@@ -481,6 +481,45 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
    * border, so the row starts with the border and not with the marker.
    */
   var PROMPT = /^[\\s\\u2502\\u2503\\u250a\\u2506|]*[>$#%\\u276f\\u276d\\u203a\\u27e9\\u3009\\u25b6]\\s?/;
+  /*
+   * The horizontal rule an agent draws its input box with.
+   *
+   * Only ever used as a STOP. Walking up out of the cursor's row looking for a
+   * prompt marker has to end somewhere, and "the top of the box" is the one
+   * boundary that is drawn on the screen rather than guessed at: above it is
+   * the transcript, and a marker up there belongs to a turn that has already
+   * been sent. Eight is short enough for a narrow split and long enough that a
+   * line of dashes in somebody's output does not read as a box.
+   */
+  var RULE = /^[\\u2500\\u2501\\u2504\\u2505\\u2508\\u2509\\u254c\\u254d\\u2550-]{8,}$/;
+  /** How far up a box may reach. A prompt of twelve rows on a phone is already
+   *  more than the pane shows; past that this stops looking rather than
+   *  walking a screenful of transcript on every keystroke. */
+  var BOX_ROWS = 12;
+  /**
+   * Everything on this side of the pane divider, on one row.
+   *
+   * Lifted out of lineNow unchanged so the rows ABOVE the cursor's get the
+   * same cut: a split window shares every buffer row, so a continuation row of
+   * an agent's box reads "their output │ the rest of my line" exactly as the
+   * cursor's row does, and reading one without the cut would put the
+   * neighbour's screen into the field.
+   */
+  var afterBorder = function (text, from, to) {
+    for (var b = to - 1; b >= from; b--) {
+      var code = text.charCodeAt(b);
+      if (code === 0x2502 || code === 0x2503 || code === 0x250a || code === 0x2506 || code === 0x2551) {
+        return text.slice(b + 1, to);
+      }
+    }
+    // No divider on this row: keep everything up to the cut, INCLUDING what is
+    // before the cut's start. On the cursor's row that start is where the row
+    // begins inside a
+    // string that may also hold the rows it wrapped from, and those are part of
+    // the same line — dropping them here is how a long shell command came back
+    // as its last wrap only.
+    return text.slice(0, to);
+  };
   var lastLine;
   var lineNow = function () {
     var buffer = term.buffer.active;
@@ -553,15 +592,7 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
      * typed is full of pipes, and cutting at the last one would hand back the
      * tail of somebody's pipeline as the whole of it.
      */
-    var border = -1;
-    for (var b = at - 1; b >= rowStart; b--) {
-      var code = raw.charCodeAt(b);
-      if (code === 0x2502 || code === 0x2503 || code === 0x250a || code === 0x2506 || code === 0x2551) {
-        border = b;
-        break;
-      }
-    }
-    if (border >= 0) raw = raw.slice(border + 1);
+    raw = afterBorder(raw, rowStart, at);
     /*
      * And the prompt is at the START of what survives that cut, or there is no
      * prompt here.
@@ -598,7 +629,12 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
      * DELs into somebody's real command.
      */
     var match = PROMPT.exec(raw);
-    if (!match) return null;
+    // No marker on the cursor's row is not "no line" — an agent's box wraps a
+    // long prompt onto rows it draws itself, and the cursor spends most of a
+    // long line on one of them. See boxedLine: what comes back from there is
+    // marked inexact, because a screen cannot say whether the break between
+    // two rows was a wrap or a newline somebody typed.
+    if (!match) return boxedLine(end);
     /*
      * Trailing blanks off, and xterm's own trim is not enough.
      *
@@ -631,14 +667,88 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     // the template literal and the file stops compiling; and spelling the
     // BROKEN form out in prose puts it in the page, where the test looking for
     // it cannot tell an explanation from a regression.
-    return raw.slice(match[0].length).replace(/\\s+$/, '');
+    return { text: raw.slice(match[0].length).replace(/\\s+$/, ''), exact: true };
   };
+  /*
+   * The same line when the agent has wrapped it onto rows of its own.
+   *
+   * ── the bug this exists to end, measured ──────────────────────────────────
+   * Claude Code draws its prompt in a box: a rule of U+2500, a row beginning
+   * "\\u276f\\u00a0", another rule. Past about the pane's width it wraps, and
+   * the second row is drawn by the program — indented under the marker, with
+   * no marker of its own and NOT flagged as wrapped in the buffer, because
+   * nothing ran off the right edge; the program moved the cursor there. So the
+   * cursor's row holds "  y mas", PROMPT finds nothing at index 0, and the
+   * read above correctly answers "I cannot tell".
+   *
+   * On a phone that reads as the feature being broken. Measured on the emulator
+   * against a real pane: a 78-character line typed at the computer put the
+   * whole of it on the pane and left the phone's field EMPTY, its placeholder
+   * flipping from "This is the pane's line" to "Write a line for this pane" —
+   * one side showing the text and the other not, which is the complaint.
+   *
+   * ── why what comes back is marked inexact ─────────────────────────────────
+   * The rows can be rejoined; they cannot be rejoined EXACTLY. A break between
+   * two rows is one of three things and the screen shows the same pixels for
+   * all of them: a hard wrap mid-word (join with nothing), a word wrap (the
+   * space at the break is not drawn, so it is lost), or a newline the person
+   * put there. Guessing wrong changes the LENGTH of what the field believes the
+   * line is, and the field's edits are counted in characters — which is exactly
+   * how DELs end up aimed at somebody's real command. So this answers with what
+   * to SHOW and says it is not something to compute an edit against; the screen
+   * treats it as a line that is already on the pane rather than as one to type
+   * into character by character.
+   */
+  var boxedLine = function (end) {
+    var buffer = term.buffer.active;
+    var top = -1, indent = 0, head = '';
+    for (var up = 1; up <= BOX_ROWS; up++) {
+      var y = end - up;
+      if (y < 0) return null;
+      var line = buffer.getLine(y);
+      if (!line) return null;
+      var text = afterBorder(line.translateToString(false), 0, term.cols).replace(/\\s+$/, '');
+      // The top of the box. A marker above it belongs to a turn that has
+      // already been sent — see the note on RULE.
+      if (RULE.test(text.trim())) return null;
+      var m = PROMPT.exec(text);
+      if (m) { top = y; indent = m[0].length; head = text.slice(m[0].length); break; }
+    }
+    if (top < 0) return null;
+    /*
+     * And every row under it has to look like a continuation of that box, or
+     * this is not one line and none of it is ours.
+     *
+     * The test is the indent: an agent aligns the wrapped rows under the text
+     * column, so the first indent-many cells of a continuation row are blank.
+     * Anything else — output that arrived under the prompt, a second pane's
+     * text past a divider we did not cut — fails here and the read goes back to
+     * answering null rather than joining two unrelated things.
+     */
+    var parts = [head];
+    for (var y2 = top + 1; y2 <= end; y2++) {
+      var row = buffer.getLine(y2);
+      if (!row) return null;
+      var full = row.translateToString(false);
+      // The cursor bounds the last row, exactly as it does in the read above:
+      // what is past it has not been typed.
+      var upto = y2 === end ? buffer.cursorX : term.cols;
+      var body = afterBorder(full, 0, upto);
+      if (body.slice(0, indent).trim() !== '') return null;
+      parts.push(body.slice(indent).replace(/\\s+$/, ''));
+    }
+    return { text: parts.join('\\n'), exact: false };
+  };
+  var lastExact = true;
   var reportLine = function () {
     try {
-      var text = lineNow();
-      if (text === lastLine) return;
+      var read = lineNow();
+      var text = read ? read.text : null;
+      var exact = read ? read.exact : true;
+      if (text === lastLine && exact === lastExact) return;
       lastLine = text;
-      post({ t: 'line', text: text });
+      lastExact = exact;
+      post({ t: 'line', text: text, exact: exact });
     } catch (e) {
       // The buffer is mid-resize. The next render says the same thing.
     }

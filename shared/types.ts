@@ -500,6 +500,31 @@ export type PtyServerFrame =
    * inactive frame is `{ active: false, windows: [], panes: [] }`.
    */
   | { t: "tmux"; active: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; session?: string | null; prefix?: string[]; client?: { cols: number; rows: number } | null }
+  /**
+   * A window this socket was asked to open, and the pane it landed on.
+   *
+   * Answered rather than left to the poll, because the poll cannot tell the
+   * caller WHICH tab is theirs. `/terminal/panes` is re-read every couple of
+   * seconds and a phone that guessed "the newest one" would open whatever the
+   * desk happened to create in the same beat. The id is the only unambiguous
+   * answer, and it is what lets a `+` land the user inside the thing they just
+   * asked for instead of next to it.
+   *
+   * `cwd` is the directory the window was actually opened in — the project
+   * root, not the pane's subdirectory — so a client can say where it went
+   * without asking a second question.
+   */
+  | { t: "opened"; pane: string; window: string; cwd: string }
+  /**
+   * That window did not open, and why — which is NOT a `fatal`.
+   *
+   * `fatal` means this socket is over: the client paints "Disconnected" and the
+   * pane it was showing goes with it. A `+` that could not work out which
+   * project the pane is in has broken nothing, and answering it with the frame
+   * that tears the terminal down would turn a button that did not work into a
+   * terminal that died.
+   */
+  | { t: "openfail"; error: string }
   /** The shell ended by itself. The socket closes right behind this. */
   | { t: "exit"; code: number | null }
   /** The server is refusing, and saying why — "that pane is gone", a disabled
@@ -556,6 +581,24 @@ export type PtyClientFrame =
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
    *  reason it exists: with a bigger client attached, `window-size largest`
    *  leaves the bottom of the pane below the panel. */
+  /**
+   * A new window running the agent, in the project the attached pane is in.
+   *
+   * The client sends no path and no command — not as a convenience, but because
+   * this is the one frame on this socket that starts a program with the
+   * permission prompts turned off, and a directory from the client would make
+   * "where" a thing the UI could choose. The server reads
+   * `#{pane_current_path}` off the pane this socket is attached to and rolls it
+   * up to that checkout's git root, which is what "the project I am working in"
+   * means on a machine whose windows live in worktrees. A `new-window` with no
+   * `-c` lands in the session's default directory — the home directory on this
+   * machine — and a phone that opens the agent in `~` has opened it in the
+   * wrong repository, silently.
+   *
+   * `yolo` buys exactly one flag, the same division `cmd:"issue"` already
+   * makes. It is a boolean rather than a string for that reason.
+   */
+  | { t: "tmux"; cmd: "agent"; yolo?: boolean }
   | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit"; window?: string; name?: string;
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather

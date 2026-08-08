@@ -209,6 +209,25 @@ export default function TerminalScreen(): React.ReactNode {
    */
   const shadow = useRef<string | null>(null);
   /*
+   * The line the PANE already holds, when the field could not be made editable.
+   *
+   * The third state, and the one that was missing. `shadow` has two: a line
+   * this field can type into, or nothing at all. An agent's box that has
+   * wrapped is neither — the text is readable and its length is not (see
+   * boxedLine in terminal-html.ts), so the field can show it and cannot compute
+   * an edit against it.
+   *
+   * Treating that as `shadow = null`, which is what happened before this
+   * existed, is what makes the phone send a line the pane already has. Measured
+   * on the emulator: `esto es una linea larga escrita en el ordenador para ver
+   * si el movil la` was typed at the computer, the phone's field went empty and
+   * became a composer, and one word typed into it submitted
+   * "…si el movil la hola2" — the desk's line and the phone's word, run as one
+   * prompt. Holding what the pane has is what lets Send know there is nothing
+   * to send but a carriage return.
+   */
+  const onPane = useRef<string | null>(null);
+  /*
    * Whether somebody has started a line here, and therefore owns it.
    *
    * Not "has the keyboard". Focused and empty, the field should still follow
@@ -333,6 +352,52 @@ export default function TerminalScreen(): React.ReactNode {
   const [keyed, setKeyed] = useState("");
   const keyedSent = useRef("");
   const forgetKeys = useCallback((): void => { setKeyed(""); keyedSent.current = ""; }, []);
+  /**
+   * A `+` that is waiting on tmux, and what to say if it comes back with a
+   * reason instead of a window.
+   *
+   * A button that opens a window somewhere else on the machine has nothing on
+   * this screen to show for itself for about a second — the strip is on a
+   * two-second poll — so without this the honest reading of a press is "nothing
+   * happened", and the second press opens a second agent.
+   */
+  const [opening, setOpening] = useState(false);
+  /**
+   * A pane the server has just made for us, which the strip has not caught up
+   * with yet.
+   *
+   * Held so `load` cannot take the selection back. tmux answers with the new
+   * pane immediately; `/terminal/panes` is on a two-second poll, and the tick
+   * that lands in between carries a list this pane is not in — so the reselect
+   * inside `load` would move the user off the tab they just asked for, once,
+   * and only sometimes. A ref rather than state because it is read inside a
+   * state updater.
+   */
+  const wanted = useRef<string | null>(null);
+
+  /*
+   * Open a window in the project this pane is in, with the agent running in it.
+   *
+   * Sent as an INTENT and not a command: the frame carries `yolo` and nothing
+   * else. The directory is the server's — it reads the pane's own cwd and rolls
+   * it up to that checkout's git root — and so is the binary and the flag. A
+   * `new-window` with no directory lands in the home directory, which is the
+   * failure this button would otherwise have shipped with: an agent opened in
+   * no repository, in a tab that looks exactly like the right one.
+   *
+   * Permissions off, because that is what this button is FOR. A tab opened from
+   * a phone is a tab nobody is sitting in front of, and an agent that stops on
+   * its first tool call to ask a question there has done nothing at all. The
+   * button says so in as many words rather than hiding it in a mode.
+   */
+  const openAgent = useCallback((): void => {
+    if (!terminal.current) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setOpening(true);
+    setError(null);
+    terminal.current.command({ t: "tmux", cmd: "agent", yolo: true });
+  }, []);
+
 
   /**
    * Read the machine's panes, and adopt the answer only if it says something
@@ -384,6 +449,14 @@ export default function TerminalScreen(): React.ReactNode {
     const best = bestSession(all);
     setSession((current) => (current && all.some((t) => t.session === current) ? current : best));
     setActive((current) => {
+      // A pane we asked for and the strip has not listed yet — see `wanted`.
+      // Held rather than adopted, so the selection does not bounce off it.
+      const want = wanted.current;
+      if (want) {
+        if (!all.some((t) => t.paneId === want)) return current;
+        wanted.current = null;
+        return want;
+      }
       if (current && all.some((t) => t.paneId === current)) return current;
       const inSession = all.filter((t) => t.session === best);
       // The first pane with an agent under it, or the first window. Either way
@@ -438,6 +511,19 @@ export default function TerminalScreen(): React.ReactNode {
     return () => clearInterval(timer);
   }, [load]));
 
+  /** What came back from that. Either a pane to go to, or a reason. */
+  const onOpened = useCallback((answer: { pane: string } | { error: string }): void => {
+    setOpening(false);
+    if ("error" in answer) { setError(answer.error); return; }
+    // Straight there. The pane exists on the machine the moment tmux answers,
+    // so the attach does not have to wait for the strip to list it — `wanted`
+    // is what stops the next poll undoing this.
+    wanted.current = answer.pane;
+    setActive(answer.pane);
+    setWhy(null);
+    void load();
+  }, [load]);
+
   const onKey = useCallback((bytes: string): void => {
     void Haptics.selectionAsync();
     /*
@@ -451,6 +537,10 @@ export default function TerminalScreen(): React.ReactNode {
      * how a completion gets erased by the character typed after it.
      */
     claimed.current = false;
+    // And the read of it, for the same reason: a bar key changes the line under
+    // the field, so what `onPane` holds describes a screen that no longer
+    // exists. Dropped rather than refreshed — the next report seeds it again.
+    onPane.current = null;
     terminal.current?.send(bytes);
   }, []);
 
@@ -491,14 +581,26 @@ export default function TerminalScreen(): React.ReactNode {
    * middle of a line, and adopting a `null` from a pane too narrow to read
    * silently cuts the field off from the shell it is typing into.
    */
-  const onLine = useCallback((text: string | null): void => {
+  const onLine = useCallback((text: string | null, exact = true): void => {
     if (claimed.current) return;
-    shadow.current = text;
+    // Editable only when the read is exact. An inexact one still fills the
+    // field — that is the whole point, the two sides are meant to show the same
+    // thing — but it is remembered as the pane's rather than as ours, so
+    // nothing computes a difference against a length that was reconstructed.
+    shadow.current = exact ? text : null;
+    onPane.current = exact ? null : text;
     setMirror(text !== null);
     if (text !== null) setDraft(text);
   }, []);
 
-  const submit = useCallback((): void => {
+  /**
+   * Send this line, whatever route it took to be on the pane.
+   *
+   * Takes the text rather than reading `draft`, because the return key can
+   * arrive as part of a change — see `typed` — and then the text to send is the
+   * one in that event and not the one the last paint was made from.
+   */
+  const commit = useCallback((text: string): void => {
     /*
      * With the mirror on, the line is ALREADY on the pane — this key put it
      * there character by character — so sending the text again would run it
@@ -506,12 +608,13 @@ export default function TerminalScreen(): React.ReactNode {
      * this button means.
      */
     if (shadow.current !== null) {
-      if (!draft) return;
+      if (!text) return;
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       terminal.current?.send("\r");
       // Cleared here rather than waiting for the pane to say so: the field is
       // empty the instant Enter is pressed, everywhere else in the world.
       shadow.current = "";
+      onPane.current = null;
       // The line is gone, so nobody owns it any more and the pane may seed the
       // next one. Released here rather than on blur alone: sending is how a
       // line ends, and the keyboard usually stays up for the next one.
@@ -519,7 +622,25 @@ export default function TerminalScreen(): React.ReactNode {
       setDraft("");
       return;
     }
-    if (!draft) return;
+    /*
+     * The pane has this line and this field only READ it — so, again, Enter
+     * and nothing else.
+     *
+     * The branch below would send the text, and that is the corruption this
+     * whole `onPane` business exists to stop: measured on the emulator, a long
+     * line typed at the computer plus one word typed here ran as the two of
+     * them concatenated. `onPane` is only ever set from a line that is on the
+     * screen, so "already there" is a fact and not an assumption.
+     */
+    if (onPane.current !== null) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      terminal.current?.send("\r");
+      onPane.current = null;
+      claimed.current = false;
+      setDraft("");
+      return;
+    }
+    if (!text) return;
     claimed.current = false;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     /*
@@ -530,22 +651,66 @@ export default function TerminalScreen(): React.ReactNode {
      * replace is for pasted text, which is the only way a newline gets in
      * here; `submitBehavior` below spends the return key on sending.
      */
-    terminal.current?.send(`${draft.replace(/\n/g, "\r")}\r`);
+    terminal.current?.send(`${text.replace(/\n/g, "\r")}\r`);
     setDraft("");
-  }, [draft]);
+  }, []);
+
+  /**
+   * The bytes an edit becomes, with the one character a terminal must never be
+   * handed by accident taken out.
+   *
+   * A newline in the MIDDLE of the field can only have arrived by paste, and
+   * what it means on a pane is not what it means in a text box. Measured
+   * against a real Claude Code pane: a bare LF does not submit, it puts a
+   * SECOND ROW in the input box — and the cursor then sits on a row with no
+   * prompt marker on it, which is the exact state that turns the mirror off.
+   * So one keystroke would both fail to do what was asked and break the field
+   * that asked it. CR is what the return key is on a terminal, and it is what
+   * every other path here already sends.
+   */
+  const forPane = (keys: string): string => keys.replace(/\n/g, "\r");
 
   /*
+   * Not memoised, and that is deliberate rather than an omission: it reads
+   * `raw`, and a `typed` held across a mode switch is a field that goes on
+   * behaving like the mode it was created in. A `TextInput`'s `onChangeText` is
+   * not a memo boundary, so a new function per render costs nothing here.
+   */
+  function typed(text: string): void {
+    /*
+     * A newline at the END of the field is the return key, and it has to be
+     * caught here because it does not always arrive as one.
+     *
+     * `onSubmitEditing` is the documented route and it fires for Gboard's ✓ and
+     * for a hardware Enter — both measured on the emulator. It is not the only
+     * route: an IME that commits the return as TEXT through the input
+     * connection never raises an editor action at all, and then the newline
+     * simply lands in the field. That is the shape of "I press enter and
+     * nothing sends, and then it works the second time" — the second press
+     * comes after the composing region has been ended by the tap, and takes the
+     * other route.
+     *
+     * Both routes now end in `commit`, so whichever the keyboard chooses, the
+     * line goes. The newline itself never reaches the pane.
+     */
+    if (text.endsWith("\n")) {
+      const body = text.replace(/\n+$/, "");
+      typedBody(body);
+      commit(body);
+      return;
+    }
+    typedBody(text);
+  }
+
+  /**
    * What the field does with what was typed, which is the whole of the mode.
    *
-   * In `keys` the field is a conduit rather than a place: the character goes
-   * down the socket and the field is emptied again in the same frame, because
-   * its `value` is a constant empty string and React Native writes a
-   * controlled value back to the native input on every change event. That is
-   * also why the keyboard type changes with the mode — a predicting keyboard
-   * rewrites what it has already handed over, and here that has already been
-   * sent and cannot be taken back.
+   * In `keys` the field is a conduit rather than a place: the difference is put
+   * on the pane's stdin as it is made, and the field keeps what was typed so a
+   * backspace is an ordinary change rather than a key event Android will not
+   * deliver — see `keyed`.
    */
-  const typed = useCallback((text: string): void => {
+  function typedBody(text: string): void {
     if (raw) {
       setKeyed(text);
       // The difference, not the field. See `keyed` above for the measurement
@@ -554,7 +719,7 @@ export default function TerminalScreen(): React.ReactNode {
       // sends rather than as a retype.
       const keys = editFor(keyedSent.current, text);
       keyedSent.current = text;
-      if (keys) terminal.current?.send(keys);
+      if (keys) terminal.current?.send(forPane(keys));
       return;
     }
     setDraft(text);
@@ -562,6 +727,28 @@ export default function TerminalScreen(): React.ReactNode {
     // no longer listened to. An empty field gives it back, so clearing the
     // field and waiting is a way to pick up whatever is typed at the desk.
     claimed.current = text.length > 0;
+
+    /*
+     * A line this field only READ can still be typed onto — as long as the
+     * typing is at the END of it.
+     *
+     * That restriction is not caution, it is the whole of what is knowable.
+     * `onPane` holds a line rejoined from the rows an agent wrapped it across,
+     * so its LENGTH may be off by one per break (see boxedLine); a DEL count
+     * computed against it would delete the wrong number of characters from
+     * somebody's real prompt. An APPEND needs no length at all — what to send
+     * is the part of the field past the text that was shown, and that is exact
+     * whatever happened at the joins.
+     *
+     * Once one character has been appended, this field's own record takes over
+     * and every edit after it is ordinary: `shadow` starts from the text that
+     * was displayed, so backspacing into what was just typed is exact too, and
+     * backspacing PAST it fails the prefix test above and is left alone.
+     */
+    if (shadow.current === null && onPane.current !== null) {
+      if (!text.startsWith(onPane.current)) return;
+      shadow.current = onPane.current;
+    }
 
     const was = shadow.current;
     if (was === null) return; // a composer: nothing leaves until it is sent
@@ -572,15 +759,15 @@ export default function TerminalScreen(): React.ReactNode {
     const keys = editFor(was, text);
     if (!keys) return;
     shadow.current = text;
-    terminal.current?.send(keys);
-  }, [raw]);
+    terminal.current?.send(forPane(keys));
+  }
 
   /** What the return key does, in either mode. In `keys` nothing is being held
    *  back, so it is the key itself and goes through the bar's own route. */
   const onReturn = useCallback((): void => {
     if (raw) { onKey("\r"); return; }
-    submit();
-  }, [raw, onKey, submit]);
+    commit(draft);
+  }, [raw, onKey, commit, draft]);
 
   if (!host) return null;
 
@@ -735,6 +922,35 @@ export default function TerminalScreen(): React.ReactNode {
               );
             })}
           </ScrollView>
+          {/*
+            A new tab, with an agent already running in it.
+
+            Pinned beside the re-read rather than carried at the end of the
+            scroller, and for the reason written on that button: where a control
+            riding after the last tab SITS depends on how many tabs there are,
+            so with six windows the `+` is off the right-hand edge — and the
+            moment somebody wants a seventh is the moment there are six.
+
+            Live only while a pane is attached, because the pane is what says
+            WHERE: the server reads this pane's own directory to decide which
+            project the window opens in. Without one there is no answer that is
+            not the home directory, which is the wrong tab drawn convincingly.
+          */}
+          <Pressable
+            onPress={openAgent}
+            disabled={!open || opening}
+            accessibilityRole="button"
+            accessibilityLabel="New tab running Claude in this project, with permission prompts off"
+            style={{
+              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
+              borderLeftWidth: 1, borderLeftColor: C.border,
+            }}
+          >
+            <Text style={{
+              color: !open || opening ? C.text4 : C.primary,
+              fontSize: T.title, fontWeight: "700",
+            }}>{opening ? "…" : "+"}</Text>
+          </Pressable>
           <Pressable
             onPress={() => { void load(); }}
             accessibilityRole="button"
@@ -766,6 +982,7 @@ export default function TerminalScreen(): React.ReactNode {
             onState={onState}
             onTmux={(info) => setPrefix(prefixKey(info.prefix?.[0]))}
             onLine={onLine}
+            onOpened={onOpened}
             onGrid={(next) => setGrid(next)}
             // The desk took its width back. Two things follow, and neither is a
             // disconnect: the window's real size is now this, and this phone is

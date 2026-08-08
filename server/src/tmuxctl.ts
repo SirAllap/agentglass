@@ -776,14 +776,30 @@ function statusInConfig(t: TmuxTarget): string {
  * Passed as separate arguments rather than a shell string — tmux runs a bare
  * string through the user's login shell, and this one is fish on the machine
  * where that was last discovered the hard way.
+ *
+ * Answers WHAT IT MADE, or null. It used to answer a boolean, and the callers
+ * that ignore the value read the same either way — but a caller that has to
+ * tell somebody where the window went cannot get that from the poll:
+ * `/terminal/panes` is a list, and "the newest row" is whatever the desk
+ * created in the same second. `-P -F` is tmux's own answer to that question,
+ * asked in the command that already runs.
  */
-export function newWindowRunning(t: TmuxTarget, cwd: string, name: string, argv: string[]): boolean {
+export function newWindowRunning(
+  t: TmuxTarget, cwd: string, name: string, argv: string[],
+): { paneId: string; windowId: string } | null {
   const clean = sanitizeWindowName(name);
-  return tmux(t.socket, [
-    "new-window", "-t", t.id, "-c", cwd,
+  // Tab-separated, like every other format string here: a window name can
+  // contain spaces, and neither of these two fields can contain a tab.
+  const out = tmux(t.socket, [
+    "new-window", "-P", "-F", "#{pane_id}\t#{window_id}", "-t", t.id, "-c", cwd,
     ...(clean ? ["-n", clean] : []),
     ...argv,
-  ]) !== null;
+  ]);
+  if (out === null) return null;
+  const [paneId = "", windowId = ""] = (out.split("\n")[0] ?? "").trim().split("\t");
+  // Both, or neither. tmux printing something this does not recognise is not a
+  // reason to hand a caller a string that goes on a command line.
+  return PANE_ID.test(paneId) && WINDOW_ID.test(windowId) ? { paneId, windowId } : null;
 }
 
 /**
@@ -952,6 +968,26 @@ export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
 
 const PANE_ID = /^%\d+$/;
 const SESSION_ID = /^\$\d+$/;
+
+/**
+ * Where a pane is, as tmux answers it right now.
+ *
+ * The shell's own cwd, not the directory the window was created in — `cd` at
+ * the desk moves this, which is the point: "open a new tab here" means where
+ * the hand is, not where the window started an hour ago.
+ *
+ * Asked of tmux rather than read off the last `/terminal/panes` sweep because
+ * the two are different clocks. The sweep is up to two seconds old and is a
+ * list; this is a question about one pane, asked at the moment somebody
+ * pressed a button.
+ */
+export function paneCwd(socket: string[], paneId: string): string | null {
+  if (!PANE_ID.test(paneId)) return null;
+  const out = tmux(socket, ["display-message", "-p", "-t", paneId, "#{pane_current_path}"]);
+  const path = out?.split("\n")[0]?.trim() ?? "";
+  // Relative or empty is not a directory this may hand to `new-window -c`.
+  return path.startsWith("/") ? path : null;
+}
 
 /**
  * Which server a `-S`/`-L`/nothing spelling actually names, as a path.
