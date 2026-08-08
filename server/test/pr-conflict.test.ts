@@ -14,6 +14,9 @@ import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// Static, and it has no side effects — the dynamic imports below are ordered
+// after AGENTGLASS_ROOT is set and this one must not disturb that.
+import { identify } from "./gitIdentity.ts";
 
 // realpath, because git records the resolved path in a worktree's .git file and
 // these assertions compare paths. The scope guard reads the machine's real
@@ -35,6 +38,7 @@ function build(): string {
   const root = join(dir, `repo-${Math.random().toString(36).slice(2)}`);
   Bun.spawnSync(["mkdir", "-p", root]);
   git(root, "init", "-q", "-b", "main", ".");
+  identify(root);
   writeFileSync(join(root, "f.txt"), "base\n");
   git(root, "add", "-A"); git(root, "commit", "-qm", "first");
   git(root, "remote", "add", "origin", root);

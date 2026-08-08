@@ -20,6 +20,9 @@ import { afterAll, beforeEach, afterEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// Static, and it has no side effects — the dynamic imports below are ordered
+// after AGENTGLASS_ROOT is set and this one must not disturb that.
+import { identify } from "./gitIdentity.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-msess-")));
 process.env.AGENTGLASS_ROOT = dir;
@@ -40,6 +43,7 @@ function build(): void {
   repo = join(dir, `r-${Math.random().toString(36).slice(2)}`);
   Bun.spawnSync(["mkdir", "-p", repo]);
   git("init", "-q", "-b", "main", ".");
+  identify(repo);
   for (const f of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(repo, f), "base\n");
   git("add", "-A"); git("commit", "-qm", "seed");
 
@@ -336,7 +340,7 @@ describe("committing a merge that still has markers in it", () => {
     const g = (...a: string[]) =>
       Bun.spawnSync(["git", "-c", "user.email=t@e.st", "-c", "user.name=T", "-c", "commit.gpgsign=false", ...a], { cwd: root });
     for (const f of ["x.txt", "y.txt", "z.txt"]) writeFileSync(join(root, f), "base\n");
-    g("init", "-q", "-b", "main", "."); g("add", "-A"); g("commit", "-qm", "seed");
+    g("init", "-q", "-b", "main", "."); identify(root); g("add", "-A"); g("commit", "-qm", "seed");
     g("checkout", "-q", "-b", "feat");
     for (const [n, f] of [["1", "x.txt"], ["2", "y.txt"], ["3", "z.txt"]] as const) {
       writeFileSync(join(root, f), `feat ${n}\n`); g("commit", "-qam", `feat ${n}`);

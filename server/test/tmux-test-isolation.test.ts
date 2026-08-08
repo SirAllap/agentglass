@@ -166,6 +166,46 @@ const ledger = (dir: string, ...paths: string[]): void => {
  *  would not — so it is never used in the vanished-directory test below. */
 const socketDirNow = (): string => join(process.env.TMUX_TMPDIR || process.env.TMPDIR || "/tmp", `tmux-${UID}`);
 
+/*
+ * The files under a lint's root, for a root that a branch may legitimately not
+ * have.
+ *
+ * Both lints below list their roots rather than discovering them, and let
+ * `readdirSync` throw on one that is not there — deliberately, because a
+ * typo'd root that silently matches nothing is how a lint goes quiet. That
+ * reasoning is still right and is kept.
+ *
+ * What it did not anticipate is the release stack. `mobile/` arrives in the
+ * THIRD branch of three: on release/app and release/desktop-build there is no
+ * phone in the tree at all, and this threw twice as "Unhandled error between
+ * tests". That did not turn a test red — it stopped both lints from ever
+ * building their file list, so on the two branches where they were the only
+ * thing guarding the tmux rules, they were not running. A lint that is missing
+ * is worse than a lint that is failing, because nothing says so.
+ *
+ * So absence is allowed only where it is DECLARED, and only where the product
+ * itself is absent: `mobile/test` may be missing when the phone is not in the
+ * tree, and a typo like `mobile/tests` still throws the moment it is. Nothing
+ * else may be missing at all.
+ *
+ * The sentinel is a TRACKED FILE — `mobile/package.json` — and not the
+ * directory the root lives under, which is what this was written as first and
+ * is wrong for a reason worth keeping: `git checkout` does not remove untracked
+ * files, so switching from the phone branch to this one leaves `mobile/`
+ * standing with a `node_modules` in it and nothing else. Measured on exactly
+ * that tree: the directory existed, `mobile/test` did not, and the two lints
+ * were skipped again with the same two unhandled errors. A clean CI checkout
+ * would have passed, which is the kind of green that is luck rather than a
+ * property.
+ */
+type LintRoot = { dir: string; ext: string; absentWithout?: string };
+const lintFiles = (repo: string, root: LintRoot): { rel: string; dir: string; src: string }[] => {
+  if (root.absentWithout && !existsSync(join(repo, root.absentWithout))) return [];
+  return readdirSync(join(repo, root.dir))
+    .filter((n) => n.endsWith(root.ext))
+    .map((n) => ({ rel: `${root.dir}/${n}`, dir: root.dir, src: readFileSync(join(repo, root.dir, n), "utf8") }));
+};
+
 let ctl: typeof import("../src/tmuxctl.ts");
 let window = "";
 
@@ -644,9 +684,12 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
   /** Listed, not discovered: a new root is a decision, and a typo'd one that
    *  silently matched nothing is how a lint goes quiet. `readdirSync` throws on
    *  a root that is not there, which is the loud version of the same thing. */
-  const roots = [
+  const roots: LintRoot[] = [
     { dir: "server/test", ext: ".test.ts" },
-    { dir: "mobile/test", ext: ".test.ts" },
+    // Absent on the two branches of the release stack below the phone — see
+    // `lintFiles`, which is where that is allowed and where it stops being
+    // allowed the moment `mobile/` exists.
+    { dir: "mobile/test", ext: ".test.ts", absentWithout: "mobile/package.json" },
     { dir: "scripts", ext: ".ts" },
   ];
 
@@ -669,11 +712,7 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
     return /"src",\s*"index\.ts"/.test(src);
   };
 
-  const files = roots.flatMap(({ dir, ext }) =>
-    readdirSync(join(repo, dir))
-      .filter((n) => n.endsWith(ext))
-      .map((n) => ({ rel: `${dir}/${n}`, dir, src: readFileSync(join(repo, dir, n), "utf8") }))
-      .filter((f) => spawnsTheServer(f.src)));
+  const files = roots.flatMap((r) => lintFiles(repo, r).filter((f) => spawnsTheServer(f.src)));
 
   test("every one of them passes TMUX_TMPDIR in the child's environment", () => {
     // `TMUX_TMPDIR:` with the colon: the object-literal key, in an env being
@@ -783,7 +822,12 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
  *     every legitimate constant in the suite.
  */
 describe("no test file runs tmux without isolating it", () => {
-  const roots = ["server/test", "mobile/test"];
+  // Same declared-absence rule as the lint above: `mobile/` is not in the
+  // tree until the third branch of the release stack. See `lintFiles`.
+  const roots: LintRoot[] = [
+    { dir: "server/test", ext: ".test.ts" },
+    { dir: "mobile/test", ext: ".test.ts", absentWithout: "mobile/package.json" },
+  ];
   const repo = join(import.meta.dir, "..", "..");
 
   /**
@@ -828,10 +872,7 @@ describe("no test file runs tmux without isolating it", () => {
       .map((m) => decls.get(m[1]!)).filter((v): v is string => v !== undefined);
   };
 
-  const files = roots.flatMap((root) =>
-    readdirSync(join(repo, root)).filter((n) => n.endsWith(".test.ts"))
-      .map((n) => ({ rel: `${root}/${n}`, src: readFileSync(join(repo, root, n), "utf8") }))
-      .filter((f) => runsTmux(f.src)));
+  const files = roots.flatMap((r) => lintFiles(repo, r).filter((f) => runsTmux(f.src)));
 
   test("every one of them starts its tmux with an empty configuration", () => {
     const offenders = files.filter((f) => !readsNoConfig(f.src)).map((f) => f.rel);
@@ -857,5 +898,130 @@ describe("no test file runs tmux without isolating it", () => {
     expect(files.map((f) => f.rel)).toContain("server/test/tmux-stale.test.ts");
     expect(files.map((f) => f.rel)).toContain("server/test/tmux-tabs.test.ts");
     expect(files.length).toBeGreaterThanOrEqual(10);
+  });
+
+  /*
+   * A THIRD thing a suite must not inherit from the developer, alongside their
+   * config and their socket directory: their TERMINAL.
+   *
+   * Six files fabricate a real client — a pty from `pty.fork()` or one
+   * `script(1)` builds — because "tmux sizes a window to the client looking at
+   * it" cannot be asked of a mock. None of them said what kind of terminal it
+   * was, so TERM came from the shell that started `bun test`. That is
+   * `xterm-256color` on this machine and `dumb` in a CI job step, and tmux
+   * refuses `dumb` outright: "open terminal failed: terminal does not support
+   * clear", exit 1, no client. 37 tests failed the first time these ran
+   * anywhere but here, and not one of them named a terminal — they read as
+   * "geom 200x50, expected 200x49" (the missing row is the status line, which
+   * only exists once a client attaches) and as `attachArgvFor` returning null
+   * (`listPanes` skips a server nobody is attached to).
+   *
+   * Its own file list, deliberately NOT `files` above: `runsTmux` looks for a
+   * spawn of `tmux` itself, and two of the six reach tmux only through a spread
+   * argv or through `tmuxctl.ts`, so they are not in it.
+   */
+  const buildsAClient = (src: string): boolean => /pty\.fork\(\)/.test(src) || /"script",\s*"-qf/.test(src);
+
+  /*
+   * The whole `Bun.spawn(...)` call, by walking parentheses from the opener.
+   *
+   * A regex cannot do this and the first attempt proved it: both client shapes
+   * carry parentheses of their own — `struct.pack('HHHH',int(sys.argv[4]),…)`
+   * inside the python source, and `built.argv.map((a) => …).join(" ")` inside
+   * the `script` argv — so a non-greedy match to the first `})` stopped in the
+   * middle of the argv and every spawn looked TERM-less. Depth counting is
+   * safe here because every one of those parentheses is balanced.
+   */
+  const clientSpawns = (src: string): string[] => {
+    const calls: string[] = [];
+    for (const m of src.matchAll(/Bun\.spawn\(/g)) {
+      const start = m.index!;
+      let depth = 0, end = -1;
+      for (let i = start + "Bun.spawn".length; i < src.length; i++) {
+        if (src[i] === "(") depth++;
+        else if (src[i] === ")" && --depth === 0) { end = i; break; }
+      }
+      if (end === -1) continue;
+      const call = src.slice(start, end + 1);
+      if (/\[\s*"(?:script|python3)"/.test(call)) calls.push(call);
+    }
+    return calls;
+  };
+
+  const clientFiles = roots.flatMap((r) => lintFiles(repo, r).filter((f) => buildsAClient(f.src)));
+
+  /*
+   * Whether a spawn declares a TERM, following ONE level of indirection.
+   *
+   * Most of these hand the env to a `clientEnv()` helper — the env has to be
+   * built at call time, because `beforeAll` puts TMUX_TMPDIR into `process.env`
+   * after the module is evaluated — so the literal `TERM` is in the helper and
+   * not at the spawn. Resolving the identifier is the same trick `tmpdirsSet`
+   * above uses, and the alternative is worse: a lint that accepted the mere
+   * presence of `clientEnv` would go green on a file that kept the helper and
+   * stopped passing it, which is the exact shape of the `TMUX_ISOLATED` near
+   * miss recorded further up this file.
+   */
+  /*
+   * Comments out, before anything is asked about the code.
+   *
+   * Measured while writing this: without it, the lint passed on a spawn whose
+   * TERM had been deliberately deleted, because the sentence explaining WHY the
+   * TERM was there ("tmux refuses TERM=dumb") was still four lines above and
+   * fell inside the window being searched. A lint that a comment can satisfy is
+   * worse than none — it is green precisely where somebody has been editing.
+   */
+  const decomment = (s: string): string =>
+    s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|\s)\/\/[^\n]*/g, "$1");
+
+  const declaresTerm = (call: string, src: string): boolean => {
+    const code = decomment(src), c = decomment(call);
+    if (/\bTERM\b/.test(c)) return true;
+    /*
+     * Exactly two indirections are legitimate, and they are resolved by name
+     * rather than by scanning nearby text — a window big enough to reach a
+     * helper is also big enough to reach the next unrelated one.
+     *
+     *   env: clientEnv()          the env is built at call time, because
+     *                             beforeAll writes TMUX_TMPDIR into process.env
+     *                             after the module is evaluated
+     *   ["python3", "-c", SRC…]   the TERM is set by the child itself, inside
+     *                             the python source held in a const — which is
+     *                             what mobile/test/pane-line.test.ts does, and
+     *                             it had this right before any server file did
+     */
+    const refs = new Set<string>();
+    const env = /env:\s*(\w+)\s*\(/.exec(c);
+    if (env) refs.add(env[1]!);
+    const argv = /\[\s*"(?:script|python3)"([\s\S]*?)\]/.exec(c);
+    if (argv) for (const m of argv[1]!.matchAll(/\b([A-Z][A-Z0-9_]{2,})\b/g)) refs.add(m[1]!);
+
+    for (const r of refs) {
+      // Bounded by the next top-level declaration, not by a character count.
+      const def = new RegExp(`const\\s+${r}\\s*[:=]([\\s\\S]*?)(?=\\nconst |\\nfunction |\\ntest\\(|\\ndescribe\\(|$)`).exec(code);
+      if (def && /\bTERM\b/.test(def[1]!)) return true;
+    }
+    return false;
+  };
+
+  test("and a client it fabricates says what kind of terminal it is", () => {
+    const offenders = clientFiles.flatMap((f) =>
+      clientSpawns(f.src).filter((c) => !declaresTerm(c, f.src))
+        .map((c) => `${f.rel} → ${c.slice(0, 70).replace(/\s+/g, " ")}…`));
+    expect(offenders, "a terminal emulator sets TERM, and a test that builds its own pty IS one. Put `TERM: TEST_TERM` in that spawn's env (see server/test/tmuxTerm.ts) — inheriting it means the suite passes here and cannot attach a client on a runner, where TERM is `dumb` and tmux refuses it").toEqual([]);
+  });
+
+  test("that lint is looking at the files it thinks it is", () => {
+    // Same guard-on-the-guard as above, and it earns it twice over: the two
+    // detectors are independent, so `clientSpawns` could silently match nothing
+    // — which is exactly how a lint goes green over a defect it was written for.
+    const rels = clientFiles.map((f) => f.rel);
+    for (const n of ["tmux-attach", "tmux-shutdown-restore", "tmux-attach-claim",
+                     "tmux-sigkill-restore", "tmux-focus-pane", "tmux-window-size"]) {
+      expect(rels).toContain(`server/test/${n}.test.ts`);
+    }
+    // Eleven today: six pty/`script` helpers, one per file, plus the five
+    // `script -qfec` phone clients tmux-attach.test.ts spawns inline.
+    expect(clientFiles.flatMap((f) => clientSpawns(f.src)).length).toBeGreaterThanOrEqual(11);
   });
 });

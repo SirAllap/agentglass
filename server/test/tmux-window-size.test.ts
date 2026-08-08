@@ -18,6 +18,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runAction } from "../src/tmuxctl.ts";
+import { TEST_TERM } from "./tmuxTerm.ts";
 
 const SOCK = `/tmp/agx-wsize-${process.pid}.sock`;
 const T = ["tmux", "-f", "/dev/null", "-S", SOCK];
@@ -28,10 +29,15 @@ const tmux = (...args: string[]) => {
 };
 
 /** A client of a given size, attached until the server dies. `script` is what
- *  gives it a pty; without one tmux has nothing to size itself to. */
+ *  gives it a pty; without one tmux has nothing to size itself to.
+ *
+ *  A pty is not enough on its own: tmux also asks what KIND of terminal it is,
+ *  and refuses `TERM=dumb` outright ("terminal does not support clear"). That
+ *  is the ambient TERM of a CI job step, so this attach quietly did nothing
+ *  there while passing on a developer's machine — see tmuxTerm.ts. */
 const attach = (cols: number, rows: number) => {
   Bun.spawn(["script", "-qfc", `stty rows ${rows} cols ${cols}; ${T.join(" ")} attach -t probe`, "/dev/null"],
-    { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    { stdout: "ignore", stderr: "ignore", stdin: "ignore", env: { ...process.env, TERM: TEST_TERM } });
 };
 
 const geom = () => {

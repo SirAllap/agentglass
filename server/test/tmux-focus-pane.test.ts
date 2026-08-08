@@ -32,6 +32,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { focusPaneAnywhere } from "../src/tmuxctl.ts";
+import { TEST_TERM } from "./tmuxTerm.ts";
 
 // A private socket directory, shaped exactly as tmux's own — `<TMUX_TMPDIR>/
 // tmux-<uid>/<name>` — so `tmuxSockets`, which lists that directory, discovers
@@ -60,8 +61,10 @@ const tmux = (...args: string[]) => {
  *  tmux something to size itself to (and to make `list-panes` see the server,
  *  which `listPanes` skips when nothing is attached). */
 const attach = (session: string, cols: number, rows: number) => {
+  // TERM is declared, not inherited: tmux refuses `TERM=dumb`, which is what a
+  // CI job step has, so this attach did nothing there. See tmuxTerm.ts.
   Bun.spawn(["script", "-qfc", `stty rows ${rows} cols ${cols}; ${T.join(" ")} attach -t ${session}`, "/dev/null"],
-    { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    { stdout: "ignore", stderr: "ignore", stdin: "ignore", env: { ...process.env, TERM: TEST_TERM } });
 };
 
 /** Which session the (single) attached client is on right now. */

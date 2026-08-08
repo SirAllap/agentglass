@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { endPhoneSession } from "../src/tmuxctl.ts";
+import { TEST_TERM } from "./tmuxTerm.ts";
 
 /*
  * Short paths, and it is a hard limit rather than a preference: a unix socket
@@ -53,6 +54,13 @@ const SOCK = "agx-shut";
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const HAVE_TMUX = !!Bun.which("tmux") && !!Bun.which("python3") && process.platform === "linux";
 
+/** The environment a client this file FABRICATES gets. `process.env` is read at
+ *  call time, never snapshotted, because `beforeAll` puts TMUX_TMPDIR into it
+ *  after this module is evaluated — the measured Bun quirk the helpers above
+ *  already work around. `TERM` is overridden rather than inherited: see
+ *  tmuxTerm.ts for the 37 failures that came of inheriting it. */
+const clientEnv = (): Record<string, string> => ({ ...process.env, TERM: TEST_TERM } as Record<string, string>);
+
 /** `env` on every spawn, and it is not decoration: measured on Bun 1.3.9, a
  *  `Bun.spawnSync` with no `env` gets the environment as it was when the PROCESS
  *  started, not `process.env` as it is now — so the TMUX_TMPDIR set in
@@ -80,7 +88,7 @@ function deskClient(cols: number, rows: number, target: string): ReturnType<type
       "fcntl.ioctl(fd,termios.TIOCSWINSZ,struct.pack('HHHH',int(sys.argv[4]),int(sys.argv[3]),0,0))\n" +
       "time.sleep(600)\n",
       SOCK, target, String(cols), String(rows)],
-    { stdout: "ignore", stderr: "ignore", env: process.env },
+    { stdout: "ignore", stderr: "ignore", env: clientEnv() },
   );
 }
 

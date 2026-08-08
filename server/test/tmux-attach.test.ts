@@ -23,6 +23,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { attachArgvFor, readFrame, runAction, restoreWindows, phoneWindows, type TmuxTarget } from "../src/tmuxctl.ts";
+import { TEST_TERM } from "./tmuxTerm.ts";
 
 const SOCK = "agx-attach-test";
 /*
@@ -68,6 +69,13 @@ const SOCK = "agx-attach-test";
 const TMPDIR = `/tmp/agx-tmux-${process.pid}`;
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const HAVE_TMUX = !!Bun.which("tmux") && !!Bun.which("python3") && process.platform === "linux";
+
+/** The environment a client this file FABRICATES gets. `process.env` is read at
+ *  call time, never snapshotted, because `beforeAll` puts TMUX_TMPDIR into it
+ *  after this module is evaluated — the measured Bun quirk the helpers above
+ *  already work around. `TERM` is overridden rather than inherited: see
+ *  tmuxTerm.ts for the 37 failures that came of inheriting it. */
+const clientEnv = (): Record<string, string> => ({ ...process.env, TERM: TEST_TERM } as Record<string, string>);
 
 /**
  * Our socket, named to `attachArgvFor` — and then checked again on the way out.
@@ -140,7 +148,7 @@ function wideClient(cols: number, rows: number, target: string, sock: string = S
       // client, listPanes skipped it, and the collision the test existed to
       // create silently did not exist.
       sock, target, String(cols), String(rows)],
-    { stdout: "ignore", stderr: "ignore", env: process.env },
+    { stdout: "ignore", stderr: "ignore", env: clientEnv() },
   );
 }
 
@@ -321,7 +329,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(ours(built)).toBe(true);
     const phone = Bun.spawn(
       ["script", "-qfec", built.argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" "), "/dev/null"],
-      { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: process.env },
+      { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: clientEnv() },
     );
     let seen = "";
     const reading = (async () => {
@@ -458,7 +466,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
 
     phone = Bun.spawn(
       ["script", "-qfec", built!.argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" "), "/dev/null"],
-      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: process.env },
+      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: clientEnv() },
     );
     await Bun.sleep(2000);
     expect(geom(win)).toBe("80x24");
@@ -542,7 +550,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     expect(ours(second)).toBe(true);
     const p2 = Bun.spawn(
       ["script", "-qfec", second.argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" "), "/dev/null"],
-      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: process.env },
+      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: clientEnv() },
     );
     await Bun.sleep(2000);
     expect(geom(win)).toBe("80x24");
@@ -700,7 +708,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(ours(built)).toBe(true);
     phone = Bun.spawn(
       ["script", "-qfec", built.argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" "), "/dev/null"],
-      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: process.env },
+      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: clientEnv() },
     );
     await Bun.sleep(2500);
 
@@ -776,7 +784,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
 
     const p = Bun.spawn(
       ["script", "-qfec", built.argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" "), "/dev/null"],
-      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: process.env },
+      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: clientEnv() },
     );
     try {
       await Bun.sleep(2500);
@@ -874,7 +882,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(second.zoomed).toEqual({ windowId: zwin, paneId: tapped });
     const p2 = Bun.spawn(
       ["script", "-qfec", second.argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" "), "/dev/null"],
-      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: process.env },
+      { stdin: "pipe", stdout: "ignore", stderr: "ignore", env: clientEnv() },
     );
     await Bun.sleep(2500);
     expect(zoomed(zwin)).toBe("1");
