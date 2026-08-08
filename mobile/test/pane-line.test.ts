@@ -165,8 +165,19 @@ beforeAll(async () => {
     `--remote-debugging-port=${CDP}`, "about:blank",
   ], { stdout: "ignore", stderr: "ignore" });
 
+  /*
+   * 240 quarter-seconds — a full minute — and it is not generosity.
+   *
+   * This loop asked for 15s while the hook it lives in had bun's 5s default,
+   * so the ceiling always fired first and the patience written here was never
+   * actually available. With the hook budgeted (see the bottom of this
+   * function) the number finally means something, and 15s is not enough for a
+   * cold Chrome on a 2-core runner: measured on ubuntu-latest, the same commit
+   * that came up inside 15s twice failed to expose a page at all on the third
+   * run.
+   */
   let target = "";
-  for (let i = 0; i < 60 && !target; i++) {
+  for (let i = 0; i < 240 && !target; i++) {
     await Bun.sleep(250);
     try {
       const list = await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json() as
@@ -174,7 +185,20 @@ beforeAll(async () => {
       target = list.find((t) => t.type === "page")?.webSocketDebuggerUrl ?? "";
     } catch { /* not up yet */ }
   }
-  if (!target) return;
+  /*
+   * Loud, because the quiet version cost an afternoon of reading the wrong
+   * thing. This was `if (!target) return;`, which left `cdp` null and handed
+   * all 29 tests below a `TypeError: null is not an object (evaluating
+   * 'cdp.value')` — twenty-nine failures, none of them mentioning Chrome, for
+   * one browser that had not finished starting. A hook that cannot build its
+   * fixture has to say so itself.
+   */
+  if (!target) {
+    throw new Error(
+      `Chrome never exposed a debuggable page on 127.0.0.1:${CDP} within 60s (binary: ${CHROME}). ` +
+      `Its output is discarded here; re-run with stdout/stderr inherited on the spawn above to see why.`,
+    );
+  }
 
   /** Open a connection to the page — the first one, and any replacement. */
   const connect = async (): Promise<WebSocket> => {
