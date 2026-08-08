@@ -34,7 +34,29 @@ beforeAll(async () => {
   // A lightweight tag, the shape `gh release create` leaves behind: no
   // annotation at all, so `%(contents)` falls through to the commit message.
   run(clone, "tag", "v9.9.8");
-  su = await import("../src/selfupdate.ts");
+  /*
+   * A cache-busted specifier, so this file gets its OWN instance of the module.
+   *
+   * `selfupdate.ts` reads AGENTGLASS_UPDATE_SRC into a module-load const, and
+   * this file used to import it by its canonical path and rely on being the
+   * first importer in the process — `bun test` shares one process across every
+   * file, so whoever imports first fixes SRC for all of them. Two sibling
+   * suites already cache-bust their imports specifically to protect that, and
+   * `install-stop.test.ts` does not.
+   *
+   * It broke exactly the way an order dependency does: green on release/app,
+   * red on release/desktop-build and release/phone, from the same source — the
+   * two suites differ only in which other files are in the tree. And it failed
+   * in a shape that pointed away from the cause, because SRC fell back to
+   * `~/.cache/agentglass/source`, which is not a repository: the two tests that
+   * need the fixture's annotated tag went red, while "refuses a lightweight
+   * tag" and "answers with a shape the client can always read" stayed green —
+   * they expect a refusal, and a missing clone refuses too.
+   *
+   * Being first is not something a test file can assert or defend, so this one
+   * stops requiring it.
+   */
+  su = await import(`../src/selfupdate.ts?u=${Math.random()}`);
   // Seven `git` spawns and a module import, against bun's 5s default. Alone
   // that is 300ms; inside the full suite, on a machine that is also building
   // something, all three tests in this file timed out at once — which reads as

@@ -65,7 +65,31 @@ const FAILURES: Record<string, Failure> = {
  */
 let shellFailure: Failure | null = null;
 let identity: "ours" | "foreign" | "down" = "ours";
-mock.module(new URL("../src/lib/api.ts", import.meta.url).pathname, () => ({
+/*
+ * The stub DELEGATES to the real module and overrides only the seams below.
+ *
+ * `mock.module` is process-wide and permanent, and this call runs at module
+ * scope, so the seven exports listed here used to BE `src/lib/api.ts` for every
+ * suite loaded after this one. Measured on ubuntu-latest, where this file ran
+ * hundredth and `gate-store.test.ts` hundred-and-eleventh: the store's poll
+ * reaches `api`, this stub exported no `api` at all, and the poll never
+ * happened — which the suite reported as "nobody polled after a subscriber
+ * arrived", a sentence about the store and not about this file. It was green
+ * here only because this machine loads the files in another order.
+ *
+ * The real module is pulled in through a specifier `mock.module` does not
+ * match, so the override is additive. The globals go first because `api.ts`
+ * reads `location.href`/`location.hostname` and localStorage in its module
+ * body — the very reason a stub was reached for in the first place.
+ */
+(globalThis as any).location ??= { hostname: "127.0.0.1", origin: "http://127.0.0.1:4000", href: "http://127.0.0.1:4000/" };
+(globalThis as any).localStorage ??= {
+  getItem: () => null, setItem: () => {}, removeItem: () => {},
+};
+const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
+const realApiModule = await import(`${API_PATH}?unmocked`);
+mock.module(API_PATH, () => ({
+  ...realApiModule,
   IS_DEMO: false,
   SERVER: "http://127.0.0.1:4000",
   // False, exactly as the packaged desktop computes it. The whole bug lived in

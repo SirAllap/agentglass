@@ -5,11 +5,10 @@
 // spawn. This pins the platform gate that decides it.
 import { beforeAll, describe, expect, test } from "bun:test";
 
-// selfupdate.ts reads AGENTGLASS_UPDATE_SRC into a module-level const at load,
-// and release-notes.test.ts relies on being the one that first imports it, with
-// that env set. A plain top-level import here would load the shared module early
-// (without that env) and break release-notes in the suite. A cache-busted import
-// gives this file its own instance and leaves the canonical module untouched.
+// selfupdate.ts reads AGENTGLASS_UPDATE_SRC into a module-level const at load, so
+// a plain top-level import here would fix SRC for the whole process from whatever
+// env happened to be set. A cache-busted import gives this file its own instance.
+// release-notes.test.ts takes one too now, rather than relying on import order.
 let windowsUpdateBlock: (platform?: string) => string | null;
 beforeAll(async () => {
   ({ windowsUpdateBlock } = await import(`../src/selfupdate.ts?u=${Math.random()}`));

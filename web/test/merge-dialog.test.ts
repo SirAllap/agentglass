@@ -49,8 +49,38 @@ import { renderToStaticMarkup } from "react-dom/server";
 mock.module(new URL("../src/components/Portal.tsx", import.meta.url).pathname, () => ({
   Portal: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
 }));
-mock.module(new URL("../src/lib/api.ts", import.meta.url).pathname, () => ({
+/*
+ * The api stub DELEGATES; it does not replace the module.
+ *
+ * `mock.module` is keyed on a resolved path and lasts for the whole `bun test`
+ * process, and this call sits at module scope — so the four functions below
+ * used to BE `src/lib/api.ts` for every suite that loaded it afterwards. That
+ * is not a local decision, it is a process-wide one, and it broke two suites
+ * that had nothing to do with this dialog. Measured on ubuntu-latest, where
+ * the file order put this file tenth and its victim thirtieth:
+ * `gate-answer-took.test.ts` died with "api.gateDecide is not a function",
+ * because the stub had four clickup calls and nothing else. It stayed green
+ * here for the ordinary reason an order-dependent bug does — this machine
+ * loads the files in a different order.
+ *
+ * So the real module is imported first, through a specifier `mock.module` does
+ * not match, and the stub is that module with the four calls overridden. Every
+ * other export — `api.gateDecide` included — is the genuine one.
+ *
+ * The globals go up before that import rather than after: `api.ts` reads
+ * `location.href`/`location.hostname` and localStorage while its module body
+ * runs, which is the throw this mock originally existed to dodge.
+ */
+(globalThis as any).location ??= { hostname: "localhost", origin: "http://localhost:4000", href: "http://localhost:4000/" };
+(globalThis as any).localStorage ??= {
+  getItem: () => null, setItem: () => {}, removeItem: () => {},
+};
+const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
+const realApiModule = await import(`${API_PATH}?unmocked`);
+mock.module(API_PATH, () => ({
+  ...realApiModule,
   api: {
+    ...realApiModule.api,
     clickupViews: async () => null,
     clickupFind: async () => null,
     clickupList: async () => null,
