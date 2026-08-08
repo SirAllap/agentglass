@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
 import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
+import { IS_DEMO } from "../../lib/demo.ts";
 
 /** Re-exported from shared so the server (POST /control validation) and the UI
  *  name one set of views. */
@@ -36,7 +37,13 @@ export type ViewDef = {
  *  without renumbering chords people already have in their fingers — and it is
  *  dropped entirely outside the desktop shell, where a `<webview>` does not
  *  exist. A rail entry that opens an empty pane on a phone would be worse than
- *  no entry at all. */
+ *  no entry at all.
+ *
+ *  The demo is the exception, and it is not a phone: it has pages written into
+ *  it (see lib/demoBrowser.ts), so the entry opens something. Dropping it there
+ *  meant the browser did not exist for anybody evaluating the app from the
+ *  landing page, which is a worse outcome than the empty pane this guard is
+ *  about. */
 export const VIEWS: ViewDef[] = [
   // First, and it leads for a reason: this is the app's own screen — the fleet,
   // the spend, the history — and it used to BE the app. It is a view now, but a
@@ -49,7 +56,7 @@ export const VIEWS: ViewDef[] = [
   { id: "docker", label: "Docker", key: "o", icon: DockerIcon, hint: "Containers, logs, stats & actions" },
   { id: "term", label: "Term", key: "t", icon: TerminalIcon, hint: "A real shell in any repo/worktree" },
   { id: "chat", label: "Chat", key: "c", icon: ChatIcon, hint: "Drive a Claude session in any repo/worktree", group: "utility" },
-  ...(HAS_BROWSER
+  ...(HAS_BROWSER || IS_DEMO
     ? [{ id: "browser" as const, label: "Browser", key: "b", icon: BrowserIcon, hint: "A page, without leaving the app", group: "utility" as const }]
     : []),
   // Appended, for the same reason Browser was: ⌘1..⌘N index into this order,

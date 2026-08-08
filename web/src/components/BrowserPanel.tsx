@@ -39,6 +39,9 @@ import { type DrivableWebview } from "../lib/browserDrive.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { PagePicker } from "./browser/PagePicker.tsx";
 import { MarkupLayer } from "./browser/MarkupLayer.tsx";
+import { DemoPage } from "./browser/DemoPage.tsx";
+import { IS_DEMO } from "../lib/demo.ts";
+import { DEMO_BROWSER_TABS } from "../lib/demoBrowser.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { suggest, type Suggestion } from "../lib/suggest.ts";
@@ -135,6 +138,13 @@ export function BrowserView(_props: { active: boolean }) {
    */
   const [profile, setProfile] = useState<string>(() => readSession()?.current ?? "");
   const [tabs, setTabs] = useState<BrowserTab[]>(() => {
+    // The demo opens with its own strip rather than whatever a previous visit
+    // left in localStorage: a saved single blank tab would show the empty-state
+    // card, which is exactly the dead panel this exists to stop being.
+    if (IS_DEMO) return DEMO_BROWSER_TABS.map((t, i) => {
+      const tab = sleepingTab(t.url, t.title, null, "");
+      return i === 0 ? { ...tab, asleep: false } : tab;
+    });
     const saved = readSession();
     const set = setFor(saved, saved?.current ?? "");
     if (!set) return [newTab(homePage(), saved?.current ?? "")];
@@ -554,7 +564,9 @@ export function BrowserView(_props: { active: boolean }) {
     if (k === "l") { e.preventDefault(); (document.getElementById("agx-browser-url") as HTMLInputElement | null)?.focus(); }
   };
 
-  if (!HAS_BROWSER) return null;
+  // The demo has no guest to attach and still draws the panel: its pages are
+  // written into the build, and the chrome around them is this component.
+  if (!HAS_BROWSER && !IS_DEMO) return null;
 
   const blank = !active?.url || active.url === BLANK;
   // Only while typing: `typed` is null the moment the bar is not being edited,
@@ -970,13 +982,17 @@ export function BrowserView(_props: { active: boolean }) {
           <div key={t.id} className="absolute inset-0 flex justify-center"
             style={t.id === activeId ? undefined : { visibility: "hidden" }}>
             <div style={{ width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%" }}>
-              <webview
-                ref={bind(t.id) as unknown as React.Ref<HTMLElement>}
-                src={t.url || BLANK}
-                partition={partitionFor(BROWSER_PARTITION, t.profile)}
-                allowpopups={undefined}
-                style={{ width: "100%", height: "100%", background: "var(--bg)" }}
-              />
+              {IS_DEMO ? (
+                <DemoPage url={t.url || BLANK} />
+              ) : (
+                <webview
+                  ref={bind(t.id) as unknown as React.Ref<HTMLElement>}
+                  src={t.url || BLANK}
+                  partition={partitionFor(BROWSER_PARTITION, t.profile)}
+                  allowpopups={undefined}
+                  style={{ width: "100%", height: "100%", background: "var(--bg)" }}
+                />
+              )}
             </div>
           </div>
           )
