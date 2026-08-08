@@ -125,7 +125,7 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <ViewHeader title="Tasks">
+      <ViewHeader label="Tasks">
         <nav className="flex items-center gap-0.5" aria-label="Sources">
           {tabs.map((s) => (
             <button key={s.id} onClick={() => setSource(s.id)}

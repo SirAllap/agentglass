@@ -2,7 +2,7 @@
 // compose project with live CPU/mem, a streaming-ish log viewer, and start/
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
+import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { api } from "../lib/api.ts";
@@ -517,7 +517,7 @@ export function DockerView({ active }: { active: boolean }) {
       className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
-                  <span className={viewTitleClass} style={{ color: "var(--text)" }}>Docker</span>
+                  <h2 className="sr-only">Docker</h2>
                   {ov?.version && <span className="text-[10px] t-dim2">Engine {ov.version}</span>}
                   {/* Scoped to the open project. The fallback case is spelled out
                       rather than shown as an empty list, so an unlabelled stack

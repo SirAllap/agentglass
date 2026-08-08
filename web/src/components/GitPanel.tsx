@@ -8,7 +8,7 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
-import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
+import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { BasePicker } from "./BasePicker.tsx";
@@ -2140,7 +2140,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     branch chip yielding space and the tab strip scrolling —
                     not by cutting off whatever escapes. */}
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
-                  <span className={viewTitleClass} style={{ color: "var(--text)" }}>Source control</span>
+                  <h2 className="sr-only">Source control</h2>
                   <div className="relative" ref={repoPickerRef}>
                     {/* Also one line. A worktree directory carries the whole
                         ticket name, and wrapped it made the button two rows

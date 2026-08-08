@@ -17,6 +17,14 @@ import type { CSSProperties, ReactNode } from "react";
  *
  * No overflow-hidden, ever. Header controls open dropdowns positioned inside
  * this row, and clipping the row clipped the menus to a sliver.
+ *
+ * And the name of the view is NOT drawn here. "Terminal" over a terminal,
+ * "Docker" over a wall of containers: the word repeated what the panel below it
+ * already was, while the lit icon in the rail had been saying the same thing a
+ * third time. Three statements of one fact, and the widest of the three sat
+ * where the controls wanted to be — so every header started indented by a
+ * different amount depending on how long its own name happened to be. The name
+ * survives for screen readers, which cannot see the rail (see `label`).
  */
 export const VIEW_HEADER_H = 48;
 
@@ -29,20 +37,22 @@ export const viewHeaderStyle: CSSProperties = {
   borderColor: "color-mix(in srgb, var(--border) 40%, transparent)",
 };
 
-/** Same size, same weight, same nowrap, in all five. A wrapped title is what
- *  made the bars different heights in the first place. */
-export const viewTitleClass = "text-[15px] font-semibold whitespace-nowrap shrink-0";
-
 export function ViewHeader({
-  title,
-  count,
+  label,
   children,
   actions,
 }: {
-  title: string;
-  /** The one number that says how much is in here — chats, containers. Beside
-   *  the title because that is where every view already put it. */
-  count?: number;
+  /**
+   * The view's name, for assistive tech only — never painted.
+   *
+   * Sighted users have the rail: the lit icon says which view this is, and the
+   * content says it again. A screen reader has neither, so the heading stays in
+   * the document and only the pixels go. It is an `h2` rather than an
+   * `aria-label` on the row because a bare `div` with a label and no role is
+   * skipped by most readers, and a heading also puts the view back in the
+   * document outline that the rail navigates.
+   */
+  label: string;
   /** Controls that scope the view: a repo picker, an engine chip. */
   children?: ReactNode;
   /** Actions, pinned right. */
@@ -50,8 +60,7 @@ export function ViewHeader({
 }) {
   return (
     <div className={viewHeaderClass} style={viewHeaderStyle}>
-      <span className={viewTitleClass} style={{ color: "var(--text)" }}>{title}</span>
-      {count != null && <span className="text-[10px] t-dim2 tabular-nums shrink-0">{count}</span>}
+      <h2 className="sr-only">{label}</h2>
       {children}
       {actions && <div className="ml-auto flex items-center gap-2 shrink-0">{actions}</div>}
     </div>

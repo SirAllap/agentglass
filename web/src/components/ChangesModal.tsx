@@ -1,7 +1,7 @@
 import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { subscribeWorktreeJump, worktreeJump } from "../lib/worktreeJump.ts";
-import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
+import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import type { FileChange, DiffHunk, WalkthroughResult, GitRepoRef } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -1180,7 +1180,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                       truncates instead, which loses the tail of a preset name
                       rather than half the row. */}
                   <div className="flex items-baseline gap-2.5 min-w-0">
-                    <span className={viewTitleClass} style={{ color: "var(--text)" }}>File changes</span>
+                    <h2 className="sr-only">File changes</h2>
                     {changes && (
                       <span className="text-[10px] t-dim2 tabular-nums truncate">
                         {all.length} edits · <span style={{ color: "var(--success)" }}>+{totals.add}</span> <span style={{ color: "var(--error)" }}>−{totals.del}</span> · {presetTitle || "What the fleet changed"}

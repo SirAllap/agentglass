@@ -15,7 +15,7 @@ import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { focusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover } from "../lib/termFocusPref.ts";
 import { cellAt, paneAt } from "../lib/tmuxHover.ts";
-import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
+import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -1864,7 +1864,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 
                 {/* header: repo picker + command launcher + actions */}
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
-                  <span className={viewTitleClass} style={{ color: "var(--text)" }}>Terminal</span>
+                  <h2 className="sr-only">Terminal</h2>
                   {/* keepTermFocus on the picker group so pressing the trigger
                       or a repo row never blurs the shell; the filter input is
                       excluded by the handler and still takes focus, and every

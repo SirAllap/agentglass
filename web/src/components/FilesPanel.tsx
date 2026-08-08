@@ -60,7 +60,7 @@ export function FilesView({ active }: { active: boolean }) {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <ViewHeader title="Files">
+      <ViewHeader label="Files">
         <div className="relative" ref={pickerRef}>
           <button onClick={() => setRepoOpen((o) => !o)}
             className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[280px] shrink-0 whitespace-nowrap"

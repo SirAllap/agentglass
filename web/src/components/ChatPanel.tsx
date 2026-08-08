@@ -1270,11 +1270,16 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   {resumeOpen && <ResumePicker onPick={resume} onClose={() => setResumeOpen(false)} />}
                 </AnimatePresence>
 
-                {/* The title belongs to the view, so it spans the view — the
-                    same bar every other section has. It used to sit inside the
+                {/* The bar belongs to the view, so it spans the view — the same
+                    one every other section has. It used to sit inside the
                     sidebar, which made Chat look like a different application:
-                    two half-width bars where the others have one. */}
-                <ViewHeader title="Chats" count={chats.length} actions={<>
+                    two half-width bars where the others have one.
+
+                    The chat count went with the word it belonged to. On its own
+                    it was a bare numeral at the far left of an otherwise empty
+                    bar, and the sidebar beside it already lists the chats it was
+                    counting. */}
+                <ViewHeader label="Chats" actions={<>
                   <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
                     className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
                     title="Continue a session that already exists — e.g. one you started in a terminal">↩ Resume</button>
