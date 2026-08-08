@@ -88,6 +88,18 @@ afterAll(() => {
 const win = (n: string) => out(["list-windows", "-t", "bartest", "-F", "#{window_name}\t#{window_id}\t#{window_index}"])
   .split("\n").map((l) => l.split("\t")).find((c) => c[0] === n)!;
 
+/**
+ * The binding for one key, read the way the code under test reads it.
+ *
+ * Never `list-keys -T prefix ,`. Measured on tmux 3.7b, the one-key form prints
+ * NOTHING to stdout and paints the binding onto the attached client as a
+ * message instead — so this fixture used to assert against an empty string, and
+ * the app used to scribble `bind-key  -T prefix . if-shell …` over the first
+ * line of the user's shell every time it took the row.
+ */
+const keyLine = (key: string) => out(["list-keys", "-T", "prefix"]).split("\n")
+  .find((l) => ctl.parseBinding(l)?.key === key) ?? "";
+
 describe.if(has)("the status row, taken and given back", () => {
   test("the row is gone, not blanked — there is no gap to leave behind", () => {
     // The whole point. `status off`, not `status on` with an empty format:
@@ -143,14 +155,51 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(ctl.runAction(target, "move", two[1]!, "")).toBe(false);
   });
 
+  test("what the key did is written down, so there is something to give back", () => {
+    // The take is what this asserts on, not the release: with the answer coming
+    // back empty, `@agx-had-rename` was never set and the release below had
+    // nothing to restore — silently, because an unset option reads as "".
+    expect(out(["show-options", "-t", target.id, "-qv", "@agx-had-rename"])).toContain("command-prompt");
+  });
+
+  test("a second take keeps the user's binding, not ours", () => {
+    // Key bindings are global and the take runs again on every sweep. Reading
+    // the table back now returns OUR binding, and saving that as "what they
+    // had" would bury their real one one copy deeper on every pass.
+    const had = out(["show-options", "-t", target.id, "-qv", "@agx-had-rename"]);
+    ctl.setStatusLine(target, false);
+    expect(out(["show-options", "-t", target.id, "-qv", "@agx-had-rename"])).toBe(had);
+    const line = keyLine(",");
+    expect(line.split("@agx-ask").length - 1).toBe(1); // ours, once, not nested
+    expect(line).toContain("#W"); // and the user's is still the false branch
+  });
+
+  test("a server the old build already took gets its keys back", () => {
+    // What a machine that ran the broken query looks like: our binding is
+    // installed and nothing was written down, so the release path had nothing
+    // to give back and the user's key stayed ours until they killed the server.
+    // Their command is still in the false branch, which is where it is read from.
+    ctl.setStatusLine(target, true);
+    raw(["bind-key", "-T", "prefix", ".", "if-shell", "-F", "#{@agx-owned}",
+      "set-option -w @agx-ask move", 'command-prompt -p "go where?" "move-window -t \'%%\'"']);
+    raw(["set-option", "-t", target.id, "-u", "@agx-had-move"]);
+
+    ctl.setStatusLine(target, false);
+    expect(out(["show-options", "-t", target.id, "-qv", "@agx-had-move"])).toContain("go where?");
+    ctl.setStatusLine(target, true);
+    const back = keyLine(".");
+    expect(back).not.toContain("@agx-ask");
+    expect(back).toContain("go where?");
+    ctl.setStatusLine(target, false);
+  });
+
   test("giving it back restores the row and the keys, quotes intact", () => {
-    const before = out(["list-keys", "-T", "prefix", ","]);
-    expect(before).toContain("if-shell"); // ours is installed
+    expect(keyLine(",")).toContain("if-shell"); // ours is installed
     expect(ctl.setStatusLine(target, true)).toBe(true);
     // The row is the user's again — unset, not forced to "on", because their
     // config is what decides.
     expect(out(["show-options", "-t", target.id, "-v", "@agx-owned"])).toBe("");
-    const after = out(["list-keys", "-T", "prefix", ","]);
+    const after = keyLine(",");
     expect(after).not.toContain("@agx-ask");
     // The quoted arguments survived the round trip. Splitting the saved line on
     // whitespace is what breaks this, and it breaks it silently.
@@ -167,5 +216,26 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(out(["show-options", "-t", theirs, "-v", "@agx-owned"])).toBe("");
     expect(out(["show-options", "-t", target.id, "-v", "@agx-owned"])).toBe("1");
     ctl.setStatusLine(target, true);
+  });
+
+  test("the head of a bind-key line is not a fixed width", () => {
+    // What has to come off the front to leave a command the false branch can
+    // run. `-r` and `-N "note"` ride in front of `-T`, the columns are padded,
+    // and the key comes back escaped — each of which a split on whitespace or a
+    // fixed prefix gets wrong in a different way.
+    const p = (l: string) => ctl.parseBinding(l);
+    expect(p('bind-key    -T prefix ,       command-prompt -I "#W" { rename-window "%%" }'))
+      .toEqual({ key: ",", cmd: 'command-prompt -I "#W" { rename-window "%%" }' });
+    expect(p('bind-key -r -T prefix T       run-shell "menu.sh"'))
+      .toEqual({ key: "T", cmd: 'run-shell "menu.sh"' });
+    expect(p('bind-key    -N "split it" -T prefix v    split-window -h'))
+      .toEqual({ key: "v", cmd: "split-window -h" });
+    expect(p("bind-key    -T prefix \\#      list-buffers")).toEqual({ key: "#", cmd: "list-buffers" });
+    // The column width tracks the widest key in the table, so it moves as the
+    // user's config does. Two gaps, same line, nothing fixed about either.
+    expect(p("bind-key -T prefix C-Space next-layout")).toEqual({ key: "C-Space", cmd: "next-layout" });
+    // A binding in another table is not this key's, however it is padded.
+    expect(p("bind-key    -T copy-mode-vi , select-pane")).toBeNull();
+    expect(p("some other line")).toBeNull();
   });
 });
