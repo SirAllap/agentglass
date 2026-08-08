@@ -84,7 +84,22 @@ describe("the document it hands the WebView", () => {
   });
 
   test("no URL survives once its own code is set aside", () => {
-    const html = doc.replace(/<script>[\s\S]*?<\/script>/g, "");
+    /*
+     * The cut matches every spelling the test above CHECKS FOR, not just the
+     * two the document happens to contain today.
+     *
+     * It read `/<script>[\s\S]*?<\/script>/g` — exact, lowercase, no
+     * attributes — and was sound, because the test above proves those are the
+     * only spellings present. CodeQL flags it anyway ("Bad HTML filtering
+     * regexp: this regular expression does not match upper case <SCRIPT>
+     * tags"), and it is right to: the guarantee lives in a different test, and
+     * a reader of this line cannot see it. Nothing is weakened by matching
+     * what the assertion above already tolerates — `<SCRIPT>`, attributes, and
+     * `</script >` — and if the generator ever emits one of those, this cut
+     * keeps working instead of silently leaving a block of code in `html` for
+     * the URL assertion below to scan.
+     */
+    const html = doc.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, "");
     // The cut has to have done its job, or the assertion under it is vacuous.
     expect(doc.length - html.length).toBeGreaterThan(100_000);
     expect(html).not.toMatch(/https?:\/\//);
