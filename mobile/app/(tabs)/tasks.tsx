@@ -1,0 +1,219 @@
+/*
+ * The cards, from the board you actually use.
+ *
+ * The views are the workspace's own — whatever was added on the desk, in the
+ * order it was added — because a phone that shows a different slice of the
+ * board than the computer is a second place to keep in your head.
+ *
+ * Status is drawn in the colour the workspace gave it and spelled the way the
+ * workspace spells it. Renaming somebody's workflow is not ours to do, and a
+ * board's colours are how its people read it at a glance. What the app decides
+ * for itself is only `statusKind` — open, done, other — because status NAMES
+ * are per-list and a workspace may have four words for "doing", so nothing may
+ * branch on them.
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FlatList, Linking, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import type { ProviderTask } from "../../../shared/providers.ts";
+import { ask } from "../../src/lib/api.ts";
+import { useAgentglass } from "../../src/state/host-context.tsx";
+import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { Card, Label, Note } from "../../src/ui.tsx";
+import { dueIn } from "../../src/lib/dates.ts";
+import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+
+interface SavedView {
+  id: string;
+  name: string;
+  url: string;
+  builtin?: boolean;
+}
+
+interface ViewsAnswer {
+  views: SavedView[];
+  current: string;
+  prefix: string;
+}
+
+interface ViewTasks {
+  tasks: ProviderTask[];
+  truncated: boolean;
+}
+
+function Row({ task, prefix, onCopied }: {
+  task: ProviderTask;
+  prefix: string;
+  onCopied: (what: string) => void;
+}): React.ReactNode {
+  const when = dueIn(task.due, new Date());
+  // The workspace's colour, with a floor: some boards pick a status colour that
+  // is legible on their own white background and vanishes on this one.
+  const statusInk = task.statusColor && task.statusColor !== "#ffffff" ? task.statusColor : C.text3;
+
+  return (
+    <Pressable
+      onPress={() => { if (task.url) void Linking.openURL(task.url); }}
+      onLongPress={() => {
+        // The id, because it is what every skill, branch name and commit
+        // message here is written against — and it is the one thing you cannot
+        // retype from memory on a phone.
+        const id = task.customId || task.id;
+        void Clipboard.setStringAsync(id);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        onCopied(id);
+      }}
+    >
+      <Card style={{ gap: SPACE.sm }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+          <Text style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
+            {task.customId || task.id}
+          </Text>
+          <View style={{ flex: 1 }} />
+          {when ? (
+            <Text style={{ color: when.late ? C.error : C.text4, fontSize: T.eyebrow }}>{when.text}</Text>
+          ) : null}
+        </View>
+
+        <Text style={{ color: C.text, fontSize: T.body, lineHeight: 19 }}>{task.title}</Text>
+
+        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" }}>
+          <View style={{
+            paddingHorizontal: SPACE.sm, paddingVertical: 2, borderRadius: RADIUS.sm,
+            borderWidth: 1, borderColor: statusInk,
+          }}>
+            <Text style={{ color: statusInk, fontSize: T.eyebrow }}>{task.status}</Text>
+          </View>
+          {task.list ? <Text style={{ color: C.text4, fontSize: T.eyebrow }}>{task.list}</Text> : null}
+          {task.sprint ? <Text style={{ color: C.text4, fontSize: T.eyebrow }}>· {task.sprint}</Text> : null}
+        </View>
+      </Card>
+    </Pressable>
+  );
+}
+
+export default function TasksScreen(): React.ReactNode {
+  usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
+  const { host } = useAgentglass();
+  const [views, setViews] = useState<ViewsAnswer | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [tasks, setTasks] = useState<ProviderTask[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  const [openOnly, setOpenOnly] = useState(true);
+
+  useEffect(() => {
+    if (!host) return;
+    void (async () => {
+      const answer = await ask<ViewsAnswer>(host, "/clickup/views");
+      if (!answer.ok) { setError(answer.error); return; }
+      setViews(answer.value);
+      setChosen((current) => current ?? answer.value.current ?? answer.value.views[0]?.id ?? null);
+    })();
+  }, [host]);
+
+  const load = useCallback(async (): Promise<void> => {
+    if (!host || !chosen) return;
+    const answer = await ask<ViewTasks>(host, `/clickup/view?id=${encodeURIComponent(chosen)}`);
+    if (!answer.ok) { setError(answer.error); setTasks([]); return; }
+    setError(null);
+    setTasks(Array.isArray(answer.value.tasks) ? answer.value.tasks : []);
+  }, [host, chosen]);
+
+  useEffect(() => { setTasks(null); void load(); }, [load]);
+
+  const shown = useMemo(
+    // Done cards are the bulk of any board and none of them are work you owe.
+    // Kept behind a switch rather than dropped, because "did I close that?" is
+    // a real question somebody asks from a sofa.
+    () => (tasks ?? []).filter((t) => (openOnly ? t.statusKind !== "done" : true)),
+    [tasks, openOnly],
+  );
+
+  const onRefresh = useCallback((): void => {
+    setPulling(true);
+    void load().finally(() => setPulling(false));
+  }, [load]);
+
+  if (!host) return null;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      <View style={{ borderBottomWidth: 1, borderBottomColor: C.border }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: SPACE.sm, paddingVertical: SPACE.sm, gap: SPACE.xs }}
+        >
+          {(views?.views ?? []).map((view) => {
+            const on = view.id === chosen;
+            return (
+              <Pressable
+                key={view.id}
+                onPress={() => setChosen(view.id)}
+                style={{
+                  paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
+                  borderRadius: RADIUS.md,
+                  backgroundColor: on ? C.bg3 : "transparent",
+                  borderWidth: 1, borderColor: on ? C.border2 : "transparent",
+                }}
+              >
+                <Text style={{ color: on ? C.text : C.text3, fontSize: T.small, fontWeight: on ? "600" : "400" }}>
+                  {view.name}
+                </Text>
+              </Pressable>
+            );
+          })}
+          <Pressable
+            onPress={() => setOpenOnly((v) => !v)}
+            style={{
+              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
+              borderRadius: RADIUS.md, borderWidth: 1,
+              borderColor: openOnly ? "transparent" : C.border2,
+            }}
+          >
+            <Text style={{ color: openOnly ? C.text4 : C.text2, fontSize: T.small }}>
+              {openOnly ? "hiding done" : "showing all"}
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </View>
+
+      {said ? (
+        <View style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.xs, backgroundColor: C.bg2 }}>
+          <Text style={{ color: C.success, fontSize: T.eyebrow }}>{said} copied</Text>
+        </View>
+      ) : null}
+
+      <FlatList
+        data={shown}
+        keyExtractor={(task) => task.id}
+        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }}
+        refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
+        ListEmptyComponent={
+          tasks === null ? null : (
+            <Card>
+              <Label text={error ? "Cannot read the board" : "Nothing here"} />
+              <Note tone={error ? "bad" : "quiet"}>
+                {error ?? "This view has no cards that are still open. The switch above shows the rest."}
+              </Note>
+            </Card>
+          )
+        }
+        renderItem={({ item }) => (
+          <Row
+            task={item}
+            prefix={views?.prefix ?? ""}
+            onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
+          />
+        )}
+      />
+
+      <View style={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}>
+        <Note>Tap opens the card. Hold copies its id.</Note>
+      </View>
+    </View>
+  );
+}
