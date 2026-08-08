@@ -1,0 +1,166 @@
+name: Android APK
+
+# Builds the phone companion and attaches the APK to the GitHub Release for the
+# tag. Like desktop-binaries.yml it only ever *uploads assets*: the release and
+# its hand-written notes belong to release.yml, and nothing here touches the
+# body.
+#
+# Run it by hand (workflow_dispatch) to check the build still works without
+# cutting a tag; that path builds and uploads nothing to a release.
+#
+# ── why this job runs `expo prebuild` ─────────────────────────────────────
+# `mobile/android/` is generated and gitignored (mobile/.gitignore says why).
+# The cost of that choice is paid right here, and it was measured rather than
+# assumed: on 2026-08-08, from an empty mobile/android/, prebuild took **2
+# seconds** and produced 552 KB — against 5m18s for the Gradle build it feeds.
+# Committing the tree would save those two seconds and buy a second source of
+# truth that silently outranks app.json, including the signing plugin below,
+# which exists only inside prebuild's output.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      # Whether this run can sign for real, decided once. A step's `if:` cannot
+      # read `secrets` and cannot read its own `env:` block, so the question has
+      # to be answered here, where the secrets context is in scope.
+      HAVE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The runner ships several JDKs and the Android toolchain is not free to
+      # pick: React Native 0.86's Gradle plugins request a Java 17 toolchain,
+      # and a build run on the wrong one dies with "does not provide the
+      # required capabilities: [JAVA_COMPILER]" — measured on this laptop,
+      # where the default `java` was a JRE.
+      #
+      # Read in a shell step and not as `${{ env.JAVA_HOME_17_X64 }}`: that
+      # expression looks right and expands to nothing, because the `env` context
+      # holds what the workflow declared, not what the image exported. Chosen
+      # over an action for the reason ci.yml's mobile job gives — an action tag
+      # guessed wrong fails the job before a single step runs.
+      - name: Point Gradle at the JDK it asks for
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          "$JAVA_HOME_17_X64/bin/javac" -version
+
+      # `npm ci` and not `npm install`: same reasoning as ci.yml's mobile job —
+      # the lockfile is the point, and its postinstall writes the two generated
+      # sources (terminal engine, icon font) that the app imports.
+      - name: Install (mobile)
+        working-directory: mobile
+        run: npm ci
+
+      # The version the APK carries, from the tag.
+      #
+      # Editing a tracked file in CI is exactly what desktop-binaries.yml
+      # refuses to do — but its reason is a build stamp that hashes the tree,
+      # and no such stamp exists here. What does exist is the failure this
+      # avoids: app.json pins versionCode 1, so without this step every release
+      # ever published would be versionCode 1, and a phone would have no way to
+      # tell last month's download from this one. Android orders builds by that
+      # integer and by nothing else.
+      #
+      # v0.8.1 → 801. Monotonic while minor and patch stay under 100, which is
+      # the same assumption the tag scheme already makes.
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const [maj, min, pat] = v.split(".").map((n) => parseInt(n, 10) || 0);
+            const app = JSON.parse(fs.readFileSync("mobile/app.json", "utf8"));
+            app.expo.version = v;
+            app.expo.android.versionCode = maj * 10000 + min * 100 + pat;
+            fs.writeFileSync("mobile/app.json", JSON.stringify(app, null, 2) + "\n");
+            console.log(`version ${v}, versionCode ${app.expo.android.versionCode}`);
+          '
+
+      # Regenerates mobile/android/ from app.json — including the release
+      # signingConfig, which mobile/plugins/with-release-signing.js adds from
+      # inside this command and nowhere else. --no-install because npm ci above
+      # already did it, and letting prebuild run its own install would drop the
+      # lockfile's resolution on the floor.
+      - name: Prebuild the native project
+        working-directory: mobile
+        run: npx expo prebuild --platform android --no-install
+
+      # Written outside the checkout on purpose: a keystore under mobile/ would
+      # be visible to prebuild, to Gradle's packaging globs and to any step that
+      # uploads a directory. RUNNER_TEMP is wiped with the runner.
+      #
+      # The owner's keystore uses one password for the store and for the key,
+      # which is why one secret feeds both variables. base64 -d reads the secret
+      # from the environment rather than from a command line, so it never
+      # reaches the process list or the log.
+      - name: Unpack the signing key
+        if: env.HAVE_KEYSTORE == 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printenv KEYSTORE_B64 | base64 -d > "$RUNNER_TEMP/release.jks"
+          chmod 600 "$RUNNER_TEMP/release.jks"
+          echo "AGENTGLASS_ANDROID_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      # A tag that cannot be signed must not produce a file anybody installs.
+      # The plugin's fallback — sign the release with the shared debug key — is
+      # right for a laptop and wrong for a published asset: it installs, it
+      # runs, and the only symptom is that the next release cannot replace it,
+      # because Android refuses an update signed by a different key. Loud here
+      # beats discovering it on somebody's phone.
+      - name: A tagged build has to be really signed
+        if: startsWith(github.ref, 'refs/tags/v') && env.HAVE_KEYSTORE != 'true'
+        run: |
+          echo "::error::ANDROID_KEYSTORE_BASE64 is not set — refusing to publish a debug-signed release APK." >&2
+          exit 1
+
+      - name: Build the APK
+        working-directory: mobile/android
+        env:
+          AGENTGLASS_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          AGENTGLASS_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          AGENTGLASS_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: ./gradlew assembleRelease --console=plain
+
+      # Named for the release it belongs to, because `app-release.apk` in a
+      # downloads folder next to three other downloads says nothing.
+      - name: Name it after the tag
+        run: |
+          name="agentglass-${GITHUB_REF_NAME:-dev}.apk"
+          mv mobile/android/app/build/outputs/apk/release/app-release.apk "$name"
+          echo "APK=$name" >> "$GITHUB_ENV"
+          ls -l "$name"
+
+      # Proof that the signature is the release one and not the debug key, from
+      # the APK itself rather than from the Gradle log — the log says what the
+      # build intended, apksigner says what the file carries. The certificate's
+      # subject is printed; nothing here prints the key or the password.
+      - name: Say which key signed it
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          signer="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
+          "$signer" verify --print-certs "$APK" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "$APK" --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Keep the build even when there is no tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentglass-android
+          path: ${{ env.APK }}
+          if-no-files-found: error

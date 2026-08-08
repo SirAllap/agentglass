@@ -21,10 +21,23 @@ jobs:
       # the bug, so they are generated now and this is what catches a hand-edit.
       - name: The mark is in sync
         run: bun scripts/logo.mjs --check
-      - name: Typecheck web
-        run: cd web && bunx tsc --noEmit
+      # `bun run typecheck`, never `bunx tsc`. bunx runs a LOCAL binary if there
+      # is one and silently downloads the newest published otherwise, and
+      # `typescript` was declared in web/ and mobile/ but not server/ — so this
+      # file was type-checking the same shared/types.ts with three different
+      # compilers depending on the directory: measured on 2026-08-07, web got
+      # 5.9.3 from node_modules and server got 7.0.2 off the registry. Nothing
+      # in the repo asked for 7; a TS major landing on npm was enough to redden
+      # a commit that changed nothing. Both are pinned to 5.9.3 in their
+      # package.json now, and `bun run` fails loudly on a missing binary where
+      # bunx would have gone and fetched one.
+      # web's script checks tsconfig.json AND tsconfig.test.json — web/test/'s
+      # 122 suites are run here by `bun test`, which strips types without
+      # checking them, so until that second config existed nothing read them.
+      - name: Typecheck web (app and tests)
+        run: cd web && bun run typecheck
       - name: Typecheck server
-        run: cd server && bunx tsc --noEmit
+        run: cd server && bun run typecheck
       - name: Tests (server)
         # Generous per-test timeout, not bun's 5s default: several server tests
         # do real git/spawn/settle work that finishes in ~seconds on a dev box
@@ -82,3 +95,84 @@ jobs:
           sleep 2
           curl -sf http://localhost:4123/health
           kill $SVPID
+
+  # The phone had no CI at all: 29 suites and two tsconfigs that only ran when
+  # somebody remembered, while mobile/README.md and mobile/.npmrc both described
+  # a `npm ci` in CI that did not exist. A reader concluded the app was covered.
+  #
+  # Its own job rather than steps on `build`: mobile/ is not a bun workspace
+  # member (the root package.json lists server, web, electron), it installs with
+  # npm from its own package-lock.json, and nothing above depends on it — so a
+  # red phone should not hide a green dashboard or wait behind vite.
+  mobile:
+    runs-on: ubuntu-latest
+    # `mobile/` arrives in a later commit than this workflow does: the phone and
+    # the job that tests it were split into separate pull requests, so on the
+    # branch that introduces the job the directory is not there yet, and `npm ci`
+    # died in eight seconds on a path that did not exist. It is also the honest
+    # condition for main, which has no mobile/ until the phone lands.
+    steps:
+      - uses: actions/checkout@v7
+      - name: Is there a phone to test?
+        id: phone
+        run: |
+          if [ -d mobile ]; then echo "there=yes" >> "$GITHUB_OUTPUT"
+          else echo "there=no" >> "$GITHUB_OUTPUT"; echo "::notice::no mobile/ in this tree — nothing to test"; fi
+      # No setup-node: `npm ci` IS Node, so every runner image carries one, and
+      # the only floor this job has is `import.meta.dirname` in the two
+      # generators below — Node 20.11, which every current image is long past.
+      # An action tag guessed wrong fails the job before a single step runs,
+      # which is a worse trade than trusting the image for a version floor
+      # nothing here is near.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # `npm ci` and not `npm install`: the lockfile is the point. Its
+      # postinstall runs scripts/build-terminal-engine.mjs and
+      # build-terminal-font.mjs, which write src/terminal/engine.generated.ts
+      # and nerdfont.generated.ts — both gitignored, both imported by
+      # terminal-html.ts. Skip this and the typecheck fails on a missing module
+      # rather than on anything real.
+      - name: Install (mobile)
+        if: steps.phone.outputs.there == 'yes'
+        working-directory: mobile
+        run: npm ci
+      # The workspace install is not redundant, and not for the reason you would
+      # guess. test/pairing-e2e.test.ts and test/fleet-shapes.test.ts spawn
+      # `bun run src/index.ts` in ../server for real, and that imports
+      # @anthropic-ai/sdk (server/src/walkthrough.ts). Drop this step and the
+      # suites still pass — bun AUTO-INSTALLS a missing import at runtime — which
+      # is worse than failing: measured on 2026-08-07, with no node_modules the
+      # server resolved @anthropic-ai/sdk@0.115.0 while bun.lock pins 0.112.1.
+      # That is the same disease as the `bunx tsc` this commit removed: a
+      # dependency chosen by the registry rather than by the repo, silently, in
+      # the only job that runs the server outside `build`.
+      - name: Install (workspace — the server those two suites boot)
+        if: steps.phone.outputs.there == 'yes'
+        run: bun install
+      # Both configs: the app against React Native, the suites against
+      # bun-types. `types` replaces rather than adds, so one file cannot hold
+      # both — see mobile/tsconfig.test.json.
+      - name: Typecheck mobile (app and tests)
+        if: steps.phone.outputs.there == 'yes'
+        working-directory: mobile
+        run: npm run typecheck
+      # `npm test` is `bun test`, with no --timeout, and that is deliberate: the
+      # 31 other suites here are pure-module tests that finish in milliseconds,
+      # so the tight 5s default is what turns a genuine hang in one of them into
+      # a fast red rather than a five-minute one. The one suite that needs more
+      # (test/pane-line.test.ts, a real Chrome over CDP driving a real tmux)
+      # carries its own budgets. That file self-skips wherever
+      # /usr/bin/google-chrome, tmux or python3 is absent.
+      #
+      # This used to say the suite "passes its own 30s per test". It passed
+      # nothing — not on a test, not on a hook — and the sentence was the stated
+      # reason there is no flag here, so the gap it described as covered was the
+      # gap that took the job down: the file's two heavy hooks inherited the 5s
+      # default and the outer one alone polls for up to 10s, giving `(fail)
+      # (unnamed) [5000.30ms] — a beforeEach/afterEach hook timed out`. The
+      # budgets are real now, on the hooks, in that file.
+      - name: Tests (mobile)
+        if: steps.phone.outputs.there == 'yes'
+        working-directory: mobile
+        run: npm test

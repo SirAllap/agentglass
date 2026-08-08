@@ -16,6 +16,7 @@
 // bug was entirely about which processes get matched. Asserting on the script's
 // text would have passed against the broken version too.
 import { describe, expect, test, afterEach } from "bun:test";
+import { readFileSync } from "node:fs";
 import { mkdtempSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,6 +95,25 @@ async function visible(app: string, want: number[], deadlineMs = 5000): Promise<
   } while (Date.now() < until);
   return seen;
 }
+
+/**
+ * A stub that blocks on a fifo rather than on stdin, because start_app hands
+ * the app /dev/null — as it must, since the reopened app outlives the shell
+ * that installed it. A stub reading stdin would see EOF and exit instantly, and
+ * the test would be measuring its own harness.
+ */
+const blocker = (app: string) => {
+  const fifo = join(app, "block");
+  Bun.spawnSync(["mkfifo", fifo]);
+  return `read x < ${fifo}`;
+};
+const ourPids = (app: string) =>
+  Bun.spawnSync(["bash", "-c", `APP="${app}"; . "${APPCTL}"; app_pids`], { stdout: "pipe" })
+    .stdout.toString().trim().split("\n").filter(Boolean);
+const cleanupInstall = (app: string) => {
+  for (const pid of ourPids(app)) { try { process.kill(Number(pid), 9); } catch { /* gone */ } }
+  rmSync(app, { recursive: true, force: true });
+};
 
 afterEach(() => {
   for (const pid of spawned.splice(0)) { try { process.kill(pid, 9); } catch { /* already gone */ } }
@@ -205,23 +225,6 @@ describe("putting back what the install took down", () => {
   // underneath it. Leaving it closed made the normal loop (merge, rebuild,
   // look at the change) end with the window gone, which reads as the rebuild
   // having broken something.
-  //
-  // The stub here blocks on a fifo rather than on stdin, because start_app
-  // hands the app /dev/null — as it must, since the reopened app outlives the
-  // shell that installed it. A stub reading stdin would see EOF and exit
-  // instantly, and the test would be measuring its own harness.
-  const blocker = (app: string) => {
-    const fifo = join(app, "block");
-    Bun.spawnSync(["mkfifo", fifo]);
-    return `read x < ${fifo}`;
-  };
-  const ourPids = (app: string) =>
-    Bun.spawnSync(["bash", "-c", `APP="${app}"; . "${APPCTL}"; app_pids`], { stdout: "pipe" })
-      .stdout.toString().trim().split("\n").filter(Boolean);
-  const cleanup = (app: string) => {
-    for (const pid of ourPids(app)) { try { process.kill(Number(pid), 9); } catch { /* gone */ } }
-    rmSync(app, { recursive: true, force: true });
-  };
 
   test("the instance comes back with the flags it had", async () => {
     const app = fakeInstall();
@@ -236,7 +239,7 @@ describe("putting back what the install took down", () => {
     // silently drops the way this app is started.
     expect(out).toContain(`${app}/agentglass`);
     expect(out).toContain("--ozone-platform=wayland");
-    cleanup(app);
+    cleanupInstall(app);
   });
 
   test("AGENTGLASS_ scoping survives, and nothing else is carried over", async () => {
@@ -244,19 +247,28 @@ describe("putting back what the install took down", () => {
     // environment. Reopening it unscoped would be a different app than the one
     // that was closed. Everything else about that environment is a dead session
     // by the time we get here, so it is deliberately left behind.
+    //
+    // Read off the SIDECAR, which inherits the app's environment and, unlike
+    // the Electron main, still has one to read. The grace is shortened because
+    // a fake sidecar does not die with its parent the way AGENTGLASS_DIE_WITH_-
+    // PARENT makes the real one: without it stop_app waits out its full ten
+    // seconds before escalating, and the test times out on its own harness.
     const app = fakeInstall();
-    const p = Bun.spawn([join(app, "agentglass"), "-c", blocker(app)], {
+    const p = Bun.spawn([join(app, "resources", "agentglass-server"), "-c", blocker(app)], {
       stdio: ["pipe", "ignore", "ignore"],
       env: { ...process.env, AGENTGLASS_PROJECT: "/tmp/scoped-repo", SOME_DEAD_SESSION: "nope" },
     });
     p.unref();
     spawned.push(p.pid);
-    await visible(app, [p.pid]);
+    const main = launch(join(app, "agentglass"), `read x < ${join(app, "block")}`);
+    await visible(app, [p.pid, main]);
 
-    const { out } = await appctl(app, `stop_app >/dev/null && start_app >/dev/null && ${AWAIT_MAIN} && tr "\\0" "\\n" < /proc/$(main_pids | head -n1)/environ`);
+    const { out } = await appctl(app,
+      `stop_app >/dev/null && start_app >/dev/null && ${AWAIT_MAIN} && tr "\\0" "\\n" < /proc/$(main_pids | head -n1)/environ`,
+      { APPCTL_GRACE_TENTHS: "5" });
     expect(out).toContain("AGENTGLASS_PROJECT=/tmp/scoped-repo");
     expect(out).not.toContain("SOME_DEAD_SESSION");
-    cleanup(app);
+    cleanupInstall(app);
   });
 
   test("an install with nothing running opens nothing", async () => {
@@ -268,5 +280,260 @@ describe("putting back what the install took down", () => {
     expect(out).not.toContain("reopening");
     expect(ourPids(app)).toEqual([]);
     rmSync(app, { recursive: true, force: true });
+  });
+
+  /*
+   * And putting it back when the install FAILED, which is the case that was
+   * missing entirely.
+   *
+   * install-local.sh stops the app because it is about to replace the files
+   * under it. Every failure path below that point simply exited, so a failed
+   * verification left the desktop with no app, no window, and no line saying
+   * that was why. That happened today.
+   */
+  test("a failed install puts back the instance it stopped, and says so", async () => {
+    const app = fakeInstall();
+    const main = launch(join(app, "agentglass"), blocker(app), "--ozone-platform=wayland");
+    await visible(app, [main]);
+
+    // Exactly what the installer's EXIT trap runs: the app is already down and
+    // something below the stop has failed.
+    const { code, out } = await appctl(app,
+      `stop_app >/dev/null; restore_after_failed_install 7 stopped 2>&1; ${AWAIT_MAIN}; main_pids`);
+    expect(code).toBe(0);
+    // Says what happened, with the exit code, rather than leaving a blank
+    // terminal and a missing window to be interpreted.
+    expect(out).toContain("The install FAILED (exit 7)");
+    expect(out).toContain("Nothing was replaced");
+    // And the window is back.
+    expect(out).toContain("reopening");
+    const back = pids(out);
+    expect(back.length).toBe(1);
+    expect(back[0]).not.toBe(main);
+    expect(alive(main)).toBe(false);
+    cleanupInstall(app);
+  });
+
+  test("it does not claim the old app survived when the copy had already run", async () => {
+    // The message it replaced said "nothing was left half-written" from both
+    // sides of the copy. After the copy that is false — the files on disk are
+    // the new ones — and a reassuring sentence that is false is the same class
+    // of bug as a stamp naming a commit the binary does not contain.
+    const app = fakeInstall();
+    const main = launch(join(app, "agentglass"), blocker(app));
+    await visible(app, [main]);
+
+    const { out } = await appctl(app,
+      `stop_app >/dev/null; restore_after_failed_install 1 replaced 2>&1; ${AWAIT_MAIN}`);
+    expect(out).toContain("did not verify");
+    expect(out).not.toContain("Nothing was replaced");
+    expect(out).toContain("reopening");
+    cleanupInstall(app);
+  });
+
+  test("a failure with nothing running still opens nothing", async () => {
+    const app = fakeInstall();
+    const { code, out } = await appctl(app, "stop_app >/dev/null; restore_after_failed_install 1 stopped 2>&1");
+    expect(code).toBe(0);
+    expect(out).toContain("No app was running");
+    expect(out).not.toContain("reopening");
+    expect(ourPids(app)).toEqual([]);
+    rmSync(app, { recursive: true, force: true });
+  });
+});
+
+/*
+ * The one link the process tests above cannot reach: that install-local.sh
+ * actually arms the recovery, and arms it in the window where it is needed.
+ *
+ * A trap rather than a check at each exit, because `set -e` makes "exit" the
+ * default outcome of anything that goes wrong down there — and it was the paths
+ * nobody had thought about that stranded him, not the ones with an explicit
+ * `exit 1` next to them.
+ */
+describe("the installer arms the recovery", () => {
+  const INSTALL = readFileSync(new URL("../../electron/install-local.sh", import.meta.url), "utf8");
+  const at = (needle: string) => {
+    const i = INSTALL.indexOf(needle);
+    expect(i).toBeGreaterThan(-1);
+    return i;
+  };
+
+  test("the EXIT trap is set once the app is down and before anything is replaced", () => {
+    expect(at("trap ")).toBeGreaterThan(at("stop_app"));
+    expect(at("trap ")).toBeLessThan(at("rm -rf \"$APP\""));
+    expect(INSTALL).toContain("restore_after_failed_install");
+  });
+
+  test("how far it got is recorded on both sides of the copy", () => {
+    // Without this the trap can only guess, and a guess here is a sentence that
+    // tells someone their old app is fine when it has already been overwritten.
+    expect(at("PHASE=replacing")).toBeLessThan(at("rm -rf \"$APP\""));
+    expect(at("PHASE=replaced")).toBeGreaterThan(at("rm -rf \"$APP\""));
+  });
+
+  test("the success path cannot make it reopen twice", () => {
+    // start_app at the end can itself fail, and `set -e` turns that into an
+    // exit — straight into the trap, which would try the same thing again.
+    // The guard has to be set on the success path too, not only inside the
+    // trap, which is why this looks at the LAST occurrence of each.
+    expect(INSTALL.lastIndexOf("RESTORED=1")).toBeGreaterThan(at("PHASE=replaced"));
+    expect(INSTALL.lastIndexOf("RESTORED=1")).toBeLessThan(INSTALL.lastIndexOf("start_app"));
+  });
+});
+
+/*
+ * What the installer is allowed to carry across a restart.
+ *
+ * It captured every AGENTGLASS_* off the running instance and replayed it. That
+ * is right for AGENTGLASS_ROOT — it is why a reopened window comes back on the
+ * same project — and wrong for everything the shell derives for itself.
+ *
+ * The failure it produced, in full: an app launched from a terminal INSIDE
+ * agentglass inherits the sidecar's whole set. The next install captures them
+ * and replays them. Every install after that captures its own replay. From then
+ * on `rotateToken` refuses, because AGENTGLASS_TOKEN is set — correctly, since
+ * rotating a file the server does not read would report a revoke that did not
+ * happen — and "Revoke this link" answers with a note about an environment
+ * variable the user never set. It survived three attempts at rotating a leaked
+ * token and took an Electron inspector session to find, because
+ * /proc/<pid>/environ shows the exec-time snapshot and told us it was not there.
+ *
+ * The first fix for that only removed those seven from the REPLAY LIST, and
+ * these tests only read the script's text, so they passed against a fix that
+ * changed nothing: `env FOO=bar cmd` adds to the environment it was given, and
+ * the update button gives the script the sidecar's. The assertions below run
+ * the launch and read what came out of it.
+ */
+describe("what survives a reinstall", () => {
+  const CAPTURE = readFileSync(new URL("../../electron/appctl.sh", import.meta.url), "utf8");
+  /** How a shell inside agentglass — and the update script — is scoped. */
+  const POLLUTED = {
+    AGENTGLASS_TOKEN: "sidecar-token", AGENTGLASS_PORT: "4000", AGENTGLASS_BIND: "0.0.0.0",
+    AGENTGLASS_TRUST_LAN: "1", AGENTGLASS_WEB_DIR: "/opt/web", AGENTGLASS_DIE_WITH_PARENT: "1",
+    AGENTGLASS_PTY_SIZE_FILE: "/tmp/pty",
+  };
+  test("the two lists that hold the seven cannot drift apart", async () => {
+    // One in bash and one in TypeScript, because they shut different doors —
+    // `make desktop-update` from a terminal never goes through the server, and
+    // the update button never goes through a clean shell. Different files, same
+    // seven, so the way that fails is somebody adding an eighth to one of them.
+    const { DERIVED_ENV } = await import("../src/selfupdate.ts");
+    const inShell = /APPCTL_DERIVED=\(([^)]*)\)/.exec(CAPTURE)?.[1]?.split(/\s+/).filter(Boolean) ?? [];
+    expect([...inShell].sort()).toEqual([...DERIVED_ENV].sort());
+    expect(inShell).toContain("AGENTGLASS_TOKEN");
+  });
+
+  test("the derived seven do not reach the reopened app, even from the shell", async () => {
+    // The bug in one assertion. The replay list never held these; the
+    // environment the installer was RUN IN did, and that is what the app
+    // inherited. Exported here exactly as server/src/selfupdate.ts used to
+    // hand them over.
+    const app = fakeInstall();
+    const main = launch(join(app, "agentglass"), blocker(app));
+    await visible(app, [main]);
+
+    const { out } = await appctl(app,
+      `stop_app >/dev/null && start_app >/dev/null && ${AWAIT_MAIN} && tr "\\0" "\\n" < /proc/$(main_pids | head -n1)/environ`,
+      POLLUTED);
+    for (const v of Object.keys(POLLUTED)) expect(out, `${v} must not reach the app`).not.toContain(`${v}=`);
+    cleanupInstall(app);
+  });
+
+  test("the scoping is read off the sidecar, which is the process that still has one", async () => {
+    // Chromium rewrites the argv+environ block in place to set its process
+    // title, so the Electron main has no environment left to read: measured on
+    // the live app, /proc/<main>/environ is 2749 bytes with not one non-NUL
+    // byte in it, against 78 variables in its sidecar. Reading the main is why
+    // the scoping replay had never once happened on a real install.
+    //
+    // Hence the shape of this test: AGENTGLASS_ROOT is on the SIDECAR and
+    // deliberately NOT on the main process, so a capture that reads the main
+    // cannot pass it.
+    const app = fakeInstall();
+    const side = Bun.spawn([join(app, "resources", "agentglass-server"), "-c", blocker(app)], {
+      stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, ...POLLUTED, AGENTGLASS_ROOT: "/tmp/scoped-repo" },
+    });
+    side.unref();
+    spawned.push(side.pid);
+    const main = launch(join(app, "agentglass"), `read x < ${join(app, "block")}`);
+    await visible(app, [main, side.pid]);
+
+    const { out } = await appctl(app,
+      `stop_app >/dev/null && start_app >/dev/null && ${AWAIT_MAIN} && tr "\\0" "\\n" < /proc/$(main_pids | head -n1)/environ`,
+      { APPCTL_GRACE_TENTHS: "5" });
+    expect(out).toContain("AGENTGLASS_ROOT=/tmp/scoped-repo");
+    // And the sidecar's own set, which is the polluted one by construction
+    // (main.js spawns it with `{ ...process.env, AGENTGLASS_TOKEN: … }`), is
+    // still filtered on the way through.
+    expect(out).not.toContain("AGENTGLASS_TOKEN=");
+    cleanupInstall(app);
+  });
+
+  test("the sidecar is found through the main's children, and by walking when it is not one", async () => {
+    // The lookup reads /proc/<main>/task/<main>/children before it walks /proc,
+    // because main.js spawns the sidecar and a walk costs 415-453 ms on this
+    // machine against 3 ms for the read — the same cost _candidate_pids exists
+    // to warn about, on a stop_app that already pays it twice.
+    //
+    // Both topologies, because "it had children" is NOT the test: an Electron
+    // main always has helpers, so a lookup that stopped at the first non-empty
+    // children file would silently miss an ADOPTED sidecar, which is nobody's
+    // child.
+    const app = fakeInstall();
+    const fifo = blocker(app);
+    const child = launch(join(app, "agentglass"),
+      `${join(app, "resources", "agentglass-server")} -c '${fifo}' & ${fifo}`);
+    await visible(app, [child]);
+    const asChild = await appctl(app, 'sidecar_pids "$(main_pids | head -n1)"');
+    expect(pids(asChild.out).length).toBe(1);
+    cleanupInstall(app);
+
+    // And the same install with the sidecar beside the main rather than under
+    // it — no argument at all, which is the walk.
+    const app2 = fakeInstall();
+    const side = launch(join(app2, "resources", "agentglass-server"), blocker(app2));
+    await visible(app2, [side]);
+    expect(pids((await appctl(app2, "sidecar_pids")).out)).toEqual([side]);
+    cleanupInstall(app2);
+  });
+
+  test("a command line Chromium has rewritten still yields its flags", async () => {
+    // /proc/<pid>/cmdline is NUL-separated for an ordinary process and ONE
+    // space-joined string for the Electron main — measured, zero NUL separators
+    // where a /bin/sh with the same arguments has four. `tr '\0' '\n'` returned
+    // a single line, `${args[@]:1}` was therefore empty, and every flag the
+    // instance had was dropped on reopen.
+    const rewritten = "/opt/agentglass --ozone-platform=wayland --no-sandbox";
+    const both = await appctl("/unused",
+      `printf '%s' "${rewritten}" | _split_cmdline; echo ---; printf '%s\\0%s\\0' /opt/agentglass --no-sandbox | _split_cmdline`);
+    const [chromium, ordinary] = both.out.split("---").map((s) => s.trim().split("\n"));
+    expect(chromium).toEqual(["/opt/agentglass", "--ozone-platform=wayland", "--no-sandbox"]);
+    // And the NUL-separated form is untouched by the new branch.
+    expect(ordinary).toEqual(["/opt/agentglass", "--no-sandbox"]);
+  });
+});
+
+/*
+ * And the second launch, which nobody meant to write.
+ *
+ * install-local.sh has ended with start_app since 22 July; self-update.sh then
+ * launched another one unconditionally about a millisecond later, and
+ * requestSingleInstanceLock picked. Measured over 20 runs against the real
+ * binary: 1.2–1.6 ms between the launches, 79–101 ms of spread in reaching the
+ * lock, and the SECOND one won 12 times out of 20 — while being the launch with
+ * none of the arguments or scoping the first one carried.
+ */
+describe("the update script does not race the installer", () => {
+  const SELFUPDATE = readFileSync(new URL("../../electron/self-update.sh", import.meta.url), "utf8");
+
+  test("it only opens the app when the install reopened nothing", () => {
+    expect(SELFUPDATE).toContain("main_pids");
+    // The launch has to sit behind a test of what is running. Asserting on the
+    // order is the point: an unconditional `setsid nohup "$BIN"` reads exactly
+    // the same as a guarded one until you look at what precedes it.
+    expect(SELFUPDATE.indexOf("main_pids")).toBeLessThan(SELFUPDATE.indexOf('setsid nohup "$BIN"'));
+    expect(SELFUPDATE.match(/setsid nohup "\$BIN"/g)?.length ?? 0).toBe(1);
   });
 });

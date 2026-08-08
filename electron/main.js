@@ -1,11 +1,10 @@
 // agentglass Electron shell.
 //
-// Runs the EXACT web UI (web/dist) in Chromium. GPU raster and WebGL keep the
-// live radar and streaming dashboard off the CPU, where the previous
-// WebKitGTK-based shell fell back to software. On Linux the *final* frame is
-// CPU-composited (see disable-gpu-compositing below) to dodge a Wayland/GPU
-// white-out, but the accelerated painting still runs on the GPU. Same pixels
-// as the web app.
+// Runs the EXACT web UI (web/dist) in Chromium, where GPU rasterisation keeps
+// the dashboard off the CPU — the previous WebKitGTK-based shell fell back to
+// software. On Linux the *final* frame is CPU-composited (see
+// disable-gpu-compositing below) to dodge a Wayland/GPU white-out; raster still
+// runs on the GPU, WebGL does not. Same pixels as the web app.
 //
 // It serves web/dist from the app's own `agentglass://` scheme and brings the
 // Bun server up with it unless one is already running.
@@ -20,27 +19,128 @@
 // origin and no port to contend for. Only one instance runs now (see the lock
 // below), but the origin is what makes the store survive a restart.
 
-const { app, BrowserWindow, Menu, ipcMain, protocol, screen, shell } = require("electron");
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeImage, protocol, screen, session, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+// The `<webview>` boundary, in its own file so it can be read and tested on its
+// own. Shipped inside the asar with this one — see build.files in package.json.
+const {
+  BROWSER_PARTITION, isBrowserPartition, safeGuestUrl, applyGuestGuard,
+} = require("./guest-guard.js");
 
-// GPU compositing on Wayland.
-app.commandLine.appendSwitch("ozone-platform-hint", "auto");
-app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+/*
+ * Which windowing backend this app is, on Linux. Pinned, on purpose.
+ *
+ * What used to be here was `ozone-platform-hint=auto` plus
+ * `enable-features=UseOzonePlatform`. Both were deleted rather than kept "just
+ * in case": Chromium removed `--ozone-platform-hint` in M140 (= Electron 38,
+ * `ui/ozone/public/ozone_switches.cc` now defines only `ozone-platform`,
+ * `ozone-dump-file` and `ozone-override-screen-size`), and the
+ * `UseOzonePlatform` feature no longer exists either. They were not merely
+ * doing nothing — they were two lines telling the next reader that this file
+ * chooses a backend, when it had stopped choosing anything.
+ *
+ * So it chooses one now, and it chooses it FROM THE SESSION. Not a constant —
+ * a constant is wrong in one direction or the other, and both directions were
+ * measured.
+ *
+ * DO NOT PIN "x11". That was the first attempt, for the reason below, and it
+ * failed in the worst shape there is: on GNOME 46 / Wayland with Chromium 150 the
+ * packaged app started, brought the sidecar up, served :4000, answered /health —
+ * and never mapped a window. Nothing on screen, no crash, no non-zero exit; the
+ * main process had connected to no display server at all. The GPU process says
+ * why, and still does today:
+ *     ui/base/x/x11_software_bitmap_presenter.cc:147
+ *       XGetWindowAttributes failed for window 1
+ * With AGENTGLASS_GPU=1 (so this is not the white-out workaround below) it is the
+ * same, plus three ContextResult::kTransientFailure out of CreateCommandBuffer.
+ * The switch is not being ignored — it reaches the children, it is right there in
+ * /proc/<gpu-pid>/cmdline — it just cannot present.
+ *
+ * DO NOT PIN "wayland" EITHER, however tempting after the above. Measured out of
+ * a scratch copy of this directory, four pins x two sessions, reading the main
+ * process's /memfd:wayland-* allocations and what the renderer can see over CDP:
+ *
+ *                            Wayland session            X11-only session
+ *     pin "wayland"          window, dpr 1.5, 331KB     NO FRAME, dpr 1  <-- zombie
+ *     pin "x11"              window, but the X11 GPU    window, dpr 1, 190KB
+ *                            error above every launch
+ *     no pin                 window, dpr 1.5, 331KB     window, dpr 1, 190KB
+ *     from the session       window, dpr 1.5, 331KB     window, dpr 1, 190KB
+ *
+ * The top-right cell is the same silent zombie as the x11 one, aimed at everybody
+ * who logs into X11: alive, serving, /health ok, no window, nothing in the log.
+ * This repo publishes an AppImage and a .deb, so that is not a hypothetical
+ * machine. "No pin" measures identically to choosing from the session; choosing
+ * is kept because a file that says which backend it is beats one that leaves it
+ * to a default that has already changed twice in this app's lifetime.
+ *
+ * On the machine this ships to the expression evaluates to "wayland", which is
+ * exactly the one-word hand-patch that was confirmed working in the installed
+ * asar. The source and the install now agree.
+ *
+ * The cost, which is real and is now paid: a Wayland client cannot position its
+ * own window, the compositor does. Saved window POSITION is gone — see
+ * APP_PLACES_ITS_WINDOW below, which stops pretending otherwise. Size, maximised
+ * and fullscreen all still work. The argument that used to stand here was that
+ * `xlsclients -l` listed agentglass before the upgrade, so it was already an X11
+ * client under XWayland and pinning x11 changed nothing. That was true of
+ * Electron 33 and did not survive Electron 43; it is written down so nobody
+ * re-derives it and reverts.
+ *
+ * Wayland pays something back that was not expected: the primary monitor on the
+ * machine this ships to is at fractional scale 1.5 (mutter's own DisplayConfig
+ * says so), and a native Wayland client is told that where XWayland was not —
+ * devicePixelRatio 1.5, a 2160x1350 buffer for a 1440x900 window. Under XWayland
+ * it was dpr 1 and the compositor upscaled the result, which is where "small or
+ * blurry" came from.
+ */
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch(
+    "ozone-platform",
+    process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === "wayland" ? "wayland" : "x11",
+  );
+}
 
-// Software-composite the final frame on Linux.
-//
-// On some Linux GPU/compositor stacks Chromium's GPU compositor hands the
-// window stale or empty tiles — the whole UI reads as solid white until a
-// repaint (switching theme) forces the tiles to redraw. Compositing the final
-// frame on the CPU sidesteps it; GPU raster and WebGL still run, so charts and
-// the radar keep their acceleration and only the last composite is on the CPU.
-// The window being unreadable beats a hair of compositor latency. Linux only,
-// and AGENTGLASS_GPU=1 opts back into full GPU compositing for a machine whose
-// stack is fine.
+/*
+ * Software-composite the final frame on Linux.
+ *
+ * On some Linux GPU/compositor stacks Chromium's GPU compositor hands the window
+ * stale or empty tiles — the whole UI reads as solid white until a repaint
+ * (switching theme) forces them to redraw. Compositing the final frame on the
+ * CPU sidesteps it. Linux only, and AGENTGLASS_GPU=1 opts back in.
+ *
+ * The price, MEASURED, because what used to be written here was wrong. This said
+ * "GPU raster and WebGL still run… only the last composite is on the CPU". Half
+ * of that is true. Read out of the running app through CDP SystemInfo.getInfo:
+ *
+ *                        default (this switch)   AGENTGLASS_GPU=1
+ *     gpu_compositing    disabled_software       enabled
+ *     rasterization      enabled                 enabled
+ *     webgl              enabled_readback        enabled
+ *     webgpu             enabled_readback        enabled
+ *
+ * So raster does survive, and WebGL does NOT: it drops to readback, where every
+ * frame is copied off the GPU into system memory. And the thing that pays is not
+ * what the old comment named — the radar and the dashboard charts are SVG, the
+ * dashboard holds zero canvases — it is the TERMINAL, whose xterm WebGL renderer
+ * (web/src/components/TerminalPanel.tsx) exists precisely to keep a fast-writing
+ * shell off the CPU.
+ *
+ * Kept anyway, for now. Under native Wayland on this machine (AMD Radeon 890M,
+ * Mesa 25.2.8, GNOME 46) the white-out did not appear in either mode across a
+ * dark→light theme change, view switches, maximise, unmaximise, fullscreen,
+ * windowed, minimise and restore — nine frames each way, every one with the
+ * right mean colour and a clean log. That is an absence of evidence from one
+ * session, not evidence of absence, and the bug it guards against is
+ * intermittent and stack-dependent; it was also tuned on XWayland under Electron
+ * 33, which is no longer the configuration that ships. Whoever removes it should
+ * do it deliberately, run without it for a week, and get the terminal's
+ * acceleration back as the reward.
+ */
 if (process.platform === "linux" && !process.env.AGENTGLASS_GPU) {
   app.commandLine.appendSwitch("disable-gpu-compositing");
 }
@@ -108,6 +208,58 @@ let mainWindow = null;
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "agentglass");
 const REMOTE_CFG = path.join(CONFIG_DIR, "remote.json");
 const WINDOW_CFG = path.join(CONFIG_DIR, "window.json");
+const PICKER_CFG = path.join(CONFIG_DIR, "picker.json");
+
+/**
+ * Where the folder picker was last pointed.
+ *
+ * Kept by us because the OS stopped keeping it. Electron 43: `defaultPath`
+ * "now defaults to the user's Downloads folder… and the OS will no longer track
+ * and restore the last-used directory between dialog invocations". For a
+ * PROJECT picker Downloads is not a neutral default, it is the wrong answer —
+ * nobody's repositories are there — and losing the OS's memory means every
+ * "Add project" starts from scratch again.
+ *
+ * Same shape as the window state above, and for the same reason: the point is
+ * that it survives a restart, so it goes on disk rather than in a variable.
+ */
+function readLastFolder() {
+  try {
+    const p = JSON.parse(fs.readFileSync(PICKER_CFG, "utf8")).folder;
+    // A remembered folder that has since been moved or deleted is worse than
+    // none: the dialog opens somewhere that does not exist and the OS decides
+    // where instead, which is the behaviour this exists to avoid.
+    return typeof p === "string" && p && fs.existsSync(p) ? p : "";
+  } catch {
+    return "";
+  }
+}
+
+function saveLastFolder(folder) {
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(PICKER_CFG, JSON.stringify({ folder }, null, 2) + "\n");
+  } catch { /* remembering where you browsed is not worth failing the pick over */ }
+}
+
+/**
+ * Whether an app on this platform may put its own window somewhere.
+ *
+ * On Linux it may not, and that is a consequence of the ozone pin at the top of
+ * this file rather than a preference: the app is a native Wayland client there,
+ * and a Wayland client is never told where it is and cannot ask to be moved —
+ * the compositor decides both. `x`/`y` handed to BrowserWindow are accepted and
+ * ignored, and `getNormalBounds()` answers with an origin the window does not
+ * have.
+ *
+ * So SIZE and STATE are persisted everywhere and POSITION only where it can be
+ * honoured. The alternative — carry on writing x/y on Linux — is worse than
+ * dropping them: window.json would look like a working feature to the next
+ * reader, and the off-screen guard below would be answering a real question
+ * ("is this rectangle still on a monitor?") out of numbers that describe
+ * nothing.
+ */
+const APP_PLACES_ITS_WINDOW = process.platform !== "linux";
 
 /**
  * Where the window was, and how.
@@ -119,8 +271,10 @@ const WINDOW_CFG = path.join(CONFIG_DIR, "window.json");
  * thing that forgot.
  *
  * Bounds AND state, because they are different answers: unmaximising a restored
- * window has to put it somewhere, and "somewhere" should be where it was before
- * it was maximised rather than a default in the middle of the screen.
+ * window has to put it somewhere, and "somewhere" should be the size it was
+ * before it was maximised rather than a default. Where position is ours (see
+ * APP_PLACES_ITS_WINDOW) that "somewhere" includes the corner it was in; on
+ * Linux it is the size only, and the compositor picks the corner.
  */
 function readWindowState() {
   try {
@@ -128,8 +282,11 @@ function readWindowState() {
     return {
       width: Number(s.width) || 1440,
       height: Number(s.height) || 900,
-      x: Number.isFinite(s.x) ? s.x : undefined,
-      y: Number.isFinite(s.y) ? s.y : undefined,
+      // Read even on Linux only if we could act on it. An old window.json from
+      // before the Wayland move still carries x/y, and honouring those would be
+      // pretending the switch never happened.
+      x: APP_PLACES_ITS_WINDOW && Number.isFinite(s.x) ? s.x : undefined,
+      y: APP_PLACES_ITS_WINDOW && Number.isFinite(s.y) ? s.y : undefined,
       max: s.max === true,
       full: s.full === true,
     };
@@ -148,14 +305,21 @@ function saveWindowState(win) {
     // for ever after — the window would come back maximised-sized and then have
     // nowhere to unmaximise to.
     const b = win.getNormalBounds();
+    const state = APP_PLACES_ITS_WINDOW
+      ? { ...b, max, full }
+      : { width: b.width, height: b.height, max, full };
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(WINDOW_CFG, JSON.stringify({ ...b, max, full }, null, 2) + "\n");
+    fs.writeFileSync(WINDOW_CFG, JSON.stringify(state, null, 2) + "\n");
   } catch { /* a window state is not worth failing a close over */ }
 }
 
 /** Is this rectangle still on a screen that exists? A window saved on a second
  *  monitor and reopened without it would otherwise come back off-screen, with
- *  no way to drag it into view. */
+ *  no way to drag it into view.
+ *
+ *  Dead code on Linux by construction rather than by an `if` here: readWindowState
+ *  hands back undefined coordinates when the platform does not place its own
+ *  windows, and undefined is already the "do not place it" answer below. */
 function onSomeDisplay(b, screen) {
   if (b.x === undefined || b.y === undefined) return false;
   return screen.getAllDisplays().some((d) => {
@@ -186,6 +350,9 @@ function setRemoteEnabled(on) {
  * choice. Written 0600 in the config dir, which is exactly what the server does
  * when it is exposed with no token set — same path, same permissions, so
  * whichever of the two gets there first, the other agrees.
+ *
+ * Minted for the loopback-only case too, which is the ordinary one — see
+ * sidecarEnv for why the mode label stopped deciding this.
  */
 function ensureToken() {
   try {
@@ -201,10 +368,17 @@ function ensureToken() {
   return t;
 }
 
-/** What the renderer must send on every call. Null when nothing requires one. */
+/**
+ * The one secret both halves must agree on — what the renderer sends, and what
+ * the sidecar is spawned with. Never null.
+ *
+ * A single decision point on purpose. When the sidecar minted from the file and
+ * this preferred the environment, an operator who set AGENTGLASS_TOKEN by hand
+ * got a shell talking past its own server: the two disagreed about the secret
+ * and every route answered 401, with nothing on screen naming the reason.
+ */
 function currentToken() {
-  if (process.env.AGENTGLASS_TOKEN) return process.env.AGENTGLASS_TOKEN;
-  return remoteEnabled() ? ensureToken() : null;
+  return process.env.AGENTGLASS_TOKEN?.trim() || ensureToken();
 }
 
 /**
@@ -241,12 +415,36 @@ function sidecarEnv(port) {
     AGENTGLASS_PORT: String(port),
     AGENTGLASS_DIE_WITH_PARENT: "1",
     AGENTGLASS_WEB_DIR: DIST,
+    /**
+     * Always — remote access on or off.
+     *
+     * "Loopback means it is you" is true of processes and false of people.
+     * 127.0.0.1 belongs to the machine, not to the account: every other Unix
+     * user on the box can reach it, and so can any browser extension holding
+     * `http://localhost/*`. Without a token each of them opened the port and
+     * was handed the cockpit — the terminal, git write, docker — with nothing
+     * to present. Someone installing a .deb does not read a security section
+     * first, and the old default asked them to set this by hand.
+     *
+     * The token is read from a 0600 file, so reaching the port stops being the
+     * same thing as being let through it, and the two callers that could reach
+     * it but cannot read the file are exactly the two we wanted gone.
+     *
+     * This does NOT make the desktop shell the only way in, and is not meant
+     * to: a browser still gets there with ?token=, which is the whole basis of
+     * the phone and the QR flow. It closes reach-without-read, nothing more.
+     *
+     * Nothing here costs the hooks anything: /ingest and the OTLP receivers are
+     * exempt (server/src/auth.ts), and the two that do authenticate read this
+     * same file when the environment has not got it (hooks/statusline.sh,
+     * hooks/gate_event.py).
+     */
+    AGENTGLASS_TOKEN: currentToken(),
   };
   if (remoteEnabled()) {
     // An explicit env var wins: someone who set the bind by hand meant it.
     env.AGENTGLASS_BIND = process.env.AGENTGLASS_BIND || "0.0.0.0";
     env.AGENTGLASS_TRUST_LAN = "1";
-    env.AGENTGLASS_TOKEN = ensureToken();
   }
   return env;
 }
@@ -260,6 +458,40 @@ const MIME = {
 };
 
 /**
+ * A Content-Security-Policy for the privileged agentglass://app origin — the one
+ * that holds the API token (window.agentglass.apiToken) and the setRemote bridge.
+ *
+ * No live XSS exists — the renderers escape untrusted text first — but this
+ * origin displays a great deal of attacker-influenceable text (agent tool output,
+ * terminal streams, PR bodies), so a future injection or a compromised dependency
+ * would otherwise run with no restriction at all: read the token and exfiltrate
+ * it anywhere. The load-bearing directives are connect-src (an injected script
+ * can reach only this app and its own loopback sidecar, never an outside host)
+ * and script-src/object-src/base-uri (no injected <script>, plugin, or <base>).
+ *
+ * Shipped Report-Only deliberately: index.html carries one inline bootstrap
+ * <script>, so an enforcing `script-src 'self'` would blank the window until that
+ * inline moves to a hash or nonce. Report-Only reports every violation to the
+ * renderer console with zero risk to a running app; flipping to enforcing is this
+ * header's name plus the boot script's sha256 added to script-src.
+ */
+const CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "media-src 'self' data: blob:",
+  "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*",
+  "worker-src 'self' blob:",
+  "frame-src 'self'",
+  "child-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
+/**
  * Serve web/dist under agentglass://app/.
  *
  * Same job the loopback server did — SPA fallback for extensionless paths, a
@@ -270,12 +502,17 @@ function serveApp() {
     let p = decodeURIComponent(new URL(request.url).pathname);
     if (p === "/" || !path.extname(p)) p = "/index.html"; // SPA fallback
     const file = path.join(DIST, p);
-    // Still guard traversal: the path comes from the page, not from us.
-    if (!file.startsWith(DIST)) return new Response("forbidden", { status: 403 });
+    // Still guard traversal: the path comes from the page, not from us. Anchor on
+    // DIST + separator so a resolved sibling whose name merely starts with DIST's
+    // (…/web-anything next to …/web) can't slip past a bare-prefix check.
+    if (file !== DIST && !file.startsWith(DIST + path.sep)) return new Response("forbidden", { status: 403 });
     try {
       const data = await fs.promises.readFile(file);
       return new Response(data, {
-        headers: { "content-type": MIME[path.extname(file)] || "application/octet-stream" },
+        headers: {
+          "content-type": MIME[path.extname(file)] || "application/octet-stream",
+          "content-security-policy-report-only": CSP,
+        },
       });
     } catch {
       return new Response("not found", { status: 404 });
@@ -386,22 +623,191 @@ async function resolvePort() {
   return adopt;
 }
 
+/**
+ * The last reason the sidecar is not there, or null while it is.
+ *
+ * Latched in the main process rather than only pushed at the window, because
+ * the two are not in step: `ensureServer` gives up roughly twelve seconds after
+ * `createWindow`, and a window opened (or reloaded) after that has missed the
+ * event entirely. The renderer reads this synchronously through the preload the
+ * same way it reads `apiOrigin`, and subscribes for anything that happens
+ * after.
+ */
+let sidecarFailure = null;
+
+/**
+ * Say out loud that there is no server, and say WHY.
+ *
+ * THE HOLE THIS FILLS. `ensureServer` used to poll forty times and then simply
+ * fall off the end of its loop, returning `undefined` — the same thing it
+ * returns on success. Its only caller is `void ensureServer(adopt)`: no `then`,
+ * no `catch`, no flag. `createWindow()` has already run, so the app is on
+ * screen, the origin is configured and looks verified, and there is nothing
+ * behind it. Every panel then fails the way a panel fails when there is
+ * genuinely nothing to show, and the only thing anywhere on screen that
+ * disagrees is a CLOSED pill in the header.
+ *
+ * The UI could not cover for it either, by construction: ServerBanner returns
+ * early unless `SERVER_GUESSED`, and api.ts makes that false whenever
+ * `DESKTOP_API` is set — which is always, in the packaged app. The banner that
+ * says "No server" was unreachable from the desktop. It is reachable now, and
+ * this is what reaches it.
+ *
+ * Also to the console, because a failure this thing describes badly is one
+ * somebody will want the raw text of.
+ */
+function reportSidecar(failure) {
+  sidecarFailure = failure;
+  if (failure) console.error(`[agentglass] sidecar: ${failure.reason} — ${failure.detail || "(no detail)"}`);
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { w.webContents.send("ag:server-failed", failure); } catch { /* window went away */ }
+  }
+}
+
+/**
+ * Keep the last of the sidecar's own words, for the message.
+ *
+ * `stdio: "ignore"` sent its stderr to /dev/null, which threw away the one
+ * thing that explains a start failure in the user's terms — a bind error names
+ * the port, a missing web directory names the path. Piped and DRAINED, never
+ * buffered whole: a pipe nobody reads fills at 64KB and then blocks the writer,
+ * so a server that logged enough would hang instead of running. Only the tail
+ * is kept, which is where a fatal error is.
+ */
+function tailStderr(child) {
+  const box = { text: "" };
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (c) => { box.text = (box.text + c).slice(-4096); });
+  child.stderr?.on("error", () => { /* the process went away mid-write */ });
+  return box;
+}
+
 async function ensureServer(adopt) {
   const port = SERVER_PORT;
-  if (adopt) return; // a dev server or another instance is already up
+  if (adopt) { reportSidecar(null); return true; } // a dev server or another instance is already up
   // AGENTGLASS_DIE_WITH_PARENT arms the server's own parent-death watchdog:
   // stopSidecar below cannot fire if this main process is SIGKILLed or crashes,
   // so the sidecar backs it up by exiting on its own once we are gone. Only
   // servers we spawn get the flag; adopted ones (returned above) keep whatever
   // lifecycle they were launched with.
   const env = sidecarEnv(port);
-  sidecar = PACKAGED
-    ? spawn(SIDECAR_BIN, [], { stdio: "ignore", env })
-    : spawn("bun", ["run", path.join(REPO, "server", "src", "index.ts")], { stdio: "ignore", env });
+  const [cmd, argv] = PACKAGED
+    ? [SIDECAR_BIN, []]
+    : ["bun", ["run", path.join(REPO, "server", "src", "index.ts")]];
+  const child = spawn(cmd, argv, { stdio: ["ignore", "ignore", "pipe"], env });
+  sidecar = child;
+  const err = tailStderr(child);
+
+  /*
+   * The `error` event, which is what a missing binary actually is.
+   *
+   * Measured on Node 24: `spawn("/nonexistent/agentglass-server")` does NOT
+   * throw. It returns a ChildProcess with `pid === undefined` and emits
+   * `error` on the next tick — and an unhandled `error` on an EventEmitter is
+   * re-thrown, which in the main process takes the whole app down. So a
+   * try/catch around the spawn is not the fix and never was; this listener is.
+   * A packaged build whose sidecar failed to be copied in did not start with a
+   * broken app, it did not start at all.
+   */
+  let spawnError = null;
+  child.on("error", (e) => { spawnError = e; });
+  /*
+   * And `exit`, which is every other way it can fail: a port it cannot bind, a
+   * config it cannot read, a crash on the first line. There was no listener for
+   * this either, so a sidecar that died after two seconds was indistinguishable
+   * from one still starting up — for twelve seconds, and then for ever.
+   *
+   * WHO SAYS SO IS SPLIT BY TIME, and measuring it is what showed why: with
+   * both this and the loop below reporting, a sidecar that exited during
+   * startup announced the same failure twice, to the console and down the IPC.
+   * So the loop owns the verdict while it is still waiting — it breaks the
+   * moment `exit` is set and describes what it found — and this owns everything
+   * after a server that WAS up goes away, which is the case nothing covered at
+   * all: a crash at three in the morning left a live window in front of a dead
+   * port with a CLOSED pill as the only clue.
+   */
+  let exit = null;
+  let started = false;
+  child.on("exit", (code, signal) => {
+    exit = { code, signal };
+    // A kill we asked for is not a failure. `killSidecar` nulls `sidecar`
+    // before this can fire, and `stopped` covers the app going down, so the
+    // identity check is what tells "it died" from "we ended it".
+    if (sidecar !== child || stopped) return;
+    sidecar = null;
+    if (started) reportSidecar(describeSidecarFailure(port, { code, signal }, spawnError, err.text, true));
+  });
+
   for (let i = 0; i < 40; i++) {
-    if ((await probe(port)) === "ours") return;
+    if ((await probe(port)) === "ours") { started = true; reportSidecar(null); return true; }
+    // Do not spend twelve seconds waiting for a process that is already gone.
+    // The old loop did, which is why "the binary is missing" and "the server is
+    // slow to boot" felt the same from outside.
+    if (spawnError || exit) break;
     await new Promise((r) => setTimeout(r, 300));
   }
+  reportSidecar(describeSidecarFailure(port, exit, spawnError, err.text, false));
+  return false;
+}
+
+/**
+ * Turn how it failed into something a person can act on.
+ *
+ * Four outcomes and four different fixes, which is the whole reason this is not
+ * one "server unavailable" string: a missing binary is a broken install, a
+ * taken port is another program, a crash on start is a bug or a bad config, and
+ * a timeout is none of those and needs the log.
+ */
+function describeSidecarFailure(port, exit, spawnError, stderr, hadStarted) {
+  const detail = (stderr || "").trim().split("\n").filter(Boolean).slice(-3).join(" · ").slice(0, 400);
+  if (spawnError?.code === "ENOENT") {
+    return {
+      reason: "missing",
+      what: "The server program is not where the app expects it.",
+      where: spawnError.path || String(spawnError.syscall || ""),
+      fix: PACKAGED
+        ? "This install is incomplete — reinstall the app."
+        : "Install bun, or run the server yourself with `bun run server/src/index.ts`.",
+      detail, port,
+    };
+  }
+  if (spawnError) {
+    return { reason: "spawn", what: "The server program could not be started.", where: spawnError.path || "",
+      fix: "Check that it is executable and not blocked by the system.", detail: detail || String(spawnError.message || spawnError), port };
+  }
+  if (exit) {
+    const how = exit.signal ? `signal ${exit.signal}` : `exit ${exit.code}`;
+    // Two very different events wearing the same `exit`, and telling a person
+    // they may have a port clash when the server had already BOUND that port
+    // and served requests on it is worse than saying nothing. `hadStarted` is
+    // the only thing that separates them.
+    return hadStarted
+      ? {
+        reason: "exited",
+        what: `The server was running and stopped (${how}).`,
+        where: "",
+        fix: "Restart the app. If it keeps happening, the server's last words are below.",
+        detail, port,
+      }
+      : {
+        reason: "exited",
+        what: `The server started and stopped again (${how}).`,
+        where: "",
+        // The most common cause by a distance, and the one the user can see for
+        // themselves. `pickPort` already walks eight ports before this, so a
+        // clash here means all of them were taken or the bind failed for another
+        // reason — either way the port is the first thing to look at.
+        fix: `Something else may be holding port ${port}, or the server hit an error on startup.`,
+        detail, port,
+      };
+  }
+  return {
+    reason: "timeout",
+    what: `The server did not answer on port ${port} within 12 seconds.`,
+    where: "",
+    fix: "It may still be starting. If this stays, restart the app.",
+    detail, port,
+  };
 }
 
 /**
@@ -462,6 +868,244 @@ function registerIpc(win) {
   });
   ipcMain.handle("ag:winClose", () => { win.close(); });
   ipcMain.handle("ag:winIsMaximized", () => win.isMaximized());
+
+  /*
+   * The system's own folder chooser, for picking a project.
+   *
+   * The web side can only offer a path box: a browser cannot open a file
+   * dialog that returns a *directory*, and typing an absolute path from memory
+   * is the least discoverable control in the app — someone who has never seen
+   * it does not know it is a control at all. Inside the shell there is a real
+   * one, so this hands it over and the picker keeps the path box as the
+   * fallback for a browser tab.
+   *
+   * Modal to the window, so it cannot end up behind it. It returns a path and
+   * nothing else — no read, no write, no recursion — and the caller still goes
+   * through the same server checks any typed path does.
+   */
+  /*
+   * Screenshot the built-in browser, for an agent that cannot see it.
+   *
+   * The panel has `capturePage()` on its own element and it is a trap: Chromium
+   * produces no frames for content nobody is looking at, so the call simply
+   * never resolves when the pane is behind another view or the window is not on
+   * screen — which is exactly when an agent is driving it. Measured: `shot`
+   * timed out at twenty seconds while `read` and `click` on the same page
+   * answered instantly.
+   *
+   * From here the same capture takes `stayHidden`, which is the flag that says
+   * "render this even though it is not visible". `stayAwake` keeps the frame
+   * loop from being throttled while it happens.
+   */
+  /*
+   * Bringing existing logins into the built-in browser.
+   *
+   * Extensions are a dead end in Electron, so a password manager cannot live in
+   * this browser and the way somebody's sessions get here is their cookies. That
+   * is not a small permission, so three things are true of this by design:
+   *
+   *   * the reading happens in a SEPARATE, one-shot process — so cookie values
+   *     never touch the HTTP API, never reach the renderer, and are gone with
+   *     the process that read them. This used to be written down as a
+   *     limitation ("Electron 33 cannot read SQLite"), and that reason has
+   *     expired: Electron 43 ships Node 24, whose `node:sqlite` is unflagged,
+   *     so the shell COULD open the jar in-process now. It deliberately does
+   *     not. Keeping the values out of this process is the point; being unable
+   *     to read them here was only ever the accident that made it obvious. (The
+   *     process is the sidecar BINARY when packaged rather than `bun run`,
+   *     because an installed app has no bun on PATH.);
+   *   * there is no HTTP route for any of it, so an agent driving this browser
+   *     cannot ask for anybody's logins;
+   *   * the confirmation is a native dialog from the main process, which is the
+   *     one surface a compromised renderer can neither fake nor suppress, and it
+   *     names the sites.
+   */
+  const runCookieReader = (args) => new Promise((resolve, reject) => {
+    const [cmd, argv] = PACKAGED
+      ? [SIDECAR_BIN, ["cookies", ...args]]
+      : ["bun", ["run", path.join(__dirname, "..", "server", "src", "cookieread.ts"), ...args]];
+    const child = spawn(cmd, argv, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => { out += d.toString(); });
+    child.stderr.on("data", (d) => { err += d.toString(); });
+    child.on("error", (e) => reject(e));
+    /*
+     * `close`, not `exit`.
+     *
+     * `exit` fires when the process is gone; its pipes may still hold data
+     * nobody has read yet. With two sites the answer always arrived first and
+     * this worked for a year. With two hundred — about two thousand cookies
+     * and their values, several hundred kilobytes — the tail was still in
+     * flight, the JSON came back cut in half, and all anybody saw was "the
+     * cookie reader did not answer". `close` is the event that means every
+     * stream is drained.
+     */
+    child.on("close", () => {
+      // The LAST line: something this imports may warn, and a warning must not
+      // be parsed as the answer.
+      const line = out.trim().split("\n").pop() || "";
+      try { resolve(JSON.parse(line)); }
+      catch {
+        // A truncated answer and an empty one are different problems, and the
+        // old message could not tell them apart.
+        const why = !out.trim()
+          ? (err.trim().split("\n").pop() || "it printed nothing")
+          : `its answer was ${out.length} bytes and did not parse`;
+        reject(new Error(`the cookie reader did not answer: ${why}`));
+      }
+    });
+  });
+
+  ipcMain.handle("ag:cookieSources", async () => {
+    try { return await runCookieReader(["list"]); }
+    catch (e) { return { ok: false, error: String(e && e.message ? e.message : e) }; }
+  });
+
+  ipcMain.handle("ag:importCookies", async (_e, req) => {
+    const source = typeof req?.source === "string" ? req.source : "";
+    // Two thousand, not two hundred. A real profile had two hundred and
+    // one sites and the old cap dropped the last one without a word.
+    const sites = Array.isArray(req?.sites) ? req.sites.filter((s) => typeof s === "string").slice(0, 2000) : [];
+    // Re-checked here rather than trusted from the renderer: this is the side
+    // that holds the values.
+    if (!source || !sites.length) return { ok: false, error: "choose a browser and at least one site" };
+
+    const answer = await dialog.showMessageBox(win, {
+      type: "warning",
+      buttons: ["Import", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      message: `Bring your logins for ${sites.length} site${sites.length === 1 ? "" : "s"} into agentglass's browser?`,
+      detail: `${sites.slice(0, 12).join(", ")}${sites.length > 12 ? `, and ${sites.length - 12} more` : ""}\n\n`
+        + "Anyone who can use this window — including an agent you let drive it — will be signed in to these sites.",
+    });
+    if (answer.response !== 0) return { ok: false, error: "cancelled" };
+
+    let read;
+    try { read = await runCookieReader(["read", "--source", source, "--sites", sites.join(",")]); }
+    catch (e) { return { ok: false, error: String(e && e.message ? e.message : e) }; }
+    if (!read || !read.ok) return { ok: false, error: (read && read.error) || "could not read those cookies" };
+
+    const ses = session.fromPartition(BROWSER_PARTITION);
+    let set = 0;
+    const failed = [];
+    for (const c of read.cookies) {
+      try { await ses.cookies.set(c); set += 1; }
+      catch (err) { failed.push({ name: c.name, url: c.url, error: String(err && err.message ? err.message : err) }); }
+    }
+    // Without this, a quit or a crash between here and the next checkpoint
+    // loses the session somebody just handed over.
+    try { await ses.cookies.flushStore(); } catch { /* best effort */ }
+    return { ok: true, set, failed, skipped: read.skipped };
+  });
+
+  /**
+   * Undo. Not "delete the partition" — the sites named, and nothing else.
+   *
+   * Across every browsing profile, which is the part that has to be got right.
+   * This swept one partition when there was only one; profiles gave the user
+   * several, and a "forget these sites" that quietly cleared one of them is the
+   * worst kind of privacy control — it reports a number, it looks finished, and
+   * the login it was supposed to remove is still sitting in another jar.
+   *
+   * The renderer says which partitions it knows about, because it owns the
+   * profile list. Each is checked against the browser family before it becomes
+   * a session: an unvalidated one here would let a renderer bug reach into the
+   * app's own storage and start deleting from it.
+   */
+  ipcMain.handle("ag:forgetCookies", async (_e, req) => {
+    // Two thousand, not two hundred. A real profile had two hundred and
+    // one sites and the old cap dropped the last one without a word.
+    const sites = Array.isArray(req?.sites) ? req.sites.filter((s) => typeof s === "string").slice(0, 2000) : [];
+    if (!sites.length) return { ok: false, error: "choose at least one site" };
+    // The default is always swept, named or not: a caller that forgets to list
+    // it must not end up clearing only the profiles.
+    const asked = Array.isArray(req?.partitions) ? req.partitions.filter(isBrowserPartition) : [];
+    const partitions = [...new Set([BROWSER_PARTITION, ...asked])];
+    let removed = 0;
+    for (const partition of partitions) {
+      const ses = session.fromPartition(partition);
+      const all = await ses.cookies.get({});
+      for (const c of all) {
+        const host = (c.domain || "").replace(/^\./, "");
+        if (!sites.some((s) => host === s || host.endsWith(`.${s}`))) continue;
+        const url = `${c.secure ? "https" : "http"}://${host}${c.path || "/"}`;
+        try { await ses.cookies.remove(url, c.name); removed += 1; } catch { /* already gone */ }
+      }
+      try { await ses.cookies.flushStore(); } catch { /* best effort */ }
+    }
+    return { ok: true, removed, profiles: partitions.length };
+  });
+
+  /*
+   * "This tab is the one on screen."
+   *
+   * Said by the renderer whenever the active tab changes, and resolved to a
+   * guest here. Only the renderer knows which tab you are looking at, and two
+   * things in this process need to: the Ctrl+wheel zoom, and the screenshot an
+   * agent asks for. An id that names nothing is ignored rather than clearing
+   * the guest — a tab mid-attach would otherwise blank the browser for a frame
+   * and take an agent's screenshot with it.
+   */
+  ipcMain.handle("ag:browserActive", (_e, id) => {
+    const n = Number(id);
+    if (!Number.isInteger(n)) return false;
+    for (const g of browserGuests) {
+      if (!g.isDestroyed() && g.id === n) { browserGuest = g; return true; }
+    }
+    return false;
+  });
+
+  /* History and bookmarks from a chosen profile. Same privileged reader as the
+     cookies, for the same reason: this is browsing history, and a route would
+     put it where an agent driving the browser could ask for it. */
+  ipcMain.handle("ag:browserPlaces", async (_e, req) => {
+    const source = typeof req?.source === "string" ? req.source : "";
+    if (!source) return { ok: false, error: "no profile chosen" };
+    try { return await runCookieReader(["places", "--source", source]); }
+    catch (e) { return { ok: false, error: String(e && e.message ? e.message : e) }; }
+  });
+
+  ipcMain.handle("ag:captureBrowser", async () => {
+    const guest = browserGuest;
+    if (!guest || guest.isDestroyed()) return null;
+    try {
+      // Raced, because `stayHidden` does not always come back. It is the flag
+      // for "render this even though nobody is looking", and when the compositor
+      // has nothing to render from it simply never resolves — measured: every
+      // other verb answered instantly and `shot` sat until the server's own
+      // twenty-second timeout, which reads to an agent as a broken browser
+      // rather than as a pane that is not showing. Four seconds is far longer
+      // than a capture that is going to happen takes.
+      const img = await Promise.race([
+        guest.capturePage(undefined, { stayHidden: true, stayAwake: true }),
+        new Promise((r) => setTimeout(() => r(null), 4000)),
+      ]);
+      return !img || img.isEmpty() ? null : img.toDataURL();
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle("ag:chooseFolder", async (_e, start) => {
+    const r = await dialog.showOpenDialog(win, {
+      title: "Choose a project folder",
+      // Never `undefined`. At Electron 43 that means ~/Downloads (see
+      // readLastFolder): what the caller asked for, else where you were last
+      // time, else home — a chain that always names somewhere, so the dialog's
+      // starting point is this app's decision and not the OS's default.
+      defaultPath: (typeof start === "string" && start) || readLastFolder() || os.homedir(),
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "Open",
+    });
+    if (r.canceled || !r.filePaths.length) return null;
+    // The PARENT, not the pick: you add several projects out of one ~/code, and
+    // reopening inside the repo you just added means climbing out of it every
+    // time.
+    saveLastFolder(path.dirname(r.filePaths[0]));
+    return r.filePaths[0];
+  });
   ipcMain.handle("ag:winState", () => ({ max: win.isMaximized(), full: win.isFullScreen() }));
 
   /*
@@ -521,6 +1165,22 @@ function registerIpc(win) {
   ipcMain.handle("ag:autostartEnabled", () => autostartEnabled());
   ipcMain.handle("ag:setAutostart", (_e, on) => setAutostart(!!on));
 
+  /*
+   * Show a file where it lives, in the desktop's own file manager.
+   *
+   * `showItemInFolder` opens the manager and SELECTS the item; it does not
+   * execute anything, which is why this is a reasonable thing to offer from a
+   * renderer at all. The path is still checked before it is used: absolute, and
+   * something that exists. A relative path would be resolved against whatever
+   * the app's cwd happens to be, which is not a place anybody chose.
+   */
+  ipcMain.handle("ag:revealPath", (_e, p) => {
+    if (typeof p !== "string" || !path.isAbsolute(p)) return { ok: false, error: "not an absolute path" };
+    try { fs.statSync(p); } catch { return { ok: false, error: "no such file" }; }
+    shell.showItemInFolder(p);
+    return { ok: true };
+  });
+
   ipcMain.handle("ag:remoteEnabled", () => remoteEnabled());
   /**
    * Turn LAN access on or off.
@@ -531,7 +1191,27 @@ function registerIpc(win) {
    * stopped mentioning it.
    */
   ipcMain.handle("ag:setRemote", async (_e, on) => {
-    setRemoteEnabled(!!on);
+    const want = !!on;
+    // Turning LAN access on exposes this machine's shell, git and browser to the
+    // network, so it gets the same main-process confirmation importing cookies
+    // does — a decision a compromised renderer can neither fake nor suppress,
+    // rather than one living only in the React UI that renderer controls. Turning
+    // it *off* needs no gate: it only ever removes reach.
+    if (want && !remoteEnabled()) {
+      const answer = await dialog.showMessageBox(win, {
+        type: "warning",
+        buttons: ["Expose to the network", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+        message: "Let other devices on your network reach agentglass?",
+        detail: "The server will listen on every network interface, not just this "
+          + "machine. Anything that pairs — your phone, or anyone who can reach "
+          + "this host and holds a link — can drive its terminal, git and browser. "
+          + "Only do this on a network you trust.",
+      });
+      if (answer.response !== 0) return remoteEnabled();
+    }
+    setRemoteEnabled(want);
     await restartSidecar();
     return remoteEnabled();
   });
@@ -578,69 +1258,26 @@ function setAutostart(on) {
   return app.getLoginItemSettings().openAtLogin;
 }
 
-/** The one session every browser guest shares. Named, and persisted, so logins
- *  survive a restart — and separate from the app's own session, so browsing
- *  never touches the cookies or storage of the `agentglass://` origin. It is
- *  also the seam session profiles would widen, if they are ever wanted. */
-const BROWSER_PARTITION = "persist:agentglass-browser";
+/** Electron's zoom LEVEL is logarithmic: each step is a factor of 1.2, which is
+ *  the size ladder Chrome walks with Ctrl+plus. ±7 is about 25%–500%. */
+/** The guest currently showing a page, for the one thing the panel cannot do
+ *  for itself — see ag:captureBrowser. Null whenever there is no browser pane
+ *  mounted, which is most of the time. */
+let browserGuest = null;
+/** Every attached guest. `browserGuest` is whichever of them the renderer says
+ *  is on screen; this is what lets a destroyed tab fall back to another. */
+const browserGuests = new Set();
 
-/** http(s) only, and no credentials in the URL.
- *
- *  Deliberately small and deliberately here rather than shared with the web
- *  app's address-bar parser: this is the boundary that makes `webviewTag` safe
- *  to turn on, and a boundary you can read in one screen is worth more than one
- *  that shares its code with an autocomplete. `main.js` is plain CommonJS with
- *  no build step and could not import that module anyway. */
-function safeGuestUrl(src) {
-  if (typeof src !== "string" || !src) return null;
-  // The empty page. It is what "leave the home page blank" means, it carries no
-  // content and no origin, and refusing it would make that setting a guest that
-  // never attaches.
-  if (src === "about:blank") return src;
-  try {
-    const u = new URL(src);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    // `https://user:pass@host` in a src attribute is a credential-stuffing
-    // shape, never something a person typed.
-    if (u.username || u.password) return null;
-    return u.toString();
-  } catch { return null; }
-}
+const ZOOM_STEP = 0.5;
+const ZOOM_MIN = -7;
+const ZOOM_MAX = 7;
 
-/**
- * Everything enabling `<webview>` costs, paid back in one place.
- *
- * A guest is a page the app did not write, so it gets nothing: no preload (it
- * would inherit the `window.agentglass` bridge and with it the API token), no
- * Node, no relaxed web security, its own session, and a src that has already
- * been checked. Fail closed — a src or partition that is not recognised is
- * refused rather than corrected, because a renderer bug that can choose either
- * is the whole attack.
- *
- * `will-attach-webview` is the only hook that runs before the guest exists;
- * attributes set in the markup are advisory until this handler agrees with
- * them.
- */
 function guardWebviews(win) {
+  // The decision itself lives in guest-guard.js so a test can call it — see the
+  // header there. This is only the wiring: the guard says yes or no, and no
+  // means the guest never exists.
   win.webContents.on("will-attach-webview", (e, webPreferences, params) => {
-    const src = safeGuestUrl(params.src);
-    if (!src || webPreferences.partition !== BROWSER_PARTITION) {
-      e.preventDefault();
-      return;
-    }
-    // Both spellings: older Electron carries preloadURL alongside preload, and
-    // leaving either is how a guest ends up holding the app's bridge.
-    delete params.preload;
-    delete webPreferences.preload;
-    delete webPreferences.preloadURL;
-    webPreferences.nodeIntegration = false;
-    webPreferences.nodeIntegrationInSubFrames = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
-    webPreferences.webSecurity = true;
-    webPreferences.allowRunningInsecureContent = false;
-    webPreferences.enableBlinkFeatures = "";
-    webPreferences.partition = BROWSER_PARTITION;
+    if (!applyGuestGuard(webPreferences, params)) e.preventDefault();
   });
 
   win.webContents.on("did-attach-webview", (_e, guest) => {
@@ -653,6 +1290,14 @@ function guardWebviews(win) {
     guest.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       const mod = process.platform === "darwin" ? input.meta : input.control;
+      // The keyboard half of the same thing. Kept with the zoom rather than
+      // with the chords below: these are not forwarded to the app, they are
+      // handled here and swallowed, exactly as a browser does.
+      if (mod && (input.key === "+" || input.key === "=" || input.key === "-" || input.key === "0")) {
+        event.preventDefault();
+        applyZoom(input.key === "0" ? 0 : guest.getZoomLevel() + (input.key === "-" ? -ZOOM_STEP : ZOOM_STEP));
+        return;
+      }
       const jumpsOut = (mod && /^[1-9]$/.test(input.key))
         || (mod && input.key.toLowerCase() === "w")
         || input.key === "Escape";
@@ -669,11 +1314,64 @@ function guardWebviews(win) {
       win.webContents.focus();
     });
 
-    // A page opening a window has nowhere to go here: there are no tabs yet, so
-    // it goes where every other external link goes.
+    /*
+     * Zoom, which a page cannot do for itself.
+     *
+     * Ctrl+wheel and Ctrl+plus are browser chrome, not page behaviour: Chrome
+     * implements them above the renderer, so a bare guest has neither and the
+     * text is whatever size the site decided. Electron reports the gesture as
+     * `zoom-changed` and then does nothing about it, which is the half that has
+     * to live here.
+     *
+     * Applied in the main process rather than forwarded to the panel and back:
+     * a zoom that lands a frame late feels like it is fighting the wheel. The
+     * panel is told afterwards, so it can show the level and remember it.
+     *
+     * Bounded either side. Chrome's own range is roughly 25%–500%, and past
+     * that a page stops being usable in a way that is hard to undo when the
+     * controls themselves are too small to hit.
+     */
+    const applyZoom = (level) => {
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level));
+      guest.setZoomLevel(next);
+      win.webContents.send("ag:browser-zoom", next);
+      return next;
+    };
+    /*
+     * Which guest is "the browser".
+     *
+     * There are several now — one per tab — and two things in this process
+     * still mean exactly one: the Ctrl+wheel zoom, which must land on the page
+     * you are looking at, and the screenshot an agent asks for, which must be
+     * of that same page. Only the renderer knows which tab is on screen, so it
+     * says (`ag:browser-active`) and this follows.
+     *
+     * The last one to attach is the fallback, which is what the single-guest
+     * version always did and is right until the first tab switch.
+     */
+    browserGuests.add(guest);
+    browserGuest = guest;
+    guest.once("destroyed", () => {
+      browserGuests.delete(guest);
+      if (browserGuest === guest) browserGuest = [...browserGuests].pop() ?? null;
+    });
+
+    guest.on("zoom-changed", (_e, direction) => {
+      applyZoom(guest.getZoomLevel() + (direction === "in" ? ZOOM_STEP : -ZOOM_STEP));
+    });
+
+    /*
+     * A page opening a window now has somewhere to go: a tab.
+     *
+     * It used to hand every one of them to the OS browser, because there was
+     * nowhere else — which meant a middle-click, a `target="_blank"` and every
+     * OAuth popup threw you out of the app. The renderer opens it beside the
+     * tab it came from. Still `deny`, so Electron never makes a real window of
+     * its own; and still through safeGuestUrl, so only http(s) is passed on.
+     */
     guest.setWindowOpenHandler(({ url }) => {
       const safe = safeGuestUrl(url);
-      if (safe) shell.openExternal(safe);
+      if (safe) win.webContents.send("ag:browser-open-tab", safe);
       return { action: "deny" };
     });
   });
@@ -703,6 +1401,25 @@ function createWindow() {
      * frameless and the buttons below are the whole story, which is why they are
      * wired rather than decorative: with `frame: false` there is no other way to
      * minimise, maximise or close.
+     *
+     * `roundedCorners` is deliberately not set, and that is a decision rather
+     * than an oversight. Electron 43 newly applies it on Linux — its own typedef
+     * went from `@platform darwin` in 33 to "on Linux, rounded corners are only
+     * drawn when the desktop environment supports client-side decorations", and
+     * GNOME 46 does CSD — so the default `true` reaches this window for the first
+     * time on this upgrade. Checked before leaving it: the app was put in
+     * Porcelain (white) and all four corners read back at 8x. The nearest pixel
+     * of anything the app draws is the logo, ~7 device px in from the top and ~18
+     * from the left; the window buttons are further in still, and the outer 20px
+     * of every corner is flat background. A corner radius has nothing to clip.
+     *
+     * Not verifiable here: GNOME 46 refuses every route to a photograph of a
+     * Wayland surface (grim gets "compositor doesn't support
+     * wlr-screencopy-unstable-v1", org.gnome.Shell.Screenshot answers
+     * AccessDenied, the portal wants a click), so this was read off the browser's
+     * own compositing surface. If the round is applied above that surface it
+     * would not appear there — but it would land on those same flat corner
+     * pixels, which is why the measurement still answers the question.
      */
     ...(process.platform === "darwin"
       ? { titleBarStyle: "hiddenInset" }
@@ -838,7 +1555,15 @@ function openLinksOutside(win) {
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, url) => {
-    if (url.startsWith(APP_ORIGIN)) return; // the app navigating within itself
+    // Parse rather than prefix-match: startsWith(APP_ORIGIN) also treats
+    // agentglass://app-anything as "within the app". Only host "app" on our own
+    // scheme is the app navigating within itself; everything else opens outside.
+    let internal = false;
+    try {
+      const u = new URL(url);
+      internal = u.protocol === `${APP_SCHEME}:` && u.host === "app";
+    } catch { /* not a parseable URL — treat as external */ }
+    if (internal) return;
     e.preventDefault();
     external(url);
   });
@@ -864,6 +1589,26 @@ app.whenReady().then(async () => {
   // caller, the local renderer included — without this the app would lock
   // itself out of its own sidecar the moment the toggle was flipped.
   ipcMain.on("ag:apiToken", (e) => { e.returnValue = currentToken(); });
+  // Whether there is a server at all, for a window that opened AFTER the give-up
+  // — a reload, or a second window. The push in `reportSidecar` only reaches
+  // windows that already exist, and a page that reloads five minutes into a
+  // dead sidecar would otherwise come up with no idea anything is wrong.
+  ipcMain.on("ag:sidecarFailure", (e) => { e.returnValue = sidecarFailure; });
+  // The browser element-picker's copy/screenshot, done on the main-process
+  // clipboard so it works while the <webview> guest holds focus — the preload
+  // explains why navigator.clipboard cannot. Each returns whether it stuck, so
+  // the picker stops claiming a copy that silently failed.
+  ipcMain.handle("ag:copyText", (_e, text) => {
+    try { clipboard.writeText(String(text ?? "")); return true; } catch { return false; }
+  });
+  ipcMain.handle("ag:copyImage", (_e, dataUrl) => {
+    try {
+      const img = nativeImage.createFromDataURL(String(dataUrl ?? ""));
+      if (img.isEmpty()) return false; // a bad data URL yields an empty image
+      clipboard.writeImage(img);
+      return true;
+    } catch { return false; }
+  });
 
   // Which port, decided before the window — the renderer bakes the origin in at
   // load and there is no second chance to correct it. This is a parallel round
