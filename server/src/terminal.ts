@@ -903,6 +903,29 @@ function tellPhonesTheWindowMoved(t: TmuxTarget, windowId: string) {
   for (const [ws, s] of sessions) {
     const at = s.phoneAttach;
     if (!at || at.windowId !== windowId || socketPath(at.socket) !== server) continue;
+    /*
+     * The FLAG, and not only the frame. This is the whole of a reported bug.
+     *
+     * `at.fit` is what the resize handler reads to decide whether a phone's
+     * geometry moves the real window, and it was written once at attach and
+     * never again. So the take-over gave the desk its columns back and left
+     * the attach still claiming the window: the phone's very next `resize`
+     * frame ran `fitWindow` and squeezed it to 80 again. That frame does not
+     * need anybody to touch the phone — a WebView re-measuring after the app
+     * comes back to the foreground sends one, which is exactly the shape it
+     * was reported in ("I take the width back on the computer and it goes
+     * narrow again on its own").
+     *
+     * Clearing it does not hang up on the phone and does not end its session;
+     * it ends this phone's CLAIM on the window's size. The phone tapping fit
+     * again reattaches with `fit=1` and gets it back, which is the rule the
+     * take-over already states: it ends the reflow that is happening, it is
+     * not a lock.
+     *
+     * Before the frame rather than after, so a send that throws still leaves
+     * the server's own state true.
+     */
+    at.fit = false;
     ctl(ws, { t: "pane", cols: size.cols, rows: size.rows, fit: false, by: "desk" });
   }
 }

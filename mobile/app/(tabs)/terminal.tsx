@@ -457,6 +457,29 @@ export default function TerminalScreen(): React.ReactNode {
   const onState = useCallback((next: TerminalState, detail?: string): void => {
     setState(next);
     setWhy(detail ?? null);
+    /*
+     * And the switch goes off with the socket that was holding it.
+     *
+     * `fit` is not a preference, it is a claim on somebody else's window: while
+     * it is on, tmux is holding the desk's window at this phone's width. The
+     * claim lives in the socket — the server reads it off the attach and the
+     * teardown puts the window back — so a socket that is gone is a claim that
+     * is gone, and a switch still lit is describing a reflow that is no longer
+     * happening.
+     *
+     * Left on, it was worse than wrong: the next attach reads it and sends
+     * `fit=1` again, so simply leaving the app and coming back re-took the
+     * width from the desk, on nobody's instruction, right after the person at
+     * the computer had asked for it back. Reported exactly that way, and the
+     * server-side half of it is the flag cleared in `tellPhonesTheWindowMoved`.
+     *
+     * Turning it off remounts the view (`fit` is in its key), which opens a
+     * socket without the fit rather than reconnecting the old one. That costs
+     * nothing while the app is away: the new view has not laid itself out, and
+     * the socket waits for that measurement before it opens, so the reattach
+     * happens when somebody is looking rather than in a pocket.
+     */
+    if (next === "gone") setFit(false);
   }, []);
 
   /*
