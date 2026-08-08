@@ -166,13 +166,16 @@ prevents (a major arriving on its own) cannot happen here either. Measured on
 is a one-line change in `package.json` whenever the SDK's own version map says
 it is safe.
 
-**Metro watches `../shared` and `../web/src`.** `shared/` is the wire — the
-same `types.ts` the server compiles against. `web/src/mobile/` is the browser
-companion's *model* layer: what counts as waiting on you, how a chat list is
-assembled, which pull-request rows are the same one. Fourteen of those sixteen
-files touch no DOM, they are already tested in `web/test/`, and two companions
-disagreeing about what "blocked" means is worse than an import that points
-sideways. When the browser companion goes, they move in here with their tests.
+**Metro watches `../shared`.** `shared/` is the wire — the same `types.ts` the
+server compiles against.
+
+It used to watch `../web/src` as well, because five modules of the model layer —
+what counts as waiting on you, how a chat list is assembled, which pull-request
+rows are the same one — still lived in the browser companion's `web/src/mobile/`
+and were imported across the repository from here. That companion is gone as of
+v0.9.0, and those modules moved in under [`src/model/`](src/model/) with their
+tests: pure decisions over server payloads, no React, no fetch, no storage,
+which is what keeps the queue testable without a device.
 
 ## Testing
 

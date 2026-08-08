@@ -23,7 +23,7 @@ python3 hooks/seed_demo.py   # populate with demo data
   (`AGENTGLASS_BIND`); keep new routes behind the existing origin/CSRF gate.
 - **`web/`** — React + Vite + Motion (animation) + Recharts + Shiki (diff
   highlighting) + xterm.js (the terminal panel).
-  `bunx tsc --noEmit` to typecheck, `bunx vite build` to verify the production
+  `bun run typecheck` to typecheck, `bunx vite build` to verify the production
   bundle. `bun run build:demo` builds the fabricated-data showcase.
 - **`shared/types.ts`** — the event/analytics contract imported by both sides.
   Change it in one place.
@@ -45,12 +45,19 @@ python3 hooks/seed_demo.py   # populate with demo data
 - **Everything CI runs, run first.** It gates on all of it:
 
   ```bash
-  cd server && bunx tsc --noEmit && bun test     # typecheck + suite (server)
-  cd ../web && bunx tsc --noEmit && bun test     # typecheck + suite (web)
+  cd server && bun run typecheck && bun test     # typecheck + suite (server)
+  cd ../web && bun run typecheck && bun test     # typecheck + suite (web)
   bunx vite build                                # the production bundle must build
   cd .. && bun scripts/smoke.ts                  # …and actually boot in a browser
   bun scripts/perfbudget.ts                      # the event loop stays answerable
   ```
+
+  `bun run typecheck`, never `bunx tsc`: `bunx` runs a local binary if there is
+  one and silently downloads the newest published otherwise, so the same
+  `shared/types.ts` was being checked by two different compiler majors depending
+  on which directory you were standing in, and a TypeScript release on npm was
+  enough to redden a commit that changed nothing. The script fails loudly on a
+  missing binary where `bunx` would go and fetch one.
 
   `smoke.ts` exists because a runtime-only error once shipped a black screen
   past typecheck, tests and build. `perfbudget.ts` exists because the terminal's
