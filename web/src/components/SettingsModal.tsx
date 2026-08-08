@@ -10,6 +10,7 @@
 // they control, and downloads say what you actually get.
 import { Fragment, createContext, isValidElement, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { RecipesPane } from "./RecipesPane.tsx";
+import { lastTerminalRoot } from "./TerminalPanel.tsx";
 import { Filter, Fold, SettingRow } from "./SettingRow.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
@@ -2140,7 +2141,10 @@ function RequirementsPane({ open }: { open: boolean }) {
    * user already has a shell in rather than inventing one and pushing on the
    * boundary that exists to stop exactly that.
    */
-  const shellRoot = (() => { try { return localStorage.getItem("agentglass.terminalRoot") || ""; } catch { return ""; } })();
+  // Through TerminalPanel's own reader, not the raw key. A literal here is a
+  // second copy of somebody else's storage schema, and it would have gone on
+  // reading a key that had quietly stopped being written.
+  const shellRoot = lastTerminalRoot();
   const [deps, setDeps] = useState<DepReport[] | null>(null);
   const [platform, setPlatform] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);

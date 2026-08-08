@@ -26,7 +26,7 @@ import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { Portal } from "./Portal.tsx";
 import { subscribePrJump, prJump, clearPrJump } from "../lib/prJump.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
-import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
+import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
@@ -2537,7 +2537,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}{PR_ROW_CSS}{LOADING_CSS}</style>
 
       <div className={viewHeaderClass} style={viewHeaderStyle}>
-        <span className={viewTitleClass} style={{ color: "var(--text)" }}>Pull Requests</span>
+        <h2 className="sr-only">Pull Requests</h2>
         {/* No repo/worktree picker here: pull requests belong to the GitHub
             remote, and every worktree of a repo shares that one remote — so the
             picker only ever offered a dozen ways to look at the SAME list. The

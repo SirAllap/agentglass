@@ -12,6 +12,7 @@ import { requestTermIssue } from "../../lib/termIssue.ts";
 import { feedbackWindowName } from "../../lib/pageRef.ts";
 import { api } from "../../lib/api.ts";
 import type { GitRepoRef } from "../../../../shared/types.ts";
+import { CheckoutPicker } from "../CheckoutPicker.tsx";
 
 type Guest = { capturePage(): Promise<{ toDataURL(): string }> } | null;
 
@@ -241,11 +242,8 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
             Draw on the page, then
           </span>
           {repos.length > 1 && (
-            <select value={repo} onChange={(e) => setRepo(e.target.value)}
-              className="text-[10px] px-1.5 py-0.5 rounded-lg outline-none"
-              style={{ background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}>
-              {repos.map((r) => <option key={r.root} value={r.root}>{r.worktreeOf ? r.branch : r.name}</option>)}
-            </select>
+            <CheckoutPicker repos={repos} value={repo} onPick={setRepo}
+              title="Which checkout the agent works in" triggerMaxWidth={180} />
           )}
           <button onClick={() => void hand()} disabled={busy || !state.shapes.length}
             className="agx-btn text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-40"

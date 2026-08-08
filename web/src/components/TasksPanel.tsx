@@ -94,7 +94,6 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
 }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
-  const [repoOpen, setRepoOpen] = useState(false);
   const shown = useSyncExternalStore(subscribeTaskSources, shownTaskSources, shownTaskSources);
   const tabs = useMemo(() => sourceTabs(shown), [shown]);
   const [source, setSource] = useState<SourceId>("all");
@@ -104,9 +103,6 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
   useEffect(() => {
     if (!tabs.some((t) => t.id === source)) setSource(tabs[0]?.id ?? "all");
   }, [tabs, source]);
-  const pickerRef = useRef<HTMLDivElement>(null);
-  useDismiss(repoOpen, pickerRef, () => setRepoOpen(false));
-  const repo = repos.find((r) => r.root === root) ?? null;
 
   useEffect(() => {
     if (!active) return;
@@ -125,7 +121,7 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <ViewHeader title="Tasks">
+      <ViewHeader label="Tasks">
         <nav className="flex items-center gap-0.5" aria-label="Sources">
           {tabs.map((s) => (
             <button key={s.id} onClick={() => setSource(s.id)}
@@ -139,31 +135,15 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
             </button>
           ))}
         </nav>
-        {/* Only the GitHub half is scoped to a repository. The local list is
-            this machine's and ClickUp is a workspace's, so a repo picker over
-            either would imply a scoping that does not exist. */}
-        <div className="relative" ref={pickerRef}
-          style={{ display: source === "local" || source === "clickup" ? "none" : undefined }}>
-          <button onClick={() => setRepoOpen((o) => !o)}
-            className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[280px] whitespace-nowrap"
-            style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }}
-            title={repo?.root}>
-            <span className="font-medium truncate">{repo ? (repo.worktreeOf ? repo.branch : repo.name) : "Pick a repo"}</span>
-            <span style={{ color: "var(--text3)" }}>▾</span>
-          </button>
-          {repoOpen && (
-            <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
-              style={{ zIndex: 30, background: "var(--bg2)", border: edge(30), minWidth: 320, maxHeight: 420, overflow: "auto" }}>
-              {repos.map((r) => (
-                <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); }}
-                  className="w-full text-left px-2.5 py-1.5 flex items-center gap-2 hover:bg-white/5"
-                  style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                  <span className="truncate flex-1" style={{ color: "var(--text)" }}>{r.worktreeOf ? r.branch : r.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {/*
+          * No repo picker. Switching checkout here never changed which issues
+          * you saw: they come from the GitHub remote, and every worktree of a
+          * project shares that one remote — so the control offered a dozen ways
+          * to look at the same list. All it really moved was the directory `gh`
+          * ran in and where `issueStart` would cut a worktree, and for both of
+          * those the answer that is always right is the project itself, which
+          * is what `repos[0]` already is under an open project.
+          */}
       </ViewHeader>
       {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} />
       : source === "clickup" ? <ClickUpBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} jump={cardJump} />

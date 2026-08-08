@@ -19,6 +19,7 @@ import { openExternal } from "../lib/externalUrl.ts";
 import { requestBrowserNav } from "../lib/browserNav.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { CheckoutPicker } from "./CheckoutPicker.tsx";
 
 export type MachineTab = "ports" | "resources" | "locks";
 
@@ -729,11 +730,11 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
       <div className="flex items-center gap-2 px-3.5 py-2 text-[11px] flex-wrap">
         <span style={{ color: "var(--text3)" }}>⛁</span>
         <span style={{ color: "var(--text)", fontWeight: 500 }}>Disk</span>
-        <select value={root} onChange={(e) => { setRoot(e.target.value); setData(null); setOpen(false); }}
-          className="text-[10.5px] px-1.5 py-0.5 rounded outline-none min-w-0"
-          style={{ background: "var(--bg)", color: "var(--text2)", border: edge(20), maxWidth: 240 }}>
-          {repos.map((r) => <option key={r.root} value={r.root}>{r.worktreeOf ? r.branch : base(r.root)}</option>)}
-        </select>
+        {/* Which checkout to measure — a one-shot argument for the scan, not a
+            move: nothing else follows it anywhere. */}
+        <CheckoutPicker repos={repos} value={root}
+          onPick={(r) => { setRoot(r); setData(null); setOpen(false); }}
+          placeholder="Pick a checkout" triggerMaxWidth={240} />
         {data && !data.error && (
           <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
             <b style={{ color: "var(--text2)", fontWeight: 500 }}>{mb(data.bytes)}</b>

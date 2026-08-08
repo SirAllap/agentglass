@@ -16,6 +16,7 @@ import { requestTermIssue } from "../../lib/termIssue.ts";
 import { seedChat } from "../../lib/chatStore.ts";
 import { api } from "../../lib/api.ts";
 import type { GitRepoRef } from "../../../../shared/types.ts";
+import { CheckoutPicker } from "../CheckoutPicker.tsx";
 
 type Guest = {
   executeJavaScript(code: string): Promise<unknown>;
@@ -209,12 +210,8 @@ export function PagePicker({ view, url, title, feedback, onNote, onDone }: {
         </div>
 
         {repos.length > 1 && (
-          <select value={repo} onChange={(e) => setRepo(e.target.value)}
-            className="text-[10.5px] px-2 py-1 rounded-lg outline-none"
-            style={{ background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
-            title="Which checkout the agent works in">
-            {repos.map((r) => <option key={r.root} value={r.root}>{r.worktreeOf ? r.branch : r.name}</option>)}
-          </select>
+          <CheckoutPicker repos={repos} value={repo} onPick={setRepo}
+            title="Which checkout the agent works in" triggerMaxWidth={200} />
         )}
 
         {/* Terminal first, chat as the lesser option — the same order and the

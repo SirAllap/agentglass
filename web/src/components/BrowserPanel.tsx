@@ -36,7 +36,7 @@ import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browser
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
 import { api } from "../lib/api.ts";
 import { type DrivableWebview } from "../lib/browserDrive.ts";
-import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
+import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { PagePicker } from "./browser/PagePicker.tsx";
 import { MarkupLayer } from "./browser/MarkupLayer.tsx";
 import { DemoPage } from "./browser/DemoPage.tsx";
@@ -590,7 +590,7 @@ export function BrowserView(_props: { active: boolean }) {
   return (
     <div className="flex flex-col h-full min-h-0 outline-none" tabIndex={-1} onKeyDown={onKey}>
       <div className={viewHeaderClass} style={viewHeaderStyle}>
-        <span className={viewTitleClass} style={{ color: "var(--text)" }}>Browser</span>
+        <h2 className="sr-only">Browser</h2>
         <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text3)" }}>{active ? tabLabel(active) : ""}</span>
         {note && (
           <span className="ml-auto text-[10px] px-2 py-0.5 rounded shrink-0"

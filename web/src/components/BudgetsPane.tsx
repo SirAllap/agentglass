@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { SettingRow } from "./SettingRow.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd } from "../lib/format.ts";
+import type { GitRepoRef } from "../../../shared/types.ts";
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../../shared/types.ts";
+import { CheckoutPicker } from "./CheckoutPicker.tsx";
 
 /**
  * A number you chose, instead of one this app picked.
@@ -21,7 +23,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
   const [rows, setRows] = useState<Budget[] | null>(null);
   const [status, setStatus] = useState<BudgetStatus[]>([]);
   const [models, setModels] = useState<string[]>([]);
-  const [roots, setRoots] = useState<string[]>([]);
+  const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -36,7 +38,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
     load();
     // The projects this machine has actually worked on, so a budget is attached
     // by picking rather than by typing a path exactly right.
-    api.gitRepos().then((r) => setRoots(r.repos.map((x) => x.root))).catch(() => setRoots([]));
+    api.gitRepos().then((r) => setRepos(r.repos)).catch(() => setRepos([]));
   }, [open, load]);
 
   /** Saved as a set, because a row has no identity: two budgets can differ only
@@ -102,13 +104,11 @@ export function BudgetsPane({ open }: { open: boolean }) {
                 <option value="month">a month</option>
               </select>
               <span className="t-dim">on</span>
-              <select className="text-[11px] px-1.5 py-1 rounded-md min-w-0 max-w-[9rem]"
-                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
-                value={b.root} onChange={(e) => patch(i, { root: e.target.value })}>
-                <option value="">everything</option>
-                {roots.map((r) => <option key={r} value={r}>{r.split("/").filter(Boolean).pop() || r}</option>)}
-                {b.root && !roots.includes(b.root) && <option value={b.root}>{b.root}</option>}
-              </select>
+              {/* "everything" is the empty root, and it has to stay reachable —
+                  a budget with no checkout is the whole machine's. */}
+              <CheckoutPicker repos={repos} value={b.root}
+                onPick={(r) => patch(i, { root: r === b.root ? "" : r })}
+                placeholder="everything" triggerMaxWidth={160} />
               <select className="text-[11px] px-1.5 py-1 rounded-md min-w-0 max-w-[11rem]"
                 style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
                 value={b.model} onChange={(e) => patch(i, { model: e.target.value })}>

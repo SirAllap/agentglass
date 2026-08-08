@@ -14,10 +14,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
 import type { FileEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
+import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { subscribeFilesReveal, filesReveal } from "../lib/filesReveal.ts";
-import { useDismiss } from "../lib/useDismiss.ts";
 import { FOLDER, FOLDER_OPEN, guides, iconFor, isNoise } from "../lib/fileIcons.ts";
 
 /** How a row is drawn depends only on this, so the tree and the search results
@@ -32,10 +32,6 @@ const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%,
 export function FilesView({ active }: { active: boolean }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
-  const [repoOpen, setRepoOpen] = useState(false);
-  const [repoQuery, setRepoQuery] = useState("");
-  const pickerRef = useRef<HTMLDivElement>(null);
-  useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
 
   const repo = repos.find((r) => r.root === root) ?? null;
 
@@ -60,45 +56,9 @@ export function FilesView({ active }: { active: boolean }) {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <ViewHeader title="Files">
-        <div className="relative" ref={pickerRef}>
-          <button onClick={() => setRepoOpen((o) => !o)}
-            className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[280px] shrink-0 whitespace-nowrap"
-            style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }}
-            title={repo ? `${repo.name}\n${repo.branch}\n${repo.root}` : "Pick a checkout"}>
-            <span className="font-medium truncate min-w-0">{repo ? (repo.worktreeOf ? repo.branch : repo.name) : "Pick a checkout"}</span>
-            {repo?.worktreeOf && <span className="shrink-0 text-[8.5px] px-1 py-[1px] rounded" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>}
-            <span className="shrink-0" style={{ color: "var(--text3)" }}>▾</span>
-          </button>
-          {repoOpen && (
-            <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
-              style={{ zIndex: 30, background: "var(--bg2)", border: edge(30), minWidth: 340, maxHeight: 420, overflow: "hidden" }}>
-              <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="Filter checkouts…"
-                className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
-              <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
-                {repos.filter((r) => {
-                  const q = repoQuery.trim().toLowerCase();
-                  return !q || `${r.name} ${r.branch} ${r.root}`.toLowerCase().includes(q);
-                }).map((r) => (
-                  <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); }}
-                    className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
-                    style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
-                      title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
-                      style={r.worktreeOf
-                        ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
-                        : { color: "var(--text3)", border: edge(25) }}>{r.worktreeOf ? "WT" : "REPO"}</span>
-                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.root}>
-                      {r.worktreeOf ? r.branch : r.name}
-                    </span>
-                    {!r.worktreeOf && <span className="shrink-0 truncate text-[9.5px]" style={{ maxWidth: 150, color: "var(--text3)" }} title={r.branch}>{r.branch}</span>}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+      <ViewHeader label="Files">
+        <CheckoutPicker repos={repos} value={root} onPick={setRoot}
+          placeholder="Pick a checkout" triggerMaxWidth={280} emptyLabel="no checkouts seen yet" />
         {repo && <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text3)" }} title={repo.root}>{repo.root}</span>}
       </ViewHeader>
       {root ? <FilesBody root={root} branch={repo?.branch ?? ""} active={active} />
