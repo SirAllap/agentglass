@@ -297,6 +297,35 @@ export function FilePalette({
   const LIST_PAD = 8;
   const listCap = docOpen && rowH && rows.length > 3 ? rowH * 3 + LIST_PAD : undefined;
 
+  /**
+   * When the list shrinks to three rows, the row you chose has to be one of them.
+   *
+   * Opening a file caps this list, and the scroll position it had in the tall
+   * box stays exactly where it was — so the row that produced the document you
+   * are now reading ends up below the window, and the three rows on screen are
+   * whichever ones happened to be at that offset. It reads as having lost your
+   * place in a list you never scrolled.
+   *
+   * Put at the TOP rather than merely brought into view, because the two rows
+   * worth seeing beside your choice are the ones after it.
+   *
+   * By hand rather than with `scrollIntoView`: that scrolls every scrollable
+   * ancestor too, and this list lives inside a fixed panel over a document.
+   * Measured from rectangles rather than `offsetTop`, which is relative to
+   * whichever ancestor happens to be positioned.
+   */
+  useEffect(() => {
+    const list = listRef.current;
+    if (!listCap || !list) return;
+    const row = list.querySelector<HTMLElement>(`[data-row="${cursor}"]`);
+    if (!row) return;
+    list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - LIST_PAD / 2;
+    // `cursor` deliberately absent: this is for the moment the box changes size,
+    // and re-running it per keystroke would fight the `block: "nearest"` walk
+    // that lets ↓ move one row at a time instead of jumping the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listCap, docOpen]);
+
   const openRow = useCallback((row: Row | undefined) => {
     if (!row || !root) return;
     if (row.kind === "dir") { onRevealDir(root, row.rel); onClose(); return; }
