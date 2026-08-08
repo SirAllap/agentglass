@@ -26,7 +26,58 @@ permissions:
   contents: write
 
 jobs:
+  # Whether this run has anything to build.
+  #
+  # A tag that changes nothing the phone is made of would otherwise spend the
+  # 5m18s of Gradle described above reproducing the APK the previous tag already
+  # published — and attach it to a release as if the phone had been rebuilt and
+  # checked at that tag, which it had not. An artefact that does not exist
+  # misleads nobody; one carrying the wrong version does.
+  #
+  # `shared/` counts as the phone: it imports palettes, project, providers,
+  # session, term and types from there, so a change to the wire is a change to
+  # the app even with mobile/ untouched. So does this workflow, because a build
+  # whose recipe changed has not been proven by the last one that ran.
+  #
+  # workflow_dispatch always builds. Running it by hand is asking whether the
+  # build still works, and "nothing changed" is not an answer to that question.
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.q.outputs.build }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the previous tag is history, not the checkout
+      - id: q
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "asked by hand — building"
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # The tag before this one, ignoring this one. Missing on the very first
+          # tag, and then there is no "since" to compare against.
+          prev="$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          if [ -z "$prev" ]; then
+            echo "no earlier tag — building"
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed="$(git diff --name-only "$prev" "$GITHUB_REF_NAME" -- mobile/ shared/ .github/workflows/android-apk.yml)"
+          if [ -n "$changed" ]; then
+            echo "changed since $prev:"; echo "$changed"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            # Said out loud rather than silently skipped: a job that vanishes
+            # from a release run reads as a job that broke.
+            echo "nothing under mobile/ or shared/ changed since $prev — the phone"
+            echo "of $prev is still the current build, and its APK is on that release."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   apk:
+    needs: scope
+    if: needs.scope.outputs.build == 'true'
     runs-on: ubuntu-latest
     env:
       # Whether this run can sign for real, decided once. A step's `if:` cannot
