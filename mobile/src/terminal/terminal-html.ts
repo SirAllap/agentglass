@@ -189,7 +189,28 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     unicode-range: ${NERD_ICONS_RANGE};
   }
   html, body { margin: 0; padding: 0; height: 100%; background: ${palette.bg}; overflow: hidden; }
-  #screen { position: absolute; inset: 0; }
+  /*
+   * A gutter down both sides, and the columns are counted inside it.
+   *
+   * Edge to edge is right for a desktop terminal in a window that already has
+   * a frame around it. On a phone the WebView IS the frame: the last glyph of
+   * a line ended on the bezel with nothing after it, which reads as text
+   * running underneath the edge of the screen rather than as a line that
+   * finished. Reported from the phone, and it is the one place in the app
+   * where the text had no side margin at all.
+   *
+   * inset and not padding: xterm measures the element it was opened into, so
+   * with padding it would size a grid to the full box and then draw it inside
+   * a smaller one — the last column half under the gutter, which is exactly
+   * the complaint. Insetting makes the element itself narrower, and
+   * usableWidth below reads that element rather than the window, so the CSS
+   * here stays the only place the number lives.
+   *
+   * 8px each side (SPACE.sm, what the rest of the phone app uses). It costs
+   * about 4% of the glyph at 60 columns on a 412px screen, which is under the
+   * step the font size can even move in.
+   */
+  #screen { position: absolute; inset: 0 8px; }
   /* The cursor keeps blinking behind a screen nobody is looking at otherwise,
      which on a phone is a repaint per second for no reader. */
   .xterm.agx-idle .xterm-cursor-blink { animation: none !important; }
@@ -238,6 +259,19 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
 
   var wanted = ${columns};
   /*
+   * How much width the grid actually has, which is not the window's.
+   *
+   * Read off the element the terminal is drawn into, so the gutter is declared
+   * once in the stylesheet and this follows it. The fallback is for the case
+   * that element has no layout yet: report() runs again on every resize, and
+   * the first pass is the one that would read zero.
+   */
+  var screenEl = document.getElementById('screen');
+  var usableWidth = function () {
+    var w = screenEl ? screenEl.clientWidth : 0;
+    return w > 0 ? w : Math.max(1, window.innerWidth);
+  };
+  /*
    * The finest step in the font size that can change anything.
    *
    * xterm sizes a cell by writing 32 glyphs into a span and reading its
@@ -251,7 +285,7 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
   var sizeFor = function (cols) {
     // Floor rather than round: a font half a pixel too wide loses the last
     // column, which is where a prompt's cursor lives.
-    return Math.max(4, Math.floor((window.innerWidth / cols) / ratio * STEPS) / STEPS);
+    return Math.max(4, Math.floor((usableWidth() / cols) / ratio * STEPS) / STEPS);
   };
 
   var term = new window.Terminal({
@@ -369,7 +403,7 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
       // Ties go to the later, larger size: two sizes a step apart often land on
       // the same cell, and at the same grid width the bigger glyph is the one
       // worth having.
-      if (tried.grid >= widest && tried.grid > 0 && tried.grid <= window.innerWidth) {
+      if (tried.grid >= widest && tried.grid > 0 && tried.grid <= usableWidth()) {
         widest = tried.grid;
         best = tried.size;
       }
