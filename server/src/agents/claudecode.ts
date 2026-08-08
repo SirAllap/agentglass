@@ -33,6 +33,36 @@ export function projectSlug(cwd: string): string {
   return cwd.replace(/[^A-Za-z0-9]/g, "-");
 }
 
+/**
+ * Does the installed CLI take `--name`?
+ *
+ * Asked of the binary rather than assumed, because the answer is a property of
+ * whatever version happens to be on this machine and getting it wrong is not a
+ * missing feature — an unknown flag makes the CLI exit before it starts, so a
+ * tmux window would open, print a usage error and close. A capability check
+ * costs one `--help` per process; a wrong guess costs the window.
+ *
+ * Cached for the life of the process. Somebody who upgrades the CLI mid-session
+ * gets the old answer until the app restarts, which is the right trade against
+ * running `--help` on every hand-off.
+ */
+let namesSessions: boolean | null = null;
+export function supportsSessionName(bin: string | null): boolean {
+  if (namesSessions !== null) return namesSessions;
+  namesSessions = false;
+  if (!bin) return false;
+  try {
+    const r = Bun.spawnSync([bin, "--help"], { stdout: "pipe", stderr: "pipe" });
+    // `-n, --name <name>` in the options list. Matched on the long form only:
+    // `-n` alone is too short to look for in a page of help text.
+    namesSessions = /--name\b/.test(r.stdout.toString() + r.stderr.toString());
+  } catch { /* an unreadable binary is one that does not take the flag */ }
+  return namesSessions;
+}
+
+/** For a suite that needs to ask twice. */
+export function __resetNameSupport(): void { namesSessions = null; }
+
 export const claudeCode: PaneAgent = {
   id: "claude-code",
   label: "Claude Code",

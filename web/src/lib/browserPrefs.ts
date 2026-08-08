@@ -18,6 +18,7 @@ export const ENGINE_KEY = "agentglass.browser.engine";
  *  while you work; the default should be the one that does not build a profile
  *  out of it. Anybody who wants Google can say so in settings. */
 export const DEFAULT_HOME = "https://duckduckgo.com";
+export const ZOOM_KEY = "agentglass.browser.zoom";
 
 /** A blank page is a real answer — "open nothing" is what an empty home means,
  *  the same as every other browser. */
@@ -77,4 +78,69 @@ export function searchEngine(): SearchEngine {
 
 export function setSearchEngine(engine: SearchEngine): void {
   write(ENGINE_KEY, engine);
+}
+
+
+/**
+ * How far the built-in browser is zoomed, as Electron's logarithmic LEVEL
+ * rather than a percentage: 0 is 100%, each ±1 is a factor of 1.2.
+ *
+ * Remembered, because the alternative is re-zooming every launch — and the
+ * people who reach for this are the ones for whom the default is unreadable,
+ * so forgetting it is not a small annoyance. Held to the same range the shell
+ * enforces, and a stored value that is not a number reads as "not zoomed"
+ * rather than throwing this panel out of the workspace.
+ */
+export const ZOOM_MIN = -7;
+export const ZOOM_MAX = 7;
+
+export function zoomLevel(): number {
+  try {
+    const raw = Number(localStorage.getItem(ZOOM_KEY));
+    return Number.isFinite(raw) ? Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, raw)) : 0;
+  } catch { return 0; }
+}
+
+export function setZoomLevel(level: number): void {
+  try {
+    if (!Number.isFinite(level) || level === 0) localStorage.removeItem(ZOOM_KEY);
+    else localStorage.setItem(ZOOM_KEY, String(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level))));
+  } catch { /* private mode */ }
+}
+
+/** What to show a person, who does not think in logarithms. Chrome's own
+ *  ladder: 1.2^level, to the nearest whole percent. */
+export const zoomPercent = (level: number): number => Math.round(Math.pow(1.2, level) * 100);
+
+/*
+ * Whether history and bookmarks ride along with a cookie import.
+ *
+ * They used to come wholesale with the logins, no choice — the reasoning being
+ * that a second button is one people miss, so the address bar stays empty for
+ * whoever imported and never noticed it. True for the default, but a person who
+ * wants only their logins in a work tool, not fifteen thousand pages of their
+ * own history, had no way to say so. Two toggles, defaulting ON so nothing
+ * changes for anyone who leaves them alone; stored as "0" only when turned OFF,
+ * so an absent key is the on-by-default and can never be confused with a choice.
+ */
+export const IMPORT_HISTORY_KEY = "agentglass.browser.importHistory";
+export const IMPORT_BOOKMARKS_KEY = "agentglass.browser.importBookmarks";
+
+export function importHistory(): boolean { return read(IMPORT_HISTORY_KEY) !== "0"; }
+export function setImportHistory(on: boolean): void { write(IMPORT_HISTORY_KEY, on ? "" : "0"); }
+export function importBookmarks(): boolean { return read(IMPORT_BOOKMARKS_KEY) !== "0"; }
+export function setImportBookmarks(on: boolean): void { write(IMPORT_BOOKMARKS_KEY, on ? "" : "0"); }
+
+/**
+ * Which imported rows to keep, given the two toggles.
+ *
+ * The reader marks each row as a bookmark or leaves it as history; this is the
+ * one place that choice is applied, so the save and the "N pages" it reports
+ * back always agree. Pure, so a test can pin that turning history off drops
+ * exactly the non-bookmarks and nothing else.
+ */
+export function pickImportRows<T extends { bookmarked: boolean }>(
+  rows: T[], history: boolean, bookmarks: boolean,
+): T[] {
+  return rows.filter((r) => (r.bookmarked ? bookmarks : history));
 }

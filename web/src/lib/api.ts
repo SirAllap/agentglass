@@ -1,5 +1,6 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, ProviderUsage } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ViewTasksResponse, TaskDetail, ProviderTask } from "../../../shared/providers.ts";
+import type { ImportedPlace } from "./desktop.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary } from "../../../shared/types.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask };
@@ -35,7 +36,20 @@ export const IS_DESKTOP: boolean = !!DESKTOP_API;
 export let SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
   DESKTOP_API?.replace(/\/$/, "") ||
-  (SERVED_BY_API ? location.origin : `http://${location.hostname}:4000`);
+  /*
+   * Guarded because there is not always a window.
+   *
+   * This line is the reason no test can import a component: everything reaches
+   * `api.ts`, and reading `location` at module scope throws under `bun test`,
+   * which has no DOM. An audit proved what that cost — it made `PrView` return
+   * null, so the entire Pull requests panel drew nothing, and the suite stayed
+   * at 1802 pass because not one test executes the component.
+   *
+   * The fallback is a string no test will ever call, and in a browser nothing
+   * changes: `typeof location` is never "undefined" there.
+   */
+  (typeof location === "undefined" ? "http://127.0.0.1:4000"
+    : SERVED_BY_API ? location.origin : `http://${location.hostname}:4000`);
 
 /**
  * Whether the line above *guessed* the origin rather than being told it.
@@ -47,6 +61,53 @@ export let SERVER: string =
  */
 export const SERVER_GUESSED: boolean =
   !(import.meta.env.VITE_CW_SERVER as string | undefined) && !DESKTOP_API && !SERVED_BY_API;
+
+/**
+ * The desktop shell's own report that there is no sidecar, and why.
+ *
+ * This exists because `SERVER_GUESSED` above is FALSE in the packaged app —
+ * `DESKTOP_API` is always set there — and ServerBanner returns early on that,
+ * so the "No server" banner was unreachable from inside the desktop. Its own
+ * comment said the shell "has probed the port since #126", which is true and is
+ * not the same claim: the shell probes to PICK a port and then spawns into it.
+ * If that spawn never answers, the origin is configured, looks verified, and is
+ * empty. Nothing else on screen disagreed except a CLOSED pill in the header.
+ *
+ * So the shell says so out loud (electron/main.js, `reportSidecar`) and this is
+ * where the page hears it. `reason` is what happened, the other three are what
+ * to put in front of a person.
+ */
+export type SidecarFailure = {
+  reason: "missing" | "spawn" | "exited" | "timeout";
+  what: string;
+  where?: string;
+  fix: string;
+  /** The tail of the server's own stderr. Often the only text that names the
+   *  real cause — a bind error names the port. May be empty. */
+  detail?: string;
+  port?: number;
+};
+
+type ShellBridge = {
+  sidecarFailure?: SidecarFailure | null;
+  onServerFailed?: (fn: (f: SidecarFailure | null) => void) => () => void;
+};
+
+const SHELL: ShellBridge | undefined =
+  typeof window !== "undefined" ? (window as unknown as { agentglass?: ShellBridge }).agentglass : undefined;
+
+/** What the shell knew when this page loaded. Null in a browser tab, which has
+ *  no shell to ask and keeps the origin-probe path below instead. */
+export function sidecarFailure(): SidecarFailure | null {
+  return SHELL?.sidecarFailure ?? null;
+}
+
+/** Everything the shell learns after that, failures and recoveries alike. A
+ *  no-op unsubscribe outside the desktop, so the caller needs no branch. */
+export function onSidecarFailure(fn: (f: SidecarFailure | null) => void): () => void {
+  if (!SHELL?.onServerFailed) return () => {};
+  return SHELL.onServerFailed(fn);
+}
 
 /** What is answering at `SERVER`. `foreign` is the interesting one: something
  *  is there, it is not us, and every panel is about to ask it for data. */
@@ -137,15 +198,13 @@ export const withToken = (url: string): string =>
 /** Whether this client has a shared-secret token configured. */
 export const hasToken = (): boolean => !!TOKEN;
 
-/**
- * The credential itself, for the one caller that cannot use `authHeaders`.
- *
- * The service worker answers a gate from a notification while the app is
- * closed, so it needs the credential in a store it can read — see
- * lib/swAuth.ts. Everything in the page uses `authHeaders`/`withToken` and
- * should keep doing so: this exists to be mirrored, once, into IndexedDB.
+/*
+ * There was an `authToken()` here, handing the raw credential out for the one
+ * caller that could not use `authHeaders`: the service worker, which answered a
+ * gate from a notification with the app closed and therefore needed its own
+ * copy in IndexedDB. The worker is gone with Web Push, and so is the only
+ * reason this module ever exported the secret rather than a header carrying it.
  */
-export const authToken = (): string => TOKEN;
 
 /** Why a chat turn ended early.
  *
@@ -320,7 +379,13 @@ const realApi = {
   /** Where the machine's agents are sitting, in tmux terms. Asked on demand —
    *  when the bar's panel opens — never polled: nobody reads the answer between
    *  pressing the chip and clicking through it. */
-  agentPanes: () => get<{ ok: boolean; reason?: string; panes: AgentPane[] }>("/terminal/panes"),
+  agentPanes: () => get<PanesResponse>("/terminal/panes"),
+  /** Where the agent in the focused pane of this tmux window has been working,
+   *  newest first. Directories, not worktrees — the caller matches them against
+   *  the worktrees it is already showing. See panewt.ts for why the screen
+   *  cannot answer this. */
+  paneDirs: (windowId: string) =>
+    get<{ ok: boolean; pane: string | null; dirs: string[] }>(`/terminal/pane-dirs?window=${encodeURIComponent(windowId)}`),
   /** Put one in front of whoever is attached to tmux. */
   focusPane: (p: { sessionId: string; windowId: string; paneId: string }) =>
     post<{ ok: boolean; error?: string }>("/terminal/panes/focus", p),
@@ -404,6 +469,29 @@ const realApi = {
   setWorkspace: (root: string | null) => post<{ ok: boolean; workspace: string | null; persisted: boolean; error?: string; note?: string }>("/workspace", { root }),
   /** Subdirectories matching a half-typed path — the picker's completion. */
   fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
+  /** Whether an agent could drive the built-in browser at all: the CLI on PATH,
+   *  the skill where agents look, and a window able to answer. See browseruse.ts
+   *  for why each of the three is reported separately. */
+  browserUseStatus: () => get<BrowserUseStatus>("/browser-use/status"),
+  /** Put the skill this build ships where agents look, keeping what was there. */
+  browserUseInstall: () => post<{ ok: boolean; path?: string; backup?: string; error?: string }>("/browser-use/install", {}),
+  /** Say that this window has a browser panel that can answer an agent's ask —
+   *  or that it no longer does. A heartbeat: the server expires it, so a window
+   *  that dies without saying goodbye stops being counted. */
+  browserReady: (client: string, on: boolean) => post<{ ok: boolean }>("/browser/ready", { client, on }),
+  /** Report what the built-in browser did with an agent's ask. The server is
+   *  holding that agent's request open until this lands — see browserdrive.ts. */
+  browserResult: (r: { id: string; ok: boolean; value?: unknown; error?: string }) =>
+    post<{ ok: boolean; known: boolean }>("/browser/result", r),
+  /** Stop offering a project in the picker, or offer it again. Nothing on disk
+   *  is touched — see config.ts. */
+  hideProject: (path: string, hidden: boolean) => post<{ ok: boolean; hidden: string[]; persisted: boolean; error?: string }>("/projects/hidden", { path, hidden }),
+  /** Clone a repository into a folder. Answers with where it landed, so the
+   *  picker can open it straight away. Slow by nature — a real clone over a
+   *  slow line takes minutes and the request is held for all of it. */
+  cloneProject: (url: string, parent: string) => post<{ ok: boolean; path?: string; error?: string }>("/projects/clone", { url, parent }),
+  /** A new, empty project: a folder with a git repository in it. */
+  newProject: (name: string, parent: string) => post<{ ok: boolean; path?: string; error?: string }>("/projects/new", { name, parent }),
   // --- live git panel (lazygit-style) ---
   gitCapability: () => get<GitCapability>("/git/capability"),
   /** Every outside tool the app shells out to, and what this machine has.
@@ -411,9 +499,28 @@ const realApi = {
    *  window, which is the only case where a stale answer is the wrong one. */
   dependencies: (force = false) => get<DepsResponse>(`/dependencies${force ? "?force=1" : ""}`),
   gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
+  /** Put a PNG somewhere an agent can read it, and say where. A tmux window
+   *  takes text; a megabyte of base64 in a prompt is not text. */
+  /** Everywhere another browser has been, for the address bar. */
+  browserPlaces: () => get<{ ok: boolean; places: ImportedPlace[] }>("/browser/places/all"),
+  browserPlaceCount: () => get<{ ok: boolean; total: number; bookmarks: number; sources: string[] }>("/browser/places"),
+  saveBrowserPlaces: (source: string, places: ImportedPlace[]) =>
+    post<{ ok: boolean; saved?: number; total?: number; bookmarks?: number; error?: string }>("/browser/places", { source, places }),
+  forgetBrowserPlaces: () => post<{ ok: boolean; total?: number }>("/browser/places/forget", {}),
+  /** Remember a page the built-in browser just visited, so the bar suggests your own history back. */
+  recordVisit: (url: string, title: string) =>
+    post<{ ok: boolean }>("/browser/visit", { url, title }),
+  saveScratchImage: (dataUrl: string, name: string) =>
+    post<{ ok: boolean; path?: string; error?: string }>("/scratch/image", { dataUrl, name }),
   /** Every repo on the machine — for the project picker, even when scoped. */
-  gitReposAll: () => get<{ repos: GitRepoRef[] }>("/git/repos?all=1"),
+  /** Every repo on the machine, plus the paths the picker has been told to
+   *  stop offering — sent together so the picker can also show them again. */
+  gitReposAll: () => get<{ repos: GitRepoRef[]; hidden?: string[] }>("/git/repos?all=1"),
   gitTree: (root: string) => get<WorkingTree>(`/git/tree?root=${encodeURIComponent(root)}`),
+  /** What every in-scope worktree changed at once, behind File changes.
+   *  "working" = the working tree (uncommitted); "committed" = each checkout's
+   *  last commit — so a change is still there after it is committed. */
+  gitChangesAll: (mode: "working" | "committed" = "working") => get<{ changes: FileChange[] }>(`/git/changes-all?mode=${mode}`),
   gitStage: (root: string, paths: string[]) => post<GitActionResult>("/git/stage", { root, paths }),
   gitUnstage: (root: string, paths: string[]) => post<GitActionResult>("/git/unstage", { root, paths }),
   gitStageAll: (root: string) => post<GitActionResult>("/git/stage-all", { root }),
@@ -456,7 +563,19 @@ const realApi = {
   gitStashDrop: (root: string, index: number) => post<GitActionResult>("/git/stash-drop", { root, index }),
   gitApplyHunk: (root: string, path: string, staged: boolean, action: "stage" | "unstage" | "discard", hunk: DiffHunk) => post<GitActionResult>("/git/apply-hunk", { root, path, staged, action, hunk }),
   gitConflictBlocks: (root: string, path: string) => get<{ ok: boolean; blocks: ConflictBlock[]; error?: string }>(`/git/conflict-blocks?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
-  gitResolveBlocks: (root: string, path: string, choices: BlockChoice[]) => post<GitActionResult>("/git/resolve-blocks", { root, path, choices }),
+  gitResolveBlocks: (root: string, path: string, choices: BlockChoice[], stamp?: string) => post<GitActionResult>("/git/resolve-blocks", { root, path, choices, stamp }),
+  /** What this stop conflicted, including the files already resolved — git
+   *  forgets the set the moment one is staged, so the server keeps it. */
+  gitMergeSession: (root: string) => get<MergeSessionView>(`/git/merge-session?root=${encodeURIComponent(root)}`),
+  /** Put a resolved file back to how git left it. Refuses without `confirm`,
+   *  because `git checkout --merge` destroys a hand resolution silently. */
+  gitReopenConflict: (root: string, path: string, confirm: boolean) => post<GitActionResult>("/git/reopen-conflict", { root, path, confirm }),
+  /** The whole conflicted file — text and conflicts together — plus the stamp
+   *  that says which parse the choices were made against. */
+  gitConflictFile: (root: string, path: string) => get<ConflictFile>(`/git/conflict-file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  /** Which two sides git has stopped between, read from `.git` rather than
+   *  deduced from the checkout's base — see MergeInfo. */
+  gitMergeInfo: (root: string) => get<MergeInfo>(`/git/merge-info?root=${encodeURIComponent(root)}`),
   /** `scope` is whose history: this checkout's own by default, the whole repo
    *  on request. See logGraph() — the default used to be everything, which put
    *  other people's branches at the top of your own log. */
@@ -492,7 +611,7 @@ const realApi = {
   gitResolve: (root: string, paths: string[], side: "ours" | "theirs") => post<GitActionResult>("/git/resolve", { root, paths, side }),
   gitMergeAbort: (root: string) => post<GitActionResult>("/git/merge-abort", { root }),
   gitUndoMerge: (root: string) => post<GitActionResult>("/git/undo-merge", { root }),
-  gitMergeContinue: (root: string) => post<GitActionResult>("/git/merge-continue", { root }),
+  gitMergeContinue: (root: string, anyway?: boolean) => post<GitActionResult>("/git/merge-continue", { root, anyway }),
   // --- live docker panel (lazydocker-style) ---
   /** Installed / daemon-down / OK — so the panel can show install guidance for a
    *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
@@ -523,6 +642,10 @@ const realApi = {
   /* Integrations. `connect` is the only call in this file that sends a secret,
      and nothing here ever receives one back — the responses carry a status. */
   providers: () => get<ProvidersResponse>("/providers"),
+  /** Where this app keeps things, and for how long. Paths, never contents. */
+  privacy: () => get<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number }>("/privacy"),
+  /** What is left of GitHub's hourly budget — this app is made of `gh` calls. */
+  ghRateLimit: () => get<{ ok: boolean; error?: string; budgets?: { id: string; label: string; limit: number; remaining: number; reset: number }[] }>("/prs/rate-limit"),
   providerConnect: (id: string, token: string) =>
     post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/connect", { id, token }),
   providerDisconnect: (id: string) =>
@@ -538,22 +661,71 @@ const realApi = {
      anything in somebody's company workspace; each one carries the
      `date_updated` the client was looking at, so a card that moved underneath
      is refused rather than overwritten. */
-  clickupViews: () => get<{ views: SavedView[]; current?: string; writeEnabled: boolean; writeForced?: boolean }>("/clickup/views"),
+  /* Recipes — saved commands. `recipesRender` shows what WILL run and never
+     runs it; that separation is the whole safety story on the client side. */
+  recipes: (root?: string) =>
+    get<RecipesResponse>(`/recipes${root ? `?root=${encodeURIComponent(root)}` : ""}`),
+  recipeSave: (r: Recipe) => post<{ ok: boolean; error?: string; recipe?: Recipe }>("/recipes/save", r as unknown as Record<string, unknown>),
+  recipeRemove: (id: string) => post<{ ok: boolean }>("/recipes/remove", { id }),
+  recipeRender: (id: string, values: Record<string, string>) =>
+    get<{ ok: boolean; error?: string; steps?: string[]; confirm?: boolean; missing?: string[] }>(
+      `/recipes/render?id=${encodeURIComponent(id)}&values=${encodeURIComponent(JSON.stringify(values))}`),
+  clickupViews: () => get<ClickUpBoards>("/clickup/views"),
   clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
   clickupView: (id?: string, force = false) =>
     get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
   clickupAddView: (url: string) =>
     post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/add", { url }),
   clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
+  /** Point a saved board at a different address. Resolves the new one before it
+   *  drops the old — see replaceViewUrl. */
+  clickupReplaceView: (id: string, url: string) =>
+    post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/replace", { id, url }),
+  /** One list's own statuses and fields, for a card that came from somewhere
+   *  other than the board on screen. */
+  clickupList: (id: string) =>
+    get<{ ok: boolean; error?: string; name?: string; statuses?: ListStatus[]; fields?: ListField[]; place?: ListPlace }>(
+      `/clickup/list?id=${encodeURIComponent(id)}`),
+  /** Who can be put on a card, from the list it lives in. */
+  clickupMembers: (list: string) =>
+    get<{ ok: boolean; error?: string; members?: ListMember[] }>(`/clickup/members?list=${encodeURIComponent(list)}`),
   clickupPrs: (card: string, field: string, root: string) =>
     get<{ ok: boolean; prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; error?: string }>(
       `/clickup/prs?${new URLSearchParams({ card, field, root })}`),
   clickupFind: (q: string) =>
     get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/clickup/find?q=${encodeURIComponent(q)}`),
+  /** Merge the base into the pull request's branch in a worktree of its own, so
+   *  the conflict exists somewhere it can be resolved. Writes — see the route. */
+  prConflict: (root: string, number: number) =>
+    post<{ ok: boolean; root?: string; conflicts?: string[]; clean?: boolean; error?: string }>("/prs/conflict", { root, number }),
+  /** WHICH files would conflict, without merging anything — GitHub only ever
+   *  says that a pull request conflicts, never where. Read-only: the merge
+   *  happens in git's object database and the checkout is untouched. */
+  prConflictFiles: (root: string, number: number) =>
+    get<{ ok: boolean; conflicts: string[]; clean: boolean; stale?: boolean;
+      /** You merged the base in here and have not pushed it — see gitwork.ts. */
+      resolvedLocally?: { branch: string; ahead: number };
+      error?: string }>(
+      `/prs/conflict-files?root=${encodeURIComponent(root)}&number=${number}`),
+  /** How far behind its base a pull request's branch is. Its own call: it costs
+   *  about 600ms, and the detail should not wait on an offer. */
+  /** The pull requests on a branch: one out of it, any number into it. By
+   *  branch rather than by author — see prsForBranch. */
+  prsForBranch: (root: string, branch: string) =>
+    get<{ ok: boolean; repo?: string; from?: PrBranchSummary; into: PrBranchSummary[]; needsAuth?: boolean; error?: string }>(
+      `/prs/for-branch?${new URLSearchParams({ root, branch })}`),
+  prBehind: (root: string, number: number) =>
+    get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }>(
+      `/prs/behind?${new URLSearchParams({ root, number: String(number) })}`),
+  /** Which saved board already holds this card. Local — the server answers from
+   *  its cache, so this can be asked before every lookup. */
+  clickupWhere: (id: string) =>
+    get<{ ok: boolean; viewId?: string; task?: ProviderTask }>(`/clickup/where?id=${encodeURIComponent(id)}`),
   clickupTask: (id: string) =>
     get<{ ok: boolean; error?: string } & Partial<TaskDetail>>(`/clickup/task?id=${encodeURIComponent(id)}`),
-  clickupAssign: (id: string, on: boolean, updated?: number) =>
-    post<ClickUpWrite>("/clickup/assign", { id, on, updated }),
+  /** `user` puts somebody ELSE on the card; without it, you. */
+  clickupAssign: (id: string, on: boolean, updated?: number, user?: number) =>
+    post<ClickUpWrite>("/clickup/assign", { id, on, updated, ...(user != null ? { user } : null) }),
   clickupStatus: (id: string, status: string, updated?: number) =>
     post<ClickUpWrite>("/clickup/status", { id, status, updated }),
   clickupField: (id: string, field: string, value: string) =>
@@ -598,11 +770,32 @@ const realApi = {
   machineSpace: (root: string) => get<SpaceReport>(`/machine/space?root=${encodeURIComponent(root)}`),
   /** SIGTERM a process we started. Refused for anything this user does not own. */
   machineKill: (pid: number) => post<{ ok: boolean; error?: string; detail?: string }>("/machine/kill", { pid }),
+  machineLocks: () => get<GitLocksReport>("/machine/locks"),
+  machineProcess: (pid: number) => get<ProcDetail>(`/machine/process?pid=${pid}`),
+  /** Desktop only — the server refuses this from a paired device on purpose. */
+  machineEnv: (pid: number, key: string) => post<{ ok: boolean; value?: string; error?: string }>("/machine/env", { pid, key }),
+  machineUnlock: (path: string) => post<{ ok: boolean; error?: string; detail?: string }>("/machine/unlock", { path }),
 
   // --- browsing and searching a checkout ---
   filesTree: (root: string, rel = "") => get<TreeReport>(`/files/tree?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}`),
-  filesFind: (root: string, q: string) => get<FindReport>(`/files/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
-  filesGrep: (root: string, q: string) => get<GrepReport>(`/files/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
+  /** One file as text, for the markdown viewer. Refuses a binary rather than
+   *  handing back a screenful of replacement characters — see files.ts. */
+  filesRead: (root: string, rel: string, ref?: string) =>
+    get<{ ok: boolean; rel: string; text: string; bytes: number; truncated?: boolean; error?: string }>(
+      `/files/read?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
+  filesFind: (root: string, q: string, ref?: string) =>
+    get<FindReport>(`/files/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
+  /** Which of these paths the working tree still has — see filesExist. */
+  filesExist: (root: string, rels: string[]) =>
+    get<{ ok: boolean; here: string[]; error?: string }>(
+      `/files/exist?root=${encodeURIComponent(root)}${rels.map((r) => `&rel=${encodeURIComponent(r)}`).join("")}`),
+  /** Every branch this repository can be searched at — local and remote.
+   *  Selecting one reads the object store; nothing is ever checked out. */
+  filesRefs: (root: string) =>
+    get<{ ok: boolean; local: string[]; remote: string[]; head?: string; error?: string }>(
+      `/files/refs?root=${encodeURIComponent(root)}`),
+  filesGrep: (root: string, q: string, ref?: string) =>
+    get<GrepReport>(`/files/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
   /** Where this server is reachable from another device, whether one has
    *  arrived, and which firewall is the likely reason if none has. */
   remoteStatus: () => get<RemoteStatus>("/remote/status"),
@@ -712,7 +905,7 @@ const realApi = {
     get<{ ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }>(
       `/prs/counts?root=${encodeURIComponent(root)}&state=${state}`),
   prDetail: (root: string, number: number, force = false) =>
-    get<{ ok: boolean; detail?: PrDetail; error?: string }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
+    get<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
   prDiff: (root: string, number: number) =>
     get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}`),
   /** Images in a PR body go through the server, which attaches the gh token —
@@ -742,7 +935,10 @@ const realApi = {
     post<{ ok: boolean; file?: string; sha?: string; error?: string }>("/prs/file-temp", { root, number, path }),
   prReviewers: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/reviewers", { root, number, add, remove }),
   prDraft: (root: string, number: number, draft: boolean) => post<PrActionResult>("/prs/draft", { root, number, draft }),
-  prUpdateBranch: (root: string, number: number) => post<PrActionResult>("/prs/update-branch", { root, number }),
+  /** `syncLocal` asks the server to fast-forward this machine's copy of the
+   *  branch afterwards, when that is safe — see PrLocalHead. */
+  prUpdateBranch: (root: string, number: number, syncLocal = false) =>
+    post<PrActionResult>("/prs/update-branch", { root, number, syncLocal }),
   prRerun: (root: string, number: number) => post<PrActionResult>("/prs/rerun", { root, number }),
   prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) =>
     post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
@@ -814,25 +1010,6 @@ const realApi = {
   dockerRestart: (id: string) => post<DockerActionResult>("/docker/restart", { id }),
   dockerRm: (id: string) => post<DockerActionResult>("/docker/rm", { id }),
 
-  // Web Push. `pushKey` is this server's VAPID public key, which a browser
-  // needs before it can subscribe at all; the other two are the register and
-  // forget. `pushDevices` never returns an endpoint or a key — an endpoint is
-  // a capability, and anyone holding one can wake that phone forever.
-  pushKey: () => get<{ key: string }>("/push/key"),
-  pushSubscribe: (subscription: unknown, label: string) =>
-    post<{ ok: boolean; devices?: number; error?: string }>("/push/subscribe", { subscription, label }),
-  pushUnsubscribe: (endpoint: string) =>
-    post<{ ok: boolean; devices?: number }>("/push/unsubscribe", { endpoint }),
-  // By the handle the device list gave out, which is the only reference a
-  // client other than the device itself ever has.
-  pushForget: (id: string) =>
-    post<{ ok: boolean; devices?: number }>("/push/unsubscribe", { id }),
-  pushDevices: () =>
-    get<{ devices: PushDevice[] }>("/push/devices"),
-  // The same fan-out an alert uses. Without it the only way to find out
-  // whether push works is to miss the one thing it exists for.
-  pushTest: () =>
-    post<{ ok: boolean; sent: number; failed: number; pruned: number }>("/push/test", {}),
 };
 
 // In demo mode every call resolves against the fabricated dataset — no server.
@@ -843,6 +1020,7 @@ const demoApi: typeof realApi = {
   // No tmux behind a demo build, so there is never a pane to point at — which
   // lands the panel on the sentence it already has for that case.
   agentPanes: () => D({ ok: false, reason: "not in the demo", panes: [] as AgentPane[] }),
+  paneDirs: () => D({ ok: true, pane: null, dirs: [] as string[] }),
   focusPane: (_p: { sessionId: string; windowId: string; paneId: string }) => D({ ok: false, error: "not in the demo" }),
   stats: (windowMs: number, provider?: string) => D(demo.stats(windowMs, provider)),
   usageDaily: (days = 90) => D(demo.usageDaily(days)),
@@ -870,6 +1048,8 @@ const demoApi: typeof realApi = {
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
   fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
+  cloneProject: (_url: string, _parent: string) => D({ ok: false, error: "unavailable in the demo" }),
+  newProject: (_name: string, _parent: string) => D({ ok: false, error: "unavailable in the demo" }),
   gitCapability: () => D({ available: true } as GitCapability),
   // The demo runs no local processes, so it has nothing to probe. The catalog
   // is still the honest thing to show: it is what the real app would check.
@@ -878,8 +1058,24 @@ const demoApi: typeof realApi = {
     deps: DEPS.map((d) => ({ ...d, status: "unsupported" as const, detail: "the demo runs no local processes, so nothing here is probed" })),
   } as DepsResponse),
   gitRepos: () => D(demo.gitRepos()),
+  browserPlaces: () => D({ ok: true, places: [] as ImportedPlace[] }),
+  browserPlaceCount: () => D({ ok: true, total: 0, bookmarks: 0, sources: [] as string[] }),
+  saveBrowserPlaces: (_s: string, _p: ImportedPlace[]) => D({ ok: false, error: "not available in the demo" }),
+  forgetBrowserPlaces: () => D({ ok: true, total: 0 }),
+  recordVisit: (_url: string, _title: string) => D({ ok: true }),
+  saveScratchImage: (_d: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   gitReposAll: () => D(demo.gitRepos()),
+  browserUseStatus: () => D({
+    cli: { state: "missing" as const, path: "", target: null },
+    skill: { state: "unshipped" as const, path: "", shipped: null },
+    windows: 0, desktop: false,
+  }),
+  browserUseInstall: () => D({ ok: false, error: "unavailable in the demo" }),
+  browserReady: (_client: string, _on: boolean) => D({ ok: true }),
+  browserResult: (_r: { id: string; ok: boolean; value?: unknown; error?: string }) => D({ ok: true, known: false }),
+  hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
+  gitChangesAll: () => D({ changes: [] as FileChange[] }),
   gitStage: (_root: string, _paths: string[]) => D(demo.gitActionUnavailable()),
   gitUnstage: (_root: string, _paths: string[]) => D(demo.gitActionUnavailable()),
   gitStageAll: (_root: string) => D(demo.gitActionUnavailable()),
@@ -914,7 +1110,11 @@ const demoApi: typeof realApi = {
   gitStashDrop: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitApplyHunk: (_root: string, _path: string, _staged: boolean, _action: "stage" | "unstage" | "discard", _hunk: DiffHunk) => D(demo.gitActionUnavailable()),
   gitConflictBlocks: (_root: string, _path: string) => D({ ok: false, blocks: [] as ConflictBlock[], error: "not available in the demo" }),
-  gitResolveBlocks: (_root: string, _path: string, _choices: BlockChoice[]) => D(demo.gitActionUnavailable()),
+  gitResolveBlocks: (_root: string, _path: string, _choices: BlockChoice[], _stamp?: string) => D(demo.gitActionUnavailable()),
+  gitMergeSession: (_root: string) => D({ ok: true, op: "", files: [], left: [], mine: [] } as MergeSessionView),
+  gitReopenConflict: (_root: string, _path: string, _confirm: boolean) => D(demo.gitActionUnavailable()),
+  gitConflictFile: (_root: string, _path: string) => D({ ok: false, segments: [], blocks: [], lines: 0, stamp: "", error: "not available in the demo" } as ConflictFile),
+  gitMergeInfo: (_root: string) => D({ ok: true, state: "clean", ours: null, theirs: null } as MergeInfo),
   gitGraph: (_root: string, _limit?: number, _scope?: "head" | "all") => D({ ...demo.gitGraph(), scope: "head" as const, branch: "main" }),
   gitWorktrees: (_root: string) => D(demo.gitWorktrees()),
   gitMerge: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
@@ -929,7 +1129,7 @@ const demoApi: typeof realApi = {
   gitResolve: (_root: string, _paths: string[], _side: "ours" | "theirs") => D(demo.gitActionUnavailable()),
   gitMergeAbort: (_root: string) => D(demo.gitActionUnavailable()),
   gitUndoMerge: (_root: string) => D(demo.gitActionUnavailable()),
-  gitMergeContinue: (_root: string) => D(demo.gitActionUnavailable()),
+  gitMergeContinue: (_root: string, _anyway?: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),
@@ -955,7 +1155,7 @@ const demoApi: typeof realApi = {
   agentConnect: (_id: string, _undo?: boolean) => D({ ok: false, error: "not available in the demo" }),
   budgets: () => D({ budgets: [], status: [], models: [] }),
   budgetsSet: (_budgets: Budget[]) => D({ ok: false, error: "not available in the demo" }),
-  updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0 }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
+  updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0, stamp: "demo", tree: "", dirty: false, dirtyCount: 0, dirtyFiles: [] }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
   updateRun: () => D({ ok: false, error: "not available in the demo" }),
   hooksStatus: () => D({ installed: false, bundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),
   hooksInstall: () => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
@@ -995,17 +1195,6 @@ const demoApi: typeof realApi = {
   dockerRestart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRm: (_id: string) => D(demo.dockerActionUnavailable()),
 
-  // There is no server behind the demo, so there is no key to subscribe
-  // against and nothing that could ever push. An empty key is what the UI
-  // already treats as "the server did not hand over a key", so the toggle
-  // fails honestly instead of appearing to work.
-  pushKey: () => D({ key: "" }),
-  pushSubscribe: (_s: unknown, _l: string) => D({ ok: false, error: "not available in the demo" }),
-  pushUnsubscribe: (_e: string) => D({ ok: true }),
-  pushForget: (_id: string) => D({ ok: true }),
-  pushDevices: () => D({ devices: [] as PushDevice[] }),
-  pushTest: () => D({ ok: false, sent: 0, failed: 0, pruned: 0 }),
-
   // The demo has no GitHub behind it, and pretending otherwise would put a
   // fake PR list in front of someone evaluating the app. It reports the same
   // "gh isn't set up" state a real machine without gh would, which is honest
@@ -1043,7 +1232,7 @@ const demoApi: typeof realApi = {
   prLabels: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
   prReviewers: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
   prDraft: (_r: string, _n: number, _d: boolean) => D(demoPrAction()),
-  prUpdateBranch: (_r: string, _n: number) => D(demoPrAction()),
+  prUpdateBranch: (_r: string, _n: number, _s?: boolean) => D(demoPrAction()),
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
@@ -1064,20 +1253,47 @@ const demoApi: typeof realApi = {
   taskNote: (_u: string, _o: string, _n: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   taskBulk: (_u: string[], _a: string, _v: string | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   providers: () => D({ providers: [] }),
+  ghRateLimit: () => D({ ok: false, error: "not available in the demo" }),
+  privacy: () => D({ db: "", config: "", credentials: "", retentionDays: 0, pairedDevices: 0 }),
   providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   providerDisconnect: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
+  recipes: (_r?: string) => D({ recipes: [] }),
+  recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),
+  recipeRemove: (_i: string) => D({ ok: true }),
+  recipeRender: (_i: string, _v: Record<string, string>) => D({ ok: false, error: "not available in the demo" }),
   clickupViews: () => D({ views: [], writeEnabled: false }),
   clickupSetWrites: (_o: boolean) => D({ ok: false }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
+  clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),
   clickupFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
+  // The one pull request in the demo that is behind its base is #461, and it
+  // said so with no number and nothing about this machine — which is exactly
+  // the pair of blanks the Update button used to leave everywhere. The demo
+  // shows the whole offer: how far behind, and that the local branch comes
+  // along. Everything else keeps the old "no answer, no promises" shape.
+  prsForBranch: (_r: string, _b: string) => D({ ok: true, into: [] as PrSummary[] }),
+  prBehind: (_r: string, n: number) => D(n === 461
+    ? {
+      ok: true, behind: 12, ahead: 3,
+      local: {
+        branch: "chore/drop-coupons-v1", exists: true, ahead: 0, behind: 12,
+        dirty: false, sync: "ff" as const,
+      },
+    }
+    : { ok: false }),
+  prConflict: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prConflictFiles: (_r: string, _n: number) => D({ ok: false, conflicts: [] as string[], clean: false, error: "not available in the demo" }),
+  clickupWhere: (_i: string) => D({ ok: false }),
   clickupTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
-  clickupAssign: (_i: string, _o: boolean, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupAssign: (_i: string, _o: boolean, _u?: number, _w?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupMembers: (_l: string) => D({ ok: false, error: "not available in the demo" }),
   clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupField: (_i: string, _f: string, _v: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
@@ -1100,25 +1316,30 @@ const demoApi: typeof realApi = {
   machineResources: (l = 40) => D(demo.machineResources(l)),
   machineSpace: (r: string) => D(demo.machineSpace(r)),
   machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
+  machineLocks: () => D({ locks: [], scanned: 0, error: "not available in the demo" }),
+  machineProcess: (pid: number) => D({ pid, comm: "", cmd: "", cwd: null, ageSec: null, ancestry: [], env: [], error: "not available in the demo" }),
+  machineEnv: (_p: number, _k: string) => D({ ok: false, error: "not available in the demo" }),
+  machineUnlock: (_p: string) => D({ ok: false, error: "not available in the demo" }),
   filesTree: (_r: string, rel = "") => D(demo.filesTree(rel)),
+  filesRead: (_r: string, rel: string, _ref?: string) => D(demo.filesRead(rel)),
   filesFind: (_r: string, q: string) => D(demo.filesFind(q)),
+  filesExist: (_r: string, rels: string[]) => D({ ok: true, here: rels }),
+  filesRefs: (_r: string) => D({ ok: true, local: ["main", "feat/checkout-rewrite"], remote: ["origin/main", "origin/release"], head: "main" }),
   filesGrep: (_r: string, _q: string) => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "not available in the demo" }),
 };
 
 export const api = IS_DEMO ? demoApi : realApi;
 
-/**
- * A subscribed device, as the server is willing to describe one.
+/*
+ * Two interfaces stood here and both are gone, for unrelated reasons.
  *
- * No endpoint and no keys, ever: an endpoint is a capability — anyone holding
- * one can ask a push service to wake that phone, forever, with no further
- * credential. `id` is a one-way handle over it, enough to forget the device
- * against this server and useless anywhere else.
+ * `PushDevice` described a Web Push subscription. That whole path was removed
+ * — a service worker needs a secure context the phone never had — so there is
+ * no device list left to type.
+ *
+ * `UsageWindow`/`UsageScopedWindow`/`UsagePayload` were not deleted but MOVED
+ * and renamed: they are `QuotaWindow` and `ProviderUsage` in shared/types.ts
+ * now, because the server and the panel both need them and a type the web
+ * owned alone could not be shared. See the note there, which keeps the old
+ * name reserved so a future `UsageWindow` cannot silently collide.
  */
-export interface PushDevice {
-  id: string;
-  label: string;
-  addedAt: number;
-  lastOkAt: number | null;
-}
-

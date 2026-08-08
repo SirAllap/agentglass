@@ -20,7 +20,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import type { SavedView, ProviderTask, ListStatus, ListField } from "../../shared/providers.ts";
+import { ASSIGNED_VIEW_ID, ASSIGNED_VIEW_NAME } from "../../shared/providers.ts";
+import type { SavedView, ProviderTask, ListStatus, ListField, ListPlace } from "../../shared/providers.ts";
 
 const FILE = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -39,6 +40,9 @@ export interface CachedView {
   tasks: ProviderTask[];
   statuses: ListStatus[];
   fields: ListField[];
+  /** Space / Folder / List, kept with the rest of what the list told us so a
+   *  restart opens with the breadcrumb already drawn. */
+  place?: ListPlace;
   /** When that read happened. Shown as "read N ago" rather than implied. */
   at: number;
   /** The view had more pages than we were willing to follow. */
@@ -84,7 +88,22 @@ function save(s: Store): void {
   }
 }
 
-export const savedViews = (): SavedView[] => load().views;
+/**
+ * The one board nobody has to add, first on the bar.
+ *
+ * Pinned rather than written to the file on first run, for two reasons: a
+ * default that is stored is a default somebody can end up without — deleted
+ * once, gone forever, with no way back except knowing an address that does not
+ * exist — and a row in a config file implies it can be edited, when there is
+ * nothing here to edit. Everything downstream treats it as an ordinary saved
+ * view, which is the point: the cache, "which board was I on", and the chip you
+ * click all work with no branch.
+ */
+const ASSIGNED: SavedView = {
+  id: ASSIGNED_VIEW_ID, name: ASSIGNED_VIEW_NAME, url: "", addedAt: 0, builtin: true,
+};
+
+export const savedViews = (): SavedView[] => [ASSIGNED, ...load().views];
 
 /** The stored answer to "may this app change my company's board". */
 export const writesAllowed = (): boolean => load().writes === true;
@@ -93,12 +112,14 @@ export const currentView = (): string | undefined => load().current;
 
 export function setCurrent(id: string): void {
   const s = load();
-  if (!s.views.some((v) => v.id === id)) return;
+  if (!savedViews().some((v) => v.id === id)) return;
   save({ ...s, current: id });
 }
 
 export function addView(v: SavedView): void {
   const s = load();
+  // The built-in one is never stored — selecting it is the whole of "adding" it.
+  if (v.id === ASSIGNED_VIEW_ID) { save({ ...s, current: v.id }); return; }
   // Re-adding an address you already have re-resolves its name rather than
   // making a second identical row.
   const views = [...s.views.filter((x) => x.id !== v.id), v];
@@ -106,6 +127,8 @@ export function addView(v: SavedView): void {
 }
 
 export function removeView(id: string): void {
+  // Nothing to remove, and nothing to leave a dangling `current` pointing at.
+  if (id === ASSIGNED_VIEW_ID) return;
   const s = load();
   const { [id]: _gone, ...rest } = s.cache;
   const views = s.views.filter((v) => v.id !== id);
@@ -116,6 +139,60 @@ export function removeView(id: string): void {
 }
 
 export const cachedFor = (id: string): CachedView | undefined => load().cache[id];
+
+/**
+ * What this workspace's card ids look like — `ORBIT-`, hyphen included.
+ *
+ * Derived from cards already read rather than configured. The ids are a prefix
+ * and a number, the prefix is the same for every card in a workspace, and we
+ * are holding dozens of them: so nobody has to be asked what their prefix is,
+ * or told they got it wrong.
+ *
+ * Empty when nothing has been read yet — a fresh machine, or a restart before
+ * the first board loads. That is a real state and callers have to treat it as
+ * "unknown", never as "no prefix": the difference is between not knowing
+ * whether `ABC-12` is one of ours and being sure it is not.
+ */
+export function knownCardPrefix(): string {
+  const s = load();
+  // `savedViews()`, not `s.views`: the built-in board is not in the stored list
+  // and is cached like any other, so reading the raw store answers "unknown" on
+  // a machine whose only board is that one.
+  const seen = savedViews().map((v) => s.cache[v.id]?.tasks?.[0]?.customId ?? "").find(Boolean) ?? "";
+  return seen.replace(/[0-9]+$/, "");
+}
+
+/**
+ * Which saved board already holds this card, if any — from the cache alone.
+ *
+ * Asked before a card fetched by id is shown as a stray. "This card is on a
+ * board you have open" and "this card lives somewhere else entirely" deserve
+ * different answers, and the second one is only honest when the first has been
+ * ruled out.
+ *
+ * Cache-only, deliberately: this runs on every lookup, and going to ClickUp to
+ * ask a question the last read already answered would spend the rate budget on
+ * something nobody asked for. A board whose cache is cold answers "no" — which
+ * is why the caller must treat this as "not that I know of" rather than "not on
+ * any board", and it self-corrects the moment that board is opened.
+ *
+ * Matched on both ids, because the two halves of the app hold different ones:
+ * a pull request carries `ORBIT-1042`, the board's rows carry `86dyn…`.
+ */
+export function boardHolding(cardId: string): { viewId: string; task: ProviderTask } | null {
+  const want = cardId.trim().toLowerCase();
+  if (!want) return null;
+  const s = load();
+  // Every board you HAVE, which is not the same as every board stored: the
+  // built-in "assigned to me" is synthesised rather than saved, and it is the
+  // one most likely to be holding the card — it is a whole workspace's worth.
+  for (const v of savedViews()) {
+    for (const t of s.cache[v.id]?.tasks ?? []) {
+      if (t.id.toLowerCase() === want || (t.customId ?? "").toLowerCase() === want) return { viewId: v.id, task: t };
+    }
+  }
+  return null;
+}
 
 export function putCache(entry: CachedView): void {
   const s = load();

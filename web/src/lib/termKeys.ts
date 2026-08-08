@@ -1,3 +1,5 @@
+import { chordFromEvent, appActionForChord } from "./keybindings.ts";
+
 // Which keys the terminal panel takes, and which belong to the shell.
 //
 // The panel sits around a real PTY, so any chord it claims is a chord the
@@ -26,4 +28,25 @@ export function isFindChord(e: {
   if (e.altKey) return false; // Alt+F is forward-word
   if (e.metaKey) return true; // macOS, where Cmd is the app's
   return !!e.ctrlKey && !!e.shiftKey;
+}
+
+/**
+ * Chords the app claims before the shell sees them.
+ *
+ * The file palette is the case this exists for: it has to open while a shell
+ * has focus — that is the entire point of it — and xterm would otherwise send
+ * the keystroke down the PTY as well, so the palette would open AND readline
+ * would act on the same keypress.
+ *
+ * Read from the live bindings rather than listed here, because this chord is
+ * rebindable. If it is moved, the terminal has to stop swallowing the old key
+ * and start swallowing the new one in the same breath — a copy of the default
+ * kept here would leave one key that opens nothing and another that does two
+ * things at once.
+ */
+export function isAppChord(e: {
+  key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean;
+}): boolean {
+  const chord = chordFromEvent(e);
+  return !!chord && appActionForChord(chord) !== null;
 }

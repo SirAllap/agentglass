@@ -11,11 +11,12 @@
 // machine — "open src/models.py" is ambiguous until you have said *whose*, and
 // opening the wrong branch's copy is a mistake you only notice after editing
 // it. Everything below the picker is that checkout and nothing else.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
 import type { FileEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
+import { subscribeFilesReveal, filesReveal } from "../lib/filesReveal.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { FOLDER, FOLDER_OPEN, guides, iconFor, isNoise } from "../lib/fileIcons.ts";
 
@@ -37,6 +38,15 @@ export function FilesView({ active }: { active: boolean }) {
   useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
 
   const repo = repos.find((r) => r.root === root) ?? null;
+
+  /*
+   * A folder chosen in the file palette, which may name a checkout this view is
+   * not showing. The root has to move first — FilesBody is keyed on it, so a
+   * reveal handed to the wrong tree would expand nothing and read as the search
+   * having lied.
+   */
+  const jump = useSyncExternalStore(subscribeFilesReveal, filesReveal);
+  useEffect(() => { if (jump?.root) setRoot(jump.root); }, [jump]);
 
   // Every time the view becomes active, not once on mount: a worktree cut after
   // this panel first loaded would otherwise never appear in the picker.
@@ -109,6 +119,33 @@ function FilesBody({ root, branch, active }: { root: string; branch: string; act
     setPeek({ root, path: `${root}/${rel}`, label: rel, edit: true, branch });
   }, [root, branch]);
 
+  /*
+   * A folder chosen from the results is a PLACE, not a document.
+   *
+   * So it clears the query and walks the tree there, which is the only thing
+   * you can do with a directory — and the thing typing its name was asking for.
+   */
+  const [reveal, setReveal] = useState<string | null>(null);
+  const openDir = useCallback((rel: string) => { setQ(""); setReveal(rel); }, []);
+
+  /*
+   * The same thing, asked from outside — the file palette, which can be open
+   * over any view at all.
+   *
+   * `n` is compared against the last one served rather than the path, because
+   * asking for the same folder twice is two requests: walk away in the tree,
+   * search for it again, and a path-keyed effect would decide nothing had
+   * changed and leave you where you were.
+   */
+  const jump = useSyncExternalStore(subscribeFilesReveal, filesReveal);
+  const served = useRef(0);
+  useEffect(() => {
+    if (!jump || jump.n === served.current || jump.root !== root) return;
+    served.current = jump.n;
+    setQ("");
+    setReveal(jump.dir);
+  }, [jump, root]);
+
   return (
     <div className="flex-1 min-h-0 flex flex-col" key={root}>
       <div className="flex items-center gap-2 px-5 py-2 shrink-0" style={{ borderBottom: edge(12) }}>
@@ -136,10 +173,10 @@ function FilesBody({ root, branch, active }: { root: string; branch: string; act
 
       <div className="flex-1 min-h-0 agx-scroll overflow-y-auto">
         {q.trim() ? (
-          mode === "names" ? <NameHits root={root} q={q} onOpen={open} />
+          mode === "names" ? <NameHits root={root} q={q} onOpen={open} onOpenDir={openDir} />
             : <ContentHits root={root} q={q} onOpen={open} />
         ) : (
-          <Tree root={root} active={active} onOpen={open} />
+          <Tree root={root} active={active} onOpen={open} reveal={reveal} />
         )}
       </div>
       {peek && <PeekFile peek={peek} onClose={() => setPeek(null)} />}
@@ -156,7 +193,13 @@ function FilesBody({ root, branch, active }: { root: string; branch: string; act
  * thousands of entries, so a folder is listed when it is opened and cached
  * after — which is also what makes a deep tree cheap to walk back through.
  */
-function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen: (rel: string) => void }) {
+function Tree({ root, active, onOpen, reveal }: {
+  root: string; active: boolean; onOpen: (rel: string) => void;
+  /** A folder to walk to, set when one is chosen from the search results.
+   *  Every ancestor opens with it, because a folder shown with its parents
+   *  collapsed is a folder you cannot see. */
+  reveal?: string | null;
+}) {
   const rootName = root.split("/").filter(Boolean).pop() ?? root;
   const [levels, setLevels] = useState<Record<string, FileEntry[]>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -188,6 +231,21 @@ function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen:
       return new Set(cur).add(rel);
     });
   }, [levels, load]);
+  /*
+   * Walk to a folder somebody picked out of the search.
+   *
+   * Its ancestors open too — `docs`, then `docs/projects`, then
+   * `docs/projects/guest-checkout-v2` — because opening the last one alone
+   * leaves it inside two collapsed parents where nothing is on screen. Each
+   * level loads as it opens; `expand` already handles that.
+   */
+  useEffect(() => {
+    if (!reveal) return;
+    const parts = reveal.split("/").filter(Boolean);
+    for (let n = 1; n <= parts.length; n++) expand(parts.slice(0, n).join("/"));
+    setCursor(reveal);
+  }, [reveal, expand]);
+
   const collapse = (rel: string) => setOpen((cur) => { const n = new Set(cur); n.delete(rel); return n; });
   const toggle = (rel: string) => (open.has(rel) ? collapse(rel) : expand(rel));
 
@@ -352,10 +410,10 @@ function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen:
  * its language's colour. A hundred grey rows is a wall you read linearly; the
  * same hundred with a yellow Python glyph every few lines is a list you scan.
  */
-function PathRow({ rel, onOpen, children }: { rel: string; onOpen: (rel: string) => void; children?: React.ReactNode }) {
+function PathRow({ rel, dir, onOpen, children }: { rel: string; dir?: boolean; onOpen: (rel: string) => void; children?: React.ReactNode }) {
   const cut = rel.lastIndexOf("/");
   const name = rel.slice(cut + 1);
-  const icon = iconFor(name, false);
+  const icon = iconFor(name, !!dir);
   return (
     <button onClick={() => onOpen(rel)} className="w-full text-left px-4 py-1.5 hover:bg-white/5" title={rel}
       style={{ borderBottom: edge(7) }}>
@@ -369,15 +427,27 @@ function PathRow({ rel, onOpen, children }: { rel: string; onOpen: (rel: string)
   );
 }
 
-function NameHits({ root, q, onOpen }: { root: string; q: string; onOpen: (rel: string) => void }) {
+function NameHits({ root, q, onOpen, onOpenDir }: {
+  root: string; q: string; onOpen: (rel: string) => void; onOpenDir: (rel: string) => void;
+}) {
   const r = useSearch(() => api.filesFind(root, q), [root, q]);
   if (r.pending) return <Note>Looking…</Note>;
   if (!r.data) return <Note tint="var(--error)">{r.error ?? "the search failed"}</Note>;
   if (r.data.error) return <Note tint="var(--error)">{r.data.error}</Note>;
-  if (!r.data.files.length) return <Note>Nothing here is called “{q.trim()}”.</Note>;
+  const dirs = r.data.dirs ?? [];
+  if (!r.data.files.length && !dirs.length) return <Note>Nothing here is called “{q.trim()}”.</Note>;
   return (
     <div>
-      <Count>{r.data.files.length} file{r.data.files.length === 1 ? "" : "s"} · via {r.data.via}{r.data.truncated ? " · first 300" : ""}</Count>
+      <Count>
+        {dirs.length > 0 && <>{dirs.length} folder{dirs.length === 1 ? "" : "s"} · </>}
+        {r.data.files.length} file{r.data.files.length === 1 ? "" : "s"} · via {r.data.via}{r.data.truncated ? " · first 300" : ""}
+      </Count>
+      {/* Folders first, and they are the answer far more often than their
+          length suggests: typing `guest-checkout-v2` names a place, and forty
+          files from inside it are forty ways of not saying so. Opening one
+          moves the tree there rather than opening a viewer, which is the only
+          thing you can do with a directory. */}
+      {dirs.map((d) => <PathRow key={`d:${d}`} rel={d} dir onOpen={onOpenDir} />)}
       {r.data.files.map((f) => <PathRow key={f} rel={f} onOpen={onOpen} />)}
     </div>
   );

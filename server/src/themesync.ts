@@ -20,6 +20,9 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { liveNvimSockets } from "./editor.ts";
+// One rule for "may a tmux command reach this socket", not a second copy of it
+// here. tmuxctl.ts does not import this file, so the edge is one-way.
+import { tmuxSocketAllowed, tmuxSocketConfined } from "./tmuxctl.ts";
 
 /*
  * Resolved per call, not once at import.
@@ -36,6 +39,19 @@ const configHome = () => process.env.XDG_CONFIG_HOME || join(homedir(), ".config
 export const themeDir = () => join(configHome(), "agentglass");
 export const nvimThemePath = () => join(themeDir(), "theme.lua");
 export const tmuxThemePath = () => join(themeDir(), "theme.tmux.conf");
+/**
+ * The palette as data, for a client that is not an editor.
+ *
+ * The two files above are a Lua module and a tmux config: correct for what
+ * reads them, useless to anything that just wants the sixteen colours. The
+ * phone wants exactly that — it paints itself in the palette of the machine it
+ * is paired to, so the companion in your hand is the cockpit on your desk
+ * rather than a second product in different colours.
+ *
+ * Written from the same `normalizeVars` result as the other two, so the three
+ * can never describe different themes.
+ */
+export const jsonThemePath = () => join(themeDir(), "theme.json");
 
 /*
  * A second lock on the same door.
@@ -53,9 +69,20 @@ export const tmuxThemePath = () => join(themeDir(), "theme.tmux.conf");
  * and for the same reason: a test suite may not redecorate the machine it runs
  * on.
  */
-const IS_TEST = process.env.NODE_ENV === "test";
+/*
+ * Read per call, never frozen at import.
+ *
+ * This was `const IS_TEST = process.env.NODE_ENV === "test"`, which is the same
+ * mistake the paths above this comment were already fixed for: the first
+ * `import` of this file decided the answer for the whole process. A `function`
+ * declaration rather than a `const` arrow because it is called from `syncTheme`
+ * and `applyThemeTo`, and a const would sit in its temporal dead zone for
+ * anything that ever ran during module evaluation — the shape that once shipped
+ * a black window in this app.
+ */
+function isTest(): boolean { return process.env.NODE_ENV === "test"; }
 function blockedInTest(target: string): boolean {
-  if (!IS_TEST) return false;
+  if (!isTest()) return false;
   const scratch = tmpdir();
   return !(target === scratch || target.startsWith(scratch + "/"));
 }
@@ -531,19 +558,47 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
     wrote.push(NVIM_THEME);
     writeFileSync(TMUX_THEME, tmuxTheme(v, themeName));
     wrote.push(TMUX_THEME);
+    // Same palette, third audience. Kept in the same try as the other two so
+    // that "the theme was written" stays one answer rather than three.
+    writeFileSync(jsonThemePath(), `${JSON.stringify({ name: themeName, vars: v }, null, 2)}\n`);
+    wrote.push(jsonThemePath());
   } catch (e) {
     return { ok: false, wrote, reloaded, error: String(e) };
   }
 
-  // tmux: cheap and safe — sourcing a file it already sources is a no-op if
-  // nothing changed, and there is no session to disturb if it isn't running.
-  //
-  // Never from a test, and the guard has to live here rather than in the test's
-  // environment: `Bun.spawn` hands the child the environment the process
-  // started with, so a test that sets TMUX_TMPDIR and deletes TMUX at runtime
-  // changes nothing about the tmux it spawns. That is how a "Light" fixture
-  // reached a developer's own session and painted every pane white.
-  if (!IS_TEST) try {
+  /*
+   * tmux: cheap and safe — sourcing a file it already sources is a no-op if
+   * nothing changed, and there is no session to disturb if it isn't running.
+   *
+   * Never from a test, and the guard has to live here rather than in the test's
+   * environment: `Bun.spawn` hands the child the environment the process
+   * started with, so a test that sets TMUX_TMPDIR and deletes TMUX at runtime
+   * changes nothing about the tmux it spawns. That is how a "Light" fixture
+   * reached a developer's own session and painted every pane white.
+   *
+   * Three gates, and they cover three different processes — none of them is a
+   * restatement of another:
+   *
+   *   `isTest()`            the suite running in `bun test`'s own process.
+   *                         Live, not a module const: frozen at import it
+   *                         answered for the whole process, and this file's
+   *                         paths were already fixed for exactly that.
+   *   `tmuxSocketAllowed`   the same rule `tmux()` applies, rather than a
+   *                         second private copy of a rule that has now been
+   *                         wrong three times. This spawn bypasses `tmux()`, so
+   *                         `tmux()`'s backstop never saw it.
+   *   `tmuxSocketConfined`  the server spawned as a CHILD with a named
+   *                         environment, where NODE_ENV is absent and the two
+   *                         above are therefore blind. TMUX_TMPDIR is the only
+   *                         signal that survives that spawn.
+   *
+   * A bare `tmux`, so it goes wherever a bare `tmux` goes — the socket `$TMUX`
+   * names, or /tmp/tmux-<uid>/default. Until today the only thing stopping it
+   * was that these suites point XDG_CONFIG_HOME at a scratch directory, making
+   * `existsSync(TMUX_THEME)` false a few lines up: a coincidence, not a guard,
+   * and one that ends the moment a suite themes something for its own reasons.
+   */
+  if (!isTest() && tmuxSocketAllowed([]) && tmuxSocketConfined([])) try {
     const p = Bun.spawn(["tmux", "source-file", TMUX_THEME], { stdout: "ignore", stderr: "ignore" });
     const t = setTimeout(() => { try { p.kill(); } catch { /* gone */ } }, 2000);
     if ((await p.exited) === 0) reloaded.push("tmux");
@@ -559,7 +614,7 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
    * now. `luafile` because the generated file is a module that applies itself
    * and registers its own ColorScheme autocmd.
    */
-  if (!IS_TEST) try {
+  if (!isTest()) try {
     const socks = await liveNvimSockets();
     const keys = `<C-\\><C-N>:luafile ${NVIM_THEME}<CR>`;
     const done = await Promise.all(socks.map(async (sock) => {
@@ -623,14 +678,64 @@ export function tmuxConfPath(): string {
  */
 export function applyThemeTo(socket: string[]): boolean {
   const TMUX_THEME = tmuxThemePath();
-  // A test may open a terminal; it may not repaint the machine's tmux.
-  if (IS_TEST || !existsSync(TMUX_THEME)) return false;
+  /*
+   * A test may open a terminal; it may not repaint the machine's tmux.
+   *
+   * Through `tmuxSocketAllowed` because this one takes a `socket` and spawns
+   * tmux directly, so it is a second door into the same server `tmux()` guards
+   * — and the socket it is handed comes from `terminal.ts`, i.e. ultimately
+   * from `socketOf()` off a real client's argv in /proc, which on this machine
+   * has the developer's tmux in it. `socketOf()` returns `[]` for both of his
+   * clients (`tmux -2 attach -t <name>`, `tmux new-session -A -s <name>`), and
+   * `[]` is exactly the bare spelling that resolves to his server.
+   *
+   * `isTest()` is kept alongside the guard rather than replaced by it. The
+   * guard would let a suite repaint its OWN `-L agx-…` server, which is
+   * defensible but is not what this function promised, and
+   * `themesync-nondestructive.test.ts` holds it to the promise: "no live tmux
+   * is repainted from a test, whatever the file says." `tmuxSocketConfined`
+   * then covers the child that cannot see NODE_ENV at all — see its note.
+   */
+  if (isTest() || !tmuxSocketAllowed(socket) || !tmuxSocketConfined(socket)) return false;
+  if (!existsSync(TMUX_THEME)) return false;
   try {
     const p = Bun.spawnSync(["tmux", ...socket, "source-file", "-q", TMUX_THEME], {
       stdout: "ignore", stderr: "ignore", timeout: 2000,
     });
     return p.exitCode === 0;
   } catch { return false; }
+}
+
+/**
+ * The palette this machine is wearing, for a client that cannot see the CSS.
+ *
+ * Null when nobody has ever picked a theme. That is the honest answer rather
+ * than the default palette: a caller that gets null knows to use its own
+ * shipped colours, while a caller handed a guess would paint itself in a theme
+ * this machine may not be using and have no way to tell the difference.
+ *
+ * The choice lives in a browser's localStorage, so the server only learns it
+ * when a theme is *picked* — `pickTheme` in web/src/lib/themes.ts posts to
+ * /theme/sync, which is what writes this file. Loading the dashboard does not
+ * count, and should not: a second browser profile with a different theme must
+ * not repaint everybody's phone by being opened.
+ */
+export function currentTheme(): { name: string; vars: ThemeVars } | null {
+  try {
+    const path = jsonThemePath();
+    if (!existsSync(path)) return null;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { name?: unknown; vars?: unknown };
+    if (!parsed || typeof parsed !== "object" || !parsed.vars) return null;
+    // Back through normalizeVars rather than trusted as read: this file is on
+    // disk in a directory people edit, and every field has to be a colour by
+    // the time it reaches a client that will hand it to a rendering engine.
+    return {
+      name: typeof parsed.name === "string" ? parsed.name.slice(0, 60) : "custom",
+      vars: normalizeVars(parsed.vars as Record<string, unknown>),
+    };
+  } catch {
+    return null; // absent, unreadable, or hand-edited into nonsense
+  }
 }
 
 /** Has the user already opted in? Read-only — this never edits their files. */

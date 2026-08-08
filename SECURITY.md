@@ -151,8 +151,21 @@ Everything below is on your machine and nowhere else. There is no account, no
 sync, and no upload — the hooks refuse to post anywhere but this host (see
 `AGENTGLASS_ALLOW_REMOTE` above). But it is worth saying plainly what lands on
 disk, because **nothing in the app deletes it**: there is no route, no button
-and no menu item that removes recorded data. The `Clear ✕` in the header clears
+and no menu item that removes recorded data.
+
+One route is named as if it did: `/browser/places/forget` throws away the
+browsing history you imported from your own browser. That history is kept in
+its own file rather than in the events database — `places.db` beside it —
+exactly so that deleting it takes one call and costs you none of your fleet's
+history. Nothing agentglass recorded is removed by it. The `Clear ✕` in the header clears
 *filters*, not history.
+
+One row in the database is not recorded data and is deleted routinely: the
+**database claim** — the pid, port and hostname of the server process that owns
+the file, written at boot and dropped on a clean exit. It exists so a second
+server cannot run a second transcript scanner over the same history, which
+double-counts events, tokens and cost in silence. It holds nothing about your
+sessions.
 
 | Where | What is in it |
 |---|---|

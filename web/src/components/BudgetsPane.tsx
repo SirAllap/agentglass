@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { SettingRow } from "./SettingRow.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd } from "../lib/format.ts";
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../../shared/types.ts";
@@ -55,15 +56,20 @@ export function BudgetsPane({ open }: { open: boolean }) {
   const patch = (i: number, over: Partial<Budget>) =>
     void save((rows ?? []).map((b, n) => (n === i ? { ...b, ...over } : b)));
 
-  if (!rows) return <div className="text-[11px] t-dim2">Reading budgets…</div>;
+  if (!rows) return <div className="py-2 text-[12px] t-dim">Reading budgets…</div>;
 
   const statusFor = (b: Budget) =>
     status.find((s) => s.budget.root === b.root && s.budget.model === b.model && s.budget.period === b.period);
 
+  /* A budget is a sentence you fill in — "spend no more than $40 a month on
+     this repo" — so the sentence stays the label rather than being chopped
+     into a label and a control that would each be half of it. What moves onto
+     the grid is Remove, which is the same button on every row and had been
+     landing wherever that row's sentence happened to end. */
   return (
-    <div className="flex flex-col gap-2">
+    <>
       {rows.length === 0 && (
-        <div className="text-[10.5px] t-dim2">
+        <div className="py-2 text-[12px] t-dim">
           Without one, spend is flagged on fixed thresholds — which is noise on a project that costs
           that much anyway, and silence on one where a tenth of it would worry you.
         </div>
@@ -74,12 +80,9 @@ export function BudgetsPane({ open }: { open: boolean }) {
         const pct = s ? Math.min(1, s.pct) : 0;
         const tint = s?.level === "over" ? "var(--error)" : s?.level === "warn" ? "var(--warning)" : "var(--success)";
         return (
-          <div key={i} className="flex flex-col gap-1.5 px-2.5 py-2 rounded-lg" style={{
-            background: "color-mix(in srgb, var(--bg2) 60%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
-          }}>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[10.5px] t-dim2">Spend no more than</span>
+          <SettingRow key={i} align="start"
+            label={<span className="flex items-center gap-2 flex-wrap">
+              <span className="t-dim">Spend no more than</span>
               <span className="flex items-center gap-1">
                 <span className="text-[11px] t-dim2">$</span>
                 <input
@@ -98,7 +101,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
                 <option value="week">a week</option>
                 <option value="month">a month</option>
               </select>
-              <span className="text-[10.5px] t-dim2">on</span>
+              <span className="t-dim">on</span>
               <select className="text-[11px] px-1.5 py-1 rounded-md min-w-0 max-w-[9rem]"
                 style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
                 value={b.root} onChange={(e) => patch(i, { root: e.target.value })}>
@@ -113,47 +116,46 @@ export function BudgetsPane({ open }: { open: boolean }) {
                 {models.map((m) => <option key={m} value={m}>{m}</option>)}
                 {b.model && !models.includes(b.model) && <option value={b.model}>{b.model}</option>}
               </select>
-              <button onClick={() => void save(rows.filter((_, n) => n !== i))}
-                className="ml-auto text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
-                style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
-                Remove
-              </button>
-            </div>
-
-            {/* The denominator, where the number is. A budget you cannot see
-                yourself approaching is one you only hear about once. */}
-            {s && (
-              <div className="flex flex-col gap-1">
-                <div className="h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <div style={{ width: `${pct * 100}%`, height: "100%", background: tint }} />
-                </div>
-                <div className="text-[10px]" style={{ color: s.level === "ok" ? "var(--text3)" : tint }}>
+            </span>}
+            /* The denominator, where the number is. A budget you cannot see
+               yourself approaching is one you only hear about once. */
+            hint={s ? (
+              <span className="block">
+                <span className="block h-1 rounded-full overflow-hidden mt-1.5" style={{ background: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                  <span className="block" style={{ width: `${pct * 100}%`, height: "100%", background: tint }} />
+                </span>
+                <span className="block mt-1" style={{ color: s.level === "ok" ? "var(--text3)" : tint }}>
                   {fmtUsd(s.spent)} of {fmtUsd(s.budget.limit)} · {Math.round(s.pct * 100)}%
-                  <span className="t-dim2"> · {s.fromDay} to {s.toDay}</span>
-                </div>
-              </div>
-            )}
-          </div>
+                  <span className="t-dim"> · {s.fromDay} to {s.toDay}</span>
+                </span>
+              </span>
+            ) : undefined}
+            control={<button onClick={() => void save(rows.filter((_, n) => n !== i))}
+              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+              style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+              Remove
+            </button>}
+          />
         );
       })}
 
-      <div className="flex items-center gap-2">
-        <button
+      <SettingRow
+        label="Add a budget"
+        hint={<>
+          {err ? <span style={{ color: "var(--error)" }}>{err}</span> : <>
+            Counted from the daily rollup as well as live events, so a monthly budget really means a month —
+            raw events are only kept for <span className="t-mono">AGENTGLASS_RETENTION_DAYS</span> (8 by
+            default). You are warned at 80% rather than only when you cross it.
+          </>}
+        </>}
+        control={<button
           onClick={() => setRows([...(rows ?? []), { root: "", model: "", limit: 0, period: "month" }])}
           disabled={busy}
-          className="self-start text-[11px] px-2.5 py-1.5 rounded-lg hover:opacity-80"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
-          Add a budget
-        </button>
-        {err && <span className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</span>}
-      </div>
-
-      <div className="text-[10px] t-dim2">
-        Counted from the daily rollup as well as live events, so a monthly budget really means a month —
-        raw events are only kept for {}
-        <span className="t-mono">AGENTGLASS_RETENTION_DAYS</span> (8 by default). You are warned at 80%
-        rather than only when you cross it.
-      </div>
-    </div>
+          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", opacity: busy ? 0.5 : 1 }}>
+          Add
+        </button>}
+      />
+    </>
   );
 }

@@ -87,7 +87,37 @@ export const LINE_HEIGHT_MIN = 1;
 export const LINE_HEIGHT_MAX = 2;
 export const DEFAULT_LINE_HEIGHT = 1;
 
+/**
+ * Scrollback, in lines, and why the default is four thousand.
+ *
+ * xterm keeps every line as cell data, so a wide window at 10k is tens of
+ * megabytes PER SHELL — and this app holds several open at once, deliberately,
+ * so a build in one keeps running while you work in another. It is also what a
+ * resize has to reflow: every line, on every fit, which is the multi-second
+ * freeze people report when dragging a pane.
+ *
+ * So the default stays where it was, and the larger sizes are offered with that
+ * cost stated rather than hidden. Anyone who wants 50k on one machine with one
+ * shell open is right to have it; anyone running eight is better off not.
+ */
+export const SCROLLBACK_SIZES = [4_000, 10_000, 25_000, 50_000] as const;
+export const DEFAULT_SCROLLBACK = 4_000;
+
+/**
+ * What counts as a word boundary for a double-click.
+ *
+ * xterm's own default, spelled out here because the point of the setting is
+ * changing it: a path like `src/lib/api.ts` is one word to a terminal and four
+ * to anyone trying to select it, and which behaviour is right depends entirely
+ * on what you spend the day double-clicking.
+ */
+export const DEFAULT_WORD_SEPARATORS = " ()[]{}',\"`";
+
 const FONT_KEY = "agentglass-term-font";
+const SCROLLBACK_KEY = "agentglass-term-scrollback";
+const WORDSEP_KEY = "agentglass-term-wordsep";
+const COPY_ON_SELECT_KEY = "agentglass-term-copy-on-select";
+const RIGHT_CLICK_PASTE_KEY = "agentglass-term-right-click-paste";
 const SIZE_KEY = "agentglass-term-size";
 const CURSOR_KEY = "agentglass-term-cursor";
 const LINE_HEIGHT_KEY = "agentglass-term-line-height";
@@ -112,6 +142,31 @@ export const currentTermLineHeight = (): number => {
   return Math.min(LINE_HEIGHT_MAX, Math.max(LINE_HEIGHT_MIN, n));
 };
 
+/** Clamped to the offered sizes on read: a hand-edited value must not reach
+ *  xterm, and an unbounded one is a machine running out of memory per shell. */
+export const currentScrollback = (): number => {
+  const n = parseInt(read(SCROLLBACK_KEY), 10);
+  return (SCROLLBACK_SIZES as readonly number[]).includes(n) ? n : DEFAULT_SCROLLBACK;
+};
+
+export const currentWordSeparators = (): string => {
+  const v = read(WORDSEP_KEY);
+  // An empty string is a real answer — "nothing is a boundary", which selects
+  // a whole line on a double click — so absence is what falls back, not blank.
+  return v === "" ? DEFAULT_WORD_SEPARATORS : v;
+};
+
+/**
+ * Copy on select, the tmux way, and it defaults to ON because that is what this
+ * terminal has always done. The switch exists for the one case it gets wrong:
+ * a machine where the clipboard is shared with something that reacts to it.
+ */
+export const copyOnSelect = (): boolean => read(COPY_ON_SELECT_KEY) !== "0";
+
+/** Right-click pastes instead of opening the context menu. Off by default: the
+ *  menu is what a right click does everywhere else in this app. */
+export const rightClickPaste = (): boolean => read(RIGHT_CLICK_PASTE_KEY) === "1";
+
 /**
  * Is a font really installed? A canvas width probe: a named family renders a
  * test string at a different width than the generic monospace fallback only when
@@ -132,13 +187,15 @@ export function fontAvailable(family: string): boolean {
 }
 
 /** The xterm options the current prefs resolve to. */
-export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle; lineHeight: number } {
+export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle; lineHeight: number; scrollback: number; wordSeparator: string } {
   const f = TERM_FONTS.find((x) => x.id === currentTermFont());
   return {
     fontFamily: f && f.stack ? f.stack : TERM_FALLBACK,
     fontSize: currentTermSize(),
     cursorStyle: currentTermCursor(),
     lineHeight: currentTermLineHeight(),
+    scrollback: currentScrollback(),
+    wordSeparator: currentWordSeparators(),
   };
 }
 
@@ -151,7 +208,7 @@ function ping(): void {
   try {
     document.documentElement.style.setProperty(
       "--agx-term-prefs",
-      `${currentTermFont()}|${currentTermSize()}|${currentTermCursor()}|${currentTermLineHeight()}`,
+      `${currentTermFont()}|${currentTermSize()}|${currentTermCursor()}|${currentTermLineHeight()}|${currentScrollback()}|${currentWordSeparators()}`,
     );
   } catch { /* no DOM */ }
 }
@@ -167,3 +224,20 @@ export function setTermLineHeight(n: number): void {
   write(LINE_HEIGHT_KEY, v === DEFAULT_LINE_HEIGHT ? "" : String(v));
   ping();
 }
+
+export function setScrollback(n: number): void {
+  const v = (SCROLLBACK_SIZES as readonly number[]).includes(n) ? n : DEFAULT_SCROLLBACK;
+  write(SCROLLBACK_KEY, v === DEFAULT_SCROLLBACK ? "" : String(v));
+  ping();
+}
+
+export function setWordSeparators(v: string): void {
+  write(WORDSEP_KEY, v === DEFAULT_WORD_SEPARATORS ? "" : v);
+  ping();
+}
+
+/* These two are read at the moment the mouse does something rather than applied
+ * to xterm, so they need no ping — the next selection or right click already
+ * sees the new answer. */
+export function setCopyOnSelect(on: boolean): void { write(COPY_ON_SELECT_KEY, on ? "" : "0"); }
+export function setRightClickPaste(on: boolean): void { write(RIGHT_CLICK_PASTE_KEY, on ? "1" : ""); }

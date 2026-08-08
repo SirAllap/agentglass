@@ -6,7 +6,8 @@
 // shipped a bug where the suite reached into a real home directory. The socket
 // name and the state directory are both redirected below so that even a call
 // that slipped through could not reach anything real.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect, afterAll, beforeAll } from "bun:test";
+import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,11 +19,33 @@ process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
 process.env.AGENTGLASS_STATE_DIR = join(tmpdir(), `agx-pane-test-${process.pid}`);
 process.env.AGENTGLASS_CLAUDE_HOME = join(tmpdir(), `agx-claude-home-${process.pid}`);
 
+/* A unique NAME still leaves the socket in the developer's DIRECTORY, which is
+ * where a `-L` with no TMUX_TMPDIR goes: measured with a recording tmux on
+ * PATH, two of this file's `list-sessions` resolved to
+ * /tmp/tmux-<uid>/agx-pane-test-<pid>. Nothing was created — `list-sessions`
+ * starts no server — so this is the mild end of it, and it is here for the same
+ * reason the comment above gives about names: "nothing is listening there" is
+ * an assumption, and `tmuxSockets()` hands every server in that directory to
+ * `listPanes`. */
+const TMPDIR = join(tmpdir(), `agx-tmux-chatpane-${process.pid}`);
+const REAL_TMPDIR = process.env.TMUX_TMPDIR;
+
 let mod: typeof import("../src/chatpane.ts");
 let pane: typeof import("../src/tmuxpane.ts");
 beforeAll(async () => {
+  // In the hook, not at module scope: `bun test` shares one process across
+  // files, so a module-scope write to a variable other tmux files also own
+  // would outlive this one.
+  mkdirSync(TMPDIR, { recursive: true });
+  process.env.TMUX_TMPDIR = TMPDIR;
   mod = await import("../src/chatpane.ts");
   pane = await import("../src/tmuxpane.ts");
+});
+
+afterAll(() => {
+  if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
+  else process.env.TMUX_TMPDIR = REAL_TMPDIR;
+  try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* never made */ }
 });
 
 test("a working directory maps to the transcript directory Claude Code actually uses", () => {

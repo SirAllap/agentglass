@@ -9,9 +9,10 @@ import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSy
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
+import { observe, noteResolved, noteReopened, stopFor, forget } from "./mergesession.ts";
 import { entered, backoff } from "./loopwatch.ts";
 import type {
-  ConflictBlock, BlockChoice,
+  ConflictBlock, ConflictFile, ConflictSegment, MergeSessionView, BlockChoice, MergeInfo, MergeSide,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine, GitTreeState,
   GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, WorktreeLeftovers, LeftoverEntry, BlockedByOwner,
@@ -239,6 +240,37 @@ export async function workingTree(rootIn: unknown): Promise<WorkingTree> {
     clean: staged.length === 0 && unstaged.length === 0,
     writeEnabled: GIT_WRITE_ENABLED,
   };
+}
+
+/** Git's empty-tree hash, to diff a repo's very first commit (which has no
+ *  parent to diff against) as an all-added change. */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/**
+ * The last commit's changes — its subject and the files it touched.
+ *
+ * The "committed" side of File changes: what you just committed, and only that,
+ * so your three files survive being committed instead of vanishing into the
+ * working tree's absence. Deliberately one commit, not the branch: the branch
+ * is hundreds of files of a whole ticket's work and its merged-in base, none of
+ * which "what did I just commit" is asking about.
+ */
+export async function lastCommitChanges(rootIn: unknown): Promise<{ subject: string; changes: GitFileChange[] }> {
+  const root = repoRoot(rootIn);
+  if (!root) return { subject: "", changes: [] };
+  // The last NON-MERGE commit, not HEAD: a "merge master into branch" is one
+  // commit that touches every file the merge brought — 161 files on a real
+  // branch here, none of them yours — and `git diff HEAD^ HEAD` of it froze the
+  // whole view. Skipping merges lands on the actual last piece of work.
+  const commit = (await gitAsync(root, ["rev-list", "--no-merges", "--max-count=1", "HEAD"])).stdout.trim();
+  if (!commit) return { subject: "", changes: [] };
+  const [subjectOut, parentOut] = await Promise.all([
+    gitAsync(root, ["log", "-1", "--format=%s", commit]),
+    gitAsync(root, ["rev-parse", "--verify", "--quiet", `${commit}^`]),
+  ]);
+  const from = parentOut.stdout.trim() ? `${commit}^` : EMPTY_TREE;
+  const diff = await gitAsync(root, ["-c", "core.quotePath=false", "diff", from, commit]);
+  return { subject: subjectOut.stdout.trim(), changes: parseDiff(root, diff.stdout, false) };
 }
 
 /** How deep to look for repos below a configured root. Projects are commonly
@@ -1727,7 +1759,9 @@ export function resolveWith(rootIn: unknown, relIn: unknown, side: unknown): Git
   if (!rels?.length) return { ok: false, error: "invalid path" };
   const co = run(root, ["checkout", `--${side}`, "--", ...rels]);
   if (!co.ok) return co;
-  return run(root, ["add", "--", ...rels]);
+  const added = run(root, ["add", "--", ...rels]);
+  if (added.ok) noteResolved(root, sessionOp(mergeInfo(root)), rels);
+  return added;
 }
 
 /** Abandon the merge and put the tree back exactly as it was. The only move
@@ -1749,16 +1783,78 @@ export function mergeAbort(rootIn: unknown): GitActionResult {
 
 /** Finish once every conflict is staged. Refuses while any remain rather than
  *  letting git fail with a message nobody reads. */
-export function mergeContinue(rootIn: unknown): GitActionResult {
+export function mergeContinue(rootIn: unknown, anywayIn?: unknown): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   const left = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
   if (left) return { ok: false, error: `still conflicted: ${left.split("\n").length} file(s) to resolve` };
+
+  /*
+   * The gap the unmerged list cannot see.
+   *
+   * Anything can stage a file with markers still in it — an agent that stopped
+   * halfway, an editor, a stray `git add -A` — and from that moment git counts
+   * it as resolved and will commit `<<<<<<<` into the branch without a word.
+   * Scoped to this stop's own files, because a sweep of the index would trip
+   * over every test fixture whose committed content is conflict markers.
+   */
+  // Read before continuing: MERGE_HEAD and rebase-merge/ are gone the instant
+  // it succeeds, so neither the stop nor which commit it was can be named
+  // afterwards.
+  const before = mergeInfo(root);
+  const op = sessionOp(before);
+  const step0 = stepLabel(before);
+  if (anywayIn !== true) {
+    const dirty = markersLeft(root, stopFor(root, op)?.files ?? []);
+    if (dirty.length) {
+      const many = dirty.length > 1;
+      return {
+        ok: false,
+        error: `${dirty.join(", ")} ${many ? "are" : "is"} staged but still ${many ? "have" : "has"} conflict markers in ${many ? "them" : "it"} — resolve ${many ? "them" : "it"}, or put the conflict back and start again.`,
+      };
+    }
+  }
+
   const state = treeState(root);
-  if (state === "rebasing") return run(root, ["-c", "core.editor=true", "rebase", "--continue"]);
-  if (state === "cherry-picking") return run(root, ["-c", "core.editor=true", "cherry-pick", "--continue"]);
-  // `merge --continue` needs an editor; --no-edit keeps git's own message.
-  return run(root, ["commit", "--no-edit"]);
+  const r = state === "rebasing" ? run(root, ["-c", "core.editor=true", "rebase", "--continue"])
+    : state === "cherry-picking" ? run(root, ["-c", "core.editor=true", "cherry-pick", "--continue"])
+    // `merge --continue` needs an editor; --no-edit keeps git's own message.
+    : run(root, ["commit", "--no-edit"]);
+
+  /*
+   * A rebase that stops again has not failed — it has advanced.
+   *
+   * `git rebase --continue` exits NON-ZERO when it commits the current step
+   * and the next commit conflicts, which for a branch of any size is the
+   * ordinary case rather than the exception. Taking that exit code at face
+   * value reported the most normal outcome in the world as an error: the
+   * screen showed a failure toast and stayed on the review of a commit that
+   * had in fact just landed, over a repository already stopped on the next
+   * one. Found by driving a three-commit rebase; git's own message says
+   * "Rebasing (2/3)" in the middle of the text it fails with.
+   *
+   * So the verdict comes from where the repository ENDED UP, not from the exit
+   * code: the operation is either over, or somewhere new, or exactly where it
+   * was — and only the last of those is a failure.
+   */
+  const after = mergeInfo(root);
+  const moved = sessionOp(after) !== op;
+  if (r.ok || moved) {
+    forget(root, op);
+    if (after.state === "clean") return { ok: true, output: r.output || "done" };
+    const where = stepLabel(after);
+    return {
+      ok: true,
+      output: `committed${step0 ? ` ${step0}` : ""} — stopped again${where ? ` on ${where}` : ""}, ${after.state === "rebasing" ? "the rebase continues" : "there is more to resolve"}`,
+    };
+  }
+  return r;
+}
+
+/** "commit 2 of 5", or null when the operation happens once. Mirrors the
+ *  client's own wording so the toast and the screen say the same thing. */
+function stepLabel(i: MergeInfo): string | null {
+  return i.step && i.total && i.total > 1 ? `commit ${i.step} of ${i.total}` : null;
 }
 
 /**
@@ -2016,6 +2112,121 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
   }
   return r;
 }
+/**
+ * Put a pull request's conflict somewhere you can actually work on it.
+ *
+ * GitHub only ever PREDICTS the conflict: "this branch has conflicts with the
+ * base". Nothing has been merged anywhere, so there is nothing for a conflict
+ * resolver — ours or anyone's — to resolve. This does the merge for real, and
+ * it does it in a worktree of its own.
+ *
+ * A worktree rather than the checkout you are standing in, and that is the
+ * whole safety story: your branch, your uncommitted work and your place in the
+ * repository are untouched, a second attempt is idempotent, and if it goes
+ * wrong the remedy is deleting a directory. A button that rewrites the tree you
+ * are working in is a button people learn not to press.
+ *
+ * What comes back is where it happened and which files are in conflict — which
+ * is exactly what the resolver already takes.
+ */
+export interface ConflictPrep {
+  ok: boolean;
+  /** The worktree the merge was done in. */
+  root?: string;
+  /** Relative paths, as git reports them. Empty with `ok` means the merge went
+   *  through cleanly — the branch was only behind, not conflicting. */
+  conflicts?: string[];
+  /** The merge left nothing to resolve; the worktree holds a finished merge
+   *  waiting to be pushed. */
+  clean?: boolean;
+  error?: string;
+}
+
+export function prepareConflictMerge(rootIn: string, branch: string, base: string): ConflictPrep {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return { ok: false, error: g.error };
+  if (!validRef(branch) || !validRef(base)) return { ok: false, error: "invalid branch name" };
+
+  // Fresh refs first: merging a base the checkout last saw a week ago produces
+  // a conflict that is nobody's, or hides one that is real.
+  git(root, [...FETCH_ARGV]);
+
+  /*
+   * The checkout that already has this branch, when there is one.
+   *
+   * The first version refused here — "already checked out at …" — which is a
+   * fact, not an instruction, and left somebody staring at a button that could
+   * not work. It is also the wrong answer: a checkout of that branch is exactly
+   * where the merge belongs, and it is where they would have done it by hand.
+   *
+   * Only when it is CLEAN. Merging into somebody's half-finished work is the one
+   * thing this whole design exists to avoid, so a dirty one is refused with the
+   * two words that fix it.
+   */
+  const held = worktreeList(root).find((w) => w.branch === branch && w.path !== root);
+  if (held) {
+    // Our own half-done merge first. Conflict markers ARE uncommitted changes,
+    // so checking "is it dirty" before this refuses on the work the first
+    // button just did — which it did, and the tests are why this order exists.
+    const standing = unmerged(held.path);
+    if (standing.length) return { ok: true, root: held.path, conflicts: standing };
+    // Then somebody else's. Not left to git: it only refuses when the merge
+    // would touch the same files, so unrelated work in that checkout would have
+    // been merged around silently — a branch quietly given a merge commit in a
+    // tree somebody is using.
+    const dirty = git(held.path, ["status", "--porcelain"]).stdout.trim();
+    if (dirty) {
+      return { ok: false, error: `${branch} is checked out at ${held.path}, and it has uncommitted changes — commit or stash them there and press again` };
+    }
+    return mergeInto(held.path, base);
+  }
+
+  // Beside the repo, named for the pull request's branch — the same shape the
+  // worktree guard already allows, so this cannot write outside it.
+  const abs = `${root}-conflict-${branch.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60)}`;
+  const already = worktreeList(root).find((w) => w.path === abs);
+  if (!already) {
+    const local = git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0;
+    // Adopt the local branch when there is one; otherwise cut it from the
+    // remote. `-b` against an existing branch is an error, and adopting a
+    // branch that only exists on the remote is not possible.
+    const add = local
+      ? run(root, ["worktree", "add", abs, branch])
+      : run(root, ["worktree", "add", "-b", branch, abs, `origin/${branch}`]);
+    if (!add.ok) return { ok: false, error: add.error ?? "could not cut a worktree" };
+  }
+  return mergeInto(abs, base);
+}
+
+/** The files git has marked as unmerged — the resolver's whole input. */
+function unmerged(where: string): string[] {
+  return git(where, ["diff", "--name-only", "--diff-filter=U"]).stdout
+    .split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/**
+ * The merge itself, wherever it is happening.
+ *
+ * `--no-edit` so it cannot sit waiting on an editor nobody can see, and
+ * `origin/<base>` rather than `<base>` because the local copy of the base is
+ * exactly what tends to be stale.
+ */
+function mergeInto(where: string, base: string): ConflictPrep {
+  // Already mid-merge from a previous press: report where it stands rather than
+  // running `git merge` again, which refuses and says nothing useful.
+  const standing = unmerged(where);
+  if (standing.length) return { ok: true, root: where, conflicts: standing };
+
+  const merged = git(where, ["merge", "--no-edit", `origin/${base}`]);
+  const conflicts = unmerged(where);
+  if (conflicts.length) return { ok: true, root: where, conflicts };
+  if (merged.code === 0) return { ok: true, root: where, conflicts: [], clean: true };
+  // Merged badly and left nothing marked: not a conflict, something else — a
+  // hook, an unrelated history. Say what git said rather than inventing a
+  // conflict that is not there.
+  return { ok: false, root: where, error: (merged.stderr || merged.stdout || "the merge did not complete").trim().slice(0, 300) };
+}
+
 /**
  * Ignored paths that are output, not work — safe to leave out of "here is what
  * you lose", because deleting them costs a rebuild and nothing else.
@@ -2789,6 +3000,449 @@ export function applyHunk(rootIn: string, pathAbs: unknown, staged: boolean, act
 }
 
 
+/* ------------------------------------------- which two sides git stopped on */
+
+/**
+ * Name a commit as a branch, when it is the tip of one.
+ *
+ * Local heads before remote-tracking refs: `main` reads better than
+ * `origin/main` and is the same commit when both point at it. Returns null
+ * rather than inventing a name — a rebase's stopped commit is a commit, and
+ * `name-rev` would happily call it `feat~2`, which is not a branch and reads
+ * like one.
+ */
+function refAt(root: string, sha: string): string | null {
+  if (!validHash(sha)) return null;
+  const heads = git(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/heads"])
+    .stdout.split("\n").filter(Boolean);
+  if (heads.length) return heads[0]!;
+  const remotes = git(root, ["for-each-ref", "--points-at", sha, "--format=%(refname:short)", "refs/remotes"])
+    .stdout.split("\n").filter(Boolean).filter((n) => !n.endsWith("/HEAD"));
+  return remotes[0] ?? null;
+}
+
+/** A commit's first line, so a side with no branch name is still nameable. */
+function subjectOf(root: string, sha: string): string {
+  if (!validHash(sha)) return "";
+  const r = git(root, ["log", "-1", "--format=%s", sha]);
+  return r.code === 0 ? r.stdout.trim() : "";
+}
+
+const sideOf = (root: string, sha: string, ref?: string | null): MergeSide | null =>
+  validHash(sha) ? { ref: ref ?? refAt(root, sha), sha, subject: subjectOf(root, sha) } : null;
+
+/** Read one of git's little state files, or "" — they are absent as often as
+ *  they are present, and an absent one is not an error. */
+function stateFile(dir: string, name: string): string {
+  try { return readFileSync(join(dir, name), "utf8").trim(); } catch { return ""; }
+}
+
+/**
+ * Which two things git has stopped between — measured from `.git`, not deduced.
+ *
+ * Every operation keeps its state somewhere different, and only one of them
+ * keeps it in MERGE_HEAD:
+ *
+ *   merge         MERGE_HEAD is the incoming commit
+ *   rebase        rebase-merge/{onto,head-name,stopped-sha,msgnum,end}, and
+ *                 NO MERGE_HEAD at all — checked against a real rebase
+ *   cherry-pick   CHERRY_PICK_HEAD
+ *   revert        REVERT_HEAD
+ *
+ * The sides invert under a rebase, which is the whole reason this is worth
+ * reading properly: git replays YOUR commits onto the other branch, so `ours`
+ * is the branch you are landing on and `theirs` is your own work. Somebody —
+ * or an agent — told to "prefer theirs" while thinking that means the base
+ * resolves the entire rebase backwards, confidently.
+ *
+ * Goes through gitDir(), never `<root>/.git`: in a linked worktree that path is
+ * a FILE containing a pointer, and every read here would come back empty.
+ */
+export function mergeInfo(rootIn: unknown): MergeInfo {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, state: "clean", ours: null, theirs: null, error: "not a git repository root" };
+  const dir = gitDir(root);
+  if (!dir) return { ok: false, state: "clean", ours: null, theirs: null, error: "cannot find the git directory" };
+
+  const state = treeState(root);
+  const head = git(root, ["rev-parse", "HEAD"]).stdout.trim();
+  const branch = git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() || null;
+
+  switch (state) {
+    case "merging":
+      return {
+        ok: true, state,
+        ours: sideOf(root, head, branch),
+        theirs: sideOf(root, stateFile(dir, "MERGE_HEAD")),
+      };
+
+    case "rebasing": {
+      // Two implementations, and they keep the same facts under different
+      // names: the merge backend counts with msgnum/end, the apply backend
+      // (`git rebase --apply`, and `git am`) with next/last.
+      const md = existsSync(join(dir, "rebase-merge")) ? join(dir, "rebase-merge") : join(dir, "rebase-apply");
+      const onto = stateFile(md, "onto");
+      // head-name is a full ref: refs/heads/feat.
+      const headName = stateFile(md, "head-name").replace(/^refs\/heads\//, "") || null;
+      const stopped = stateFile(md, "stopped-sha") || stateFile(md, "original-commit") || head;
+      const step = Number(stateFile(md, "msgnum") || stateFile(md, "next")) || undefined;
+      const total = Number(stateFile(md, "end") || stateFile(md, "last")) || undefined;
+      return {
+        ok: true, state,
+        // Inverted on purpose: see above.
+        ours: sideOf(root, onto || head),
+        theirs: stopped === head && headName
+          ? sideOf(root, stopped, headName)
+          : sideOf(root, stopped),
+        ...(step ? { step } : {}),
+        ...(total ? { total } : {}),
+      };
+    }
+
+    case "cherry-picking":
+      return {
+        ok: true, state,
+        ours: sideOf(root, head, branch),
+        theirs: sideOf(root, stateFile(dir, "CHERRY_PICK_HEAD")),
+      };
+
+    case "reverting":
+      return {
+        ok: true, state,
+        ours: sideOf(root, head, branch),
+        theirs: sideOf(root, stateFile(dir, "REVERT_HEAD")),
+      };
+
+    default:
+      // Bisecting is a state, but not one with two sides to choose between.
+      return { ok: true, state, ours: null, theirs: null };
+  }
+}
+
+/* -------------------------------------- what WOULD conflict, without merging */
+
+/** Answers are cached briefly: the pull-request panel polls, and each miss is
+ *  a network fetch plus a tree merge. A minute is shorter than anyone's
+ *  round trip to GitHub and back. */
+const PREVIEW_TTL_MS = 60_000;
+const previewCache = new Map<string, { at: number; v: ConflictPreview; localTip: string }>();
+
+export interface ConflictPreview {
+  ok: boolean;
+  /** Paths that would conflict, in git's own order. Empty when it merges clean. */
+  conflicts: string[];
+  clean: boolean;
+  /** The refs could not be fetched, so this is from whatever was last pulled
+   *  down. Worth saying rather than presenting an old answer as current. */
+  stale?: boolean;
+  /**
+   * You already merged the base in, here, and have not pushed it.
+   *
+   * The case this exists for: the conflict is settled in a worktree on this
+   * machine and the merge commit is local, so GitHub is still perfectly
+   * correct that the pull request conflicts — and the panel was repeating that
+   * while the answer sat on the same disk it was drawing on. "Merging is
+   * blocked" is true of GitHub and false of you, and the difference is one
+   * push.
+   *
+   * `ahead` is how many commits the local branch has that the pushed head does
+   * not, so the banner can say what pushing would send.
+   */
+  resolvedLocally?: { branch: string; ahead: number };
+  error?: string;
+}
+
+/**
+ * Which files a merge would conflict on — without performing the merge.
+ *
+ * `git merge-tree --write-tree --name-only` merges two commits entirely in
+ * the object database: it writes a tree, prints the conflicted paths, and exits
+ * 1 if there were any. Checked against a real repository: the working tree is
+ * untouched, HEAD does not move, and `git status` is empty afterwards. That
+ * matters because this runs from a panel poll on a checkout somebody is
+ * working in — the existing "Resolve conflicts" button makes a real merge in a
+ * worktree of its own, which is the right thing to do when you are about to
+ * resolve, and much too much to do just to name three files.
+ *
+ * The refs are fetched first. GitHub is the authority on what these branches
+ * are, and a list built from a stale remote-tracking ref names files that may
+ * no longer conflict — a wrong list is worse than none. When the fetch fails
+ * the answer is still given, marked stale, because offline-and-approximate
+ * beats offline-and-silent.
+ */
+export async function conflictPreview(rootIn: unknown, base: string, head: string, number?: number): Promise<ConflictPreview> {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, conflicts: [], clean: false, error: "not a git repository root" };
+  if (!validRef(base) || !validRef(head)) return { ok: false, conflicts: [], clean: false, error: "invalid branch name" };
+  const pr = Number.isInteger(number) && (number as number) > 0 ? (number as number) : null;
+
+  const key = `${root}\u0000${base}\u0000${head}\u0000${pr ?? ""}`;
+
+  /*
+   * The clock is the ceiling; the branch is the trigger.
+   *
+   * A minute of cache is fine for a pull request nobody is touching, and much
+   * too long for the one you are working on: you resolve the conflict in a
+   * worktree, commit, push, and the panel goes on saying "merging is blocked"
+   * because the answer it has is fifty seconds old. The thing that actually
+   * changed is a ref on this disk, and reading it costs a rev-parse.
+   *
+   * So a cached answer is kept only while the local branch is where it was.
+   * Move it — a merge, a commit, a rebase, anything that precedes a push — and
+   * the next look recomputes, fetch and all. No polling, no extra network on
+   * the quiet path.
+   */
+  const localTipOf = (b: string) => git(root, ["rev-parse", "--verify", "--quiet", `${b}^{commit}`]).stdout.trim();
+  const tip = localTipOf(head);
+  const hit = previewCache.get(key);
+  if (hit && Date.now() - hit.at < PREVIEW_TTL_MS && hit.localTip === tip) return hit.v;
+
+  /*
+   * Explicit refspecs rather than `git fetch origin <branch>`, whose effect on
+   * the remote-tracking refs depends on how the remote happens to be
+   * configured. These land where they are named or not at all.
+   *
+   * And the head comes from `refs/pull/<n>/head` when the pull request's
+   * number is known. Measured against this repository's own open pull
+   * requests: one of the two is from a FORK, so `refs/heads/<branch>` does not
+   * exist on origin at all and the first version of this answered "no local
+   * copy of provider-usage-gauges-462" for a pull request that conflicts in a
+   * file it could name perfectly well. On a public repository a fork is the
+   * ordinary case, not the exception — and the same ref also survives the
+   * author deleting their branch while the pull request is still open.
+   */
+  const spec = [`+refs/heads/${base}:refs/remotes/origin/${base}`];
+  if (pr) spec.push(`+refs/pull/${pr}/head:refs/remotes/origin/pr/${pr}`);
+  else spec.push(`+refs/heads/${head}:refs/remotes/origin/${head}`);
+  const fetched = await gitAsync(root, ["fetch", "--quiet", "origin", ...spec]);
+  const stale = fetched.code !== 0;
+
+  const have = (ref: string) => git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code === 0;
+  const pick = (b: string) => (have(`origin/${b}`) ? `origin/${b}` : have(b) ? b : null);
+  const a = pick(base);
+  // The pull ref first: it is the pull request's actual head wherever it
+  // lives, and a same-named local branch may be something else entirely.
+  const z = (pr && have(`origin/pr/${pr}`) ? `origin/pr/${pr}` : null) ?? pick(head);
+  if (!a || !z) {
+    const v: ConflictPreview = { ok: false, conflicts: [], clean: false, error: `no local copy of ${!a ? base : head} — fetch first` };
+    previewCache.set(key, { at: Date.now(), v, localTip: tip });
+    return v;
+  }
+
+  const r = await gitAsync(root, ["merge-tree", "--write-tree", "--name-only", a, z]);
+  // Older git has no --write-tree (it arrived in 2.38) and answers with a
+  // usage error rather than a merge. Saying so beats reporting "no conflicts".
+  if (r.code !== 0 && r.code !== 1) {
+    const v: ConflictPreview = { ok: false, conflicts: [], clean: false, error: r.stderr.trim() || "git could not compare those branches" };
+    previewCache.set(key, { at: Date.now(), v, localTip: tip });
+    return v;
+  }
+  // Line 1 is the written tree's oid; the conflicted paths follow, and a blank
+  // line ends them before git's own commentary.
+  const lines = r.stdout.split("\n");
+  const conflicts: string[] = [];
+  for (const l of lines.slice(1)) { if (!l.trim()) break; conflicts.push(l); }
+
+  /*
+   * Before answering "it conflicts", look at what is on this machine.
+   *
+   * A local branch of the same name that already CONTAINS the base has had the
+   * merge done in it. Two `merge-base --is-ancestor` calls and a rev-list, all
+   * against refs already fetched above — no network, and only on the path
+   * where there is a conflict to explain, so a clean pull request pays nothing.
+   */
+  let resolvedLocally: ConflictPreview["resolvedLocally"];
+  if (conflicts.length && have(head)) {
+    const contains = git(root, ["merge-base", "--is-ancestor", a, head]).code === 0;
+    if (contains) {
+      // What pushing would send: commits the local branch has and the pushed
+      // head does not. Counted against `z`, which is the pull request's actual
+      // head wherever it lives.
+      const ahead = Number(git(root, ["rev-list", "--count", `${z}..${head}`]).stdout.trim()) || 0;
+      resolvedLocally = { branch: head, ahead };
+    }
+  }
+
+  const v: ConflictPreview = {
+    ok: true, conflicts, clean: r.code === 0,
+    ...(stale ? { stale: true } : {}),
+    ...(resolvedLocally ? { resolvedLocally } : {}),
+  };
+  if (previewCache.size > 200) previewCache.clear();
+  previewCache.set(key, { at: Date.now(), v, localTip: tip });
+  return v;
+}
+
+/* --------------------------------------------- the set git stops remembering */
+
+/**
+ * A name for THIS stop, not for the operation.
+ *
+ * A rebase stops once per commit with a different set of files each time, so
+ * the commit being replayed is part of the identity: settle commit 1 and
+ * commit 2's screen must not open claiming three files are already done.
+ */
+export function sessionOp(info: MergeInfo): string {
+  if (!info.theirs?.sha || info.state === "clean" || info.state === "bisecting") return "";
+  return `${info.state}:${info.theirs.sha}`;
+}
+
+/**
+ * What this stop conflicted, including the files already resolved.
+ *
+ * The observation happens here, on read, because there is no other moment
+ * that reliably happens: the panel may be opened at any point during a merge,
+ * including one somebody started in a terminal an hour ago.
+ */
+export function mergeSession(rootIn: unknown): MergeSessionView {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, op: "", files: [], left: [], mine: [], error: "not a git repository root" };
+  const info = mergeInfo(root);
+  const op = sessionOp(info);
+  const left = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).stdout.split("\u0000").filter(Boolean);
+  if (!op) {
+    // Nothing is stopped. Whatever we knew is about a merge that is over.
+    return { ok: true, op: "", files: [], left, mine: [] };
+  }
+  const stop = observe(root, op, left);
+  return { ok: true, op, files: stop.files, left, mine: stop.mine };
+}
+
+/**
+ * Put a resolved file back to how git left it.
+ *
+ * `git checkout --merge -- <path>` is the obvious way to do this and it is a
+ * shredder. Driven against a real repository: hand-resolve a conflict, stage
+ * it, run that command — exit 0, not one word of output, and the hand-written
+ * resolution replaced by the original markers. It is the same destruction the
+ * whole-file `--ours` already sits behind a confirmation for, on a control
+ * that reads like an undo.
+ *
+ * So it refuses without an explicit confirmation, and the refusal says what
+ * would be lost — including, when the file was resolved somewhere else, that
+ * the work being thrown away is not ours and we cannot say what it was.
+ */
+export function reopenConflict(rootIn: unknown, relIn: unknown, confirmIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const rels = validRels(root, [relIn]);
+  if (!rels?.length) return { ok: false, error: "invalid path" };
+  const rel = rels[0]!;
+
+  const info = mergeInfo(root);
+  const op = sessionOp(info);
+  if (!op) return { ok: false, error: "nothing is being merged here — there is no conflict to put back" };
+  const stop = stopFor(root, op);
+  if (!stop?.files.includes(rel)) {
+    return { ok: false, error: `${rel} was not one of this merge's conflicts` };
+  }
+  const unmerged = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).stdout.split("\u0000").filter(Boolean);
+  if (unmerged.includes(rel)) return { ok: false, error: `${rel} is still conflicted — there is nothing to put back` };
+
+  if (confirmIn !== true) {
+    const mine = stop.mine.includes(rel);
+    return {
+      ok: false,
+      error: mine
+        ? `This throws away how ${rel} was resolved and restores the original conflict. Confirm to continue.`
+        : `${rel} was resolved outside this panel — by an agent, an editor, or by hand. Putting the conflict back deletes that work and this panel cannot show you what it was. Open the file first if you are not sure. Confirm to continue.`,
+    };
+  }
+
+  const r = run(root, ["checkout", "--merge", "--", rel]);
+  if (!r.ok) return r;
+  // Verify rather than assume: `checkout --merge` exits 0 in cases where it
+  // has done nothing, and a button that silently does nothing is worse than
+  // one that fails.
+  const after = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]).stdout.split("\u0000").filter(Boolean);
+  if (!after.includes(rel)) return { ok: false, error: `git did not put the conflict in ${rel} back` };
+  noteReopened(root, op, rel);
+  return { ok: true, output: `${rel} is conflicted again` };
+}
+
+/**
+ * What must not run while git is stopped in the middle of something.
+ *
+ * The screen hides these, and hiding is not enforcement: the routes are still
+ * there, the Diff view reaches some of them, and an agent with the app open
+ * reaches all of them. So the refusal lives here, where it applies to whoever
+ * asks.
+ *
+ * The list is not "everything". Each of these is either destructive in this
+ * state or produces a result nobody wants:
+ *
+ *   staging, unstaging, discarding, hunk surgery — this is how a file with
+ *     `<<<<<<<` in it gets marked resolved, and how a conflicted file gets
+ *     thrown away by a control meant for ordinary edits;
+ *   committing — a merge is finished with `merge --continue`, which checks for
+ *     leftover markers first; `commit` does not;
+ *   push and pull — push publishes the state from BEFORE the merge, which
+ *     reads as "my merge vanished"; pull refuses anyway, with git's wording;
+ *   checkout, branch delete or rename, reset, stash, another merge or rebase —
+ *     all of them either fail obscurely or leave two operations in flight.
+ *
+ * Fetch is absent on purpose: it writes nothing to the working tree and it is
+ * often exactly what you want before deciding.
+ */
+const STOPPED_REFUSES = new Set([
+  "/git/stage", "/git/unstage", "/git/stage-all", "/git/unstage-all",
+  "/git/discard", "/git/apply-hunk", "/git/commit-staged",
+  "/git/push", "/git/pull", "/git/sync-base",
+  "/git/checkout", "/git/branch-delete", "/git/branch-rename", "/git/reset",
+  "/git/stash-push", "/git/stash-apply", "/git/stash-pop",
+  "/git/merge", "/git/rebase", "/git/undo-merge",
+]);
+
+/**
+ * The refusal, or null to let it through.
+ *
+ * Says what to do rather than what happened: "finish it or abandon it" is the
+ * whole content of the message, and the two buttons that do those things are
+ * on the screen it will appear on.
+ */
+export function stoppedRefusal(rootIn: unknown, pathname: string): GitActionResult | null {
+  if (!STOPPED_REFUSES.has(pathname)) return null;
+  const root = repoRoot(rootIn);
+  if (!root) return null;
+  const state = treeState(root);
+  if (state === "clean" || state === "bisecting") return null;
+  const n = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
+  const left = n ? n.split("\n").length : 0;
+  const doing = state.replace(/ing$/, "");
+  return {
+    ok: false,
+    error: left
+      ? `This checkout is mid-${doing} with ${left} file${left === 1 ? "" : "s"} still conflicted. Resolve them, or abandon the ${doing}, before anything else.`
+      : `This checkout is mid-${doing}. Finish it or abandon it before anything else.`,
+  };
+}
+
+/**
+ * Files that are staged but still read as conflicted.
+ *
+ * The gap `--diff-filter=U` cannot see: anything can `git add` a file with
+ * markers still in it — an agent that stopped early, an editor, a stray
+ * `git add -A` — and from then on git considers it resolved and will happily
+ * commit the markers into the branch.
+ *
+ * Scoped to this stop's own files, with the same patterns the parser uses. A
+ * sweep of the whole index would be both slow and wrong: this repository has
+ * test fixtures whose committed content is conflict markers, and they would
+ * block every merge forever.
+ */
+export function markersLeft(root: string, rels: string[]): string[] {
+  const out: string[] = [];
+  for (const rel of rels) {
+    let text: string;
+    try { text = readFileSync(join(root, rel), "utf8"); } catch { continue; }
+    if (text.includes("\u0000")) continue;
+    for (const line of text.split("\n")) {
+      if (C_START.test(line) || C_MID.test(line) || C_END.test(line)) { out.push(rel); break; }
+    }
+  }
+  return out;
+}
+
 /* ------------------------------------------------- conflicts, block by block */
 
 /**
@@ -2871,6 +3525,91 @@ function splitConflicts(text: string): { segments: (string[] | ConflictBlock)[];
   return { segments, blocks };
 }
 
+/**
+ * A fingerprint of the file exactly as it was parsed.
+ *
+ * Cheap and deterministic — length plus a djb2 over the text. Its only job is
+ * to answer "is this still the file I showed?", and the thing it guards
+ * against is another writer (an agent in a tmux tab, nvim, a rerun of the
+ * merge), not a forger.
+ */
+export function contentStamp(text: string): string {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return `${text.length.toString(36)}.${h.toString(36)}`;
+}
+
+/**
+ * Walk the parsed segments and give every line its real number.
+ *
+ * Raw numbers: the ones the file has on disk right now, markers included. That
+ * is deliberate — they are what nvim shows when the panel jumps you to a
+ * conflict, and a second numbering scheme that disagrees with the editor is
+ * worse than none.
+ */
+function locate(segments: (string[] | ConflictBlock)[]): ConflictSegment[] {
+  const out: ConflictSegment[] = [];
+  let cur = 1;
+  for (const seg of segments) {
+    if (Array.isArray(seg)) {
+      if (seg.length) out.push({ kind: "text", from: cur, lines: seg });
+      cur += seg.length;
+      continue;
+    }
+    const mid = cur + 1 + seg.ours.length + (seg.base ? 1 + seg.base.length : 0);
+    seg.ourLine = cur + 1;
+    seg.theirLine = mid + 1;
+    seg.endLine = mid + 1 + seg.theirs.length;
+    out.push({ kind: "conflict", index: seg.index });
+    cur = seg.endLine + 1;
+  }
+  return out;
+}
+
+/**
+ * The whole conflicted file, not the conflicts on their own.
+ *
+ * `splitConflicts` has always returned the text between the blocks; the block
+ * endpoint discarded it, so the screen showed regions with nothing around them
+ * and no way to tell what the code they sit in does. This is the same parse,
+ * kept whole.
+ */
+/** How much of a conflicted file this endpoint is willing to send. Four
+ *  megabytes is a very large lockfile and a very small reason to hang a
+ *  browser tab. */
+const CONFLICT_FILE_MAX = 4 * 1024 * 1024;
+
+export function conflictFile(rootIn: unknown, relIn: unknown): ConflictFile {
+  const empty = { segments: [], blocks: [], lines: 0, stamp: "" };
+  const root = repoRoot(rootIn); if (!root) return { ok: false, ...empty, error: "not a git repository root" };
+  const rels = validRels(root, [relIn]);
+  if (!rels?.length) return { ok: false, ...empty, error: "invalid path" };
+  let text: string;
+  try { text = readFileSync(join(root, rels[0]!), "utf8"); }
+  catch { return { ok: false, ...empty, error: "cannot read that file" }; }
+  // A binary file has no lines to choose between, so whole-file is the only
+  // resolution — saying so beats rendering its bytes.
+  if (text.includes("\u0000")) return { ok: false, ...empty, error: "binary file — resolve it whole" };
+  // Above this it is not a file somebody reads a conflict in, it is a
+  // generated artefact — and sending it would be megabytes of JSON to render a
+  // screen nobody can use. Refused outright rather than truncated: a silently
+  // shortened file is how you resolve a conflict you were never shown.
+  if (text.length > CONFLICT_FILE_MAX) {
+    return { ok: false, ...empty, error: `too big to work through here (${(text.length / 1e6).toFixed(1)} MB) — take one side for the whole file, or open it in your editor` };
+  }
+  const { segments, blocks } = splitConflicts(text);
+  // locate() writes the line numbers onto the blocks, so it runs before they
+  // are handed over.
+  const located = locate(segments);
+  return {
+    ok: true,
+    segments: located,
+    blocks,
+    lines: text.split("\n").length,
+    stamp: contentStamp(text),
+  };
+}
+
 export function conflictBlocks(rootIn: unknown, relIn: unknown): {
   ok: boolean; blocks: ConflictBlock[]; error?: string;
 } {
@@ -2895,19 +3634,64 @@ export function conflictBlocks(rootIn: unknown, relIn: unknown): {
  * resolving the wrong conflict with the wrong side, and looking like it worked.
  * Refusing costs a reload; guessing costs code.
  */
-export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknown): GitActionResult {
+/** As many lines as one hand-written block may carry. Generous for a real
+ *  edit, small enough that a runaway client cannot post a book. */
+const EDIT_MAX_LINES = 5000;
+
+/**
+ * Check a list of block decisions, and say what is wrong with it in words the
+ * screen can show.
+ *
+ * The one that matters is the marker check. A hand-written block containing
+ * `<<<<<<<` would be staged by git as RESOLVED while the file still reads as
+ * conflicted — so the next parse finds a conflict git does not know about, and
+ * the commit carries the markers. Every other rule here is hygiene; that one
+ * is the difference between a resolution and a corrupted file.
+ */
+function validateChoices(list: unknown[]): string | null {
+  const sides = new Set(["ours", "theirs", "both", "theirs-first"]);
+  for (const c of list) {
+    if (typeof c === "string") {
+      if (!sides.has(c)) return "unknown choice";
+      continue;
+    }
+    if (!c || typeof c !== "object" || !Array.isArray((c as { edit?: unknown }).edit)) return "unknown choice";
+    const lines = (c as { edit: unknown[] }).edit;
+    if (lines.length > EDIT_MAX_LINES) return `an edited block is limited to ${EDIT_MAX_LINES} lines`;
+    for (const l of lines) {
+      if (typeof l !== "string") return "an edited block must be lines of text";
+      // Lines, not a blob: the reassembly joins with "\n", so an embedded
+      // newline would silently produce a line count nobody chose.
+      if (l.includes("\n") || l.includes("\r")) return "an edited block must be split into lines";
+      if (C_START.test(l) || C_MID.test(l) || C_END.test(l) || C_BASE.test(l)) {
+        return "an edited block cannot contain conflict markers — git would stage it as resolved while the file still reads as conflicted";
+      }
+    }
+  }
+  return null;
+}
+
+export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknown, stampIn?: unknown): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   const rels = validRels(root, [relIn]);
   if (!rels?.length) return { ok: false, error: "invalid path" };
   if (!Array.isArray(choicesIn)) return { ok: false, error: "choices must be a list" };
-  const allowed = new Set(["ours", "theirs", "both", "theirs-first"]);
-  if (!choicesIn.every((c) => typeof c === "string" && allowed.has(c))) return { ok: false, error: "unknown choice" };
+  const bad = validateChoices(choicesIn);
+  if (bad) return { ok: false, error: bad };
   const choices = choicesIn as BlockChoice[];
 
   const abs = join(root, rels[0]!);
   let text: string;
   try { text = readFileSync(abs, "utf8"); } catch { return { ok: false, error: "cannot read that file" }; }
+  // The count check below catches a stale parse only when the number of
+  // conflicts changed. A rewrite that kept the count — an agent resolving one
+  // block and reintroducing another, the merge rerun — passes it, and then
+  // choice N lands on a block that is no longer the Nth. The stamp catches
+  // that too, and it is what the whole-file view sends.
+  if (typeof stampIn === "string" && stampIn && stampIn !== contentStamp(text)) {
+    return { ok: false, error: "that file changed since you opened it — reload it" };
+  }
   const { segments, blocks } = splitConflicts(text);
   if (blocks.length !== choices.length) {
     return { ok: false, error: `the file has ${blocks.length} conflicts, not ${choices.length} — reload it` };
@@ -2923,7 +3707,8 @@ export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknow
     if (Array.isArray(seg)) { outLines.push(...seg); continue; }
     const c = choices[seg.index]!;
     outLines.push(...(
-      c === "ours" ? seg.ours
+      typeof c !== "string" ? c.edit
+      : c === "ours" ? seg.ours
       : c === "theirs" ? seg.theirs
       : c === "both" ? [...seg.ours, ...seg.theirs]
       : [...seg.theirs, ...seg.ours]
@@ -2932,5 +3717,7 @@ export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknow
   const out = outLines.join("\n");
 
   try { writeFileSync(abs, out); } catch { return { ok: false, error: "cannot write that file" }; }
-  return run(root, ["add", "--", rels[0]!]);
+  const added = run(root, ["add", "--", rels[0]!]);
+  if (added.ok) noteResolved(root, sessionOp(mergeInfo(root)), [rels[0]!]);
+  return added;
 }

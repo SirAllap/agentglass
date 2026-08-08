@@ -14,6 +14,7 @@
 // It sits on --bg2 with a hairline, like every other toolbar in this app,
 // rather than on the near-black the notch needed to read as "carved out of the
 // screen". That is what makes it belong to the theme instead of floating over it.
+import type { SystemNote } from "../lib/sysNotify.ts";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
 import { subscribeProviderUsage, usageOf } from "../lib/usageStore.ts";
@@ -29,6 +30,8 @@ import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
 import { Logo } from "./Logo.tsx";
 import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
 import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
+import { ICON } from "../lib/iconSize.ts";
+import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 
 export const TOP_BAR_H = 30;
 
@@ -65,18 +68,18 @@ function WindowControls({ max }: { max: boolean }) {
     <span className="flex items-center gap-0.5 shrink-0 ml-1 -mr-1.5">
       <button onClick={WINDOW_CONTROLS.minimize} aria-label="Minimise" title="Minimise"
         className={`${btn} hover:bg-white/10 hover:text-[var(--text)]`} style={box}>
-        <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}><path d="M2.5 6h7" /></svg>
+        <svg viewBox="0 0 12 12" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.1}><path d="M2.5 6h7" /></svg>
       </button>
       <button onClick={WINDOW_CONTROLS.toggleMaximize} aria-label={max ? "Restore" : "Maximise"} title={max ? "Restore" : "Maximise"}
         className={`${btn} hover:bg-white/10 hover:text-[var(--text)]`} style={box}>
         {max ? (
           // Two offset squares: the window comes back OUT of full width, which
           // one square cannot say.
-          <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}>
+          <svg viewBox="0 0 12 12" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.1}>
             <rect x="2" y="4" width="6" height="6" rx="1" /><path d="M4.4 4V3a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v3.6a1 1 0 0 1-1 1H8" />
           </svg>
         ) : (
-          <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}>
+          <svg viewBox="0 0 12 12" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.1}>
             <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
           </svg>
         )}
@@ -85,7 +88,7 @@ function WindowControls({ max }: { max: boolean }) {
         className={`${btn} hover:text-white`} style={box}
         onMouseEnter={(e) => { e.currentTarget.style.background = "var(--error)"; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-        <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}><path d="M3 3l6 6M9 3l-6 6" /></svg>
+        <svg viewBox="0 0 12 12" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.1}><path d="M3 3l6 6M9 3l-6 6" /></svg>
       </button>
     </span>
   );
@@ -138,7 +141,7 @@ function AppMenuButton() {
       }}
       className="shrink-0 grid place-items-center rounded hover:bg-white/10"
       style={{ width: 20, height: 18, color: "var(--text3)", ...NO_DRAG }}>
-      <svg viewBox="0 0 16 16" width={13} height={13} fill="currentColor" aria-hidden>
+      <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="currentColor" aria-hidden>
         <circle cx="3" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="13" cy="8" r="1.3" />
       </svg>
     </button>
@@ -174,7 +177,7 @@ function Item({ cap, children, title, dim, hideUnder }: {
   const vis = hideUnder === "md" ? "hidden md:flex" : hideUnder === "sm" ? "hidden sm:flex" : "flex";
   return (
     <span className={`${vis} items-center gap-1.5 shrink-0`} title={title} style={{ opacity: dim ? 0.45 : 1, transition: "opacity .15s" }}>
-      {cap && <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{cap}</span>}
+      {cap && <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{cap}</span>}
       {children}
     </span>
   );
@@ -184,7 +187,7 @@ function Item({ cap, children, title, dim, hideUnder }: {
  *  are told apart without reading their captions. */
 function Arrow({ up }: { up?: boolean }) {
   return (
-    <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6}
+    <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6}
       strokeLinecap="round" strokeLinejoin="round" aria-hidden
       style={{ color: up ? "var(--success)" : "var(--info)" }}>
       {up ? <><path d="M12 20V9M6 13l6-6 6 6" /><path d="M4.5 4h15" /></>
@@ -227,13 +230,19 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 }
 
 export function TopBar({
-  workspace, onOpenProject, onOpenPalette, quiet, needs,
+  workspace, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
   needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
   filterProvider = "",
 }: {
-  workspace: string | null;
+  /** `undefined` means "not asked yet" — distinct from null, which is a real
+   *  answer ("the whole machine"). The chip must not claim either while the
+   *  server is still coming up underneath it. */
+  workspace: string | null | undefined;
   onOpenProject: () => void;
   onOpenPalette: () => void;
+  /** Open the file finder. It had a chord and nothing else, which makes it a
+   *  feature you have to be told about — reported as exactly that. */
+  onOpenFiles: () => void;
   /**
    * Step back — the view below is already saying all of this.
    *
@@ -252,7 +261,9 @@ export function TopBar({
   onNeedProject: (root: string) => void;
   onNeedTerminal: () => void;
   /** A notification that knows where it belongs. */
-  onNoteGoto: (g: { kind: "pr"; repo: string; number: number }) => void;
+  /** Where a notification points — a pull request, or a checkout with work in
+   *  it. See SystemNote["goto"]. */
+  onNoteGoto: (g: NonNullable<SystemNote["goto"]>) => void;
   /** The dashboard's provider filter, which decides whose plan the meters
    *  show when no chat is focused. Wired to the focused chat's agent in the
    *  commit after this one. */
@@ -324,13 +335,29 @@ export function TopBar({
           gets instead. */}
       <Logo size={17} className="shrink-0" title="agentglass" style={{ pointerEvents: "none" }} />
       <AppMenuButton />
-      <button onClick={onOpenProject} className="flex items-center gap-1.5 shrink-0 min-w-0 rounded px-1 -mx-1"
-        title={workspace ? `${workspace}\nClick to switch project` : "Open a project — everything here scopes itself to its folder"}
-        style={NO_DRAG}>
-        <span className="text-[10.5px] truncate" style={{ color: workspace ? "var(--text)" : "var(--text4)", maxWidth: 190 }}>
-          {workspace ? workspace.split("/").filter(Boolean).pop() : "all repos"}
+      {/* The project this cockpit is about, and the way to change it.
+          It used to be two spans of plain text with a chevron, and it read as
+          a label: nobody who had not been told could tell it was the control
+          that switches project. So it is drawn as what it is — a chip with an
+          edge, a hover state and a pressable surface — and the open project
+          carries the weight, since "which project am I in" is the one thing
+          this corner exists to answer. */}
+      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1 py-[3px]"
+        title={workspace ? `${workspace}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open a single project" : "Reading the open project…"}
+        style={{
+          ...NO_DRAG,
+          border: `1px solid color-mix(in srgb, var(--border) ${workspace ? 55 : 40}%, transparent)`,
+          background: workspace ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)",
+        }}>
+        <span className="text-[10px] shrink-0" style={{ color: workspace ? "var(--primary-hover)" : "var(--text4)" }}>▣</span>
+        <span className="text-[10.5px] truncate" style={{ color: workspace ? "var(--text)" : "var(--text3)", fontWeight: workspace ? 600 : 400, maxWidth: 190 }}>
+          {/* Three states, said differently on purpose: a project, the
+              deliberate whole-machine view, and "not known yet" — which used
+              to be indistinguishable from the second and had the bar quietly
+              claiming "all repos" over a cockpit scoped to one project. */}
+          {workspace ? workspace.split("/").filter(Boolean).pop() : workspace === null ? "all repos" : "…"}
         </span>
-        <span className="text-[8px]" style={{ color: "var(--text4)" }}>▾</span>
+        <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}>▾</span>
       </button>
 
       {/* The live state belongs with what it is about — this project, these
@@ -398,7 +425,7 @@ export function TopBar({
                 notification carries its message. */}
             <span className="text-[10px] truncate opacity-90 min-w-0">{needs!.because}</span>
             {needs!.count > 1 && (
-              <span className="text-[9px] tabular-nums shrink-0 opacity-75" title={`${needs!.count} agents want you`}>+{needs!.count - 1}</span>
+              <span className="text-[10px] tabular-nums shrink-0 opacity-75" title={`${needs!.count} agents want you`}>+{needs!.count - 1}</span>
             )}
             {/* No key advertised. Enter belongs to whatever has focus — a
                 shell, a composer — and binding it globally would take it from
@@ -409,7 +436,7 @@ export function TopBar({
                 screen you could not answer from; the chip opens a panel over
                 itself now and moves nothing, so a glyph promising travel would
                 be the same lie in a smaller font. */}
-            <span className="text-[9px] opacity-75 shrink-0">{needsOpen ? "▴" : "▾"}</span>
+            <span className="text-[10px] opacity-75 shrink-0">{needsOpen ? "▴" : "▾"}</span>
           </button>
         ) : (
           <NoteToast note={note} />
@@ -456,6 +483,34 @@ export function TopBar({
         <button onClick={onOpenPalette} title="Search anything (⌘K)"
           className="hidden sm:block text-[9.5px] px-1.5 py-[1px] rounded shrink-0"
           style={{ color: "var(--text3)", border: edge(16), ...NO_DRAG }}>⌘K</button>
+        {/*
+          * Find a file — shaped like the thing it opens, not like a chip.
+          *
+          * It was a bare ⌕ the size of the ⌘K badge beside it, and it read as
+          * one more status pill: "it is tiny and does not draw the eye". A
+          * search box is the one control everybody recognises without being
+          * told, so it is drawn as one — a field with its placeholder and its
+          * key — even though pressing it opens a palette rather than typing
+          * here. That is the same trade GitHub, Linear and VS Code make in
+          * their headers, and for the same reason.
+          *
+          * It collapses to the glyph on a narrow window, where the meters and
+          * the clock have the better claim on the space.
+          */}
+        <button onClick={onOpenFiles} title={`Find a file (${chordLabel(appChordFor("files.palette"))})`}
+          className="agx-topbar-find group flex items-center gap-2 shrink-0 rounded-md px-2 py-[3px]"
+          style={NO_DRAG}>
+          {/* 14, not 11. A glyph standing in for a whole control is the one
+              thing on a bar that cannot be read at the size of a label. */}
+          <span className="leading-none" style={{ color: "var(--primary)", fontSize: 14 }}>⌕</span>
+          <span className="hidden md:block text-[10.5px] whitespace-nowrap" style={{ color: "var(--text3)" }}>
+            Find a file…
+          </span>
+          <span className="hidden md:block text-[9px] px-1 py-[1px] rounded shrink-0 tabular-nums"
+            style={{ color: "var(--text4)", border: edge(16) }}>
+            {chordLabel(appChordFor("files.palette"))}
+          </span>
+        </button>
         {/* Only in fullscreen. Windowed, the desktop already has a clock two
             centimetres away and a second one is furniture; fullscreen is
             exactly when that one is gone, which is when this earns its place.

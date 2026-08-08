@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { inScope, chatBypassAllowed } from "./config.ts";
-import { startKeepalive, MODEL_RE, SESSION_RE } from "./chat.ts";
+import { startKeepalive, drainStderr, MODEL_RE, SESSION_RE } from "./chat.ts";
 import type { CodexModel, TimelineEntry } from "../../shared/types.ts";
 
 const codexBin = () => Bun.which("codex");
@@ -444,8 +444,8 @@ export function codexStream(cwd: unknown, message: unknown, model: unknown, resu
 
   // Drained from the start, not after exit: a full stderr pipe blocks the child
   // forever, and `codex` is talkative on stderr even on a clean run (it logs a
-  // line per unloadable skill).
-  const stderrText = new Response(proc.stderr as ReadableStream<Uint8Array>).text().catch(() => "");
+  // line per unloadable skill). Readable mid-flight too — see drainStderr.
+  const stderr = drainStderr(proc.stderr as ReadableStream<Uint8Array>);
 
   const enc = new TextEncoder();
   let cancelled = false;
@@ -462,7 +462,9 @@ export function codexStream(cwd: unknown, message: unknown, model: unknown, resu
       let firstByte = false;
       const watchdog = setTimeout(async () => {
         if (firstByte || cancelled) return;
-        const hint = (await Promise.race([stderrText, Promise.resolve("")])).trim();
+        // Not awaited: what stderr has said so far is the whole point, and a
+        // CLI hung on a login prompt never closes the pipe.
+        const hint = stderr.soFar().trim();
         try {
           controller.enqueue(enc.encode(JSON.stringify({
             type: "agx_error",
@@ -516,7 +518,7 @@ export function codexStream(cwd: unknown, message: unknown, model: unknown, resu
       const code = await proc.exited;
       if (cancelled) return; // a cancelled controller throws on enqueue/close
       if (code !== 0) {
-        const text = (await stderrText).trim();
+        const text = (await stderr.all).trim();
         controller.enqueue(enc.encode(JSON.stringify({ type: "agx_error", code, error: text || `codex exited ${code}` }) + "\n"));
       }
       controller.close();

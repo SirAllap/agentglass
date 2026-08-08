@@ -99,9 +99,27 @@ export interface ProviderStatus {
   /** One line under the badge: who you are signed in as, what is wrong, or what
    *  is left to do. Written for the person, never a raw error body. */
   detail?: string;
+  /**
+   * Something this provider does is degraded, said beside the main verdict
+   * rather than instead of it.
+   *
+   * A provider is not one thing. ClickUp answers a task list AND drives the
+   * card bell, and those fail separately: the panel can be showing a list it
+   * read four minutes ago while the watcher has been 401ing for a week. A
+   * second field rather than prose inside `detail`, because sniffing your own
+   * sentences is how a copy edit becomes a bug — the same reason `pending` is
+   * a field and not an ellipsis.
+   */
+  notice?: string;
   /** Set when the answer came from a cache rather than a live check, so the
    *  page can say "as of" instead of implying it just asked. */
   at?: number;
+  /** This answer is complete enough to act on, but a slower part of it is still
+   *  arriving — ClickUp's task count takes ten seconds of ClickUp's own time.
+   *  The page polls again while any provider says so, rather than leaving an
+   *  ellipsis on screen that never resolves. A field and not a "…" in `detail`,
+   *  because sniffing your own prose is how a copy edit becomes a bug. */
+  pending?: boolean;
 }
 
 export interface ProvidersResponse {
@@ -121,6 +139,15 @@ export interface ProvidersResponse {
  * invent things it has not (a uuid). Two shapes, one list on screen.
  */
 export interface ProviderTask {
+  /**
+   * How many comments the card has, when it has been counted.
+   *
+   * `undefined` means not known — the workspace does not report it on a task,
+   * so it costs a call per card and one may not have landed yet. Zero is a real
+   * answer and must stay distinguishable from it: "no comments" is a fact,
+   * "we could not ask" is not.
+   */
+  comments?: number;
   /** The provider's own id, as a string. Never parsed. */
   id: string;
   /**
@@ -169,6 +196,10 @@ export interface ProviderTask {
    * the workspace's own, one per person — does it when there is no photo.
    */
   people?: {
+    /** ClickUp's own id. Names are not identity — this board has two people
+     *  sharing initials — and a picker that toggles by name is a picker that
+     *  eventually removes the wrong person. */
+    id?: number;
     name: string;
     initials: string;
     /** The colour ClickUp assigned this person. */
@@ -271,6 +302,82 @@ export interface SavedView {
   /** Where it came from, so a stale entry can be re-resolved. */
   url: string;
   addedAt: number;
+  /** This one ships with the app rather than being pasted — see
+   *  `ASSIGNED_VIEW_ID`. It cannot be removed and has no address. */
+  builtin?: boolean;
+}
+
+/**
+ * The board that is not a board: everything assigned to you.
+ *
+ * Pasting an address is the right way to open a *board*, and it is the wrong
+ * way to open the one list every person already has. "Assigned to me" lives at
+ * `/{workspace}/my-work/tasks`, which names no view and no list — there is
+ * nothing in that address to resolve, which is why pasting it could only ever
+ * be refused. So it is not resolved: it is a query we already know how to ask,
+ * given a token, and it is always on the bar.
+ *
+ * Kept as a reserved id rather than a flag on the response so that everything
+ * downstream — the cache on disk, "which board was I on", the chip you click —
+ * keeps working with no special case. The `me:` prefix cannot collide: ClickUp's
+ * view ids are digits and hyphens.
+ *
+ * It is the slow one, and knowingly: about twelve seconds against a real
+ * workspace versus one and a half for a view, because it filters an entire
+ * organisation by assignee rather than reading something already scoped. That
+ * is what the disk cache is for — it opens on what you last saw and corrects
+ * itself behind you.
+ */
+export const ASSIGNED_VIEW_ID = "me:assigned";
+export const ASSIGNED_VIEW_NAME = "Assigned to me";
+
+/**
+ * Where a list sits in the workspace, as ClickUp's own breadcrumb reads it.
+ *
+ * Space → Folder → List. It arrives on `GET /list/{id}`, which is already
+ * fetched for the statuses, so this costs nothing extra — which is the only
+ * reason it is worth having: "which board is this card even on" is a question
+ * a list of thirteen cards from eight lists asks constantly, and one that used
+ * to need a trip to the browser to answer.
+ */
+export interface ListPlace {
+  space?: string;
+  /**
+   * Absent for a folderless list.
+   *
+   * ClickUp answers for those with a placeholder folder marked `hidden`, whose
+   * name is an id-like string nobody has ever seen in their own workspace.
+   * Showing it would invent a level of hierarchy that does not exist, so it is
+   * dropped — the same thing ClickUp's own breadcrumb does.
+   */
+  folder?: string;
+  list: string;
+}
+
+/**
+ * What this machine's ClickUp is set up with — the boards, and how they are
+ * allowed to be touched.
+ *
+ * Cheap on purpose: every field is read from the local store, so a surface that
+ * only wants to know "is there a ClickUp here at all" can ask without spending
+ * anything against a workspace's rate budget.
+ */
+export interface ClickUpBoards {
+  views: SavedView[];
+  /** The board on screen when you last looked. */
+  current?: string;
+  /**
+   * What this workspace's card ids look like — `ORBIT-`, hyphen included.
+   *
+   * Derived from cards already read, so it is EMPTY until a board has loaded
+   * once. Empty means "unknown", not "no prefix": a reader may not use it to
+   * decide that some id is not one of ours.
+   */
+  prefix?: string;
+  writeEnabled: boolean;
+  /** Forced on by the environment rather than chosen here, so the UI says so
+   *  instead of offering a switch that will not stay off. */
+  writeForced?: boolean;
 }
 
 /** The statuses a list accepts, in the workspace's own order and words. */
@@ -280,6 +387,18 @@ export interface ListStatus {
   type: string;
   orderindex: number;
   color?: string;
+}
+
+/** Somebody who can be put on a card: the members of the list it lives in.
+ *  Same shape as an assignee, because they become one. */
+export interface ListMember {
+  id: number;
+  name: string;
+  initials: string;
+  color?: string;
+  avatar?: string;
+  /** The connected account, which the picker floats to the top. */
+  me?: boolean;
 }
 
 /** A custom field on a list, and its options when it has them. */
@@ -303,9 +422,18 @@ export interface ViewTasksResponse {
    *  gave no list — the picker then has nothing to offer, and says so. */
   statuses: ListStatus[];
   fields: ListField[];
+  /** Where the board's own list sits — Space / Folder / List. Absent for the
+   *  built-in board, whose rows come from many lists; those carry their own. */
+  place?: ListPlace;
   view?: SavedView;
   error?: string;
   unauthorised?: boolean;
+  /** There was more behind this than we were willing to follow. Said out loud,
+   *  because a list that silently stops reads as "that is all of them". */
+  truncated?: boolean;
+  /** These rows are what we had; a fresh read is running behind them. The panel
+   *  murmurs rather than blocks — see readView. */
+  revalidating?: boolean;
   at: number;
 }
 
@@ -315,5 +443,32 @@ export interface TaskDetail {
   description: string;
   subtasks: ProviderTask[];
   checklists: { name: string; items: { name: string; done: boolean }[] }[];
-  comments: { id: string; who: string; text: string; at: number }[];
+  comments: {
+    id: string; who: string; text: string; at: number;
+    /** How many replies the thread has, from the workspace's own count. */
+    replies?: number;
+    /**
+     * The replies themselves, fetched with the card rather than on demand.
+     *
+     * On demand was the obvious design and it is the wrong one here: the row
+     * shows the faces of whoever answered BEFORE anything is expanded, which is
+     * most of what the count is for — "did the person I asked reply, or was it
+     * the bot again". Fetching on click would leave that unanswerable until
+     * after the click that the faces exist to make unnecessary.
+     */
+    replyList?: TaskReply[];
+  }[];
+}
+
+/** One reply in a comment thread. */
+export interface TaskReply {
+  id: string;
+  who: string;
+  text: string;
+  at: number;
+  /** For the face on the row. Initials are the fallback the workspace itself
+   *  uses when somebody has no picture. */
+  avatar?: string;
+  initials?: string;
+  color?: string;
 }

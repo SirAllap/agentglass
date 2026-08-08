@@ -11,7 +11,8 @@
 // held connection is no longer the only place a pending request exists — a hook
 // whose connection dropped can re-attach with awaitGate(id).
 import type { PendingGate } from "../../shared/types.ts";
-import { pushGate } from "./alerts.ts";
+import { pushGate, describeSession } from "./alerts.ts";
+import { paneForSession } from "./panewt.ts";
 import { recordGate, resolveGateRow, undecidedGates, getGate } from "./db.ts";
 export type GateDecision = "allow" | "deny";
 export type GateOutcome = { decision: GateDecision; reason: string };
@@ -115,8 +116,18 @@ export function submitGate(
   // later, the request still exists somewhere a restart can find it.
   recordGate({ id, source_app, session_id, tool_name, summary, created, expires });
   return new Promise((resolve) => {
-    waiters.set(id, { id, source_app, session_id, tool_name, summary, created, expires, resolve, timer: arm(id, expires) });
-    pushGate(`${source_app}:${session_id.slice(0, 8)}`, tool_name, summary, id);
+    waiters.set(id, { id, source_app, session_id, tool_name, summary, created, expires,
+      // Resolved once, here, so the dashboard and the phone say the same thing
+      // about the same request rather than each composing its own name.
+      where: describeSession(source_app, session_id), pane: paneForSession(session_id) ?? undefined, resolve, timer: arm(id, expires) });
+    // The checkout and the tmux window, not a project name and eight
+    // characters of a UUID. This is the alert that wakes a phone and expects a
+    // decision from the lock screen; it was the least readable of the lot.
+    //
+    // The gate id no longer rides along: it existed for the two buttons on a
+    // Web Push notification, and that whole path is gone. The pane does, and is
+    // a destination rather than an answer.
+    pushGate(describeSession(source_app, session_id), tool_name, summary, paneForSession(session_id) ?? undefined);
     onChange();
   });
 }

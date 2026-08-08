@@ -25,6 +25,9 @@ export interface IngestBody {
   /** Authoritative cost for this event when the sender already knows it. */
   reported_cost_usd?: number;
   payload?: Record<string, unknown>;
+  /** The tmux pane the agent is running in (`%3`), when the sender is inside
+   *  one. Only the hook can know this — see panewt.ts. */
+  tmux_pane?: string;
   /** Optional transcript array (assistant/user messages with `usage`). */
   chat?: unknown[];
   summary?: string;
@@ -359,7 +362,235 @@ export interface TmuxWindow {
    * it exists for the one sweep between the keystroke and the panel reacting.
    */
   ask?: "rename" | "move";
+  /**
+   * A phone is looking at a pane in this window right now.
+   *
+   * Not something tmux reports — it is read back off our own grouped sessions,
+   * which are named after the pane they joined. It is here because a phone is
+   * otherwise completely invisible from the desk: it shares the window, so what
+   * it does (a reflow, a moved cursor, a pane that scrolls on its own) arrives
+   * with nothing to attribute it to. Absent, rather than false, when nobody is.
+   */
+  phone?: boolean;
+  /**
+   * The agent running in one of this window's panes finished its turn, and the
+   * desk has not looked at this tab since.
+   *
+   * Derived server-side from the transcript's own end-of-turn event (`Stop`),
+   * not from tmux's activity flag: the flag fires on any output — an agent still
+   * working, nvim redrawing, every window at once when the desk re-attaches —
+   * none of which is "done". A pane with no agent never sets this. Cleared the
+   * moment the tab becomes the active one (you looked). Absent when not done.
+   */
+  agentDone?: boolean;
+  /**
+   * How big tmux is drawing this window right now.
+   *
+   * Here because `phone` cannot answer the question the desk actually has. A
+   * phone that attached without asking for a fit costs the desk nothing, so a
+   * notice fired on `phone` would cry wolf on the common case; the observable
+   * that matters is *this window is narrower than my terminal*, and it is this
+   * pair against the client size on the same frame.
+   *
+   * Compare COLUMNS only. Measured: a 200x50 client gives a 200x49 window
+   * because tmux spends a row on the status line, so a rows comparison
+   * false-positives by one on every desk that has a bar.
+   *
+   * Absent, rather than 0, when tmux did not answer with a size — a 0 reads as
+   * "narrower than everything" and would put the notice on a window nobody has
+   * touched. Guard for it (`w.cols && w.cols < client.cols`) rather than
+   * defaulting it.
+   */
+  cols?: number;
+  rows?: number;
 }
+
+/**
+ * A tmux pane in the window on screen, and where it sits on the grid.
+ *
+ * Reported because the app cannot see it any other way. tmux draws its splits
+ * INSIDE one terminal — a single xterm, one DOM element — so from the browser
+ * there is nothing to hover: no element per pane, no boundary, no hit test.
+ * With the geometry in hand the pointer's cell answers "which pane is this",
+ * and tmux is told to select it.
+ *
+ * Bounds are inclusive cell coordinates in the window's own grid, exactly as
+ * tmux reports them, and that grid is the terminal's — so a cell in the xterm
+ * is a cell here with no conversion.
+ */
+export interface TmuxPane {
+  /** tmux's own id (`%7`), which is what `select-pane` takes. */
+  id: string;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  active: boolean;
+  /**
+   * The window has a pane zoomed.
+   *
+   * Carried on every pane because it invalidates all of their geometry at once:
+   * a zoomed pane covers the window while the others still report the bounds
+   * they had, so more than one pane claims the same cell and "which pane is
+   * under the pointer" has no answer worth acting on.
+   */
+  zoomed: boolean;
+}
+
+/**
+ * The /terminal/pty protocol, server → client.
+ *
+ * The newest wire in the app and, until this, the only one with no contract at
+ * all: the server hand-rolled each frame inside `ctl()`, the desk declared a
+ * bag of optional fields at its `onmessage`, and the phone declared a DIFFERENT
+ * bag at its own. Three descriptions of one protocol, and only ever two of them
+ * were edited together — which is not a hypothesis. `TmuxWindow` above is the
+ * payload of the `tmux` frame and has been in here all along; the frame that
+ * carries it was not.
+ *
+ * What that cost, concretely: rename `by` on the `pane` frame, or fold `cols`
+ * and `rows` into a `size` object, and the server and the desk stay green while
+ * the phone silently loses its "you are seeing 80 of 200 columns" hint and
+ * keeps a fitted UI over a window that is no longer fitted — the exact failure
+ * TerminalView.tsx's own comment records as having shipped once.
+ *
+ * A discriminated union rather than one wide interface, so each end must narrow
+ * on `t` before it can read a field, and so a field can only be read from the
+ * frame that actually carries it.
+ *
+ * Binary frames are not in here and cannot be: they are raw pty bytes with no
+ * envelope, which is the point of them.
+ */
+export type PtyServerFrame =
+  /**
+   * The shell is up. Sent exactly once per socket.
+   *
+   * `pane` is the tmux window's REAL size and is present only for a pane
+   * attach: a phone needs it to know it is looking at a slice, because without
+   * a fit tmux renders at the desk's width and the columns past the phone's own
+   * never arrive. `resize` is false on the backends with no pty behind them,
+   * where there is no TIOCSWINSZ to make.
+   */
+  | { t: "ready"; mode: "pty" | "pipe"; shell: string; cwd: string; resize: boolean; pane?: { cols: number; rows: number } }
+  /**
+   * The window changed size under an attach that is already open.
+   *
+   * The second writer of what `ready.pane` said once. `fit` is whether this
+   * client is still the one the window is sized to, and `by` is who moved it.
+   *
+   * `"phone"` is this client's own width control coming back as a fact. It is
+   * not bookkeeping: `window-size largest` means the window is as wide as the
+   * widest client, so asking for 60 columns moves the real window ONLY when
+   * nothing wider is attached — and nothing used to say which of those had
+   * happened. The screen inferred it by comparing the one size it had ever been
+   * told against the width it was asking for when it was told, and at a fresh
+   * attach those are equal for a reason that has nothing to do with this phone:
+   * an 80-column desk and an 80-column default. So a phone at 60 in front of an
+   * 80-column desk claimed the window was 60 "for the computer too" while
+   * twenty columns were falling off the right. Answering with the window's real
+   * size after every resize is what makes the claim checkable instead of
+   * guessed.
+   */
+  | { t: "pane"; cols: number; rows: number; fit: boolean; by: "desk" | "phone" }
+  /**
+   * tmux, as the server's twice-a-second sweep sees it.
+   *
+   * `session`, `prefix` and `client` ride only on the active frame — there is
+   * no session to name when tmux has gone — so they are optional here and the
+   * inactive frame is `{ active: false, windows: [], panes: [] }`.
+   */
+  | { t: "tmux"; active: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; session?: string | null; prefix?: string[]; client?: { cols: number; rows: number } | null }
+  /** The shell ended by itself. The socket closes right behind this. */
+  | { t: "exit"; code: number | null }
+  /** The server is refusing, and saying why — "that pane is gone", a disabled
+   *  terminal, a shell that would not spawn. The one control frame the phone
+   *  puts on screen verbatim, because it is an answer somebody can act on. */
+  | { t: "fatal"; error: string };
+
+/**
+ * The /terminal/pty protocol, client → server.
+ *
+ * Everything under `t: "tmux"` is something a keybinding could already do, so
+ * none of it adds capability to a socket that already carries a shell. Note
+ * what is NOT here: a command string. The client sends a pull request number,
+ * or a directory and a boolean, and the server builds what actually executes —
+ * see ptyMessage, where that division is the security boundary.
+ */
+export type PtyClientFrame =
+  /** Keystrokes, straight to the shell's stdin. */
+  | { t: "in"; d: string }
+  /** This client's grid. Also reflows the tmux window when the attach asked
+   *  for a fit — see `fitWindow`. */
+  | { t: "resize"; cols: number; rows: number }
+  /** Show or hide tmux's own status line while the panel is drawing its own. */
+  | { t: "tmux"; cmd: "status"; visible?: boolean }
+  /** Focus-follows-mouse inside tmux. The narrowest command here on purpose:
+   *  it is the only one sent without a click behind it. */
+  | { t: "tmux"; cmd: "selectpane"; pane: string }
+  /**
+   * Move the pane's scrollback by `lines` — negative back into history.
+   *
+   * A COUNT, not a key. That distinction is the whole of it: a finger on a
+   * phone used to be turned into wheel events, and xterm answers a wheel on the
+   * alternate screen with no scrollback by sending a CURSOR KEY — measured
+   * through the shipped page against a real pane running `cat -v`, one drag
+   * delivered 53 of them, a mix of ESC[B and ESC O B. At a shell those walk
+   * history onto the prompt; in an agent's TUI they move the selection, and one
+   * of the things they can move is an Allow/Deny gate. A scroll must never be
+   * able to become a keystroke a program can act on, so when nothing is
+   * listening for a mouse the page stops synthesising input altogether and asks
+   * for this instead. The server drives tmux's own copy mode, which is exactly
+   * what tmux does for a wheel when it HAS the mouse — the same intrusion on the
+   * shared pane, reached without putting bytes on the pane's stdin.
+   */
+  | { t: "tmux"; cmd: "scroll"; lines: number }
+  /** Open a review of pull request `number` in a window of the user's tmux.
+   *  A NUMBER and a directory: the prompt and the binary are the server's. */
+  | { t: "tmux"; cmd: "review"; number: number; root: string }
+  /** Start work on an issue in a window of the user's tmux. `agent` opens the
+   *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
+   *  `sessionTitle` sanitises before it reaches an argv array. */
+  | { t: "tmux"; cmd: "issue"; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string }
+  /** The tab strip's four window commands, plus take-over. Kept in step with
+   *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
+  /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
+   *  reason it exists: with a bigger client attached, `window-size largest`
+   *  leaves the bottom of the pane below the panel. */
+  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit"; window?: string; name?: string;
+      /** `fit` only: the asking panel's own grid. Range-checked on the server —
+       *  it ends up in a `resize-window`, so it is a number to validate rather
+       *  than to trust. */
+      cols?: number; rows?: number };
+
+/**
+ * Every key any member of a union carries, and what that key can hold.
+ *
+ * Generic on purpose and not written against `PtyClientFrame` directly: a
+ * conditional type only distributes over a naked TYPE PARAMETER, so the
+ * concrete-union spelling of this quietly collapsed to `keyof (A | B | …)` —
+ * the keys COMMON to every frame, which is `t` and nothing else. Measured: the
+ * server stopped compiling on fifteen lines that read a field the wire has
+ * carried all along.
+ */
+type UnionKeys<T> = T extends unknown ? keyof T : never;
+type UnionValue<T, K extends PropertyKey> = T extends unknown ? (K extends keyof T ? T[K] : never) : never;
+
+/**
+ * A client frame as it comes off the socket: every field a maybe.
+ *
+ * Deliberately NOT `PtyClientFrame` itself, and this is a rule about the server
+ * rather than a convenience. `JSON.parse` returns whatever a client felt like
+ * sending; asserting it into the union above would tell the compiler that
+ * `msg.d` is a string and `msg.cwd` is a path, and every runtime guard on this
+ * socket would stop being required by anything. This socket is reachable from
+ * the UI, so those guards are the whole defence.
+ *
+ * Derived from the union rather than written out again, because a second list
+ * of the same field names is precisely what this contract exists to delete: a
+ * rename in `PtyClientFrame` takes the key out of here, and the server stops
+ * compiling at the line that reads it.
+ */
+export type PtyClientMessage = { [K in UnionKeys<PtyClientFrame>]?: UnionValue<PtyClientFrame, K> };
 
 /** A tool call held at the gate, awaiting a remote approve/deny. */
 export interface PendingGate {
@@ -369,6 +600,18 @@ export interface PendingGate {
   tool_name: string;
   summary: string;
   created: number;
+  /**
+   * Who is asking, in words — "agentglass · scratch:1 «AI»".
+   *
+   * Composed on the server because only the server can: the checkout comes from
+   * the pane note the hook recorded, and the window name from tmux. The client
+   * was building `${source_app}:${session_id.slice(0, 8)}` instead, which is a
+   * project name and eight characters of a UUID and identifies nothing on a
+   * machine with thirty worktrees of that project.
+   */
+  where?: string;
+  /** The tmux pane it is running in, so the notification has somewhere to go. */
+  pane?: string;
 }
 
 /** A gate request that has been resolved. `resolution` is who resolved it:
@@ -622,9 +865,31 @@ export type ControlCmd =
    *  mounted to run — see web/src/lib/chatIntent.ts. */
   | { cmd: "chat"; do: "new" };
 
+/** An agent asking the built-in browser to do one thing. Answered by whichever
+ *  window is showing it, over POST /browser/result — see browserdrive.ts. */
+/** What the Agent browser pane reports. Mirrors browseruse.ts, which explains
+ *  why a symlink and a copy need different words for being broken. */
+export interface BrowserUseStatus {
+  cli: { state: "installed" | "dangling" | "missing"; path: string; target: string | null };
+  skill: { state: "current" | "stale" | "missing" | "unshipped"; path: string; shipped: string | null };
+  windows: number;
+  desktop: boolean;
+}
+
+export interface BrowserAskFrame {
+  id: string;
+  /** Kept in step with BrowserOp in server/src/browserdrive.ts by hand, and the
+   *  compiler notices when it drifts: the server assigns one to the other. */
+  op:
+    | "open" | "read" | "click" | "type" | "wait" | "shot"
+    | "back" | "forward" | "scroll" | "press" | "text";
+  args: Record<string, unknown>;
+}
+
 /** WebSocket frames. */
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
+  | { type: "browser"; data: BrowserAskFrame }
   /** The open-tool list again, with fresh evidence. Pushed on a timer while any
    *  call is open: evidence is a claim about *now*, and one taken at connect
    *  time is worth nothing thirty seconds later. */
@@ -640,6 +905,8 @@ export type WsFrame =
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
   | { type: "ci"; data: CiVerdict }
+  /** A ClickUp card of yours was assigned or moved — see CardNote. */
+  | { type: "card"; data: CardNote }
   /** One of agentglass's own push alerts (a gate hold, a permission wait, a tool
    *  error) — the same thing the server would hand to notify-send. Broadcast so a
    *  connected client can raise a NATIVE OS notification, which Electron routes to
@@ -654,6 +921,46 @@ export interface AlertNote {
   body: string;
   /** freedesktop urgency: 0 low, 1 normal, 2 critical. */
   urgency: 0 | 1 | 2;
+  /**
+   * The tmux pane the agent this is about is sitting in, when one is known.
+   *
+   * What makes the notification somewhere to go rather than something to read.
+   * Recorded by the hook that fired the event, so it travels WITH the news
+   * instead of being guessed from it afterwards.
+   */
+  pane?: string;
+}
+
+/**
+ * A ClickUp card of yours that moved, derived rather than received.
+ *
+ * ClickUp has no notifications API, so this is what a poll can honestly say —
+ * see server/src/clickupwatch.ts. There is no "who": the query answers with
+ * cards, not with an activity feed, and naming a person would be a guess.
+ */
+export interface CardNote {
+  /**
+   * Newly assigned to you, already yours and moved, commented on, or a comment
+   * that named you.
+   *
+   * A mention is an id match on a `tag` block, not a search for your name — a
+   * workspace with two Davids in it makes that difference the whole feature.
+   */
+  kind: "assigned" | "status" | "comment" | "mention";
+  /** ClickUp's own id, which is what opens the card. */
+  id: string;
+  /** What a person calls it — `ORBIT-1042` — falling back to the internal id. */
+  label: string;
+  title: string;
+  status: string;
+  /** The status it left, on a `status` note. */
+  was?: string;
+  /** Who wrote it, on a `comment` or `mention`. Comments carry an author;
+   *  assignments and status changes do not, so those never claim one. */
+  who?: string;
+  /** What they said, trimmed to a line. */
+  said?: string;
+  url?: string;
 }
 
 /** The aggregate outcome of a PR's checks, once every one of them is terminal. */
@@ -665,6 +972,15 @@ export interface CiVerdict {
   /** Named, so the message can say what broke instead of just that something did. */
   failing: string[];
   url: string;
+  /**
+   * Somebody with write access has approved it.
+   *
+   * Carried so the client can be told about checks only on the pull requests
+   * that are about to merge — which is when a check result is a thing to act
+   * on rather than a thing to glance at. Decided here because the poll has the
+   * review decision in hand and the notification path does not.
+   */
+  approved: boolean;
 }
 
 // --- commit composer (live git working-tree) ---------------------------------
@@ -1236,10 +1552,114 @@ export type ConflictBlock = {
   base?: string[];
   ourLabel: string;
   theirLabel: string;
+  /**
+   * Raw 1-based line numbers of the first line of each side, and of the
+   * closing `>>>>>>>`.
+   *
+   * Raw, meaning the numbers the file has on disk with the markers still in
+   * it — the same ones nvim shows when the panel jumps you there. Computed on
+   * the server so the client never re-derives them and drifts.
+   */
+  ourLine?: number;
+  theirLine?: number;
+  endLine?: number;
 };
 
-/** What to write for one block. `both` keeps ours then theirs. */
-export type BlockChoice = "ours" | "theirs" | "both" | "theirs-first";
+/**
+ * A conflicted file as alternating runs: text git left alone, and the regions
+ * it could not decide.
+ *
+ * The parser always produced this; the old endpoint threw the text away and
+ * sent only the conflicts, which is why the screen showed fragments with no
+ * idea what surrounded them.
+ */
+export type ConflictSegment =
+  | { kind: "text"; from: number; lines: string[] }
+  | { kind: "conflict"; index: number };
+
+export type ConflictFile = {
+  ok: boolean;
+  segments: ConflictSegment[];
+  blocks: ConflictBlock[];
+  /** Lines in the file, so the caller can decide to render it in a window. */
+  lines: number;
+  /**
+   * Fingerprint of the file exactly as parsed.
+   *
+   * A choice made against one parse must never be written against another: if
+   * anything touched the file in between — an agent in tmux, nvim, a rerun of
+   * the merge — the block indices point somewhere else and applying them
+   * resolves the wrong conflict with the wrong side, successfully.
+   */
+  stamp: string;
+  error?: string;
+};
+
+/**
+ * What to write for one block. `both` keeps ours then theirs.
+ *
+ * The four sides cover the conflicts where one branch is simply right. They do
+ * not cover the ordinary case where neither is: two people changed the same
+ * function for different reasons and the answer is a third thing. Without
+ * `{ edit }` those conflicts had to leave the app for an editor, which is most
+ * of the reason the resolver went unused.
+ */
+export type BlockChoice = "ours" | "theirs" | "both" | "theirs-first" | { edit: string[] };
+
+/** What one stopped operation conflicted, including what is already resolved.
+ *  Git keeps none of this once a file is staged, so the server does. */
+export type MergeSessionView = {
+  ok: boolean;
+  /** Identifies this stop; empty when nothing is stopped. */
+  op: string;
+  /** Every file this stop conflicted, relative to the root, as first seen. */
+  files: string[];
+  /** Of those, the ones git still has unmerged right now. */
+  left: string[];
+  /** Of those, the ones resolved through this app rather than elsewhere. */
+  mine: string[];
+  error?: string;
+};
+
+/** One end of a stopped operation: what to call it, and what it actually is. */
+export type MergeSide = {
+  /**
+   * A branch name when the commit is the tip of one — `main`, `origin/master`.
+   * Null when it is not, which is the ordinary case for the commit a rebase or
+   * a cherry-pick is replaying: it is a commit, not a branch, and calling it
+   * one would be a guess.
+   */
+  ref: string | null;
+  sha: string;
+  /** The commit's first line, so a side with no ref can still be named. */
+  subject: string;
+};
+
+/**
+ * Which two things git has stopped between, read from `.git` rather than
+ * derived.
+ *
+ * The panel used to build this sentence from the checkout's *base branch*,
+ * which is a deduction. Merge a branch that is not your base, or cherry-pick,
+ * and it names the wrong ref with complete confidence — the exact failure that
+ * makes somebody resolve a conflict backwards.
+ */
+export type MergeInfo = {
+  ok: boolean;
+  state: GitTreeState;
+  /** What `<<<<<<<` means in this operation. Null when nothing is stopped. */
+  ours: MergeSide | null;
+  /** What `>>>>>>>` means. */
+  theirs: MergeSide | null;
+  /**
+   * Which commit of how many, for the operations that replay a series. A
+   * rebase does not end when the last file is resolved: it stops again on the
+   * next commit, possibly many times.
+   */
+  step?: number;
+  total?: number;
+  error?: string;
+};
 
 /** The notes for one release: the tag annotation the GitHub release was made
  *  from, read from the update clone when there is one and from the releases API
@@ -1259,6 +1679,7 @@ export type UpdateStatus = {
   available: boolean;
   info: {
     version: string;
+    /** HEAD at build time. Says where the build started, not what it contains. */
     commit: string;
     builtAt: string;
     source: string;
@@ -1268,6 +1689,19 @@ export type UpdateStatus = {
      *  not `version`, is what decides whether a published tag is newer. */
     baseTag: string;
     distance: number;
+    /** What the build IS: `9699619` for a tree that was exactly that commit,
+     *  `9699619+dirty.a3f1c2e` for one that was not. This is the field to
+     *  render; `commit` alone once named a commit that lacked the security fix
+     *  the binary actually contained. */
+    stamp: string;
+    /** sha256 over the packaged source tree. "" on builds predating the stamp. */
+    tree: string;
+    dirty: boolean;
+    /** How many packaged files differ from `commit`. */
+    dirtyCount: number;
+    /** Which ones, as `M path`. Desktop only — empty for a browser or a phone,
+     *  because it names work in flight in the developer's checkout. */
+    dirtyFiles: string[];
   };
   branch: string;
   behind: number;
@@ -1331,6 +1765,21 @@ export interface PrReviewer {
   login: string;
   isTeam?: boolean;
 }
+
+/**
+ * What a BY-BRANCH lookup can promise, which is much less than a list row.
+ *
+ * `prsForBranch` asks `gh` for the cheap field set on purpose — the check
+ * rollup is a separate GraphQL walk per pull request, measured at four times
+ * the cost of everything else together — so seven of `PrSummary`'s fields are
+ * simply not there. It used to be cast to `PrSummary` anyway, and a consumer
+ * that believed the cast and read `checks.failure` off it took the whole Source
+ * control view to a black screen. The guard for that lives in one component;
+ * this is the guard for every component after it, at compile time.
+ */
+export type PrBranchSummary = Pick<PrSummary,
+  "number" | "title" | "author" | "state" | "isDraft" |
+  "headRefName" | "baseRefName" | "url" | "updatedAt" | "reviewDecision">;
 
 export interface PrSummary {
   number: number;
@@ -1525,6 +1974,71 @@ export interface PrCheckJob {
 
 export interface PrChecklistItem { checked: boolean; text: string }
 
+/**
+ * What "Update branch" can do to the copy of that branch on this machine.
+ *
+ * The button merges the base into the head ON GITHUB, so the moment it
+ * succeeds the local copy of that branch is a commit behind the remote it
+ * tracks — and nothing said so. These are the only outcomes worth having
+ * a word for, and only one of them is a write:
+ *
+ *   absent    no local copy of this branch at all — nothing to sync
+ *   ff        the local branch can be fast-forwarded onto the remote
+ *   diverged  the local branch has commits GitHub does not have, so after
+ *             GitHub's merge the two histories can no longer fast-forward
+ *   dirty     it is checked out somewhere with uncommitted changes
+ *   busy      that checkout is mid-merge, mid-rebase or conflicted
+ *
+ * Everything except `ff` is a sentence to show, never an operation to try.
+ */
+export type PrLocalSync = "absent" | "ff" | "diverged" | "dirty" | "busy";
+
+/** The local copy of a pull request's head branch, read with git alone — no
+ *  network, so it costs nothing to ask alongside the behind count. */
+export interface PrLocalHead {
+  branch: string;
+  exists: boolean;
+  /** Absolute path of the worktree it is checked out in, if any. A branch
+   *  nobody has checked out is the easy case: its ref can be moved forward
+   *  without touching a working tree at all. */
+  worktree?: string;
+  /** Commits the local branch has that its remote does not. */
+  ahead: number;
+  /** Commits the remote has that the local branch does not — before GitHub
+   *  adds the merge this button is about to make. */
+  behind: number;
+  /** Uncommitted changes in that worktree. False when it is not checked out:
+   *  somebody else's dirty tree is not this branch's problem. */
+  dirty: boolean;
+  sync: PrLocalSync;
+}
+
+/** The three ways GitHub will land a pull request. */
+export type PrMergeMethod = "squash" | "merge" | "rebase";
+
+/**
+ * What the repository itself allows, rather than what we assume.
+ *
+ * Every one of these is a repository setting, and each of them used to be
+ * guessed: the panel hard-coded "squash" as the method, offered auto-merge on
+ * repositories that forbid it, and always asked gh to delete the head branch —
+ * on a repository that deletes it on merge, that is a second call whose only
+ * possible outcomes are "already gone" and a failure that reads as if the
+ * merge itself failed.
+ */
+export interface PrMergePolicy {
+  /**
+   * The methods this repository permits, in GitHub's own precedence — the
+   * first is the one its merge button arrives already checked on, which is
+   * what "just press the blue button" means for whoever wrote the convention.
+   */
+  allowed: PrMergeMethod[];
+  /** "Allow auto-merge", off by default on a new repository. */
+  auto: boolean;
+  /** The repository deletes the head branch itself once a PR merges. */
+  deletesBranch: boolean;
+}
+
 export interface PrDetail extends PrSummary {
   body: string;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
@@ -1573,6 +2087,14 @@ export interface PrDetail extends PrSummary {
   createdAt?: string;
   /** You may edit the title/body. */
   viewerCanUpdate?: boolean;
+  /** What this repository allows. Optional because a cached detail taken
+   *  before this existed, and the demo fixture, have no opinion — the UI falls
+   *  back to offering all three rather than to an empty menu. */
+  mergePolicy?: PrMergePolicy;
+  /** Who owns the head branch. GitHub's own merge commit names it
+   *  ("Merge pull request #7 from owner/branch"), and a merge made from here
+   *  should read like every other merge on the base branch. */
+  headRepoOwner?: string;
   /** What the page could not show because a list hit its page size. Silence
    *  here used to be a lie: a hundred-and-first file simply vanished. */
   truncated?: { files?: number; commits?: number; comments?: number; threads?: number; checks?: number };
@@ -1867,6 +2389,35 @@ export interface RemoteStatus {
    *  open right now, which is the difference between "is here" and "was here". */
   devices: RemoteDevice[];
   firewall: FirewallHint | null;
+  /** This machine's tailnet identity, and whether we could confirm it. Optional
+   *  only so a client can talk to an older server without crashing. */
+  tailnet?: TailnetHealth;
+}
+
+/**
+ * What the server knows about this machine's Tailscale name, and how it knows.
+ *
+ * The gate that admits the phone's WebSocket reads this set, so an empty one is
+ * not cosmetic — it refuses `/stream` while REST keeps answering, which is the
+ * shape of "the app looks alive and stopped buzzing". `problem` is what makes
+ * "no tailnet" and "could not ask tailscale" different answers on screen; they
+ * used to be the same empty set. The server's remote.ts is the authority.
+ */
+export interface TailnetHealth {
+  /** `tailscale` was on PATH at the last look. */
+  installed: boolean;
+  /** Names this machine is trusted to answer to right now. */
+  names: string[];
+  /** When the last ANSWER landed. 0 ⇒ there has never been one. */
+  at: number;
+  /** Set while tailscale cannot be asked: `names` is the last known value, held
+   *  on a deadline, not a fresh one. */
+  problem?: string;
+  /** Consecutive failed probes. */
+  fails?: number;
+  /** The hold expired — `names` is empty because the server gave up on it, not
+   *  because the tailnet is empty. A phone on its MagicDNS name is refused. */
+  dropped?: boolean;
 }
 
 // --- what this machine is doing, and what is in this checkout ---------------
@@ -1947,8 +2498,74 @@ export interface PortEntry {
   /** Its working directory is gone. Whatever checkout it was serving has been
    *  deleted underneath it, so nothing it is doing can still matter. */
   cwdGone: boolean;
+  /**
+   * What started it, nearest first — `bun ← bash ← agentglass-server`.
+   *
+   * `fromAgent` answers yes-or-no; this answers "by what". The difference
+   * matters when the chain is the explanation: a `bun` under a login shell is
+   * something left running, and the same `bun` under this app's own sidecar
+   * came out of an agent's terminal and inherited that terminal's environment
+   * — which is how one ended up bound to every interface carrying a token
+   * nobody meant to hand out.
+   *
+   * Empty for other users' processes and for orphans whose parents have gone.
+   */
+  ancestry: Forebear[];
+  /** Bound to every interface rather than to loopback. Stated rather than left
+   *  to be spotted in `addr`: it is the one fact on the row whose consequence
+   *  leaves the machine. */
+  publicBind: boolean;
+  /** The binary behind it has been deleted or replaced on disk — the kernel
+   *  keeps the inode alive, so it is still running code you no longer have.
+   *  Usually a rebuild underneath a server somebody forgot to restart. */
+  exeGone: boolean;
 }
+/** One rung of a process's ancestry. */
+export interface Forebear { pid: number; name: string }
 export interface PortsReport { ports: PortEntry[]; mine: number; external: number; error?: string }
+
+/**
+ * A git lock file, and whether anything is behind it.
+ *
+ * Git does not take a kernel lock — it creates a file and relies on O_EXCL, so
+ * the lock IS the file's existence and nothing in it says who made it. The
+ * holder is inferred from the other end: a live `git` working in this checkout.
+ * See server/src/gitlocks.ts.
+ */
+export interface GitLock {
+  /** The checkout it belongs to — a linked worktree in its own right. */
+  repo: string;
+  /** `index.lock`, `HEAD.lock`, `refs/heads/main.lock`. */
+  name: string;
+  path: string;
+  ageSec: number;
+  heldBy: { pid: number; cmd: string } | null;
+  /** Nothing is holding it. Usually means safe to delete; `ageSec` is beside it
+   *  because a two-second-old lock is a git mid-write the scan just missed. */
+  stale: boolean;
+}
+export interface GitLocksReport { locks: GitLock[]; scanned: number; error?: string }
+
+/** One environment variable, with its value withheld when it looks like a
+ *  secret. `null` means hidden; `""` is a real, empty value. */
+export interface EnvVar { key: string; value: string | null; masked: boolean }
+/**
+ * Everything about one process that will not fit on a row.
+ *
+ * The command line in full, what started it, and the environment it was given
+ * — which is where the explanation for a stray process actually lives, and also
+ * where its secrets do. See server/src/procdetail.ts for the masking rule.
+ */
+export interface ProcDetail {
+  pid: number;
+  comm: string;
+  cmd: string;
+  cwd: string | null;
+  ageSec: number | null;
+  ancestry: Forebear[];
+  env: EnvVar[];
+  error?: string;
+}
 
 /** One process worth showing. */
 export interface ProcEntry {
@@ -2003,7 +2620,21 @@ export interface FileEntry {
   status?: string;
 }
 export interface TreeReport { ok: boolean; root: string; rel: string; entries: FileEntry[]; error?: string }
-export interface FindReport { ok: boolean; files: string[]; truncated: boolean; via: string; error?: string }
+export interface FindReport {
+  ok: boolean;
+  files: string[];
+  /** Directories whose path matches too.
+   *
+   *  Typing `guest-checkout-v2` used to answer with the forty files inside
+   *  that folder and never with the folder — which is the one result that says
+   *  "here is the thing you named". Kept apart from `files` rather than mixed
+   *  in, because opening one is a different action: a file opens in the
+   *  viewer, a directory moves the tree. */
+  dirs: string[];
+  truncated: boolean;
+  via: string;
+  error?: string;
+}
 export interface GrepHit { rel: string; line: number; text: string; at: number; len: number }
 export interface GrepReport { ok: boolean; hits: GrepHit[]; files: number; truncated: boolean; via: string; error?: string }
 
@@ -2065,6 +2696,63 @@ export interface AgentPane {
   paneId: string;
   path: string;
   agentCwds: string[];
+  /**
+   * A tmux popup — a session that is only ever shown INSIDE another one.
+   *
+   * Read off the client's TERM (see `nestedSessions` on the server), which is
+   * knowable only while the popup is open, so the route remembers every session
+   * it has ever seen marked. The phone drops these from its strip: a scratchpad
+   * is what you open over your work and dismiss, not a place to go.
+   */
+  popup?: boolean;
+  /**
+   * Somebody has this session on a screen.
+   *
+   * Here, in the contract, and that placement is the whole point. It used to be
+   * declared inline in `listPanes`'s return type, where only the server could
+   * see it — so renaming it typechecked green on the server AND on the desk
+   * (which never reads it) while the phone's `pane.attached === false` filter
+   * quietly became `undefined === false` and stopped firing, putting every
+   * detached session on the machine back into the tab strip. tabs.ts records
+   * that as a bug already fixed once.
+   *
+   * Optional because absent is a THIRD answer the phone acts on: a server too
+   * old to say, whose panes it keeps rather than hides. That is why the test is
+   * `=== false` and not `!attached`.
+   */
+  attached?: boolean;
+  /** The agent session this pane last reported, from the `tmux_pane` its hooks
+   *  carry. An exact answer where `agentCwds` can only offer a directory two
+   *  agents may share — null when nothing ever reported one, which is every
+   *  agent not started under a hook-wired CLI. */
+  agentSession: string | null;
+}
+
+/**
+ * What GET /terminal/panes answers — the desk's pane picker and the phone's
+ * whole tab strip.
+ *
+ * Written down because two of the three ends had their own idea of it: the desk
+ * declared the body inline and left `canAttach` out, the phone typed it as
+ * `{ panes?: unknown }` and cast. Neither could be wrong about a field it did
+ * not name, which is another way of saying neither could notice one changing.
+ */
+export interface PanesResponse {
+  ok: boolean;
+  /** Why there is nothing to point at, when the answer is not ok. The live
+   *  route always answers ok; this is the demo build's sentence. */
+  reason?: string;
+  panes: AgentPane[];
+  /**
+   * This server understands `?pane=` on the terminal socket.
+   *
+   * A build without it ignores the parameter and opens a plain shell, so a
+   * phone tapping a tab gets an empty prompt where the running session should
+   * be, with nothing anywhere to say why. Optional, and checked as
+   * `canAttach !== true` rather than `=== false`, because the build that cannot
+   * do it is exactly the build that does not send the flag.
+   */
+  canAttach?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2168,3 +2856,55 @@ export interface RemindersResponse {
    *  can show its own without a query per row. */
   byTask?: Record<string, Reminder>;
 }
+
+// ---------------------------------------------------------------------------
+// recipes — commands you saved, as opposed to commands we found
+// ---------------------------------------------------------------------------
+
+/**
+ * A hole in a recipe, and what may fill it.
+ *
+ * Typed rather than free text wherever the app already knows the answer: a
+ * `worktree` is chosen from the ones this repo has, so it cannot be misspelled
+ * and cannot be anything else. That is not only convenience — see renderSteps
+ * for why a typed value is also the safe one.
+ */
+export interface RecipeParam {
+  /** What `{{this}}` is called in the steps. */
+  key: string;
+  label: string;
+  /** `flag` is a yes/no — the `--rebuild-fe` of any script. */
+  type: "text" | "choice" | "flag" | "repo" | "worktree" | "branch";
+  /** For `choice`, the closed list. Ignored otherwise. */
+  options?: string[];
+  value?: string;
+}
+
+/**
+ * A command with a name, saved by the person who wrote it.
+ *
+ * The other half of the terminal's command list: `ProjectCommand` is what we
+ * DISCOVER by walking a repo's Makefiles and package.json, and it can only ever
+ * be a single line with no arguments. This is what somebody keeps — several
+ * steps, parameters, and a decision about where it runs.
+ */
+export interface Recipe {
+  id: string;
+  name: string;
+  desc: string;
+  /** In order. A step that fails stops the rest. */
+  steps: string[];
+  /** `repo` narrows it to one checkout and its worktrees. */
+  scope: "global" | "repo";
+  /** The repository root, when scoped to one. */
+  repo?: string;
+  params?: RecipeParam[];
+  /** Long ones belong in tmux, so closing the app cannot take them with it. */
+  tmux?: boolean;
+  /** Ask before running, every time. Set by the author, and forced on by the
+   *  server for anything that reads as destructive. */
+  confirm?: boolean;
+  addedAt: number;
+}
+
+export interface RecipesResponse { recipes: Recipe[] }

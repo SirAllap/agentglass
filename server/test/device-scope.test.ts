@@ -88,9 +88,11 @@ describe("deny by default", () => {
     "/git/status",
     // What a phone is for: answering something that is already asked.
     "/gate/decide", "/chat/send", "/chat/pane/key",
-    // A device managing its own notifications — the mechanism that tells it
-    // there is something to answer.
-    "/push/subscribe", "/push/unsubscribe", "/push/test",
+    // `/push/subscribe`, `/push/unsubscribe` and `/push/test` were here, for a
+    // device managing its own notifications. Web Push is gone and the phone
+    // hears alerts on the socket it already holds, which is a read — so the
+    // set of writes a paired phone may make got smaller, and the test below
+    // is what caught the names being left behind.
   ]);
 
   test("every POST route is full access unless it is one of the named few", () => {
@@ -182,7 +184,11 @@ describe("what each level can actually do", () => {
 describe("the pairing routes themselves", () => {
   test("are reachable without a credential, because handing one out is the point", () => {
     for (const r of ["/pair/info", "/pair/claim", "/pair/collect", "/pair/ticket", "/pair/accept"]) {
-      expect(isAuthExempt(r), r).toBe(true);
+      // From the network too: the phone claiming a ticket is on the network by
+      // definition, and the machine-side steps defend themselves by address
+      // rather than by credential (see atMachine in index.ts).
+      expect(isAuthExempt(r, "remote"), r).toBe(true);
+      expect(isAuthExempt(r, "loopback"), r).toBe(true);
     }
   });
 
@@ -196,13 +202,20 @@ describe("the pairing routes themselves", () => {
     // The register of everything reachable with no credential at all, and why
     // each one is allowed to be. Changing this list is the moment to re-read
     // it, which is the whole point of writing it out rather than deriving it.
-    const OPEN: Record<string, string> = {
-      "/health": "answers a fixed shape, so a shell can find which server owns the port",
+    //
+    // Split by where the caller is, because that is what the rule turns on. A
+    // local hook cannot carry a secret; a stranger on the LAN is not a local
+    // hook, and "it only appends" stopped being a reason the day appending
+    // raised a notification on the owner's phone.
+    const FROM_THIS_MACHINE: Record<string, string> = {
       "/ingest": "append-only: a local hook has no way to carry a secret",
       "/v1/traces": "append-only OTel sink, same reason",
       "/otlp/v1/traces": "append-only OTel sink, same reason",
       "/v1/logs": "append-only OTel sink, same reason",
       "/otlp/v1/logs": "append-only OTel sink, same reason",
+    };
+    const FROM_ANYWHERE: Record<string, string> = {
+      "/health": "answers a fixed shape, so a shell — or a phone that is not paired yet — can find which server owns the port",
       // Receives nothing and stores nothing — it exists to say there is no
       // metrics receiver here. Gating it would turn a silent 404 into a silent
       // 401, which is the same dead end.
@@ -210,12 +223,17 @@ describe("the pairing routes themselves", () => {
       "/otlp/v1/metrics": "refuses, and explains; reads and writes nothing",
     };
     for (const r of ROUTES.filter((r) => !isPairing(r))) {
-      if (r in OPEN) continue;
-      expect(isAuthExempt(r), `${r} no longer needs a credential`).toBe(false);
+      if (r in FROM_ANYWHERE) continue;
+      expect(isAuthExempt(r, "remote"), `${r} is reachable from the network with no credential`).toBe(false);
+      if (r in FROM_THIS_MACHINE) continue;
+      expect(isAuthExempt(r, "loopback"), `${r} no longer needs a credential`).toBe(false);
     }
-    // And nothing on the list has quietly stopped being a route.
-    for (const r of Object.keys(OPEN)) {
-      expect(isAuthExempt(r), `${r} is listed as open but is not exempt`).toBe(true);
+    // And nothing on either list has quietly stopped being a route.
+    for (const r of Object.keys(FROM_THIS_MACHINE)) {
+      expect(isAuthExempt(r, "loopback"), `${r} is listed as open locally but is not exempt`).toBe(true);
+    }
+    for (const r of Object.keys(FROM_ANYWHERE)) {
+      expect(isAuthExempt(r, "remote"), `${r} is listed as open but is not exempt`).toBe(true);
     }
   });
 

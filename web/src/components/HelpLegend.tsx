@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { MOD_KEY } from "../lib/format.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 const EVENTS: [string, string][] = [
   ["Running a tool", "#a78bfa"],
@@ -37,7 +38,7 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
             >
               <div className="flex items-center justify-between mb-3">
                 <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Legend & shortcuts</span>
-                <button onClick={onClose} className="t-dim2 text-[16px] px-2 hover:opacity-70">✕</button>
+                <CloseButton onClick={onClose} />
               </div>
               <div className="grid grid-cols-2 gap-5">
                 <div>

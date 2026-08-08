@@ -21,11 +21,18 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "agx-cu-"));
 const C = await import("../src/credentials.ts");
 const CU = await import("../src/clickup.ts");
+// The write switch lives in clickup-views.json, and without this line that is
+// the DEVELOPER'S OWN — so the suite's answer to "are writes allowed?" depended
+// on a file outside the repository, and a test asserting that a write is
+// refused would pass or fail according to a toggle somebody flipped in the app.
+// The seam already existed; this test simply was not using it.
+const CV = await import("../src/clickupviews.ts");
 
 /** What the stub was asked, so a test can assert on the request as well as the
  *  answer — the header is half of what this module has to get right. */
 let seen: { path: string; auth: string | null }[] = [];
-let reply: (req: Request) => Response;
+// A handler may need to read the request body, which is async.
+let reply: (req: Request) => Response | Promise<Response>;
 
 const server = Bun.serve({
   port: 0,
@@ -62,12 +69,14 @@ beforeEach(() => {
   C.__setCredentialsPath(join(dir, "credentials.json"));
   C.__clearAll();
   CU.__setClickUpBase(BASE);
+  CV.__setViewsPath(join(dir, "clickup-views.json"));
   reply = () => json({});
 });
 afterEach(() => { CU.__reset(); });
 afterAll(() => {
   server.stop(true);
   CU.__setClickUpBase(null);
+  CV.__setViewsPath(null);
   C.__setCredentialsPath(null);
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
@@ -393,6 +402,86 @@ describe("the address you paste", () => {
     // would produce a status picker offering another board's statuses.
     expect(parseViewUrl("https://example.clickup.com/9000001/v/l/6-42-1")?.listId).toBeUndefined();
   });
+
+  it("recognises the My Work page instead of refusing it", () => {
+    // The address of "assigned to me" names no view and no list — it is a
+    // question, not a place — so the resolver used to call it rubbish. It is
+    // also the single likeliest thing anybody pastes.
+    const p = parseViewUrl("https://example.clickup.com/9000001/my-work/tasks")!;
+    expect(p.kind).toBe("assigned");
+    expect(p.workspaceId).toBe("9000001");
+    expect(p.viewId).toBeUndefined();
+    expect(p.listId).toBeUndefined();
+    // The bare page, and the other tabs on it, are the same answer.
+    expect(parseViewUrl("https://example.clickup.com/9000001/my-work")?.kind).toBe("assigned");
+    expect(parseViewUrl("https://example.clickup.com/9000001/my-work/reminders")?.kind).toBe("assigned");
+  });
+
+  it("does not read somebody else's my-work path as ours", () => {
+    expect(parseViewUrl("https://example.invalid/9000001/my-work/tasks")).toBe(null);
+  });
+});
+
+describe("everything assigned to you, which has no view to ask", () => {
+  it("follows its pages and says so when it stops early", async () => {
+    // Three pages, not the ten a view gets: this query takes about twelve
+    // seconds a page against a real workspace, so ten would be two minutes of
+    // spinner. Past three the answer is honest about being short.
+    const full = Array.from({ length: 100 }, (_, i) => ({ ...TASK, id: `t${i}` }));
+    reply = () => json({ tasks: full });
+    const r = await CU.assignedTasks("pk_1_X", "9001", "7");
+    expect(r.ok).toBe(true);
+    expect(r.data!.truncated).toBe(true);
+    expect(r.data!.tasks.length).toBe(300);
+    expect(seen.length).toBe(3);
+  });
+
+  it("stops at the first short page", async () => {
+    reply = () => json({ tasks: [TASK] });
+    const r = await CU.assignedTasks("pk_1_X", "9001", "7");
+    expect(r.data!.truncated).toBe(false);
+    expect(r.data!.tasks.length).toBe(1);
+    expect(seen.length).toBe(1);
+  });
+
+  it("keeps what arrived when a later page fails", async () => {
+    // Half an answer beats none: the panel would otherwise blank a list that
+    // was almost entirely read.
+    let n = 0;
+    reply = () => (n++ === 0
+      ? json({ tasks: Array.from({ length: 100 }, (_, i) => ({ ...TASK, id: `t${i}` })) })
+      : json({ err: "nope" }, { status: 500 }));
+    const r = await CU.assignedTasks("pk_1_X", "9001", "7");
+    expect(r.ok).toBe(true);
+    expect(r.data!.tasks.length).toBe(100);
+    expect(r.data!.truncated).toBe(true);
+  });
+
+  it("reports nothing at all as a failure, not as an empty list", async () => {
+    reply = () => json({ err: "nope" }, { status: 500 });
+    const r = await CU.assignedTasks("pk_1_X", "9001", "7");
+    expect(r.ok).toBe(false);
+    expect(r.data).toBeUndefined();
+  });
+
+  it("brings back the statuses its own rows are in, finished ones last", async () => {
+    /*
+     * There is no single list to ask, so the statuses come from the rows. Order
+     * is `orderindex` — every board numbers its own workflow left to right, so
+     * across lists it is a good hint — with the done ones sorted to the end
+     * regardless, because five kinds of done interleaved with the work is worse
+     * than no order at all.
+     */
+    reply = () => json({ tasks: [
+      { ...TASK, id: "a", status: { status: "in production", type: "done", orderindex: 9, color: "#0a0" } },
+      { ...TASK, id: "b", status: { status: "blocked", type: "custom", orderindex: 3 } },
+      { ...TASK, id: "c", status: { status: "to do", type: "open", orderindex: 0 } },
+      { ...TASK, id: "d", status: { status: "blocked", type: "custom", orderindex: 3 } },
+    ] });
+    const s = (await CU.assignedTasks("pk_1_X", "9001", "7")).data!.statuses;
+    expect(s.map((x) => x.status)).toEqual(["to do", "blocked", "in production"]);
+    expect(s[2]!.color).toBe("#0a0");
+  });
 });
 
 describe("what the status TYPE decides", () => {
@@ -457,6 +546,7 @@ describe("writing to somebody's company board", () => {
     C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
     for (const [what, go] of [
       ["assign", () => CU.assignSelf("abc", true)],
+      ["assign somebody else", () => CU.setAssignee("abc", 9, true)],
       ["status", () => CU.setStatus("abc", "in development")],
       ["field", () => CU.setField("abc", "f1", "opt")],
     ] as const) {
@@ -465,6 +555,104 @@ describe("writing to somebody's company board", () => {
       expect(r.error, what).toContain("switched off");
     }
     // And nothing was sent.
+    expect(seen.length).toBe(0);
+  });
+});
+
+describe("putting somebody else on a card", () => {
+  // Writes are allowed here because the file they are read from is this test's
+  // own — see __setViewsPath above.
+  const allow = () => { C.setCredential("clickup", { token: "pk_1_X", accountId: "7" }); CV.setWritesAllowed(true); };
+
+  it("adds and removes rather than replacing", async () => {
+    // A ClickUp card holds SEVERAL assignees. Sending the whole list would
+    // quietly take off whoever else was on it — which is somebody discovering
+    // by accident that they are no longer on their own card.
+    allow();
+    let body: any = null;
+    reply = async (req) => { body = await req.json(); return json(TASK); };
+    await CU.setAssignee("abc", 9, true);
+    expect(body).toEqual({ assignees: { add: [9] } });
+    await CU.setAssignee("abc", 9, false);
+    expect(body).toEqual({ assignees: { rem: [9] } });
+  });
+
+  it("refuses something that is not a person", async () => {
+    // The id crosses the wire as JSON from the browser; a NaN here would send
+    // `{"add":[null]}` and let ClickUp decide what that means.
+    allow();
+    const r = await CU.setAssignee("abc", Number("nobody"), true);
+    expect(r.ok).toBe(false);
+    expect(seen.length).toBe(0);
+  });
+
+  it("will not overwrite a card somebody else moved first", async () => {
+    // Same precondition the status write has: `updated` is checked before the
+    // write, so two people on one card is a conflict rather than a race.
+    allow();
+    reply = () => json({ ...TASK, date_updated: "1754399999999" });
+    const r = await CU.setAssignee("abc", 9, true, 1754300000000);
+    expect(r.ok).toBe(false);
+    expect(r.conflict).toBe(true);
+  });
+});
+
+describe("who can be put on a card", () => {
+  it("asks the LIST, not the workspace", async () => {
+    // A workspace here holds the whole company. A picker offering all of them
+    // to assign one backend card is a picker nobody uses twice.
+    C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
+    reply = () => json({ members: [{ id: 9, username: "Ana", initials: "AN", color: "#f0f" }] });
+    const r = await CU.listMembers("L1");
+    expect(r.ok).toBe(true);
+    expect(seen[0]!.path).toBe("/list/L1/member");
+    expect(r.data!.members[0]).toMatchObject({ id: 9, name: "Ana", initials: "AN", color: "#f0f" });
+  });
+
+  it("puts you first, then everybody else by name", async () => {
+    // The commonest assignment on any board is your own, and a list that makes
+    // you hunt for yourself is a list that gets used once.
+    C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
+    reply = () => json({ members: [
+      { id: 3, username: "Zoe" }, { id: 7, username: "You" }, { id: 5, username: "Ana" },
+    ] });
+    const r = await CU.listMembers("L1");
+    expect(r.data!.members.map((m) => m.name)).toEqual(["You", "Ana", "Zoe"]);
+    expect(r.data!.members[0]!.me).toBe(true);
+  });
+
+  it("adds YOU when the list does not name you", async () => {
+    // Measured on a real board: a nineteen-member list came back without the
+    // connected account in it. List membership is not the same question as
+    // "who can be assigned here", and without this the picker loses the one
+    // thing the control it replaced could actually do.
+    C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
+    reply = (req) => new URL(req.url).pathname === "/user"
+      ? json({ user: { id: 7, username: "You", email: "you@example.invalid" } })
+      : json({ members: [{ id: 9, username: "Ana" }] });
+    const r = await CU.listMembers("L1");
+    expect(r.data!.members.map((m) => m.name)).toEqual(["You", "Ana"]);
+    expect(r.data!.members[0]).toMatchObject({ id: 7, me: true });
+  });
+
+  it("does not ask who you are when the list already said", async () => {
+    // One call, not two, on the ordinary path.
+    C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
+    reply = () => json({ members: [{ id: 7, username: "You" }] });
+    await CU.listMembers("L1");
+    expect(seen.map((x) => x.path)).toEqual(["/list/L1/member"]);
+  });
+
+  it("drops a member with no name to show", async () => {
+    C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
+    reply = () => json({ members: [{ id: 9 }, { id: 10, username: "Ana" }] });
+    const r = await CU.listMembers("L1");
+    expect(r.data!.members.map((m) => m.id)).toEqual([10]);
+  });
+
+  it("says so rather than guessing when ClickUp is not connected", async () => {
+    const r = await CU.listMembers("L1");
+    expect(r.ok).toBe(false);
     expect(seen.length).toBe(0);
   });
 });
@@ -516,5 +704,81 @@ describe("the pull requests a card produced", () => {
       "https://github.com/acme/widgets", "https://example.invalid/x/y/pull/1"]) {
       expect(prNumberFromUrl(bad), JSON.stringify(bad)).toBe(null);
     }
+  });
+});
+
+describe("which of a card's lists is the sprint", () => {
+  const { sprintOf, looksLikeSprint } = CU;
+
+  it("picks the sprint however the lists happen to be ordered", () => {
+    /*
+     * The bug this replaces, in one assertion. A card in a sprint is in two or
+     * three lists at once and they arrive as one flat array whose order is not
+     * stable — measured on a real workspace, the SAME card answers these two
+     * orders from two endpoints. Taking "the first that is not the primary
+     * list" therefore picked a different answer depending on who asked, and a
+     * column headed SPRINT spent its life saying "Miscellaneous".
+     */
+    const a = sprintOf([{ name: "Miscellaneous" }, { name: "Sprint 138 (26/8/5 - 26/8/11)" }], "Bugs");
+    const b = sprintOf([{ name: "Sprint 138 (26/8/5 - 26/8/11)" }, { name: "Miscellaneous" }], "Bugs");
+    expect(a).toBe("Sprint 138");
+    expect(b).toBe(a);
+  });
+
+  it("takes a sprint with no dates on it", () => {
+    // Real, from the same workspace: requiring the date range would have
+    // dropped this one and shown nothing where there is a sprint.
+    expect(sprintOf([{ name: "Sprint 118" }], "Grasshopper V1")).toBe("Sprint 118");
+  });
+
+  it("finds it when the card's own list IS the sprint", () => {
+    expect(sprintOf([], "Sprint 140 (26/8/12 - 26/8/18)")).toBe("Sprint 140");
+  });
+
+  it("says nothing rather than naming a list that is not a sprint", () => {
+    // The heading says Sprint. A list name under it is not a near miss, it is a
+    // different fact — and guessing is what sent somebody to ClickUp to find
+    // out which sprint a card was really in.
+    expect(sprintOf([{ name: "Bugs" }, { name: "Miscellaneous" }], "Bugs")).toBe(null);
+    expect(sprintOf([], "Backlog")).toBe(null);
+    expect(sprintOf(undefined, null)).toBe(null);
+  });
+
+  it("recognises a workspace that names its sprints something else, if it dates them", () => {
+    // ClickUp appends the range itself, so the range is the portable half of
+    // the signature — a workspace calling them Iterations still gets a column.
+    expect(looksLikeSprint("Iteration 4 (1/1/26 - 1/7/26)")).toBe(true);
+    expect(looksLikeSprint("Projects Purple")).toBe(false);
+  });
+});
+
+describe("an address somebody assembled by hand", () => {
+  const { parseViewUrl } = CU;
+
+  it("finds the id even with two kind tokens in front of it", () => {
+    // Reported from a real paste: an `l` AND an `li`, which is what you get
+    // stitching an address out of two of ClickUp's own forms. The old parser
+    // took `li` as the id and the panel said "ClickUp answered 404" about an
+    // address whose real id was one segment further along.
+    const p = parseViewUrl("https://example.clickup.com/9000001/v/l/li/901715834894")!;
+    expect(p.kind).toBe("list");
+    expect(p.listId).toBe("901715834894");
+  });
+
+  it("lands the same place however the same list is written", () => {
+    const forms = [
+      "https://example.clickup.com/9000001/v/li/901715834894",
+      "https://example.clickup.com/9000001/v/l/li/901715834894",
+    ].map((u) => parseViewUrl(u)?.listId);
+    expect(new Set(forms).size).toBe(1);
+    expect(forms[0]).toBe("901715834894");
+  });
+
+  it("still refuses an address with no id in it at all", () => {
+    for (const bad of [
+      "https://example.clickup.com/9000001/v/l/",
+      "https://example.clickup.com/9000001/v/l/li",
+      "https://example.clickup.com/9000001/v/",
+    ]) expect(parseViewUrl(bad), bad).toBe(null);
   });
 });

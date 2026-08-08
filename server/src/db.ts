@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, chmodSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync } from "node:fs";
+import { homedir, hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type {
   WatchEvent,
@@ -72,6 +72,8 @@ function testDbPath(): string {
 const DB_PATH = process.env.NODE_ENV === "test"
   ? testDbPath()
   : process.env.AGENTGLASS_DB || defaultDbPath();
+/** Where the history actually is, for the one page that says so out loud. */
+export const dbPath = (): string => DB_PATH;
 const db = new Database(DB_PATH, { create: true });
 // The DB holds full prompts, file contents and command output in cleartext.
 // Default file perms (0644) leave it world-readable; only $HOME being 0700
@@ -81,14 +83,21 @@ const db = new Database(DB_PATH, { create: true });
 for (const suffix of ["", "-wal", "-shm"]) {
   try { chmodSync(DB_PATH + suffix, 0o600); } catch { /* not created yet — created 0600 once WAL kicks in */ }
 }
-db.exec("PRAGMA journal_mode = WAL;");
-db.exec("PRAGMA foreign_keys = ON;");
 // Wait for a lock instead of failing on it. WAL lets readers and one writer
 // work at once, but two writers still collide — and this database has several:
 // the ingest path, the transcript scanner's sweep, and the retention prune.
 // Without a timeout SQLite raises SQLITE_BUSY immediately, which surfaces as a
 // dropped event rather than as the momentary contention it actually is.
+//
+// FIRST, before the journal_mode switch below, and that order is load-bearing:
+// setting journal_mode takes a lock, and if another process is recovering the
+// WAL at that instant it fails with SQLITE_BUSY_RECOVERY — measured, as an
+// uncaught SQLiteError at module load that killed the whole server on the way
+// up. busy_timeout is a connection setting that needs no lock of its own, so
+// applying it first turns that crash into a wait.
 db.exec("PRAGMA busy_timeout = 5000;");
+db.exec("PRAGMA journal_mode = WAL;");
+db.exec("PRAGMA foreign_keys = ON;");
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS events (
@@ -335,6 +344,188 @@ for (const col of ["project_path", "cwd_path"]) {
       AND session_id IN (SELECT session_id FROM events WHERE ${col} IS NOT NULL)`);
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
+
+// ---------------------------------------------------------------------------
+/**
+ * One scanner per database file — enforced in the file, not by hoping.
+ *
+ * The transcript scanner is the one writer here that is NOT idempotent: its
+ * events carry `event_id: null`, so the idempotency index above
+ * (`WHERE event_id IS NOT NULL`) cannot see, let alone drop, a line ingested
+ * twice. Two server processes on one file therefore inflate event counts,
+ * tokens and dollars in silence — nothing errors, the totals just grow.
+ *
+ * That is not hypothetical. Measured on this machine's own 354 MB history on
+ * 2026-08-07: 22 duplicate groups, 22 extra rows out of 100,354 scanner events.
+ * Small, and that is exactly why it went unnoticed for so long. Measured in the
+ * lab with two real processes racing one live tail: 4 appended turns became 5
+ * events and 5,000 input tokens instead of 4,000.
+ *
+ * It is easy to reach: `defaultDbPath()` resolves to the XDG data dir, so any
+ * checkout without a local `agentglass.db` — none of the worktrees on this
+ * machine have one — runs its scanner over the real history. The README's
+ * "attaches, never duplicates" only fires on a `:4000` port collision, and a
+ * second server started on another port on purpose sails straight past it.
+ *
+ * So the second process is held off here: the claim row names a pid and a port,
+ * and whoever finds a LIVE claim that is not theirs runs with the scanner
+ * disabled (see `startScanner`). Everything else it does — serving, hook ingest,
+ * git, the terminal — is unaffected, and hook ingest is idempotent anyway.
+ *
+ * A stale claim must never lock anyone out: this app is SIGKILLed routinely
+ * (the desktop shell kills its sidecar, `pkill` during development), so the row
+ * regularly outlives its process. `holderAlive` is what decides, and it is
+ * deliberately three checks deep because a bare `kill(pid, 0)` is wrong twice
+ * over — pids are reused after a reboot and after wraparound.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS db_claim (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  pid INTEGER NOT NULL,
+  port INTEGER NOT NULL,
+  host TEXT NOT NULL DEFAULT '',
+  boot_id TEXT NOT NULL DEFAULT '',
+  start_ticks INTEGER NOT NULL DEFAULT 0,
+  claimed_at INTEGER NOT NULL
+);
+`);
+
+export interface DbClaimRow {
+  pid: number;
+  port: number;
+  host: string;
+  boot_id: string;
+  start_ticks: number;
+  claimed_at: number;
+}
+
+/** The escape hatch, for the case this mechanism is the thing in the way.
+ *  `0` skips claiming AND skips being held off — the pre-fix behaviour. */
+const CLAIM_ENABLED = process.env.AGENTGLASS_DB_CLAIM !== "0";
+
+/** Identifies the boot, so a pid from before a reboot is never mistaken for a
+ *  live process. Linux only; empty elsewhere, where the ticks check below still
+ *  applies (and, failing both, a wrongly-live claim only disables a scanner). */
+function bootId(): string {
+  try { return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(); } catch { return ""; }
+}
+/**
+ * Field 22 of /proc/<pid>/stat — when that pid started, in clock ticks.
+ *
+ * This is what distinguishes "the claim holder is still running" from "some
+ * unrelated process now has that pid". Parsed from after the last `)` because
+ * field 2 is the command name in parentheses and may itself contain spaces and
+ * parens; splitting the whole line on spaces gets the wrong column for anything
+ * named like `(my prog)`.
+ */
+function startTicks(pid: number): number {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return Number(rest[19]) || 0; // rest[0] is field 3 (state) → field 22 is index 19
+  } catch { return 0; }
+}
+
+/** Is the process named by this claim still running, and still the same one? */
+function holderAlive(row: DbClaimRow): boolean {
+  if (row.pid <= 0) return false;
+  // A claim written by another machine cannot be checked from here — there is no
+  // such pid locally to ask about. Treat it as stale rather than refuse to scan
+  // for ever: a database reachable from two hosts at once is a broken setup
+  // (SQLite over a network filesystem), and a permanent lockout would be worse
+  // than the duplicate ingest this guards.
+  if (row.host && row.host !== hostname()) return false;
+  const boot = bootId();
+  if (boot && row.boot_id && boot !== row.boot_id) return false; // rebooted since
+  try {
+    process.kill(row.pid, 0);
+  } catch (e) {
+    // EPERM means the pid exists and belongs to another user — alive, just not
+    // ours to signal. Only ESRCH ("no such process") means gone.
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+  const ticks = startTicks(row.pid);
+  if (ticks && row.start_ticks && ticks !== row.start_ticks) return false; // pid reused
+  return true;
+}
+
+const readClaim = db.query<DbClaimRow, []>(
+  "SELECT pid, port, host, boot_id, start_ticks, claimed_at FROM db_claim WHERE id = 1"
+);
+const writeClaim = db.query(`
+  INSERT INTO db_claim (id, pid, port, host, boot_id, start_ticks, claimed_at)
+  VALUES (1, $pid, $port, $host, $boot, $ticks, $at)
+  ON CONFLICT(id) DO UPDATE SET
+    pid = excluded.pid, port = excluded.port, host = excluded.host,
+    boot_id = excluded.boot_id, start_ticks = excluded.start_ticks,
+    claimed_at = excluded.claimed_at
+`);
+const dropClaim = db.query("DELETE FROM db_claim WHERE id = 1 AND pid = $pid AND host = $host");
+
+/** Set when another live process holds the file, so the scanner can stand down
+ *  and `/projects` can report honestly instead of claiming it is scanning. */
+let heldOffBy: DbClaimRow | null = null;
+/** The live holder of this database, or null when it is ours. */
+export function dbClaimedElsewhere(): DbClaimRow | null {
+  return heldOffBy;
+}
+
+export interface DbClaimResult {
+  /** True when this process owns the file and may run its scanner. */
+  ok: boolean;
+  /** The live process that beat us to it, when `ok` is false. */
+  holder: DbClaimRow | null;
+  /** A dead process's claim we cleared out of the way — a SIGKILLed predecessor. */
+  tookOver: DbClaimRow | null;
+}
+
+/**
+ * Claim this database for this process. Call once, at boot, with the real port.
+ *
+ * IMMEDIATE so two servers starting at the same instant cannot both read "no
+ * claim" and both write one: the write lock is taken at BEGIN, before the read,
+ * so the loser waits and then sees the winner's row.
+ *
+ * It FAILS OPEN — a throw here reports "claimed", not "held off". That is a
+ * deliberate choice and not a hole: this runs on the boot path, so failing
+ * closed would mean a broken guard can stop the app scanning at all, while
+ * failing open costs at worst the pre-fix behaviour, which the compare-and-swap
+ * on `lines_done` (transcripts.ts) still covers.
+ */
+export function claimDatabase(port: number): DbClaimResult {
+  if (!CLAIM_ENABLED) return { ok: true, holder: null, tookOver: null };
+  try {
+    return db.transaction((): DbClaimResult => {
+      const prev = readClaim.get();
+      if (prev && prev.pid !== process.pid && holderAlive(prev)) {
+        heldOffBy = prev;
+        return { ok: false, holder: prev, tookOver: null };
+      }
+      writeClaim.run({
+        $pid: process.pid,
+        $port: port,
+        $host: hostname(),
+        $boot: bootId(),
+        $ticks: startTicks(process.pid),
+        $at: Date.now(),
+      });
+      heldOffBy = null;
+      return { ok: true, holder: null, tookOver: prev && prev.pid !== process.pid ? prev : null };
+    }).immediate();
+  } catch (e) {
+    console.warn(`[db] could not claim ${DB_PATH}: ${e instanceof Error ? e.message : e} — scanning anyway`);
+    heldOffBy = null;
+    return { ok: true, holder: null, tookOver: null };
+  }
+}
+
+/** Give the claim back on a clean exit. Best-effort by design: the SIGKILL case
+ *  is precisely what `holderAlive` exists to handle, so a missed release costs
+ *  nothing beyond one liveness check at the next boot. */
+export function releaseDatabaseClaim(): void {
+  if (!CLAIM_ENABLED || heldOffBy) return;
+  try { dropClaim.run({ $pid: process.pid, $host: hostname() }); } catch { /* exiting anyway */ }
+}
 
 // ---------------------------------------------------------------------------
 /**
@@ -1235,8 +1426,20 @@ function duplicateResult(row: any): InsertResult {
  *  - PostToolUse latency via pre→post pairing
  *  - the updated session rollup (authoritative token/cost totals)
  */
+/** A side-channel notified of every event as it lands, live or backfilled, so a
+ *  consumer can keep a derived view (the latest event per session, for the
+ *  tab-strip "agent finished" dot) without importing this module's internals or
+ *  re-querying on a hot path. Set once at startup; a missing hook is not called.
+ *  A hook rather than a direct import so db.ts stays a leaf — the consumer reads
+ *  pane_agent, which reads db, and importing it here would close a cycle. */
+let eventHook: ((sessionId: string, type: string, ts: number) => void) | null = null;
+export function setEventHook(fn: (sessionId: string, type: string, ts: number) => void): void { eventHook = fn; }
+
 export function insertEvent(n: NormalizedEvent): InsertResult {
   const model = n.model_name;
+  // Every event, before any dedup/rollup below: the derived view keeps by max
+  // timestamp, so replaying a duplicate or an out-of-order backfill is harmless.
+  eventHook?.(n.session_id, n.hook_event_type, n.timestamp);
 
   // --- token delta computation -------------------------------------------
   let dIn = n.usage.input_tokens ?? 0;

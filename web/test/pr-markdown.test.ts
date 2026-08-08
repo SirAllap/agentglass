@@ -404,3 +404,123 @@ describe("an HTML table from a bot", () => {
     expect(JSON.stringify(blocks)).toContain("trailing words");
   });
 });
+
+/*
+ * The two reasons a review comment read worse here than on GitHub.
+ *
+ * Both were reported by comparing our rendering of the SAME comment with
+ * GitHub's, side by side: «no tenemos esos puntos ni el indentado correcto ni
+ * los saltos de línea correctos... el espaciado es muy importante para la
+ * lectura».
+ *
+ * Neither was a parse failure, which is why nothing in this suite noticed: the
+ * markdown was read correctly and then drawn with the bullets switched off and
+ * the newlines spent.
+ */
+describe("the two ways the prose was flattened", () => {
+  test("puts the list marker back that the CSS reset took away", async () => {
+    /*
+     * The panel's stylesheet set the indent and coloured `::marker`, but never
+     * undid Tailwind preflight's `ul,ol{list-style:none}` — so there was no
+     * marker for the colour to land on and a finding list arrived as text
+     * nudged 1.5em right. Measured in the built app afterwards: ul `disc`,
+     * nested `circle`, ol `decimal`, padding-left 18.75px.
+     */
+    const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+    expect(panel).toContain(".agx-md ul{list-style:disc}");
+    expect(panel).toContain(".agx-md ul ul{list-style:circle}");
+    expect(panel).toContain(".agx-md ol{list-style:decimal}");
+    // The task list draws its own box and must stay bare.
+    expect(panel).toContain(".agx-md .agx-task{list-style:none;padding-left:0}");
+  });
+
+  test("keeps a single newline as a break, the way GitHub does", async () => {
+    // GitHub renders comment bodies with hard breaks on. Joining with a space
+    // ran "Review Summary" into the stats line under it, and every other stat
+    // line in the body lost its shape the same way.
+    const { parseBody } = await import("../src/lib/prBody.ts");
+    const blocks = parseBody("Findings summary\n2 blocking. 1 minor.", undefined);
+    const para = blocks.find((b) => b.kind === "para") as { html: string } | undefined;
+    expect(para?.html).toContain("<br>");
+    expect(para?.html).not.toContain("Findings summary 2 blocking");
+  });
+});
+
+/*
+ * Three shapes the list parser got wrong, all invisible until the markers were
+ * switched back on and then confidently wrong. Found by the correctness audit,
+ * each with the parser's own output as the evidence.
+ */
+describe("lists, once they had markers again", () => {
+  test("a blank line between steps does not restart the numbering", () => {
+    // Was three separate `<ol>`s, and an `<ol>` with no `start` begins at 1 —
+    // so a three-step procedure read "1. / 1. / 1.". Loose lists are how every
+    // review bot writes a procedure.
+    const blocks = parseBody("1. First\n\n2. Second\n\n3. Third\n");
+    const lists = blocks.filter((b) => b.kind === "list");
+    expect(lists.length).toBe(1);
+    expect((lists[0] as { items: unknown[] }).items.length).toBe(3);
+  });
+
+  test("a blank line followed by prose still ends the list", () => {
+    const blocks = parseBody("1. First\n2. Second\n\nAnd then a paragraph.\n");
+    expect(blocks.filter((b) => b.kind === "list").length).toBe(1);
+    expect(blocks.filter((b) => b.kind === "para").length).toBe(1);
+  });
+
+  test("a bullet nested under a numbered step keeps its own marker", () => {
+    // Flat, every `<li>` of the `<ol>` took a number: the two sub-bullets became
+    // steps 3 and 4 and pushed the real step 3 to 5.
+    const blocks = parseBody("1. One\n2. Two\n   - note\n   - other\n3. Three\n");
+    const list = blocks.find((b) => b.kind === "list") as { items: { depth: number; ordered?: boolean }[] };
+    expect(list.items.map((i) => i.ordered)).toEqual([true, true, false, false, true]);
+    expect(list.items.map((i) => i.depth)).toEqual([0, 0, 1, 1, 0]);
+  });
+});
+
+describe("a machine's marker on a line with words on it", () => {
+  test("a sticky comment keeps its words", () => {
+    // The old pattern backtracked from the first `<!--` to the LAST `-->`, so a
+    // one-line sticky comment arrived as an author, a timestamp and nothing.
+    expect(JSON.stringify(parseBody("<!-- sticky:cov -->Coverage is 75%<!-- /sticky -->")))
+      .toContain("Coverage is 75%");
+  });
+
+  test("a line that is only markers is still dropped", () => {
+    expect(parseBody("<!-- only -->").length).toBe(0);
+  });
+
+  test("and one in the middle of a sentence is still left alone", () => {
+    // Somebody showing the syntax typed that on purpose; an edge marker is a
+    // bot's handle on its own comment.
+    expect(JSON.stringify(parseBody("Write <!-- like this --> to hide a note"))).toContain("like this");
+  });
+});
+
+describe("nesting is about order, not about how far", () => {
+  const depths = (body: string) => {
+    const list = parseBody(body).find((b) => b.kind === "list") as { items: { depth: number }[] };
+    return list.items.map((i) => i.depth);
+  };
+
+  test("two sublists indented differently sit at the SAME level", () => {
+    /*
+     * A real bug, not a test gap, found by the tests audit. Depth came from
+     * dividing the indent by two, so a four-space sublist was filed a level
+     * below a two-space one — and a body that indents some of its sublists by
+     * two and some by four, which is most of them, nested the second inside the
+     * first. GitHub draws them level.
+     */
+    expect(depths("- a\n  - b\n- c\n    - d")).toEqual([0, 1, 0, 1]);
+    expect(depths("- a\n   - b\n- c\n  - d")).toEqual([0, 1, 0, 1]);
+  });
+
+  test("going deeper still steps, and coming back still returns", () => {
+    expect(depths("- a\n  - b\n    - c\n- d")).toEqual([0, 1, 2, 0]);
+    expect(depths("- a\n    - b\n        - c")).toEqual([0, 1, 2]);
+  });
+
+  test("a tab is an indent like any other", () => {
+    expect(depths("- a\n\t- b")).toEqual([0, 1]);
+  });
+});

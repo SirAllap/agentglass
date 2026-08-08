@@ -339,6 +339,36 @@ export const getActiveChatId = (): string => activeChatId;
  */
 let focusReq = { id: "", n: 0 };
 export function requestChatFocus(id: string) { focusReq = { id, n: focusReq.n + 1 }; emit(); }
+
+/**
+ * Put a prompt in front of Claude, from a panel that is not the chat.
+ *
+ * Three calls, and missing any one of them fails differently. `newChat` and
+ * `update` fill the tab in; `setActiveChatId` records the selection; and
+ * `requestChatFocus` is the one that actually moves the panel — the chat panel
+ * owns its own selection in component state and reads the stored id only once,
+ * at mount, then writes its own back over it. A caller that set the id and
+ * stopped there opened the chat view on whatever tab was already there, and its
+ * seeded prompt sat in a tab nobody was looking at, so the button read as doing
+ * nothing at all. That was exactly the git panel's conflict handoff.
+ *
+ * It lives here rather than in one of the panels because the sequence is the
+ * knowledge, and the third caller to reinvent it would get it wrong the same
+ * way the second did.
+ *
+ * A seeded tab that was never sent is REUSED rather than duplicated: pressing
+ * the button twice means "show me that again", not "make another one". Nothing
+ * is sent — starting a run that costs real tokens because a button was clicked
+ * one pane over is not a decision this should make for anybody.
+ */
+export function seedChat(cwd: string, prompt: string, title: string): Chat {
+  const spare = listChats().find((c) => c.cwd === cwd && c.title === title && !c.messages.length && !c.sending);
+  const chat = spare ?? newChat(cwd);
+  update(chat.id, (c) => { c.draft = prompt; c.title = title; });
+  setActiveChatId(chat.id);
+  requestChatFocus(chat.id);
+  return chat;
+}
 export const chatFocusRequest = () => focusReq;
 
 // Restored synchronously, at module load, on purpose. The panel seeds a blank

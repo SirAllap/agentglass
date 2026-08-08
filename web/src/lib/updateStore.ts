@@ -88,6 +88,9 @@ export function ingestUpdate(st: UpdateStatus | null): void {
       ? `${st.behind} releases newer than this build — Settings › About to install`
       : "Settings › About to see what is in it and install",
     urgency: 1,
+    // The body was an instruction to go somewhere, on a row that could go
+    // there. Now the sentence and the click agree.
+    goto: { kind: "settings", pane: "about" },
   });
 }
 

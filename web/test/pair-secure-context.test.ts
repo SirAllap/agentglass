@@ -1,7 +1,7 @@
 /*
  * Why a phone could not pair, and why it could not find out.
  *
- * Reported from a real phone: the QR opened `http://100.69.209.63:4000/?pair=…`,
+ * Reported from a real phone: the QR opened `http://100.64.0.1:4000/?pair=…`,
  * the form appeared, "Ask to connect" did nothing — on the phone or on the
  * desktop — and the only feedback was "Still preparing the connection — try
  * again in a second."
@@ -54,7 +54,7 @@ describe("whether this page can pair at all", () => {
      * app on the MagicDNS name — an actual secure context — which is the
      * concrete step, unlike `tailscale cert` alone (which only fetches files).
      */
-    const why = pairingBlocked({ subtle: undefined, origin: "http://100.69.209.63:4000", isSecureContext: false })!;
+    const why = pairingBlocked({ subtle: undefined, origin: "http://100.64.0.1:4000", isSecureContext: false })!;
     expect(why).toContain("tailscale serve");
     expect(why).toMatch(/HTTPS/i);
   });
@@ -101,7 +101,14 @@ describe("the screen that chose the address", () => {
   test("says so before somebody walks over with a phone", () => {
     // The phone is the wrong place to learn this: by then they have scanned,
     // typed a name and read six digits off a screen.
-    expect(panel).toMatch(/A phone cannot pair over this address/);
+    //
+    // Whose limitation it is has to be in the sentence. This asserted the
+    // opening words "A phone cannot pair over this address" until there was an
+    // app, which generates its own key and pairs over exactly this address —
+    // at which point the warning sat above the QR talking people out of the
+    // one route that would have worked for them.
+    expect(panel).toMatch(/in a browser cannot pair over this address/);
+    expect(panel).not.toMatch(/A phone cannot pair over this address/);
     expect(panel).toContain("const insecure =");
   });
 
@@ -110,7 +117,7 @@ describe("the screen that chose the address", () => {
     // this has to keep being right for https and for loopback.
     const m = /const insecure = (.+);/.exec(panel)!;
     const insecure = (url: string) => eval(m[1]!.replace(/baseUrl/g, JSON.stringify(url)));
-    expect(insecure("http://100.69.209.63:4000")).toBe(true);
+    expect(insecure("http://100.64.0.1:4000")).toBe(true);
     expect(insecure("http://192.168.1.9:4000")).toBe(true);
     expect(insecure("https://box.tail1234.ts.net")).toBe(false);
     expect(insecure("http://localhost:4000")).toBe(false);
@@ -120,6 +127,7 @@ describe("the screen that chose the address", () => {
 
 describe("what the app claims about pairing over plain HTTP", () => {
   const pane = src("../src/components/RemoteAccessPane.tsx");
+  const pair = src("../src/components/PairPanel.tsx");
 
   test("no longer promises an encryption the browser will not allow", () => {
     /*
@@ -128,8 +136,50 @@ describe("what the app claims about pairing over plain HTTP", () => {
      * primitives to do that. A security claim that is false is worse than a
      * missing one: it is the sentence somebody reads to decide the risk is
      * handled.
+     *
+     * Asserted across BOTH files, which is stricter than before: the claim used
+     * to be checked only where it happened to be written, so moving it would
+     * have moved it out from under its own guard.
      */
-    expect(pane, "the false claim is still here").not.toMatch(/encrypted to the device that asked for it/);
-    expect(pane).toMatch(/cannot pair over it at all/);
+    for (const [name, text] of [["RemoteAccessPane", pane], ["PairPanel", pair]] as const) {
+      expect(text, `the false claim is back in ${name}`).not.toMatch(/encrypted to the device that asked for it/);
+    }
+  });
+
+  test("and says plainly, once, that it is the BROWSER that cannot pair", () => {
+    /*
+     * Two corrections to one sentence, made on two branches, and both are kept
+     * here because they answer different questions.
+     *
+     * WHERE it is said: once, next to the button it disables. It lives in
+     * PairPanel because that is where the recipe for fixing it is —
+     * RemoteAccessPane said the same thing eleven lines above in different
+     * words, and two red boxes making one claim read as two problems.
+     *
+     * WHOSE limitation it is: the browser's, not the phone's. "a phone cannot
+     * pair over it at all" was honest while the companion was a page. It is
+     * false now — the app makes its own key — and it did real damage: the pane
+     * hid the LAN addresses behind it and pushed a tailnet address that fails
+     * with "nothing answered" whenever the phone is signed out of the tailnet.
+     *
+     * So the assertion is not that the warning is gone. It is that the warning
+     * is in one place and names the browser there. Dropping it would take a
+     * true and useful thing off the screen.
+     *
+     * WHAT the browser is running: the cockpit. This asked for `/browser
+     * cannot/`, and "the companion in a browser cannot" — the sentence that
+     * was still on the other branch of this merge — satisfies it word for
+     * word. The companion was deleted in 86b07f7; a guard that accepts a name
+     * for a page that no longer exists is not guarding the thing that goes
+     * wrong here, which is somebody reading these two files to decide what a
+     * QR should grant. So it pins the phrase PairPanel actually shows.
+     */
+    expect(pair).toMatch(/cannot pair over this address/);
+    expect(pair, "the limitation must name the browser, not the phone")
+      .toMatch(/cockpit in a browser cannot pair over this address/);
+    expect(pair, "the deleted companion is back in the sentence").not.toMatch(/companion in a browser/);
+    expect(pane, "the deleted companion is back in the sentence").not.toMatch(/companion in a browser/);
+    expect(pair, "the claim is true of a browser, not of a phone").not.toMatch(/cannot pair over it at all/);
+    expect(pane, "said twice again").not.toMatch(/cannot pair over/);
   });
 });

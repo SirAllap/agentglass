@@ -19,7 +19,8 @@
 import { singleFlight } from "./singleflight.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
-import type { ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, TaskDetail } from "../../shared/providers.ts";
+import type {
+  ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail } from "../../shared/providers.ts";
 
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 
@@ -104,7 +105,18 @@ async function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS):
       headers: { Authorization: token, "content-type": "application/json" },
       signal: ctl.signal,
     });
-    const remaining = Number(r.headers.get("x-ratelimit-remaining"));
+    // A MISSING header is not a budget of zero, and this used to say it was:
+    // `Number(null)` is 0 and `Number.isFinite(0)` is true, so any response that
+    // did not carry the header parked the budget at zero and made the next
+    // sixty seconds of calls answer "Holding off — ClickUp's rate limit is
+    // nearly used up" without asking anybody. Found by measuring T27: the first
+    // poll against a revoked token correctly said "ClickUp refused this token",
+    // and the second overwrote it with a rate-limit sentence that was not true
+    // and had a different remedy. Real ClickUp always sends the header; a
+    // proxy, a captive portal or an error page in front of it does not, and
+    // those are exactly the moments the message matters.
+    const remainingRaw = r.headers.get("x-ratelimit-remaining");
+    const remaining = remainingRaw === null ? NaN : Number(remainingRaw);
     const reset = Number(r.headers.get("x-ratelimit-reset"));
     if (Number.isFinite(remaining)) {
       budget = {
@@ -169,7 +181,7 @@ interface RawTask {
   custom_id?: string | null;
   name: string;
   url?: string;
-  status?: { status?: string; type?: string; color?: string };
+  status?: { status?: string; type?: string; color?: string; orderindex?: number };
   due_date?: string | number | null;
   date_updated?: string | number | null;
   priority?: { priority?: string } | null;
@@ -223,11 +235,57 @@ function shortSprint(name: string | undefined): string | null {
   return (m?.[1] ?? name).trim() || null;
 }
 
+/**
+ * Which of a card's lists is the SPRINT.
+ *
+ * This has to be recognised rather than positioned, and that is the whole
+ * lesson. A card in a sprint is a card in two or three lists at once, and they
+ * arrive as one flat `locations` array whose order is not stable — measured on
+ * a real workspace, the same card answers `['Miscellaneous', 'Sprint 138 …']`
+ * from the workspace query and `['Sprint 138 …', 'Miscellaneous']` from its own
+ * endpoint. "The first one that is not the primary list" therefore picked
+ * whichever happened to be first, and a column headed SPRINT spent its life
+ * saying "Miscellaneous" and "Bugs".
+ *
+ * Two signatures, because ClickUp's own Sprint feature writes both and neither
+ * is guaranteed: the name begins with "Sprint", or it ends in the parenthesised
+ * date range ClickUp appends when a sprint has dates. Measured on the same
+ * workspace: `Sprint 138 (26/8/5 - 26/8/11)` has both and `Sprint 118` has only
+ * the first, so requiring the range would have dropped a real sprint.
+ *
+ * Nothing matching means nothing shown. A list name under a heading that says
+ * Sprint is not a near miss, it is a different fact — and the version that
+ * guessed is exactly what sent somebody to ClickUp to find out which sprint a
+ * card was really in.
+ */
+const SPRINT_NAMED = /^sprint\b/i;
+const SPRINT_DATED = /\(\s*\d{1,4}[/\-.]\d{1,2}[^)]*[–—-][^)]*\)\s*$/;
+export const looksLikeSprint = (name: string): boolean => {
+  const n = name.trim();
+  return !!n && (SPRINT_NAMED.test(n) || SPRINT_DATED.test(n));
+};
+
+/** The sprint a card is in, or nothing. Its own list counts: a card can live
+ *  directly in a sprint list rather than being added to one. */
+export function sprintOf(locations: { name?: string }[] | undefined, listName?: string | null): string | null {
+  const names = [...(locations ?? []).map((l) => l.name ?? ""), listName ?? ""];
+  return shortSprint(names.find((n) => n && looksLikeSprint(n)));
+}
+
 /** Two letters from a name, for a column that has room for two letters. */
 function initialsOf(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return "";
   return ((parts[0]![0] ?? "") + (parts.length > 1 ? parts[parts.length - 1]![0] ?? "" : "")).toUpperCase();
+}
+
+/** A comment as ClickUp sends it. Only the parts we read. */
+interface RawComment {
+  id: string | number;
+  comment?: { type?: string; text?: string; user?: { id?: string | number } }[];
+  comment_text?: string;
+  user?: { id?: string | number; username?: string };
+  date?: string | number;
 }
 
 export function toTask(raw: RawTask, myId?: string): ProviderTask {
@@ -262,6 +320,7 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     listId: raw.list?.id ? String(raw.list.id) : undefined,
     assignees: assignees.map((a) => a.username ?? "").filter(Boolean),
     people: assignees.map((a) => ({
+      id: a.id != null ? Number(a.id) : undefined,
       name: a.username ?? "",
       initials: a.initials || initialsOf(a.username ?? ""),
       color: a.color || undefined,
@@ -270,7 +329,7 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     })).filter((x) => x.name || x.initials),
     // A sprint is another LIST the card also lives in. `locations` holds those,
     // minus the one it belongs to primarily.
-    sprint: shortSprint((raw.locations ?? []).map((l) => l.name ?? "").find((n) => n && n !== raw.list?.name)),
+    sprint: sprintOf(raw.locations, raw.list?.name),
     // Resolved here, against the connected account. The browser has no business
     // knowing your ClickUp user id, and a client-side comparison would need it.
     mine: myId ? assignees.some((a) => String(a.id ?? "") === myId) : undefined,
@@ -322,6 +381,46 @@ export interface TaskPage {
    *  out loud rather than silently truncated — a list that stops at 100 with no
    *  note reads as "that is all of them". */
   more: boolean;
+  /**
+   * The statuses SEEN on this page, rather than the ones a list accepts.
+   *
+   * A workspace-wide query has no single list to ask, and `listMeta` is the
+   * wrong question here: the rows came from a dozen lists, and asking each of
+   * them costs two calls apiece against a 100-a-minute budget to describe
+   * statuses that are mostly the same words. What the page itself carries is
+   * enough for the two jobs the panel has — group the rows in workflow order,
+   * and offer them as filters — and it costs nothing extra.
+   *
+   * NOT enough to MOVE a card with: a status this page happens to contain need
+   * not exist on the list the card you are looking at lives in. That picker asks
+   * the card's own list, on demand.
+   */
+  statuses: ListStatus[];
+}
+
+/**
+ * The statuses a batch of rows was actually in, in something like workflow order.
+ *
+ * `orderindex` is per-list, so across lists it is a hint rather than a truth —
+ * but every board numbers its own workflow left to right, so "0" is the column
+ * work starts in on all of them and the hint is a good one. Deduplicated by
+ * name, keeping the earliest index anyone gave it, and the finished ones are
+ * sorted to the end regardless: five kinds of done interleaved with the work is
+ * the one ordering that is worse than none.
+ */
+function statusesSeen(rows: RawTask[]): ListStatus[] {
+  const by = new Map<string, ListStatus>();
+  for (const r of rows) {
+    const name = r.status?.status;
+    if (!name) continue;
+    const at = Number(r.status?.orderindex);
+    const had = by.get(name);
+    const orderindex = Number.isFinite(at) ? at : 999;
+    if (!had) by.set(name, { status: name, type: r.status?.type ?? "custom", orderindex, color: r.status?.color });
+    else if (orderindex < had.orderindex) had.orderindex = orderindex;
+  }
+  const done = (s: ListStatus) => (s.type === "done" || s.type === "closed" ? 1 : 0);
+  return [...by.values()].sort((a, b) => done(a) - done(b) || a.orderindex - b.orderindex || a.status.localeCompare(b.status));
 }
 
 /**
@@ -359,7 +458,152 @@ export async function fetchTasks(
   const r = await call<{ tasks: RawTask[] }>(`/team/${encodeURIComponent(workspaceId)}/task?${q}`, token, LIST_TIMEOUT_MS);
   if (!r.ok) return { ...r, data: undefined };
   const raw = r.data?.tasks ?? [];
-  return { ok: true, data: { tasks: raw.map((t) => toTask(t, userId)), more: raw.length >= 100 } };
+  return {
+    ok: true,
+    data: { tasks: raw.map((t) => toTask(t, userId)), more: raw.length >= 100, statuses: statusesSeen(raw) },
+  };
+}
+
+/**
+ * What has moved on MY cards since a moment in time.
+ *
+ * The narrow cousin of the query above, and it exists because a notification is
+ * a DIFF, not a list. Asking for everything assigned to me costs twelve seconds
+ * and returns thirteen rows that are almost always the same thirteen; asking
+ * for what changed since the last look costs six and usually returns nothing,
+ * which is the answer a poll wants most of the time.
+ *
+ * `date_updated_gt` is ClickUp's own filter, so the work is done on their side.
+ * Measured against a real workspace: 6.0s, 5 rows for a day's worth of change,
+ * and it cost 2 of a 10,000-an-hour budget.
+ *
+ * Closed cards are included here, unlike the list above: "moved to done" is
+ * exactly the kind of change worth being told about, and excluding it would
+ * make a card vanish rather than finish.
+ */
+export async function changedForMe(sinceMs: number): Promise<CallResult<{ tasks: ProviderTask[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const me = redacted("clickup");
+  if (!me?.workspaceId || !me.accountId) return { ok: false, error: "No ClickUp workspace chosen yet" };
+  const q = new URLSearchParams({
+    date_updated_gt: String(Math.floor(sinceMs)),
+    include_closed: "true",
+    order_by: "updated",
+  });
+  q.append("assignees[]", me.accountId);
+  const r = await call<{ tasks: RawTask[] }>(`/team/${encodeURIComponent(me.workspaceId)}/task?${q}`, token, LIST_TIMEOUT_MS);
+  if (!r.ok) return { ...r, data: undefined };
+  return { ok: true, data: { tasks: (r.data?.tasks ?? []).map((t) => toTask(t, me.accountId)) } };
+}
+
+/**
+ * What has moved on the boards you follow, whoever it belongs to.
+ *
+ * The companion to `changedForMe`, and it exists for one case that one cannot
+ * see: somebody mentioning you on a card that is not yours. Scoped to the lists
+ * behind your saved boards rather than the whole workspace — a company's
+ * workspace moves constantly and none of it is yours to be told about.
+ *
+ * Measured on a real board: one card moved in the last hour. So this is a call
+ * that almost always answers "nothing", which is what makes asking every few
+ * minutes reasonable.
+ */
+export async function changedOnLists(sinceMs: number, listIds: string[]): Promise<CallResult<{ tasks: ProviderTask[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const me = redacted("clickup");
+  if (!me?.workspaceId || !listIds.length) return { ok: true, data: { tasks: [] } };
+  const q = new URLSearchParams({ date_updated_gt: String(Math.floor(sinceMs)), include_closed: "true" });
+  for (const l of listIds) q.append("list_ids[]", l);
+  const r = await call<{ tasks: RawTask[] }>(`/team/${encodeURIComponent(me.workspaceId)}/task?${q}`, token, LIST_TIMEOUT_MS);
+  if (!r.ok) return { ...r, data: undefined };
+  return { ok: true, data: { tasks: (r.data?.tasks ?? []).map((t) => toTask(t, me.accountId)) } };
+}
+
+/**
+ * The comments on one card, newest first, as ClickUp returns them.
+ *
+ * A mention is not a string match. It arrives as a block of its own —
+ * `{ type: "tag", user: { id } }` — so "somebody mentioned ME" is an id
+ * comparison rather than a guess at a name, which matters on a workspace with
+ * two Davids in it.
+ *
+ * Cheap, measured: about 300ms. That is what makes per-card polling viable at
+ * all, and it is only ever asked of cards a cheaper query already said had
+ * moved — a comment bumps the card's `date_updated`, verified against real
+ * cards where the two timestamps match to the minute.
+ */
+export interface CardComment {
+  id: string;
+  who: string;
+  /** The commenter's ClickUp id, so our own comments can be left out. */
+  whoId: string;
+  text: string;
+  at: number;
+  /** Ids mentioned with an `@` inside the comment. */
+  mentions: string[];
+}
+
+export async function commentsOn(taskId: string): Promise<CallResult<{ comments: CardComment[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const r = await call<{ comments?: RawComment[] }>(`/task/${encodeURIComponent(taskId)}/comment`, token);
+  if (!r.ok) return { ...r, data: undefined };
+  const comments = (r.data?.comments ?? []).map((c) => ({
+    id: String(c.id),
+    who: c.user?.username ?? "Somebody",
+    whoId: String(c.user?.id ?? ""),
+    text: (c.comment_text ?? "").trim(),
+    at: Number(c.date) || 0,
+    mentions: (c.comment ?? [])
+      .filter((b) => b.type === "tag" && b.user?.id != null)
+      .map((b) => String(b.user!.id)),
+  }));
+  return { ok: true, data: { comments } };
+}
+
+/**
+ * Every page of it, up to a point.
+ *
+ * Three pages, not the ten a view is allowed. The cap is not about the rows, it
+ * is about the clock: a view answers a page in about a second, and this query
+ * takes twelve — so following ten pages would be two minutes of somebody
+ * watching a spinner to find out they have more than three hundred open cards
+ * assigned to them, which they already knew. Three is past any real inbox and
+ * the truncation is said out loud rather than hidden.
+ */
+const ASSIGNED_MAX_PAGES = 3;
+
+export async function assignedTasks(
+  token: string, workspaceId: string, userId: string,
+): Promise<CallResult<{ tasks: ProviderTask[]; statuses: ListStatus[]; truncated: boolean }>> {
+  const out: ProviderTask[] = [];
+  const seen: ListStatus[] = [];
+  for (let page = 0; page < ASSIGNED_MAX_PAGES; page++) {
+    const r = await fetchTasks(token, workspaceId, userId, page);
+    // A page that failed after some already arrived is a short answer, not no
+    // answer — the same call the view reader makes.
+    if (!r.ok || !r.data) {
+      return out.length ? { ok: true, data: { tasks: out, statuses: statusMerge(seen), truncated: true } } : { ...r, data: undefined };
+    }
+    out.push(...r.data.tasks);
+    seen.push(...r.data.statuses);
+    if (!r.data.more) return { ok: true, data: { tasks: out, statuses: statusMerge(seen), truncated: false } };
+  }
+  return { ok: true, data: { tasks: out, statuses: statusMerge(seen), truncated: true } };
+}
+
+/** The same dedupe `statusesSeen` does, applied across pages. */
+function statusMerge(all: ListStatus[]): ListStatus[] {
+  const by = new Map<string, ListStatus>();
+  for (const s of all) {
+    const had = by.get(s.status);
+    if (!had) by.set(s.status, { ...s });
+    else if (s.orderindex < had.orderindex) had.orderindex = s.orderindex;
+  }
+  const done = (s: ListStatus) => (s.type === "done" || s.type === "closed" ? 1 : 0);
+  return [...by.values()].sort((a, b) => done(a) - done(b) || a.orderindex - b.orderindex || a.status.localeCompare(b.status));
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +634,26 @@ const reset = __reset;
  * actually clicks, and a task list that is 60 seconds stale has never been the
  * problem — the same trade `tasks.ts` makes for its own store.
  */
+/**
+ * What we already know, without going and asking.
+ *
+ * `clickupTasks()` fetches when its cache is cold, and ClickUp's own floor for
+ * that query is ten to twelve seconds — measured, and documented on
+ * fetchTasks(). That is the right trade for the panel that exists to show the
+ * list. It is the wrong one for a caller that only wants to know whether the
+ * token works, because it makes that caller wait ten seconds for an answer it
+ * was not asking for.
+ *
+ * Returns null when there is nothing cached, and asks for nothing. A getter
+ * that quietly starts a network call is a getter whose caller cannot reason
+ * about what it costs — and in the test suite it was a request arriving in the
+ * middle of an unrelated test's page count. Warming the cache is the caller's
+ * decision, made where the caller can see it: see `/providers`.
+ */
+export function clickupCached(): ClickUpSnapshot | null {
+  return snap;
+}
+
 export async function clickupTasks(force = false): Promise<ClickUpSnapshot> {
   if (!force && snap && Date.now() - snap.at < TTL_MS) return snap;
   return singleFlight("clickup:tasks", async () => {
@@ -429,7 +693,7 @@ export async function clickupTasks(force = false): Promise<ClickUpSnapshot> {
  * writes it; this is the fallback for a credential written before that, and for
  * one whose workspace was cleared.
  */
-async function identity(token: string): Promise<{ workspaceId?: string; userId?: string }> {
+export async function identity(token: string): Promise<{ workspaceId?: string; userId?: string }> {
   const { redacted } = await import("./credentials.ts");
   const known = redacted("clickup");
   if (known?.workspaceId && known.accountId) return { workspaceId: known.workspaceId, userId: known.accountId };
@@ -471,12 +735,26 @@ export const tokenLabel = (): string => fingerprint(secretFor("clickup") ?? "");
  */
 export interface ParsedViewUrl {
   workspaceId?: string;
-  kind: "view" | "list";
+  kind: "view" | "list" | "assigned";
   viewId?: string;
   listId?: string;
 }
 
-const VIEW_PATH = /\/(\d+)\/v\/([a-z]+)\/([\w-]+)/i;
+const VIEW_PATH = /\/(\d+)\/v\//i;
+/** What an id actually looks like, so a stray path segment cannot be mistaken
+ *  for one. A list is digits; a view is `6-901715483311-1`. */
+const LIST_ID = /^\d{6,}$/;
+const VIEW_ID = /^\d+-\d{6,}-\d+$/;
+/**
+ * The My Work page, which is the one address with nothing in it to resolve.
+ *
+ * `https://example.clickup.com/9000001/my-work/tasks` names no view and no list —
+ * it is a question ("what is assigned to me"), not a place — so the resolver
+ * could only ever refuse it, and refusing the page somebody is most likely to
+ * paste is the wrong answer to give them. Recognised here and answered with the
+ * built-in board instead.
+ */
+const MY_WORK_PATH = /\/(\d+)\/my-work(\/|$)/i;
 
 export function parseViewUrl(raw: string): ParsedViewUrl | null {
   const text = (raw || "").trim();
@@ -503,13 +781,44 @@ export function parseViewUrl(raw: string): ParsedViewUrl | null {
   // `notclickup.com` and `evilclickup.com`, which are somebody else's hosts.
   if (host && host !== "clickup.com" && !host.endsWith(".clickup.com")) return null;
 
+  const mine = MY_WORK_PATH.exec(path);
+  if (mine) return { workspaceId: mine[1], kind: "assigned" };
+
   const m = VIEW_PATH.exec(path);
   if (m) {
-    const [, workspaceId, kind, id] = m as unknown as [string, string, string, string];
-    if (kind.toLowerCase() === "li") return { workspaceId, kind: "list", listId: id };
+    const [, workspaceId] = m as unknown as [string, string];
+    /*
+     * Walk to the id rather than assume it is the next segment.
+     *
+     * Reported from a real paste: `/9000001/v/l/li/901715834894` — an `l` AND
+     * an `li`, two kind tokens in a row, which happens when somebody stitches an
+     * address together from two of ClickUp's own forms. Taking "whatever follows
+     * the kind" made the id the literal string `li`, and the panel then reported
+     * "ClickUp answered 404" for an address whose real id was sitting one
+     * segment further along, untouched.
+     *
+     * So the id is RECOGNISED — digits for a list, `6-901715483311-1` for a view
+     * — and anything before it that is not one is treated as another kind token.
+     * The last kind seen wins, because that is the one nearest the thing it
+     * describes.
+     */
+    const segs = path.split("/").filter(Boolean);
+    const at = segs.findIndex((x) => x.toLowerCase() === "v");
+    let kind = "";
+    let id = "";
+    for (let i = at + 1; i < segs.length; i++) {
+      const seg = segs[i]!;
+      if (LIST_ID.test(seg) || VIEW_ID.test(seg)) { id = seg; break; }
+      if (/^[a-z]+$/i.test(seg)) kind = seg.toLowerCase();
+    }
+    if (!id) return null;
+    if (kind === "li") return { workspaceId, kind: "list", listId: id };
     // A view id looks like `6-901715483311-1`; the middle segment is the list.
     const parts = id.split("-");
-    const listId = parts.length >= 2 && /^\d{6,}$/.test(parts[1]!) ? parts[1] : undefined;
+    const listId = parts.length >= 2 && LIST_ID.test(parts[1]!) ? parts[1] : undefined;
+    // Digits alone under a view kind is a list id however it was labelled —
+    // there is no view whose id is bare digits.
+    if (!listId && LIST_ID.test(id)) return { workspaceId, kind: "list", listId: id };
     return { workspaceId, kind: "view", viewId: id, listId };
   }
   return null;
@@ -525,12 +834,239 @@ export async function viewMeta(token: string, viewId: string): Promise<CallResul
   return { ok: true, data: { name: v.name || "Untitled view", type: v.type || "list" } };
 }
 
+
+/**
+ * A ClickUp comment, as markdown.
+ *
+ * ClickUp stores a comment the way its editor works — a Quill delta: a flat run
+ * of `{ text, attributes }` pieces where the ATTRIBUTES OF A LINE live on the
+ * piece whose text is the newline that ends it. Reading only `text` and joining
+ * it, which is what this did, throws every one of those away: a comment that in
+ * a browser is a heading, three bold bullets and a fenced block of test output
+ * arrived here as one grey paragraph, and the block of output — the evidence
+ * the comment was written to carry — was indistinguishable from the prose
+ * around it.
+ *
+ * Measured against a real comment rather than inferred from Quill's docs. The
+ * whole vocabulary that card used:
+ *
+ *   {"bold":true} {"italic":true} {"code":true} {"bold":true,"code":true}
+ *   {"header":2} {"header":3}
+ *   {"list":{"list":"bullet"}} {"list":{"list":"ordered"}}
+ *   {"code-block":{"code-block":"css"}}
+ *
+ * `link` is handled too — it is the one common attribute that card happened not
+ * to use, and dropping a URL is the same class of loss as dropping a fence.
+ *
+ * Markdown rather than HTML for the same reason `tableMarkdown` chose it: the
+ * panel already renders markdown for descriptions, so this arrives through a
+ * path that is already styled, already sanitised and already scrolls a wide
+ * table sideways.
+ */
+interface DeltaBlock {
+  text?: string;
+  /** ClickUp types a few pieces instead of attributing them. `divider` is the
+   *  one that matters: its text is already `---`, but it is a LINE of its own
+   *  and carries no newline, so without this it welds itself to whatever the
+   *  author wrote under the rule. */
+  type?: string;
+  attributes?: {
+    bold?: boolean; italic?: boolean; code?: boolean; link?: string;
+    header?: number;
+    list?: { list?: string };
+    "code-block"?: { "code-block"?: string };
+    blockquote?: boolean;
+  };
+  "table-embed"?: { rows?: unknown[]; columns?: unknown[]; cells?: Record<string, { content?: { insert?: unknown }[] }> };
+}
+
+/**
+ * Text that will survive being read as markdown.
+ *
+ * A run with no attributes is LITERAL — somebody typed `src/**\/*.py` or
+ * `a_b_c` and meant those characters. Emitting them into a markdown document
+ * unescaped is how a file glob becomes an italic run that swallows the rest of
+ * the sentence.
+ *
+ * Only the characters the renderer actually reads, and only where it reads
+ * them: a `#` or a `-` matters at the start of a line and nowhere else, so
+ * escaping every one of them would fill ordinary prose with backslashes.
+ */
+function literal(text: string): string {
+  // Only `*`, a backtick and the backslash itself: those are the three the
+  // renderer reads inside a line. `_` is deliberately absent — it means nothing
+  // to this renderer, and escaping it would put visible backslashes through
+  // every `snake_case` name in a comment about code.
+  //
+  // Nothing is escaped at the START of a line either. A person who typed
+  // "1. " into a paragraph ClickUp did not mark as a list still meant a
+  // numbered line, and rendering it as one is what they were looking at when
+  // they wrote it.
+  return text.replace(/([\\`*])/g, "\\$1");
+}
+
+/**
+ * The language ClickUp says the block is, passed through.
+ *
+ * Including `css`, which is what it wrote for a block of python test output on
+ * the card this was measured against — because that IS what ClickUp renders it
+ * as, and what somebody comparing the two windows is looking at. A grammar the
+ * app disagrees with produces the same colours as the browser it came from;
+ * substituting a cleverer guess produces a THIRD rendering of the same comment,
+ * which is the one thing neither window would explain.
+ *
+ * `plain` and `text` mean "no language" and are the one case worth dropping, so
+ * the renderer's own guess gets a turn on a block nobody labelled at all.
+ */
+const CHOSEN = (lang: string): string => (lang === "plain" || lang === "text" ? "" : lang);
+
+/**
+ * One line's runs, as markdown.
+ *
+ * Adjacent runs that share an emphasis get ONE pair of markers around the lot.
+ * Wrapping each run on its own is what produced `**leave ****`required`**** out**`
+ * — four asterisks in a row, which no reader parses — because ClickUp splits a
+ * bold sentence at every inline code span inside it.
+ *
+ * Surrounding spaces are moved outside the markers for the same reason: `** x **`
+ * is not emphasis in most readers, and the space belongs to the sentence rather
+ * than to the emphasised word.
+ */
+function renderRuns(runs: { text: string; a: DeltaBlock["attributes"] }[]): string {
+  const shape = (r: { a: DeltaBlock["attributes"] }) => `${!!r.a?.bold}|${!!r.a?.italic}|${r.a?.link ?? ""}`;
+  const out: string[] = [];
+  for (let i = 0; i < runs.length;) {
+    let j = i;
+    while (j < runs.length && shape(runs[j]) === shape(runs[i])) j++;
+    const a = runs[i].a;
+    const body = runs.slice(i, j)
+      .map((r) => (r.a?.code ? "`" + r.text.replace(/`/g, "") + "`" : literal(r.text)))
+      .join("");
+    const lead = body.match(/^\s*/)![0];
+    const tail = body.match(/\s*$/)![0];
+    let core = body.slice(lead.length, body.length - tail.length);
+    if (core) {
+      if (a?.bold) core = "**" + core + "**";
+      if (a?.italic) core = "*" + core + "*";
+      if (a?.link) core = "[" + core + "](" + a.link + ")";
+    }
+    out.push(lead + core + tail);
+    i = j;
+  }
+  return out.join("");
+}
+
+export function commentMarkdown(blocks: DeltaBlock[]): string {
+  const out: string[] = [];
+  /** The runs of the line being built, before its newline arrives and says what
+   *  kind of line it is. */
+  let line: { text: string; a: DeltaBlock["attributes"] }[] = [];
+  /** Consecutive `code-block` lines gather into one fence rather than becoming
+   *  one fence each. */
+  let fence: { lang: string; lines: string[] } | null = null;
+
+  const closeFence = () => {
+    if (!fence) return;
+    out.push("```" + fence.lang, ...fence.lines, "```");
+    fence = null;
+  };
+
+  const endLine = (a: DeltaBlock["attributes"]) => {
+    const body = renderRuns(line).trimEnd();
+    line = [];
+    const cb = a?.["code-block"];
+    if (cb) {
+      // Inside a fence the text is verbatim, so anything `literal` escaped on
+      // the way in has to come back off.
+      fence ??= { lang: CHOSEN(cb["code-block"] ?? ""), lines: [] };
+      fence.lines.push(body.replace(/\\([\\`*])/g, "$1"));
+      return;
+    }
+    closeFence();
+    const h = a?.header;
+    if (h && h >= 1 && h <= 4 && body) out.push("#".repeat(h) + " " + body);
+    else if (a?.list?.list === "bullet") out.push("- " + body);
+    else if (a?.list?.list === "ordered") out.push("1. " + body);
+    else if (a?.blockquote) out.push("> " + body);
+    else out.push(body);
+  };
+
+  for (const b of blocks) {
+    const tbl = b["table-embed"];
+    if (tbl) {
+      const md = tableMarkdown(tbl);
+      if (md) { endLine(undefined); closeFence(); out.push("", md, ""); }
+      continue;
+    }
+    if (b.type === "divider") { endLine(undefined); closeFence(); out.push("", "---", ""); continue; }
+    const raw = typeof b.text === "string" ? b.text : "";
+    if (!raw) continue;
+    const a = b.attributes;
+    // A run can carry its own newlines; each one ends a line under THIS block's
+    // attributes, which is exactly what Quill means by them.
+    const parts = raw.split("\n");
+    parts.forEach((part, i) => {
+      if (part) line.push({ text: part, a });
+      if (i < parts.length - 1) endLine(a);
+    });
+  }
+  if (line.length) endLine(undefined);
+  closeFence();
+  // Three or more blank lines are what an editor's empty paragraphs become, and
+  // markdown needs only one to separate.
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * A ClickUp comment table, as markdown.
+ *
+ * The one thing its plain-text rendering cannot do — it emits the string
+ * "undefined" where a table was, which is how a card's most useful comment
+ * arrived with a hole in it. The data is all there in the block: a sparse map
+ * of cells keyed `"row:column"`, one-indexed, alongside the row and column
+ * counts.
+ *
+ * Turned into a markdown table rather than into HTML because the panel already
+ * renders markdown for descriptions and comments, so this arrives through a
+ * path that is already styled, already sanitised, and already scrolls sideways
+ * when a table is wider than the pane.
+ *
+ * The first row is the header, which is what ClickUp's own editor makes it —
+ * measured on the real one: every cell in row 1 carries `cell-bg-color: grey`.
+ */
+function tableMarkdown(t: { rows?: unknown[]; columns?: unknown[]; cells?: Record<string, { content?: { insert?: unknown }[] }> }): string {
+  const rows = t.rows?.length ?? 0;
+  const cols = t.columns?.length ?? 0;
+  if (!rows || !cols || !t.cells) return "";
+  const cell = (r: number, c: number): string =>
+    (t.cells?.[`${r}:${c}`]?.content ?? [])
+      .map((x) => (typeof x.insert === "string" ? x.insert : ""))
+      .join("")
+      // A newline inside a cell would end the markdown row. `<br>` is what a
+      // markdown table has instead, and the renderer passes it through as text
+      // rather than as markup, which is the safe half of the trade.
+      .replace(/\s*\n\s*/g, " ")
+      .replace(/\|/g, "\\|")
+      .trim();
+  const line = (r: number) => `| ${Array.from({ length: cols }, (_, i) => cell(r, i + 1)).join(" | ")} |`;
+  const out = [line(1), `| ${Array.from({ length: cols }, () => "---").join(" | ")} |`];
+  for (let r = 2; r <= rows; r++) out.push(line(r));
+  return out.join("\n");
+}
+
 /** A list's own statuses and custom fields — the two things a view cannot tell
  *  us, and the two a picker needs in order not to guess. */
 export async function listMeta(
   token: string, listId: string,
-): Promise<CallResult<{ name: string; statuses: ListStatus[]; fields: ListField[] }>> {
-  const l = await call<{ name?: string; statuses?: { status: string; type: string; orderindex: number; color?: string }[] }>(
+): Promise<CallResult<{ name: string; statuses: ListStatus[]; fields: ListField[]; place: ListPlace }>> {
+  const l = await call<{
+    name?: string;
+    statuses?: { status: string; type: string; orderindex: number; color?: string }[];
+    // Verified against a real list: `/list/{id}` carries its own space and
+    // folder. The breadcrumb therefore costs no call of its own.
+    folder?: { name?: string; hidden?: boolean };
+    space?: { name?: string };
+  }>(
     `/list/${encodeURIComponent(listId)}`, token,
   );
   if (!l.ok) return { ...l, data: undefined };
@@ -541,6 +1077,12 @@ export async function listMeta(
     ok: true,
     data: {
       name: l.data?.name ?? "",
+      place: {
+        space: l.data?.space?.name || undefined,
+        // A folderless list gets a hidden placeholder — see ListPlace.
+        folder: l.data?.folder && !l.data.folder.hidden ? l.data.folder.name || undefined : undefined,
+        list: l.data?.name ?? "",
+      },
       statuses: (l.data?.statuses ?? []).map((s) => ({
         status: s.status, type: s.type, orderindex: s.orderindex, color: s.color,
       })).sort((a, b) => a.orderindex - b.orderindex),
@@ -581,6 +1123,77 @@ export async function viewTasks(
     if (r.data?.last_page !== false) return { ok: true, data: { tasks: out, truncated: false } };
   }
   return { ok: true, data: { tasks: out, truncated: true } };
+}
+
+/**
+ * How many comments each card has.
+ *
+ * The workspace does not put this on a task — measured against a real one:
+ * thirty-eight fields and not a count among them — so the only way to know is
+ * to ask for the comments and count them, one call per card.
+ *
+ * SPLIT IN TWO, AND THAT IS THE DESIGN. The first version awaited every card
+ * before returning the board, and this board already says "did not answer in
+ * time — showing what was last read" when the workspace is slow. Twenty extra
+ * calls in front of a list that was already racing a timeout is how a column of
+ * small numbers takes a panel down. So the read is instant and comes from the
+ * cache; the counting happens behind it, for the next one.
+ *
+ * The cache key is the card AND its `updated` stamp. A comment moves that
+ * stamp, so a card nobody has touched is never counted twice and a board that
+ * has not changed costs nothing. The first sight of a board shows blanks and
+ * fills in a refresh later — the honest trade for not making it wait.
+ */
+const commentCounts = new Map<string, number>();
+
+/**
+ * Take back the counts a previous run already worked out.
+ *
+ * The map is memory-only, so a restart empties it — and the very next sweep
+ * would then replace cached rows that DID carry a count with fresh ones that do
+ * not, blanking a column that was correct a second earlier. The counts survive
+ * the restart on the cached board itself (they are fields on the rows, and the
+ * board is written to disk), so the cheapest recovery is to read them back off
+ * it before applying anything.
+ *
+ * Keyed by id AND stamp like everything else here, so a card edited while the
+ * app was closed is not credited with its old count.
+ */
+export function seedCommentCounts(tasks: ProviderTask[]): void {
+  for (const t of tasks) {
+    if (t.comments !== undefined && !commentCounts.has(`${t.id}:${t.updated}`)) {
+      commentCounts.set(`${t.id}:${t.updated}`, t.comments);
+    }
+  }
+}
+
+/** Whatever has been counted, applied. Synchronous by design. */
+export function applyCommentCounts(tasks: ProviderTask[]): ProviderTask[] {
+  return tasks.map((t) => {
+    const n = commentCounts.get(`${t.id}:${t.updated}`);
+    return n === undefined ? t : { ...t, comments: n };
+  });
+}
+
+/**
+ * Count what has not been counted, behind the request.
+ *
+ * Never awaited by one. Five in flight because the workspace rate-limits by the
+ * minute, and forty cards at once is a burst that gets everything after it
+ * refused — including the board's own next read.
+ */
+export async function refreshCommentCounts(tasks: ProviderTask[], token: string): Promise<void> {
+  const need = tasks.filter((t) => !commentCounts.has(`${t.id}:${t.updated}`));
+  const LANES = 5;
+  for (let i = 0; i < need.length; i += LANES) {
+    await Promise.all(need.slice(i, i + LANES).map(async (t) => {
+      const r = await call<{ comments?: unknown[] }>(`/task/${encodeURIComponent(t.id)}/comment`, token);
+      if (r.ok) commentCounts.set(`${t.id}:${t.updated}`, (r.data?.comments ?? []).length);
+    }));
+  }
+  // Keyed by id+stamp, so an edited card leaves its old entry behind. Cleared
+  // wholesale: it is a display count and rebuilding costs one sweep.
+  if (commentCounts.size > 2000) commentCounts.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +1295,74 @@ export async function assignSelf(taskId: string, on: boolean, expectUpdated?: nu
 /** Move a card to another status. The value must be one the LIST accepts —
  *  the caller offers those and never a free-text box, so this cannot be asked
  *  to invent one. */
+/**
+ * Who can be put on a card: the members of the list it lives in.
+ *
+ * The list rather than the workspace, and that is the whole point — a workspace
+ * here has everybody in the company in it, and a picker offering all of them to
+ * assign one backend card is a picker nobody uses twice. ClickUp publishes
+ * membership per list, which is the team that actually works the board.
+ */
+export async function listMembers(listId: string): Promise<CallResult<{ members: ListMember[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const me = redacted("clickup")?.accountId;
+  const r = await call<{ members?: NonNullable<RawTask["assignees"]>[number][] }>(`/list/${encodeURIComponent(listId)}/member`, token);
+  if (!r.ok) return { ok: false, error: r.error };
+  const members: ListMember[] = (r.data?.members ?? [])
+    .filter((m) => m.id != null)
+    .map((m) => ({
+      id: Number(m.id),
+      name: m.username ?? "",
+      initials: m.initials || initialsOf(m.username ?? ""),
+      color: m.color || undefined,
+      avatar: m.profilePicture || undefined,
+      me: me ? String(m.id) === me : undefined,
+    }))
+    .filter((m) => m.name || m.initials);
+  // You, even when the list does not name you.
+  //
+  // Measured against a real board: a nineteen-member list came back without the
+  // connected account in it at all — ClickUp's list membership is not the same
+  // question as "who can be assigned here", and somebody working a board they
+  // are not formally a member of is ordinary. Without this the picker would
+  // silently lose the one thing the old control COULD do, which was put you on
+  // the card. So the account is added from `whoAmI` when the list forgot it.
+  if (me && !members.some((m) => m.me)) {
+    const who = await whoAmI(token);
+    if (who.ok && who.data) {
+      members.unshift({ id: Number(me), name: who.data.name || "you", initials: initialsOf(who.data.name || "you"), me: true });
+    }
+  }
+  // You first: the commonest assignment on any board is your own.
+  members.sort((a, b) => Number(!!b.me) - Number(!!a.me) || a.name.localeCompare(b.name));
+  return { ok: true, data: { members } };
+}
+
+/**
+ * Put somebody on a card, or take them off.
+ *
+ * `assignSelf` did this for one person — you — because that was the whole
+ * feature: the id was the connected account's and there was no way to name
+ * anybody else. It is the same PUT; what was missing was being allowed to say
+ * who. Add and remove rather than replace, because a ClickUp card holds several
+ * assignees and replacing would quietly take off whoever else was on it.
+ */
+export async function setAssignee(taskId: string, userId: number, on: boolean, expectUpdated?: number): Promise<WriteOutcome> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
+  if (!Number.isFinite(userId)) return { ok: false, error: "That is not a person" };
+  const stale = await guardUnchanged(token, taskId, expectUpdated);
+  if (stale) return { ok: false, conflict: true, error: stale };
+  const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
+    assignees: on ? { add: [userId] } : { rem: [userId] },
+  });
+  __reset();
+  const me = redacted("clickup")?.accountId;
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error };
+}
+
 export async function setStatus(taskId: string, status: string, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
@@ -731,7 +1412,13 @@ export async function taskDetail(taskId: string): Promise<CallResult<TaskDetail>
   if (!r.ok) return { ...r, data: undefined };
   const d = r.data!;
   const me = redacted("clickup")?.accountId;
-  const c = await call<{ comments?: { id: string; comment_text?: string; user?: { username?: string }; date?: string }[] }>(
+  const c = await call<{ comments?: {
+    id: string; comment_text?: string; date?: string; reply_count?: number;
+    user?: { username?: string };
+    /** ClickUp's own rich representation: a Quill delta, one piece per run of
+     *  text, carrying the formatting its editor applied. See commentMarkdown. */
+    comment?: DeltaBlock[];
+  }[] }>(
     `/task/${encodeURIComponent(taskId)}/comment`, token,
   );
   return {
@@ -744,11 +1431,75 @@ export async function taskDetail(taskId: string): Promise<CallResult<TaskDetail>
         name: cl.name ?? "",
         items: (cl.items ?? []).map((i) => ({ name: i.name ?? "", done: !!i.resolved })),
       })),
-      comments: (c.data?.comments ?? []).map((x) => ({
-        id: x.id, who: x.user?.username ?? "", text: x.comment_text ?? "", at: Number(x.date) || 0,
-      })),
+      /*
+       * Built from the blocks, not from `comment_text`.
+       *
+       * ClickUp's own plain-text rendering of a comment emits the literal
+       * string "undefined" for anything it cannot flatten — a table, most
+       * often — so a comment carrying the one thing worth reading arrived with
+       * a hole where it had been. Measured on a real card: the blocks hold the
+       * text, `comment_text` holds "undefined" in the middle of it.
+       *
+       * And the blocks hold the FORMATTING, which is the other half: headings,
+       * bold, inline code and fenced blocks are all attributes on those pieces,
+       * and joining their text threw every one away. `commentMarkdown` reads
+       * them. `comment_text` is only the fallback for a comment that has no
+       * blocks at all.
+       *
+       * Oldest first. A conversation read newest-first is a conversation read
+       * backwards: the reply lands before the thing it replies to, which is
+       * how "this looks good" ends up above what was good.
+       */
+      comments: (await Promise.all((c.data?.comments ?? []).map(async (x) => {
+        const text = commentMarkdown(x.comment ?? []) || (x.comment_text ?? "");
+        return {
+          id: x.id, who: x.user?.username ?? "", text,
+          at: Number(x.date) || 0,
+          replies: x.reply_count || undefined,
+          replyList: x.reply_count ? await commentReplies(x.id, token) : undefined,
+        };
+      }))).sort((a, b) => a.at - b.at),
     },
   };
+}
+
+/**
+ * The replies under one comment.
+ *
+ * A separate endpoint in the workspace's API — `/comment/<id>/reply` — and the
+ * reason a threaded comment arrived as a bare count. Only asked for when the
+ * count says there is something to ask about, so a card of unthreaded comments
+ * costs exactly the calls it did before.
+ *
+ * A failure returns nothing rather than propagating. The card is the thing
+ * somebody opened; losing all of it because one thread would not load is a
+ * worse answer than a comment that still shows its count and cannot expand.
+ */
+async function commentReplies(commentId: string, token: string): Promise<TaskReply[]> {
+  const r = await call<{ comments?: {
+    id: string; comment_text?: string; date?: string;
+    user?: { username?: string; initials?: string; color?: string; profilePicture?: string };
+    comment?: DeltaBlock[];
+  }[] }>(`/comment/${encodeURIComponent(commentId)}/reply`, token);
+  if (!r.ok) return [];
+  return (r.data?.comments ?? [])
+    .map((x) => {
+      const who = x.user?.username ?? "";
+      return {
+        id: x.id,
+        who,
+        // The same blocks-first treatment as the parent: `comment_text` emits
+        // the literal string "undefined" for anything it cannot flatten.
+        text: commentMarkdown(x.comment ?? []) || (x.comment_text ?? ""),
+        at: Number(x.date) || 0,
+        avatar: x.user?.profilePicture || undefined,
+        initials: x.user?.initials || initialsOf(who),
+        color: x.user?.color || undefined,
+      };
+    })
+    // Oldest first, like the thread above it. A reply read before the reply it
+    // answers is the same defect one level down.
+    .sort((a, b) => a.at - b.at);
 }
 
 /** A list's own tasks, for an address that pointed at a list rather than a

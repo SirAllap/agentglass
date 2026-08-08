@@ -30,6 +30,7 @@ import { termOptions } from "../lib/termPrefs.ts";
 // pasted into the settings page.
 import { themeFromCss } from "./TerminalPanel.tsx";
 import { isRemoteScript } from "../../../shared/deps.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 export function ShellConsole({ command, cwd, onClose }: {
   /** Typed into the shell verbatim, and never followed by a newline. */
@@ -161,7 +162,7 @@ export function ShellConsole({ command, cwd, onClose }: {
           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
           {copied ? "copied" : "copy"}
         </button>
-        <button onClick={onClose} className="shrink-0 text-[11px] px-1.5 leading-none" style={{ color: "var(--text3)" }} title="Close this console">✕</button>
+        <CloseButton onClick={onClose} style={{ color: "var(--text3)" }} title="Close this console" className="shrink-0" />
       </div>
       <div className="px-2.5 py-1 text-[10px]" style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
         {state === "failed"

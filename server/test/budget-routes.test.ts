@@ -11,17 +11,22 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { freePort } from "./freePort.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-budget-"));
-  const port = 4870 + Math.floor(Math.random() * 20);
+  const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
     // A named environment, never `...process.env`.
     env: {
       PATH: process.env.PATH ?? "",
+      // The server sweeps tmux window sizes at boot; without this it sweeps the
+      // developer's own socket directory. See tmuxTmp.ts.
+      TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       HOME: process.env.HOME ?? "",
       XDG_CONFIG_HOME: dir,
       AGENTGLASS_ROOT: dir,

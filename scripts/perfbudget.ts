@@ -25,6 +25,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { privateTmuxDir } from "./tmuxTmp.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 
@@ -80,6 +81,11 @@ const server = spawn({
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_DATA_HOME: join(home, "data"),
     XDG_CACHE_HOME: join(home, "cache"),
+    // Its own tmux socket directory, beside the config/data/cache above and
+    // for the same reason: this child is a SERVER, and a server with no
+    // TMUX_TMPDIR sweeps and lists /tmp/tmux-<uid> — the sessions the user is
+    // working in. See scripts/tmuxTmp.ts for what was measured reaching them.
+    TMUX_TMPDIR: privateTmuxDir(home),
     AGENTGLASS_TOKEN: "",
     // The transcript sweep reads whatever is in the operator's ~/.claude, which
     // is neither this app's doing nor reproducible on a CI runner.

@@ -42,6 +42,10 @@ const CRED_PATH = join(
 let overridePath: string | null = null;
 export function __setCredentialsPath(p: string | null): void { overridePath = p; cache = undefined; }
 const path = (): string => overridePath ?? CRED_PATH;
+/** The file, for the page that says where secrets are kept. The path, never a
+ *  token: this is exported so somebody can go and look, not so the browser
+ *  can. */
+export const credentialsPath = (): string => path();
 
 /** What is kept per provider. Only `token` is a secret; the rest is what the
  *  service told us about the token, so a card can say who you are without a

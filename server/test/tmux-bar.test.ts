@@ -21,18 +21,39 @@
 //
 // Runs against its own tmux server on a private socket — never the developer's.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
 
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 
 // Own socket AND an empty config — see tmuxIsolated. Unique per run, or a
 // leftover server from a previous one is what this talks to.
 const SOCK = [...TMUX_ISOLATED, "-L", `agx-bartest-${process.pid}`];
+/*
+ * And a socket DIRECTORY of its own, which this had not got. A `-L` name with
+ * no TMUX_TMPDIR resolves to /tmp/tmux-<uid> — the developer's, beside the
+ * `default` his sessions are on. Measured with a recording tmux on PATH: 68 of
+ * this file's calls landed there, and the machine still had `agx-bartest-*`
+ * sockets in his directory from runs hours earlier, one per run, cleaned up by
+ * reaching into his directory to delete them.
+ *
+ * Not the danger `-f /dev/null` above already closed — that is the half that
+ * keeps his tmux config, and so tmux-continuum's restore, out of a server this
+ * file starts. This is the other half: a fixture has no business leaving
+ * anything in that directory at all, and `tmuxSockets()` hands every server in
+ * a directory to `listPanes`.
+ */
+const TMPDIR = `/tmp/agx-tmux-bar-${process.pid}`;
+const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const has = !!Bun.which("tmux");
 
+/** `env: process.env` and it is load-bearing: measured on Bun 1.3.9, a
+ *  `Bun.spawnSync` with no `env` gets the environment as it was when the
+ *  PROCESS started, not `process.env` as it is now. Without it the TMUX_TMPDIR
+ *  set below reaches `tmuxctl.ts` (which passes `process.env`) and not this
+ *  helper, so the fixture would build its server in one directory while the
+ *  code under test looked in another. */
 const raw = (args: string[]) =>
-  Bun.spawnSync(["tmux", ...SOCK, ...args], { stdout: "pipe", stderr: "pipe", timeout: 4000 });
+  Bun.spawnSync(["tmux", ...SOCK, ...args], { stdout: "pipe", stderr: "pipe", timeout: 4000, env: process.env });
 const out = (args: string[]) => raw(args).stdout.toString().trim();
 
 let target: { pid: number; socket: string[]; session: string; id: string };
@@ -40,6 +61,11 @@ let ctl: typeof import("../src/tmuxctl.ts");
 
 beforeAll(async () => {
   if (!has) return;
+  // Here rather than at module load: `bun test` runs a suite's files in one
+  // process, and the other tmux files are entitled to the environment they were
+  // written against.
+  mkdirSync(TMPDIR, { recursive: true });
+  process.env.TMUX_TMPDIR = TMPDIR;
   raw(["kill-server"]);
   raw(["new-session", "-d", "-s", "bartest", "-n", "one"]);
   raw(["new-window", "-t", "bartest", "-n", "two"]);
@@ -49,13 +75,14 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  if (!has) return;
-  raw(["kill-server"]);
+  if (has) raw(["kill-server"]);
+  if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
+  else process.env.TMUX_TMPDIR = REAL_TMPDIR;
   // tmux leaves the socket file behind when the server exits, so killing the
-  // server alone still drops one dead socket per run into /tmp.
-  try {
-    rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? ""}`, SOCK[SOCK.length - 1]), { force: true });
-  } catch { /* nothing to remove */ }
+  // server alone still drops one dead socket per run. It is inside TMPDIR now,
+  // so this takes the directory and the socket together — where the version
+  // before reached into HIS directory to delete a file out of it.
+  try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* nothing to remove */ }
 });
 
 const win = (n: string) => out(["list-windows", "-t", "bartest", "-F", "#{window_name}\t#{window_id}\t#{window_index}"])

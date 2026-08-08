@@ -102,12 +102,21 @@ const forgotten = new Set<string>();
  * only when you were already looking at the surface that shows it.
  */
 function announce(g: PendingGate) {
-  const agent = `${g.source_app}:${g.session_id.slice(0, 8)}`;
+  // The server's name for it, not a third home-made one. This composed
+  // `${source_app}:${session_id.slice(0, 8)}` — the same string the server
+  // alert and the gate push both used until they stopped, and the same one that
+  // was reported as identifying nothing. The fallback is only for a server old
+  // enough not to send `where`.
+  const agent = g.where || `${g.source_app}:${g.session_id.slice(0, 8)}`;
   recordNote({
     app: "gate",
     summary: `Approve ${g.tool_name}?`,
     body: g.summary ? `${agent} · ${g.summary}` : `${agent} is held until you decide`,
     urgency: 2,
+    // Somewhere to go while you decide: the pane it is held in, so you can read
+    // what it was doing before you answer. The approve buttons live in the notch
+    // itself; this is the other half of the question.
+    ...(g.pane ? { goto: { kind: "pane" as const, pane: g.pane } } : {}),
   });
   for (const fn of arrivals) {
     try { fn(g); } catch { /* one bad listener must not stop the rest */ }
@@ -172,6 +181,63 @@ export function forgetGate(id: string) {
 }
 
 /**
+ * Answer a hold, and find out whether the answer landed.
+ *
+ * `/gate/decide` reports the interesting failure with **200** and `ok: false` —
+ * the clock got there first, or somebody answered from another device, and the
+ * agent has already been told the opposite. A `try/catch` never sees that, and
+ * the cockpit's own alerts panel used to write the whole call as
+ * `api.gateDecide(id, decision).catch(() => {})`: the card left the screen, the
+ * agent stayed blocked, and nothing anywhere said so. That is the same fault
+ * the phone's decide path was repaired for, on the surface that is a few feet
+ * from the machine — and web/test/gate-answer-took.test.ts existed only to
+ * pin the client type because the caller was still wrong.
+ *
+ * So the optimistic drop is undone on failure and the card comes back where it
+ * was: the server's list is the truth again, which also settles the case where
+ * it did resolve elsewhere — that one stops being listed and stays gone.
+ *
+ * The note is the same channel a new hold uses. `notify-send` is what the
+ * server would have reached for, and a desktop Do Not Disturb swallows it
+ * without a word; an in-app note cannot be silenced by a setting agentglass
+ * does not own. Urgency 2: an agent is still stopped, which is exactly the
+ * state the press was meant to end.
+ */
+export async function answerGate(gate: PendingGate, decision: "allow" | "deny"): Promise<boolean> {
+  const at = snapshot.findIndex((g) => g.id === gate.id);
+  forgetGate(gate.id);
+  const r = await api
+    .gateDecide(gate.id, decision)
+    // A rejection is the transport, not the decision: no answer reached the
+    // server at all, so the hold is certainly still held.
+    .catch(() => ({ ok: false, error: "the server could not be reached — nothing was sent" }));
+  if (r.ok) return true;
+
+  // Un-suppress before anything else. `forgotten` is cleared by an ingest that
+  // no longer lists the id, so leaving it in there for a gate the server still
+  // holds would hide that card until the hold timed out — the failure would
+  // have cost the very thing it needs to show.
+  forgotten.delete(gate.id);
+  if (!snapshot.some((g) => g.id === gate.id)) {
+    const next = snapshot.slice();
+    next.splice(at < 0 ? next.length : at, 0, gate);
+    snapshot = next;
+    changed();
+  }
+  const agent = `${gate.source_app}:${gate.session_id.slice(0, 8)}`;
+  recordNote({
+    app: "gate",
+    summary: `${decision === "allow" ? "Approve" : "Deny"} ${gate.tool_name} did not take`,
+    // The server's own sentence, not a paraphrase: it distinguishes "already
+    // allowed by somebody else" from "already denied by the timeout", and those
+    // need different things done about them.
+    body: `${agent} · ${r.error || "the server refused the answer without saying why"}`,
+    urgency: 2,
+  });
+  return false;
+}
+
+/**
  * Test seam: forget everything this module remembers.
  *
  * The store is a singleton whose behaviour is deliberately history-dependent --
@@ -216,12 +282,17 @@ let started = false;
  * Begin polling. Idempotent, and once begun it never stops.
  *
  * Called from the two subscribe functions rather than at import, which is the
- * whole point: `main.tsx` imports the desktop tree unconditionally so it can
- * choose between it and the phone one, so on a phone this module was loaded,
- * this poll was started, and `/gate/pending` was fetched every two seconds
- * *for a store nothing on that device ever reads*. The phone keeps its own
- * gate list in MobileApp and polls it separately, so the whole loop was waste
- * — on the one device where it costs a battery.
+ * whole point. `main.tsx` used to import the desktop tree unconditionally so it
+ * could choose between it and a phone one, so on a phone this module was
+ * loaded, this poll was started, and `/gate/pending` was fetched every two
+ * seconds *for a store nothing on that device ever read* — the browser
+ * companion kept its own gate list. A whole loop of waste on the one device
+ * where it cost a battery.
+ *
+ * That fork is gone with the companion, so the specific waste cannot recur, and
+ * the shape stays anyway: a module that polls on import bills every page that
+ * merely touches it, and the next surface to import this one for a type will
+ * not be reviewed with that in mind.
  *
  * Never stopping is deliberate and is the property the module comment is about:
  * tying the poll to a panel's lifetime meant agentglass stopped noticing new

@@ -9,14 +9,60 @@
 // nobody reads, healing only if they happened to reopen the panel on that exact
 // session and then close it properly.
 //
-// Every test here runs against its own tmux server on a private socket.
+// This line used to read "Every test here runs against its own tmux server on a
+// private socket", and it was wrong in the two ways that mattered. The socket
+// NAME was private; the DIRECTORY and the CONFIGURATION were the developer's.
+// `-L agx-stale-test` with no TMUX_TMPDIR lands in /tmp/tmux-<uid>, beside the
+// `default` his sessions are on, and no `-f` means the server reads
+// ~/.tmux.conf like any other.
+//
+// Not deduced — measured, by running the whole server suite behind a `tmux` that
+// resolves the socket by tmux's own rule and records where each call lands. This
+// file made 239 of the 333 calls that reached his socket directory, and the
+// callers name what was really happening:
+//
+//   .tmux/plugins/tpm/tpm                          63 calls from kanagawa.sh
+//   .tmux/plugins/tmux-resurrect/resurrect.tmux    tmux-yank, tmux-sensible, …
+//   .tmux/plugins/tmux-continuum/continuum.tmux
+//   .tmux/plugins/tmux-continuum/scripts/continuum_restore.sh   <- this one ran
+//
+// His plugin manager was not "inheritable", it was EXECUTING inside a fixture
+// this file created and then `kill-server`s. `@continuum-restore 'on'` is in his
+// config, and the only thing that stopped it rebuilding his workspace in here is
+// continuum's own `another_tmux_server_running_on_startup` — literally "is
+// another tmux of mine already up". On a fresh boot, on CI, or any evening his
+// tmux is down, that check flips and this file starts the only server on the
+// machine, with his config, with restore on, and with tmux-assistant-resurrect
+// relaunching his agent CLIs `--resume` into it. That is not a new risk: it is
+// the exact afternoon tmuxIsolated.ts was written about.
+//
+// So: `-f /dev/null` for the config and a TMUX_TMPDIR of our own for the
+// directory. The socket NAME stays fixed and the DIRECTORY carries the pid,
+// which is the shape ce905fa measured — isolating the name instead makes it
+// worse (18 failures against 5), because the search hands every server in a
+// directory to `listPanes`.
+//
+// The assertions below read `list-keys` and `show-options`, so until now they
+// were measuring his dotfiles and passing by luck. Under `-f /dev/null` they
+// measure tmux's own defaults, which is what they were always claiming to.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync } from "node:fs";
+import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 
-const SOCK = ["-L", "agx-stale-test"];
+// Short, for the 108-byte unix socket path limit.
+const TMPDIR = `/tmp/agx-tmux-stale-${process.pid}`;
+const SOCK = [...TMUX_ISOLATED, "-L", "agx-stale-test"];
+const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const has = !!Bun.which("tmux");
 
+/** `env: process.env` and it is load-bearing, not decoration: measured on Bun
+ *  1.3.9, a `Bun.spawnSync` with no `env` gets the environment as it was when
+ *  the PROCESS started, not `process.env` as it is now. Without it the
+ *  TMUX_TMPDIR set in `beforeAll` reaches `tmuxctl.ts` (which passes
+ *  `process.env`) and not this helper — so the code under test would look in
+ *  our directory while the fixture built its server in his. */
 const raw = (args: string[]) =>
-  Bun.spawnSync(["tmux", ...SOCK, ...args], { stdout: "pipe", stderr: "pipe", timeout: 5000 });
+  Bun.spawnSync(["tmux", ...SOCK, ...args], { stdout: "pipe", stderr: "pipe", timeout: 5000, env: process.env });
 const out = (args: string[]) => raw(args).stdout.toString().trim();
 
 let ctl: typeof import("../src/tmuxctl.ts");
@@ -25,6 +71,11 @@ let theirs = "";
 
 beforeAll(async () => {
   if (!has) return;
+  // Set here and put back in afterAll rather than at module load: `bun test`
+  // runs a suite's files in one process, and the other tmux files are entitled
+  // to the environment they were written against.
+  mkdirSync(TMPDIR, { recursive: true });
+  process.env.TMUX_TMPDIR = TMPDIR;
   raw(["kill-server"]);
   raw(["new-session", "-d", "-s", "mine"]);
   raw(["new-session", "-d", "-s", "theirs"]);
@@ -33,7 +84,15 @@ beforeAll(async () => {
   ctl = await import("../src/tmuxctl.ts");
 });
 
-afterAll(() => { if (has) raw(["kill-server"]); });
+afterAll(() => {
+  if (has) raw(["kill-server"]);
+  if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
+  else process.env.TMUX_TMPDIR = REAL_TMPDIR;
+  // The directory carries a pid, so it is a new one every run and nobody would
+  // ever reap it. A crashed run leaves an empty directory behind, which is the
+  // honest trade for not colliding with the run next door.
+  try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* already gone */ }
+});
 
 const target = () => ({ pid: 0, socket: SOCK, session: "mine", id: mine });
 const opt = (sess: string, name: string) => out(["show-options", "-qv", "-t", sess, name]);

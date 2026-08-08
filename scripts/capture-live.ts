@@ -19,6 +19,7 @@ import { join, resolve } from "node:path";
 /** Same finishing as the demo stills, so the terminal shot sits beside them in
  *  the README at the same width, density and weight. */
 import { finishStill } from "./still.ts";
+import { privateTmuxDir } from "./tmuxTmp.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const OUT = join(ROOT, ".github", "assets");
@@ -29,8 +30,10 @@ const W = 1920, SCALE = 2;
 const H_PROBE = 1000;
 const PANEL_H = 1080;
 
-/** Chrome and the protocol — the same helpers capture.ts and capture-phone.ts
- *  drive, so a fix to the connect retry loop reaches all three. */
+/** Chrome and the protocol — the same helpers capture.ts and make-icons.ts
+ *  drive, so a fix to the connect retry loop reaches all three.
+ *  (capture-phone.ts was the fourth; it photographed the browser companion for
+ *  the README and went when that did — mobile/scripts/qa.ts shoots the app.) */
 import { connect, findChrome, key, lit, until } from "./cdp.ts";
 
 async function main() {
@@ -65,6 +68,11 @@ async function main() {
       XDG_CONFIG_HOME: join(home, "config"),
       XDG_DATA_HOME: join(home, "data"),
       XDG_CACHE_HOME: join(home, "cache"),
+      // Its own tmux socket directory, beside the config/data/cache above and
+      // for the same reason: this child is a SERVER, and a server with no
+      // TMUX_TMPDIR sweeps and lists /tmp/tmux-<uid> — the sessions the user is
+      // working in. See scripts/tmuxTmp.ts for what was measured reaching them.
+      TMUX_TMPDIR: privateTmuxDir(home),
       // The operator's own shell exports leak in through ...process.env, and on
       // a machine already running agentglass they are hostile to a headless
       // shot: AGENTGLASS_BIND=0.0.0.0 + TRUST_LAN mint a token the tokenless

@@ -38,3 +38,27 @@ export function onOpenPrs(fn: ((j: PrJump) => void) | null): () => void {
 export function openPrs(query: string, scope: PrScope = "open"): void {
   listener?.({ query, scope, n: ++seq });
 }
+
+/**
+ * Open one, rather than search for it.
+ *
+ * `openPrs` types a number into the panel's filter and lets it search, which is
+ * right when the sender only has a string — a branch name off a notification,
+ * a card id. It is wrong when the sender knows exactly which pull request it
+ * means: reported from Source control, where pressing the branch's own chip put
+ * "17375" in the search box and stopped at "25 of 388 matches", having already
+ * had the number in hand.
+ *
+ * So a caller that knows both the repository and the number says so, and the
+ * shell turns that into the panel's own jump — which selects and opens.
+ */
+let exact: ((j: { repo: string; number: number }) => void) | null = null;
+
+export function onOpenPr(fn: ((j: { repo: string; number: number }) => void) | null): () => void {
+  exact = fn;
+  return () => { if (exact === fn) exact = null; };
+}
+
+export function openPr(repo: string, number: number): void {
+  exact?.({ repo, number });
+}

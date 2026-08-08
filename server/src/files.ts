@@ -16,7 +16,7 @@
 // it before it reaches the filesystem — a listing endpoint that accepts
 // `../../../etc` is a file server for the whole machine.
 
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
 import { inScope } from "./config.ts";
@@ -45,6 +45,14 @@ export interface TreeReport {
 export interface FindReport {
   ok: boolean;
   files: string[];
+  /** Directories whose path matches too.
+   *
+   *  A folder is a search result: typing `guest-checkout-v2` is how anybody
+   *  refers to a place in a repository, and the answer to it is the place.
+   *  Kept apart from `files` rather than mixed in, because opening one is a
+   *  different action — a file opens in the viewer, a directory moves the
+   *  tree. */
+  dirs: string[];
   truncated: boolean;
   /** Which tool answered, so a surprising result set can be explained rather
    *  than doubted. */
@@ -147,26 +155,130 @@ export function fileTree(rootIn: unknown, relIn: unknown): TreeReport {
  * otherwise — always present, and it lists exactly the tracked files, which is
  * a slightly narrower but never wrong answer.
  */
-export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES): FindReport {
+/**
+ * A ref this repository actually has, or null.
+ *
+ * Asked of git rather than pattern-matched, and that is both halves of the job:
+ * it is the containment check for a value that becomes a command argument, and
+ * it is the only way to know `origin/master` is not simply a typo — a name that
+ * does not resolve would otherwise come back as "no results", which reads as
+ * "your migration is safe" when the truth is nobody looked.
+ *
+ * `^{commit}` so a tag or a branch both land on something with a tree, and
+ * `--verify --quiet` so an unknown name is an empty answer instead of noise on
+ * stderr.
+ */
+export function resolveRef(root: string, refIn: unknown): string | null {
+  const ref = typeof refIn === "string" ? refIn.trim() : "";
+  if (!ref) return null;
+  // Nothing that could be read as an option, and nothing with whitespace: git
+  // takes `--upload-pack=...` as a flag wherever it appears.
+  if (ref.startsWith("-") || /\s/.test(ref)) return null;
+  const r = git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  return r.code === 0 && r.stdout.trim() ? ref : null;
+}
+
+/**
+ * Every path a ref holds, from the object store.
+ *
+ * `ls-tree -r` reads the commit's tree directly: nothing is checked out, no
+ * worktree is touched, and the answer is what that branch has right now rather
+ * than what this disk has. That is the whole point of asking — "which
+ * migrations are on origin/master" is a question about a branch you are not on
+ * and must not switch to.
+ */
+function pathsAt(root: string, ref: string): string[] {
+  const r = git(root, ["ls-tree", "-r", "--name-only", ref]);
+  return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
+}
+
+/** Files and folders matching `needle` among `paths`, folders derived from the
+ *  prefixes — the same rule the git fallback uses, since git tracks files and
+ *  has no notion of a directory either way. */
+function matchPaths(paths: string[], needle: string, limit: number): { files: string[]; dirs: string[]; truncated: boolean } {
+  const files = paths.filter((p) => p.toLowerCase().includes(needle));
+  const dirSet = new Set<string>();
+  for (const p of paths) {
+    const parts = p.split("/");
+    for (let n = 1; n < parts.length; n++) {
+      const dir = parts.slice(0, n).join("/");
+      if (dir.toLowerCase().includes(needle)) dirSet.add(dir);
+    }
+  }
+  return {
+    files: files.slice(0, limit),
+    dirs: [...dirSet].sort().slice(0, limit),
+    truncated: files.length > limit,
+  };
+}
+
+export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, refIn?: unknown): FindReport {
   const at = inside(rootIn, "");
-  if ("error" in at) return { ok: false, files: [], truncated: false, via: "", error: at.error };
+  if ("error" in at) return { ok: false, files: [], dirs: [], truncated: false, via: "", error: at.error };
   const q = typeof queryIn === "string" ? queryIn.trim() : "";
-  if (!q) return { ok: true, files: [], truncated: false, via: "" };
+  if (!q) return { ok: true, files: [], dirs: [], truncated: false, via: "" };
+
+  /*
+   * A branch you are not on — origin/master, most usefully.
+   *
+   * "Which migration numbers already exist upstream" cannot be answered by the
+   * working tree, and the alternatives are all worse than this: fetch and
+   * check out (loses your place), a second worktree (a checkout on disk for a
+   * listing), or reading it in the browser. `ls-tree` is neither — it is a read
+   * of the object store this repository already has.
+   */
+  if (refIn !== undefined && refIn !== null && refIn !== "") {
+    const ref = resolveRef(at.root, refIn);
+    if (!ref) {
+      return { ok: false, files: [], dirs: [], truncated: false, via: "",
+        error: `No such branch or ref here: ${String(refIn)}. Fetch it first if it is new.` };
+    }
+    const m = matchPaths(pathsAt(at.root, ref), q.toLowerCase(), limit);
+    return { ok: true, ...m, via: `git ls-tree ${ref}` };
+  }
 
   const fd = Bun.which("fd") ?? Bun.which("fdfind");
   if (fd) {
     // --fixed-strings: a path is typed, not written as a regex, and a stray `.`
     // or `+` in a filename should find that filename.
-    const r = Bun.spawnSync([fd, "--type", "f", "--hidden", "--exclude", ".git", "--fixed-strings", q],
+    //
+    // Directories in the same breath, and `fd` marks them with a trailing
+    // slash so one run answers both. Asking twice would double the walk of a
+    // checkout for an answer one walk already contains.
+    // --full-path, because the query is a PATH. Without it `fd` compares only
+    // the basename: typing `guest-checkout-v2` — a folder near the root —
+    // answered with nothing at all, since no file is called that. The git
+    // fallback below has always matched the whole path, so the two backends
+    // were also giving different answers to the same question depending on
+    // what was installed.
+    const r = Bun.spawnSync([fd, "--hidden", "--exclude", ".git", "--full-path", "--fixed-strings", q],
       { cwd: at.root, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
-    const files = lines(r.stdout).slice(0, limit);
-    return { ok: true, files, truncated: lines(r.stdout).length > limit, via: "fd" };
+    const all = lines(r.stdout);
+    const dirs = all.filter((p) => p.endsWith("/")).map((p) => p.replace(/\/$/, "")).slice(0, limit);
+    const files = all.filter((p) => !p.endsWith("/")).slice(0, limit);
+    return { ok: true, files, dirs, truncated: all.length > limit * 2, via: "fd" };
   }
 
   const r = git(at.root, ["ls-files", "--cached", "--others", "--exclude-standard"]);
   const needle = q.toLowerCase();
-  const all = r.stdout.split("\n").filter((p) => p && p.toLowerCase().includes(needle));
-  return { ok: true, files: all.slice(0, limit), truncated: all.length > limit, via: "git ls-files" };
+  const tracked = r.stdout.split("\n").filter(Boolean);
+  const all = tracked.filter((p) => p.toLowerCase().includes(needle));
+  /*
+   * git has no notion of a directory — it tracks files — so the folders are
+   * derived from the paths it does know: every prefix of every tracked file,
+   * kept when the prefix itself matches. That finds an empty directory not at
+   * all, which is the one git cannot see either.
+   */
+  const dirSet = new Set<string>();
+  for (const p of tracked) {
+    const parts = p.split("/");
+    for (let n = 1; n < parts.length; n++) {
+      const dir = parts.slice(0, n).join("/");
+      if (dir.toLowerCase().includes(needle)) dirSet.add(dir);
+    }
+  }
+  const dirs = [...dirSet].sort().slice(0, limit);
+  return { ok: true, files: all.slice(0, limit), dirs, truncated: all.length > limit, via: "git ls-files" };
 }
 
 /**
@@ -176,13 +288,63 @@ export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES):
  * the same reason as above: nobody typing `useState(` into a search box means
  * "an unclosed group".
  */
-export function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS): GrepReport {
+export function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS, refIn?: unknown): GrepReport {
   const at = inside(rootIn, "");
   if ("error" in at) return { ok: false, hits: [], files: 0, truncated: false, via: "", error: at.error };
   const q = typeof queryIn === "string" ? queryIn.trim() : "";
   // Two characters, same floor the in-review search uses: one letter matches
   // every file in the repository, which is not a search result.
   if (q.length < 2) return { ok: true, hits: [], files: 0, truncated: false, via: "" };
+
+  /*
+   * The same question of a branch you are not on. `git grep` takes a ref
+   * directly and reads it out of the object store — ripgrep cannot, because
+   * ripgrep searches files on disk and these are not on disk.
+   *
+   * Its output gains a `ref:` prefix on every line, which is stripped below so
+   * a hit on a branch and a hit here look the same to the caller.
+   */
+  const atRef = refIn !== undefined && refIn !== null && refIn !== "" ? resolveRef(at.root, refIn) : null;
+  if (refIn !== undefined && refIn !== null && refIn !== "" && !atRef) {
+    return { ok: false, hits: [], files: 0, truncated: false, via: "",
+      error: `No such branch or ref here: ${String(refIn)}. Fetch it first if it is new.` };
+  }
+  if (atRef) {
+    /*
+     * `-e <pattern> <ref>`, in that order, and no `--`.
+     *
+     * `git grep ... <ref> -- <q>` reads q as a PATHSPEC, not as the pattern —
+     * so it searched the whole branch for a file called "0095" and answered
+     * nothing. Silently: an empty result from a search is indistinguishable
+     * from "that text is not on this branch", which is the answer somebody is
+     * about to trust. `-e` names the pattern explicitly, which also keeps a
+     * query starting with a dash from being read as a flag.
+     */
+    const r = Bun.spawnSync(["git", "-C", at.root, "grep", "--fixed-strings", "--ignore-case",
+      "--line-number", "-I", "-e", q, atRef],
+      { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    const hits: GrepHit[] = [];
+    const files = new Set<string>();
+    const needle = q.toLowerCase();
+    const all = lines(r.stdout);
+    for (const line of all.slice(0, limit)) {
+      // `ref:path:line:text` — the ref is stripped, the rest is the ordinary
+      // shape. Split from the left only as far as needed: a path may contain a
+      // colon and the text almost certainly does.
+      const noRef = line.startsWith(`${atRef}:`) ? line.slice(atRef.length + 1) : line;
+      const a1 = noRef.indexOf(":");
+      const a2 = noRef.indexOf(":", a1 + 1);
+      if (a1 < 0 || a2 < 0) continue;
+      const rel = noRef.slice(0, a1);
+      const ln = Number(noRef.slice(a1 + 1, a2));
+      const text = noRef.slice(a2 + 1).slice(0, MAX_LINE);
+      if (!Number.isFinite(ln)) continue;
+      const at0 = text.toLowerCase().indexOf(needle);
+      hits.push({ rel, line: ln, text, at: at0 < 0 ? 0 : at0, len: at0 < 0 ? 0 : q.length });
+      files.add(rel);
+    }
+    return { ok: true, hits, files: files.size, truncated: all.length > limit, via: `git grep ${atRef}` };
+  }
 
   const rg = Bun.which("rg");
   const out = rg
@@ -250,4 +412,149 @@ function statusMarks(root: string): Map<string, string> {
 
 function lines(buf: Uint8Array): string[] {
   return new TextDecoder().decode(buf).split("\n").filter(Boolean);
+}
+
+/* ------------------------------------------------------ one file, as text */
+
+/**
+ * How much of a file is worth sending to a viewer.
+ *
+ * A markdown document is prose; the ones people keep are tens of kilobytes and
+ * the biggest in this repository is under a hundred. A megabyte is far past
+ * anything anybody wrote by hand and well short of what would hurt to move, so
+ * it is the line between "read it" and "open it in the editor".
+ */
+const MAX_TEXT_BYTES = 1_000_000;
+
+export interface FileText {
+  ok: boolean;
+  rel: string;
+  text: string;
+  bytes: number;
+  /** The file is longer than the cap; `text` is the first MAX_TEXT_BYTES of
+   *  it. Said rather than silently shown, because a document that stops in the
+   *  middle of a sentence reads as a broken document. */
+  truncated?: boolean;
+  error?: string;
+}
+
+/**
+ * A file's text, for something that renders rather than edits.
+ *
+ * Same containment as every other reader here — `inside()` decides what may be
+ * read at all, and the same rules that stop the tree walking out of the
+ * checkout stop this one.
+ *
+ * Binary is refused rather than mangled. A NUL byte in the first few kilobytes
+ * is the test every tool from `grep` to `git` uses, and it is right for the
+ * same reason: a viewer that decodes a PNG as UTF-8 produces a screen of
+ * replacement characters and no explanation.
+ */
+export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): FileText {
+  const at = inside(rootIn, relIn);
+  if ("error" in at) return { ok: false, rel: "", text: "", bytes: 0, error: at.error };
+
+  /*
+   * The file as that branch has it, not as this disk has it.
+   *
+   * Without this, a result found on origin/master opens the working tree's copy
+   * of the same path — a different file wearing the right name, or nothing at
+   * all for one that only exists upstream. That is the worst kind of wrong
+   * answer: it looks like it worked.
+   */
+  if (refIn !== undefined && refIn !== null && refIn !== "") {
+    const ref = resolveRef(at.root, refIn);
+    if (!ref) return { ok: false, rel: at.rel, text: "", bytes: 0, error: `No such branch or ref here: ${String(refIn)}` };
+    const r = git(at.root, ["show", `${ref}:${at.rel}`]);
+    if (r.code !== 0) return { ok: false, rel: at.rel, text: "", bytes: 0, error: `${at.rel} is not on ${ref}` };
+    const full = r.stdout;
+    // Same ceiling and the same binary refusal as a file on disk: a ref is not
+    // a reason to hand a megabyte of object store to the renderer.
+    if (full.includes("\u0000")) return { ok: false, rel: at.rel, text: "", bytes: full.length, error: "that looks like a binary file" };
+    const text = full.length > MAX_TEXT_BYTES ? full.slice(0, MAX_TEXT_BYTES) : full;
+    return { ok: true, rel: at.rel, text, bytes: full.length, truncated: full.length > MAX_TEXT_BYTES };
+  }
+
+  let st;
+  try { st = statSync(at.abs); } catch { return { ok: false, rel: at.rel, text: "", bytes: 0, error: "no such file" }; }
+  if (st.isDirectory()) return { ok: false, rel: at.rel, text: "", bytes: 0, error: "that is a directory" };
+
+  let buf: Buffer;
+  try { buf = readFileSync(at.abs); } catch (e) { return { ok: false, rel: at.rel, text: "", bytes: 0, error: String(e) }; }
+
+  const head = buf.subarray(0, 8192);
+  if (head.includes(0)) return { ok: false, rel: at.rel, text: "", bytes: st.size, error: "that file is binary" };
+
+  const truncated = buf.length > MAX_TEXT_BYTES;
+  const text = new TextDecoder().decode(truncated ? buf.subarray(0, MAX_TEXT_BYTES) : buf);
+  return { ok: true, rel: at.rel, text, bytes: st.size, ...(truncated ? { truncated: true } : {}) };
+}
+
+/**
+ * Every branch this repository can be searched at, local and remote.
+ *
+ * Local ones matter as much as remote: "what does orbit-WEB-1042 have in it" is
+ * asked of a branch sitting in this repository that this worktree is not on,
+ * and the only ways to look were to check it out — moving you off your work —
+ * or to cut yet another worktree for a listing.
+ *
+ * Nothing here checks anything out. These names are handed to `ls-tree` and
+ * `git grep <ref>`, which read the object store; the working tree is not
+ * touched and HEAD does not move. That is the whole reason this can offer a
+ * branch list at all without being dangerous.
+ */
+export function listRefs(rootIn: unknown): { ok: boolean; local: string[]; remote: string[]; head?: string; error?: string } {
+  const at = inside(rootIn, "");
+  if ("error" in at) return { ok: false, local: [], remote: [], error: at.error };
+
+  const read = (glob: string) => {
+    const r = git(at.root, ["for-each-ref", "--format=%(refname:short)", glob]);
+    return r.code === 0 ? r.stdout.split("\n").map((x) => x.trim()).filter(Boolean) : [];
+  };
+
+  // The branch this worktree is on, so the list can say which one you are
+  // already looking at rather than offering it as somewhere else to go.
+  const h = git(at.root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const head = h.code === 0 ? h.stdout.trim() : undefined;
+
+  /* main and master first — "does my migration collide with what is already
+     there" means one of those nine times in ten — then the rest by name. */
+  const rank = (x: string) => (/(^|\/)(main|master)$/.test(x) ? 0 : /(^|\/)(develop|dev|staging)$/.test(x) ? 1 : 2);
+  const order = (xs: string[]) => xs.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+
+  return {
+    ok: true,
+    local: order(read("refs/heads")),
+    // origin/HEAD is an alias for a branch already in the list, and offering
+    // both invites "why do these two give the same answer".
+    remote: order(read("refs/remotes").filter((x) => !x.endsWith("/HEAD"))),
+    ...(head ? { head } : {}),
+  };
+}
+
+/**
+ * Which of these paths are actually here, right now.
+ *
+ * For the "Recent" list, which is a memory of what you opened and not a promise
+ * that it still exists: switch that checkout to another branch and half the
+ * list points at files the working tree no longer has. Clicking one opened an
+ * empty viewer with "no such file" in it — a dead end that reads as a failure
+ * of the viewer rather than a fact about the branch.
+ *
+ * One call for the whole list rather than one per row: a stat is cheap and a
+ * round trip is not, and this runs every time that tab is shown.
+ */
+export function filesExist(rootIn: unknown, relsIn: unknown): { ok: boolean; here: string[]; error?: string } {
+  const at = inside(rootIn, "");
+  if ("error" in at) return { ok: false, here: [], error: at.error };
+  const rels = Array.isArray(relsIn) ? relsIn.filter((x): x is string => typeof x === "string") : [];
+  const here: string[] = [];
+  // Capped: this takes a list from the client, and an unbounded one would be an
+  // unbounded number of stats.
+  for (const rel of rels.slice(0, 200)) {
+    const one = inside(rootIn, rel);
+    if ("error" in one) continue;
+    try { statSync(one.abs); here.push(rel); } catch { /* not here, which is the answer */ }
+  }
+  return { ok: true, here };
 }

@@ -145,3 +145,89 @@ export function paneForCwd(rows: PaneRow[], cwd: string | null | undefined): Pan
   const hits = panesForCwd(rows, cwd);
   return hits.length === 1 ? hits[0]! : null;
 }
+
+/**
+ * Attach the session each pane last reported running, where one was reported.
+ *
+ * The directory join above is the fallback, not the good answer. It has to
+ * decline whenever two agents share a worktree — which is a working day, not an
+ * edge case — and declining is the honest end of a question that now has an
+ * exact answer available: Claude Code's hooks carry `tmux_pane`, so panewt.ts
+ * has been recording pane → session on every event for a while. This is the
+ * side that reads it back.
+ *
+ * Kept here, pure and injected, rather than reaching into the database from the
+ * route: the interesting cases are a pane with no note, a note for a pane that
+ * has since closed, and two panes claiming one session — none of which need a
+ * tmux server or a db file to exercise.
+ */
+/**
+ * A tmux session this app made on the user's behalf, mirroring one of theirs.
+ *
+ * The phone companion joins as a grouped session, which shares the original's
+ * windows — so `list-panes -a` reports every one of those panes twice, once
+ * under `orbit` and once under `agx-phone-12-x5rsja`. They are the same pane,
+ * not two candidates, and the one worth addressing is the user's own: moving
+ * the mirror moves what the phone is looking at, not what is on the desk.
+ */
+const MIRROR_SESSION = /^agx-phone-\d+-[a-z0-9]+$/;
+
+export function withAgentSessions<T extends { paneId: string; session?: string }>(
+  rows: T[],
+  noteOf: (paneId: string) => { sessionId: string; at: number } | null,
+): (T & { agentSession: string | null })[] {
+  const claims = new Map<string, { at: number; rows: number[] }>();
+  const notes = rows.map((r) => noteOf(r.paneId));
+  notes.forEach((n, i) => {
+    if (!n?.sessionId) return;
+    const held = claims.get(n.sessionId);
+    if (!held || n.at > held.at) claims.set(n.sessionId, { at: n.at, rows: [i] });
+    else if (n.at === held.at) held.rows.push(i);
+  });
+  // Rows for one physical pane, collapsed before anything is called ambiguous.
+  // Measured on this machine: a paired phone put five of the seven interesting
+  // panes into this branch, and treating them as rival claimants blanked the
+  // feature for all five.
+  for (const [sessionId, held] of claims) {
+    if (held.rows.length < 2) continue;
+    const ids = new Set(held.rows.map((i) => rows[i]!.paneId));
+    if (ids.size !== 1) continue; // different panes: genuinely two claims
+    const own = held.rows.filter((i) => !MIRROR_SESSION.test(rows[i]!.session ?? ""));
+    // All mirrors and no original should not happen — a grouped session exists
+    // because an original does — but if it ever does, the first is still the
+    // same pane and better than nothing.
+    claims.set(sessionId, { at: held.at, rows: [(own.length ? own : held.rows)[0]!] });
+  }
+  // Only the newest claimant keeps the session, and only if it is alone in
+  // being newest. Both halves were found in the notes on the machine this runs
+  // on, not reasoned about:
+  //
+  //   session 4d419542 → %12 (a minute ago) and %3 (21 hours ago)
+  //
+  // tmux reuses a pane id once the pane is gone, so an old note names a pane
+  // that today holds somebody's shell — and %3 sorted ahead of %12 in the live
+  // list, so first-match would have sent you to a fish prompt with nothing to
+  // do with the alert. A tie means two panes hold the same id on two different
+  // tmux servers (pane ids are unique per server, and the note has no room for
+  // which); there is no way to tell those apart, so neither is offered and the
+  // directory fallback takes it from there.
+  const winner = new Map<number, string>();
+  for (const [sessionId, { rows: idx }] of claims) if (idx.length === 1) winner.set(idx[0]!, sessionId);
+  return rows.map((r, i) => ({ ...r, agentSession: winner.get(i) ?? null }));
+}
+
+/**
+ * The pane a session is in, when both sides agree it is still there.
+ *
+ * `paneForSession` alone is not enough: the note outlives the pane. An agent
+ * exits, tmux reuses nothing and the pane id is simply gone, and the row stays
+ * in the table saying %12 forever. Intersecting it with the live pane list is
+ * what turns a remembered id into a place you can be sent.
+ */
+export function paneForAgentSession<T extends { paneId: string; agentSession: string | null }>(
+  rows: T[],
+  sessionId: string | null | undefined,
+): T | null {
+  if (!sessionId) return null;
+  return rows.find((r) => r.agentSession === sessionId) ?? null;
+}

@@ -20,6 +20,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { freePort } from "./freePort.ts";
 
 let dir: string, base: string, socket: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -46,13 +47,25 @@ beforeAll(async () => {
    * a test suite ending somebody's work.
    */
   socket = `agx-panes-${dir.slice(dir.lastIndexOf("-") + 1)}`;
-  const port = 4930 + Math.floor(Math.random() * 20);
+  const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
     // A named environment, never `...process.env`.
     env: {
       PATH: process.env.PATH ?? "",
       HOME: process.env.HOME ?? "",
+      /*
+       * The tmux this suite runs, and the one the server is allowed to see.
+       *
+       * Unset, `tmuxSockets()` lists `/tmp/tmux-<uid>` and the boot sweep walks
+       * the developer's own sessions. Pointed HERE, at this run's scratch
+       * directory — and the helper below spawns `tmux` with the same value, so
+       * both halves resolve `-L <socket>` to one server. They must: with only
+       * the child moved, the suite creates its session on one server and asks
+       * the other about it, and the three "with a pane genuinely running" tests
+       * go red with an empty listing.
+       */
+      TMUX_TMPDIR: dir,
       XDG_CONFIG_HOME: dir,
       AGENTGLASS_ROOT: dir,
       AGENTGLASS_DB: join(dir, "f.db"),
@@ -77,10 +90,10 @@ afterAll(() => {
   // behind is what turns a unique name into a fixed one for whoever reuses the
   // temp directory name next, and it is how the old fixed socket ended up
   // holding a server for hours.
-  try { Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, "kill-server"], { stdout: "ignore", stderr: "ignore" }); } catch { /* never started one */ }
+  try { Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, "kill-server"], { stdout: "ignore", stderr: "ignore", env: { ...process.env, TMUX_TMPDIR: dir } }); } catch { /* never started one */ }
   // And the socket file itself: tmux leaves it behind, so a suite that only
   // killed the server still littered /tmp with one dead socket per run.
-  try { rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? ""}`, socket), { force: true }); } catch { /* nothing to remove */ }
+  try { rmSync(join(dir, `tmux-${process.getuid?.() ?? ""}`, socket), { force: true }); } catch { /* nothing to remove */ }
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
@@ -171,7 +184,8 @@ describe("with a pane genuinely running", () => {
   // `beforeAll` is what names it. Naming it twice is how the two halves of this
   // file drifted onto different servers in the first place.
   const tmuxOk = Bun.spawnSync(["tmux", "-V"]).exitCode === 0;
-  const tmux = (...args: string[]) => Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, ...args]);
+  const tmux = (...args: string[]) =>
+    Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, ...args], { env: { ...process.env, TMUX_TMPDIR: dir } });
 
   test.skipIf(!tmuxOk)("a pane no open chat points at is named an orphan", async () => {
     tmux("new-session", "-d", "-s", A, "sleep", "300");

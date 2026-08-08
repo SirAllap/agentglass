@@ -28,7 +28,7 @@
 // open project, the same boundary chat.ts, codex.ts and the terminal hold.
 import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { inScope, chatBypassAllowed } from "./config.ts";
-import { startKeepalive, MODEL_RE, SESSION_RE } from "./chat.ts";
+import { startKeepalive, drainStderr, MODEL_RE, SESSION_RE } from "./chat.ts";
 import type { AgentModel, IngestBody } from "../../shared/types.ts";
 
 const agyBin = () => Bun.which("agy");
@@ -402,8 +402,8 @@ export function antigravityStream(
   });
 
   // Drained from the start, not after exit: a full stderr pipe blocks the child
-  // forever.
-  const stderrText = new Response(proc.stderr as ReadableStream<Uint8Array>).text().catch(() => "");
+  // forever. Readable mid-flight too — see drainStderr.
+  const stderr = drainStderr(proc.stderr as ReadableStream<Uint8Array>);
 
   const enc = new TextEncoder();
   const dec = new TextDecoder();
@@ -450,7 +450,9 @@ export function antigravityStream(
       let firstByte = false;
       const watchdog = setTimeout(async () => {
         if (firstByte || cancelled) return;
-        const hint = (await Promise.race([stderrText, Promise.resolve("")])).trim();
+        // Not awaited: what stderr has said so far is the whole point, and a
+        // CLI hung on a login prompt never closes the pipe.
+        const hint = stderr.soFar().trim();
         try {
           controller.enqueue(enc.encode(JSON.stringify({
             type: "agx_error",
@@ -484,7 +486,7 @@ export function antigravityStream(
       const code = await proc.exited;
       if (cancelled) return; // a cancelled controller throws on enqueue/close
       if (code !== 0) {
-        const text = (await stderrText).trim();
+        const text = (await stderr.all).trim();
         controller.enqueue(enc.encode(JSON.stringify({ type: "agx_error", code, error: text || `agy exited ${code}` }) + "\n"));
       }
       controller.close();

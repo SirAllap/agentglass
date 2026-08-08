@@ -20,6 +20,7 @@
 // It never runs that command. Handing a GUI a root shell to fix a network
 // problem is a worse trade than reading one line and pasting it.
 import { networkInterfaces } from "node:os";
+import { readFileSync, statSync } from "node:fs";
 
 /**
  * A non-loopback address that has talked to us, and what we know about it.
@@ -83,7 +84,7 @@ export function noteClient(ip: string | null | undefined, opts: { now?: number; 
     prev.lastAt = now;
     prev.hits++;
     // A device that starts sending a User-Agent (or changes it) renames itself;
-    // a request without one — the phone's own service worker, say — must not
+    // a request without one — the phone app's fetch, a hook, curl — must not
     // erase the name we already have.
     if (agent && agent !== prev.agent) { prev.agent = agent; prev.label = deviceLabel(agent); }
   } else {
@@ -259,6 +260,167 @@ export function __resetRemoteClients(): void {
   seen.clear();
 }
 
+// ---------------------------------------------------------------------------
+// Was this loopback connection really tailscaled?
+// ---------------------------------------------------------------------------
+//
+// net.ts explains the hole (`tailscale serve` re-originates from 127.0.0.1, so
+// the whole tailnet looked like the desk). This is the half of the fix that
+// cannot be forged, and it exists because the cheap version of the fix is a
+// fresh vulnerability: every header on a proxied request is attacker-adjacent,
+// and a local process can set all of them.
+//
+// Measured, same box, same headers, one through a real `tailscale serve` and
+// one straight at the port from my own shell:
+//
+//   through serve : peer 127.0.0.1:36388  -> socket uid 0
+//   forged direct : peer 127.0.0.1:36394  -> socket uid 1000
+//
+// with the forging curl sending the real peer's tailnet address in
+// `X-Forwarded-For`, plus `Tailscale-User-Login:` and `Tailscale-Headers-Info:`
+// verbatim. Every header matched; the uid did not, and a process cannot choose
+// the uid the kernel records against its own socket. That is the whole basis of
+// the check.
+//
+// (Through serve, tailscaled *overwrites* those headers — the forged
+// `Tailscale-User-Login: attacker@evil.example` came out as the real login. So
+// they are unforgeable *through* the proxy and trivially forgeable *around*
+// it, which is exactly why they are a trigger below and never a decision.
+// `X-Real-IP` and `Tailscale-Headers` are passed through untouched, so a
+// tailnet client sets those itself: never read them.)
+
+/** Where tailscaled puts its LocalAPI socket on Linux. Owned by the uid
+ *  tailscaled runs as, inside a root-owned directory — so one stat answers
+ *  "which uid is tailscaled" without a /proc scan (3.75ms) or hardcoding 0.
+ *  Root is the honest default: tailscaled needs it for the TUN device. */
+const TAILSCALED_SOCK = "/var/run/tailscale/tailscaled.sock";
+
+let uidCache: { uid: number; at: number } | null = null;
+/** Set only by __trustProxyUid, declared here rather than beside it: a `let`
+ *  read by a function defined above it is a TDZ crash waiting for the first
+ *  caller that runs during module evaluation. This codebase has had that
+ *  black-screen bug once already. */
+let forcedUid: number | null = null;
+
+function tailscaledUid(now = Date.now()): number {
+  if (forcedUid !== null) return forcedUid;
+  if (uidCache && now - uidCache.at < 60_000) return uidCache.uid;
+  let uid = 0;
+  try { uid = statSync(TAILSCALED_SOCK).uid; } catch { /* not Linux, or not installed */ }
+  uidCache = { uid, at: now };
+  return uid;
+}
+
+/**
+ * uid per local port, for sockets currently connected TO `ourPort`.
+ *
+ * Cached as a whole table for a second rather than memoised per connection,
+ * and that is a deliberate trade. Ephemeral ports get reused, so a per-port
+ * verdict can outlive the connection it was about and bless whatever picks the
+ * number up next. Caching the *table* instead means no answer is ever more
+ * than a second stale, for the same cost: the parse measured 2.2-4.5ms over
+ * 185 rows, so one read per second is ~0.25% of a core even under load.
+ *
+ * Reading it at all is rare: the trigger below fires only on requests carrying
+ * forwarding headers, and his hooks send none.
+ */
+let tableCache: { map: Map<number, number>; port: number; at: number } | null = null;
+
+function socketOwners(ourPort: number, now = Date.now()): Map<number, number> {
+  if (tableCache && tableCache.port === ourPort && now - tableCache.at < 1000) return tableCache.map;
+  const map = new Map<number, number>();
+  for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    let text: string;
+    try { text = readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n").slice(1)) {
+      const c = line.trim().split(/\s+/);
+      if (c.length < 10) continue;
+      if (c[3] !== "01") continue; // ESTABLISHED only; a TIME_WAIT row reports uid 0 for everyone
+      const localPort = parseInt(c[1]!.split(":")[1] ?? "", 16);
+      const remPort = parseInt(c[2]!.split(":")[1] ?? "", 16);
+      if (remPort !== ourPort || !Number.isFinite(localPort)) continue;
+      map.set(localPort, Number(c[7]));
+    }
+  }
+  tableCache = { map, port: ourPort, at: now };
+  return map;
+}
+
+/** Test seam: drop both caches so a test can change what /proc would say. */
+export function __resetProxyProbe(): void {
+  uidCache = null;
+  tableCache = null;
+  forcedUid = null;
+}
+
+/**
+ * Test seam: treat `uid` as tailscaled's.
+ *
+ * A test proxy runs as whoever runs the tests, never as root, so without this
+ * the end-to-end proof could only ever be run on a machine with Tailscale
+ * installed and configured — which is to say, never in CI, on exactly the file
+ * that must not regress. Reachable only from inside the process (the e2e test
+ * spawns the server with `--preload`), and anything that can choose the
+ * server's command line already owns the server.
+ */
+export function __trustProxyUid(uid: number): void {
+  forcedUid = uid;
+}
+
+/**
+ * True when the local tailscaled is the one holding this connection.
+ *
+ * Two stages, cheap then certain:
+ *
+ *  1. Trigger — does the request carry any forwarding header at all. Broad on
+ *     purpose (any of the three, not the exact marker), because a false
+ *     negative here silently re-opens the hole while a false positive costs
+ *     one cached /proc read and is then rejected by stage 2. His hooks carry
+ *     none of them and never reach stage 2.
+ *
+ *  2. Decision — the uid that owns the connecting socket. Un-forgeable by any
+ *     non-root local process. If an attacker is already root the token file is
+ *     readable anyway, so root is not a boundary this check pretends to hold.
+ *
+ * Where /proc does not exist (macOS, Windows) stage 2 cannot run and the
+ * trigger stands alone, so the headers are believed. That is safe *for
+ * authorization* and not for bookkeeping, and the difference matters: a forged
+ * `X-Forwarded-For` can only ever move a caller from loopback to remote, which
+ * takes privilege away — remote needs a token, loopback does not. What it can
+ * still do is invent a row in the device list or spend another device's rate
+ * limit. Both need a process already on the machine, and neither grants
+ * anything.
+ */
+export function proxiedByTailscaled(
+  peer: { address?: string; port?: number } | null | undefined,
+  ourPort: number,
+  headers: { get(name: string): string | null },
+  now = Date.now()
+): boolean {
+  if (!peer?.address || !isLoopback(peer.address)) return false;
+  const forwarded =
+    headers.get("x-forwarded-for") ||
+    headers.get("tailscale-headers-info") ||
+    headers.get("tailscale-user-login");
+  if (!forwarded) return false;
+  let owners = socketOwners(ourPort, now);
+  let uid = peer.port === undefined ? undefined : owners.get(peer.port);
+  // A miss is usually a connection newer than the one-second table, so pay for
+  // one fresh read before drawing any conclusion from absence. Without this the
+  // very first request on a new tailscaled connection — which is every request
+  // that matters until the pool warms — would be decided by the fallback.
+  if (uid === undefined && peer.port !== undefined) {
+    tableCache = null;
+    owners = socketOwners(ourPort, now);
+    uid = owners.get(peer.port);
+  }
+  // Genuinely nothing to consult: no /proc (macOS, Windows), or the socket went
+  // away between accept and now. Both land on the trigger alone — see above for
+  // why believing a forwarding header can only ever cost privilege, not grant it.
+  if (owners.size === 0 || uid === undefined) return true;
+  return uid === tailscaledUid(now);
+}
+
 export interface Reachable {
   /** The address to put in a URL. */
   address: string;
@@ -288,47 +450,326 @@ export interface Reachable {
  * Refreshed on a timer rather than per request: the gate reads `names`
  * synchronously on the hot path, and shelling out to `tailscale` there would
  * add a process spawn to every request.
+ *
+ * ── why this is not just a value ──────────────────────────────────────────
+ * It is a TRUST cache. `trustedName` in index.ts reads it to decide whether a
+ * WebSocket upgrade is allowed, and the phone deliberately presents its
+ * MagicDNS origin (mobile/src/lib/live.ts says why at length). So an empty
+ * `names` does not merely hide a row in a picker — it refuses `/stream`, and
+ * the phone stops receiving alert frames while REST keeps answering on its 20s
+ * poll. The app looks alive and has quietly stopped buzzing.
+ *
+ * The bug this shape fixes: every failure of `tailscale status` used to be
+ * indistinguishable from "this machine has no tailnet name", and the empty set
+ * was assigned unconditionally. One blip — tailscaled restarting, the socket
+ * slow, the binary busy — landing on the 120s tick emptied it, and it healed
+ * only on the next successful tick, up to two minutes later, with nothing said
+ * anywhere. So: a probe that could not ASK never overwrites the last answer,
+ * and it is retried sooner than a probe that could.
  */
-let tailnet: { names: Set<string>; https: { name: string; url: string } | null } = { names: new Set(), https: null };
+interface Tailnet {
+  names: Set<string>;
+  https: { name: string; url: string } | null;
+  /** `tailscale` was on PATH at the last look. */
+  installed: boolean;
+  /** When the last probe that got an ANSWER landed. 0 ⇒ never had one. */
+  at: number;
+  /** Consecutive probes that could not ask. 0 while healthy. */
+  fails: number;
+  /** Why the last probe could not ask. Null while healthy. */
+  problem: string | null;
+  /** The grace ran out while still unable to ask, so the held names were
+   *  dropped. Empty `names` then means "we gave up", not "no tailnet". */
+  dropped: boolean;
+}
+let tailnet: Tailnet = { names: new Set(), https: null, installed: true, at: 0, fails: 0, problem: null, dropped: false };
 export function tailnetNames(): ReadonlySet<string> { return tailnet.names; }
 
-async function tsCmd(args: string[]): Promise<string | null> {
-  const bin = Bun.which("tailscale");
-  if (!bin) return null;
+/**
+ * How long to wait before looking again.
+ *
+ * Two cadences, because a failure is the state most worth leaving: a held name
+ * has a deadline on it, and every second spent failing is a second of that
+ * deadline. Backed off all the same — a daemon that is down tends to stay down
+ * for a while, and a process spawn every ten seconds for an hour is not free.
+ */
+export const TAILNET_OK_MS = 120_000;
+const TAILNET_RETRY_MS = 10_000;
+const TAILNET_RETRY_MAX_MS = 60_000;
+
+/**
+ * How long a trusted name may outlive the last time we could confirm it.
+ *
+ * This is the staleness budget of a TRUST cache, so it is not "as long as
+ * possible". Ten minutes, and the reasoning is about what an attacker would
+ * need in the window rather than about how long a restart takes:
+ *
+ *   - The name only leaves `names` for real when `tailscale status` ANSWERS and
+ *     this node has no MagicDNS name — logged out, or removed from the tailnet.
+ *     That answer is authoritative and applied at once, whatever the exit code
+ *     (see selfNameOf). The grace is only ever spent while we CANNOT ASK.
+ *   - So the exposure is the overlap of two things: this machine removed from
+ *     the tailnet, AND its local tailscaled unreachable. In that state nothing
+ *     is routing over the tailnet to us anyway; the only caller that can still
+ *     present the name is one that already reaches the port some other way —
+ *     loopback, or the LAN with AGENTGLASS_TRUST_LAN already on, both of which
+ *     `privateHost` trusts without this cache.
+ *   - And an accepted origin is not access. The token gate (auth.ts) and
+ *     pairing are untouched by any of this; the origin check is the anti-CSRF
+ *     layer, not the credential.
+ *
+ * Ten minutes is roughly forty retries at the schedule above, which is far more
+ * than any tailscaled restart measured on this machine (single-digit seconds),
+ * and short enough that a genuinely dead daemon fails closed inside a coffee.
+ */
+const TAILNET_GRACE_MS = 10 * 60_000;
+
+/*
+ * The two "said once" latches, declared HERE rather than beside the functions
+ * that use them.
+ *
+ * `let` in a module is in its temporal dead zone until the line runs, so a
+ * declaration further down the file is a live grenade for anything that could
+ * be reached during module evaluation — this app has already lost a window to
+ * exactly that. Nothing calls refreshTailscale at import time today; putting
+ * these above every reader means nothing can start.
+ */
+let expiredAlreadySaid = false;
+let healedIsNews = false;
+
+interface TsRun {
+  /** `tailscale` is not on PATH. An ANSWER — there is no tailnet — not a
+   *  failure to ask. The old `string | null` said the same thing here as it did
+   *  for a daemon mid-restart, which is the whole of T26. */
+  absent?: boolean;
+  /** Exit status; null when the process could not be started or read at all. */
+  code: number | null;
+  out: string;
+  why?: string;
+}
+
+async function tsCmd(args: string[]): Promise<TsRun> {
+  // The PATH is passed rather than left implicit, and it is not a style choice:
+  // measured, `Bun.which("tailscale")` resolves against the PATH the process
+  // was STARTED with, and a `process.env.PATH` changed afterwards has no effect
+  // at all. It cost this ticket a proof — a stub put on PATH at runtime was
+  // silently bypassed and the real binary answered instead. The same staleness
+  // applies in the app: a server started before Tailscale was installed would
+  // never find it, however many times this ran.
+  const bin = Bun.which("tailscale", { PATH: process.env.PATH ?? "" });
+  if (!bin) return { absent: true, code: null, out: "" };
   try {
     const p = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "ignore" });
     const out = await new Response(p.stdout).text();
     await p.exited;
-    return p.exitCode === 0 ? out : null;
-  } catch { return null; }
+    return { code: p.exitCode, out };
+  } catch (e) {
+    return { code: null, out: "", why: String((e as Error)?.message ?? e).slice(0, 120) };
+  }
 }
 
-/** Read the tailnet name and whether serve is fronting our port. Cheap, and it
- *  fails soft: no Tailscale, or serve not set up, just leaves nothing offered. */
-export async function refreshTailscale(port: number): Promise<void> {
-  const statusOut = await tsCmd(["status", "--json"]);
-  const names = new Set<string>();
-  let self = "";
-  if (statusOut) {
-    try {
-      const dns = JSON.parse(statusOut)?.Self?.DNSName;
-      if (typeof dns === "string" && dns) { self = dns.replace(/\.$/, "").toLowerCase(); names.add(self); }
-    } catch { /* not JSON we recognise */ }
+/**
+ * The MagicDNS name in a `tailscale status --json` body.
+ *
+ * Three returns, and the distinction is the point:
+ *   a name  — this node answers to it;
+ *   ""      — we read a real status body and this node has no name (logged out,
+ *             or removed from the tailnet). An ANSWER, applied immediately;
+ *   null    — that was not a status body. We could not ask.
+ *
+ * The BODY decides, and the exit code is never consulted. Measured, on this
+ * machine's real tailscaled: running, `--json` gives exit 0 and a body with
+ * `BackendState: "Running"`. NOT measured, and deliberately: what `--json`
+ * exits with when the backend is stopped or logged out — that would have meant
+ * stopping a daemon that is not this code's to stop.
+ *
+ * Which is the reason for the rule rather than an excuse for it. An exit-code
+ * test has to be right about that unmeasured case in BOTH directions: read it
+ * as failure and a name that has genuinely gone is held for the grace; read it
+ * as an answer and a daemon that merely could not be reached empties the cache,
+ * which is the bug. Reading the body cannot be wrong either way — a daemon that
+ * is not there writes nothing to stdout, and nothing does not parse.
+ */
+function selfNameOf(out: string): string | null {
+  let j: unknown;
+  try { j = JSON.parse(out); } catch { return null; }
+  if (!j || typeof j !== "object") return null;
+  const dns = (j as { Self?: { DNSName?: unknown } }).Self?.DNSName;
+  return typeof dns === "string" && dns ? dns.replace(/\.$/, "").toLowerCase() : "";
+}
+
+/** What one refresh worked out, and when to come back. */
+export interface TailnetProbe {
+  /** We got an authoritative answer about the tailnet this pass. */
+  ok: boolean;
+  /** Milliseconds until the next look. Sooner after a failure — see above. */
+  nextMs: number;
+  /** Why we could not ask, when we could not. */
+  problem?: string;
+  /** This pass gave up on a held name (the grace ran out). */
+  dropped?: boolean;
+}
+
+/**
+ * Read the tailnet name and whether serve is fronting our port.
+ *
+ * Fails SOFT in the sense that matters and fails LOUD in the sense that used to
+ * be missing: no Tailscale, or serve not set up, still just leaves nothing
+ * offered — but a probe that could not run keeps the last good answer, says so
+ * on `/remote/status`, logs it once, and asks to be called back sooner.
+ */
+export async function refreshTailscale(port: number, now = Date.now()): Promise<TailnetProbe> {
+  const run = await tsCmd(["status", "--json"]);
+
+  // Not installed is an answer, and a stable one: there is no tailnet, and no
+  // amount of retrying will produce a name. Assigned, not held.
+  if (run.absent) {
+    const had = tailnet.names.size;
+    tailnet = { names: new Set(), https: null, installed: false, at: now, fails: 0, problem: null, dropped: false };
+    if (had) console.warn(`[remote] tailscale is no longer on PATH — dropped ${had} trusted tailnet name(s)`);
+    // Not `sayTailnetHealed()`: this IS an answer, so the hold is over, but
+    // "tailscale answered again" under a line saying it is gone reads as two
+    // contradictory events. Clear the latches without narrating a recovery.
+    healedIsNews = false;
+    expiredAlreadySaid = false;
+    return { ok: true, nextMs: TAILNET_OK_MS };
   }
+
+  const self = selfNameOf(run.out);
+  if (self === null) return holdTailnet(run, now);
+
+  const names = new Set<string>();
+  if (self) names.add(self);
+
+  /*
+   * The serve offer follows the names, and only within the same answer.
+   *
+   * `tailscale serve status --json` prints `{}` when nothing is served, which
+   * parses and is authoritative: serve was turned off, stop offering the HTTPS
+   * row. If the serve probe itself could not be read we keep whatever we had,
+   * but only while the identity is unchanged — an https URL built on a name
+   * this node no longer answers to is worse than no row at all.
+   */
   let https: { name: string; url: string } | null = null;
-  const serveOut = self ? await tsCmd(["serve", "status", "--json"]) : null;
-  if (serveOut) {
-    try {
-      const web = JSON.parse(serveOut)?.Web ?? {};
+  if (self) {
+    const serve = await tsCmd(["serve", "status", "--json"]);
+    const web = serveWeb(serve.out);
+    if (web === null) {
+      https = tailnet.https && tailnet.https.name === self ? tailnet.https : null;
+    } else {
       const hits = `:${port}`;
       for (const [hostPort, cfg] of Object.entries(web)) {
         const handlers = (cfg as { Handlers?: Record<string, { Proxy?: string }> })?.Handlers ?? {};
         const proxiesUs = Object.values(handlers).some((h) => typeof h?.Proxy === "string" && h.Proxy.includes(hits));
         if (proxiesUs) { const name = hostPort.replace(/:\d+$/, "").toLowerCase(); https = { name, url: `https://${name}/` }; break; }
       }
-    } catch { /* serve status shape changed — offer nothing rather than guess */ }
+    }
   }
-  tailnet = { names, https };
+
+  tailnet = { names, https, installed: true, at: now, fails: 0, problem: null, dropped: false };
+  sayTailnetHealed();
+  return { ok: true, nextMs: TAILNET_OK_MS };
+}
+
+/** The `Web` map out of a serve status body, or null when that was not one. */
+function serveWeb(out: string): Record<string, unknown> | null {
+  let j: unknown;
+  try { j = JSON.parse(out); } catch { return null; }
+  if (!j || typeof j !== "object") return null;
+  const web = (j as { Web?: unknown }).Web;
+  return web && typeof web === "object" ? (web as Record<string, unknown>) : {};
+}
+
+/**
+ * A probe that could not ask: keep what we knew, on a deadline.
+ *
+ * Nothing here overwrites `names` until the deadline passes, which is the whole
+ * fix — the phone's upgrade survives a tailscaled restart instead of being
+ * refused for up to two minutes with no trace anywhere.
+ */
+function holdTailnet(run: TsRun, now: number): TailnetProbe {
+  const problem = run.why
+    ? `tailscale could not be run (${run.why})`
+    : `tailscale status answered nothing readable (exit ${run.code ?? "?"})`;
+  const fails = tailnet.fails + 1;
+  const expired = now - tailnet.at >= TAILNET_GRACE_MS;
+  // `at` is left where it was: the grace is measured from the last ANSWER, not
+  // from the last attempt, or a probe every ten seconds would renew it forever.
+  const keep = expired ? new Set<string>() : tailnet.names;
+  const dropped = expired && (tailnet.names.size > 0 || tailnet.dropped);
+  const wasHolding = tailnet.problem !== null;
+  tailnet = {
+    ...tailnet,
+    names: keep,
+    https: expired ? null : tailnet.https,
+    fails, problem, dropped,
+  };
+  // Said once per spell of trouble, not once per probe: at ten seconds a
+  // ten-minute outage is forty identical lines, and a log nobody can skim is a
+  // log nobody reads. Same treatment alerts.ts gives a missing notify-send.
+  if (!wasHolding) {
+    healedIsNews = true;
+    const held = keep.size;
+    console.warn(
+      `[remote] ${problem} — ${held ? `holding ${held} trusted tailnet name(s) for up to ${Math.round((TAILNET_GRACE_MS - (now - tailnet.at)) / 1000)}s` : "no tailnet name is held"}`
+    );
+  }
+  if (dropped && !expiredAlreadySaid) {
+    expiredAlreadySaid = true;
+    console.warn(
+      `[remote] tailscale has not answered for ${Math.round(TAILNET_GRACE_MS / 60_000)} minutes — the trusted tailnet name is dropped. ` +
+      `A phone connecting over its MagicDNS name will be refused at the WebSocket upgrade until tailscale answers again.`
+    );
+  }
+  return {
+    ok: false,
+    nextMs: Math.min(TAILNET_RETRY_MS * 2 ** (fails - 1), TAILNET_RETRY_MAX_MS),
+    problem,
+    dropped,
+  };
+}
+
+function sayTailnetHealed(): void {
+  expiredAlreadySaid = false;
+  if (!healedIsNews) return;
+  healedIsNews = false;
+  console.log(`[remote] tailscale answered again — ${tailnet.names.size} trusted tailnet name(s)`);
+}
+
+/** Whether the answer above is an answer at all. Read by `/remote/status` so
+ *  "no tailnet" and "could not ask" stop looking identical from outside. */
+export interface TailnetHealth {
+  /** `tailscale` was on PATH at the last look. */
+  installed: boolean;
+  /** Names trusted right now. */
+  names: string[];
+  /** When we last got an ANSWER. 0 ⇒ never. */
+  at: number;
+  /** Set while we cannot ask: `names` is what we last KNEW, not what is true. */
+  problem?: string;
+  /** Consecutive failed probes. */
+  fails?: number;
+  /** The grace ran out — `names` is empty because we gave up holding it. */
+  dropped?: boolean;
+}
+
+export function tailnetHealth(): TailnetHealth {
+  return {
+    installed: tailnet.installed,
+    names: [...tailnet.names],
+    at: tailnet.at,
+    ...(tailnet.problem ? { problem: tailnet.problem, fails: tailnet.fails } : {}),
+    ...(tailnet.dropped ? { dropped: true } : {}),
+  };
+}
+
+/** Test seam: put the cache back to a fresh boot. Nothing in the app calls it —
+ *  a suite that leaves a held name behind poisons the next file's expectations,
+ *  and these are module-level by design (the gate reads them synchronously). */
+export function __resetTailnet(): void {
+  tailnet = { names: new Set(), https: null, installed: true, at: 0, fails: 0, problem: null, dropped: false };
+  expiredAlreadySaid = false;
+  healedIsNews = false;
 }
 
 const cgnat = (ip: string): boolean => {
@@ -447,6 +888,15 @@ export interface RemoteStatus {
   /** One row per device that has reached this machine, live state included. */
   devices: DeviceRecord[];
   firewall: FirewallHint | null;
+  /**
+   * What we know about this machine's tailnet name, and whether we know it.
+   *
+   * Here because the empty set had two meanings and no way to tell them apart
+   * from outside — "there is no tailnet" and "tailscale would not answer, so
+   * the phone's origin is about to be refused" produced the identical, silent,
+   * healthy-looking page. See Tailnet.
+   */
+  tailnet: TailnetHealth;
 }
 
 export function remoteStatus(opts: {
@@ -479,5 +929,6 @@ export function remoteStatus(opts: {
     clients: remoteClients(),
     devices: remoteDevices(base.map((a) => a.address)),
     firewall: firewallHint(opts.port, base[0]?.subnet ?? null, opts.which),
+    tailnet: tailnetHealth(),
   };
 }

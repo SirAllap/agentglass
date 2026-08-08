@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
   BLANK, DEFAULT_HOME, ENGINE_KEY, HOME_KEY,
   homePage, homePageRaw, searchEngine, setHomePage, setSearchEngine,
+  importHistory, setImportHistory, importBookmarks, setImportBookmarks, pickImportRows,
 } from "../src/lib/browserPrefs.ts";
 
 // bun's test environment has no DOM; the module only ever touches these two.
@@ -69,5 +70,40 @@ describe("search engine", () => {
   test("junk in storage falls back rather than reaching the URL builder", () => {
     store.set(ENGINE_KEY, "askjeeves");
     expect(searchEngine()).toBe("google");
+  });
+});
+
+describe("what rides along with a cookie import", () => {
+  const H = (over: Partial<{ bookmarked: boolean }> = {}) => ({ url: "u", bookmarked: false, ...over });
+  const B = () => ({ url: "u", bookmarked: true });
+
+  test("both default ON, so leaving them alone changes nothing", () => {
+    expect(importHistory()).toBe(true);
+    expect(importBookmarks()).toBe(true);
+  });
+
+  test("only OFF is stored; turning back on clears the key, not stores 'true'", () => {
+    setImportHistory(false);
+    expect(store.get("agentglass.browser.importHistory")).toBe("0");
+    expect(importHistory()).toBe(false);
+    setImportHistory(true);
+    expect(store.has("agentglass.browser.importHistory")).toBe(false);
+    expect(importHistory()).toBe(true);
+  });
+
+  test("history off drops exactly the non-bookmarks, keeps the bookmarks", () => {
+    const rows = [H(), H(), B()];
+    expect(pickImportRows(rows, false, true)).toEqual([B()]);
+  });
+
+  test("bookmarks off drops exactly the bookmarks, keeps the history", () => {
+    const rows = [H(), B(), H()];
+    expect(pickImportRows(rows, true, false)).toEqual([H(), H()]);
+  });
+
+  test("both on keeps everything; both off keeps nothing", () => {
+    const rows = [H(), B()];
+    expect(pickImportRows(rows, true, true)).toHaveLength(2);
+    expect(pickImportRows(rows, false, false)).toHaveLength(0);
   });
 });

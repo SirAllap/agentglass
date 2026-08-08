@@ -196,15 +196,18 @@ describe("retention", () => {
 describe("delivery", () => {
   it("hands a fired reminder to the one path everything else uses", async () => {
     // Not a delivery path of its own: `pushReminder` is a sibling of
-    // `pushGate`, so a reminder buys the webhook, the phone fan-out, the native
-    // OS notification and notify-send from code that already gets each right.
+    // `pushGate`, so a reminder buys the webhook, every attached client (the
+    // cockpit, the desktop, a paired phone) and notify-send from code that
+    // already gets each right.
     // What is asserted here is that it is *reached* — the transports themselves
     // are alerts.ts's, and already covered.
     const alerts = await import("../src/alerts.ts");
     const seen: { title: string; body: string; urgency: number }[] = [];
     alerts.setAlertSink({
       broadcast: (a) => { seen.push({ title: a.title, body: a.body, urgency: a.urgency }); },
-      hasClients: () => true,
+      // One socket, and it answered its last ping: a client that is there and
+      // demonstrably listening. See AlertSink.census.
+      census: () => ({ attached: 1, live: 1 }),
     });
     try {
       R.addReminder({ title: "the delivery test", civil: civilIn(-1) });
@@ -212,8 +215,9 @@ describe("delivery", () => {
       expect(fired.length).toBe(1);
       const mine = seen.filter((a) => a.title.includes("the delivery test"));
       expect(mine.length, "the reminder never reached the alert path").toBe(1);
-      // Urgency 1, never 2: waking a phone's radio is for an agent that is
-      // stopped until somebody answers. A reminder is news.
+      // Urgency 1, never 2: 2 is the level a phone shows at Android's `max`,
+      // over whatever you are doing, and it is for an agent that is stopped
+      // until somebody answers. A reminder is news.
       expect(mine[0]!.urgency).toBe(1);
     } finally {
       alerts.setAlertSink(null);
@@ -225,7 +229,7 @@ describe("delivery", () => {
     // eight times as useful as one; it is how a feature gets turned off.
     const alerts = await import("../src/alerts.ts");
     const seen: string[] = [];
-    alerts.setAlertSink({ broadcast: (a) => { seen.push(a.title); }, hasClients: () => true });
+    alerts.setAlertSink({ broadcast: (a) => { seen.push(a.title); }, census: () => ({ attached: 1, live: 1 }) });
     try {
       for (let i = 1; i <= 8; i++) R.addReminder({ title: `backlog item ${i}`, civil: civilIn(-i * 7) });
       const fired = R.drainDue();

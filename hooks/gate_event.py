@@ -64,6 +64,34 @@ def _agentglass_local_only(url):
         url = urlunparse(u._replace(netloc=netloc))
     return url
 
+def _shared_secret():
+    """The token the server is running with, or "" when it has none.
+
+    The environment first, then the file — the same order and the same file as
+    hooks/statusline.sh, for the same reason. A hook inherits the environment of
+    whatever launched Claude Code, which for a desktop icon or a terminal opened
+    outside agentglass is nothing at all. Since the desktop app runs its sidecar
+    with a token even on loopback (electron/main.js), reading only the
+    environment would leave every gate post unauthenticated: /gate answers 401,
+    the HTTPError branch below cancels the retry loop, and the call lands in
+    fail-open. The gate would stop holding, silently, with nothing on screen to
+    say it had.
+
+    0600 and owned by this user, so being able to read it is the check. An
+    unreadable file is not an error — a server started without a token wants no
+    header at all, and sending one it never asked for changes nothing.
+    """
+    from_env = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    if from_env:
+        return from_env
+    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    try:
+        with open(os.path.join(config_home, "agentglass", "token"), encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
 TIMEOUT = int(os.environ.get("AGENTGLASS_GATE_TIMEOUT", "60"))
 # Default is fail-open: if agentglass is unreachable, allow (never block agents
 # by accident). Set this to invert it — an unreachable control plane DENIES the
@@ -120,9 +148,9 @@ def main():
     # Carry the shared secret when the server has one. /gate is the control plane
     # (a POST raises an operator-facing approval prompt), so a token-protected
     # server requires auth here — otherwise any local process could inject spoofed
-    # approval prompts. The hook runs on the same machine and reads it from env.
+    # approval prompts. The hook runs on the same machine, so it can read it.
     headers = {"Content-Type": "application/json"}
-    token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    token = _shared_secret()
     if token:
         headers["Authorization"] = "Bearer " + token
 

@@ -1,4 +1,5 @@
 import { adoptServer } from "./api.ts";
+import { partitionsFor } from "./browserProfiles.ts";
 
 // Desktop-only capabilities.
 //
@@ -18,6 +19,7 @@ type DesktopBridge = {
   setZoom: (factor: number) => Promise<number>;
   autostartEnabled: () => Promise<boolean>;
   setAutostart: (on: boolean) => Promise<boolean>;
+  revealPath?: (p: string) => Promise<{ ok: boolean; error?: string }>;
   remoteEnabled?: () => Promise<boolean>;
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
@@ -32,7 +34,75 @@ type DesktopBridge = {
   winState?: () => Promise<{ max: boolean; full: boolean }>;
   appMenu?: (x: number, y: number) => Promise<void>;
   onWinState?: (fn: (st: { max: boolean; full: boolean }) => void) => () => void;
+  /** Absent on shells built before the project picker learned to browse. */
+  chooseFolder?: (start?: string) => Promise<string | null>;
+  /** Absent on shells built before the browser could zoom. */
+  onBrowserZoom?: (fn: (level: number) => void) => () => void;
+  onBrowserOpenTab?: (fn: (url: string) => void) => () => void;
+  setActiveBrowserGuest?: (id: number) => Promise<boolean>;
+  browserPlaces?: (req: { source: string }) => Promise<{ ok: boolean; places?: ImportedPlace[]; error?: string }>;
+  /** Absent on shells built before agents could screenshot the browser. */
+  captureBrowser?: () => Promise<string | null>;
+  /** All absent on shells built before cookie import existed. */
+  cookieSources?: () => Promise<CookieSourcesReply>;
+  importCookies?: (req: { source: string; sites: string[] }) => Promise<CookieImportReply>;
+  forgetCookies?: (req: { sites: string[]; partitions?: string[] }) => Promise<{ ok: boolean; removed?: number; profiles?: number; error?: string }>;
 };
+
+/** A page another browser knows about. History and bookmarks arrive as one
+ *  shape, because the address bar treats them as one list. */
+export interface ImportedPlace {
+  url: string; title: string; visits: number; lastAt: number; bookmarked: boolean;
+}
+
+/** What the reader answers with. Sites and counts; never a name, never a value. */
+export interface CookieSite { site: string; cookies: number }
+export interface CookieSource {
+  id: string; label: string; kind: "firefox" | "chromium";
+  /** False when the values are encrypted with a key this cannot reach. */
+  readable: boolean;
+  rows: number;
+  reason?: string;
+  sites: CookieSite[];
+}
+export type CookieSourcesReply = { ok: boolean; sources?: CookieSource[]; error?: string };
+export type CookieImportReply = {
+  ok: boolean; set?: number; failed?: { name: string; url: string; error: string }[];
+  skipped?: Record<string, number>; error?: string;
+};
+
+/** Whether this shell can bring existing logins in at all. */
+export const CAN_IMPORT_COOKIES = typeof (typeof window !== "undefined"
+  ? (window as unknown as { agentglass?: { cookieSources?: unknown } }).agentglass?.cookieSources
+  : undefined) === "function";
+
+export async function cookieSources(): Promise<CookieSourcesReply> {
+  const b = bridge();
+  if (!b?.cookieSources) return { ok: false, error: "this build cannot read other browsers" };
+  try { return await b.cookieSources(); } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+export async function importCookies(source: string, sites: string[]): Promise<CookieImportReply> {
+  const b = bridge();
+  if (!b?.importCookies) return { ok: false, error: "this build cannot import cookies" };
+  try { return await b.importCookies({ source, sites }); } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/**
+ * Forget these sites, everywhere this browser keeps them.
+ *
+ * The profile list is the renderer's, so the partitions have to be named from
+ * here — and every one of them, or the button lies: it would report a number,
+ * look finished, and leave the login it was asked to remove sitting in another
+ * profile's jar. The main process validates each name and always sweeps the
+ * default whether or not it was listed.
+ */
+export async function forgetCookies(sites: string[], profileIds: readonly string[] = []): Promise<{ ok: boolean; removed?: number; profiles?: number; error?: string }> {
+  const b = bridge();
+  if (!b?.forgetCookies) return { ok: false, error: "this build cannot remove them" };
+  const partitions = partitionsFor(BROWSER_PARTITION, profileIds);
+  try { return await b.forgetCookies({ sites, partitions }); } catch (e) { return { ok: false, error: String(e) }; }
+}
 
 function bridge(): DesktopBridge | null {
   if (typeof window === "undefined") return null;
@@ -55,6 +125,93 @@ export const HAS_BROWSER = bridge()?.browser === true;
  *  partition and refuses every other, so it is read from the shell rather than
  *  written down twice. */
 export const BROWSER_PARTITION = bridge()?.browserPartition ?? "";
+
+/** Whether this shell can open the system's folder chooser. False in a browser
+ *  tab, and false on a shell built before it existed — the picker offers its
+ *  path box instead of a button that would do nothing. */
+export const CAN_BROWSE_FOLDER = typeof bridge()?.chooseFolder === "function";
+
+/**
+ * Ask the system for a folder. Null when the person cancelled, and null when
+ * there is no chooser to ask — the caller treats both the same way, because
+ * "no folder came back" is the only thing it can act on.
+ */
+export async function chooseFolder(start?: string): Promise<string | null> {
+  const b = bridge();
+  if (!b?.chooseFolder) return null;
+  try {
+    return await b.chooseFolder(start);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hear about a zoom the shell has just applied to the built-in browser.
+ *
+ * A no-op unsubscribe when the shell is older or this is a browser tab, so the
+ * caller can wire it unconditionally in an effect.
+ */
+export function onBrowserZoom(fn: (level: number) => void): () => void {
+  const b = bridge();
+  return b?.onBrowserZoom ? b.onBrowserZoom(fn) : () => {};
+}
+
+/**
+ * A page in the built-in browser asked for a window.
+ *
+ * A middle click, a `target="_blank"`, an OAuth popup. Every one of them used
+ * to be handed to the OS browser, because a single-page view had nowhere else
+ * to put it — which threw you out of the app to finish a login. Now it becomes
+ * a tab. A no-op unsubscribe on an older shell, so the caller can wire it
+ * unconditionally.
+ */
+export function onBrowserOpenTab(fn: (url: string) => void): () => void {
+  const b = bridge();
+  return b?.onBrowserOpenTab ? b.onBrowserOpenTab(fn) : () => {};
+}
+
+/**
+ * Tell the shell which tab is on screen.
+ *
+ * The main process keeps one "current browser" — it is what the Ctrl+wheel
+ * zoom lands on and what an agent's screenshot captures. With one page that was
+ * always whichever guest attached last; with tabs it is whichever you are
+ * looking at, and this side is the only one that knows.
+ */
+export function setActiveBrowserGuest(id: number): void {
+  const b = bridge();
+  try { void b?.setActiveBrowserGuest?.(id); } catch { /* older shell */ }
+}
+
+/**
+ * The pages and bookmarks in another browser's profile.
+ *
+ * Read by the shell rather than the server for the same reason the cookies
+ * are: this is somebody's browsing history, and a route would put it on the
+ * API surface an agent can reach.
+ */
+export async function browserPlaces(source: string): Promise<ImportedPlace[]> {
+  const b = bridge();
+  if (!b?.browserPlaces) return [];
+  try {
+    const r = await b.browserPlaces({ source });
+    return r.ok ? (r.places ?? []) : [];
+  } catch { return []; }
+}
+
+/**
+ * A screenshot of the built-in browser as a data URL, taken by the shell.
+ *
+ * Null when this is a browser tab, when the shell predates it, or when there is
+ * no page to capture — the caller falls back to asking the element, which works
+ * whenever the pane happens to be on screen.
+ */
+export async function captureBrowser(): Promise<string | null> {
+  const b = bridge();
+  if (!b?.captureBrowser) return null;
+  try { return await b.captureBrowser(); } catch { return null; }
+}
 
 /** Whether the app is set to launch at login. Null when not applicable (a
  *  browser tab) or when the shell refuses to answer — the caller renders
@@ -244,3 +401,21 @@ export const WINDOW_CONTROLS = (() => {
     subscribe: (fn: (st: { max: boolean; full: boolean }) => void) => b.onWinState?.(fn) ?? (() => {}),
   };
 })();
+
+/**
+ * Show a file where it lives, in the desktop's own file manager.
+ *
+ * Null when there is nothing to ask — a browser tab, or a shell built before
+ * this existed — so a caller can leave the button out rather than draw one that
+ * does nothing. `showItemInFolder` selects the item; it never runs it.
+ */
+export async function revealPath(p: string): Promise<{ ok: boolean; error?: string } | null> {
+  const b = bridge();
+  if (!b?.revealPath) return null;
+  try { return await b.revealPath(p); }
+  catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** Whether this shell can show a file in the file manager at all. Read at
+ *  render time so a button is not offered where it would be dead. */
+export const canReveal = (): boolean => !!bridge()?.revealPath;

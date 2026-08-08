@@ -14,6 +14,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { INFO } from "../src/pairing.ts";
+import { freePort } from "./freePort.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 
 const TOKEN = "test-machine-token-not-a-real-one";
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -37,7 +39,7 @@ function phone() {
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-pairsrv-"));
-  const port = 4700 + Math.floor(Math.random() * 260);
+  const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
     // A named environment, never `...process.env`: `bun test` shares one
@@ -45,6 +47,9 @@ beforeAll(async () => {
     // suite before this one happened to leave on it.
     env: {
       PATH: process.env.PATH ?? "",
+      // The server sweeps tmux window sizes at boot; without this it sweeps the
+      // developer's own socket directory. See tmuxTmp.ts.
+      TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       HOME: process.env.HOME ?? "",
       XDG_CONFIG_HOME: dir,
       AGENTGLASS_ROOT: dir,
@@ -248,7 +253,33 @@ describe("what the machine sees", () => {
     const labels = s.devices.map((d: { label: string }) => d.label);
     expect(labels).toContain("the phone in my hand");
     expect(labels).not.toContain("the lost phone"); // revoked
-    expect(s.devices.every((d: { hash?: string }) => !d.hash)).toBe(false); // it is the stored row
+    // Everything the pane draws, and nothing else.
+    for (const d of s.devices) {
+      expect(Object.keys(d).sort()).toEqual(
+        expect.arrayContaining(["createdAt", "id", "label", "scope"]),
+      );
+    }
+  });
+
+  test("and does NOT name the credential hash", async () => {
+    // This route used to answer the stored row verbatim, hash and all. It is
+    // not brute-forceable — 32 random bytes through SHA-256 — but it is the
+    // reason devices.json is written 0600, and there is no reason for it to be
+    // in a browser's memory, in whatever logs the response, or in the next
+    // screenshot of the Remote pane. No client ever read it.
+    const s = await jsonOf(await get("/pair/state?ticket=", TOKEN));
+    expect(s.devices.length).toBeGreaterThan(0);
+    expect(s.devices.some((d: { hash?: string }) => d.hash !== undefined)).toBe(false);
+    expect(JSON.stringify(s)).not.toContain("hash");
+
+    // Nor does the accept that mints one.
+    const p = phone();
+    const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
+    await post("/pair/claim", { ticket: t.id, code: t.code, label: "a fresh phone", pub: p.pub });
+    const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope: "answer" }, TOKEN));
+    expect(acc.device.id).toBeString();
+    expect(acc.device.hash).toBeUndefined();
+    expect(JSON.stringify(acc)).not.toContain("hash");
   });
 
   test("a request waiting on a person shows who is asking and the same code", async () => {

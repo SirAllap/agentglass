@@ -7,20 +7,66 @@
 // because a test that spawns tmux is a test that fails on a machine without it.
 // What is unit-tested is everything that turns tmux's text into our shapes, and
 // everything that decides whether a command is allowed to run at all.
-import { afterAll, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync } from "node:fs";
+import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+
+/*
+ * "A test that spawns tmux" is what the paragraph above says this file is not,
+ * and it was wrong — measured, and by some distance the loudest thing in the
+ * suite.
+ *
+ * Nothing here calls `Bun.spawn(["tmux", …])`, which is why reading the file
+ * kept agreeing with the paragraph. But the `TmuxTarget`s below go to
+ * `runAction` and `setStatusLine`, and `tmux()` in tmuxctl.ts spawns the binary
+ * with whatever socket argv it is handed — and a `set-option` on a socket with
+ * no server does not fail, it STARTS one. Which then reads ~/.tmux.conf,
+ * because `tmux()` passes no `-f` and cannot: in production that file is the
+ * user's and loading it is the point.
+ *
+ * Run behind a tmux that records where each call lands, this one file made 394
+ * calls into /tmp/tmux-<uid> and the callers were his:
+ * tpm, tmux-resurrect, tmux-kanagawa, tmux-assistant-resurrect, and
+ * tmux-continuum's `continuum_restore.sh`. His `@continuum-restore` is on; the
+ * only brake is continuum's own "is another tmux of mine already running",
+ * which is true on his desk today and false on a fresh boot or on CI.
+ *
+ * So the socket argv carries `-f /dev/null` — the same door tmux-bar uses, and
+ * the only one available to a file that never spawns tmux itself — and the
+ * directory is this process's own. Both, not either: the directory keeps the
+ * socket away from his `default`, and only the config keeps his plugins out of
+ * a server this file starts.
+ */
+const TMPDIR = `/tmp/agx-tmux-tabs-${process.pid}`;
+const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 
 // A socket meant to have nothing on it — unique per run, because "nothing is
 // listening on this name" is an assumption and not a fact. See tmuxIsolated for
 // what a fixed one cost once.
 const DEAD_SOCKET = `agx-tabs-dead-${process.pid}`;
-// Even a failed connection leaves the socket file, so the run that named it
-// takes it away again rather than leaving one per run in /tmp.
+/** The argv every target below is built on. `-f /dev/null` before `-L`, because
+ *  tmux wants its options before the command and `tmux()` appends ours after. */
+const DEAD = [...TMUX_ISOLATED, "-L", DEAD_SOCKET];
+
+// In `beforeAll` and not at module scope, which is what every other tmux file
+// here does and for a reason worth stating: `bun test` shares one process
+// across files, and ESM hoists every `import` above the module body — so a
+// module-scope write lands before the imported modules of files yet to come and
+// is silently overwritten by theirs. Paired with the restore below, this owns
+// the variable only for as long as this file is running.
+beforeAll(() => {
+  mkdirSync(TMPDIR, { recursive: true });
+  process.env.TMUX_TMPDIR = TMPDIR;
+});
+
 afterAll(() => {
-  try {
-    rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? ""}`, DEAD_SOCKET), { force: true });
-  } catch { /* nothing to remove */ }
+  if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
+  else process.env.TMUX_TMPDIR = REAL_TMPDIR;
+  // Even a failed connection leaves the socket file behind, and a started one
+  // leaves the directory too. Both are under TMPDIR now, so one removal does it
+  // — where the old cleanup deleted a socket out of HIS directory, which is the
+  // shape of the whole bug rather than the cure for it.
+  try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* nothing to remove */ }
 });
 import { parseWindows, parseFrame, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, setStatusLine, type TmuxTarget } from "../src/tmuxctl.ts";
 
@@ -52,6 +98,24 @@ describe("reading tmux's window list", () => {
     expect(parseWindows("@0\t1\tok\t1\t*\ngarbage\n")).toHaveLength(1);
     // A line without a window id is not a window, whatever else it looks like.
     expect(parseWindows("1\tok\t1\t*\n")).toEqual([]);
+  });
+
+  test("geometry rides on the end of the same line", () => {
+    const [w] = parseWindows("@0\t1\tAI01\t0\t-\t\t80\t24\n");
+    expect(w!.cols).toBe(80);
+    expect(w!.rows).toBe(24);
+  });
+
+  test("a line with no geometry has none, rather than zero", () => {
+    // The desk decides "a phone is holding this window narrow" by comparing
+    // this against its own terminal width. A window that answered 0 would be
+    // narrower than every client there has ever been, and the notice would go
+    // up on a window nothing had touched.
+    const [w] = parseWindows("@0\t1\tAI01\t0\t-\n");
+    expect(w!.cols).toBeUndefined();
+    expect(w!.rows).toBeUndefined();
+    expect(parseWindows("@0\t1\tAI01\t0\t-\t\t\t\n")[0]!.cols).toBeUndefined();
+    expect(parseWindows("@0\t1\tAI01\t0\t-\t\tnope\tnope\n")[0]!.cols).toBeUndefined();
   });
 
   test("bell and activity marks are passed through for the panel to interpret", () => {
@@ -94,6 +158,31 @@ describe("which session the client is on", () => {
     expect(parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$1\t@0\t1\tnot-ours\t1\t*", "/dev/pts/0")!.windows).toEqual([]);
   });
 
+  test("the size on the frame is OUR client's, not the first one listed", () => {
+    /*
+     * Every client on the server is on this list, and some of them are phones.
+     * Taking the first line would have the desk comparing its window against
+     * the size of the very client squeezing it — the comparison would come out
+     * equal and the notice would never appear.
+     */
+    const withPhone = [
+      "c\t/dev/pts/9\tagx-phone-0-abc\t$3\t80\t24",
+      "c\t/dev/pts/0\tmain\t$2\t200\t50",
+      "w\t$2\t@3\t1\tAI01\t1\t*\t\t80\t23",
+    ].join("\n");
+    const f = parseFrame(withPhone, "/dev/pts/0")!;
+    expect(f.client).toEqual({ cols: 200, rows: 50 });
+    expect(f.windows[0]!.cols).toBe(80);
+    // The pair the desk acts on: this window is narrower than this terminal.
+    expect(f.windows[0]!.cols! < f.client!.cols).toBe(true);
+    // And rows are NOT compared: 23 against 50 is the status line, not a phone.
+    expect(parseFrame(withPhone, "/dev/pts/9")!.client).toEqual({ cols: 80, rows: 24 });
+  });
+
+  test("a client line with no size is null, not a zero-wide terminal", () => {
+    expect(parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$2\t@3\t1\tAI01\t1\t*", "/dev/pts/0")!.client).toBeNull();
+  });
+
   test("no client on our terminal is no answer at all", () => {
     // Mid-attach, or the client detached between the /proc walk and the ask.
     // Answering with the first session in the list would put somebody else's
@@ -133,7 +222,7 @@ describe("what a tab strip is allowed to ask for", () => {
   // The terminal socket already carries a shell, so this cannot widen anything
   // — but it must not become a way to run arbitrary tmux commands either. Each
   // of these is refused before tmux is invoked at all.
-  const t: TmuxTarget = { pid: 1, socket: ["-L", DEAD_SOCKET], session: "s", id: "$0" };
+  const t: TmuxTarget = { pid: 1, socket: DEAD, session: "s", id: "$0" };
 
   test("an action outside the four is refused", () => {
     expect((runAction as unknown as (t: TmuxTarget, a: string) => boolean)(t, "kill-server")).toBe(false);
@@ -187,7 +276,7 @@ describe("borrowing the status line", () => {
   // `display-message` — with no row allocated it draws them over the top line
   // of the shell instead. What is unit-testable without a tmux server is the
   // bookkeeping: whether we claim to have borrowed something we did not.
-  const t: TmuxTarget = { pid: 1, socket: ["-L", DEAD_SOCKET], session: "s", id: "$0" };
+  const t: TmuxTarget = { pid: 1, socket: DEAD, session: "s", id: "$0" };
 
   test("an unreachable server is not reported as borrowed", () => {
     // The caller remembers what it borrowed so it can give it back on the way
@@ -206,7 +295,7 @@ describe("the prefix the panel advertises", () => {
   // would light up for everyone except the people who rebound it, who are the
   // ones who use tmux enough to have missed the indicator in the first place.
   test("an unreachable server yields no prefix rather than a guessed one", () => {
-    const t: TmuxTarget = { pid: 1, socket: ["-L", DEAD_SOCKET], session: "s", id: "$0" };
+    const t: TmuxTarget = { pid: 1, socket: DEAD, session: "s", id: "$0" };
     expect(prefixKeys(t)).toEqual([]);
   });
 });

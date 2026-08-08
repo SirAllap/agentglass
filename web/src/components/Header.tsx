@@ -9,6 +9,7 @@ import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 import { WorkspaceIcon } from "./workspace/icons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 // Sessions whose model never resolved carry the "unknown" provider value; it
 // stays lowercase everywhere it is compared (server sentinel, providerOf), but
@@ -67,7 +68,7 @@ function SkillsIcon() {
  *  you were already in. This button opens preferences, and every application
  *  ever written spells that with a cog, which is why it was the one control in
  *  the header nobody could find without hovering everything first. */
-function GearIcon({ size = 15 }: { size?: number }) {
+function GearIcon({ size = ICON.md }: { size?: number }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3.1" />
@@ -77,22 +78,41 @@ function GearIcon({ size = 15 }: { size?: number }) {
 }
 
 /** A plug: something is listening on this machine. */
-export function PortsIcon({ size = 15 }: { size?: number }) {
+export function PortsIcon({ size = ICON.md }: { size?: number }) {
+  /*
+   * A socket, not a plug.
+   *
+   * The plug was a narrow object — 58% of its box across, against the 83% the
+   * rest of the rail fills — so at the same nominal size it read as a smaller
+   * icon, which is what it is a picture of and not what it is a control for.
+   * A socket is the same idea (a port something plugs INTO, which is closer to
+   * what the panel lists anyway) in a shape that fills a square.
+   */
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 3v5M15 3v5" />
-      <path d="M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6z" />
-      <path d="M12 17v4" />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="3.5" />
+      <path d="M9.5 8.5v4M14.5 8.5v4" />
+      <path d="M8.5 16h7" />
     </svg>
   );
 }
 
 /** A gauge: how much of the machine is left. */
-export function ResourcesIcon({ size = 15 }: { size?: number }) {
+export function ResourcesIcon({ size = ICON.md }: { size?: number }) {
+  /*
+   * A chip, not a dial.
+   *
+   * The dial was an arc: 45% of its box tall however wide it was made, because
+   * that is the shape of an arc, so it could be sized correctly and still read
+   * as the lightest thing on the strip. A chip is what the panel is about — how
+   * much of THIS machine is left — and it is square, which is the shape a rail
+   * of squares needs.
+   */
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 18a8 8 0 1 1 16 0" />
-      <path d="M12 18l4-5" />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="7.5" y="7.5" width="9" height="9" rx="1.5" />
+      <path d="M3 10h4.5M3 14h4.5M16.5 10H21M16.5 14H21" />
+      <path d="M10 3v4.5M14 3v4.5M10 16.5V21M14 16.5V21" />
     </svg>
   );
 }

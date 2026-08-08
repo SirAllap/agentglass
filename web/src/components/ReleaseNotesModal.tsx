@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { useEffect } from "react";
 import { Portal } from "./Portal.tsx";
 import { Markdown } from "../lib/markdown.tsx";
+import { CloseButton } from "./CloseButton.tsx";
 
 /**
  * The notes for one release, in a dialog.
@@ -63,7 +64,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>{title}</span>
                   {tag && <span className="chip" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{tag}</span>}
-                  <button onClick={onClose} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70" aria-label="Close">✕</button>
+                  <CloseButton onClick={onClose} title="Close" className="ml-auto" />
                 </div>
 
                 <div className="px-5 py-4 overflow-y-auto agx-scroll text-[12.5px]" style={{ color: "var(--text2)" }}>

@@ -12,6 +12,7 @@ import { floorTiers } from "./contrast.ts";
 import { SERVER, authHeaders, IS_DESKTOP } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
 import { applyAccent } from "./accent.ts";
+import { BASE, cssVars } from "../../../shared/palettes.ts";
 
 export interface Theme {
   id: string;
@@ -37,7 +38,11 @@ export const THEMES: Theme[] = [
   { id: "porcelain", name: "Porcelain", preview: {"primary":"#ffffff","secondary":"#f5f5f5","accent":"#171717"}, vars: {"--bg":"#ffffff","--bg2":"#f5f5f5","--bg3":"#ececec","--bg4":"#e2e2e2","--text":"#0a0a0a","--text2":"#383838","--text3":"#737373","--text4":"#909090","--border":"#d9d9de","--border2":"#c4c4ca","--primary":"#171717","--primary-hover":"#000000","--success":"#15803d","--warning":"#b45309","--error":"#e40014","--info":"#2563eb","--shadow":"rgba(0, 0, 0, 0.12)"} },
 
   // --- community-proven dark palettes ---
-  { id: "github-dark", name: "GitHub Dark", preview: {"primary":"#0d1117","secondary":"#161b22","accent":"#58a6ff"}, vars: {"--bg":"#0d1117","--bg2":"#161b22","--bg3":"#21262d","--bg4":"#30363d","--text":"#e6edf3","--text2":"#c9d1d9","--text3":"#8b949e","--text4":"#6e7681","--border":"#30363d","--border2":"#444c56","--primary":"#58a6ff","--primary-hover":"#79c0ff","--success":"#3fb950","--warning":"#d29922","--error":"#f85149","--info":"#58a6ff","--shadow":"rgba(1, 4, 9, 0.85)"} },
+  // The two GitHub palettes read their colours out of shared/palettes.ts rather
+  // than holding them, because the phone's Dark and Light ARE these two — see
+  // that file. Same values, one copy; `--shadow` stays here because it is a CSS
+  // var with no counterpart in what the server syncs to tmux and nvim.
+  { id: "github-dark", name: "GitHub Dark", preview: {"primary":"#0d1117","secondary":"#161b22","accent":"#58a6ff"}, vars: { ...cssVars(BASE.dark), "--shadow": "rgba(1, 4, 9, 0.85)" } },
   { id: "github-dark-dimmed", name: "GitHub Dark Dimmed", preview: {"primary":"#22272e","secondary":"#2d333b","accent":"#6cb6ff"}, vars: {"--bg":"#22272e","--bg2":"#2d333b","--bg3":"#373e47","--bg4":"#444c56","--text":"#cdd9e5","--text2":"#adbac7","--text3":"#768390","--text4":"#636e7b","--border":"#444c56","--border2":"#545d68","--primary":"#6cb6ff","--primary-hover":"#96d0ff","--success":"#57ab5a","--warning":"#c69026","--error":"#e5534b","--info":"#6cb6ff","--shadow":"rgba(0, 0, 0, 0.8)"} },
   { id: "catppuccin-mocha", name: "Catppuccin Mocha", preview: {"primary":"#1e1e2e","secondary":"#313244","accent":"#89b4fa"}, vars: {"--bg":"#1e1e2e","--bg2":"#313244","--bg3":"#45475a","--bg4":"#585b70","--text":"#cdd6f4","--text2":"#bac2de","--text3":"#a6adc8","--text4":"#7f849c","--border":"#45475a","--border2":"#585b70","--primary":"#89b4fa","--primary-hover":"#b4befe","--success":"#a6e3a1","--warning":"#f9e2af","--error":"#f38ba8","--info":"#74c7ec","--shadow":"rgba(17, 17, 27, 0.7)"} },
   { id: "catppuccin-macchiato", name: "Catppuccin Macchiato", preview: {"primary":"#24273a","secondary":"#363a4f","accent":"#8aadf4"}, vars: {"--bg":"#24273a","--bg2":"#363a4f","--bg3":"#494d64","--bg4":"#5b6078","--text":"#cad3f5","--text2":"#b8c0e0","--text3":"#a5adcb","--text4":"#8087a2","--border":"#494d64","--border2":"#5b6078","--primary":"#8aadf4","--primary-hover":"#b7bdf8","--success":"#a6da95","--warning":"#eed49f","--error":"#ed8796","--info":"#7dc4e4","--shadow":"rgba(24, 25, 38, 0.7)"} },
@@ -62,7 +67,7 @@ export const THEMES: Theme[] = [
   { id: "colorblind-dark", name: "Colorblind Dark", preview: {"primary":"#101418","secondary":"#1a2027","accent":"#56b4e9"}, vars: {"--bg":"#101418","--bg2":"#1a2027","--bg3":"#263039","--bg4":"#33404c","--text":"#f8fafc","--text2":"#e2e8f0","--text3":"#cbd5e1","--text4":"#94a3b8","--border":"#475569","--border2":"#64748b","--primary":"#56b4e9","--primary-hover":"#85c8ef","--success":"#009e73","--warning":"#f0e442","--error":"#d55e00","--info":"#0072b2","--shadow":"rgba(0, 0, 0, 0.8)"} },
 
   // --- community-proven light palettes ---
-  { id: "github-light", name: "GitHub Light", preview: {"primary":"#ffffff","secondary":"#f6f8fa","accent":"#0969da"}, vars: {"--bg":"#ffffff","--bg2":"#f6f8fa","--bg3":"#eaeef2","--bg4":"#d0d7de","--text":"#1f2328","--text2":"#414852","--text3":"#656d76","--text4":"#8c959f","--border":"#d0d7de","--border2":"#afb8c1","--primary":"#0969da","--primary-hover":"#0550ae","--success":"#1a7f37","--warning":"#9a6700","--error":"#cf222e","--info":"#0969da","--shadow":"rgba(31, 35, 40, 0.15)"} },
+  { id: "github-light", name: "GitHub Light", preview: {"primary":"#ffffff","secondary":"#f6f8fa","accent":"#0969da"}, vars: { ...cssVars(BASE.light), "--shadow": "rgba(31, 35, 40, 0.15)" } },
   { id: "catppuccin-latte", name: "Catppuccin Latte", preview: {"primary":"#eff1f5","secondary":"#e6e9ef","accent":"#1e66f5"}, vars: {"--bg":"#eff1f5","--bg2":"#e6e9ef","--bg3":"#dce0e8","--bg4":"#ccd0da","--text":"#4c4f69","--text2":"#5c5f77","--text3":"#6c6f85","--text4":"#8c8fa1","--border":"#ccd0da","--border2":"#bcc0cc","--primary":"#1e66f5","--primary-hover":"#0b57d0","--success":"#40a02b","--warning":"#df8e1d","--error":"#d20f39","--info":"#179299","--shadow":"rgba(76, 79, 105, 0.15)"} },
   { id: "solarized-light", name: "Solarized Light", preview: {"primary":"#fdf6e3","secondary":"#eee8d5","accent":"#268bd2"}, vars: {"--bg":"#fdf6e3","--bg2":"#eee8d5","--bg3":"#e3ddc9","--bg4":"#d3ceb8","--text":"#586e75","--text2":"#657b83","--text3":"#839496","--text4":"#93a1a1","--border":"#ddd6c1","--border2":"#c9c2ad","--primary":"#268bd2","--primary-hover":"#1a6fad","--success":"#859900","--warning":"#b58900","--error":"#dc322f","--info":"#2aa198","--shadow":"rgba(88, 110, 117, 0.15)"}, ansi: {"black":"#073642","red":"#dc322f","green":"#859900","yellow":"#b58900","blue":"#268bd2","magenta":"#d33682","cyan":"#2aa198","white":"#eee8d5","brightBlack":"#002b36","brightRed":"#cb4b16","brightGreen":"#586e75","brightYellow":"#657b83","brightBlue":"#839496","brightMagenta":"#6c71c4","brightCyan":"#93a1a1","brightWhite":"#fdf6e3"} },
 
@@ -232,7 +237,12 @@ export function initialTheme(): string {
  * business telling tmux and nvim about it.
  */
 export function watchThemeStorage() {
-  addEventListener("storage", (e) => {
+  // `window.` rather than the bare global: bun-types declares its own
+  // `addEventListener(type: string, …)` whose catch-all overload wins over
+  // lib.dom's `WindowEventMap` one, so under tsconfig.test.json the handler
+  // typed as a plain `Event` and `e.key`/`e.newValue` did not exist. Same
+  // function at runtime, and the only form that says which target is meant.
+  window.addEventListener("storage", (e) => {
     if (e.key !== "agentglass-theme" || !e.newValue) return;
     if (document.documentElement.getAttribute("data-theme") === e.newValue) return;
     applyTheme(e.newValue);

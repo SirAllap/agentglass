@@ -6,7 +6,9 @@ import {
 import { chordFor, chordLabel, chords, subscribeBindings } from "../../lib/keybindings.ts";
 import { SkillsIcon } from "./icons.tsx";
 import { PortsIcon, ResourcesIcon } from "../Header.tsx";
-import { Portal } from "../Portal.tsx";
+import { ContextMenu as RailMenu, MenuItem } from "../ContextMenu.tsx";
+import { ICON } from "../../lib/iconSize.ts";
+import { railActiveColor } from "../../lib/railAccent.ts";
 
 const EMPTY_CHORDS = {};
 const BY_ID = new Map(VIEWS.map((v) => [v.id, v] as const));
@@ -31,6 +33,32 @@ export type RailPip = { dot?: boolean; count?: number };
  *  ever destroyed: hidden views collect behind one button that only exists
  *  while there is something in it.
  */
+/** The active icon's colour, kept in step with the theme and the accent. */
+function useRailActive(): string {
+  const read = () => {
+    const cs = getComputedStyle(document.documentElement);
+    return railActiveColor(
+      cs.getPropertyValue("--primary").trim(),
+      cs.getPropertyValue("--bg").trim(),
+      cs.getPropertyValue("--text").trim(),
+      cs.getPropertyValue("--text4").trim(),
+    );
+  };
+  const [colour, setColour] = useState<string>(() =>
+    (typeof document === "undefined" ? "var(--primary)" : read()));
+  useEffect(() => {
+    // applyTheme and applyAccent both set variables on the root element, and
+    // neither announces itself. Watching the attribute they write is how this
+    // stays true across a theme switch without a bespoke event to subscribe to.
+    const ob = new MutationObserver(() => setColour(read()));
+    ob.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
+    setColour(read());
+    return () => ob.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return colour;
+}
+
 export function ViewRail({
   view, onSelect, onSkills, onSettings, onMachine, pips,
 }: {
@@ -52,6 +80,11 @@ export function ViewRail({
   // The rail's layout is the user's. Read through a store so a drag updates
   // every mounted rail at once rather than only the one being dragged.
   const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
+  // The ink the active icon is drawn in — the accent, unless the accent is a
+  // grey a shade away from the rail, in which case the theme's text colour.
+  // See railActiveColor. Re-read when the root's style attribute changes,
+  // which is what applyTheme and applyAccent both write to.
+  const active = useRailActive();
   // Re-render when a shortcut is rebound, so the tooltips keep telling the
   // truth. chordFor reads the store itself; this only supplies the signal.
   useSyncExternalStore(subscribeBindings, chords, () => EMPTY_CHORDS);
@@ -181,19 +214,21 @@ export function ViewRail({
           setTimeout(() => setLifted(true), 0);
         }}
         onDragEnd={endDrag}
-        className={`${dragging ? "" : "agw-tip "}relative h-10 w-full grid place-items-center rounded-[10px] transition-colors`}
+        className={`${dragging ? "" : "agw-tip "}relative h-11 w-full grid place-items-center rounded-[10px] transition-colors`}
         // The modifier binding, not the bare letter. Inside the workspace the
         // letters no longer navigate — they belong to whatever has focus,
         // usually a shell — and a tooltip advertising a key that does nothing
         // is worse than no tooltip. Which is also why the bottom drawer shows
         // none: down there a view has no number, by design.
         data-tip={chord ? `${v.label} · ${chordLabel(chord)}` : v.label}
-        style={lift ? LIFTED : {
-          color: on ? "var(--primary-hover)" : "var(--text4)",
-          background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
-        }}
+        // No box any more. At 16px the glyph needed a tinted panel behind it
+        // to be findable; at 22 it carries the state itself, and the box was a
+        // second shape competing with the only one that matters. The inactive
+        // ones go quieter to match — the contrast between "on" and "off" is
+        // now entirely in the ink.
+        style={lift ? LIFTED : { color: on ? active : "var(--text4)", background: "transparent" }}
       >
-        <Icon size={17} />
+        <Icon size={ICON.rail} />
         {/* the 3px edge marker: reads as "you are here" from the far side
         of the screen, where a background tint alone doesn't. */}
         {on && (
@@ -201,7 +236,7 @@ export function ViewRail({
             style={{ background: "var(--primary)" }} />
         )}
         {pip?.count ? (
-          <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[9px] font-bold tabular-nums"
+          <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
             style={{ background: "var(--success)", color: "#06281c" }}>{pip.count}</span>
         ) : pip?.dot ? (
           <span className="absolute top-[7px] right-[9px] w-[6px] h-[6px] rounded-full"
@@ -225,7 +260,7 @@ export function ViewRail({
           background: "color-mix(in srgb, var(--primary) 10%, transparent)",
           color: "color-mix(in srgb, var(--primary-hover) 70%, transparent)",
         }}>
-        <Icon size={17} />
+        <Icon size={ICON.rail} />
       </div>
     );
   };
@@ -314,7 +349,7 @@ export function ViewRail({
           }}
           title="Drop to hide"
         >
-          <EyeOffIcon size={16} />
+          <EyeOffIcon size={ICON.rail} />
         </div>
       )}
 
@@ -346,8 +381,8 @@ export function ViewRail({
             className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
             style={{ color: restoreAt ? "var(--primary-hover)" : "var(--text4)" }}
           >
-            <PlusIcon size={16} />
-            <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[9px] font-bold tabular-nums"
+            <PlusIcon size={ICON.rail} />
+            <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
               style={{ background: "color-mix(in srgb, var(--primary) 70%, transparent)", color: "var(--bg)" }}>{hiddenViews.length}</span>
           </button>
         )}
@@ -359,7 +394,7 @@ export function ViewRail({
           className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
-          <PortsIcon size={16} />
+          <PortsIcon size={ICON.rail} />
         </button>
         <button
           onClick={() => onMachine("resources")}
@@ -368,7 +403,7 @@ export function ViewRail({
           className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
-          <ResourcesIcon size={16} />
+          <ResourcesIcon size={ICON.rail} />
         </button>
         <button
           onClick={onSettings}
@@ -377,7 +412,7 @@ export function ViewRail({
           className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
-          <RailGear size={16} />
+          <RailGear size={ICON.rail} />
         </button>
         {/* The catalog is reference, not a view: it opens over the workspace and
             hands it straight back, so it belongs down here with close rather
@@ -389,7 +424,7 @@ export function ViewRail({
           className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
-          <SkillsIcon size={16} />
+          <SkillsIcon size={ICON.rail} />
         </button>
       </div>
 
@@ -422,7 +457,7 @@ export function ViewRail({
             return (
               <MenuItem key={v.id} onClick={() => { moveView(v.id, "work", base.work.length); setRestoreAt(null); }}>
                 <span className="flex items-center gap-2">
-                  <Icon size={14} />
+                  <Icon size={ICON.sm} />
                   <span>{v.label}</span>
                 </span>
               </MenuItem>
@@ -452,65 +487,7 @@ const LIFTED: React.CSSProperties = {
  *  inside a couple of overflow-hidden panes, so anything wider drawn in place
  *  would be clipped to the rail it came out of. Styled to match the panel
  *  menus (PrPanel's filter dropdown) — one menu look for the app. */
-function RailMenu({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ x, y });
-
-  // Measured after the first paint, because "does this fall off the bottom of
-  // the window" cannot be answered before it has a height.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({
-      x: Math.min(x, window.innerWidth - r.width - 8),
-      y: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)),
-    });
-  }, [x, y]);
-
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
-    window.addEventListener("keydown", key, true);
-    window.addEventListener("blur", onClose);
-    return () => {
-      window.removeEventListener("keydown", key, true);
-      window.removeEventListener("blur", onClose);
-    };
-  }, [onClose]);
-
-  return (
-    <Portal>
-      {/* Full-viewport catcher rather than a document mousedown listener: it
-          also stops the click landing on whatever is underneath, which for a
-          rail menu is usually a tab that would switch view on the way out. */}
-      <div className="fixed inset-0" style={{ zIndex: 9998 }} onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div ref={ref} role="menu"
-        className="fixed p-1.5 rounded-xl flex flex-col text-[11px]"
-        style={{
-          top: pos.y, left: pos.x, minWidth: 184, zIndex: 9999,
-          background: "color-mix(in srgb, var(--bg2) 97%, black)",
-          border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
-          boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
-          backdropFilter: "blur(18px)",
-        }}
-      >
-        {children}
-      </div>
-    </Portal>
-  );
-}
-
-function MenuItem({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: ReactNode }) {
-  return (
-    <button role="menuitem" onClick={onClick}
-      className="px-2 py-1.5 rounded-lg text-left hover:bg-white/5 transition-colors"
-      style={{ color: danger ? "var(--error)" : "var(--text2)" }}>
-      {children}
-    </button>
-  );
-}
-
-function EyeOffIcon({ size = 16 }: { size?: number }) {
+function EyeOffIcon({ size = ICON.md }: { size?: number }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
       <path d="M9.9 5.1A9.7 9.7 0 0 1 12 4.9c5 0 9 5.1 9 5.1a15 15 0 0 1-2.9 3.2M6.5 6.6A15.6 15.6 0 0 0 3 10s4 5.1 9 5.1a9.4 9.4 0 0 0 3.4-.6" />
@@ -520,7 +497,7 @@ function EyeOffIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-function PlusIcon({ size = 16 }: { size?: number }) {
+function PlusIcon({ size = ICON.md }: { size?: number }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
       <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" strokeDasharray="3.4 2.6" />
@@ -533,9 +510,9 @@ function PlusIcon({ size = 16 }: { size?: number }) {
  *  alongside the other two: that one is styled for an 8px button and this rail
  *  draws at 16, and a shared icon that needs a size prop per caller is just two
  *  icons with extra steps. */
-function RailGear({ size = 16 }: { size?: number }) {
+function RailGear({ size = ICON.md }: { size?: number }) {
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="-2.34 -2.34 28.67 28.67" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={2.39} strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3.1" />
       <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
     </svg>

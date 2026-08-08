@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { usageRefreshModel } from "../src/codexusage.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 
 describe("usageRefreshModel", () => {
   test("takes the last entry — parseModels sorts by Codex's own priority", () => {
@@ -43,6 +44,9 @@ describe("the route, with Codex switched off", () => {
     proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
       env: {
         PATH: process.env.PATH ?? "",
+      // The server sweeps tmux window sizes at boot; without this it sweeps the
+      // developer's own socket directory. See tmuxTmp.ts.
+      TMUX_TMPDIR: TMUX_TEST_TMPDIR,
         HOME: dir,
         XDG_CONFIG_HOME: dir,
         AGENTGLASS_ROOT: dir,

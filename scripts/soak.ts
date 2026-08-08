@@ -25,6 +25,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { privateTmuxDir } from "./tmuxTmp.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const MINUTES = Number(process.env.AGX_SOAK_MINUTES || 3);
@@ -73,6 +74,11 @@ const server = spawn({
     AGENTGLASS_PORT: String(port), AGENTGLASS_ROOT: repo,
     AGENTGLASS_DB: join(home, "soak.db"),
     XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"), XDG_CACHE_HOME: join(home, "cache"),
+    // Its own tmux socket directory, beside the config/data/cache above and
+    // for the same reason: this child is a SERVER, and a server with no
+    // TMUX_TMPDIR sweeps and lists /tmp/tmux-<uid> — the sessions the user is
+    // working in. See scripts/tmuxTmp.ts for what was measured reaching them.
+    TMUX_TMPDIR: privateTmuxDir(home),
     AGENTGLASS_TOKEN: "", AGENTGLASS_SCAN_DISABLED: "1",
     // Arm the server's parent-death watchdog. A soak runs for minutes and is the
     // one most likely to be interrupted; if this script is SIGKILLed the server

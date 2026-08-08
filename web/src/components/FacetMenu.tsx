@@ -130,7 +130,7 @@ export function FacetMenu({
       >
         {label}
         {active && <span className="tabular-nums" style={{ opacity: 0.85 }}>{badge}</span>}
-        <span className="text-[7px] opacity-70">▼</span>
+        <span className="text-[10px] opacity-70">▼</span>
       </button>
       <Portal>
         <AnimatePresence>
@@ -179,7 +179,7 @@ export function FacetMenu({
                         onMouseEnter={() => setCursor(i)}
                         className="px-2 py-1.5 rounded-lg text-[11.5px] text-left flex items-center gap-2"
                         style={i === cursor ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)" } : undefined}>
-                        <span aria-hidden className="shrink-0 grid place-items-center text-[9px]"
+                        <span aria-hidden className="shrink-0 grid place-items-center text-[10px]"
                           style={{
                             width: 14, height: 14,
                             borderRadius: mode === "radio" ? 999 : 4,

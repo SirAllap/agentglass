@@ -3,6 +3,7 @@ import type { WatchEvent } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { friendly } from "../lib/labels.ts";
 import { fmtTime, fmtMs, fmtUsd, fmtTokens, fmtEq, eqTitle, agentKey, typeColor } from "../lib/format.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -41,7 +42,7 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
                     <div className="text-[10px] t-dim2">{event.hook_event_type} · {agentKey(event)}</div>
                   </div>
                 </div>
-                <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
+                <CloseButton onClick={onClose} />
               </div>
 
               <div className="p-5 overflow-auto">

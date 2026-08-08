@@ -104,4 +104,11 @@ describe("parseControlCmd — junk", () => {
       expect(parseControlCmd(b as unknown)).toBeNull();
     }
   });
+
+  test("the browser view can be opened too — an agent driving it needs it mounted", () => {
+    expect(parseControlCmd({ cmd: "view", to: "browser" })).toEqual({ cmd: "view", to: "browser" });
+    // And the list is still a list: a view that is not on it stays off. (`dash`
+    // joined the list in 0.8, so the off-list example is a name that never will.)
+    expect(parseControlCmd({ cmd: "view", to: "settings" })).toBeNull();
+  });
 });

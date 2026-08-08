@@ -6,7 +6,10 @@ import type { ControlCmd, ViewId } from "../../shared/types.ts";
 // every browser tab. Kept in step with shared/types.ts by hand, and
 // control.test.ts pins these values — the 0.8 redesign made the dashboard a
 // view and added tasks, files and the browser, so an external controller can
-// reach every one of them, not the six the workspace used to hold.
+// reach every one of them, not the six the workspace used to hold. `browser`
+// earns its place for a further reason: an agent driving the built-in browser
+// (browserdrive.ts) needs that view mounted before anything can answer it, and
+// the alternative was telling the agent to ask a human to click a tab.
 const VIEW_IDS: readonly ViewId[] = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files"];
 type OpenWhat = Extract<ControlCmd, { cmd: "open" }>["what"];
 const OPEN_WHAT: readonly OpenWhat[] = ["stats", "skills", "search", "help", "palette"];

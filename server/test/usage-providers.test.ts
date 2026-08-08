@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { anthropicUsage, installedProviders, allProviderUsage } from "../src/providerusage.ts";
 import type { AgentProbe } from "../../shared/types.ts";
 import type { UsagePayload } from "../src/usage.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -23,6 +24,9 @@ beforeAll(async () => {
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
     env: {
       PATH: process.env.PATH ?? "",
+      // The server sweeps tmux window sizes at boot; without this it sweeps the
+      // developer's own socket directory. See tmuxTmp.ts.
+      TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       HOME: dir,
       XDG_CONFIG_HOME: dir,
       AGENTGLASS_ROOT: dir,

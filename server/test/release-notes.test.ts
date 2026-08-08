@@ -35,7 +35,12 @@ beforeAll(async () => {
   // annotation at all, so `%(contents)` falls through to the commit message.
   run(clone, "tag", "v9.9.8");
   su = await import("../src/selfupdate.ts");
-});
+  // Seven `git` spawns and a module import, against bun's 5s default. Alone
+  // that is 300ms; inside the full suite, on a machine that is also building
+  // something, all three tests in this file timed out at once — which reads as
+  // three broken assertions rather than as one slow hook. The budget is for
+  // subprocess scheduling, not for the work.
+}, 30_000);
 
 afterAll(() => { try { rmSync(clone, { recursive: true, force: true }); } catch { /* fine */ } });
 

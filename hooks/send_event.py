@@ -126,10 +126,21 @@ def main():
         body["chat"] = chat
 
     data = json.dumps(body).encode("utf-8")
+    # Carry the shared secret when the server has one, the same way gate_event.py
+    # does. /ingest is tokenless only for a sender on the server's own machine:
+    # appending drives a notification on the desk and on the paired phone, so
+    # from off-box it needs the credential like anything else. A hook posting to
+    # localhost — the only thing _agentglass_local_only permits unless
+    # AGENTGLASS_ALLOW_REMOTE is set — never reaches that check, and sending the
+    # header there costs nothing.
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(
         server.rstrip("/") + "/ingest",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:

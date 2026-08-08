@@ -1,0 +1,587 @@
+<meta charset="utf-8">
+<title>Pull requests — triage + one-screen</title>
+<style>
+:root{
+  --bg:#1e1e1e; --bg2:#262626; --bg3:#2e2e2e; --line:#383840;
+  --text:#fafafa; --text2:#c9c9cf; --text3:#a1a1a1; --text4:#6f6f78;
+  --primary:#e5e5e5; --accent:#a78bfa;
+  --ok:#86efac; --warn:#fbbf24; --err:#ff6568; --info:#7fb3d5;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+.hide{display:none!important}
+
+/* ── chrome ─────────────────────────────────────────────────────────── */
+.top{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line)}
+.top h1{font-size:13px;font-weight:600;margin:0}
+.dim{color:var(--text3)} .dim2{color:var(--text4)}
+.spacer{margin-left:auto}
+.chip{border:1px solid var(--line);border-radius:5px;padding:2px 8px;font-size:10.5px;color:var(--text2)}
+.chip.on{background:color-mix(in srgb,var(--accent) 24%,transparent);border-color:color-mix(in srgb,var(--accent) 55%,transparent);color:var(--text)}
+.chip.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+.chip.err{color:var(--err);border-color:color-mix(in srgb,var(--err) 40%,transparent)}
+.chip.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.btn{border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--text2)}
+.btn:hover{border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--text)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#1b1b1f;font-weight:600}
+.btn.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+.btn.danger{color:var(--err);border-color:color-mix(in srgb,var(--err) 40%,transparent)}
+.btn[disabled]{opacity:.38;cursor:not-allowed}
+.btn.hazard{background:repeating-linear-gradient(135deg,var(--warn) 0 7px,color-mix(in srgb,var(--warn) 62%,var(--bg)) 7px 14px);color:#1b1b1f;border-color:var(--warn);font-weight:700}
+.icon{display:grid;place-items:center;width:22px;height:22px;font-size:15px;border-radius:5px;color:var(--text3)}
+.icon:hover{color:var(--text);background:var(--bg3)}
+.icon.on{color:var(--accent)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+
+/* ── pinned bar ─────────────────────────────────────────────────────── */
+.pins{display:flex;align-items:center;gap:6px;padding:5px 14px;border-bottom:1px solid var(--line);background:var(--bg2)}
+.pin{display:flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:6px;padding:1px 4px 1px 7px}
+.pin.cur{background:color-mix(in srgb,var(--accent) 22%,transparent);border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.pin b{font-weight:500;font-size:11px;color:var(--text2)}
+.pin .x{width:20px;height:20px;font-size:15px;display:grid;place-items:center;color:var(--text3);opacity:0}
+.pin:hover .x,.pin.cur .x{opacity:1}
+
+/* ── triage board ───────────────────────────────────────────────────── */
+.bar{display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.search{flex:1;min-width:220px;display:flex;align-items:center;gap:7px;background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:4px 9px}
+.search input{flex:1;background:none;border:0;outline:none;color:var(--text);font:inherit}
+.lanes{padding:6px 14px 40px}
+.lane{margin-top:14px}
+.lane>h2{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;margin:0 0 6px;
+  padding:5px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--line)}
+.lane>h2 .n{font-variant-numeric:tabular-nums;border:1px solid var(--line);border-radius:4px;padding:0 6px;color:var(--text3)}
+.lane>h2 .why{font-weight:400;color:var(--text3)}
+.row{display:grid;grid-template-columns:22px 78px 1fr 190px 118px 92px 56px;gap:10px;align-items:center;
+  padding:6px 8px;border-bottom:1px solid color-mix(in srgb,var(--text) 9%,transparent);cursor:pointer}
+.row:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+.row .star{opacity:0}
+.row:hover .star,.row .star.on{opacity:1}
+.row .id{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--text3);font-variant-numeric:tabular-nums}
+.row .t{min-width:0}
+.row .t .h{font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .t .s{display:flex;align-items:center;gap:6px;margin-top:2px;font-size:10px;color:var(--text3);flex-wrap:wrap}
+.row .lab{border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:9.5px}
+.reason{grid-column:3/-1;font-size:10.5px;color:var(--text3);margin-top:3px;display:flex;gap:6px}
+.reason b{color:var(--text2);font-weight:500}
+.stack{color:var(--warn)}
+
+
+/* ── triage board — five columns of cards, as the original ──────────── */
+.sum{padding:10px 14px 6px;font-size:12.5px}
+.sum b{font-size:17px;font-weight:600}
+.segs{display:flex;gap:3px;padding:0 14px 8px}
+.seg{flex:none;border:1px solid;border-radius:5px;padding:3px 9px;font-size:10.5px;display:flex;gap:6px;align-items:center}
+.seg b{font-variant-numeric:tabular-nums}
+.cols{display:grid;grid-template-columns:repeat(5,minmax(268px,1fr));gap:10px;padding:0 14px 8px;
+  align-items:start;overflow-x:auto}
+.lcol{border-top:2px solid;border-radius:2px;min-width:0}
+.lcol>h2{display:flex;align-items:baseline;gap:7px;margin:0;padding:7px 2px 2px;font-size:11px;font-weight:600}
+.lcol>h2 .n{font-variant-numeric:tabular-nums;font-size:13px}
+.lcol>h2 .k{margin-left:auto;font-size:9px;color:var(--text4);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.lcol .why{font-size:10px;color:var(--text3);padding:0 2px 7px;line-height:1.45}
+.card{border:1px solid var(--line);border-radius:7px;background:var(--bg2);padding:8px 9px;margin-bottom:8px;cursor:pointer}
+.card:hover{border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+.card .h{display:flex;gap:6px;align-items:flex-start;font-size:11.5px;color:var(--text)}
+.card .h .num{color:var(--text4);font-size:10px;font-variant-numeric:tabular-nums;flex:none;padding-top:1px}
+.card .who{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:10px;color:var(--text3)}
+.card .who .av{width:15px;height:15px;border-radius:3px;background:var(--bg3);display:grid;place-items:center;font-size:8px;color:var(--text2)}
+.card .who .r{margin-left:auto;font-variant-numeric:tabular-nums}
+.card .meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;font-size:9.5px;color:var(--text3);align-items:center}
+.card .tag{border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.card .rsn{display:flex;gap:5px;margin-top:6px;font-size:10.5px;color:var(--text3);line-height:1.45}
+.card .rsn .a{color:var(--text4);flex:none}
+.card .rsn b{color:var(--text2);font-weight:500}
+.card .acts{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap;align-items:center}
+.k{font-size:9px;color:var(--text4);border:1px solid var(--line);border-radius:3px;padding:0 3px}
+.foot{padding:8px 14px;border-top:1px solid var(--line);font-size:10.5px;color:var(--text3);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.legend{padding:6px 14px 14px;font-size:9.5px;color:var(--text4);display:flex;gap:12px;flex-wrap:wrap}
+
+/* ── one-screen detail ──────────────────────────────────────────────── */
+.mast{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.strip{display:flex;gap:14px;padding:7px 14px;border-bottom:1px solid var(--line);background:var(--bg2);flex-wrap:wrap;font-size:10.5px}
+.strip .f{display:flex;flex-direction:column;gap:1px}
+.strip .f .k{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text4)}
+.strip .f .v{color:var(--text2);display:flex;align-items:center;gap:5px}
+.tabs{display:flex;gap:2px;padding:0 14px;border-bottom:1px solid var(--line)}
+.tabs button{padding:6px 10px;font-size:11px;color:var(--text3);border-bottom:2px solid transparent}
+.tabs button.on{color:var(--text);border-bottom-color:var(--accent)}
+.tabs .n{font-size:9.5px;color:var(--text4);margin-left:4px}
+.tabs .n.warn{color:var(--warn)}
+
+.three{display:grid;grid-template-columns:250px minmax(0,1fr) 320px;align-items:start}
+.three>*{max-height:calc(100vh - 200px)}
+.three>*{overflow:auto;border-right:1px solid var(--line)}
+.three>*:last-child{border-right:0}
+.col h3{margin:0;padding:7px 10px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--text4);position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line)}
+.file{display:flex;align-items:center;gap:6px;padding:5px 10px;font-size:11px;color:var(--text2);cursor:pointer}
+.file:hover{background:var(--bg2)} .file.on{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--text)}
+.file .m{margin-left:auto;display:flex;gap:4px;font-size:9px;color:var(--text4)}
+.code{font-size:11.5px;padding:0}
+.code .ln{display:grid;grid-template-columns:44px 1fr;gap:8px;padding:0 10px}
+.code .ln span:first-child{color:var(--text4);text-align:right;font-variant-numeric:tabular-nums}
+.code .add{background:color-mix(in srgb,var(--ok) 12%,transparent)}
+.code .del{background:color-mix(in srgb,var(--err) 12%,transparent)}
+.thread{margin:6px 10px;border:1px solid var(--line);border-radius:6px;padding:7px 9px;background:var(--bg2);font-size:11px}
+.rail section{border-bottom:1px solid var(--line);padding:8px 10px}
+.rail h4{margin:0 0 5px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text4)}
+.pane{padding:12px 14px 40px;max-width:none}
+.box{border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:12px}
+.box .hd{display:flex;gap:10px;align-items:flex-start;padding:10px 12px}
+.box .hd .b{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:#1b1b1f;flex:none;font-size:13px}
+.box .rz{display:flex;gap:8px;align-items:baseline;padding:6px 12px;border-top:1px solid color-mix(in srgb,var(--text) 10%,transparent);font-size:11px}
+.box .acts{display:flex;gap:6px;flex-wrap:wrap;padding:9px 12px;border-top:1px solid color-mix(in srgb,var(--text) 10%,transparent);background:color-mix(in srgb,var(--text) 4%,transparent)}
+.md{font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px;line-height:1.65;color:var(--text2)}
+.md h4{color:var(--text);margin:14px 0 6px;font-size:14px}
+.md code{background:var(--bg3);border-radius:3px;padding:1px 4px;font-family:ui-monospace,monospace;font-size:12px}
+.note{font-size:10.5px;color:var(--text4);padding:8px 14px;border-top:1px solid var(--line)}
+.new{border:1px dashed color-mix(in srgb,var(--accent) 55%,transparent);border-radius:4px;padding:0 5px;font-size:9px;color:var(--accent)}
+@media(max-width:1180px){.three{grid-template-columns:200px minmax(0,1fr)}.rail{display:none}}
+</style>
+
+<div class="top">
+  <h1>Pull requests</h1><span class="dim">orbit/shop-api</span>
+  <button class="chip" id="navList">Triage</button>
+  <button class="chip" id="navDetail">Detail</button>
+  <span class="spacer dim2">maqueta interactiva · datos ficticios</span>
+</div>
+
+<div class="pins">
+  <span class="dim2" style="font-size:9px;letter-spacing:.1em">PINNED</span>
+  <span class="pin cur"><span class="dot" style="background:var(--warn)"></span><b>#17455</b><span class="x">×</span></span>
+  <span class="pin"><span class="dot" style="background:var(--ok)"></span><b>#16299</b><span class="x">×</span></span>
+  <span class="pin"><span class="dot" style="background:var(--err)"></span><b>#16091</b><span class="x">×</span></span>
+</div>
+
+<!-- ══════════════ LISTA — 2-triage, con todo lo de hoy ══════════════ -->
+<div id="viewList">
+  <div class="bar">
+    <!--
+      The board is scoped to you, always, and that is not a filter you pick —
+      it is what the board IS. "Mine" and "Needs my review" stopped being two
+      mutually exclusive pills you toggle between and became two LANES you see
+      at once, which was the whole complaint about the pill row: the two
+      populations you care about could never be on screen together.
+
+      The scopes that are not about you stay, and they open the TABLE — which is
+      today's list, untouched. Nothing is lost; the pills just stopped pretending
+      a board and a table are the same shape.
+    -->
+    <button class="chip on" id="pillBoard">◫ Board <span class="dim2">yours · 16</span></button>
+    <span style="width:1px;height:14px;background:var(--line)"></span>
+    <span class="dim2" style="font-size:10px">as a table:</span>
+    <button class="chip err">Failing <span class="dim2">205</span></button>
+    <button class="chip ok">Ready <span class="dim2">83</span></button>
+    <button class="chip">All <span class="dim2">390</span></button>
+    <button class="chip">Custom</button>
+    <span style="width:1px;height:14px;background:var(--line)"></span>
+    <button class="chip on">Open</button><button class="chip">Closed</button><button class="chip">All</button>
+  </div>
+  <div class="bar">
+    <span class="search"><span class="dim">⌕</span><input placeholder="Filter these, or press / to search them all"></span>
+    <button class="chip">Author ▾</button><button class="chip">Label ▾</button><button class="chip">Reviews ▾</button>
+    <button class="chip">Checks ▾</button><button class="chip">Draft ▾</button><button class="chip">Base ▾</button>
+    <button class="chip">Assignee ▾</button><button class="chip">Milestone ▾</button>
+    <span class="spacer"></span><button class="chip">Sort ▾</button>
+    <button class="chip on" title="Lanes group by what each one needs from you">Lanes <span class="new">nuevo</span></button>
+  </div>
+  <div class="sum" id="sum"></div>
+  <div class="segs" id="segs"></div>
+  <div class="cols" id="cols"></div>
+  <div class="foot">
+    <span>The other <b style="color:var(--text2)">364</b> open pull requests want nothing from you right now.</span>
+    <span class="dim2">·</span><span>41 have had no push in 30 days</span>
+    <button class="btn" style="font-size:10px">Sweep the stale ones</button>
+    <button class="btn" style="font-size:10px">Show me all 392</button>
+  </div>
+  <div class="legend">
+    <span><span class="k">1</span>–<span class="k">5</span> lane</span><span><span class="k">j</span><span class="k">k</span> card</span>
+    <span><span class="k">⏎</span> open it</span><span><span class="k">r</span> review</span><span><span class="k">a</span> approve</span>
+    <span><span class="k">m</span> merge</span><span><span class="k">n</span> nudge</span><span><span class="k">/</span> search all 392</span>
+    <span><span class="k">esc</span> unfocus a lane</span>
+  </div>
+</div>
+
+<!-- ══════════════ DETALLE — 3-onescreen, con todo lo de hoy ══════════ -->
+<div id="viewDetail" class="hide">
+  <div class="mast">
+    <span class="chip ok">Open</span><b>#17455</b>
+    <span>GC7 — Guest checkout receipt email + resend endpoint + order analytics (DB migration only)</span>
+    <span class="chip" style="color:var(--accent)">WEB-1042</span>
+    <span class="spacer"></span>
+    <button class="btn primary">✦ Review with Claude ▾</button>
+    <button class="btn">GitHub ↗</button><button class="btn">⋯</button>
+    <button class="icon on" title="Pinned">★</button>
+  </div>
+
+  <div class="strip">
+    <span class="f"><span class="k">Author</span><span class="v">nlombard</span></span>
+    <span class="f"><span class="k">Branch</span><span class="v">fix/receipt-event… <span class="dim2">→</span> <span class="stack">feat/billing-v2</span></span></span>
+    <span class="f"><span class="k">Changes</span><span class="v" style="color:var(--ok)">+355</span></span>
+    <span class="f"><span class="k">Reviewers</span><span class="v">d-okafor ✓</span></span>
+    <span class="f"><span class="k">Assignee</span><span class="v dim2">unassigned</span></span>
+    <span class="f"><span class="k">Milestone</span><span class="v dim2">none</span></span>
+    <span class="f"><span class="k">Labels</span><span class="v">READY TO REVIEW · REVIEW:CAVEMAN</span></span>
+    <span class="f"><span class="k">Checks</span><span class="v"><span class="dot" style="background:var(--warn)"></span>44/45 running</span></span>
+    <span class="f"><span class="k">Review</span><span class="v">3<span class="dim2">/9 viewed</span> · 4 threads · 2 queued</span></span>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+  <div id="tabBody"></div>
+  <div class="note" id="footnote"></div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+
+/* ─────────── the board: lanes are what each PR needs FROM YOU ───────── */
+const LANES = [
+  { id:"review", n:"NEEDS YOUR REVIEW", why:"Somebody asked you by name, and nobody else can unblock it.", c:"var(--warn)" },
+  { id:"land",   n:"GREEN, READY TO LAND", why:"Approved, green, no conflicts. Only a human press is missing.", c:"var(--ok)" },
+  { id:"blocked",n:"BLOCKED", why:"Red checks or conflicts. Reviewing these is wasted work until they move.", c:"var(--err)" },
+  { id:"others", n:"WAITING ON SOMEONE ELSE", why:"Not yours to move. The only useful action is a poke.", c:"var(--info)" },
+  { id:"flight", n:"YOURS, IN FLIGHT", why:"Open by you and still moving. Nothing is owed by you right now.", c:"var(--accent)" },
+];
+
+/* Every card carries the sentence that put it in its lane — the thing a flat
+   table cannot say, and the reason this board is worth the width. */
+const PRS = [
+  { lane:"review", id:4821, t:"Make checkout idempotent when the payment webhook retries", who:"rlindqvist", ini:"RL",
+    age:"2h", d:"+214 −38", f:"9f", ck:"✓ 14 ✗ 0", tags:["WAITING"], base:"main",
+    rsn:"Asked you directly 2h ago. <b>First look</b> — nobody has read it yet.", acts:[["Review","r"]],
+    revs:["MK","AD"], extra:2 },
+  { lane:"review", id:4788, t:"Tax engine v2: per-line rates, backfill behind a flag", who:"tovah-b", ini:"TB",
+    age:"11d", d:"+1842 −407", f:"41f", ck:"✓ 12 ● 2", tags:["WAITING","BIG"], base:"main",
+    rsn:"Sitting on you for <b>11 days</b> — and the branch is 6 commits behind <b>main</b>.",
+    acts:[["Review","r"],["Update branch",""]] },
+  { lane:"review", id:4802, t:"Retry the inventory sync with jitter instead of a fixed 5s", who:"dparkinson", ini:"DP",
+    age:"1d", d:"+63 −21", f:"3f", ck:"✓ 14", tags:["RE-REQUESTED"], base:"main",
+    rsn:"Pushed a fix for the changes you asked for on Monday, then re-requested you.",
+    acts:[["Review the fix","r"]] },
+  { lane:"review", id:4795, t:"Drop the legacy /v1/cart alias and its redirect table", who:"wgrant", ini:"WG",
+    age:"4d", d:"+18 −611", f:"12f", ck:"✓ 14", tags:["WAITING","PA"], base:"main",
+    rsn:"Your team <b>@acme/payments</b> was asked 4d ago — none of the six of you has claimed it.",
+    acts:[["Claim & review",""]] },
+
+  { lane:"land", id:4712, t:"Fix the currency rounding on partial refunds", who:"you", ini:"YO",
+    age:"1d", d:"+47 −19", f:"4f", ck:"✓ 14", tags:["APPROVED"], base:"main",
+    here:true, revs:["TB"],
+    rsn:"Approved by <b>@tovah-b</b> yesterday. Green, up to date with <b>main</b>.",
+    acts:[["Merge","m"],["squash ▾",""]] },
+  { lane:"land", id:4744, t:"Warehouse: prefer the nearest fulfilment centre on split orders", who:"mchen", ini:"MC",
+    age:"3d", d:"+188 −54", f:"11f", ck:"✓ 14", tags:["APPROVED ×2"], base:"main",
+    rsn:"Two approvals, green for three days, nothing behind it. <b>Nobody pressed merge.</b>",
+    acts:[["Merge","m"],["squash ▾",""]] },
+  { lane:"land", id:4801, t:"Docs: the webhook signature is base64, not hex", who:"dparkinson", ini:"DP",
+    age:"6h", d:"+7 −7", f:"1f", ck:"no checks", tags:["APPROVED"], base:"main",
+    rsn:"One paragraph under <b>docs/</b> — no workflow watches that path, so green is as green as it gets.",
+    acts:[["Merge","m"]] },
+
+  { lane:"blocked", id:4693, t:"Split the orders table by tenant", who:"tovah-b", ini:"TB",
+    age:"4d", d:"+902 −214", f:"28f", ck:"✓ 12 ✗ 2", tags:["RED 3 RUNS"], base:"main",
+    rsn:"<b>e2e/checkout</b> and <b>contract-tests</b> — the <b>same failure three runs running</b>, so it is not flake.",
+    acts:[["Ask why ✦",""],["Re-run",""]] },
+  { lane:"blocked", id:4757, t:"Move the price cache behind Redis", who:"you", ini:"YO",
+    age:"2d", d:"+276 −88", f:"17f", ck:"✓ 14", tags:["CONFLICTS","APPROVED"], base:"main",
+    rsn:"<b>7 files conflict</b> with main — the worst is <b>pricing/cache.ts</b>, 6 hunks.",
+    acts:[["Resolve ✦",""]] },
+  { lane:"blocked", id:4728, t:"Ship the tax-engine flag default-on for EU stores", who:"mchen", ini:"MC",
+    age:"1d", d:"+31 −9", f:"3f", ck:"✓ 13 ✗ 1", tags:[], base:"feat/tax-v2",
+    rsn:"<b>typecheck</b> red — one error, <b>tax/lineRate.ts:88</b>. A minute's work for the author.",
+    acts:[["Ask why ✦",""],["Nudge","n"]] },
+
+  { lane:"others", id:4735, t:"Idempotency keys on the refunds endpoint", who:"wgrant", ini:"WG",
+    age:"9d", d:"+140 −26", f:"8f", ck:"✓ 14", tags:["CHANGES"], base:"main",
+    rsn:"<b>You</b> asked for changes 9d ago. No push since — it is <b>@wgrant's move</b>, not yours.",
+    acts:[["Nudge","n"]] },
+  { lane:"others", id:4703, t:"Warehouse picking order: nearest aisle first", who:"you", ini:"YO",
+    age:"4d", d:"+83 −17", f:"6f", ck:"✓ 14", tags:["WAITING"], base:"main",
+    rsn:"<b>@tovah-b</b> was asked 4d ago and has not opened it once.",
+    acts:[["Nudge","n"],["Ask someone else",""]] },
+  { lane:"others", id:4699, t:"Move the flags service behind the gateway", who:"you", ini:"YO",
+    age:"3d", d:"+64 −40", f:"5f", ck:"✓ 14", tags:["APPROVED","🔒 INFRA"], base:"main",
+    rsn:"Approved and green, but <b>infra/</b> is owned by <b>@acme/platform</b> — you cannot merge this one.",
+    acts:[["Merge 🔒",""],["Nudge them","n"]] },
+
+  { lane:"flight", id:4830, t:"Rate-limit guest checkout by device fingerprint", who:"you", ini:"YO",
+    age:"22m", d:"+167 −22", f:"8f", ck:"✓ 6 ● 8", tags:[], base:"main",
+    rsn:"Pushed 22m ago. <b>6 of 14 checks in</b>, nothing red yet. No reviewer asked.",
+    acts:[["Request review",""]] },
+  { lane:"flight", id:4791, t:"Fix the N+1 on the order-history page", who:"you", ini:"YO",
+    age:"3d", d:"+72 −134", f:"6f", ck:"✓ 14", tags:["CHANGES","2 THREADS"], base:"main",
+    rsn:"<b>@d-okafor</b> asked for changes 3h ago — two threads open, neither replied to.",
+    acts:[["Reply ↩",""],["Apply review ✦",""]] },
+  { lane:"flight", id:4824, t:"Prototype: async order-confirmation emails", who:"you", ini:"YO",
+    age:"2d", d:"+240 −6", f:"10f", ck:"✓ 14", tags:["DRAFT"], base:"main",
+    rsn:"Still a draft, still green. <b>Nobody is waiting on it</b>, including you.",
+    acts:[["Mark ready",""]] },
+];
+
+function board(){
+  const mine = PRS.length, all = 392;
+  $("#sum").innerHTML = `<b>${mine}</b> of ${all} open pull requests want something from you
+    <span class="dim2" style="font-size:11px">— yours, and the ones you were asked to look at. The board never shows more than that; the other ${all - mine} are a table, one click away.</span><br>
+    <span class="dim2">·</span> <b style="font-size:12.5px;color:var(--ok)">${PRS.filter(p=>p.lane==="land").length}</b>
+    <span class="dim">of them can land right now.</span>`;
+
+  $("#segs").innerHTML = LANES.map((l) => {
+    const n = PRS.filter((p) => p.lane === l.id).length;
+    return `<span class="seg" style="border-color:color-mix(in srgb,${l.c} 45%,transparent);color:${l.c}">
+      <b>${n}</b><span style="color:var(--text3)">${l.n.toLowerCase()}</span></span>`;
+  }).join("") + `<span class="seg dim2" style="border-color:var(--line)">${mine} / ${all}</span>`;
+
+  /*
+   * Six per lane, and the rest counted rather than drawn.
+   *
+   * The board is a view of what wants something from YOU, not of the
+   * repository: 390 open pull requests are a table, and the footer keeps the
+   * link to it. But a lane is still allowed to be forty on a bad week, and
+   * forty cards in a column is a scroll inside a scroll — worse than the flat
+   * list it replaced. So each lane shows its top six and says what it is
+   * holding back, which keeps the whole board on one screen at any size.
+   */
+  const CAP = 6;
+  $("#cols").innerHTML = LANES.map((l, i) => {
+    const all = PRS.filter((p) => p.lane === l.id);
+    const rows = all.slice(0, CAP);
+    const more = all.length - rows.length;
+    return `<div class="lcol" style="border-top-color:${l.c}">
+      <h2 style="color:${l.c}"><span class="n">${rows.length}</span>${l.n}<span class="k">${i+1}</span></h2>
+      <div class="why">${l.why}</div>
+      ${rows.map((p) => `
+        <div class="card" data-open="${p.id}">
+          <div class="h"><span class="num">⇅#${p.id}</span><span>${p.t}</span></div>
+          <div class="who"><span class="av">${p.ini}</span>${p.who}<span class="dim2">·</span>${p.age}
+            <span class="r dim">${p.d} ${p.f}</span></div>
+          <div class="meta">
+            <span>${p.ck}</span>
+            ${p.tags.map((t)=>`<span class="tag">${t}</span>`).join("")}
+            <span class="dim2">→</span><span class="${["main","master"].includes(p.base)?"dim2":"stack"}">${p.base}</span>
+            ${p.here ? `<span class="tag" style="color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent)">here</span>` : ""}
+            ${p.extra ? `<span class="dim2" title="more labels">+${p.extra}</span>` : ""}
+            ${p.revs ? `<span style="margin-left:auto;display:flex;gap:3px" title="Reviewers">${
+              p.revs.map((r)=>`<span class="av" style="width:14px;height:14px;font-size:7px">${r}</span>`).join("")}</span>` : ""}
+          </div>
+          <div class="rsn"><span class="a">↳</span><span>${p.rsn}</span></div>
+          <div class="acts">${p.acts.map(([n,k]) =>
+            `<button class="btn" style="font-size:10px;padding:2px 7px">${n}${k?` <span class="k">${k}</span>`:""}</button>`).join("")}
+            <button class="icon" style="margin-left:auto;width:18px;height:18px;font-size:13px" title="Pin">☆</button>
+          </div>
+        </div>`).join("")}
+      ${more > 0 ? `<button class="btn" style="width:100%;font-size:10px;color:var(--text3)">
+        +${more} more in this lane</button>` : ""}
+    </div>`;
+  }).join("");
+
+  document.querySelectorAll("[data-open]").forEach((c) =>
+    c.addEventListener("click", (e) => { if (e.target.closest("button")) return; show("detail"); }));
+}
+
+/* ─────────── the detail: one screen for Files, tabs for the rest ────── */
+const TABS = [
+  { id:"overview", n:"Overview" },
+  { id:"conversation", n:"Conversation", c:6 },
+  { id:"commits", n:"Commits", c:5 },
+  { id:"files", n:"Files", c:9, one:true },
+  { id:"checks", n:"Checks", c:45, warn:true },
+  { id:"review", n:"Review", c:2, warn:true },
+];
+let tab = "files";
+
+const FILES = [
+  { p:"events/models.py", d:"+18 −2", viewed:true, th:1 },
+  { p:"events/migrations/0027_guest_checkout_receipt_event.py", d:"+312 −0", th:2, fail:true },
+  { p:"events/testing.py", d:"+25 −1", viewed:true },
+];
+
+function tabsBar(){
+  $("#tabs").innerHTML = TABS.map((t) => `
+    <button data-tab="${t.id}" class="${t.id===tab?"on":""}">${t.n}${t.c!==undefined
+      ? `<span class="n ${t.warn?"warn":""}">${t.c}</span>` : ""}${t.one?` <span class="new">1 pantalla</span>`:""}</button>`).join("");
+  document.querySelectorAll("[data-tab]").forEach((b) =>
+    b.addEventListener("click", () => { tab = b.dataset.tab; render(); }));
+}
+
+const oneScreen = () => `
+<div class="three">
+  <div class="col">
+    <h3>Files · 3/9 viewed</h3>
+    ${FILES.map((f,i) => `<div class="file ${i===1?"on":""}">
+      <span class="dot" style="background:${f.fail?"var(--err)":f.viewed?"var(--ok)":"var(--text4)"}"></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.p.split("/").pop()}</span>
+      <span class="m">${f.th?`💬${f.th}`:""} ${f.d}</span></div>`).join("")}
+    <h3 style="margin-top:0">Progress</h3>
+    <div style="padding:6px 10px;font-size:10.5px;color:var(--text3)">
+      3 viewed · 4 threads open · 2 queued · 1 failing check
+    </div>
+  </div>
+
+  <div class="col code">
+    <h3>events/migrations/0027_…py <span class="dim2">+312 −0</span></h3>
+    <div class="ln"><span>14</span><span>from django.db import migrations, models</span></div>
+    <div class="ln"><span>15</span><span></span></div>
+    <div class="ln"><span>16</span><span>class Migration(migrations.Migration):</span></div>
+    <div class="ln"><span>17</span><span>    dependencies = [('events', '0026_guest_checkout_email_events')]</span></div>
+    <div class="ln"><span>18</span><span></span></div>
+    <div class="ln add"><span>19</span><span>+   # WEB-1042.3 — the receipt event row the sender looks up by name.</span></div>
+    <div class="ln add"><span>20</span><span>+   # It lands DISABLED: enabling is a manual admin step once the</span></div>
+    <div class="ln add"><span>21</span><span>+   # campaign exists, which is deliberate and matches 0022 onwards.</span></div>
+    <div class="ln add"><span>22</span><span>+   GUEST_CHECKOUT_RECEIPT = 'guest-checkout-receipt'</span></div>
+    <div class="ln add"><span>23</span><span>+   CHOICES = [</span></div>
+    <div class="ln add"><span>24</span><span>+       ('guest_checkout_receipt', 'Guest checkout receipt'),</span></div>
+    <div class="ln add"><span>25</span><span>+   ]</span></div>
+    <div class="ln"><span>26</span><span></span></div>
+    <div class="ln add"><span>27</span><span>+   def create_event(apps, schema_editor):</span></div>
+    <div class="ln add"><span>28</span><span>+       Event = apps.get_model('events', 'Event')</span></div>
+    <div class="thread">
+      <b>d-okafor</b> <span class="dim2">· line 28 · unresolved · from the review</span><br>
+      <span class="dim">This needs a mirror card into master — the row lands disabled here, so nothing
+      sends until somebody flips it. Worth saying in the description.</span>
+      <div style="margin-top:6px;display:flex;gap:6px"><button class="btn" style="font-size:10px">Reply</button>
+        <button class="btn" style="font-size:10px">Resolve</button>
+        <span class="dim2" style="font-size:10px;align-self:center">⏎ replies · r resolves</span></div>
+    </div>
+    <div class="ln del"><span>29</span><span>-       Event.objects.create(name=NAME, enabled=True)</span></div>
+    <div class="ln add"><span>29</span><span>+       Event.objects.create(name=NAME, enabled=False)</span></div>
+    <div class="ln"><span>30</span><span></span></div>
+    <div class="ln add"><span>31</span><span>+   def drop_event(apps, schema_editor):</span></div>
+    <div class="ln add"><span>32</span><span>+       apps.get_model('events', 'Event').objects.filter(name=NAME).delete()</span></div>
+    <div class="ln"><span>33</span><span></span></div>
+    <div class="ln add"><span>34</span><span>+   operations = [</span></div>
+    <div class="ln add"><span>35</span><span>+       migrations.AlterField('event', 'name', models.CharField(choices=CHOICES)),</span></div>
+    <div class="ln add"><span>36</span><span>+       migrations.RunPython(create_event, drop_event),</span></div>
+    <div class="ln add"><span>37</span><span>+   ]</span></div>
+  </div>
+
+  <div class="col rail">
+    <section><h4>Said about this file</h4>
+      <div style="font-size:11px;color:var(--text2)">
+        <b>d-okafor</b> <span class="dim2">4h</span><br>
+        <span class="dim">LGTM. But be aware that this migration needs a mirror PR into master.</span>
+      </div>
+      <div class="dim2" style="font-size:10px;margin-top:5px">From Conversation — pulled here because it names this file.</div>
+    </section>
+    <section><h4>Checks blaming this file</h4>
+      <div style="font-size:11px"><span class="dot" style="background:var(--err)"></span>
+        <b>django-tests</b> <span class="dim2">· events/migrations/0027…</span></div>
+      <button class="btn" style="font-size:10px;margin-top:6px">Open the log</button>
+    </section>
+    <section><h4>Your review</h4>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn" style="color:var(--ok)">✓ Approve</button>
+        <button class="btn" style="color:var(--err)">✕ Request changes</button>
+        <button class="btn">💬 Comment</button>
+      </div>
+      <div class="dim2" style="font-size:10px;margin-top:6px">2 line comments go with it — one notification, not 3.</div>
+      <button class="btn primary" style="margin-top:6px;width:100%">Submit review</button>
+    </section>
+    <section><h4>Merge <span class="new">añadido</span></h4>
+      <div style="font-size:11px;color:var(--warn)">◯ Waiting for the checks</div>
+      <div class="dim2" style="font-size:10px;margin:4px 0 6px">44 of 45 in. Nothing has failed.</div>
+      <button class="btn hazard" style="width:100%">Create a merge commit</button>
+      <button class="btn" style="width:100%;margin-top:5px">Merge when green</button>
+      <div class="dim2" style="font-size:10px;margin-top:5px">The whole box lives in Overview — this is the short version, so a verdict never needs a tab.</div>
+    </section>
+  </div>
+</div>`;
+
+const overview = () => `
+<div class="pane">
+  <div class="box">
+    <div class="hd">
+      <span class="b" style="background:var(--warn)">◯</span>
+      <span><b style="font-size:13px">Waiting for the checks</b><br>
+      <span class="dim" style="font-size:11px">The branch just moved — GitHub creates the runs a few seconds after the push.</span></span>
+    </div>
+    <div class="rz"><span style="color:var(--warn)">◯</span><span>35 checks passed, 10 still running<span class="dim2"> · no conflicts with feat/billing-v2</span></span></div>
+    <div class="rz"><span style="color:var(--warn)">◯</span><span>4 review threads still open — <span class="dim2">a reply is not a resolve</span></span>
+      <button class="btn" style="margin-left:auto;font-size:10px">Go to thread</button></div>
+    <div class="rz"><span class="stack">→</span><span>Lands on <span class="stack">feat/billing-v2</span>, not the trunk <span class="new">añadido</span></span></div>
+    <!-- The states today's box can be in, drawn so the mockup cannot quietly
+         drop one. In the app only the ones that apply are rendered. -->
+    <div class="rz"><span style="color:var(--info)">↑</span><span>Resolved here and not pushed —
+      <b style="color:var(--text)">2 commits ahead</b> of what GitHub has.
+      <span class="dim2">GitHub is right about the conflict until you push.</span></span>
+      <button class="btn" style="margin-left:auto;font-size:10px">Push</button></div>
+    <div class="rz"><span style="color:var(--err)">✕</span><span>7 files conflict with the base —
+      <span class="dim2">pricing/cache.ts, orders/tax.ts, +5</span></span>
+      <button class="btn" style="margin-left:auto;font-size:10px">Resolve ✦</button>
+      <button class="btn" style="font-size:10px">Hand to an agent</button></div>
+    <div class="rz"><span style="color:var(--warn)">⚑</span><span>Force-pushed since the last review —
+      <span class="dim2">what @d-okafor approved is not what is here now.</span></span></div>
+    <div class="acts">
+      <button class="btn hazard">Create a merge commit ▾</button>
+      <button class="btn" title="Armed by you — press to disarm">Cancel auto-merge</button>
+      <button class="btn">Merge when green</button>
+      <button class="btn" title="Closed pull requests get this instead of merge">↺ Reopen</button>
+      <button class="btn warn" disabled title="The branch was just updated — pushing again would restart the checks">↻ Update branch &amp; pull · 4 behind</button>
+      <button class="btn" disabled title="A new run is already starting">Re-run failed</button>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn">To draft</button><button class="btn danger">Close</button></span>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="hd" style="padding-bottom:0"><b style="font-size:11px;letter-spacing:.08em;color:var(--text4)">DESCRIPTION</b>
+      <button class="btn" style="margin-left:auto;font-size:10px">✎ Edit</button></div>
+    <div class="md" style="padding:4px 12px 12px">
+      <h4>Context</h4>
+      <p><b>Schema only.</b> GC7's logic ships separately; this PR exists so that it can.</p>
+      <p>Mailhaus events in this codebase are <b>rows, not just code</b>. The sender does
+      <code>Event.objects.get(name=…)</code> — a lookup, not a create — so the receipt cannot be sent until the row exists.</p>
+      <h4>Checklist</h4>
+      <p>☑ Followed the checks document · ☑ Added tests · ☐ Updated documentation</p>
+    </div>
+  </div>
+
+  <div class="box"><div class="hd"><span style="font-size:11px;color:var(--text4);letter-spacing:.08em">COMMITS · 5</span></div>
+    <div style="padding:0 12px 10px;font-size:11px;color:var(--text2)">
+      <div>970ba72 <span class="dim">Merge feat/billing-v2 into GC7</span> <span class="chip ok" style="font-size:9px">Verified</span></div>
+      <div>fa6f7f1 <span class="dim">Add the receipt event row, disabled</span></div>
+      <div class="dim2">+3 more</div>
+    </div>
+  </div>
+</div>`;
+
+const simple = (title, body) => `<div class="pane"><div class="box"><div class="hd">
+  <span style="font-size:11px;color:var(--text4);letter-spacing:.08em">${title}</span></div>
+  <div style="padding:0 12px 12px;font-size:11.5px;color:var(--text2)">${body}</div></div></div>`;
+
+function render(){
+  tabsBar();
+  const body =
+    tab === "files" ? oneScreen() :
+    tab === "overview" ? overview() :
+    tab === "conversation" ? simple("CONVERSATION · 6",
+      `<div><b>d-okafor</b> <span class="dim2">approved · 4h</span><br><span class="dim">LGTM. But be aware that this migration needs a mirror PR into master.</span></div>
+       <div style="margin-top:8px"><b>4 threads</b> <span class="dim2">· 2 resolved · every one of them also appears in the rail beside its code</span></div>
+       <div style="margin-top:8px" class="dim2">Bots folded away · 2</div>`) :
+    tab === "commits" ? simple("COMMITS · 5",
+      `970ba72 Merge feat/billing-v2 into GC7<br>fa6f7f1 Add the receipt event row, disabled<br>
+       <span class="dim2">+3 more · each one opens its own diff</span>`) :
+    tab === "checks" ? simple("CHECKS · 45",
+      `<div><span style="color:var(--warn)">◯</span> <b>CI / Tests</b> <span class="dim2">22 · 10 running</span></div>
+       <div><span style="color:var(--ok)">✓</span> <b>CI / Benchmarks</b> <span class="dim2">5</span></div>
+       <div><span style="color:var(--ok)">✓</span> <b>Ops / Branch Sync Check</b> <span class="dim2">1</span></div>
+       <div class="dim2" style="margin-top:6px">Grouped by workflow, as today. The rail only ever shows the ones blaming the file you are on.</div>`) :
+    simple("REVIEW · 2 queued",
+      `<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" style="color:var(--ok)">✓ Approve</button>
+       <button class="btn" style="color:var(--err)">✕ Request changes</button><button class="btn">💬 Comment</button></div>
+       <div class="dim2" style="margin-top:8px">Same three controls that live in the rail — here with the queued comments listed in full.</div>`);
+  $("#tabBody").innerHTML = body;
+  $("#footnote").textContent = tab === "files"
+    ? "Files IS the one-screen review: tree + diff + rail, and no tab ever changes what the other two columns show. Under 1180px the rail folds away and its four sections move into Overview."
+    : "Everything today's panel had is still a tab. One-screen replaces the Files tab; it does not replace the panel.";
+}
+
+function show(v){
+  $("#viewList").classList.toggle("hide", v !== "list");
+  $("#viewDetail").classList.toggle("hide", v === "list");
+}
+$("#navList").addEventListener("click", () => show("list"));
+$("#navDetail").addEventListener("click", () => show("detail"));
+
+board(); render(); show("list"); /* the board is the way in */
+</script>

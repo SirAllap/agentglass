@@ -121,11 +121,12 @@ test("a gate that resolves and is later reissued is announced again", () => {
 /**
  * The poll is started by someone listening, not by the module being imported.
  *
- * `main.tsx` imports the desktop tree unconditionally so it can pick between it
- * and the phone one. That meant loading this module on a phone — and starting
- * a two-second `/gate/pending` poll there, feeding a store nothing on that
- * device ever reads, since MobileApp keeps its own gate list. A whole loop of
- * waste on the one device where it costs a battery.
+ * `main.tsx` used to import the desktop tree unconditionally so it could pick
+ * between it and a browser companion built for a phone. That meant loading this
+ * module on a phone — and starting a two-second `/gate/pending` poll there,
+ * feeding a store nothing on that device ever read, since the companion kept
+ * its own gate list. A whole loop of waste on the one device where it cost a
+ * battery. The companion is deleted; the rule it bought is what is pinned here.
  *
  * Driven through `fetch` rather than by mocking the api module: what matters is
  * that no request leaves, and the request is the thing to count.

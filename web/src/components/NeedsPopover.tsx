@@ -22,6 +22,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import type { AgentPane } from "../../../shared/types.ts";
+import { CloseButton } from "./CloseButton.tsx";
+import { paneChoices } from "../lib/panePick.ts";
 
 export type NeedsItem = {
   /** The agent card key this was raised from. Stable enough for a list key. */
@@ -66,20 +68,10 @@ function Action({ children, onClick, primary }: { children: React.ReactNode; onC
   );
 }
 
-/**
- * The panes running an agent in this directory.
- *
- * Measured, not assumed: on the machine this was built against there are five
- * agents in one project directory and three in another, so "which pane" often
- * has no single answer. The button appears on exactly one hit; more than that
- * and the panel says how many rather than dropping you into the wrong
- * conversation with nothing to tell you it was the wrong one.
- */
-const panesFor = (panes: AgentPane[], cwd: string | null): AgentPane[] =>
-  cwd ? panes.filter((p) => p.agentCwds.includes(cwd)) : [];
-
-function Row({ it, hits, onChat, onApprove, onProject, onPane }: {
+function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
   it: NeedsItem;
+  /** The pane this very session reported being in, when it did. */
+  exact: AgentPane | null;
   /** Panes running an agent in this session's directory. One is a button; more
    *  than one is a fact worth stating and not a choice worth guessing. */
   hits: AgentPane[];
@@ -89,8 +81,8 @@ function Row({ it, hits, onChat, onApprove, onProject, onPane }: {
   onPane: (p: AgentPane) => void;
 }) {
   const tint = it.level === "error" ? "var(--error)" : "var(--warning)";
-  const pane = hits.length === 1 ? hits[0]! : null;
-  const actionable = !!it.chatId || it.gated || !!it.otherProject || hits.length > 0;
+  const pane = exact ?? (hits.length === 1 ? hits[0]! : null);
+  const actionable = !!it.chatId || it.gated || !!it.otherProject || !!pane || hits.length > 0;
   return (
     <div className="agx-note-row">
       <div className="flex items-center gap-2 mb-1">
@@ -101,7 +93,7 @@ function Row({ it, hits, onChat, onApprove, onProject, onPane }: {
             another one is legitimate — but reading it as though it came from the
             project in front of you is how you go looking in the wrong tree. */}
         {it.otherProject && (
-          <span className="text-[9px] uppercase tracking-wider px-1.5 py-[1px] rounded shrink-0"
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-[1px] rounded shrink-0"
             style={{ color: "var(--text3)", border: "1px solid var(--border)" }}
             title={`This is not the project you have open — it lives in ${it.project}`}>
             {it.otherProject}
@@ -125,6 +117,14 @@ function Row({ it, hits, onChat, onApprove, onProject, onPane }: {
           <Action primary={!it.chatId && !it.gated} onClick={() => onPane(pane)}>
             Go to its pane · {pane.windowName || pane.windowIndex}
           </Action>
+        )}
+        {/* Only where the pane was guessed from a directory. When the session
+            named its own pane there is nothing to hedge about, and a caveat on
+            a certain answer teaches you to distrust the certain ones. */}
+        {pane && !exact && (
+          <span className="text-[10px]" style={{ color: "var(--text4)" }} title="Matched by the directory the agent is running in — it is the only pane there">
+            best guess
+          </span>
         )}
         {/* Several agents in one directory is the normal case, not the odd one
             — five in a project is a working day. The app cannot tell them
@@ -239,15 +239,18 @@ export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprov
         }}
       >
         <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderBottom: "1px solid var(--border)" }}>
-          <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>waiting on you</span>
-          <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{items.length}</span>
-          <button className="agx-note-btn ml-auto" onClick={onClose} title="Close (Esc)">✕</button>
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>waiting on you</span>
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{items.length}</span>
+          <CloseButton onClick={onClose} title="Close (Esc)" className="agx-note-btn ml-auto" />
         </div>
         <div className="agx-inbox-list">
-          {items.map((it) => (
-            <Row key={it.key} it={it} hits={panesFor(panes, it.cwd)}
-              onChat={onChat} onApprove={onApprove} onProject={onProject} onPane={goPane} />
-          ))}
+          {items.map((it) => {
+            const { exact, hits } = paneChoices(panes, it);
+            return (
+              <Row key={it.key} it={it} exact={exact} hits={hits}
+                onChat={onChat} onApprove={onApprove} onProject={onProject} onPane={goPane} />
+            );
+          })}
         </div>
       </div>
     </Portal>

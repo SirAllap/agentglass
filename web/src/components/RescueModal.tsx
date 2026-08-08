@@ -29,7 +29,7 @@ const groupOf = (p: string) => p.split("/").pop() || p;
 function Tick({ on, dim }: { on: boolean; dim?: boolean }) {
   return (
     <span
-      className="shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center text-[9px] leading-none"
+      className="shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] leading-none"
       style={{
         color: on ? "var(--bg)" : "transparent",
         background: on ? (dim ? "var(--warning)" : "var(--primary)") : "transparent",
@@ -164,7 +164,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
                       <Tick on={ticked} dim={risky} />
                       <span className="text-[11.5px] truncate" style={{ color: ticked ? "var(--text)" : "var(--text3)" }}>{r.entry.path}</span>
                       {risky && (
-                        <span className="text-[9px] px-1 rounded shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
+                        <span className="text-[10px] px-1 rounded shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
                           Overwrites the main checkout
                         </span>
                       )}

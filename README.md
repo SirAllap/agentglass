@@ -34,7 +34,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 
 - [Every project, one cockpit](#every-project-one-cockpit)
 - [More than a dashboard — a workspace](#more-than-a-dashboard--a-workspace)
-- [Away from the desk — the phone companion](#away-from-the-desk--the-phone-companion)
+- [Away from the desk — the phone app](#away-from-the-desk--the-phone-app)
 - [Why](#why) · [Themes](#themes)
 - [Quickstart](#quickstart) · [Requirements](#requirements-what-agentglass-expects-to-find)
 - [Desktop app](#desktop-app) · [Updating](#updating)
@@ -359,21 +359,41 @@ Two tabs of a panel that opens from the foot of the rail, over whatever view you
 
 ---
 
-## Away from the desk — the phone companion
+## Away from the desk — the phone app
 
-The cockpit stays at the desk. A terminal, a hunk-level diff and a docker table
-are not things anybody drives with a thumb, and a narrower version of them is
-not a phone app — it is the wrong app, smaller. So **a phone gets a different
-application**, not a different stylesheet: `main.tsx` chooses one tree or the
-other before React mounts. That is also what keeps the phone build honest —
-nothing heavy can leak into it. No terminal, no charts, no radar; the fleet's
-pulse is fourteen CSS-animated bars rather than a canvas, which on a phone is a
-battery decision as much as a layout one.
+The cockpit stays at the desk. A hunk-level diff and a docker table are not
+things anybody drives with a thumb, and a narrower version of them is not a
+phone app — it is the wrong app, smaller. So **a phone gets a different
+application**: a native Android build that lives in [`mobile/`](mobile/), pairs
+with your machine over your own wifi, and reads the same server the cockpit
+reads.
 
-**What decides.** Width under 768px, or a coarse pointer up to 900px — that
-second rule catches the phone held sideways, where the width alone would say
-"small laptop". A tablet in landscape is a perfectly good desk and keeps the
-cockpit. An explicit choice, stored per device, always wins over both.
+**It used to be a second web app**, and it could never do the one thing it
+existed for. `crypto.subtle` is secure-context only, so a page served at
+`http://192.168.1.20:4000` has no WebCrypto at all: it cannot generate the key
+the pairing handshake is built on, and the phone on the sofa was exactly the
+device that could not complete it. The app is not a page. It brings its own
+P-256 (@noble, on Hermes — no secure context and no native module), so the same
+handshake works unchanged over plain HTTP on the network you are already on —
+and the handshake itself did not move to meet it: not a route, not a field.
+
+It is **not in a store**. It is an Expo project in this repository, run from
+Metro onto your own phone or emulator — [`mobile/README.md`](mobile/README.md)
+is the two commands and the traps.
+
+### Seven tabs
+
+| Tab | What it is for |
+|---|---|
+| **Now** | The queue below: everything that wants a decision, in one list you can empty. |
+| **Terminal** | The machine's **real tmux panes**, as tabs — not a second empty prompt. Open one and you are looking at what is on that screen right now: the agent mid-turn, the build that failed, the rebase waiting on a decision. It joins as its own grouped session with `window-size largest`, so attaching from the sofa does not drag a 200-column session down to phone width on the desk. A key bar carries what a software keyboard has no room for — Escape, Tab, the arrows, `^C`, and the tmux prefix. |
+| **Chats** | The same conversation you left at the desk, and still the same one when you sit back down: the session lives on the server, not on this phone. Scoped to **Live** when anything is running, because that is almost always why you reached for it. |
+| **PRs** | Per repository, with the three things that decide whether you open it at all on the row itself — is CI red, has somebody approved, how big is it. The check rollup costs about four times the rest of the row, so it arrives on a second pass and says `checks…` until it does rather than claiming there are none. |
+| **Repos** | Every checkout, not one per repository — linked worktrees answer with the same pull requests but have their own uncommitted work. A switch per file **is** the staging; then a title, Commit, and Push if the branch is ahead. |
+| **Tasks** | Your board's own views, in the order the workspace has them, in the colours it gave them — a phone showing a different slice of the board than the computer is a second place to keep in your head. |
+| **Settings** | What this phone is paired to, what it was granted, and whether it may buzz. |
+
+![the phone app — the machine's tmux panes, a checkout's changes, and what this device was granted](.github/assets/android.png)
 
 ### The home screen is a queue, not a dashboard
 
@@ -389,22 +409,12 @@ and answering it takes the card out of the list.
 | **Ready to merge** | Approved, checks green, nothing in the way. The one card that finishes work rather than starting it. |
 | **Review requested** | Somebody asked for your eyes. Opens the pull request, diff and all. |
 | **Stopped · wants direction** | A session that ended its turn and has gone quiet — between four minutes and twelve hours. Under four it is probably still thinking; over twelve it is yesterday's problem, not tonight's. |
+| **Stopped part-way** | A checkout left mid-rebase, mid-merge or mid-cherry-pick. Nothing is running there and nothing will until somebody finishes it. |
 
 Ordered by what it costs you to be away: blocking a person first, then broken,
 then finished-and-waiting, then everything else — and within a rank, newest
 first. A card you are not going to deal with tonight can be snoozed, and it
 comes back when it changes.
-
-### Three tabs, and no more
-
-- **Now** — the queue above.
-- **Chats** — say something back. The same conversation you left at the desk,
-  and still the same one when you sit back down: the session lives on the
-  server, not in a browser tab. Turns stream in as they happen, with the tools
-  the agent runs named as it runs them.
-- **Repos** — for when you want to look rather than need to. Pick a repository,
-  then the facet: **Changes** (a switch per file *is* the staging, then commit
-  and push), **Pull requests**, **Containers**. It opens on whatever is wrong.
 
 The diff is unified, wrapped, with a `+` or `−` glyph on every line as well as
 the tint — at 11.5px, outdoors, in one hand, colour alone is not a signal to
@@ -415,10 +425,13 @@ rely on, and for a good number of people it is not a signal at all.
 **Settings ▸ Remote access**, one switch to open the port. Then adding a device
 is its own small handshake, and it is deliberately not one step.
 
-The pane shows a **QR code and six digits**. Scan the code, type the digits on
-the phone, and a request appears back at the computer — naming the device, the
-address it came from, and the same six digits — and waits for somebody to
-accept. Nothing exists until they do.
+The pane shows a **QR code and six digits**. Scan the code with the app — or
+paste the link it encodes, which carries the address as well as the ticket —
+type the digits, and a request appears back at the computer, naming the device,
+the address it came from and the same six digits. It waits for somebody there to
+accept. Nothing exists until they do, and **the ticket is good for two minutes**:
+the app counts them down on both screens, because an invitation that has quietly
+expired looks exactly like a phone that cannot reach the machine.
 
 That shape is the point. **The QR is an invitation, not a key.** It used to be
 the machine's own token, which meant a photograph of this screen, a screenshot
@@ -436,8 +449,16 @@ at the request, and revocable on its own.
 - **Look only** — sessions, costs, changes, pull requests. Approves nothing.
 - **Answer things** *(the default)* — the above, plus approving gates and
   replying to a running session. What a phone is actually for.
-- **Everything** — the terminal, git write, Docker, merging. For a laptop you
-  trust, not a phone.
+- **Everything** — the terminal, git write, Docker, merging. A grant for a
+  device you trust, and the one the **Terminal** tab needs: a real PTY on your
+  machine is not something to hand out by default, so `/terminal/pty` refuses
+  anything less.
+
+The app is shown its own grant rather than left to discover it: a phone paired
+to **Answer things** gets the list of changes and no commit button. Hiding a
+button never stopped anything — the scope is checked on the route, per request —
+but a button that answers "you may not" is a worse way to learn it than a screen
+that never offered it.
 
 **Forget** one device and only that one stops working: its credential is
 revoked, the sockets it is holding are closed, and the desk and every other
@@ -445,13 +466,16 @@ phone carry on. Rotating the code is still there for when you have lost the code
 itself, and still kicks everything.
 
 It is **your network only** — the server binds to the LAN. The same pane will
-tell you when a host firewall is dropping the packets, because otherwise the
-phone shows a white page and nothing anywhere says why. Over café wifi, pair on
-the Tailscale address it offers instead: that one is encrypted end to end.
+tell you when a host firewall is dropping the packets, because otherwise
+"nothing answered at 192.168.1.20" is all anyone gets, and that sentence is
+equally true of a machine that is switched off. Over café wifi, pair on the
+Tailscale address it offers instead: that one is encrypted end to end.
 
-The page ships a web manifest, so **Add to home screen** gives you an icon that
-opens without browser chrome. On an iPhone that is not optional — it is the only
-way Safari will deliver a push.
+The cockpit itself still opens in a phone browser, and the page ships a web
+manifest so **Add to home screen** gives it an icon that opens without browser
+chrome. Pairing one, though, needs a secure context for the same WebCrypto
+reason as ever — so it is the tailnet HTTPS address that works there, never
+`http://192.168.…`. That is what the app is for.
 
 ### Reaching it when you are not on the same wifi
 
@@ -483,57 +507,46 @@ does not make anything work better, and turning off the guard to do it
 (`AGENTGLASS_ALLOW_REMOTE=1`) is for the case where the server genuinely runs on
 another machine — not for the case where you added a tunnel to it.
 
-### Alerts that reach a locked phone
+### Alerts on the phone, and what they honestly cover
 
-Everything else agentglass can say needs somebody already looking. A webhook
-goes to a chat app, `notify-send` goes to a desktop that may not exist, and the
-phone's socket closes with the screen **on purpose** — a socket reconnecting
-behind a dark screen is a worse deal than a poll. So the one case the companion
-exists for, you walked away and an agent is now blocked waiting on a person,
-was the one case nothing covered.
+**Settings ▸ This phone may buzz**, one switch. A gate holding, a tool that
+failed, a run that stopped — the same notes the computer puts on its own screen,
+raised on the phone instead. They ride **the live connection this device already
+holds**: `{type:"alert"}` on the socket is the identical frame the desk turns
+into a native notification, so there is no push service in the path, no account
+anywhere, no device token held by anybody, and nothing to register.
 
-**Settings ▸ Push to this phone**, one switch. After that a held gate buzzes the
-phone in your pocket **with Allow and Deny on the notification** — you answer it
-from the lock screen and nothing opens. That is the whole loop: an agent stops,
-your pocket buzzes, you tap Allow, it goes. Tapping the notification itself
-still opens the queue, which is what happens on an iPhone, where Safari draws no
-buttons.
+**What that costs, said plainly: the app has to be alive to hear it.** Android
+keeps the socket for a while after the screen goes off and then freezes the
+process, so this reaches a pocket for a while and not for ever. The Settings
+screen says so where you turn it on, rather than implying a guarantee it cannot
+keep. **Send a test alert** is there because the alternative way to find out
+whether it works is to miss the thing it exists for.
 
-Only a held gate gets them. Everything else this app sends is news, and news
-with buttons on it is a worse notification rather than a better one.
+What is worth interrupting for is decided on the phone, and there are four
+different ways to say no: you are **looking at the app** already (the queue is
+on screen and updating, and a notification over the top of it is the app telling
+you what you can see), it is the **same alert** inside ninety seconds (a
+reconnect re-broadcasts, and a phone reconnects every time it comes out of a
+pocket — without this, walking into the office buzzes once per lift door), the
+server itself called it **worth knowing and not worth stopping for**, or it
+arrives with **no title**, and a buzz with no explanation teaches people to
+ignore the next one. Only an agent that is stopped and waiting on a person gets
+Android's `max`. Making everything urgent is how a channel ends up switched off
+in the system settings, where the app cannot see it and cannot ask again.
 
-Answering is bounded by what the device was paired for: a phone paired to
-**Look only** is told so rather than silently failing, and the two buttons do
-nothing it was not granted — the check is on the route, not on the notification.
+> **There was a Web Push route here, and it is gone.** It woke a locked phone
+> through Google's or Mozilla's push service, with Allow and Deny drawn on the
+> notification — and by the end nothing could subscribe to it: a service worker
+> and `PushManager` need a secure context, so a phone opening the QR link at
+> `http://192.168.…` had neither. The same measurement that ended the browser
+> companion, one layer down. It left with the switch that turned it on, rather
+> than staying as a route nobody could reach.
 
-It is end-to-end encrypted by design: the push service relays a blob it cannot
-read (RFC 8291 over RFC 8188, VAPID for the token). Your machine generates its
-own signing key on first use and keeps it in `~/.config/agentglass/push.json`
-at 0600 — nothing is registered with anybody, and the only thing that leaves is
-ciphertext addressed to your own device.
-
-- **Test** sends a real notification down the real path, so you find out now
-  rather than by missing something later.
-- More than one device gets a list — what each is called, when it last actually
-  received an alert, and a way to forget one. A phone you replaced keeps
-  receiving until you say otherwise, and the list is where you say it.
-- A held gate stays on the lock screen until you deal with it; anything less
-  urgent is allowed to fade.
-- Every tap says what it did — including the ones that are not a clean yes. A
-  gate somebody already answered at the desk, one that timed out while the phone
-  was face-down, a device that has since been forgotten, or a machine that has
-  gone to sleep are four different sentences, because they need four different
-  things done about them.
-- **On iPhone and iPad this needs the Home Screen icon first.** Safari has had
-  Web Push since 16.4, but only for an installed site — in a browser tab the
-  switch will say so and point at the share sheet.
-
-Independent of `AGENTGLASS_NOTIFY`, which is the desktop channel: a phone is
-subscribed whether or not the machine it watches has a screen.
+`AGENTGLASS_NOTIFY` is the desktop channel and does not gate this one: a paired
+phone hears the socket whether or not the machine it watches has a screen.
 
 ---
-
-![the phone companion — the queue, a repository's changes, and the chat list](.github/assets/mobile.png)
 
 ## Why
 
@@ -563,7 +576,7 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 📈 **Anthropic plan usage** | 5-hour + weekly plan-limit meters — shown only when you're viewing Anthropic (the one provider with a usage API), on wide screens. |
 | ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `i` tasks · `o` Docker · `t` terminal · `c` chat · `e` files · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
-| 🔔 **Alerts** | Web Push to a locked phone (end-to-end encrypted, no account anywhere) — a held gate arrives with **Allow and Deny on the notification** — plus webhook (Slack/Discord), desktop notify and an optional in-app chime. |
+| 🔔 **Alerts** | A held gate reaches whatever is attached: the notch in the cockpit, a **native OS notification** on the desktop, and a paired phone over its own live socket — plus webhook (Slack/Discord), `notify-send` on a headless box and an optional in-app chime. |
 | 💰 **Budgets** | *"No more than $40 a month on this repository."* Per-project and per-model, warned at 80% rather than only when you cross it, counted from the daily rollup as well as live events so a monthly budget really means a month. Settings ▸ Preferences. |
 | 📤 **Export** | One-click CSV / JSON of all events. |
 
@@ -634,6 +647,28 @@ launch-at-login, and the self-update route, which refuses a browser by design).
 It is the development path, not the way to run the app. If something else on
 your machine already owns `:4000`, the tab will talk to *that* server, so check
 the port before believing an empty dashboard.
+
+**Running a second server alongside the installed app** — a test instance, a
+worktree you want to poke at — needs `AGENTGLASS_DB`, and this is the one that
+bites. Isolating `XDG_CONFIG_HOME` is not enough: the *database* is found via
+`XDG_DATA_HOME`, and a checkout with no `agentglass.db` of its own resolves to
+the installed app's real history. A second server there would run a second
+transcript scanner over it, and two scanners over one file inflate events,
+tokens and cost — the scanner's rows carry no `event_id`, so the idempotency
+index cannot dedupe them, nothing errors, and the totals simply grow. The claim
+at boot now stops that scanner from starting, which keeps the numbers honest but
+also means your test instance sees no live sessions. Give it its own file:
+
+```bash
+S=$(mktemp -d)
+env AGENTGLASS_DB=$S/agentglass.db \
+    XDG_DATA_HOME=$S/data XDG_CONFIG_HOME=$S/cfg \
+    AGENTGLASS_PORT=4713 \
+    bun run server/src/index.ts
+```
+
+(`GH_CONFIG_DIR=$HOME/.config/gh` too, if you want the PR panel to work — `gh`
+reads its login through `XDG_CONFIG_HOME`, and isolating that logs it out.)
 
 **Single-port deploys** (a headless box, a systemd unit): build the UI once and
 the server serves it itself, one process, one port, API and dashboard on the
@@ -791,13 +826,28 @@ reach, so an install never exposes a dashboard on a port.
 
 - **Attaches, never duplicates** — if a server is already listening on `:4000`
   (e.g. a `bun run dev` you left running), the app attaches to it instead of
-  racing a second one against the same database.
+  racing a second one against the same database. Note the trigger: it is the
+  **port**, so a second server started deliberately on another port sails past
+  this check. What stops *that* one is the database claim below.
+- **One scanner per database file** — the server claims its database at boot
+  (pid and port, in the file itself), and a second process that finds a live
+  claim runs with the transcript scanner **off**: it serves, it ingests hooks,
+  it just does not sweep. Two scanners over one file double events, tokens and
+  cost in silence — scanner rows carry no `event_id`, so the ingest idempotency
+  index cannot dedupe them. A claim left behind by a killed process is taken
+  over, not honoured. Give a second instance its own `AGENTGLASS_DB` and both
+  scan.
 - **Clean lifecycle** — the bundled server is a child process, killed when the
   app exits. If the app dies hard, the server's own watchdog notices it was
   orphaned (`AGENTGLASS_DIE_WITH_PARENT`, armed by the shell) and exits rather
   than lingering on the port.
 - **Launch at login** — an in-app toggle, no file editing.
-- **Keeps full history** — the desktop app defaults `AGENTGLASS_RETENTION_DAYS=0`.
+- **Keeps eight days of raw events** — the same `AGENTGLASS_RETENTION_DAYS`
+  default as every other way of running it; the packaged app sets nothing. The
+  boot log and Settings ▸ Budgets both state the window in force. Spend history
+  outlives the rows via the daily rollup, which has no expiry — but the raw
+  prompts and command lines behind it do not. Set
+  `AGENTGLASS_RETENTION_DAYS=0` if you want them kept for ever.
 
 A desktop app launched from its icon has no "current folder" — so on first
 open the cockpit **asks which folder it's about**: pick a project, a folder of
@@ -841,12 +891,28 @@ write to your repos and control Docker. It ships safe for its intended home —
 are:
 
 - **It only listens on your own machine.** The server binds `127.0.0.1` —
-  nothing on your network can reach it. By default there is **no authentication**,
-  because on a single-user machine "can reach localhost" already means "is you".
-- **Optional shared-secret token.** Set `AGENTGLASS_TOKEN` and every route but
-  the append-only telemetry sinks (`/ingest`, the OTLP receivers) requires it —
-  `Authorization: Bearer <token>` for the API, `?token=<token>` on the dashboard
-  URL (it's stored and stripped from the address bar). This is what makes a
+  nothing on your network can reach it.
+- **The desktop app is authenticated even there.** It mints a shared secret on
+  first launch (`0600`, in your config dir) and runs its server behind it, remote
+  access or not, so that reaching the port and being let through it stop being
+  the same thing. `localhost` belongs to the *machine*, not to your account:
+  without this, a second Unix user on the box — or a browser extension holding
+  `http://localhost/*` — opened `http://localhost:4000` and got the cockpit,
+  shell included. This does **not** make the app the only way in, and isn't
+  meant to: a browser still gets there with `?token=`, which is what the phone
+  and the QR flow are built on. It closes the callers that can reach the port
+  and can't read the file. Running the server yourself (`bun run server`) on
+  loopback with no `AGENTGLASS_TOKEN` set is unchanged — still no auth, because
+  there "can reach localhost" is a choice you made knowingly.
+- **Shared-secret token.** Set `AGENTGLASS_TOKEN` and every route
+  requires it — `Authorization: Bearer <token>` for the API, `?token=<token>` on
+  the dashboard URL (it's stored and stripped from the address bar). The
+  append-only telemetry sinks (`/ingest`, the OTLP receivers) are the one
+  exception, and only for a sender **on this machine**: a local hook has no way
+  to carry a secret, while appending from the network is not inert — an event
+  raises a notification on your desk and on your paired phone, and lands in the
+  database for good. From off-box those sinks need the token like everything
+  else (the hook scripts send it when `AGENTGLASS_TOKEN` is in their env). This is what makes a
   shared machine or a network bind safe, and it stops *other local processes*
   from opening the shell. Binding a non-loopback address **without** a token
   refuses to run unauthenticated: it mints one, prints it, and saves it
@@ -856,11 +922,12 @@ are:
   shell and the live stream require a verified local origin, and a Host-header
   guard blocks DNS-rebinding tricks (browsers can't forge `Host`). Running it
   behind a reverse proxy? Allow its name via `AGENTGLASS_ALLOWED_HOSTS`.
-- **⚠️ Shared / multi-user machines are NOT the default home.** `localhost`
-  belongs to the *machine*, not to your account — on a box where other people
-  also have accounts, any of them could reach the server and its shell **as
-  your user**. Set `AGENTGLASS_TOKEN` to lock it to you, and/or disable the
-  capability surfaces: `AGENTGLASS_TERMINAL_DISABLED=1`, `AGENTGLASS_FS_BROWSE_DISABLED=1`,
+- **⚠️ Shared / multi-user machines are still not the default home.** The
+  desktop app's token (above) is what stops another account on the box reaching
+  your shell, and it is on by default now rather than something to remember. If
+  you run the **server yourself** on a shared box, that is on you: set
+  `AGENTGLASS_TOKEN`. Either way, consider disabling the
+  capability surfaces you don't use: `AGENTGLASS_TERMINAL_DISABLED=1`, `AGENTGLASS_FS_BROWSE_DISABLED=1`,
   `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_CODEX_DISABLED=1`,
   `AGENTGLASS_ANTIGRAVITY_DISABLED=1`, `AGENTGLASS_GIT_WRITE_DISABLED=1`,
   `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
@@ -887,16 +954,15 @@ are:
   using your own credentials), the update check against the GitHub releases API,
   the **Pull requests** panel through your own authenticated `gh` CLI, the AI
   **Explain** walkthrough through a local `claude` (or your `ANTHROPIC_API_KEY`),
-  Web Push once you turn it on for a phone, and anything *you* configure
-  (webhook alerts).
-- **Push, specifically.** Turning it on means this machine posts to whichever
-  push service your phone's browser nominated — Google's for Chrome, Mozilla's
-  for Firefox, Apple's for Safari. The body is encrypted end to end (RFC 8291),
-  so that service relays something it cannot read: it learns that this machine
-  sent something to that device, and nothing else — not the project, not the
-  command, not the agent. No account is created anywhere, and the signing key is
-  generated locally and never leaves (`~/.config/agentglass/push.json`, 0600).
-  Off until you switch it on, per device, and revocable from the same list.
+  and anything *you* configure (webhook alerts).
+- **The phone is not an exception.** An alert reaches it over the socket it
+  already holds to your machine, so there is no third party in that path at all
+  — no push service, no device token registered anywhere, nothing to revoke but
+  the device itself. agentglass used to post to whichever push service the
+  phone's browser nominated (Google's, Mozilla's, Apple's), encrypted end to end
+  so the service relayed something it could not read; that route is gone, and
+  the VAPID key it used to mint (`~/.config/agentglass/push.json`) is no longer
+  written or read. An existing one is dead weight and can be deleted.
 
 ---
 
@@ -1061,7 +1127,8 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_TRUST_LAN` | — | `1` → also trust RFC1918 (private-LAN) addresses as origins/hosts, not just loopback. Required for LAN browsers to reach an exposed instance. Off by default: a shell-granting server trusts only `localhost` unless told otherwise. **Setting it makes a token mandatory** — even on the default loopback bind — because it widens the CSRF origin gate to any private-IP page; with no `AGENTGLASS_TOKEN` set the server mints, persists and prints one. |
 | `AGENTGLASS_ALLOWED_HOSTS` | — | Comma-separated extra hostnames accepted by the DNS-rebinding guard (requests must arrive under a localhost/private `Host`). Only needed behind a reverse proxy. |
 | `AGENTGLASS_WEB_DIR` | — | Directory holding the built dashboard (`index.html` + `assets/`) to serve from the API port. Defaults to `web/dist` beside the source. The desktop app sets it to the bundle it ships, which is what lets its own server hand a phone a dashboard instead of a bare API. |
-| `AGENTGLASS_DB` | `~/.local/share/agentglass/agentglass.db` | SQLite file path. The default lives under `$XDG_DATA_HOME` (or `~/.local/share`), created `0700`; a pre-existing `agentglass.db` in the working directory wins, which is what keeps a checkout's `bun run dev` on its own database. |
+| `AGENTGLASS_DB` | `~/.local/share/agentglass/agentglass.db` | SQLite file path. The default lives under `$XDG_DATA_HOME` (or `~/.local/share`), created `0700`. A pre-existing `agentglass.db` **in the working directory** wins — but only for a checkout that already has one: a fresh clone has no such file, so `bun run dev` there lands on the shared history under `$XDG_DATA_HOME`, the same file the installed app uses. Isolating `XDG_DATA_HOME` alone is not enough either if you also want the *installed* app's database left alone — set this variable. A second server on the same file runs with its transcript scanner disabled (see the claim above), so it will not corrupt anything, but it also will not scan. |
+| `AGENTGLASS_DB_CLAIM` | `1` | `0` → do not claim the database file at boot, and do not stand the scanner down when someone else holds it. The escape hatch for the case where the claim itself is in the way; leaving it on is what keeps two processes from double-counting events, tokens and cost. |
 | `AGENTGLASS_ROOT` | — | Scope the whole cockpit to one project (repo + worktrees) or a folder of projects. Unset = every project on the machine. Also set by passing a directory to the desktop app; the in-app **project picker** sets/clears the same scope at runtime and persists it as `root` in the config file (note: the env var, when set, wins again on the next launch). |
 | `AGENTGLASS_REPO_DIRS` | — | Colon-separated dirs to sweep for git repos (git / terminal / chat panels). Also settable as `repoDirs` in the config file. |
 | `AGENTGLASS_PROJECTS_DIR` | `~/.claude/projects` | Root the transcript scanner reads Claude Code session logs from. Several roots can be listed, separated by the platform's `PATH` delimiter (`:` on Linux/macOS, `;` on Windows). |
@@ -1070,7 +1137,7 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_RETENTION_DAYS` | `8` | Days of **raw events** to keep (pruned hourly). Covers the full 7d stats window; `0` = keep forever. Expiring days are folded into a daily rollup first, so spend history outlives the rows — see *spend per day* in Statistics. |
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` alerts here (Slack/Discord compatible). |
-| `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. Does **not** gate Web Push to a phone, which is subscribed per device from the companion's own settings — see [Alerts that reach a locked phone](#alerts-that-reach-a-locked-phone). |
+| `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. Does **not** gate the phone, which hears every alert on the socket it already holds and decides for itself — see [Alerts on the phone](#alerts-on-the-phone-and-what-they-honestly-cover). |
 | `AGENTGLASS_SERVER` | `http://127.0.0.1:4000` | Used by the hook/seed scripts. Refused unless it points at this machine — see the next row. A `localhost` value is accepted and rewritten to `127.0.0.1` before connecting: the server binds IPv4-only, so on a host that resolves `localhost` to `::1` first, every event pays a refused connect before falling back. |
 | `AGENTGLASS_ALLOW_REMOTE` | — | `1` → let the hook scripts post to a **non-local** `AGENTGLASS_SERVER`. Off by default and deliberately awkward: those payloads carry full session transcripts, and `AGENTGLASS_SERVER` can be set by a repo-local `settings.json` — so a cloned repository could otherwise redirect your transcripts to somebody else's host. Set it only if you genuinely run the server on another machine. |
 | `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). Unset, the UI resolves same-origin when the server itself served it (single-port mode), `:4000` otherwise. |
@@ -1169,7 +1236,6 @@ cannot be configured by `export` at all.
 | `GET /insights` | Derived warnings — loops, fast burn, high failure rate, spend velocity. |
 | `GET /search?q=` | Full-text search across all captured prompts/commands/outputs. |
 | `POST /gate` · `GET /gate/pending` · `POST /gate/decide` | Control-plane approve/deny for the opt-in `PreToolUse` gate. |
-| `GET /push/key · /push/devices` · `POST /push/subscribe · /push/unsubscribe · /push/test` | Web Push to a phone: this machine's VAPID public key, the subscribed devices, registering and forgetting one, and sending a real test alert down the real path. `/push/devices` answers *how many and what are they called* and never an endpoint or a key — an endpoint is a capability, and anyone holding one could wake that phone forever. |
 | `GET /actions?limit=&before=` | Every write the cockpit performed — git, docker, pull requests, gate decisions — with the address it came from. Append-only; unscoped on purpose. |
 | `POST /control` | Drive the dashboard's own UI (switch view, toggle workspace, theme, zoom, new chat) from an external controller — a Stream Deck, a phone. Validated then rebroadcast on `/stream`; changes only what's shown, grants no capability the keyboard doesn't. See [`docs/EXTENDING.md`](docs/EXTENDING.md). |
 | `GET /export?format=csv\|json` | Download all events (bounded by retention). |
@@ -1190,7 +1256,7 @@ cannot be configured by `export` at all.
                                                        │      ├─ config.ts       project scoping (root / repoDirs)
                                                        │      ├─ db.ts           SQLite: events + sessions, latency pairing
                                                        │      ├─ pricing.ts      model → USD (any provider)
-                                                       │      ├─ alerts.ts       webhook / desktop push
+                                                       │      ├─ alerts.ts       webhook / desktop / attached clients
                                                        │      ├─ gitwork.ts      live working tree (lazygit)
                                                        │      ├─ docker.ts       live containers (lazydocker)
                                                        │      ├─ terminal.ts     real PTY shells over WS (+ make/script catalog)

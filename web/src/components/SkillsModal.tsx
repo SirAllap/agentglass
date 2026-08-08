@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { SkillInfo } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
+import { LAYER } from "../lib/layers.ts";
 import { api } from "../lib/api.ts";
 import { fmtAgo, fmtUsd } from "../lib/format.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 type Kind = "all" | "skill" | "command";
 type Usage = "all" | "used" | "never";
@@ -204,10 +206,8 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
   const used = all.filter((s) => s.calls > 0).length;
 
   return (
-    // Above the workspace's portal, not merely after it: the rail opens this
-    // from inside the workspace, and at equal z the frame — which mounts later
-    // — would paint straight over the catalog.
-    <Portal z={10100}>
+    // Why this is numbered at all, and what it has to stay below: lib/layers.ts.
+    <Portal z={LAYER.catalog}>
       <AnimatePresence>
         {open && (
           <>
@@ -235,7 +235,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                   <a href={api.skillsExportUrl("md")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ md</a>
                   <a href={api.skillsExportUrl("csv")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ csv</a>
                   <a href={api.skillsExportUrl("json")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ json</a>
-                  <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
+                  <CloseButton onClick={onClose} />
                 </div>
               </div>
 

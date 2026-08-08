@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
-import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
+import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, seedChat, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { FilesView } from "../FilesPanel.tsx";
 import { TasksView } from "../TasksPanel.tsx";
 import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
@@ -58,7 +58,7 @@ const KEEP_RUNNING = new Set<ViewId>(["term", "chat"]);
  */
 
 export function Workspace({
-  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard, prJump,
+  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard, prJump, cardJump,
 }: {
   view: ViewId;
   onView: (v: ViewId) => void;
@@ -72,6 +72,8 @@ export function Workspace({
   dashboard: (active: boolean) => React.ReactNode;
   /** A pull-request errand another panel sent — see lib/openPrs.ts. */
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
+  /** The same errand the other way round — see lib/openCard.ts. */
+  cardJump?: import("../../lib/openCard.ts").CardJump | null;
 }) {
   const openChat = useCallback(() => onView("chat"), [onView]);
 
@@ -84,11 +86,7 @@ export function Workspace({
    * rather than duplicated — clicking twice means "show me that again".
    */
   const openChatWith = useCallback((cwd: string, prompt: string, title: string) => {
-    const spare = listChats().find((c) => c.cwd === cwd && c.title === title && !c.messages.length && !c.sending);
-    const chat = spare ?? newChat(cwd);
-    updateChat(chat.id, (c) => { c.draft = prompt; c.title = title; });
-    setActiveChatId(chat.id);
-    requestChatFocus(chat.id);
+    seedChat(cwd, prompt, title);
     onView("chat");
   }, [onView]);
 
@@ -167,7 +165,7 @@ export function Workspace({
               {v.id === "dash"
                 ? dashboard(active)
                 : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prJump={prJump}
-                    reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
+                    cardJump={cardJump} reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
             </div>
           );
         })}
@@ -178,17 +176,18 @@ export function Workspace({
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId, prJump }: {
+function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId, prJump, cardJump }: {
   id: ViewId; active: boolean;
   openChat: () => void;
   openChatWith: (cwd: string, prompt: string, title: string) => void;
   reviewInTerminal: (root: string, number: number) => void;
   chatFocusId?: string | null;
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
+  cardJump?: import("../../lib/openCard.ts").CardJump | null;
 }) {
   switch (id) {
     case "files": return <FilesView active={active} />;
-    case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} />;
+    case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} cardJump={cardJump} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
     case "diff": return <DiffView active={active} />;
     case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />;

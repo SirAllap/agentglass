@@ -3,8 +3,12 @@
 //   AGENTGLASS_WEBHOOK   — POST {text} to this URL (Slack/Discord-compatible)
 //   AGENTGLASS_NOTIFY=1  — run `notify-send` (Linux desktop) if available
 //
-// Both of these leave the process, and neither is guaranteed to arrive. In
-// particular `notify-send` hands the notification to the desktop's daemon,
+// A client attached to the live socket gets every alert regardless — that is
+// the frame the desktop raises a native notification from, and the one the
+// phone app turns into a local notification.
+//
+// Both of the env-gated ones leave the process, and neither is guaranteed to
+// arrive. In particular `notify-send` hands the notification to the desktop's daemon,
 // which is free to hold it: with Do Not Disturb on it is queued silently and
 // the command still exits 0, so there is no failure for this file to see. That
 // is fine for "an agent errored", and not fine for a gate hold, where an agent
@@ -13,8 +17,8 @@
 // desktop setting can suppress. Treat everything below as best-effort reach
 // for when nobody is looking at agentglass at all.
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
-import { sendPush } from "./push.ts";
-import { vapidKeys, subscriptions, removeSubscription, markDelivered } from "./pushstore.ts";
+import { paneForSession, paneAgentNote } from "./panewt.ts";
+import { listPanes } from "./tmuxctl.ts";
 
 const WEBHOOK = process.env.AGENTGLASS_WEBHOOK;
 const DESKTOP = process.env.AGENTGLASS_NOTIFY === "1";
@@ -23,10 +27,30 @@ const DESKTOP = process.env.AGENTGLASS_NOTIFY === "1";
 // to macOS and Windows too — the cross-platform replacement for notify-send,
 // which only exists on Linux. The server still owns the opt-in (AGENTGLASS_
 // NOTIFY) and the triggers; the client just surfaces what it is handed.
-// notify-send stays as the fallback for a headless server with no client.
+// notify-send stays as the fallback for a server with nothing LISTENING —
+// which is not the same as nothing attached, and used to be treated as if it
+// were. See AlertSink.census.
 export interface AlertSink {
   broadcast: (a: AlertNote) => void;
-  hasClients: () => boolean;
+  /**
+   * How many sockets are attached, and how many of those have PROVED in the
+   * last few seconds that the process on the other end is still running.
+   *
+   * One snapshot rather than two predicates, because the two are read a line
+   * apart and a socket can close in between; a caller that broadcast on the
+   * first answer and suppressed the fallback on the second would be deciding
+   * from two different moments.
+   *
+   * This replaced `hasClients(): boolean`, which meant `clients.size > 0` over
+   * a Set pruned only when a socket says goodbye. A phone that Android freezes
+   * says nothing at all — measured (Bun 1.3.9, `Bun.serve` shaped exactly like
+   * index.ts): with the peer SIGSTOPped, `clients.size` stayed 1, `ws.send()`
+   * returned 68 bytes written and never threw, `getBufferedAmount()` stayed 0,
+   * and the socket was not closed until 120.1s. Two minutes of every alert
+   * going into a frozen socket while the notify-send fallback below was
+   * skipped because "a client is attached".
+   */
+  census: () => { attached: number; live: number };
 }
 let sink: AlertSink | null = null;
 export function setAlertSink(s: AlertSink | null) { sink = s; }
@@ -62,94 +86,32 @@ function shouldSend(key: string): boolean {
   return true;
 }
 
-/**
- * Every phone that asked to be told, in parallel, best effort.
+/*
+ * There was a fourth channel here: Web Push, a fan-out to every browser that
+ * had subscribed, and the only one that reached a device with its screen off.
+ * It is gone, along with `reach` — the second scale that said whether an alert
+ * was worth waking a radio for, and the gate id that put Allow and Deny on the
+ * notification.
  *
- * This is the only channel that reaches a device with its screen off. The
- * others cannot: a webhook goes to a chat app, notify-send goes to a desktop
- * that may not exist, and the socket closes with the phone's screen on purpose.
- *
- * A push service answering 404 or 410 means that subscription is dead — the
- * user cleared site data, or the browser rotated it — so it is forgotten. Any
- * other failure is the service having a bad minute and the device is kept: an
- * over-eager prune would silently unsubscribe a working phone, and nobody would
- * find out until a gate went unanswered.
+ * It went because nothing could subscribe to it any more. A service worker and
+ * `PushManager` need a *secure context*, so a phone opening the QR link at
+ * `http://192.168.x.x` has neither — the same measurement that killed the
+ * browser companion (`crypto.subtle` is secure-context only, so the pairing
+ * handshake could not start either), one layer down. The subscribe switch lived
+ * in that companion, so after 86b07f7 there was no caller for the routes and no
+ * registrar for the worker. The phone app that replaced it raises LOCAL
+ * notifications from the `{type:"alert"}` frame on its own socket — the same
+ * frame `sink.broadcast` hands the desk — with no push service in the path at
+ * all. See mobile/src/notifications/notify.ts, which is honest about the cost:
+ * Android freezes the process a while after the screen goes off, so that route
+ * reaches a pocket for a while and not for ever.
  */
-/**
- * What a phone should do about an alert — which is not the same question as
- * how loud the desktop should be, and conflating the two was a mistake.
- *
- * `urgency` is freedesktop's 0/1/2, and a tool error has been *critical* there
- * on purpose since long before any of this: you are at the machine, and a
- * failed tool call is worth a notification that does not time out. When push
- * arrived, that same number was reused to decide two new things — whether to
- * wake the device's radio, and whether the notification stays on the lock
- * screen until it is dealt with. So a failed `grep` on one of eight agents
- * lit up a phone in a pocket and pinned a notification to it that would not
- * go away, which is precisely how somebody learns to swipe the whole app away.
- *
- * `wake` means an agent is stopped until a person answers. Nothing else is.
- * The default is `tell` so that a new kind of alert is quiet on a phone until
- * somebody decides otherwise, rather than loud until somebody notices.
- */
-export type Reach = "wake" | "tell";
-
-export interface PushFanout {
-  /** How many devices the push service accepted it for. */
-  sent: number;
-  /** How many refused for a reason that is not "this device is gone". */
-  failed: number;
-  /** How many were forgotten because the service said they no longer exist. */
-  pruned: number;
-}
-
-/**
- * What the phone can do about this without opening the app.
- *
- * Only a held gate has one, and only ever the gate's own id. It is not a
- * credential and it is not a capability: deciding still needs the device's
- * paired credential, and the id alone is a uuid that names something already
- * on that person's screen. The worker uses it to put Allow and Deny on the
- * notification instead of a line of text telling somebody to go and find it.
- */
-export interface PushAction {
-  gate: string;
-}
-
-export async function pushEveryone(
-  title: string, body: string, reach: Reach, action?: PushAction,
-): Promise<PushFanout> {
-  const subs = subscriptions();
-  const out: PushFanout = { sent: 0, failed: 0, pruned: 0 };
-  if (!subs.length) return out;
-  const keys = await vapidKeys();
-  // `reach` travels inside the encrypted payload as well as in the header, as
-  // the same 0/1/2 the worker already reads. The header is for the push
-  // service, which decides whether to wake the radio; the field is for the
-  // service worker, which decides whether the notification stays on screen
-  // until it is dealt with. Only one of the two can read the body, and only
-  // one of the two can wake the device.
-  const wake = reach === "wake";
-  const payload = new TextEncoder().encode(
-    JSON.stringify({
-      title, body, at: Date.now(), urgency: wake ? 2 : 1,
-      ...(action ? { gate: action.gate } : {}),
-    }),
-  );
-  await Promise.all(subs.map(async (s) => {
-    const r = await sendPush(s, payload, keys, {
-      // Only something an agent is stopped on is worth waking a pocket for.
-      urgency: wake ? "high" : "normal",
-    });
-    if (r.gone) { removeSubscription(s.endpoint); out.pruned++; }
-    else if (r.ok) { markDelivered(s.endpoint); out.sent++; }
-    else out.failed++;
-  }));
-  return out;
-}
-
 async function deliver(
-  title: string, body: string, urgency: 0 | 1 | 2 = 2, reach: Reach = "tell", action?: PushAction,
+  title: string, body: string, urgency: 0 | 1 | 2 = 2,
+  /** Where the agent is, when it is in tmux. Only reaches an attached client:
+   *  a phone cannot select a pane on this machine, and `notify-send` has
+   *  nowhere to put it. */
+  pane?: string,
 ) {
   if (WEBHOOK && !IS_TEST) {
     try {
@@ -162,16 +124,6 @@ async function deliver(
       console.warn("[alerts] webhook failed:", e);
     }
   }
-  // Before the desktop branch and outside it: a phone is subscribed whether or
-  // not AGENTGLASS_NOTIFY is on, and the desktop path returns early when a
-  // client is attached — which would have skipped the phone entirely in the
-  // one case where somebody is at the desk and the phone still wants to know.
-  if (!IS_TEST) {
-    // Never awaited: an unreachable push service must not hold up the
-    // notification that is also going to the desktop.
-    pushEveryone(title, body, reach, action).catch((e) => console.warn("[alerts] push failed:", e));
-  }
-
   // An attached client is not an operating-system side effect.
   //
   // `AGENTGLASS_NOTIFY` exists to gate `notify-send` — spawning a binary that
@@ -179,14 +131,32 @@ async function deliver(
   // frame to a client that is already connected and already looking is not the
   // same act, and gating it behind the same flag meant a running app stayed
   // silent about the very things it was open to show. The user chose to have
-  // this window; the browser then asks its own permission before anything
-  // native happens (`sysNotify.ts:178`), which is the consent that matters.
+  // this window, and the client asks the browser's own permission from a click
+  // in Settings before anything native happens (`sysNotify.ts` →
+  // `askNotifyPermission`). That sentence used to point at `sysNotify.ts:178`,
+  // which is `shouldInterrupt` — a product rule about urgency with no
+  // permission in it. Nothing asked, anywhere, until this was settled.
   //
-  // `notify-send` below stays exactly where it was.
-  if (sink?.hasClients()) {
-    sink.broadcast({ title, body, urgency });
-    return;
-  }
+  // ── attached is not listening ────────────────────────────────────────────
+  // Two numbers, and they answer two different questions.
+  //
+  // ATTACHED decides who gets the frame. A frozen phone still gets it: the
+  // bytes sit in its socket buffer and arrive when the process thaws —
+  // measured, 4 frames queued during a 60s SIGSTOP were all delivered 570ms
+  // after SIGCONT. Withholding them would lose a backlog that costs nothing.
+  //
+  // LIVE decides whether anybody was TOLD, and only that suppresses
+  // notify-send. This is the failure the old `hasClients()` allowed: phone in
+  // a pocket, Android freezes it, socket half-open, desktop closed — the gate
+  // held, `clients.size === 1`, the frame went into a frozen socket and the
+  // desk was never touched. Nobody was told and every surface said fine.
+  //
+  // No double-fire when both really are alive: a desk client that is answering
+  // pings keeps `live > 0`, so this returns before `notify-send` exactly as it
+  // always did.
+  const { attached, live } = sink?.census() ?? { attached: 0, live: 0 };
+  if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}) });
+  if (live > 0) return;
   if (DESKTOP) {
     if (notifier) { notifier({ title, body, urgency }); return; }
     // No seam installed and this is a test run: say nothing. A suite must never
@@ -213,19 +183,24 @@ let warnedNoNotifySend = false;
 /**
  * A tool call is being held at the control-plane gate — ping the human.
  *
- * The id travels with it so a phone can answer from the notification rather
- * than being told to go and find the app. That changes what the sentence
- * should say, too: "approve or deny in agentglass" was the only instruction
- * that made sense when the notification was a dead end, and it is the wrong
- * one to read above two buttons that do it.
+ * The gate's id used to travel with it, so the two buttons on a pushed
+ * notification knew what they were answering. Nothing carries buttons now, so
+ * the id is gone with the push that needed it, and the sentence names what is
+ * stopped rather than telling anybody a uuid.
+ *
+ * The PANE stays, and is a different thing: not something to answer with, but
+ * somewhere to go. It only ever reaches an attached client, which is the one
+ * surface that can act on it.
  */
-export function pushGate(agent: string, tool: string, summary: string, id?: string) {
+export function pushGate(agent: string, tool: string, summary: string, pane?: string) {
   if (shouldSend(`gate:${agent}:${summary}`))
     deliver(
       "✋ Approval needed",
       `${agent} wants to run ${tool}${summary ? `: ${summary.slice(0, 200)}` : ""}`,
-      2, "wake",
-      id ? { gate: id } : undefined,
+      2,
+      // So the one alert that stops an agent dead also says where to go and
+      // takes you there. It is the notification with the most reason to.
+      pane,
     );
 }
 
@@ -233,22 +208,108 @@ export function pushGate(agent: string, tool: string, summary: string, id?: stri
  * A reminder came due — say so, once.
  *
  * One call rather than a delivery path of its own, and that is deliberate: this
- * buys the webhook, the phone fan-out, the native OS notification when a client
- * is attached and `notify-send` when none is, all through the code that already
- * gets each of those right. A parallel path is the bug this file fixed once
- * already.
+ * buys the webhook, the native OS notification when a client is attached and
+ * `notify-send` when none is, all through the code that already gets each of
+ * those right. A parallel path is the bug this file fixed once already.
  *
- * Urgency 1 and `reach: "tell"`, never `"wake"`. Waking a phone's radio is
- * reserved for an agent that is stopped until a person answers. A reminder is
- * news: it should arrive, and it should not vibrate somebody awake.
+ * Urgency 1, never 2. A reminder is news; 2 is for an agent that is stopped
+ * until a person answers, and a phone shows the two differently.
  */
 export function pushReminder(id: string, title: string, when: string) {
-  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 1, "tell");
+  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 1);
 }
+
+/**
+ * How to name the agent an alert is about.
+ *
+ * It used to be `${source_app}:${session_id.slice(0, 8)}` — a project name and
+ * eight characters of a UUID. Reported, fairly, as telling the reader nothing:
+ * "agentglass:e4f85ee9" does not say WHICH of a dozen checkouts, does not say
+ * where it is running, and is not a thing anybody can act on. A notification
+ * that names something you cannot find is a notification you learn to dismiss.
+ *
+ * Two facts replace it, and both were already on hand:
+ *
+ *   · the CHECKOUT, from the hook's own `cwd`. On a machine with thirty
+ *     worktrees of the same repository this is the only part that identifies
+ *     anything — "agentglass-anc" answers "which one" outright.
+ *   · the PANE, when the agent is in tmux. The hook reports it (`tmux_pane`)
+ *     and panewt records it, so this is a lookup rather than a guess. It is
+ *     what turns "something needs you" into somewhere to go.
+ *
+ * The session prefix stays at the end, because two agents can be running in the
+ * same checkout and it is the only thing that tells them apart. It is a
+ * disambiguator now rather than the headline.
+ */
+export function describeAgent(e: WatchEvent): string {
+  const cwd = typeof (e.payload as { cwd?: unknown } | null)?.cwd === "string"
+    ? String((e.payload as { cwd: string }).cwd) : "";
+  return describeSession(e.source_app, e.session_id, cwd);
+}
+
+/**
+ * The same name, for the callers that have a session and no event.
+ *
+ * The gate is the one that matters: it is the notification that wakes a phone,
+ * and it was composing `${source_app}:${session_id.slice(0, 8)}` by hand — the
+ * exact string this replaced everywhere else, in the one alert somebody is
+ * woken up by and expected to decide on.
+ *
+ * A cwd is optional because the gate has none. It does not need one: the pane
+ * note recorded by the hook holds the directory the agent is running in, so the
+ * checkout can be recovered from the session alone.
+ */
+export function describeSession(sourceApp: string, sessionId: string, cwdIn = ""): string {
+  const pane = paneForSession(sessionId);
+  const cwd = cwdIn || (pane ? paneAgentNote(pane)?.cwd ?? "" : "");
+  // Trailing slashes come from a shell that had one; `filter(Boolean)` so the
+  // basename of "/home/u/repo/" is "repo" rather than "".
+  const checkout = cwd.split("/").filter(Boolean).pop() ?? "";
+  const where = checkout || sourceApp;
+  const at = pane ? paneLabel(pane) : null;
+  // The session prefix ONLY when there is no pane. It is a disambiguator, and a
+  // pane already disambiguates — carrying both left six characters of a UUID on
+  // a line that had just been made readable.
+  return at ? `${where} · ${at}` : `${where} (${sessionId.slice(0, 6)})`;
+}
+
+/**
+ * A pane id, as somebody would say it out loud.
+ *
+ * `%8` is tmux's own handle and means nothing to a person: it was reported as
+ * being no better than the UUID it replaced. What a person navigates by is the
+ * window — `main:3 «claude»` is a thing you can find, and it is what their
+ * status bar is already showing them.
+ *
+ * Falls back to the raw id rather than to nothing. A pane tmux will not
+ * describe is still a pane, and `%8` beats silence for somebody who does know
+ * how to select one.
+ */
+function paneLabel(pane: string): string {
+  const now = Date.now();
+  if (now - paneCacheAt > PANE_CACHE_MS) { paneCache = null; paneCacheAt = now; }
+  try {
+    // Cached for a few seconds because this spawns tmux, and a burst of alerts
+    // from one stopped agent would otherwise spawn one per alert.
+    paneCache ??= listPanes();
+    const row = paneCache.find((r) => r.paneId === pane);
+    if (!row) return pane;
+    const name = row.windowName ? ` «${row.windowName}»` : "";
+    return `${row.session}:${row.windowIndex}${name}`;
+  } catch {
+    return pane;
+  }
+}
+let paneCache: ReturnType<typeof listPanes> | null = null;
+let paneCacheAt = 0;
+/** Long enough to absorb a burst, short enough that a renamed window is right
+ *  by the time anybody looks. */
+const PANE_CACHE_MS = 5_000;
 
 /** Inspect an event and fire an alert if it warrants one. */
 export function maybeAlert(e: WatchEvent) {
-  const agent = `${e.source_app}:${e.session_id.slice(0, 8)}`;
+  const agent = describeAgent(e);
+  const pane = paneForSession(e.session_id) ?? undefined;
 
   if (e.hook_event_type === "PermissionRequest") {
     if (shouldSend(`perm:${e.session_id}`))
@@ -256,18 +317,21 @@ export function maybeAlert(e: WatchEvent) {
         "⏳ Approval needed",
         `${agent} is waiting on a permission request${e.tool_name ? ` (${e.tool_name})` : ""}.`,
         // The other one an agent is stopped on. Everything below this line is
-        // news rather than a blockage, and reaches a phone quietly.
-        2, "wake",
+        // news rather than a blockage, and says so with a lower urgency.
+        2, pane,
       );
     return;
   }
   if (e.hook_event_type === "Notification") {
     const msg = String((e.payload as any)?.message ?? "Agent notification");
-    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver("🔔 " + agent, msg, 1);
+    // The message leads and the agent follows. It was the other way round —
+    // the title was the opaque identifier and the message was the body — so a
+    // stack of these read as a column of hashes with the actual news underneath.
+    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, 1, pane);
     return;
   }
   if (e.is_error) {
     if (shouldSend(`err:${e.session_id}:${e.tool_name}`))
-      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`);
+      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`, 2, pane);
   }
 }

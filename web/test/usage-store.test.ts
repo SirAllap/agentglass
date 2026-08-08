@@ -135,11 +135,13 @@ describe("subscribeProviderUsage", () => {
     const calls: number[] = [];
     const startTime = Date.now();
 
-    // Create a controlled promise that we resolve ourselves
-    let resolveProviderUsage: ((data: any) => void) | null = null;
-    const controlledPromise = new Promise((resolve) => {
-      resolveProviderUsage = resolve;
-    });
+    // A promise this test resolves itself. `Promise.withResolvers` rather than
+    // capturing `resolve` out of an executor: TypeScript cannot know the
+    // executor runs synchronously, so the captured variable stayed narrowed to
+    // its `= null` initialiser and `resolveProviderUsage?.(…)` below was a call
+    // on `never`. bun test strips types, so it ran green anyway — which is the
+    // whole reason tsconfig.test.json now exists.
+    const { promise: controlledPromise, resolve: resolveProviderUsage } = Promise.withResolvers<unknown>();
 
     // Temporarily replace the api with our controlled version
     const originalPatch = api.api.providerUsage;
@@ -159,7 +161,7 @@ describe("subscribeProviderUsage", () => {
       expect(usageStore.providerUsage()).toBe(null);
 
       // Now resolve the promise
-      resolveProviderUsage?.(demo.providerUsage());
+      resolveProviderUsage(demo.providerUsage());
 
       // Wait for the promise to resolve and callback to fire
       await new Promise(resolve => setTimeout(resolve, 50));
