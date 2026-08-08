@@ -148,8 +148,26 @@ jobs:
       - name: Say which key signed it
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          signer="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
-          "$signer" verify --print-certs "$APK" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          # Buscado en tres sitios y no en uno. La primera versión hacía
+          # `ls -d "$ANDROID_HOME"/build-tools/*` a secas: si esa variable no llega
+          # al paso, el glob revienta, `bash -e` mata el paso y —por ir todo en una
+          # tubería— no se imprime el motivo. Bloqueó la subida de un APK que estaba
+          # correctamente firmado, y el log solo decía "exit code 1".
+          root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          signer="$(command -v apksigner || true)"
+          if [ -z "$signer" ] && [ -d "$root/build-tools" ]; then
+            signer="$(ls -d "$root"/build-tools/* 2>/dev/null | sort -V | tail -1)/apksigner"
+          fi
+          if [ ! -x "$signer" ]; then
+            echo "::error::apksigner no encontrado (ANDROID_HOME=${ANDROID_HOME:-vacio} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-vacio})"
+            ls -d "$root"/build-tools/* 2>&1 || true
+            exit 1
+          fi
+          # Sin tubería: la salida entera al log y el grep decide después, para que
+          # un fallo se pueda leer en vez de dejar un exit 1 desnudo.
+          out="$("$signer" verify --print-certs "$APK" 2>&1)" || { echo "$out"; exit 1; }
+          echo "$out"
+          echo "$out" | grep -q "Signer #1 certificate DN" || { echo "::error::sin firmante"; exit 1; }
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
