@@ -207,8 +207,34 @@ const web = serve({
 });
 
 const profile = mkdtempSync(join(tmpdir(), "agx-qa-"));
+
+/**
+ * Which browser to drive.
+ *
+ * It used to be the literal `/usr/bin/google-chrome`, which is a path a Chrome
+ * install does not always leave behind: on Arch the package installs
+ * `google-chrome-stable` and nothing else, so the spawn failed silently
+ * (`stderr: "ignore"`) and the run died 20 seconds later on "chrome never
+ * opened a page" — a message about the browser that says nothing about the
+ * binary being missing. Any Chromium build serves: what this harness needs from
+ * it is the DevTools protocol, which they all speak.
+ */
+function browser(): string {
+  const tried = [
+    process.env.CHROME ?? "",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  ].filter(Boolean);
+  const found = tried.find((path) => existsSync(path));
+  if (!found) throw new Error(`no Chrome to drive — looked at ${tried.join(", ")}. Set CHROME=<path>.`);
+  return found;
+}
+
 const chrome = Bun.spawn([
-  "/usr/bin/google-chrome", "--headless=new", "--disable-gpu", "--no-first-run",
+  browser(), "--headless=new", "--disable-gpu", "--no-first-run",
   // The app talks to the agentglass server on another port. A browser calls
   // that cross-origin; a phone does not. This is a harness, and the thing under
   // test is the screens, not the browser's own rules.
