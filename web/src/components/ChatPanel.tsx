@@ -27,11 +27,12 @@ import { tidyPaneScreen } from "../lib/paneScreen.ts";
 import { quickSkills, pinnedSkills, togglePinnedSkill } from "../lib/quickSkills.ts";
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
+import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import { fmtAgo, fmtUsd, fmtTokens, modelLabelOf, modelColor } from "../lib/format.ts";
 import { sessionIsLive, resumableAgent } from "../lib/derive.ts";
 import { ctxLimitOf } from "../lib/contextWindow.ts";
-import { worktreeTag, sessionWorktree, sessionCwd } from "../lib/worktree.ts";
+import { sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
@@ -1251,13 +1252,6 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // Worktrees read as their card ("└ WEB-1042"), not as a near-duplicate of
   // the project name — with a dozen open, `orbit-WEB-1042` and
   // `orbit-WEB-1043` are one glance apart otherwise.
-  const repoOptions = useMemo(
-    () => repos.map((r) => {
-      const wt = worktreeTag(r);
-      return { value: r.root, label: wt ? `└ ${wt}` : repoName(r.root), hint: r.branch };
-    }),
-    [repos]
-  );
 
   return (
     <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
@@ -1327,8 +1321,15 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   <div className="flex items-center gap-2 px-4 py-2.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                     {active ? (
                       <>
-                        <Select value={active.cwd} onChange={(v) => { update(active.id, (c) => { c.cwd = v; }); setDefaultCwd(v); }}
-                          className={selCls} style={selStyle} options={repoOptions} placeholder="Pick a repo" />
+                        {/* The same control every other checkout is picked
+                            with, and a value nobody else can move: this is
+                            where THIS conversation runs, which is not the same
+                            question as what Source control is reading. */}
+                        <CheckoutPicker
+                          repos={repos} value={active.cwd}
+                          onPick={(v) => { update(active.id, (c) => { c.cwd = v; }); setDefaultCwd(v); }}
+                          placeholder="Pick a repo" triggerMaxWidth={220}
+                        />
                         {/* Only shown when there is a choice to make: on a
                             machine with one CLI installed this would be a
                             control with a single option and nothing to explain.

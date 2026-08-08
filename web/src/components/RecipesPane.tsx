@@ -18,6 +18,7 @@ import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole, consoleInTmux } from "./TerminalPanel.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { SettingRow } from "./SettingRow.tsx";
+import { CheckoutPicker } from "./CheckoutPicker.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 const PARAM_TYPES: RecipeParam["type"][] = ["text", "choice", "flag", "repo", "worktree", "branch"];
@@ -346,11 +347,9 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
               {(p.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           ) : p.type === "repo" || p.type === "worktree" ? (
-            <select value={values[p.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
-              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
-              <option value="">—</option>
-              {repos.map((x) => <option key={x.root} value={x.root}>{x.worktreeOf ? `${x.name} · ${x.branch}` : x.name}</option>)}
-            </select>
+            <CheckoutPicker repos={repos} value={values[p.key] ?? ""}
+              onPick={(r) => setValues((v) => ({ ...v, [p.key]: r }))}
+              placeholder="—" triggerMaxWidth={220} />
           ) : (
             <input value={values[p.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
               className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style} spellCheck={false} />

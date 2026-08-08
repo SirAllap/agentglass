@@ -16,6 +16,7 @@ import { keepTermFocus } from "../lib/keepFocus.ts";
 import { focusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover } from "../lib/termFocusPref.ts";
 import { cellAt, paneAt } from "../lib/tmuxHover.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
+import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -257,12 +258,24 @@ let consoleBlocked: (cmd: string) => void = () => {};
 // resort rather than routine: it only runs at the server's own ceiling, and it
 // never touches a shell that is still connected — closing a live job to make
 // room for a new tab would lose work the user can't see.
+//
+// What it spares beyond that is what is ON SCREEN. It used to spare everything
+// sharing the root of the shell being created, which worked only while the
+// terminal had a repo picker and shells came in per-repo pools: with one root
+// for the whole view, that clause spared every session there is and the ceiling
+// quietly stopped applying. Panes are the honest version of the same intent —
+// "don't close what I am looking at" — and they were what it meant all along.
 const MAX_CLIENT_SESSIONS = 60;
-function evictLru(exceptRoot: string) {
+/** Ids currently mounted in a pane, kept here because eviction is module-level
+ *  and the panes are the view's state. Written by the view on every layout
+ *  change; empty before it mounts, which is also when nothing is on screen. */
+let onScreen: readonly string[] = [];
+export function setOnScreenSessions(ids: readonly string[]): void { onScreen = ids; }
+function evictLru() {
   if (sessions.size < MAX_CLIENT_SESSIONS) return;
   let lru: Sess | null = null;
   for (const s of sessions.values()) {
-    if (s.root === exceptRoot || s.status === "live" || s.status === "connecting") continue;
+    if (onScreen.includes(s.id) || s.status === "live" || s.status === "connecting") continue;
     if (!lru || s.lastUsed < lru.lastUsed) lru = s;
   }
   if (!lru) return;
@@ -494,7 +507,7 @@ function reconnected(s: Sess) {
 
 /** A brand-new shell for `root`. Repos hold as many as you open. */
 function createSession(root: string): Sess {
-  evictLru(root);
+  evictLru();
   const tp = termOptions();
   const term = new Terminal({
     fontFamily: tp.fontFamily,
@@ -926,15 +939,16 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
    * it.
    */
   const [picked, setPicked] = useState<string>(() => { try { return localStorage.getItem(CONSOLE_ROOT_KEY) || ""; } catch { return ""; } });
+  /** The checkout menu has the keyboard, so focus-follows-mouse must leave it
+   *  alone — hovering the shell while you are typing into the filter would drag
+   *  the cursor out from under the letters. */
+  const [pickerOpen, setPickerOpen] = useState(false);
   const root = picked || fallbackRoot;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const { ask, dialog } = useDialogs();
   /** The row for the directory we are standing in — what "here" means, by name,
    *  what it currently holds, and whether it has uncommitted work in it. */
   const here = repos.find((r) => r.root === root) ?? null;
-  const [repoOpen, setRepoOpen] = useState(false);
-  const [repoQuery, setRepoQuery] = useState("");
-  const pickerRef = useRef<HTMLDivElement>(null);
   /** Put the cursor back in the console after a menu that had to borrow the
    *  focus (the repo filter, the commands filter) closes again. Deferred a
    *  frame so it lands after the menu's own input has finished unmounting —
@@ -943,7 +957,6 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     const s = sessions.get(sid);
     if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
   }, [sid]);
-  useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); focusConsole(); });
 
   // Every time the picker OPENS — not once. The `repos.length` short-circuit was
   // a fetch-once, so a worktree cut after this strip first loaded never showed:
@@ -951,15 +964,14 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   // cheap and is the only way new worktrees (and branches) appear here the way
   // they already do in Source control.
   const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[] }>({ current: "", branches: [] });
-  useEffect(() => {
-    if (!repoOpen || IS_DEMO) return;
+  const refreshPicker = useCallback(() => {
+    if (IS_DEMO) return;
     api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {});
     if (root) api.gitBranches(root).then(setBranchData).catch(() => {});
-  }, [repoOpen, root]);
+  }, [root]);
   const chooseRepo = (next: string) => {
     setPicked(next);
     try { localStorage.setItem(CONSOLE_ROOT_KEY, next); } catch { /* private mode — lasts the session */ }
-    setRepoOpen(false); setRepoQuery("");
     focusConsole();
   };
   // A local branch with no worktree of its own: switch by checking it out in the
@@ -970,7 +982,6 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     if (needsCheckoutConfirm(t) && !(await ask(checkoutConfirm(t)))) return;
     api.gitCheckout(root, name).then((r) => {
       if (!r.ok) return;
-      setRepoOpen(false); setRepoQuery("");
       api.gitRepos().then(({ repos: rr }) => setRepos(rr)).catch(() => {});
       focusConsole();
     }).catch(() => {});
@@ -1071,68 +1082,19 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
             run, and on a worktree-per-ticket repo the right directory is rarely
             the one the terminal view happens to be sitting in — so it picks its
             own, and remembers it. */}
-        <div className="relative shrink-0" ref={pickerRef} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="shrink-0" onMouseDown={(e) => e.stopPropagation()}>
           {/* keepTermFocus so opening the picker does not blur the console; the
               filter input inside autofocuses on its own, and closing hands the
-              cursor back (see chooseRepo / the useDismiss above). */}
-          <button onMouseDown={keepTermFocus} onClick={() => setRepoOpen((o) => !o)} disabled={IS_DEMO}
-            className="flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-md max-w-[200px]"
-            style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
-            title={root || "No repo"}>
-            <span className="truncate">{root ? repoName(root) : "No repo"}</span><span className="t-dim2">▼</span>
-          </button>
-          {repoOpen && (
-            <div className="absolute left-0 rounded-lg text-[11px] shadow-2xl flex flex-col"
-              style={{ zIndex: 40, bottom: "calc(100% + 4px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 360, overflow: "hidden" }}>
-              <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="Filter repos…"
-                className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
-              <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
-                {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => (
-                  <button key={r.root} onClick={() => chooseRepo(r.root)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
-                    style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                    {/* Same badge and same name rule as every other picker: a
-                        worktree IS its branch, a project is its folder — but the
-                        folder is now always said out loud beside it. Naming a
-                        worktree only by its branch means a checkout RENAMES the
-                        row, and that is what made "master turned into a worktree
-                        and the worktree into a branch" the honest description of
-                        what someone saw. The identity of a directory must not
-                        change under a click. */}
-                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
-                      style={r.worktreeOf
-                        ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
-                        : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{r.worktreeOf ? "WT" : "REPO"}</span>
-                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={`${r.branch}\n${r.root}`}>{r.worktreeOf ? r.branch : r.name}</span>
-                    {r.worktreeOf && r.name !== r.branch && (
-                      <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>
-                    )}
-                    {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
-                  </button>
-                ))}
-                {/* Local branches with no worktree — switch by checking out in
-                    the console's current directory, same as Source control. */}
-                {(() => {
-                  const q = repoQuery.trim().toLowerCase();
-                  const checkedOut = new Set(repos.map((r) => r.branch));
-                  const branches = branchData.branches.filter((b) => !checkedOut.has(b.name) && (!q || b.name.toLowerCase().includes(q)));
-                  if (!branches.length) return null;
-                  return (
-                    <>
-                      <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
-                      {branches.slice(0, 80).map((b) => (
-                        <button key={b.name} onClick={() => checkoutHere(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
-                          <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
-                          <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
-                        </button>
-                      ))}
-                    </>
-                  );
-                })()}
-                {!repos.length && <div className="px-3 py-2 t-dim2">Reading repos…</div>}
-              </div>
-            </div>
-          )}
+              cursor back. */}
+          <span onMouseDown={keepTermFocus}>
+            <CheckoutPicker
+              repos={repos} value={root} onPick={chooseRepo}
+              branches={{ items: branchData.branches, onCheckout: checkoutHere }}
+              onOpenChange={(o) => { setPickerOpen(o); if (o) refreshPicker(); }} onDismiss={focusConsole}
+              disabled={IS_DEMO} placeholder="No repo" triggerMaxWidth={200}
+              emptyLabel="Reading repos…"
+            />
+          </span>
         </div>
 
         {sess && <span className="text-[10px] shrink-0" style={{ color: SESS_DOT[sess.status].color }}>● {SESS_DOT[sess.status].label}</span>}
@@ -1160,7 +1122,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
       <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }}
         onClick={() => sess?.term.focus()}
         onMouseEnter={(e) => {
-          if (shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: repoOpen, visible: open })) focusConsole();
+          if (shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: pickerOpen, visible: open })) focusConsole();
         }} />
     </div>
   );
@@ -1225,14 +1187,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    *  anyone whose last view was the terminal. tsc cannot see it because the
    *  read is inside the `find` callback, where it looks deferred. */
   const here = repos.find((r) => r.root === root) ?? null;
-  const [repoOpen, setRepoOpen] = useState(false);
-  const [repoQuery, setRepoQuery] = useState("");
   /** Only whether the server allows commands at all — the list, its dropdown
    *  and the pins are the shared CommandBar's business now. */
   const [cmds, setCmds] = useState<TerminalCommands | null>(null);
   /** Both dropdowns live in here, so one listener can tell "clicked outside"
    *  from "clicked a row". */
-  const pickersRef = useRef<HTMLDivElement>(null);
   // The "jump to a worktree's git / changes" dropdown. Separate from the repo
   // picker above (which switches the terminal itself): this one leaves the
   // terminal where it is and takes you to Source control / File changes for the
@@ -1254,39 +1213,31 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
+  /*
+   * Where a new shell opens. Not a choice any more — the open project.
+   *
+   * `repos[0]` is that project: the scoped repo list leads with it and orders
+   * the worktrees after. A remembered root that is no longer in the list is
+   * DROPPED rather than kept, because a stale one from a previous scope would
+   * silently open shells, and list commands, in a repo outside the project.
+   */
   useEffect(() => {
     if (!open) return;
     api.gitRepos().then(({ repos }) => {
       setRepos(repos);
-      // When the scoped repo list doesn't contain the remembered root, DROP it
-      // rather than keep it: a stale localStorage root from a previous scope
-      // would silently open shells (and list commands) in an out-of-scope repo
-      // while the header claims "pick a repo".
       setRoot((cur) => (cur && repos.some((r) => r.root === cur) ? cur : repos[0]?.root || ""));
     }).catch(() => {});
   }, [open]);
+  /*
+   * Still written, even though nobody picks it.
+   *
+   * The docked console falls back to this key when it has no pick of its own
+   * (see `consoleRoot`). Dropping the write is what would silently break
+   * `docker exec` and recipe runs on a profile that has never opened the
+   * console's own picker — `runInConsole` just returns false, with no error and
+   * no toast.
+   */
   useEffect(() => { if (root) { try { localStorage.setItem(ROOT_KEY, root); } catch { /* ignore */ } } }, [root]);
-  // Local branches, so the picker offers them the way Source control does — the
-  // ones with a worktree are already worktree rows; these switch by checking out
-  // in the current directory. Fetched only when the picker is open.
-  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[] }>({ current: "", branches: [] });
-  // Refresh repos AND branches whenever the picker opens — so a worktree or
-  // branch made after this view first loaded shows without a restart.
-  useEffect(() => {
-    if (!repoOpen || !root || IS_DEMO) return;
-    api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => {});
-    api.gitBranches(root).then(setBranchData).catch(() => {});
-  }, [repoOpen, root]);
-  const checkoutBranch = async (name: string) => {
-    const t = { branch: name, dir: here?.name ?? root.split("/").pop() ?? root, displacing: here?.branch ?? null, dirty: here?.dirty ?? 0 };
-    if (needsCheckoutConfirm(t) && !(await ask(checkoutConfirm(t)))) return;
-    api.gitCheckout(root, name).then((r) => {
-      if (!r.ok) return;
-      setRepoOpen(false); setRepoQuery("");
-      api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => {});
-      focusTerm();
-    }).catch(() => {});
-  };
   useEffect(() => {
     if (!open || !root) return;
     setCmds(null);
@@ -1297,6 +1248,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // plain case, and a split shows several at once the way tmux does — the point
   // being to watch a build in one while working in another.
   const [paneIds, setPaneIds] = useState<string[]>([]);
+  // Eviction is module-level and the panes are here, so it is told rather than
+  // left to guess — see setOnScreenSessions.
+  useEffect(() => { setOnScreenSessions(paneIds); }, [paneIds]);
   const [focusIdx, setFocusIdx] = useState(0);
   const paneRefs = useRef<(HTMLDivElement | null)[]>([]);
 
@@ -1312,7 +1266,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // The repo picker's filter takes focus off the shell while it is open, so
   // dismissing it (Escape, an outside click) has to give the shell its cursor
   // back — see focusTerm.
-  useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
   useDismiss(wtOpen, wtRef, () => { setWtOpen(false); setWtQuery(""); setWtShowAll(false); focusTerm(); });
   // Keep the focused pane's worktree fresh.
   //
@@ -1407,14 +1360,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * app means a white window rather than a warning.
    */
   const hoverFocus = useCallback((i: number, buttons: number) => {
-    if (!shouldFocusOnHover({ enabled: ffm, buttons, typing: repoOpen || wtOpen || findOpen, visible: active && open })) return;
+    if (!shouldFocusOnHover({ enabled: ffm, buttons, typing: wtOpen || findOpen, visible: active && open })) return;
     const s = sessions.get(paneIds[i] ?? "");
     if (!s) return;
     // Only when it moves. Re-entering the pane you are already in would re-run
     // the mount effect below, which detaches and re-attaches a live terminal.
     setFocusIdx((cur) => (cur === i ? cur : i));
     requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
-  }, [ffm, repoOpen, wtOpen, findOpen, active, open, paneIds]);
+  }, [ffm, wtOpen, findOpen, active, open, paneIds]);
 
   /** The tmux pane last asked for, so a pointer resting inside one does not
    *  re-send for every mousemove in the half-second before the sweep reports
@@ -1436,7 +1389,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * so crossing a divider is one command and sitting in a pane is none.
    */
   const hoverTmuxPane = useCallback((i: number, e: { clientX: number; clientY: number; buttons: number }) => {
-    if (!shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: repoOpen || wtOpen || findOpen, visible: active && open })) return;
+    if (!shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: wtOpen || findOpen, visible: active && open })) return;
     const s = sessions.get(paneIds[i] ?? "");
     // Fewer than two panes and there is nothing to choose between — the server
     // sends an empty list for exactly that case.
@@ -1454,7 +1407,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (!pane || pane.active || askedPane.current === pane.id) return;
     askedPane.current = pane.id;
     s.ws.send(ptyFrame({ t: "tmux", cmd: "selectpane", pane: pane.id }));
-  }, [ffm, repoOpen, wtOpen, findOpen, active, open, paneIds]);
+  }, [ffm, wtOpen, findOpen, active, open, paneIds]);
 
   useEffect(() => {
     if (!open) return;
@@ -1824,7 +1777,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     s.term.focus();
   }, [paneIds, focusIdx]);
 
-  const repoRef = repos.find((r) => r.root === root);
   /* The demo has no server to ask, so `loadCommands` answers with a terminal
      that is switched off — and the overlay that message drives was covering the
      canned session. The demo's terminal is not disabled: it has no shell, which
@@ -1862,101 +1814,58 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 .xterm-viewport{scrollbar-width:none!important}
 .xterm-viewport::-webkit-scrollbar{width:0!important;height:0!important}`}</style>
 
-                {/* header: repo picker + command launcher + actions */}
+                {/* header: where this pane is + command launcher + actions */}
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
                   <h2 className="sr-only">Terminal</h2>
-                  {/* keepTermFocus on the picker group so pressing the trigger
-                      or a repo row never blurs the shell; the filter input is
-                      excluded by the handler and still takes focus, and every
-                      way out of the menu below hands the cursor back. */}
-                  <div ref={pickersRef} className="flex items-center gap-3" onMouseDown={keepTermFocus}>
-                  <div className="relative">
-                    <button onClick={() => { if (repoOpen) { setRepoOpen(false); focusTerm(); } else setRepoOpen(true); }} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
-                      <span className="font-medium">{repoRef ? repoName(repoRef.root) : "Pick a repo"}</span><span className="t-dim2">▼</span>
-                    </button>
-                    {repoOpen && (
-                      /* Wide enough for the whole worktree name and its branch.
-                         It used to be 320px with the branch clipped at 150, so
-                         a card-per-worktree checkout showed as "orbit-WEB-1042"
-                         beside an elided branch — the two pieces that tell them
-                         apart, both cut off. Source control shows them in full;
-                         this now matches it. */
-                      <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 460, maxWidth: "min(86vw, 760px)", maxHeight: 420, overflow: "hidden" }}>
-                        <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="Filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
-                        <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
-                          {/* The path is searchable too: with a worktree per card,
-                              "20343" is how you find one — it's in the directory
-                              name and the branch, not in the project name. */}
-                          {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => {
-                            const live = sessionsFor(r.root).some((s) => s.status === "live");
-                            return (
-                              <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); focusTerm(); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                                {/* Indented under its project — a shell in a
-                                    worktree is a shell in that branch, not in
-                                    some unrelated repo that looks similar. */}
-                                {/* A worktree gets its own mark rather than an
-                                    indent. "└" only says "child of the line
-                                    above", which stops meaning anything once
-                                    the list is filtered and the parent is off
-                                    screen — and it reads as tree drawing, not
-                                    as a kind of thing. */}
-                                <span
-                                  className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
-                                  title={r.worktreeOf ? `Worktree of ${r.worktreeOf}` : "Main checkout"}
-                                  style={r.worktreeOf
-                                    ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
-                                    : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
-                                >{r.worktreeOf ? "WT" : "REPO"}</span>
-                                {/* A worktree IS its branch — one per ticket is
-                                    the whole point — so the branch is the name
-                                    worth the wide column, and the directory is
-                                    only a terse stub of it. A project is the
-                                    other way round: the folder is the identity
-                                    and the branch is just what happens to be
-                                    checked out. Same rule Source control uses,
-                                    so the two pickers read alike.
-
-                                    `truncate` matters: without it a long
-                                    worktree name wrapped to seven lines and
-                                    collided with the branch beside it. */}
-                                <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.worktreeOf ? `${r.branch}\n${r.root}` : r.root}>
-                                  {r.worktreeOf ? r.branch : r.name}
-                                  {live && <span title="Live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}
-                                </span>
-                                {!r.worktreeOf && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>}
-                                {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
-                                {r.behind > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
-                                {r.ahead > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
-                              </button>
-                            );
-                          })}
-                          {/* Local branches with no checkout of their own —
-                              switch by checking out in the current directory,
-                              same as Source control's picker. */}
-                          {(() => {
-                            const q = repoQuery.trim().toLowerCase();
-                            const checkedOut = new Set(repos.map((r) => r.branch));
-                            const branches = branchData.branches.filter((b) => !checkedOut.has(b.name) && (!q || b.name.toLowerCase().includes(q)));
-                            if (!branches.length) return null;
-                            return (
-                              <>
-                                <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
-                                {branches.slice(0, 80).map((b) => (
-                                  <button key={b.name} onClick={() => checkoutBranch(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
-                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
-                                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
-                                  </button>
-                                ))}
-                              </>
-                            );
-                          })()}
-                          {!repos.length && <div className="px-3 py-2 t-dim2">No repos seen yet</div>}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  </div>
+                  {/*
+                    * Where this pane is, not where to go.
+                    *
+                    * There was a repo picker here, and it could not do what it
+                    * looked like it did: the server reads a shell's directory
+                    * once, when the PTY opens (`terminal.ts`), so picking a
+                    * worktree never moved the shell in front of you — it hid
+                    * your shells and started a new one somewhere else. Moving a
+                    * live shell for real means typing `cd` into it, over
+                    * whatever you were typing, in whichever of several panes,
+                    * possibly under a running build. tmux already answers that
+                    * question, and answers it better.
+                    *
+                    * So the slot states a fact instead of offering a choice.
+                    * Which matters twice over: with no picker, nothing else on
+                    * this bar said which checkout you were in, and "I thought I
+                    * was in the worktree" is the same surprise the picker used
+                    * to cause, just mirrored.
+                    *
+                    * The answer comes from the server (see panewt.ts) rather
+                    * than from this end guessing off the pane's own directory —
+                    * that is the parent repo for every agent in a fleet, which
+                    * is what made it look unanswerable.
+                    */}
+                  {(() => {
+                    const at = detectedWt ?? here ?? null;
+                    if (!at) return null;
+                    const label = at.worktreeOf ? at.branch : at.name;
+                    return (
+                      <button
+                        onMouseDown={keepTermFocus}
+                        onClick={() => requestWorktreeJump({ view: "git", root: at.root })}
+                        title={`${at.root}\nOpen its Source control`}
+                        className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg min-w-0 shrink"
+                        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
+                      >
+                        <span
+                          className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
+                          title={at.worktreeOf ? `worktree of ${at.worktreeOf}` : "main checkout"}
+                          style={at.worktreeOf
+                            ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
+                            : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                        >{at.worktreeOf ? "WT" : "REPO"}</span>
+                        <span className="font-medium truncate min-w-0">{label}</span>
+                        {at.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${at.dirty} changed file${at.dirty === 1 ? "" : "s"}`}>●{at.dirty}</span>}
+                        <span className="t-dim2 shrink-0 text-[10px]">↗</span>
+                      </button>
+                    );
+                  })()}
 
                   {/* Commands and pins — the same control the docked console
                       mounts, so the two shells offer the same thing. Its own

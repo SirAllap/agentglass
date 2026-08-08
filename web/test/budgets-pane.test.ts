@@ -41,8 +41,14 @@ describe("setting one", () => {
   test("a project or model that is no longer offered is still shown", () => {
     // A repo that has moved, or a model that has not been used this month, must
     // not silently reassign somebody's budget to "everything" on next render.
-    expect(pane).toContain("!roots.includes(b.root)");
+    //
+    // The model half is still this pane's own `<select>`. The project half is
+    // the shared checkout picker now, and it owns the same guarantee — its
+    // `unlisted` branch keeps a stored root on screen, marked, when the list it
+    // is choosing from no longer offers it. Asserted there rather than here, so
+    // every panel that stores a root gets it: see checkout-picker.test.ts.
     expect(pane).toContain("!models.includes(b.model)");
+    expect(pane).toContain("<CheckoutPicker");
   });
 });
 

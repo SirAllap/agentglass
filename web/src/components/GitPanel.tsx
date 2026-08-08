@@ -11,6 +11,7 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
+import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { BasePicker } from "./BasePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { RescueModal } from "./RescueModal.tsx";
@@ -731,8 +732,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // as somebody else's dialog next to our modals, and blocks the JS thread so
   // nothing can show progress while it is up.
   const { ask, askText, dialog } = useDialogs();
-  const [repoOpen, setRepoOpen] = useState(false);
-  const [repoQuery, setRepoQuery] = useState("");
   /**
    * One search box and one sort, shared by every list tab.
    *
@@ -1693,12 +1692,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (how === "checkout") setView("changes");
   };
 
-  // Source control's picker never had this; the terminal's did. Same bug, one
-  // file each, which is why it read as fixed.
-  const repoPickerRef = useRef<HTMLDivElement | null>(null);
-  useDismiss(repoOpen, repoPickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
-
-  const openWorktree = (w: GitWorktree) => { setRoot(w.path); setRepoOpen(false); setSelKey(null); setView("changes"); };
+  const openWorktree = (w: GitWorktree) => { setRoot(w.path); setSelKey(null); setView("changes"); };
   // The lazygit move: a branch already checked out in a worktree can't be
   // `git checkout`ed here (git refuses a branch that is out elsewhere), so
   // switching to it OPENS that worktree; otherwise it is a plain checkout.
@@ -1957,8 +1951,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // The repo picker is a switcher: repos + worktrees + local branches. It can be
   // opened from any view, so make sure the branch list is loaded when it is —
   // otherwise the branches section is empty everywhere but the Branches tab.
-  useEffect(() => {
-    if (!repoOpen || !root) return;
+  const refreshPicker = useCallback(() => {
+    if (!root) return;
     reloadBranches();
     /**
      * And the repo list itself, which is where each row's branch comes from.
@@ -1972,7 +1966,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
      */
     api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => { /* keep the stale list rather than an empty one */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoOpen]);
+  }, [root]);
   // A different repo has different remotes: carrying the selection over asks for
   // branches from a remote this one may not even have.
   useEffect(() => { setRemoteSel(""); setRemoteRows([]); setRemoteQuery(""); }, [root]);
@@ -2141,108 +2135,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     not by cutting off whatever escapes. */}
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
                   <h2 className="sr-only">Source control</h2>
-                  <div className="relative" ref={repoPickerRef}>
-                    {/* Also one line. A worktree directory carries the whole
-                        ticket name, and wrapped it made the button two rows
-                        tall and shoved the tab strip down with it. */}
-                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[240px] shrink-0 whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
-                      title={repoRef ? `${repoRef.name}\n${repoRef.root}` : undefined}>
-                      {/* Repo AND branch. The button named only the checkout,
-                          which is the half that does not change — you switch
-                          branch from this very panel and the control at the top
-                          of it went on saying exactly what it said before. The
-                          branch comes from the working-tree poll rather than
-                          from the repo list, so it moves the instant you switch
-                          rather than at the next repo scan. */}
-                      <span className="font-medium truncate min-w-0">{repoRef?.name ?? "Repo"}</span>
-                      {currentBranchName && (
-                        <span className="t-dim2 shrink-0 truncate max-w-[9rem]" style={{ maxWidth: "9rem" }} title={`on ${currentBranchName}`}>· {currentBranchName}</span>
-                      )}
-                      <span className="t-dim2 shrink-0">▼</span>
-                    </button>
-                    {repoOpen && (
-                      <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 420, overflow: "hidden" }}>
-                        <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="Filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
-                        <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
-                          {/* Path included: a worktree is found by its card id
-                              ("20343"), which lives in the directory name. */}
-                          {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => (
-                            <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); setSelKey(null); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                              {/* Was "└", an indent meaning "child of the line
-                                  above" — which says nothing once you filter
-                                  the list and the parent is off screen, and
-                                  left projects marked by the absence of a
-                                  character. A badge names the kind outright,
-                                  and reads the same wherever the row lands.
-                                  The terminal's picker uses the same one. */}
-                              <span
-                                className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
-                                title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
-                                style={r.worktreeOf
-                                  ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
-                                  : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
-                              >{r.worktreeOf ? "WT" : "REPO"}</span>
-                              {/* A worktree IS its branch — that's the whole point
-                                  of having one per ticket. The directory name is
-                                  a terse stub of it (`orbit-WEB-1188` for a
-                                  branch called `WEB-1188-quota-banner-copy…`),
-                                  so leading with the directory spent the wide
-                                  column on the less informative of the two and
-                                  truncated the one you were reading. Projects
-                                  keep their name, since there the folder is the
-                                  identity and the branch is just what's checked
-                                  out right now.
-
-                                  But the folder is now always shown beside it.
-                                  That rule holds only while a worktree keeps the
-                                  branch it was made for, and this app hands you a
-                                  one-click way to change it — so a checkout
-                                  RENAMED a row, and "master turned into a
-                                  worktree and the worktree into a branch" was an
-                                  accurate description of what someone saw. A
-                                  directory's identity must not move under a
-                                  click. */}
-                              <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.worktreeOf ? `${r.branch}\n${r.root}` : r.root}>
-                                {r.worktreeOf ? r.branch : r.name}
-                              </span>
-                              {!r.worktreeOf
-                                ? <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>
-                                : r.name !== r.branch && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>}
-                              {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
-                              {/* Same reading as the header chip. This used to be
-                                  hardcoded to zero, so the one place you pick a
-                                  repo from could never tell you one had drifted. */}
-                              {r.behind > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
-                              {r.ahead > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
-                            </button>
-                          ))}
-                          {/* Local branches with no checkout of their own — the
-                              other half of a switcher. A worktree branch is
-                              already a WT row above; these switch by checking out
-                              in the current directory. */}
-                          {(() => {
-                            const q = repoQuery.trim().toLowerCase();
-                            const checkedOut = new Set(repos.map((r) => r.branch));
-                            const pickerBranches = branchData.branches.filter((b) => !checkedOut.has(b.name) && (!q || b.name.toLowerCase().includes(q)));
-                            if (!pickerBranches.length) return null;
-                            return (
-                              <>
-                                <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
-                                {pickerBranches.slice(0, 80).map((b) => (
-                                  <button key={b.name} disabled={busy || !writeEnabled} onClick={() => { checkout(b.name); setRepoOpen(false); setRepoQuery(""); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2 disabled:opacity-50">
-                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
-                                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
-                                    {trackChip(b.track).gone && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
-                                  </button>
-                                ))}
-                              </>
-                            );
-                          })()}
-                          {!repos.length && <div className="px-3 py-2 t-dim2">no repos seen yet</div>}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <CheckoutPicker
+                    repos={repos}
+                    value={root}
+                    onPick={(r) => { setRoot(r); setSelKey(null); }}
+                    branchLabel={currentBranchName || null}
+                    branches={{ items: branchData.branches, disabled: busy || !writeEnabled, onCheckout: checkout, gone: (b) => trackChip(b.track).gone }}
+                    onOpenChange={(o) => { if (o) refreshPicker(); }}
+                  />
                   {/* Scrolls rather than shoves. Eight tabs plus a long branch
                       name will not fit a narrow window, and something has to
                       give — a strip you can flick is better than controls
