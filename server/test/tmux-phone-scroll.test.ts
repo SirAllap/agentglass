@@ -19,18 +19,31 @@
  * until they were measured — that `-N` takes a repeat count, that `copy-mode`
  * is idempotent, and that `-e` leaves the mode at the bottom of the history.
  */
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { leaveCopyMode, scrollPhonePane } from "../src/tmuxctl.ts";
 
-const SOCK = `/tmp/agx-pscroll-${process.pid}.sock`;
-/** The form tmuxctl takes: the socket flags on their own, with `tmux` and the
- *  command added around them. */
-const SOCKET = ["-f", "/dev/null", "-S", SOCK];
+/*
+ * A server per test, on a socket of its own.
+ *
+ * This was one socket and a `kill-server` at the top of every `beforeEach`,
+ * which is a race with itself: the old server is still shutting down while the
+ * next `new-session` is already talking to it, and the session that command
+ * creates dies with the server it landed on. The test that follows then finds a
+ * pane with no history, or no pane at all.
+ *
+ * A new path per test cannot collide with a server that is on its way out, and
+ * `-f /dev/null` keeps every one of them out of the user's own configuration.
+ */
+let seq = 0;
+let sock = "";
+let SOCKET: string[] = [];
+const started: string[] = [];
 
-const tmux = (...args: string[]): string => {
-  const r = Bun.spawnSync(["tmux", ...SOCKET, ...args], { stdout: "pipe", stderr: "pipe" });
+const on = (where: string, args: string[]): string => {
+  const r = Bun.spawnSync(["tmux", "-f", "/dev/null", "-S", where, ...args], { stdout: "pipe", stderr: "pipe" });
   return r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim() : "";
 };
+const tmux = (...args: string[]): string => on(sock, args);
 
 /** The session name the server makes for a phone. The pattern is checked before
  *  anything is run, so a name of any other shape must do nothing at all. */
@@ -42,21 +55,70 @@ const state = (): { inMode: boolean; at: number } => {
   return { inMode: mode === "1", at: Number(at || 0) };
 };
 
+/**
+ * Wait for a fact about the pane, and say which one when it never arrives.
+ *
+ * Every claim in this file is a claim about scrollback, so the history has to
+ * be THERE before a test starts — and how long a shell takes to print three
+ * hundred lines is not something a number in the source can know.
+ */
+const until = (what: string, ready: () => boolean, ms = 10_000): void => {
+  const stop = Date.now() + ms;
+  while (Date.now() < stop) {
+    if (ready()) return;
+    Bun.sleepSync(25);
+  }
+  throw new Error(`the pane never ${what} within ${ms}ms`);
+};
+
+/*
+ * What "the history is there" means, measured rather than assumed: 300 printed
+ * lines on a 24-row pane leave 277 above the top, not 300 — the last screenful
+ * is still on screen and is not scrollback. Asserting 300 here is a wait that
+ * can never end, which is how this was found.
+ */
+const SCROLLBACK = 277;
+
+/** How many lines are above the top of the pane — the scrollback itself. */
+const history = (): number => Number(tmux("display-message", "-p", "-t", "probe", "#{history_size}") || 0);
+
 beforeEach(() => {
-  tmux("kill-server");
+  sock = `/tmp/agx-pscroll-${process.pid}-${++seq}.sock`;
+  SOCKET = ["-f", "/dev/null", "-S", sock];
+  started.push(sock);
   // Three hundred lines to scroll through, then a process that stays put so the
   // pane does not die under the test.
   tmux("new-session", "-d", "-s", "probe", "-x", "80", "-y", "24",
     "sh -c 'for i in $(seq 1 300); do echo LINE-$i; done; sleep 300'");
-  Bun.sleepSync(500);
+  /*
+   * This was `Bun.sleepSync(500)`, and 500ms is a guess about somebody else's
+   * machine. On a GitHub runner — the same run reported `event loop blocked
+   * 6620ms` — the shell had not printed yet, so the pane had no scrollback,
+   * `scrollPhonePane` correctly refused to open copy mode for a finger with
+   * nothing to show, and the test that assumed it had gone back 40 lines read
+   * `inMode: false`:
+   *
+   *     expect(scrollPhonePane(SOCKET, PHONE, 10)?.inMode).toBe(true)
+   *     Expected: true / Received: false
+   *
+   * That is the code being right and the fixture being late. Waiting for the
+   * history rather than for a period of time cannot be late, and cannot be
+   * slow on a fast machine either: it leaves as soon as the lines are there.
+   */
+  until("printed its scrollback", () => history() >= SCROLLBACK);
   // The phone's own view of it: a grouped session, named the way the attach
   // names it. `display-message -t <session>` resolves to that session's current
   // window's active pane, which is what the phone is looking at.
   tmux("new-session", "-d", "-t", "probe", "-s", PHONE);
-  Bun.sleepSync(300);
+  // And the grouped session has to be answering before a test addresses it —
+  // `scrollPhonePane` takes the phone's name, not the probe's.
+  until("joined the group", () => tmux("display-message", "-p", "-t", PHONE, "#{pane_id}").startsWith("%"));
 });
 
-afterAll(() => { tmux("kill-server"); });
+afterEach(() => { tmux("kill-server"); });
+// Belt and braces: a test that threw in its own hook still leaves a server, and
+// a stray tmux on this machine outlives the run that made it.
+afterAll(() => { for (const s of started) on(s, ["kill-server"]); });
 
 describe("a finger asking the machine to scroll", () => {
   it("enters copy mode and moves back by exactly the count it was given", () => {
