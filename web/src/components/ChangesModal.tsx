@@ -573,7 +573,12 @@ function FileItem({ c, active, reviewed, onSelect, onToggleReviewed }: { c: File
           {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
         </span>
       </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
+        {/* mt-1.5, and the step matters: mt-1 was tried and measured, and the
+            sweep still reported the pair touching. The path line is 9.5px but
+            the row it sits in inherits a larger size, and 4px under that is
+            still one block of text. 6px is where the filename and its
+            directory read as two lines. */}
+        <div className="flex items-center gap-1.5 mt-1.5 text-[9.5px] t-dim2 pl-[22px]">
           <span className="truncate min-w-0" title={c.file_path}>{dirOf(c.file_path)}</span>
           <span className="ml-auto shrink-0 opacity-80">{c.tool}</span>
           <span className="shrink-0">{fmtTime(c.timestamp)}</span>
