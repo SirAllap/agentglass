@@ -224,7 +224,7 @@ export function CheckoutPicker({
           <div ref={rowsRef} className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
             {unlisted && (
               <div className="px-2.5 py-1.5 flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
-                <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>SET</span>
+                <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>SET</span>
                 <span className="min-w-0 flex-1 truncate" style={{ color: "var(--warning)" }} title={unlisted}>{unlisted}</span>
                 <span className="shrink-0 t-dim2 text-[9.5px]">not in this list</span>
               </div>
@@ -248,7 +248,7 @@ export function CheckoutPicker({
                     the row lands. It was an indent once, which says nothing as
                     soon as the list is filtered and the parent is off screen. */}
                 <span
-                  className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
+                  className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded"
                   title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
                   style={r.worktreeOf
                     ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
@@ -292,7 +292,7 @@ export function CheckoutPicker({
                       className="w-full text-left px-2.5 py-1.5 flex items-center gap-2 disabled:opacity-50"
                       style={{ background: at === cursor ? "color-mix(in srgb, var(--primary) 9%, transparent)" : "transparent" }}
                     >
-                      <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
+                      <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
                       <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
                       {branches?.gone?.(b) && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
                     </button>

@@ -697,7 +697,7 @@ function GroupBlock({ g, collapsed, selId, reviewed, fold, onToggleCollapse, onS
           numeric drops underneath, where it still reads fine. */}
       <div className="flex items-start gap-1.5 px-1.5 py-1 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)" }}>
         <button onClick={onToggleCollapse} className="flex items-start gap-1.5 min-w-0 flex-1 text-left">
-          <span className="text-[10px] t-dim2 transition-transform shrink-0 mt-[3px]" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
+          <span className="text-[10px] t-dim2 transition-transform shrink-0 mt-1" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
           <span className="min-w-0 flex-1">
             <span className="block text-[11px] font-semibold leading-snug" title={g.label}
               style={{ color: "var(--text2, var(--text))", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>

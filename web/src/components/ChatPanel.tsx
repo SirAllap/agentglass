@@ -423,7 +423,7 @@ function EffortDial({ chat }: { chat: Chat }) {
         title={"How hard the model thinks, sent as --effort.\n\nDefault leaves the CLI's own setting alone.\nChanging this restarts the chat's session, keeping the conversation."}
         className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-md"
         style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
-        <span className="flex items-end gap-[2px]" aria-hidden>
+        <span className="flex items-end gap-0.5" aria-hidden>
           {CHAT_EFFORTS.map((_, i) => (
             <span key={i} style={{
               width: 3, height: 4 + i * 2, borderRadius: 1,

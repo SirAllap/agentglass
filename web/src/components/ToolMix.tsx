@@ -44,7 +44,7 @@ export function ToolMix({ events }: { events: WatchEvent[] }) {
   return (
     <Panel eyebrow="Tool mix" title="What the fleet is doing" right={<span className="text-[10px] t-dim2">{total} runs</span>}>
       <div className="flex flex-col justify-center h-full gap-3">
-        <div className="flex h-4 rounded-full overflow-hidden gap-[2px]" style={{ background: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
+        <div className="flex h-4 rounded-full overflow-hidden gap-0.5" style={{ background: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
           {seg.map((m) => (
             <motion.div
               key={m.name}

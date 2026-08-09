@@ -323,7 +323,7 @@ function Tree({ root, active, onOpen, reveal }: {
         return (
           <button key={e.rel} data-row={e.rel}
             onClick={() => { setCursor(e.rel); if (e.dir) toggle(e.rel); else onOpen(e.rel); }}
-            className="w-full text-left flex items-center py-[2px] text-[12px] leading-[1.5] hover:bg-white/5"
+            className="w-full text-left flex items-center py-0.5 text-[12px] leading-[1.5] hover:bg-white/5"
             style={{
               paddingLeft: 14, paddingRight: 16,
               background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : undefined,
@@ -441,7 +441,7 @@ function ContentHits({ root, q, onOpen }: { root: string; q: string; onOpen: (re
       </Count>
       {groups.map((g) => (
         <PathRow key={g.rel} rel={g.rel} onOpen={onOpen}>
-          <div className="mt-1 flex flex-col gap-[1px]">
+          <div className="mt-1 flex flex-col gap-px">
             {g.hits.map((h, i) => (
               <div key={i} className="flex items-baseline gap-2 text-[11px]">
                 {/* The line number is a coordinate, not prose — its own tint,
