@@ -2774,6 +2774,39 @@ export function restoreWindows(
      * Before the `-A`, so the window is recomputed once, with the layout it is
      * going to keep.
      */
+    /*
+     * What the window carries NOW, against what was recorded when this phone
+     * arrived. Three answers, and only one of them is a restore (#488).
+     *
+     * `hadWindowSize` lists every window of the group, because a phone's
+     * grouped session shares them all — but the phone only ever MOVED the one
+     * it fitted. Walking the rest was writing a snapshot over windows nothing
+     * had touched, and the snapshot ages: measured, a desk that pressed "Fit to
+     * this window" after the phone arrived had its deliberate `manual` replaced
+     * by the `largest` this record was taken with, minutes later, by a teardown
+     * for a window the phone was never on.
+     *
+     * `show-options -qwv` answers empty for a window option that is not set,
+     * rather than the inherited value — measured on 3.7b — so "" here really is
+     * "this window carries none of its own", which is what `had` spells the
+     * same way.
+     */
+    const now = (tmux(socket, ["show-options", "-qwv", "-t", id, "window-size"]) ?? "").trim();
+    // Already where it belongs. Nothing to put back, and nothing owed, so the
+    // mark comes off rather than inviting a later pass to act on it.
+    if (now === (had ?? "")) { clearSizeMark(socket, id); continue; }
+    /*
+     * Not a value this app leaves behind, so not this app's to overwrite.
+     *
+     * The only two we ever write are `manual` (a fit, via `resize-window`) and
+     * `largest` (the attach, and the desk's take-over). Anything else — a
+     * `latest`, a `smallest`, a value somebody set by hand while the phone was
+     * here — is a deliberate act by somebody who is not us, and putting an old
+     * snapshot over it is the same class of mistake as the stale restore above.
+     * The mark stays: the window is still one we touched, and a later pass can
+     * decide with fresher information than this teardown has.
+     */
+    if (now !== "manual" && now !== "largest") continue;
     if (zoomed && zoomed.windowId === id) unzoomWindow(socket, sessionId, id, zoomed.paneId);
     tmux(socket, ["resize-window", "-A", "-t", id]);
     tmux(socket, had
@@ -2786,12 +2819,25 @@ export function restoreWindows(
      * leave a window still pinned and no longer marked — the one state the
      * startup sweep can never fix, and strictly worse than the bug.
      *
-     * Only for windows this loop actually restored. The two `continue`s above
+     * Only for windows this loop actually restored. The `continue`s above
      * leave the mark deliberately: a window another phone is still on is still
      * owed the restore, and leaving the mark is what lets the next boot finish
      * the job if that phone's server is the one that gets killed.
+     *
+     * And only when the restore WORKED, which is the other half of #488. This
+     * used to clear unconditionally, so a restore that put back the wrong value
+     * — or none at all, because tmux refused the command — destroyed the only
+     * evidence that the window was ever ours. `reclaimPinnedWindow` reads that
+     * mark and nothing else; without it the safety net cannot fire on the one
+     * case that needs it, which is a teardown that has already gone wrong. The
+     * two bugs are invisible from each other's code and were found together.
+     *
+     * Verified by reading the option back rather than by trusting the write:
+     * `tmux()` returning non-null means the command was accepted, not that the
+     * value took.
      */
-    clearSizeMark(socket, id);
+    const after = (tmux(socket, ["show-options", "-qwv", "-t", id, "window-size"]) ?? "").trim();
+    if (after === (had ?? "")) clearSizeMark(socket, id);
   }
   // And make the desk repaint. A program that was resized twice has drawn
   // itself for the wrong width in between, and tmux does not redraw a pane

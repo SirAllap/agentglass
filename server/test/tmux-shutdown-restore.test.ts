@@ -305,18 +305,22 @@ describe.if(HAVE_TMUX)("a server going down gives the desk its window back", () 
      * in `attachArgvFor` lands on the shared window, not on our session), and
      * it is back to carrying nothing.
      *
-     * Its ROW count is the one thing that does not come back to the value it
-     * started at — 50 before, 49 after — and that is `resize-window -A` doing
-     * what it says rather than a leak. `-A` sizes a window to the largest
-     * client attached to it, and this window had never been sized against a
-     * client at all; the desk's is 50 rows with a status line, so 49 is the
-     * size it would have taken the moment anybody looked at it. The option is
-     * unset either way, which is what decides whether it goes on following
-     * clients — see the last test in this file.
+     * Its ROW count used to be the one thing that did NOT come back to where it
+     * started — 50 before, 49 after — and this file said so, calling it
+     * `resize-window -A` doing what it says rather than a leak. It was a leak,
+     * and it is the first of the three failures in #488: the teardown walked
+     * every window of the group, because a grouped session shares them all, and
+     * resized ones the phone had never been on. A window that carries the same
+     * `window-size` it carried when the phone arrived is now left alone
+     * entirely — no `-A`, no option write — so it keeps its own geometry.
+     *
+     * Asserted as `beforeOther.geom` rather than as a literal, so this reads as
+     * "unchanged" and cannot quietly encode a new side effect the way the
+     * literal did.
      */
     expect({ windowSize: sizeOpt(other), zoomed: zoom(other) })
       .toEqual({ windowSize: beforeOther.windowSize, zoomed: beforeOther.zoomed });
-    expect(geom(other)).toBe("200x49");
+    expect(geom(other)).toBe(beforeOther.geom);
     expect(Number(geom(other).split("x")[0])).toBe(Number(beforeOther.geom.split("x")[0]));
     // Our own grouped session is gone with the server — it is what the shutdown
     // kills to make the restore allowed, and leaving it would be a session in
