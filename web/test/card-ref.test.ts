@@ -6,7 +6,7 @@
 // are invented; the SHAPE is what was measured, and every rule below exists
 // because of something in it.
 import { describe, expect, it } from "bun:test";
-import { cardRef, looksLikeOurs } from "../src/lib/cardRef.ts";
+import { cardRef, chipAction, looksLikeOurs } from "../src/lib/cardRef.ts";
 
 /*
  * A pull-request template, trimmed to the three parts that matter: a checklist
@@ -141,5 +141,56 @@ describe("whether an id belongs to the workspace we are connected to", () => {
     // prefix". Refusing on it would make the chip come and go with a cache.
     expect(looksLikeOurs(branchRef, undefined)).toBe(true);
     expect(looksLikeOurs(branchRef, "")).toBe(true);
+  });
+});
+
+/*
+ * What the chip does, on machines that are not the author's.
+ *
+ * Every rule below already existed and none of them fired, because the value
+ * the caller weighed them against was a count of saved boards — and the
+ * built-in "Assigned to me" board is always in that list, token or no token.
+ * So `boards > 0` was true everywhere, and a repository that has never heard
+ * of ClickUp got ClickUp's own mark on a branch called `ABC-1234-thing`.
+ *
+ * These are written against the machine, not against the id: the same pull
+ * request has to produce three different chips depending on what is connected.
+ */
+describe("what the chip should do, given what this machine has", () => {
+  const jira = cardRef({ headRefName: "ABC-1234-rounding-error" });
+  const ours = cardRef({ headRefName: "ORBIT-1042-rounding-error" });
+  const addressed = cardRef({ body: "https://clickup.com/t/8ab12cd34" });
+
+  it("says nothing at all on a machine with no ClickUp", () => {
+    // The case this whole function exists for. A Jira shop, a Linear shop,
+    // somebody with no tracker: an id in a branch name is not ours to claim.
+    expect(chipAction(jira, { connected: false })).toBe(null);
+    expect(chipAction(ours, { connected: false })).toBe(null);
+  });
+
+  it("still opens an address on a machine with no ClickUp", () => {
+    // A URL needs nobody's credentials, and the body naming one is a fact
+    // rather than a convention. Out to the browser, since there is no board
+    // here to land in.
+    expect(chipAction(addressed, { connected: false }))
+      .toEqual({ in: "clickup", url: "https://clickup.com/t/8ab12cd34" });
+  });
+
+  it("opens the card here once ClickUp is connected", () => {
+    expect(chipAction(ours, { connected: true, prefix: "ORBIT-" })).toEqual({ in: "tasks" });
+    expect(chipAction(addressed, { connected: true, prefix: "ORBIT-" })).toEqual({ in: "tasks" });
+  });
+
+  it("keeps another tracker's ids off the mark even with ClickUp connected", () => {
+    // Somebody who has ClickUp AND a repository whose branches are named for
+    // Jira. The prefix is what separates them.
+    expect(chipAction(jira, { connected: true, prefix: "ORBIT-" })).toBe(null);
+  });
+
+  it("says nothing while the answer is still in flight", () => {
+    // Null setup is "not known yet", never "no" — which is what stops the chip
+    // appearing and then vanishing a beat later.
+    expect(chipAction(ours, null)).toBe(null);
+    expect(chipAction(null, { connected: true })).toBe(null);
   });
 });

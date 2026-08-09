@@ -140,3 +140,31 @@ export function looksLikeOurs(ref: CardRef, prefix: string | undefined): boolean
   if (!prefix) return true;
   return ref.label.toUpperCase().startsWith(prefix.toUpperCase());
 }
+
+/**
+ * What the masthead chip should DO — the three answers at the top of this file,
+ * as one decision instead of a condition spread across some JSX.
+ *
+ * It lives here, next to the evidence it weighs, because the mistake it exists
+ * to prevent is not a rendering mistake. The rule was right and the value fed
+ * to it was not: the chip asked "are there boards", the answer was always yes
+ * because the built-in board is always there, and a repository that has never
+ * heard of ClickUp got ClickUp's mark on its pull requests. A boolean called
+ * `connected` cannot be satisfied by an off-by-one, and a function returning
+ * WHERE this goes cannot be half-applied.
+ *
+ *   null            say nothing — an id from a tracker we cannot resolve
+ *   { in: "tasks" } open the card here, in the ClickUp board
+ *   { in: "clickup" } no ClickUp on this machine, but the body gave an address,
+ *                   and a URL opens without anybody's credentials
+ */
+export function chipAction(
+  ref: CardRef | null,
+  setup: { connected: boolean; prefix?: string } | null,
+): { in: "tasks" } | { in: "clickup"; url: string } | null {
+  // Null setup is "the answer has not arrived", not "no". Saying nothing until
+  // it has is what stops the chip appearing and then vanishing.
+  if (!ref || !setup) return null;
+  if (setup.connected && looksLikeOurs(ref, setup.prefix)) return { in: "tasks" };
+  return ref.url ? { in: "clickup", url: ref.url } : null;
+}

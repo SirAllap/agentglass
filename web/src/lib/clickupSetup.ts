@@ -15,8 +15,23 @@ import { useEffect, useState } from "react";
 import { api } from "./api.ts";
 
 export interface ClickUpSetup {
-  /** How many boards are saved. Zero means there is nothing to open a card in. */
-  boards: number;
+  /**
+   * Is there a ClickUp on this machine — a token, not a tab.
+   *
+   * This used to be `boards: number`, read off the length of the saved-view
+   * list, and it was wrong in the one direction that matters: the built-in
+   * "Assigned to me" board is always in that list, so the count was never zero
+   * and every caller asking "is ClickUp set up here" got yes. A repository
+   * whose branches are `ABC-1234-thing` — a Jira shop, a Linear shop, anybody —
+   * got a ClickUp mark on its pull requests and a chip that led to the connect
+   * screen.
+   *
+   * A count could not have been fixed by comparing it against a different
+   * number, because there is no number here that means what this means. So the
+   * server states it and this carries it, and there is nothing left to
+   * misread.
+   */
+  connected: boolean;
   /** `ORBIT-`, when a board has been read. Undefined is "unknown", never "none". */
   prefix?: string;
 }
@@ -35,11 +50,14 @@ export function clickupSetup(): Promise<ClickUpSetup> {
   // link for the next minute.
   inflight ??= api.clickupViews()
     .then((r) => {
-      const value: ClickUpSetup = { boards: r.views.length, prefix: r.prefix || undefined };
+      const value: ClickUpSetup = { connected: r.connected === true, prefix: r.prefix || undefined };
       held = { at: Date.now(), value };
       return value;
     })
-    .catch(() => ({ boards: 0 } as ClickUpSetup))
+    // A server that did not answer is not a machine with ClickUp on it. The
+    // failure is not cached (see above), so this is "not while I cannot ask"
+    // rather than "no" — and the quiet answer is the safe one either way.
+    .catch(() => ({ connected: false } as ClickUpSetup))
     .finally(() => { inflight = null; });
   return inflight;
 }

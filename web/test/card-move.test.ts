@@ -16,11 +16,22 @@ import type { ListStatus } from "../../shared/providers.ts";
 describe("which card is worth offering to move", () => {
   // Stricter than the chip that merely links to the card: this one writes to
   // somebody's board.
-  const setup = (prefix?: string) => ({ boards: 1, prefix });
+  const setup = (prefix?: string) => ({ connected: true, prefix });
 
-  it("takes a ClickUp address in the body as proof", () => {
+  it("takes a ClickUp address in the body as proof, with no prefix needed", () => {
     const pr = { headRefName: "whatever", title: "x", body: "https://clickup.com/t/86abc123\n" };
-    expect(mergeCardRef(pr, { boards: 0 })?.query).toBe("86abc123");
+    expect(mergeCardRef(pr, { connected: true })?.query).toBe("86abc123");
+  });
+
+  it("offers nothing at all without a ClickUp to write to", () => {
+    // Evidence of a card is not evidence of a connection. A fork of a team that
+    // uses ClickUp carries their addresses in its bodies, and the merge form
+    // used to spin on "Looking up … on ClickUp" before admitting there was no
+    // ClickUp here. Nothing to write with, so nothing to offer.
+    const addressed = { headRefName: "whatever", title: "x", body: "https://clickup.com/t/86abc123\n" };
+    const ours = { headRefName: "ORBIT-1042-rounding", title: "x", body: "" };
+    expect(mergeCardRef(addressed, { connected: false })).toBe(null);
+    expect(mergeCardRef(ours, { connected: false, prefix: "ORBIT-" })).toBe(null);
   });
 
   it("takes a branch id when the workspace's own prefix matches it", () => {
