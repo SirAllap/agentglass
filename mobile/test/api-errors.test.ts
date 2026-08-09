@@ -61,7 +61,7 @@ describe("and nothing that gets through carries an address", () => {
     ["Something odd at /127.0.0.1:4000", "Something odd at the computer"],
     ["Something odd at localhost:4000", "Something odd at the computer"],
     ["Something odd at [::1]:4000", "Something odd at the computer"],
-    ["Something odd at serallap.tail24eb8d.ts.net", "Something odd at the computer"],
+    ["Something odd at somebox.tailnet-example.ts.net", "Something odd at the computer"],
     ["Something odd at machine.local", "Something odd at the computer"],
   ];
 
