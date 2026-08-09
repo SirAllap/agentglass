@@ -26,7 +26,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
-import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
+import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
+import { chipTarget } from "../lib/chipTarget.ts";
+import { openPr } from "../lib/openPrs.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
@@ -1249,6 +1251,21 @@ function detectPaneWorktree(term: Terminal | undefined, worktrees: GitRepoRef[])
   return null;
 }
 
+/**
+ * The pull request out of a branch, remembered for a minute.
+ *
+ * The chip re-asks whenever the focused pane changes worktree, and switching
+ * between two tmux tabs is something you do several times a minute — without a
+ * cache that is a GitHub call per switch, on a rate limit shared with the whole
+ * PR panel. A minute is short enough that opening a pull request and coming
+ * back shows it, and long enough that flipping between tabs costs nothing.
+ *
+ * Module-level, so it survives the panel being closed and reopened. Keyed by
+ * root AND branch: the same branch name in two checkouts is two branches.
+ */
+const branchPrCache = new Map<string, { at: number; repo: string | null; pr: PrBranchSummary | null }>();
+const BRANCH_PR_TTL = 60_000;
+
 export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
   const open = active;
   /** Whether a hover takes the keyboard — see lib/termFocusPref.ts. Subscribed
@@ -1285,10 +1302,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   /** The worktree the focused pane's agent is working in — shown compact in the
    *  status bar and pinned atop the picker. */
   const [detectedWt, setDetectedWt] = useState<GitRepoRef | null>(null);
-  /** The tmux window the current detection belongs to, so a read that comes up
-   *  empty keeps the last worktree (an agent between turns names nothing)
-   *  rather than flickering it away — but switching windows starts fresh. */
+  /** No answer for the pane in front of you YET. Distinct from "no worktree":
+   *  the first is a read in flight and says so, the second is silence. Without
+   *  it a tab switch either kept the previous tab's worktree on screen or fell
+   *  back to the panel's own checkout, and both are confident wrong answers. */
+  const [wtDetecting, setWtDetecting] = useState(false);
+  /** The tmux window+pane the current detection belongs to, so a read that comes
+   *  up empty keeps the last worktree (an agent between turns names nothing)
+   *  rather than flickering it away — but moving the focus starts fresh. */
   const detectedWinRef = useRef("");
+  /** Focus key → the worktree root last read there. Coming back to a tab you
+   *  have already been in answers from this instantly, so the "reading" state
+   *  is only ever paid once per pane. */
+  const wtSeen = useRef(new Map<string, string>());
   const wtRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
@@ -1358,18 +1384,49 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // Polled rather than read on render because neither source changes in a way
   // React can see, and re-asked whenever the focused pane or the repo list
   // changes. Both ends are bounded — one tmux call and a cached tail.
+  //
+  // WHICH pane has the focus is not polled, though, and that was the bug: the
+  // window id came off the same 4-second tick, so `^f n` moved the terminal
+  // instantly and both worktree readouts sat on the previous tab's answer for
+  // up to four seconds — long enough to read them, believe them, and click one.
+  // tmux pushes the window and pane lists (~70ms after a switch redraws the
+  // pane, see terminal.ts), so the focus is a value this render already holds:
+  // read it here, key the effect on it, and the re-ask happens on the switch.
+  const focusSess = sessions.get(paneIds[focusIdx] ?? "");
+  const focusWin = focusSess?.tmuxWindows?.find((w) => w.active)?.id ?? "";
+  // Panes are only reported while the window is split, so this is "" for an
+  // unsplit window — which is right: there is nothing to move between. When
+  // there is, `^f o` changes the answer without changing the window, and the
+  // server reads the ACTIVE pane of the window it is given.
+  const focusPane = focusSess?.tmuxPanes?.find((p) => p.active)?.id ?? "";
+  const focusKey = focusWin ? `${focusWin}:${focusPane}` : "";
   useEffect(() => {
     if (!open || IS_DEMO) return;
     const project = here?.worktreeOf || here?.root || root;
     const cands = repos.filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project);
+    /*
+     * The focus moved. Answer from what this pane read last time if we have it,
+     * and otherwise say we are reading.
+     *
+     * Done here, in the effect's body, rather than when the read comes back:
+     * leaving the previous pane's worktree up while the new one is being read
+     * is the wrong answer with a click target on it, and "Reading…" for the
+     * ~100ms a first visit costs is the honest one.
+     */
+    if (focusKey !== detectedWinRef.current) {
+      detectedWinRef.current = focusKey;
+      const remembered = focusKey ? wtSeen.current.get(focusKey) : "";
+      const known = remembered ? cands.find((r) => r.root === remembered) ?? null : null;
+      setDetectedWt(known);
+      setWtDetecting(!known);
+    }
     let stopped = false;
     const run = async () => {
       const s = sessions.get(paneIds[focusIdx] ?? "");
-      const win = s?.tmuxWindows?.find((w) => w.active)?.id ?? "";
       let d: GitRepoRef | null = null;
-      if (win) {
+      if (focusWin) {
         try {
-          const { dirs } = await api.paneDirs(win);
+          const { dirs } = await api.paneDirs(focusWin);
           // In the order the server gave them: newest first, so an agent that
           // has moved between worktrees answers with the one it is in now.
           for (const p of dirs) {
@@ -1380,17 +1437,69 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       }
       if (stopped) return;
       if (!d) d = detectPaneWorktree(s?.term, cands);
-      // Sticky: a pane's worktree does not vanish because the agent stopped
-      // naming it, so only a fresh detection replaces it. When the focused
-      // window changes, take whatever the new one reads — even nothing, so an
-      // idle window does not keep wearing its neighbour's worktree.
-      if (win !== detectedWinRef.current) { detectedWinRef.current = win; setDetectedWt(d); }
-      else if (d) setDetectedWt((prev) => (prev?.root === d.root ? prev : d));
+      if (stopped) return;
+      // Read, whatever it said. A pane with no worktree is an answer too, and
+      // leaving the spinner up for it would be a chip that never settles.
+      setWtDetecting(false);
+      // Sticky WITHIN one pane: a worktree does not vanish because the agent
+      // stopped naming it between turns, so only a fresh detection replaces it.
+      // Across a switch it is not sticky at all — that is the reset above.
+      const found = d;
+      if (found) {
+        if (focusKey) wtSeen.current.set(focusKey, found.root);
+        setDetectedWt((prev) => (prev?.root === found.root ? prev : found));
+      }
     };
     void run();
     const id = setInterval(() => { void run(); }, 4000);
     return () => { stopped = true; clearInterval(id); };
-  }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root]);
+  }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root, focusKey, focusWin]);
+  /**
+   * What the header chip and the status bar both name: the worktree the focused
+   * pane is working in, and the panel's own checkout only as a fallback for a
+   * shell no agent is reporting from.
+   *
+   * The fallback is deliberately NOT used while a read is in flight — see
+   * `wtDetecting`. Falling back mid-switch made the chip flash the parent repo
+   * between two worktrees, which reads as the app having lost the answer.
+   */
+  const chipWt = detectedWt ?? (wtDetecting ? null : here) ?? null;
+  /**
+   * The pull request out of the chip's branch, when there is one.
+   *
+   * Same question Source control's header chip asks, and the same answer, so
+   * the two agree: `prsForBranch` + `chipTarget`, which is where the "opens a
+   * search box instead of the pull request" bug was fixed once already.
+   */
+  const [chipPr, setChipPr] = useState<{ repo: string; pr: PrBranchSummary } | null>(null);
+  const prRoot = chipWt?.root ?? "";
+  const prBranch = chipWt?.branch ?? "";
+  useEffect(() => {
+    if (!open || IS_DEMO || !prRoot || !prBranch) { setChipPr(null); return; }
+    const key = `${prRoot}\u0000${prBranch}`;
+    const seen = branchPrCache.get(key);
+    if (seen && Date.now() - seen.at < BRANCH_PR_TTL) {
+      const t = chipTarget(seen.repo, seen.pr);
+      setChipPr(t.kind === "open" ? { repo: t.repo, pr: t.pr } : null);
+      return;
+    }
+    // Not "keep the last one until the new answer lands": that is the same
+    // stale-under-a-new-tab bug the worktree read just stopped having.
+    setChipPr(null);
+    let live = true;
+    void api.prsForBranch(prRoot, prBranch)
+      .then((r) => {
+        branchPrCache.set(key, { at: Date.now(), repo: r.repo ?? null, pr: r.from ?? null });
+        if (!live) return;
+        const t = chipTarget(r.repo, r.from);
+        setChipPr(t.kind === "open" ? { repo: t.repo, pr: t.pr } : null);
+      })
+      /* No GitHub, no auth, no network: the chip simply has no pull request to
+         offer. The Source control header is where that distinction is drawn and
+         explained; repeating it in the terminal's chrome would be noise. */
+      .catch(() => { if (live) setChipPr(null); });
+    return () => { live = false; };
+  }, [open, prRoot, prBranch]);
 
   const tabs = root ? termSessionsFor(root) : [];
 
@@ -1558,7 +1667,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     wasActive.current = active;
   }, [active, open, paneIds, focusIdx]);
 
-  const sess = sessions.get(paneIds[focusIdx] ?? "");
+  // The same session the worktree read above is keyed on — one lookup, so the
+  // two can never disagree about which pane is in front of you.
+  const sess = focusSess;
   // tmux is running in the shell you're looking at, so it owns the tabs and the
   // splits. Ours would be a second set of controls doing the same job worse —
   // and two competing pane models is exactly how you end up with a split inside
@@ -1934,16 +2045,43 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     * that is the parent repo for every agent in a fleet, which
                     * is what made it look unanswerable.
                     */}
+                  {/*
+                    * Three doors, not one.
+                    *
+                    * The chip named the worktree and could only open Source
+                    * control, so the two things you actually do with a branch an
+                    * agent is working on — read its diff, look at its pull
+                    * request — were a view switch and a search away from the one
+                    * place already holding the branch's name. The status bar's
+                    * copy had grown Git and Diff for exactly that reason; this
+                    * is the complete one, and the pull request is the part
+                    * neither had.
+                    *
+                    * Separate buttons rather than one button with a menu: a menu
+                    * is a click to find out what the options are, and there are
+                    * three.
+                    */}
                   {(() => {
-                    const at = detectedWt ?? here ?? null;
-                    if (!at) return null;
+                    // Mid-switch, with the read still out: say so rather than
+                    // fall back to the panel's own checkout, which is a
+                    // different branch stated with the same confidence.
+                    if (!chipWt) {
+                      return wtDetecting ? (
+                        <span
+                          className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg shrink-0"
+                          title="Reading which worktree this pane is working in"
+                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text3)" }}
+                        >
+                          <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>WT</span>
+                          <span className="animate-pulse">Reading this pane…</span>
+                        </span>
+                      ) : null;
+                    }
+                    const at = chipWt;
                     const label = at.worktreeOf ? at.branch : at.name;
                     return (
-                      <button
-                        onMouseDown={keepTermFocus}
-                        onClick={() => requestWorktreeJump({ view: "git", root: at.root })}
-                        title={`${at.root}\nOpen its Source control`}
-                        className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg min-w-0 shrink"
+                      <span
+                        className="flex items-center gap-1 text-[11px] pl-2.5 pr-1.5 py-1 rounded-lg min-w-0 shrink"
                         style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
                       >
                         <span
@@ -1953,10 +2091,41 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
                             : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
                         >{at.worktreeOf ? "WT" : "REPO"}</span>
-                        <span className="font-medium truncate min-w-0">{label}</span>
-                        {at.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${at.dirty} changed file${at.dirty === 1 ? "" : "s"}`}>●{at.dirty}</span>}
-                        <span className="t-dim2 shrink-0 text-[10px]">↗</span>
-                      </button>
+                        {/* The name still opens Source control on its own — that
+                            was the chip's one action and muscle memory for it is
+                            older than the buttons beside it. */}
+                        <button
+                          onMouseDown={keepTermFocus}
+                          onClick={() => requestWorktreeJump({ view: "git", root: at.root })}
+                          title={`${at.root}\nOpen its Source control`}
+                          className="agx-btn flex items-center gap-1.5 min-w-0 shrink rounded px-1"
+                          style={{ color: "var(--text)" }}
+                        >
+                          <span className="font-medium truncate min-w-0">{label}</span>
+                          {at.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${at.dirty} changed file${at.dirty === 1 ? "" : "s"}`}>●{at.dirty}</span>}
+                          <span className="t-dim2 shrink-0 text-[10px]">↗</span>
+                        </button>
+                        <button
+                          onMouseDown={keepTermFocus}
+                          onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(at.root) })}
+                          title={`Open ${dirName(at.root)}'s changes in File changes`}
+                          className="agx-btn shrink-0 flex items-center gap-1 px-2 py-[1px] rounded leading-none"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                        >Diff <span className="t-dim2 text-[10px]">↗</span></button>
+                        {/* Only when the branch HAS one. A dashed "no pull
+                            request" pill in the terminal's chrome would be a
+                            permanent fixture on every local branch, and Source
+                            control is where that fact belongs. */}
+                        {chipPr && (
+                          <button
+                            onMouseDown={keepTermFocus}
+                            onClick={() => openPr(chipPr.repo, chipPr.pr.number)}
+                            title={`#${chipPr.pr.number} ${chipPr.pr.title}\n${chipPr.pr.state === "OPEN" && chipPr.pr.isDraft ? "Draft" : chipPr.pr.state.toLowerCase()} · open it in Pull requests`}
+                            className="agx-btn shrink-0 flex items-center gap-1 px-2 py-[1px] rounded leading-none tabular-nums"
+                            style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                          >PR #{chipPr.pr.number} <span className="t-dim2 text-[10px]">↗</span></button>
+                        )}
+                      </span>
                     );
                   })()}
 
@@ -2501,13 +2670,21 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         This chip must NOT make the status bar any taller than it
                         is without it — the row is `items-center`, so a child
                         taller than the surrounding 9.5px text grows the whole
-                        bar. `leading-none` here + `py-0` on the buttons + a 9px
-                        badge keep every element inside the text's own line box.
-                        Give one back a normal line-height and the bar jumps a
-                        few pixels the moment a worktree is detected. */}
-                    {detectedWt && (
+                        bar. `leading-none` here + `py-0` on the buttons keep
+                        every element inside the text's own line box. Give one
+                        back a normal line-height, or vertical padding, and the
+                        bar jumps a few pixels the moment a worktree is detected
+                        — which is why the buttons below were given room to
+                        breathe SIDEWAYS only.
+
+                        The badge wears the same filled pill as `tmux` at the
+                        other end of this bar: one bar, one way of marking what a
+                        stretch of it is about. The bordered 9px capital version
+                        it replaced was a third style in a row that already had
+                        two, and at that size the letters had no room. */}
+                    {detectedWt ? (
                       <span className="flex items-center gap-1.5 leading-none" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
-                        <span className="px-1 rounded text-[9px] uppercase tracking-wider" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>this pane</span>
+                        <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
                         {/* Branch is the name of the thing you are working on; the
                             folder is where it lives. Show the branch, and the
                             folder after it in a dimmer hand — both on one line, so
@@ -2517,11 +2694,25 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           <span className="truncate max-w-[110px] text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detectedWt.root)}</span>
                         )}
                         {detectedWt.dirty > 0 && <span className="tabular-nums" style={{ color: "var(--warning)" }}>●{detectedWt.dirty}</span>}
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn px-1.5 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git</button>
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn px-1.5 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                        {/* The arrow is what keeps these reading as buttons once
+                            they have room around the word — the same ↗ the
+                            worktree chip in the header uses for the same promise:
+                            pressing this leaves the terminal. */}
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn inline-flex items-center gap-1 px-2 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git <span className="t-dim2">↗</span></button>
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn inline-flex items-center gap-1 px-2 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff <span className="t-dim2">↗</span></button>
                         <span className="t-dim2">·</span>
                       </span>
-                    )}
+                    ) : wtDetecting ? (
+                      /* The switch has happened and the answer has not arrived.
+                         Holding the previous pane's worktree here for the ~100ms
+                         a first read costs is how the bar came to disagree with
+                         the tab strip above it. */
+                      <span className="flex items-center gap-1.5 leading-none" title="Reading which worktree this pane is working in">
+                        <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
+                        <span className="animate-pulse" style={{ color: "var(--text3)" }}>Reading…</span>
+                        <span className="t-dim2">·</span>
+                      </span>
+                    ) : null}
                     <span>{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
                   </span>
                 </div>
