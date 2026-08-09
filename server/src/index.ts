@@ -265,6 +265,25 @@ function localOrigin(req: Request): boolean {
  * callers it turns away are the non-browser ones — which is exactly the
  * `websocat ws://host:4000/terminal/pty` case that otherwise hands a login
  * shell to anyone who can reach the port.
+ *
+ * Every route that EXECUTES or MUTATES is on this gate, and the split used to
+ * be an accident of where the code landed: 22 mutating routes on `localOrigin`
+ * against 5 here (#469). `localOrigin` waves a missing Origin straight through,
+ * which is right for reads — the hooks and the OTLP exporters cannot send one,
+ * and turning them away breaks the product — and wrong for anything that
+ * commits, pushes, starts a container, kills a process, spawns an agent or
+ * rewrites the workspace scope every other capability checks itself against.
+ *
+ * On the default loopback bind nothing changes: `from === "loopback"` is true
+ * and an Origin-less caller is still allowed. The case this closes is the one
+ * the README documents as supported — `AGENTGLASS_BIND=0.0.0.0` without a
+ * token — where a remote `curl` with no Origin header could drive git, Docker,
+ * the chat and the process killer.
+ *
+ * Two deliberate exceptions, both reads that happen to be POSTs or to have no
+ * browser at the other end: `/git/status`, which takes a body only because it
+ * is a query, and `/ingest`, the OTLP receivers and `/pair/*`, which are
+ * Origin-less by design and must stay that way.
  */
 /**
  * The strictest gate in the server: the desktop shell and nothing else.
@@ -1008,7 +1027,7 @@ const server = Bun.serve<WsData>({
     // Pick the project this cockpit is about (or null → the whole machine).
     // Applied live and persisted for the next launch.
     if (pathname === "/workspace" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = setWorkspaceRoot(b.root == null ? null : String(b.root));
@@ -1029,7 +1048,7 @@ const server = Bun.serve<WsData>({
      * arguments are checked in projectadd.ts, where the reasoning lives.
      */
     if (pathname === "/projects/clone" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = await cloneProject(b.url, b.parent);
@@ -1044,14 +1063,14 @@ const server = Bun.serve<WsData>({
      * next sweep.
      */
     if (pathname === "/projects/hidden" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = setProjectHidden(b.path, b.hidden !== false);
       return json(res, res.ok ? 200 : 400);
     }
     if (pathname === "/projects/new" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = await createProject(b.name, b.parent);
@@ -1082,7 +1101,7 @@ const server = Bun.serve<WsData>({
      * which a freshly written file never has.
      */
     if (pathname === "/agents/connect" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { id?: unknown; undo?: unknown };
       try { b = (await req.json()) as { id?: unknown; undo?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const id = typeof b.id === "string" ? b.id : "";
@@ -1123,7 +1142,7 @@ const server = Bun.serve<WsData>({
 
     if (pathname === "/hooks/status") return json(hookStatus());
     if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
     }
 
@@ -1138,7 +1157,7 @@ const server = Bun.serve<WsData>({
       return json({ budgets: readBudgets(), status: budgetStatus(), models: costedModels() });
     }
     if (pathname === "/budgets/set" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { budgets?: unknown };
       try { b = (await req.json()) as { budgets?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (!Array.isArray(b.budgets)) return json({ ok: false, error: "expected a list of budgets" }, 400);
@@ -1240,7 +1259,7 @@ const server = Bun.serve<WsData>({
       });
     }
     if (pathname === "/gate/decide" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false }); }
       const decision = b.decision === "deny" ? "deny" : "allow";
@@ -1285,7 +1304,7 @@ const server = Bun.serve<WsData>({
     // keyboard doesn't already, so it needs no gate beyond the localOrigin +
     // token checks the whole surface already carries.
     if (pathname === "/control" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: unknown = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const cmd = parseControlCmd(b);
@@ -1305,7 +1324,7 @@ const server = Bun.serve<WsData>({
       return json(browserUseStatus(browserReadyCount(), true));
     }
     if (pathname === "/browser-use/install" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const res = installSkill();
       return json(res, res.ok ? 200 : 400);
     }
@@ -1328,7 +1347,7 @@ const server = Bun.serve<WsData>({
      */
     const browserDataPost = pathname === "/browser/places" || pathname === "/browser/places/forget" || pathname === "/browser/visit";
     if (pathname.startsWith("/browser/") && req.method === "POST" && !browserDataPost) {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const op = pathname.slice("/browser/".length);
       if (op === "ready") {
         // A window saying it has a browser panel that can answer. Heartbeat, so
@@ -1622,7 +1641,7 @@ const server = Bun.serve<WsData>({
       return json({ repos: await statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
     }
     if (pathname === "/git/commit" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = gitCommit(String(b.root || ""), Array.isArray(b.files) ? b.files : [], String(b.title || ""), String(b.body || ""));
@@ -1856,14 +1875,14 @@ const server = Bun.serve<WsData>({
      */
     if (pathname === "/theme/current") return json({ theme: currentTheme() });
     if (pathname === "/theme/sync" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       return json(await syncTheme(b.vars ?? {}, String(b.name ?? "custom")));
     }
 
     if (pathname === "/editor/open" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       return json(await openInEditor(b.path, b.line));
@@ -1875,7 +1894,7 @@ const server = Bun.serve<WsData>({
        (see ag:browserPlaces); this only keeps them and hands them back to the
        address bar. */
     if (pathname === "/browser/places" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const source = String(b.source ?? "");
       const rows = Array.isArray(b.places) ? b.places : [];
@@ -1898,7 +1917,7 @@ const server = Bun.serve<WsData>({
       return json({ ok: true, places: allPlaces() });
     }
     if (pathname === "/browser/places/forget" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       forgetPlaces();
       return json({ ok: true, ...placeCount() });
     }
@@ -1906,18 +1925,18 @@ const server = Bun.serve<WsData>({
        'agentglass' source so a browser re-import (which DELETEs by source) never
        wipes it — see recordVisit(). */
     if (pathname === "/browser/visit" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       recordVisit(String(b.url ?? ""), String(b.title ?? ""));
       return json({ ok: true });
     }
     if (pathname === "/scratch/image" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       return json(saveShot(b.dataUrl, b.name));
     }
     if (pathname.startsWith("/git/") && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const root = String(b.root || "");
@@ -2270,7 +2289,7 @@ const server = Bun.serve<WsData>({
       return json(await refreshCodexUsage());
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const id = String(b.id || "");
@@ -2340,7 +2359,7 @@ const server = Bun.serve<WsData>({
       return json({ ok: false, error: "not found" }, 404);
     }
     if (pathname.startsWith("/issues/") && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const root = String(b.root || "");
@@ -2393,7 +2412,7 @@ const server = Bun.serve<WsData>({
     }
 
     if (pathname === "/machine/unlock" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = removeStaleLock(b.path, knownProjects().map((p) => p.path));
@@ -2402,7 +2421,7 @@ const server = Bun.serve<WsData>({
     }
 
     if (pathname === "/machine/kill" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = killPort(b.pid);
@@ -2532,7 +2551,7 @@ const server = Bun.serve<WsData>({
       ));
     }
     if (pathname.startsWith("/prs/") && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const root = b.root ?? "";
@@ -2676,7 +2695,7 @@ const server = Bun.serve<WsData>({
     /** Put one of them in front of whoever is attached. The ids are validated
      *  against tmux's own syntax in focusPane() before they reach a command. */
     if (pathname === "/terminal/panes/focus" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { sessionId?: unknown; windowId?: unknown; paneId?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const ok = focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
@@ -2709,7 +2728,7 @@ const server = Bun.serve<WsData>({
       });
     }
     if (pathname === "/chat/send" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       // The launch, not the turn. chatSend returns a stream rather than an
@@ -2742,7 +2761,7 @@ const server = Bun.serve<WsData>({
     // pane with `--resume`. Without this the ~380MB sits there until the idle
     // sweeper notices, half an hour after you said you were done with it.
     if (pathname === "/chat/pane/close" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       const id = typeof b.session === "string" ? b.session : "";
@@ -2761,7 +2780,7 @@ const server = Bun.serve<WsData>({
      * "done".
      */
     if (pathname === "/chat/pane/pin" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       const id = typeof b.session === "string" ? b.session : "";
@@ -2804,7 +2823,7 @@ const server = Bun.serve<WsData>({
     // needs, and sending them here beats telling someone to open a terminal to
     // move a cursor one step.
     if (pathname === "/chat/pane/key" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       const id = typeof b.session === "string" ? b.session : "";
@@ -2833,7 +2852,7 @@ const server = Bun.serve<WsData>({
       return json({ enabled: CODEX_ENABLED, bypass: CODEX_BYPASS_ALLOWED, models: CODEX_ENABLED ? codexModels() : [] });
     }
     if (pathname === "/codex/send" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       // Same reasoning as /chat/send: the launch is the auditable fact, not the
@@ -2860,7 +2879,7 @@ const server = Bun.serve<WsData>({
       return json({ enabled: ANTIGRAVITY_ENABLED, bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED ? await antigravityModels() : [] });
     }
     if (pathname === "/antigravity/send" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       noteAction(clientIp, "/antigravity/send",
