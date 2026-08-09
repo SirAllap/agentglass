@@ -164,7 +164,10 @@ function SetupCard({ title, steps, note, error }: {
             </span>
             <span className="min-w-0">
               <span className="block text-[13px]" style={{ color: "var(--text)" }}>{st.title}</span>
-              {st.detail && <span className="block text-[12px] t-dim mt-0.5">{st.detail}</span>}
+              {/* mt-1 for the same reason as SettingRow's hint: 2px under
+                  13.5px type reads as one paragraph, not as a label and its
+                  detail. */}
+              {st.detail && <span className="block text-[12px] t-dim mt-1">{st.detail}</span>}
             </span>
             <span className="justify-self-end">
               {st.action

@@ -309,7 +309,10 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
         {/* The dot carries the state as colour; this says which one, because
             "finished" and "stuck, needs you" are the same glance otherwise and
             they want opposite reactions from you. */}
-        <div className="flex items-center gap-1.5 min-w-0">
+        {/* mt-1.5: the repo line sat flush against the chat's title at 0px, so
+            a card read as one wrapped sentence rather than a name and where it
+            runs. Same pair and same step as the changed-file rows. */}
+        <div className="flex items-center gap-1.5 min-w-0 mt-1.5">
           <span className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "No repo"}</span>
           {chat.sending
             ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>· Running</span>

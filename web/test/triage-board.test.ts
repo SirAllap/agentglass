@@ -377,3 +377,90 @@ describe("the lane headings line up", () => {
     for (const l of LANES) expect(html).toContain(l.why);
   });
 });
+
+describe("the card carries the suite as a bar", () => {
+  /*
+   * "6/14" and "13/14" are the same shape at ten pixels — a board built for a
+   * glance was asking you to read two numbers and divide. What is asserted is
+   * the WIDTH, because the width is the claim: a bar that does not move with
+   * the rollup is worse than no bar, since it looks like an answer.
+   */
+  const width = (html: string, n: number): string | null => {
+    const card = html.slice(html.indexOf(`data-pr="${n}"`));
+    return card.match(/width:\s*([0-9]+%)/)?.[1] ?? null;
+  };
+
+  it("fills by what has reported, not by what passed", () => {
+    // 6 in of 14, nothing red: 43%. A run half in looks half in.
+    const html = render({ mine: [pr(1, { ok: 6, pend: 8 })] });
+    expect(width(html, 1)).toBe("43%");
+  });
+
+  it("fills a finished red run to the end", () => {
+    // A failure is not an unfinished run. The colour says the verdict; the
+    // length says the progress, and they are two different questions.
+    const html = render({ mine: [pr(2, { ok: 3, fail: 1 })] });
+    expect(width(html, 2)).toBe("100%");
+  });
+
+  it("leaves the track empty when nothing has reported", () => {
+    // Not a hidden bar — that would make the card a different height — and not
+    // a full grey one, which reads as "done".
+    const html = render({ mine: [pr(3, { ok: 0 })] });
+    expect(width(html, 3)).toBe("0%");
+  });
+
+  it("still says the verdict in words", () => {
+    // Colour alone cannot say "red" to somebody who cannot see red.
+    expect(render({ mine: [pr(4, { ok: 2, fail: 1 })] })).toContain("1 failing");
+    expect(render({ mine: [pr(5, { ok: 6, pend: 8 })] })).toContain("6 of 14 in");
+  });
+});
+
+describe("the pin is a target you can hit", () => {
+  /*
+   * It was a 22px glyph in the bottom corner, under a sentence whose length
+   * decided where it ended up — so it moved between cards, and you aimed at it
+   * rather than hitting it. Asked for explicitly.
+   */
+  const pinBtn = (html: string, n: number): string => {
+    const card = html.slice(html.indexOf(`data-pr="${n}"`));
+    const at = card.indexOf('aria-label="Pin');
+    return card.slice(Math.max(0, at - 400), at + 200);
+  };
+
+  it("is at least 26px square", () => {
+    const b = pinBtn(render({ mine: [pr(1)] }), 1);
+    const w = Number(b.match(/width:\s*([0-9]+)px/)?.[1] ?? 0);
+    const h = Number(b.match(/height:\s*([0-9]+)px/)?.[1] ?? 0);
+    expect(w).toBeGreaterThanOrEqual(26);
+    expect(h).toBeGreaterThanOrEqual(26);
+  });
+
+  it("sits on the title row, where every card has one", () => {
+    // Before the sentence and before the action, so its position cannot depend
+    // on how long either of them is.
+    const html = render({ mine: [pr(1)] });
+    const card = html.slice(html.indexOf('data-pr="1"'));
+    expect(card.indexOf('aria-label="Pin')).toBeLessThan(card.indexOf("↳"));
+  });
+
+  it("says which state it is in for a reader who cannot see the star", () => {
+    expect(render({ mine: [pr(1)], pinned: () => true })).toContain('aria-pressed="true"');
+    expect(render({ mine: [pr(1)], pinned: () => false })).toContain('aria-pressed="false"');
+  });
+});
+
+describe("a long title cannot decide the card's height", () => {
+  it("clamps the title and keeps the whole of it reachable", () => {
+    /*
+     * Reported from a screenshot: a four-line title pushed the state, the
+     * sentence and the button down by two rows, so the cards in one lane were
+     * three different heights and the column could not be read down.
+     */
+    const long = "fix: " + "a very long title that nobody would ever type by hand ".repeat(4);
+    const html = render({ mine: [pr(1, { title: long })] });
+    expect(html).toContain("-webkit-line-clamp:2");
+    expect(html).toContain(long.slice(0, 40)); // still there, still in the title attribute
+  });
+});
