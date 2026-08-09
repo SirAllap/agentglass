@@ -35,12 +35,17 @@ import { sessionTitle } from "../../../shared/sessionTitle.ts";
 import { baseName } from "../../../shared/projectKey.ts";
 import { newsItems, waitingItems } from "../../src/model/nowQueue.ts";
 import { runningAgents, type Doing, type RunningAgent } from "../../src/model/machine.ts";
+import {
+  ageLabel, planState, quotaTone, remainingOf, resetLabel, tightestWindow,
+} from "../../src/model/quota.ts";
 import { ChevronIcon, NowIcon } from "../../src/nav/icons.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { useQueue } from "../../src/state/use-queue.ts";
+import { useUsage } from "../../src/state/use-usage.ts";
 import { Card, Label, Note } from "../../src/ui.tsx";
-import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { C, MONO, RADIUS, SPACE, T, toneColor } from "../../src/theme.ts";
+import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
 
 /** "4m", "2h", "3d" — the age of a thing, in the least space that is honest.
  *  The same shape Now draws its cards with. */
@@ -185,12 +190,144 @@ function AgentRow({ agent, now, onOpen }: {
   );
 }
 
+/** One window, as a bar of what is LEFT of it.
+ *
+ *  Left, not used, and the direction is the whole point: this screen is read on
+ *  the way somewhere to decide whether to start something, and a bar that fills
+ *  up as you work answers the opposite question. A window with nothing left
+ *  draws no bar at all, which is the same rule the desk's meter follows in
+ *  reverse: the one thing this must never overstate is how much you have. */
+function Meter({ label, window: w, now }: {
+  label: string;
+  window: QuotaWindow;
+  now: number;
+}): React.ReactNode {
+  const left = remainingOf(w);
+  const ink = toneColor(quotaTone(w.usedPercent));
+  const resets = resetLabel(w.resetsAt, now);
+  return (
+    <View
+      accessibilityRole="text"
+      accessibilityLabel={`${label}: ${left}% left${resets ? `, resets ${resets}` : ""}`}
+      style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
+    >
+      <Text style={{ color: C.text4, fontSize: T.eyebrow, width: 62 }} numberOfLines={1}>{label}</Text>
+      <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: C.bg, overflow: "hidden" }}>
+        {left > 0 ? (
+          <View style={{ width: `${left}%`, height: "100%", borderRadius: 3, backgroundColor: ink }} />
+        ) : null}
+      </View>
+      <Text style={{
+        color: ink, fontSize: T.small, fontWeight: "600", width: 42, textAlign: "right",
+      }}>{left}%</Text>
+    </View>
+  );
+}
+
+/**
+ * What is left of the plan, above the agents that are spending it.
+ *
+ * The headline is the window closest to running out across every provider, and
+ * it is stated once in full size rather than left for the eye to find among the
+ * bars under it. That is the question the card is here to answer: an agent you
+ * are about to start is stopped by the tightest window, not by the average of
+ * them.
+ *
+ * Four states, all of them said out loud. The expensive one to get wrong is
+ * "could not reach the computer", which must never be drawn as an empty bar: a
+ * phone off the network would otherwise report the plan as spent.
+ */
+function PlanCard({ rows, loaded, error, now }: {
+  rows: ProviderUsage[] | null;
+  loaded: boolean;
+  error: string | null;
+  now: number;
+}): React.ReactNode {
+  const state = planState(loaded, rows);
+  if (state === "loading") return null; // nothing is more honest than nothing, for one poll
+  const top = tightestWindow(rows);
+  // Only worth naming the provider on each bar when more than one is reporting.
+  // On a machine with Claude alone, "Claude · 5h" on every row is one word of
+  // signal and one of furniture.
+  const providers = (rows ?? []).filter((r) => r.available).length;
+
+  return (
+    <Card style={{ gap: SPACE.sm, padding: SPACE.md }}>
+      <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <Label text="Plan left" />
+        <View style={{ flex: 1 }} />
+        {/* The age belongs beside the number it qualifies. The computer holds a
+            reading for fifteen minutes and keeps the last good one for up to a
+            day while the endpoint is rate-limiting, so a stale percentage looks
+            exactly like a live one unless it says so. */}
+        {top ? (
+          <Text style={{ color: C.text4, fontSize: T.eyebrow }}>{ageLabel(top.observedAt, now)}</Text>
+        ) : null}
+      </View>
+
+      {state === "unreachable" ? (
+        <Note>{error ?? "The computer did not answer about the plan."}</Note>
+      ) : null}
+      {state === "empty" ? (
+        <Note>No agent on this computer reports a plan quota.</Note>
+      ) : null}
+
+      {top ? (
+        <View style={{ flexDirection: "row", alignItems: "baseline", gap: SPACE.sm }}>
+          <Text style={{
+            color: toneColor(quotaTone(top.window.usedPercent)),
+            fontSize: 30, fontWeight: "700", lineHeight: 36,
+          }}>{remainingOf(top.window)}%</Text>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={{ color: C.text2, fontSize: T.small }} numberOfLines={1}>
+              left of {top.provider} · {top.window.label}
+            </Text>
+            {top.window.resetsAt ? (
+              <Text style={{ color: C.text4, fontSize: T.eyebrow }} numberOfLines={1}>
+                resets {resetLabel(top.window.resetsAt, now)}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
+      {(rows ?? []).filter((r) => r.available).map((row) => (
+        row.windows.map((w) => (
+          <Meter
+            key={`${row.provider}:${w.label}`}
+            label={providers > 1 ? `${row.label} ${w.label}` : w.label}
+            window={w}
+            now={now}
+          />
+        ))
+      ))}
+
+      {/* Why an unavailable provider is silent HERE, when the desk's panel
+          prints its note.
+          A note is an explanation, and an explanation is only worth the space
+          when it is the answer. With Claude reporting, "No Codex sessions on
+          this machine yet" is two lines of a phone's Home screen spent saying
+          nothing about how much is left, which is the one thing this card is
+          for. With NOTHING reporting, the same sentence is the whole answer,
+          and a card showing a bare heading would look broken instead. */}
+      {!top ? (rows ?? []).filter((r) => !r.available).map((row) => (
+        <Note key={row.provider}>{row.label}: {row.note ?? "No reading."}</Note>
+      )) : null}
+    </Card>
+  );
+}
+
 export default function HomeScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { fleet, live, refresh, host } = useAgentglass();
   const router = useRouter();
   const [pulling, setPulling] = useState(false);
 
+  const usage = useUsage();
+  // Held apart from `usage` itself: the hook hands back a fresh object every
+  // render, so depending on it would rebuild the pull handler on every frame.
+  // `reload` is stable.
+  const reloadUsage = usage.reload;
   const queue = useQueue(fleet);
   const waiting = waitingItems(queue);
   const news = newsItems(queue);
@@ -203,11 +340,15 @@ export default function HomeScreen(): React.ReactNode {
   const onRefresh = useCallback((): void => {
     setPulling(true);
     refresh();
+    // Pulled down means "tell me where things stand", and the plan is part of
+    // that. It mostly costs nothing: the computer answers this one out of a
+    // fifteen-minute cache, which is the whole reason the phone may ask freely.
+    reloadUsage();
     // The refresh is fire-and-forget in the store, so the spinner is on a
     // timer rather than on the request. Lying for 600ms beats plumbing a
     // promise through for a gesture nobody measures.
     setTimeout(() => setPulling(false), 600);
-  }, [refresh]);
+  }, [refresh, reloadUsage]);
 
   return (
     <FlatList
@@ -239,6 +380,11 @@ export default function HomeScreen(): React.ReactNode {
                   : live === "connecting" ? "Reconnecting…" : "Offline"}
             </Text>
           </View>
+          {/* Under the connection line on purpose. Every number in this card is
+              a claim about another computer, and one that has been offline for
+              ten minutes must not present the same screen as one that is
+              connected. */}
+          <PlanCard rows={usage.rows} loaded={usage.loaded} error={usage.error} now={now} />
           <Label text={agents.length ? `On the machine · ${agents.length}` : "On the machine"} />
         </View>
       }
