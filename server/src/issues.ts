@@ -21,7 +21,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, basename } from "node:path";
-import { gh } from "./prs.ts";
+import { gh, ghGraphql } from "./prs.ts";
 import { git, safeAbs } from "./git.ts";
 import { addWorktree, removeWorktree } from "./gitwork.ts";
 import { inScope } from "./config.ts";
@@ -59,6 +59,22 @@ export interface IssueWork {
 }
 
 export type StartMode = "worktree" | "shell" | "claude" | "plan" | "branch";
+
+/**
+ * A pull request that has something to do with an issue.
+ *
+ * `linked` separates the two things GitHub's timeline calls a reference: one
+ * somebody attached to the issue (and which will close it) from a `#123` that
+ * turned up in a body somewhere. See issuePullRequests.
+ */
+export interface IssuePr {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  draft: boolean;
+  linked: boolean;
+}
 
 export interface IssuesReport { ok: boolean; issues: IssueRow[]; error?: string }
 
@@ -224,6 +240,142 @@ export async function issueDetail(rootIn: unknown, numberIn: unknown): Promise<{
   } catch (e) {
     return { ok: false, error: String(e) };
   }
+}
+
+// ---------------------------------------------------------------------------
+// the pull requests an issue produced
+// ---------------------------------------------------------------------------
+
+/*
+ * The other direction of the link the pull-request panel already draws.
+ *
+ * A pull request says which issues it closes — `closingIssuesReferences`, read
+ * in prs.ts and shown as "Merging this closes: #123". Standing on the ISSUE
+ * there was nothing, which is the half you are on when you want to know
+ * whether somebody is already doing this.
+ *
+ * Worth contrasting with the ClickUp version of the same feature, which had to
+ * GUESS: ClickUp's API exposes no link to a pull request, so cardPullRequests
+ * searches GitHub for the card id and hopes the team names its branches after
+ * it. Here the link is a real edge in GitHub's own graph, so nothing is
+ * guessed and nothing depends on a naming convention.
+ *
+ * Two kinds of edge arrive, and they are NOT the same claim:
+ *
+ *   CONNECTED_EVENT        somebody linked this pull request to this issue —
+ *                          a deliberate act, and the one that closes it
+ *   CROSS_REFERENCED_EVENT a pull request mentioned `#123` somewhere. Often
+ *                          "related to", sometimes just a changelog line.
+ *
+ * Reported apart rather than merged, for the reason `stated` exists on a
+ * ClickUp card: a mention shown as "this closes your issue" is a promise
+ * nobody made.
+ *
+ * DISCONNECTED_EVENT is asked for so that unlinking is honoured. The timeline
+ * is a log, not a state — a link that was made and then removed still has its
+ * CONNECTED_EVENT sitting in it forever, so without this an issue keeps
+ * advertising a pull request somebody deliberately detached from it.
+ */
+const ISSUE_PRS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){
+    issue(number:$number){
+      timelineItems(first:100, itemTypes:[CONNECTED_EVENT, DISCONNECTED_EVENT, CROSS_REFERENCED_EVENT]){
+        nodes{
+          __typename
+          ... on ConnectedEvent{ subject{ ... on PullRequest{ number title state url isDraft } } }
+          ... on DisconnectedEvent{ subject{ ... on PullRequest{ number } } }
+          ... on CrossReferencedEvent{ source{ ... on PullRequest{ number title state url isDraft } } }
+        }
+      }
+    }
+  }
+}`;
+
+interface RawPr { number?: number; title?: string; state?: string; url?: string; isDraft?: boolean }
+
+interface IssuePrsAnswer {
+  data?: {
+    repository?: {
+      issue?: {
+        timelineItems?: {
+          nodes?: ({ __typename?: string; subject?: RawPr; source?: RawPr } | null)[];
+        };
+      };
+    };
+  };
+}
+
+export async function issuePullRequests(
+  rootIn: unknown, numberIn: unknown,
+): Promise<{ ok: boolean; prs: IssuePr[]; error?: string }> {
+  const root = safeAbs(rootIn);
+  const number = Number(numberIn);
+  if (!root || !Number.isInteger(number) || number <= 0) return { ok: false, prs: [], error: "invalid request" };
+  if (!inScope(root)) return { ok: false, prs: [], error: "outside the open project" };
+
+  const repo = await repoOf(root);
+  const [owner, name] = (repo ?? "").split("/");
+  if (!owner || !name) return { ok: false, prs: [], error: "no GitHub repository here" };
+
+  const r = await ghGraphql<IssuePrsAnswer>(ISSUE_PRS_QUERY, { owner, name, number });
+  // Null is the transport failing, which is not an issue with no pull
+  // requests. The caller has to be able to tell those apart — see the panel,
+  // where one renders nothing and the other says so.
+  if (!r?.data?.repository?.issue) return { ok: false, prs: [], error: "could not ask GitHub" };
+  return { ok: true, prs: prsFromTimeline(r.data.repository.issue.timelineItems?.nodes ?? []) };
+}
+
+/**
+ * The timeline reduced to a list of pull requests, separated from the fetching.
+ *
+ * Split out because the reduction is the part with rules in it and the fetch is
+ * the part that needs a network: what has to be got right here is which events
+ * outrank which, and none of that has anything to do with HTTP.
+ *
+ * A timeline is a LOG. Every rule below is a consequence of that one fact —
+ * the same pull request can appear several times, in any order, saying
+ * different things each time, and only the sum of them is the truth.
+ */
+export function prsFromTimeline(
+  nodes: ({ __typename?: string; subject?: RawPr; source?: RawPr } | null | undefined)[],
+): IssuePr[] {
+  const out = new Map<number, IssuePr>();
+  const detached = new Set<number>();
+  for (const node of nodes) {
+    if (!node) continue;
+    const raw = node.subject ?? node.source;
+    const n = Number(raw?.number);
+    // A timeline node for an ISSUE rather than a pull request. Cross-references
+    // between issues are ordinary and arrive here as an inline fragment that
+    // matched nothing, so there is no number to read.
+    if (!Number.isInteger(n) || n <= 0) continue;
+    if (node.__typename === "DisconnectedEvent") { detached.add(n); continue; }
+    const linked = node.__typename === "ConnectedEvent";
+    // Re-linking after a detach is a LATER event than the detach, so the last
+    // word wins rather than the first.
+    if (linked) detached.delete(n);
+    // Nothing to show and nowhere to send a click. A disconnect above is still
+    // honoured, because it says something even when the node carries no detail.
+    if (!raw?.url) continue;
+    const had = out.get(n);
+    out.set(n, {
+      number: n,
+      title: String(raw.title ?? ""),
+      state: String(raw.state ?? "").toUpperCase(),
+      url: String(raw.url),
+      draft: raw.isDraft === true,
+      // Once linked, always linked. A pull request that closes an issue and
+      // also mentions it in a comment produces both events, and whichever
+      // happens to come last must not decide the claim.
+      linked: linked || had?.linked === true,
+    });
+  }
+
+  // Linked first, then newest — the one somebody is looking for is the one
+  // that is actually going to close this.
+  return [...out.values()]
+    .filter((p) => !detached.has(p.number))
+    .sort((a, b) => Number(b.linked) - Number(a.linked) || b.number - a.number);
 }
 
 // ------------------------------------------------------------ the writes ----

@@ -58,7 +58,7 @@ const KEEP_RUNNING = new Set<ViewId>(["term", "chat"]);
  */
 
 export function Workspace({
-  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard, prJump, cardJump,
+  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard, prJump, cardJump, issueJump,
 }: {
   view: ViewId;
   onView: (v: ViewId) => void;
@@ -74,6 +74,7 @@ export function Workspace({
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
   /** The same errand the other way round — see lib/openCard.ts. */
   cardJump?: import("../../lib/openCard.ts").CardJump | null;
+  issueJump?: import("../../lib/openIssue.ts").IssueJump | null;
 }) {
   const openChat = useCallback(() => onView("chat"), [onView]);
 
@@ -165,7 +166,7 @@ export function Workspace({
               {v.id === "dash"
                 ? dashboard(active)
                 : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prJump={prJump}
-                    cardJump={cardJump} reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
+                    cardJump={cardJump} issueJump={issueJump} reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
             </div>
           );
         })}
@@ -176,7 +177,7 @@ export function Workspace({
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId, prJump, cardJump }: {
+function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId, prJump, cardJump, issueJump }: {
   id: ViewId; active: boolean;
   openChat: () => void;
   openChatWith: (cwd: string, prompt: string, title: string) => void;
@@ -184,10 +185,11 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
   chatFocusId?: string | null;
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
   cardJump?: import("../../lib/openCard.ts").CardJump | null;
+  issueJump?: import("../../lib/openIssue.ts").IssueJump | null;
 }) {
   switch (id) {
     case "files": return <FilesView active={active} />;
-    case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} cardJump={cardJump} />;
+    case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} cardJump={cardJump} issueJump={issueJump} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
     case "diff": return <DiffView active={active} />;
     case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />;
