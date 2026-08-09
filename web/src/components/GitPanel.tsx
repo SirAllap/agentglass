@@ -6,6 +6,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
+import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
@@ -314,7 +315,7 @@ function dirName(p: string, root: string) {
  */
 const VIEW_KEYS: Record<View, [string, string][]> = {
   changes: [["j/k", "file"], ["space", "stage"], ["x", "discard"], ["`", "tree/flat"], ["-/=", "fold"]],
-  log: [["j/k", "commit"]],
+  log: [["j/k", "commit"], ["c", "pick"], ["right-click", "menu"]],
   // Nothing to steer: the tab is a list of findings and a button per finding.
   tidy: [],
   reflog: [["j/k", "entry"]],
@@ -751,6 +752,17 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [stashes, setStashes] = useState<GitStash[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
   const [tidy, setTidy] = useState<TidyReport | null>(null);
+  /** The right-click menu on a commit row: what was clicked, where. */
+  const [commitMenu, setCommitMenu] = useState<{ hash: string; subject: string; x: number; y: number } | null>(null);
+  /**
+   * Commits picked out of the log for a series cherry-pick — hashes, in the
+   * order the user picked them. Empty when nothing is picked.
+   *
+   * The selection is deliberately not the keyboard cursor: picking a spread of
+   * commits across a long history (or a `-n` staging pass) must survive moving
+   * around and re-reading the log.
+   */
+  const [pickSet, setPickSet] = useState<ReadonlySet<string>>(new Set());
   /** The rescue prompt, and the promise deleteHeldByWorktrees() is parked on
    *  while it is open. Null means no prompt; resolving with null is a cancel. */
   const [rescue, setRescue] = useState<{ reports: WorktreeLeftovers[]; resolve: (v: Map<string, string[]> | null) => void; progress?: string } | null>(null);
@@ -1676,6 +1688,41 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (mode === "hard" && !(await ask({ title: `Hard reset to ${hash}?`, body: "This DISCARDS working-tree changes.", danger: true, confirmLabel: "Reset --hard" }))) return;
     act(() => api.gitReset(root, hash, mode), `reset --${mode} ${hash}`).then((ok) => { if (ok) api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)); });
   };
+  /**
+   * The log's picks, ordered oldest-first as the server replays them.
+   *
+   * The log lists newest at the top, so the pick order (click / `c` order) is
+   * display order; the sequencer applies oldest first, which is the reverse.
+   */
+  const pickedHashes = () => [...pickSet].reverse();
+  const reloadGraph = () => api.gitGraph(root, 500, logScope).then((r) => { setGraph(r.lines); setGraphBranch(r.branch); }).catch(() => {});
+  /**
+   * Cherry-pick the picked commits as ONE sequencer run.
+   *
+   * One run is the point: a conflict pauses the series at the commit that
+   * fought, and continuing replays the rest — where per-commit cherry-picks
+   * would stop each at the same conflict forever. Oldest first, so a series
+   * "replays in order", which is how people read the list.
+   */
+  const runCherryPick = async (noCommit = false) => {
+    const hashes = pickedHashes();
+    if (!hashes.length) return;
+    const how = noCommit ? "staged" : "committed";
+    const ok = await act(() => api.gitCherryPick(root, hashes, noCommit),
+      `cherry-picked ${hashes.length} commit${hashes.length === 1 ? "" : "s"}`,
+      `pick:${hashes.length}`);
+    if (ok) {
+      setPickSet(new Set());
+      reloadGraph();
+    }
+  };
+  /** Right-click → "Cherry-pick" on a single row: same path as the series, with
+   *  a series of one. */
+  const cherryPickOne = async (hash: string, noCommit = false) => {
+    setPickSet(new Set([hash]));
+    setCommitMenu(null);
+    await runCherryPick(noCommit);
+  };
   // base branch
   /** Fetched when a picker opens, not on mount. Depending on the Branches tab
    *  having been visited made the picker useless exactly when you reach for it
@@ -1863,6 +1910,20 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         // remove — both go through the same confirm the buttons use.
         if (k === " ") { e.preventDefault(); rowAction("primary"); }
         else if (lower === "d") { e.preventDefault(); rowAction("delete"); }
+      }
+      else if (view === "log") {
+        // `c` picks the commit under the cursor for a series cherry-pick —
+        // same toggle the mouse does. Nothing else in this view takes a key,
+        // so the bar's hints can claim it without competition.
+        if (lower === "c") {
+          e.preventDefault();
+          const l = graph[rowIdx];
+          if (l?.hash) setPickSet((prev) => {
+            const next = new Set(prev);
+            next.has(l.hash!) ? next.delete(l.hash!) : next.add(l.hash!);
+            return next;
+          });
+        }
       }
       return;
     }
@@ -2656,18 +2717,47 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                       <span className="ml-auto shrink-0 text-[9.5px] tabular-nums t-dim2">{graph.length ? `${graph.filter((l) => l.hash).length} commits` : ""}</span>
                     </div>
+                    {/* The series-cherry-pick action bar: appears when commits
+                        are picked, replaces the row it grew from, and carries
+                        the replay order in its own words — "oldest first" is
+                        the part people second-guess. The keys are what the
+                        picker itself advertised: `c` toggles a row. */}
+                    {pickSet.size > 0 && (
+                      <div className="shrink-0 mx-3 mb-2 px-2.5 py-1.5 rounded-lg flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)" }}>{pickSet.size}</span>
+                        <span className="min-w-0 flex-1 truncate text-[10.5px] t-dim2">cherry-pick: oldest first, one run</span>
+                        <button onClick={() => void runCherryPick()} disabled={busy || !writeEnabled}
+                          className="agx-btn text-[10.5px] px-2.5 py-1 rounded-md font-medium whitespace-nowrap"
+                          style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                          title="Replay the picked commits onto this branch in one run — a conflict pauses the series, and Continue finishes it">
+                          {pending === `pick:${pickSet.size}` ? "picking…" : `cherry-pick ${pickSet.size}`}
+                        </button>
+                        <button onClick={() => void runCherryPick(true)} disabled={busy || !writeEnabled}
+                          className="agx-btn text-[10.5px] px-2 py-1 rounded-md whitespace-nowrap"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                          title="Cherry-pick without committing — the changes land staged, so you can review or amend them first">
+                          stage only
+                        </button>
+                        <button onClick={() => setPickSet(new Set())} disabled={busy} className="text-[10px] px-1.5 py-1 rounded t-dim2" title="Clear the selection">✕</button>
+                      </div>
+                    )}
                   <div onScroll={incGraph.onScroll} className="agx-scroll flex-1 min-h-0 overflow-auto py-1 text-[11.5px]" style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}>
                     {incGraph.rows.map((l, i) => {
                       const isCommit = !!l.hash;
+                      const picked = isCommit && pickSet.has(l.hash!);
                       return (
-                        <div key={i} onClick={isCommit ? () => { setRowIdx(i); openCommit(l.hash!, l.subject || ""); } : undefined}
+                        <div key={i} onClick={isCommit ? () => {
+                          if (pickSet.size > 0 || picked) { setPickSet((prev) => { const next = new Set(prev); next.has(l.hash!) ? next.delete(l.hash!) : next.add(l.hash!); return next; }); return; }
+                          setRowIdx(i); openCommit(l.hash!, l.subject || "");
+                        } : undefined}
                           {...rowProps(i === rowIdx)}
                           className={`flex items-center gap-2 px-3 whitespace-pre ${isCommit ? "cursor-pointer hover:brightness-125" : ""}`}
-                          style={{ lineHeight: "1.55", ...(i === rowIdx ? rowProps(true).style : {}) }}
-                          title={isCommit ? "View this commit's diff" : undefined}
-                          onContextMenu={isCommit ? async (e) => { e.preventDefault(); const m = await askText({ title: `Reset current branch to ${l.hash}`, input: { label: "Mode — soft, mixed or hard", initial: "mixed" }, confirmLabel: "Reset" }); if (m === "soft" || m === "mixed" || m === "hard") resetTo(l.hash!, m); } : undefined}>
+                          style={{ lineHeight: "1.55", ...(i === rowIdx ? rowProps(true).style : {}), ...(picked ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : {}) }}
+                          title={isCommit ? (pickSet.size > 0 ? "Toggle this commit in the cherry-pick series" : "View this commit's diff") : undefined}
+                          onContextMenu={isCommit ? (e) => { e.preventDefault(); setRowIdx(i); setCommitMenu({ hash: l.hash!, subject: l.subject || "", x: e.clientX, y: e.clientY }); } : undefined}>
                           <span style={{ color: "color-mix(in srgb, var(--primary) 75%, var(--text3))" }}>{l.graph}</span>
                           {isCommit && <>
+                            <span className="shrink-0 tabular-nums" style={{ color: picked ? "var(--primary-hover)" : "var(--text3)" }}>{picked ? "●" : ""}</span>
                             <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)" }}>{l.hash}</span>
                             {l.refs && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{l.refs}</span>}
                             <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{l.subject}</span>
@@ -3090,6 +3180,24 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           to — the rail's views are the destinations, this is a detour. */}
       <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
       {rescue && <RescueModal reports={rescue.reports} progress={rescue.progress} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
+      {/* The commit row's right-click menu. The reset it offers is the old
+          right-click, kept under its own heading so the cherry-pick actions
+          can sit above it without either reading as the other. */}
+      {commitMenu && (
+        <ContextMenu x={commitMenu.x} y={commitMenu.y} onClose={() => setCommitMenu(null)}>
+          <MenuItem onClick={() => { const m = commitMenu; setCommitMenu(null); openCommit(m.hash, m.subject); }}>View diff</MenuItem>
+          <MenuItem onClick={() => { navigator.clipboard?.writeText(commitMenu.hash).catch(() => {}); setCommitMenu(null); }}>Copy hash</MenuItem>
+          <MenuItem onClick={() => void cherryPickOne(commitMenu.hash)}>Cherry-pick onto this branch</MenuItem>
+          <MenuItem onClick={() => void cherryPickOne(commitMenu.hash, true)}>Cherry-pick, stage only</MenuItem>
+          <div className="my-0.5 h-px" style={{ background: "color-mix(in srgb, var(--border) 60%, transparent)" }} />
+          <MenuItem danger onClick={() => {
+            const m = commitMenu;
+            setCommitMenu(null);
+            void askText({ title: `Reset current branch to ${m.hash}`, input: { label: "Mode — soft, mixed or hard", initial: "mixed" }, confirmLabel: "Reset" })
+              .then((mode) => { if (mode === "soft" || mode === "mixed" || mode === "hard") resetTo(m.hash, mode); });
+          }}>Reset here…</MenuItem>
+        </ContextMenu>
+      )}
       {dialog}
     </div>
   );
