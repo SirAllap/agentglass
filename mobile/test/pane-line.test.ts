@@ -129,21 +129,48 @@ let server: ReturnType<typeof Bun.serve> | null = null;
 let cdp: Cdp | null = null;
 let profile = "";
 
+/** How many reports the page had already sent when the last `feed` went in. */
+let before = 0;
+
+const LINES = `(window.__agx || []).filter(function (m) { return m.t === 'line'; })`;
+
 /** Bytes as the pane would send them, base64 the way the socket delivers them. */
 const feed = async (bytes: string): Promise<void> => {
+  before = (await cdp!.value<number>(`${LINES}.length`)) ?? 0;
   const b64 = Buffer.from(bytes, "utf8").toString("base64");
   await cdp!.value(`window.AGX.write(${JSON.stringify(b64)}), 1`);
 };
 
-/** What the page last said is being typed. `undefined` if it never said. */
+/**
+ * What the page said is being typed, AFTER the feed that preceded this call.
+ *
+ * This used to be `await Bun.sleep(260)` and a read — 260ms being "longer than
+ * the page's own 90ms settle". A fixed sleep is not a synchronisation
+ * primitive, and on a GitHub runner the first report arrived later than that:
+ * `Expected: "hola como vas bien" / Received: undefined`, one test red out of
+ * 398 with the engine loaded and every later test in the same file green,
+ * because by then there was an older message for the read to return. The same
+ * race was live in every one of these assertions; the first one is simply the
+ * only one with nothing stale to fall back on.
+ *
+ * So it waits for a report the page had not sent yet, rather than for a period
+ * of time. The count is taken in `feed`, which is the only thing that makes the
+ * page speak, so the pair cannot drift.
+ *
+ * The ceiling is a real answer and not a failure: if the page decides a redraw
+ * changed nothing it sends nothing, and the last thing it said is what it
+ * thinks. `undefined` when it has never said anything at all.
+ */
 const reported = async (): Promise<string | null | undefined> => {
-  // Longer than the page's own 90ms settle, which exists so a redraw storm
-  // collapses into one message rather than one per frame.
-  await Bun.sleep(260);
-  return cdp!.value<string | null | undefined>(`(function () {
-    var seen = (window.__agx || []).filter(function (m) { return m.t === 'line'; });
-    return seen.length ? seen[seen.length - 1].text : undefined;
-  })()`);
+  const deadline = Date.now() + 4_000;
+  for (;;) {
+    const n = (await cdp!.value<number>(`${LINES}.length`)) ?? 0;
+    if (n > before || Date.now() > deadline) {
+      return cdp!.value<string | null | undefined>(
+        `(function () { var seen = ${LINES}; return seen.length ? seen[seen.length - 1].text : undefined; })()`);
+    }
+    await Bun.sleep(40);
+  }
 };
 
 beforeAll(async () => {
