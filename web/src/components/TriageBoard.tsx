@@ -429,6 +429,15 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
   const task = taskLink(p, hasTaskProvider);
   const tint = c.pending > 0 ? "var(--warning)" : c.verdict === "red" ? "var(--error)"
     : c.verdict === "green" ? "var(--success)" : "var(--text4)";
+  /*
+   * How much of the suite has reported, as a percentage of the bar.
+   *
+   * Everything that has an answer counts, failures included: a red run that
+   * finished is a finished run, and drawing it half full would say "still
+   * going". `total` can be 0 — nothing has reported at all, which is an empty
+   * track rather than a full one.
+   */
+  const done = c.total > 0 ? Math.round(((c.total - c.pending) / c.total) * 100) : 0;
   return (
     /* `data-pr` because a card is the unit anything outside this file counts —
        a test asking how many landed in a lane, a probe asking which column it
@@ -441,49 +450,105 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         background: "var(--bg2)",
         boxShadow: cursor ? "inset 2px 0 0 var(--primary)" : undefined,
       }}>
+      {/*
+       * Title first, and the pin beside it.
+       *
+       * The pin used to be a 22px glyph in the bottom corner, which is a
+       * target you aim at rather than one you hit — and it sat under a
+       * sentence whose length decided where it ended up, so it moved between
+       * cards. It is 26px now, in the one place every card has in common, and
+       * the whole square is the button rather than the star inside it.
+       */}
       <div className="flex gap-1.5 items-start text-[11.5px]" style={{ color: "var(--text)" }}>
         <span className="shrink-0 pt-px text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>#{p.number}</span>
-        <span className="min-w-0">{p.title}</span>
+        {/* Two lines, then an ellipsis. A four-line title used to push the
+            state, the sentence and the button down by two rows, so a lane of
+            long titles was a lane you had to scroll — and the cards stopped
+            being the same shape, which is what made the column hard to read
+            down. The whole title is on the card's own tooltip. */}
+        <span className="min-w-0 flex-1" title={p.title}
+          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
+          {p.title}
+        </span>
+        <button onClick={(e) => { e.stopPropagation(); onPin(); }}
+          title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
+          aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
+          aria-pressed={pinned}
+          className="agx-btn shrink-0 -mt-0.5 -mr-0.5 grid place-items-center rounded-md"
+          style={{ width: 26, height: 26, fontSize: 15, lineHeight: 1,
+            color: pinned ? "var(--primary-hover)" : "var(--text3)",
+            border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "1px solid transparent",
+            background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+          {pinned ? "★" : "☆"}
+        </button>
+      </div>
+
+      {/*
+       * The suite as a bar, not as a word.
+       *
+       * "6/14" and "13/14" are the same shape at ten pixels and read as the
+       * same thing at a glance, which is exactly the glance this board is
+       * for. The bar is filled by what has reported: a suite half in looks
+       * half in. Red fills whatever got that far rather than filling to the
+       * end, because a failure is not a finished run — the colour says the
+       * verdict and the length says the progress, and they are two different
+       * questions.
+       *
+       * Nothing has reported: an empty track. Not a hidden bar, which would
+       * make the card a different height, and not a full grey one, which
+       * would read as "done".
+       */}
+      <div className="mt-1.5 rounded-full overflow-hidden" style={{ height: 3, background: "color-mix(in srgb, var(--text) 12%, transparent)" }}>
+        <span className="block h-full rounded-full" style={{ width: `${done}%`, background: tint, transition: "width .25s" }} />
       </div>
 
       <div className="flex items-center gap-1.5 mt-1 text-[10px]" style={{ color: "var(--text3)" }}>
-        <span className="truncate" style={{ maxWidth: 110 }}>{p.author}</span>
-        <span style={{ color: "var(--text4)" }}>·</span>
-        <span className="tabular-nums">{ago(p.updatedAt)}</span>
+        {/* The verdict in words, in the bar's own colour — colour alone cannot
+            say "red" to somebody who cannot see red. */}
+        <span className="shrink-0 tabular-nums" style={{ color: tint }}>
+          {c.pending > 0 ? `${c.success} of ${c.total} in` : c.verdict === "red" ? `${c.failure} failing`
+            : c.total === 0 ? "no checks" : "green"}
+        </span>
+        <span style={{ color: "var(--text4)" }}>→</span>
+        {/* Where it lands, tinted when it is not the trunk — a stacked pull
+            request read as a trunk one is a mistake you make once. */}
+        <span className="truncate" style={{ maxWidth: 90, color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
         <span className="ml-auto tabular-nums shrink-0" style={{ color: "var(--text4)" }}>
           +{p.additions} −{p.deletions} · {p.changedFiles}f
         </span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1 mt-1 text-[9.5px]" style={{ color: "var(--text3)" }}>
-        <span className="inline-flex items-center gap-1">
-          <span className="inline-block rounded-full shrink-0" style={{ width: 6, height: 6, background: tint }} />
-          {c.pending > 0 ? `${c.success}/${c.total}` : c.verdict === "red" ? `${c.failure} failing`
-            : c.total === 0 ? "no checks" : "green"}
+      <div className="flex items-center gap-1.5 mt-1 text-[10px]" style={{ color: "var(--text3)" }}>
+        <span className="truncate" style={{ maxWidth: 110 }}>{p.author}</span>
+        <span style={{ color: "var(--text4)" }}>·</span>
+        <span className="tabular-nums shrink-0">{ago(p.updatedAt)}</span>
+        {/* Everything that is only sometimes true, on the line that is allowed
+            to be empty. A card with none of these keeps its shape. */}
+        <span className="flex items-center gap-1 min-w-0 text-[9.5px] ml-1">
+          {p.isCurrentBranch && <Tag tint="var(--primary)">here</Tag>}
+          {p.isDraft && <Tag>draft</Tag>}
+          {task && <Tag tint="var(--accent, var(--primary))" title={taskLinkTitle(task)}>{task.label}</Tag>}
+          {p.labels.slice(0, 1).map((l) => <Tag key={l.name}>{l.name}</Tag>)}
+          {p.labels.length > 1 && <span title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 1}</span>}
         </span>
-        {/* Where it lands, tinted when it is not the trunk — a stacked pull
-            request read as a trunk one is a mistake you make once. */}
-        <span style={{ color: "var(--text4)" }}>→</span>
-        <span style={{ color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
-        {p.isCurrentBranch && <Tag tint="var(--primary)">here</Tag>}
-        {p.isDraft && <Tag>draft</Tag>}
-        {/* The work item, whoever tracks it — absent entirely when nothing
-            does. See taskLink.ts. */}
-        {task && <Tag tint="var(--accent, var(--primary))" title={taskLinkTitle(task)}>{task.label}</Tag>}
-        {p.labels.slice(0, 1).map((l) => <Tag key={l.name}>{l.name}</Tag>)}
-        {p.labels.length > 1 && <span title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 1}</span>}
         {!!p.reviewers?.length && (
-          <span className="ml-auto shrink-0" title={`Reviewers: ${p.reviewers.map((r) => r.login).join(", ")}`}>
+          <span className="ml-auto shrink-0 text-[9.5px]" title={`Reviewers: ${p.reviewers.map((r) => r.login).join(", ")}`}>
             {p.reviewers.slice(0, 3).map((r) => r.login.slice(0, 2).toUpperCase()).join(" ")}
           </span>
         )}
       </div>
 
       {/* The sentence that put it in this lane. Without it a board is a list
-          whose order you have to re-derive every morning. */}
+          whose order you have to re-derive every morning. Two lines, like the
+          title: the longest of these runs to four on a narrow lane, and a card
+          whose height is decided by a sentence cannot be scanned beside one
+          whose sentence is short. */}
       <div className="flex gap-1.5 mt-1.5 text-[10.5px] leading-snug" style={{ color: "var(--text3)" }}>
         <span className="shrink-0" style={{ color: "var(--text4)" }}>↳</span>
-        <span>{p.filed.reason}</span>
+        <span title={p.filed.reason}
+          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
+          {p.filed.reason}
+        </span>
       </div>
 
       <div className="flex items-center gap-1.5 mt-1.5">
@@ -495,13 +560,6 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
             ? { background: "var(--primary)", color: "var(--bg)", fontWeight: 500 }
             : { color: "var(--text2)", border: edge(20) }}>
           {ACTION_LABEL[act]}
-        </button>
-        <button onClick={(e) => { e.stopPropagation(); onPin(); }}
-          title={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
-          aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
-          className="ml-auto grid place-items-center rounded"
-          style={{ width: 22, height: 22, fontSize: 15, color: pinned ? "var(--primary-hover)" : "var(--text3)" }}>
-          {pinned ? "★" : "☆"}
         </button>
       </div>
     </div>
