@@ -1723,6 +1723,24 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     setCommitMenu(null);
     await runCherryPick(noCommit);
   };
+  /**
+   * Revert one commit from the row menu: a new commit undoing it. A conflict
+   * pauses as `reverting`, which the existing conflict screen already handles
+   * (its continue/abort branch on that state).
+   */
+  const revertOne = async (hash: string) => {
+    setCommitMenu(null);
+    if (await act(() => api.gitRevert(root, hash), "reverted", "revert")) reloadGraph();
+  };
+  /** Fold the picked commits into one, tree preserved. Oldest..newest must run
+   *  to the tip — the server verifies; the panel just sends the span. */
+  const squashPicked = async () => {
+    const hashes = pickedHashes();
+    if (hashes.length < 2) { flash(false, "Pick two or more consecutive commits ending at the tip to squash"); return; }
+    const ok = await act(() => api.gitSquash(root, hashes[0], hashes[hashes.length - 1]),
+      `squashed ${hashes.length} commits`, "squash");
+    if (ok) { setPickSet(new Set()); reloadGraph(); }
+  };
   // base branch
   /** Fetched when a picker opens, not on mount. Depending on the Branches tab
    *  having been visited made the picker useless exactly when you reach for it
@@ -2738,6 +2756,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           title="Cherry-pick without committing — the changes land staged, so you can review or amend them first">
                           stage only
                         </button>
+                        {pickSet.size >= 2 && (
+                          <button onClick={() => void squashPicked()} disabled={busy || !writeEnabled}
+                            className="agx-btn text-[10.5px] px-2 py-1 rounded-md whitespace-nowrap"
+                            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                            title="Fold the picked commits into one, tree preserved. Must be a consecutive run ending at the tip of this branch.">
+                            squash {pickSet.size}
+                          </button>
+                        )}
                         <button onClick={() => setPickSet(new Set())} disabled={busy} className="text-[10px] px-1.5 py-1 rounded t-dim2" title="Clear the selection">✕</button>
                       </div>
                     )}
@@ -3189,6 +3215,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           <MenuItem onClick={() => { navigator.clipboard?.writeText(commitMenu.hash).catch(() => {}); setCommitMenu(null); }}>Copy hash</MenuItem>
           <MenuItem onClick={() => void cherryPickOne(commitMenu.hash)}>Cherry-pick onto this branch</MenuItem>
           <MenuItem onClick={() => void cherryPickOne(commitMenu.hash, true)}>Cherry-pick, stage only</MenuItem>
+          <MenuItem onClick={() => void revertOne(commitMenu.hash)}>Revert (new commit undoing it)</MenuItem>
           <div className="my-0.5 h-px" style={{ background: "color-mix(in srgb, var(--border) 60%, transparent)" }} />
           <MenuItem danger onClick={() => {
             const m = commitMenu;

@@ -1428,6 +1428,93 @@ export function cherryPickAbort(rootIn: unknown): GitActionResult {
 }
 
 /**
+ * Undo a commit with a new commit, keeping history.
+ *
+ * The conflict path rides the existing machinery exactly as cherry-picks do:
+ * `treeState()` reports `reverting`, `mergeAbort()` runs `git revert --abort`,
+ * and `mergeContinue()` commits the staged resolution with `--no-edit`.
+ * `--no-edit` on the way in too: the panel has no message editor for a revert,
+ * and an interactive editor opening out of a web request is a hang.
+ */
+export function revertCommit(rootIn: unknown, hashIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const hash = typeof hashIn === "string" && validHash(hashIn) ? hashIn : "";
+  if (!hash) return { ok: false, error: "no valid commit hash to revert" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before reverting` };
+  return run(root, ["-c", "core.editor=true", "revert", "--no-edit", hash]);
+}
+
+/**
+ * Fold the staged changes into the previous commit.
+ *
+ * Refuses while anything else is in progress, and requires the working tree to
+ * be clean besides what is staged — `--amend` with stray unstaged changes would
+ * silently leave them out of the commit they look like they belong to.
+ */
+export function amendCommit(rootIn: unknown, titleIn: unknown, bodyIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const title = typeof titleIn === "string" ? titleIn.trim() : "";
+  if (!title) return { ok: false, error: "commit title required" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before amending` };
+  const staged = git(root, ["diff", "--cached", "--name-only"]).stdout.trim();
+  const stray = git(root, ["diff", "--name-only"]).stdout.trim();
+  if (!staged && !stray) return { ok: false, error: "nothing staged to amend" };
+  // Checked before the "nothing staged" branch above can hide it: a tree with
+  // only unstaged changes must not be told to stage before being told it is
+  // about to lose them.
+  if (stray) return { ok: false, error: `unstaged changes in ${stray.split("\n")[0]} — stage or discard them first, or the amend will silently drop them` };
+  const args = ["commit", "--amend", "-m", title];
+  const body = typeof bodyIn === "string" ? bodyIn.trim() : "";
+  if (body) args.push("-m", body);
+  return run(root, args);
+}
+
+/**
+ * Fold a contiguous run of commits into one, tree preserved.
+ *
+ * Soft-reset to just before the oldest picked commit, then a single commit.
+ * The old tip is left in ORIG_HEAD, which is the undo point the panel can offer
+ * ("I meant to keep three commits"). `oldest`/`newest` are the span's ends; the
+ * whole range is verified contiguous BEFORE anything moves, so a gap cannot
+ * silently swallow commits that were never picked.
+ */
+export function squashCommits(rootIn: unknown, oldestIn: unknown, newestIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const oldest = typeof oldestIn === "string" && validHash(oldestIn) ? oldestIn : "";
+  const newest = typeof newestIn === "string" && validHash(newestIn) ? newestIn : "";
+  if (!oldest || !newest) return { ok: false, error: "no valid commit hashes to squash" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before squashing` };
+  // The picked range must sit at the tip of this branch and be contiguous.
+  if (git(root, ["merge-base", "--is-ancestor", newest, "HEAD"]).code !== 0)
+    return { ok: false, error: `${newest} is not in this branch's history — squash only commits on the current branch` };
+  const count = git(root, ["rev-list", "--count", `${oldest}^..${newest}`]).stdout.trim();
+  const span = git(root, ["rev-list", "--count", `${oldest}^..HEAD`]).stdout.trim();
+  if (count !== span) return { ok: false, error: `${oldest}..${newest} is not a contiguous run to HEAD — pick a consecutive span ending at the tip` };
+  const msg = git(root, ["log", "-1", "--format=%s", newest]).stdout.trim();
+  const headBefore = git(root, ["rev-parse", "HEAD"]).stdout.trim();
+  // Two steps, each observable: the soft reset stops with the tree intact and
+  // everything the run touched staged, so a failure cannot lose work — the
+  // index is the squash's contents either way.
+  const reset = run(root, ["reset", "--soft", `${oldest}^`]);
+  if (!reset.ok) return reset;
+  const commit = run(root, ["commit", "-m", `squash! ${msg}`]);
+  if (!commit.ok) return { ...commit, error: `${commit.error} — the changes are staged at ${oldest}^; commit them to finish the squash` };
+  const undone = git(root, ["rev-parse", "ORIG_HEAD"]).stdout.trim();
+  if (undone !== headBefore) {
+    // Should not happen: reset --soft writes ORIG_HEAD. Refuse silently losing
+    // the tip rather than claim a clean squash.
+    return { ok: false, error: `squash completed but the undo point is missing — the old tip was ${headBefore}` };
+  }
+  return { ...commit, output: `${commit.output} — old tip saved at ORIG_HEAD (${headBefore.slice(0, 7)})` };
+}
+
+/**
  * `git log --graph` rendered to rows: the graph glyphs plus commit fields
  * (graph-only connector rows carry just `graph`).
  *
@@ -1869,6 +1956,7 @@ export function mergeContinue(rootIn: unknown, anywayIn?: unknown): GitActionRes
   const state = treeState(root);
   const r = state === "rebasing" ? run(root, ["-c", "core.editor=true", "rebase", "--continue"])
     : state === "cherry-picking" ? run(root, ["-c", "core.editor=true", "cherry-pick", "--continue"])
+    : state === "reverting" ? run(root, ["-c", "core.editor=true", "revert", "--continue"])
     // `merge --continue` needs an editor; --no-edit keeps git's own message.
     : run(root, ["commit", "--no-edit"]);
 

@@ -467,6 +467,12 @@ const realApi = {
       headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify(payload),
     }).then((r) => r.json() as Promise<CommitResult>),
+  gitAmend: (payload: { root: string; files: string[]; title: string; body: string }) =>
+    fetch(SERVER + "/git/amend", {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(payload),
+    }).then((r) => r.json() as Promise<CommitResult>),
   walkthrough: (files: WalkthroughInputFile[]) =>
     fetch(SERVER + "/walkthrough", {
       method: "POST",
@@ -625,6 +631,14 @@ const realApi = {
   gitCherryPick: (root: string, hashes: string[], noCommit?: boolean) => post<GitActionResult>("/git/cherry-pick", { root, hashes, noCommit }),
   gitCherryPickContinue: (root: string) => post<GitActionResult>("/git/cherry-pick-continue", { root }),
   gitCherryPickAbort: (root: string) => post<GitActionResult>("/git/cherry-pick-abort", { root }),
+  /** A new commit undoing the picked one, `--no-edit` so nothing opens. */
+  gitRevert: (root: string, hash: string) => post<GitActionResult>("/git/revert", { root, hash }),
+  /** Fold the staged changes into the previous commit. */
+  /** Fold the staged changes into the previous commit — the Source Control
+   *  composer's variant, which amends the index as it stands. */
+  gitAmendStaged: (root: string, title: string, body: string) => post<GitActionResult>("/git/amend-staged", { root, title, body }),
+  /** Fold a contiguous tip-span into one commit; ORIG_HEAD is the undo point. */
+  gitSquash: (root: string, oldest: string, newest: string) => post<GitActionResult>("/git/squash", { root, oldest, newest }),
   // --- live docker panel (lazydocker-style) ---
   /** Installed / daemon-down / OK — so the panel can show install guidance for a
    *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
@@ -1071,6 +1085,7 @@ const demoApi: typeof realApi = {
   gateDecide: (id: string) => D(demo.gateDecide(id)),
   gitStatus: (_paths: string[]) => D(demo.gitStatus()),
   gitCommit: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),
+  gitAmend: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),
   walkthrough: (files: WalkthroughInputFile[]) => D(demo.walkthrough(files)),
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
@@ -1160,6 +1175,9 @@ const demoApi: typeof realApi = {
   gitCherryPick: (_root: string, _hashes: string[], _noCommit?: boolean) => D(demo.gitActionUnavailable()),
   gitCherryPickContinue: (_root: string) => D(demo.gitActionUnavailable()),
   gitCherryPickAbort: (_root: string) => D(demo.gitActionUnavailable()),
+  gitRevert: (_root: string, _hash: string) => D(demo.gitActionUnavailable()),
+  gitAmendStaged: (_root: string, _title: string, _body: string) => D(demo.gitActionUnavailable()),
+  gitSquash: (_root: string, _oldest: string, _newest: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),

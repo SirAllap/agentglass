@@ -44,7 +44,7 @@ import { askBrowser, browserReadyCount, noteBrowserReady, parseAsk, setBrowserSi
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability, safeAbs as gitSafeAbs } from "./git.ts";
+import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
   workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
@@ -55,6 +55,7 @@ import {
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   cherryPick, cherryPickContinue, cherryPickAbort,
+  revertCommit, amendCommit, squashCommits,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   prepareConflictMerge,
 } from "./gitwork.ts";
@@ -1653,6 +1654,13 @@ const server = Bun.serve<WsData>({
       const res = gitCommit(String(b.root || ""), Array.isArray(b.files) ? b.files : [], String(b.title || ""), String(b.body || ""));
       return json(res, res.ok ? 200 : 400);
     }
+    if (pathname === "/git/amend" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = gitAmend(String(b.root || ""), Array.isArray(b.files) ? b.files : [], String(b.title || ""), String(b.body || ""));
+      return json(res, res.ok ? 200 : 400);
+    }
 
     // --- live git panel (lazygit-style working tree) ---
     // Is git even installed? A plain read like the rest of /git/*, so the
@@ -1999,6 +2007,9 @@ const server = Bun.serve<WsData>({
         case "/git/cherry-pick": res = cherryPick(root, b.hashes, b.noCommit); break;
         case "/git/cherry-pick-continue": res = cherryPickContinue(root); break;
         case "/git/cherry-pick-abort": res = cherryPickAbort(root); break;
+        case "/git/revert": res = revertCommit(root, b.hash); break;
+        case "/git/amend-staged": res = amendCommit(root, b.title, b.body); break;
+        case "/git/squash": res = squashCommits(root, b.oldest, b.newest); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why
