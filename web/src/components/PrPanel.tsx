@@ -2547,7 +2547,29 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             remote, and every worktree of a repo shares that one remote — so the
             picker only ever offered a dozen ways to look at the SAME list. The
             repo name, stated once, is all this header needs. */}
-        {repo && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{repo.nameWithOwner}</span>}
+        {/* The repo name was a label, and a label is the one thing this header
+            had room for that nobody could use. It is the same string either
+            way, so it costs no space to make it the way OUT to the thing it
+            names: the name opens the repository, and `PRs ↗` beside it opens
+            the pull request list — the page somebody looking at this panel is
+            most likely to want, and the one that takes the most clicks to
+            reach from a repository landing page. */}
+        {repo && (
+          <span className="flex items-center gap-1.5 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
+            <button type="button"
+              className="agx-btn truncate rounded px-1 -mx-1"
+              onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}`)}
+              title={`Open ${repo.nameWithOwner} on GitHub`}>
+              {repo.nameWithOwner}
+            </button>
+            <button type="button"
+              className="agx-btn shrink-0 rounded px-1"
+              onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}/pulls`)}
+              title="Open this repository's pull requests on GitHub">
+              PRs ↗
+            </button>
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {toast && <span className="text-[10px] max-w-[380px] truncate" style={{ color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</span>}
           {/* The loud "Loading pull requests…" is for a genuinely empty pane
