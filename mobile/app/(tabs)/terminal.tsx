@@ -1147,6 +1147,33 @@ export default function TerminalScreen(): React.ReactNode {
           </Text>
         </Pressable>
       ) : null}
+      {/*
+        Something this screen was told and has nowhere else to say.
+
+        Reported from QA, and it was the message ABOUT the missing message: the
+        `+`'s deadline fired, the control came back — measured — and the
+        sentence explaining why never appeared anywhere. `error` had exactly one
+        reader, inside the "Nothing open" card, which draws only when NO pane is
+        attached. A pane is attached whenever the `+` can be pressed at all, so
+        every word written here went to a branch that could not be on screen at
+        the same time as the button that wrote it. The server's own refusal —
+        "this terminal is not attached to tmux yet" — was invisible for the same
+        reason and had never been seen either.
+
+        Tap to dismiss. It is the answer to a press, so it belongs to the person
+        who pressed and should go when they have read it, rather than sitting
+        over the pane until something else replaces it.
+      */}
+      {open && error ? (
+        <Pressable
+          onPress={() => setError(null)}
+          accessibilityRole="button"
+          accessibilityLabel={`${error}. Tap to dismiss.`}
+          style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm, backgroundColor: C.bg2 }}
+        >
+          <Text style={{ color: C.error, fontSize: T.eyebrow }}>{error}</Text>
+        </Pressable>
+      ) : null}
       {open && state !== "live" ? (
         <View style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.xs, backgroundColor: C.bg2 }}>
           <Text style={{ color: state === "gone" ? C.error : C.text3, fontSize: T.eyebrow }}>

@@ -331,6 +331,37 @@ describe("a line the field could read but cannot edit", () => {
  * breaks the field that sent it, which is exactly "I press enter, nothing
  * happens, and it works the second time".
  */
+/*
+ * A message with nowhere to appear is not a message.
+ *
+ * Found by QA measuring the `+`'s deadline: the guard released on time and the
+ * sentence saying why never showed up anywhere on screen. `error` had one
+ * reader, inside the "Nothing open" card, which draws only when NO pane is
+ * attached — and a pane is attached whenever the `+` can be pressed. So both
+ * the deadline's words and the server's own "not attached to tmux yet" refusal
+ * were written to a branch that cannot be on screen at the same time as the
+ * button that writes them.
+ */
+describe("where a refusal actually lands", () => {
+  const screen = readFileSync(join(import.meta.dir, "..", "app", "(tabs)", "terminal.tsx"), "utf8");
+
+  test("there is a reader for it while a pane IS open", () => {
+    expect(screen).toContain("{open && error ? (");
+  });
+
+  test("and the empty-state card is no longer the only one", () => {
+    // Two readers, not one: the card for when nothing is attached, and the row
+    // above the key bar for when something is.
+    expect(screen.match(/\{open && error \? \(|tone={error \? "bad" : "quiet"}/g)).toHaveLength(2);
+  });
+
+  test("the deadline writes a sentence, not a code", () => {
+    // Whatever it says has to be readable by somebody holding a phone — this is
+    // the one path where the app is explaining its own silence.
+    expect(screen).toContain('setError("The computer did not answer about the new tab.")');
+  });
+});
+
 describe("what the return key becomes", () => {
   const screen = readFileSync(join(import.meta.dir, "..", "app", "(tabs)", "terminal.tsx"), "utf8");
 
