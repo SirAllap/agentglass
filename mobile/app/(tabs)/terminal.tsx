@@ -362,6 +362,9 @@ export default function TerminalScreen(): React.ReactNode {
    * happened", and the second press opens a second agent.
    */
   const [opening, setOpening] = useState(false);
+  /** The deadline on that spinner. A ref because it is cleared from a callback
+   *  that must not re-run when it changes. */
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * A pane the server has just made for us, which the strip has not caught up
    * with yet.
@@ -396,6 +399,34 @@ export default function TerminalScreen(): React.ReactNode {
     setOpening(true);
     setError(null);
     terminal.current.command({ t: "tmux", cmd: "agent", yolo: true });
+    /*
+     * And a deadline, because a spinner with no way out is worse than a
+     * refusal.
+     *
+     * Reported from QA: the control went to `…` and stayed there, for as long
+     * as anybody watched. The server had returned silently — the frame reached
+     * a guard above this command that answers nothing — and there was no second
+     * writer of `opening`, so the button was dead until the screen remounted.
+     *
+     * That server path is fixed, but it must not be the only thing standing
+     * between a user and a permanent spinner. A socket can also drop between
+     * the send and the reply, and `command()` puts nothing on the wire at all
+     * when the socket is not open, which looks identical from here. So this
+     * ends by itself and says so.
+     *
+     * Eight seconds because the work behind it is `new-window` on a local tmux
+     * — measured in tens of milliseconds — plus however long the phone's radio
+     * takes to carry two small frames. A second would race a sleeping radio; a
+     * minute is a button nobody presses twice.
+     */
+    if (openTimer.current) clearTimeout(openTimer.current);
+    openTimer.current = setTimeout(() => {
+      openTimer.current = null;
+      setOpening((waiting) => {
+        if (waiting) setError("The computer did not answer about the new tab.");
+        return false;
+      });
+    }, 8000);
   }, []);
 
 
@@ -513,6 +544,8 @@ export default function TerminalScreen(): React.ReactNode {
 
   /** What came back from that. Either a pane to go to, or a reason. */
   const onOpened = useCallback((answer: { pane: string } | { error: string }): void => {
+    // The answer landed, so the deadline above has nothing left to say.
+    if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
     setOpening(false);
     if ("error" in answer) { setError(answer.error); return; }
     // Straight there. The pane exists on the machine the moment tmux answers,
