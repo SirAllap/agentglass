@@ -62,7 +62,7 @@ import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { pins, isPinned, togglePin, subscribePins } from "../lib/prPins.ts";
+import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { FileRail } from "./FileRail.tsx";
 
@@ -1063,6 +1063,122 @@ function PrTableHead() {
       <span>Checks</span>
       <span>Updated</span>
       <span />
+    </div>
+  );
+}
+
+/**
+ * The pins, centred on the bar.
+ *
+ * The ones you keep coming back to, one click from wherever you are. This panel
+ * shows one pull request at a time, so moving between two of them was a trip:
+ * back to the list, find it again in a list that reorders itself by activity,
+ * open it — twice a minute while a suite runs, and the row has usually moved
+ * since you last looked.
+ *
+ * It used to be a row of its own under the way back, drawn even when it was
+ * empty so that it could not push the masthead down a second after the detail
+ * landed. In one bar there is nothing to push: an empty capsule can simply not
+ * be there, and the bar it would have sat in is the same height either way. So
+ * the list view gets it too — the jump-list is as useful over a table as it is
+ * over a pull request — and on a machine with nothing pinned neither view pays
+ * anything for it.
+ *
+ * Centred absolutely rather than laid out between its neighbours: the chips on
+ * the left and the Refresh on the right are what the list view draws, and the
+ * capsule must not move them. It also means the pins sit in the same place in
+ * both views, which is the point of putting them in a shared bar at all.
+ */
+function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
+  pinned: Pin[];
+  /** The rollup for a pinned pull request, when the current list happens to
+   *  carry it. A pin from another scope has no state to show and shows none. */
+  pinState: Map<number, PrSummary>;
+  selected: number | null;
+  /** The pull request on screen, when there is one — it gets the pin control.
+   *  Null in the list view, which is why that view is pins-or-nothing. */
+  current: { repo: string; number: number; title: string } | null;
+  onOpen: (n: number) => void;
+}) {
+  // Nothing pinned and nothing to pin: no capsule, no gap where one would be.
+  if (pinned.length === 0 && !current) return null;
+  const currentPinned = !!current && isPinned(current.repo, current.number);
+
+  return (
+    <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"
+      style={{ maxWidth: "40%" }}>
+      <div className="flex items-center gap-1.5 rounded-full pl-2.5 pr-1 py-0.5 min-w-0 overflow-x-auto agx-scroll pointer-events-auto"
+        style={{
+          background: "color-mix(in srgb, var(--bg3) 85%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+        }}>
+        {pinned.length === 0
+          ? <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}>☆ nothing pinned</span>
+          : (
+            <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--text4)" }}>Pinned</span>
+          )}
+        {/*
+         * Two actions on one chip: the number opens it, the × takes it off.
+         * Taking a pin off used to mean opening the pull request first, which
+         * is the trip this bar exists to save. The × is revealed on hover and
+         * held open on the one you are reading, so at rest this is a row of
+         * numbers rather than a row of numbers and crosses. A span rather than
+         * a nested button: a button inside a button is invalid markup and the
+         * inner one stops receiving clicks in some engines.
+         */}
+        {pinned.map((p) => (
+          <span key={p.number}
+            className="group flex items-center gap-1 rounded-full shrink-0 overflow-hidden pl-1.5"
+            style={p.number === selected
+              ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
+              : { border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            {/* A dot, not a coloured number. Colour alone cannot say "green" to
+                somebody who cannot see green, and the same dot is what the rows
+                in the list use — so the bar and the list agree rather than
+                being two vocabularies. */}
+            {(() => {
+              const sum = pinState.get(p.number);
+              if (!sum) return null;
+              const c = sum.checks;
+              const what = c.pending > 0 ? `${c.pending} still running`
+                : c.verdict === "red" ? `${c.failure} failing`
+                : c.verdict === "green" ? "all checks passed"
+                : "nothing has reported";
+              return <Dot tint={stateTint(sum)} title={`#${p.number} — ${what}`} />;
+            })()}
+            <button onClick={() => onOpen(p.number)} title={p.title}
+              className="text-[10px] pr-1 py-px tabular-nums"
+              style={{ color: p.number === selected ? "var(--text)" : "var(--text2)" }}>
+              #{p.number}
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
+              title={`Unpin #${p.number}`}
+              aria-label={`Unpin #${p.number}`}
+              className={`leading-none grid place-items-center ${p.number === selected ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+              style={{ color: "var(--text3)", fontSize: 14, width: 18, height: 18 }}>
+              ×
+            </button>
+          </span>
+        ))}
+        {/* The control sits IN the bar it feeds, so pressing it explains the bar
+            the first time — a pin button somewhere else and a strip of numbers
+            up here are two features until you happen to press one and watch the
+            other change. */}
+        {current && (
+          <button
+            onClick={() => togglePin(current.repo, current.number, current.title)}
+            title={currentPinned
+              ? `#${current.number} is on the bar — click to take it off`
+              : `Keep #${current.number} on this bar, one click away from anywhere in this panel`}
+            className="text-[10px] px-2 py-px rounded-full shrink-0"
+            style={currentPinned
+              ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
+              : { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+            {currentPinned ? "★ Pinned" : `☆ Pin #${current.number}`}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -2607,7 +2723,23 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     <div className="flex flex-col h-full min-h-0">
       <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}{PR_ROW_CSS}</style>
 
-      <div className={viewHeaderClass} style={viewHeaderStyle}>
+      {/*
+       * One bar, where there used to be three.
+       *
+       * Opening a pull request added a "‹ Pull requests · repo · #507" row and
+       * a pinned row under this one, and the two of them cost 70px of the pull
+       * request you had just opened — to say where you were, which the panel
+       * you are looking at already says, and to hold a jump-list that is empty
+       * most of the time. Both fold in here.
+       *
+       * `relative`, because the pinned capsule is centred on the BAR rather
+       * than on the space left over between the chips and the Refresh button.
+       * Those two ends are the ones the list view draws, and they have to stay
+       * where the list puts them: a header that rearranges itself when you
+       * open a card reads as a different screen rather than as the same one,
+       * one level down.
+       */}
+      <div className={`${viewHeaderClass} relative`} style={viewHeaderStyle}>
         <h2 className="sr-only">Pull Requests</h2>
         {/* No repo/worktree picker here: pull requests belong to the GitHub
             remote, and every worktree of a repo shares that one remote — so the
@@ -2641,6 +2773,38 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             ))}
           </span>
         )}
+
+        {/* The way back, and where you are.
+            A page you cannot leave is a trap, and the browser's Back button is
+            not ours to borrow — this panel lives inside an app, not a tab. The
+            repository is NOT repeated here: it is the chip immediately to the
+            left, and it was the widest word in a row that had already said it
+            twice. */}
+        {selected != null && (
+          <>
+            <span className="shrink-0" style={{ width: 1, height: 15, background: "color-mix(in srgb, var(--border) 65%, transparent)" }} />
+            <button onClick={backToList}
+              className="agx-btn inline-flex items-center gap-1.5 shrink-0 text-[10.5px] rounded-md px-1.5 py-0.5"
+              style={{ color: "var(--text3)" }}
+              title="Back to the list">
+              <span aria-hidden>‹</span>
+              <span>Pull requests</span>
+              <span className="tabular-nums" style={{ color: "var(--text2)" }}>· #{selected}</span>
+              {/* What you are reading is the copy from last time, and the real
+                  one is on its way. Said quietly and in passing — the
+                  alternative was an empty pane, which said nothing at all for
+                  a whole second. */}
+              {detailStale && <span className="animate-pulse" style={{ color: "var(--primary)" }}>· refreshing</span>}
+            </button>
+          </>
+        )}
+
+        <PinnedCapsule
+          pinned={pinned} pinState={pinState} selected={selected}
+          current={selected != null && d && repo ? { repo: repo.nameWithOwner, number: d.number, title: d.title } : null}
+          onOpen={openPr}
+        />
+
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {toast && <span className="text-[10px] max-w-[380px] truncate" style={{ color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</span>}
           {/* The loud "Loading pull requests…" is for a genuinely empty pane
@@ -2889,111 +3053,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               />
             </div>
           )}
-          {/* The way back. A page you cannot leave is a trap, and the browser's
-              Back button is not ours to borrow — this panel lives inside an
-              app, not a tab. */}
-          <button onClick={backToList}
-            className="agx-btn flex items-center gap-1.5 px-3 py-1.5 border-b shrink-0 text-[10.5px] self-stretch justify-start"
-            style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
-            <span>‹</span>
-            <span>Pull requests</span>
-            {repo && <span style={{ color: "var(--text3)", opacity: .6 }}>· {repo.nameWithOwner}</span>}
-            {selected != null && <span className="tabular-nums" style={{ color: "var(--text2)" }}>· #{selected}</span>}
-            {/* What you are reading is the copy from last time, and the real one
-                is on its way. Said quietly and in passing — the alternative was
-                an empty pane, which said nothing at all for a whole second. */}
-            {detailStale && <span className="animate-pulse" style={{ color: "var(--primary)" }}>· refreshing</span>}
-          </button>
-          {/*
-            * The ones you keep coming back to, one click from wherever you are.
-            *
-            * This panel shows one pull request at a time, so moving between two
-            * of them was a trip: back to the list, find it again in a list that
-            * reorders itself by activity, open it. Twice a minute while a suite
-            * runs, and the row has usually moved since you last looked.
-            *
-            * Under the way back and above the masthead, which is where it has
-            * always been and where the mockup has it: the "‹ Pull requests ·
-            * repo · #465" row IS this panel's title bar, and the strip of pins
-            * belongs under the title and over the pull request, not over the
-            * exit. Moving it to the very top would put a jump-list above the
-            * way out of the page it jumps within.
-            *
-            * Rendered unconditionally rather than only once there is something
-            * in it: it used to appear when the detail landed, which pushed the
-            * masthead down a row a second after you opened a pull request —
-            * the header moving under a reader who has already started.
-            */}
-          <div className="flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agx-scroll shrink-0"
-            style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
-            <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--text4)" }}>Pinned</span>
-            {pinned.length === 0 && (
-              <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}>nothing yet —</span>
-            )}
-            {/*
-              * Two actions on one chip: the number opens it, the × takes it
-              * off. Asked for — taking a pin off meant opening the pull
-              * request first, which is the trip this bar exists to save.
-              *
-              * The × is revealed on hover and pinned open on the one you are
-              * reading, so the row is a row of numbers at rest rather than a
-              * row of numbers and crosses. A span rather than a nested
-              * button, because a button inside a button is invalid markup
-              * and the inner one stops receiving clicks in some engines.
-              */}
-            {pinned.map((p) => (
-              <span key={p.number}
-                className="group flex items-center gap-1 rounded shrink-0 overflow-hidden pl-1.5"
-                style={p.number === selected
-                  ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-                  : { border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-                {/* A dot, not a coloured number. Colour alone cannot say
-                    "green" to somebody who cannot see green, and the same dot
-                    is what the rows in the list use — so the bar and the list
-                    agree rather than being two vocabularies. */}
-                {(() => {
-                  const sum = pinState.get(p.number);
-                  if (!sum) return null;
-                  const c = sum.checks;
-                  const what = c.pending > 0 ? `${c.pending} still running`
-                    : c.verdict === "red" ? `${c.failure} failing`
-                    : c.verdict === "green" ? "all checks passed"
-                    : "nothing has reported";
-                  return <Dot tint={stateTint(sum)} title={`#${p.number} — ${what}`} />;
-                })()}
-                <button onClick={() => openPr(p.number)} title={p.title}
-                  className="text-[10px] pr-1 py-px tabular-nums"
-                  style={{ color: p.number === selected ? "var(--text)" : "var(--text2)" }}>
-                  #{p.number}
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
-                  title={`Unpin #${p.number}`}
-                  aria-label={`Unpin #${p.number}`}
-                  className={`leading-none grid place-items-center ${p.number === selected ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
-                  style={{ color: "var(--text3)", fontSize: 15, width: 20, height: 20 }}>
-                  ×
-                </button>
-              </span>
-            ))}
-            {/* The control sits IN the bar it feeds, so pressing it explains
-                the bar the first time — a pin button somewhere else and a
-                strip of numbers up here are two features until you happen to
-                press one and watch the other change. */}
-            {selected != null && d && repo && (
-              <button
-                onClick={() => togglePin(repo.nameWithOwner, d.number, d.title)}
-                title={isPinned(repo.nameWithOwner, d.number)
-                  ? `#${d.number} is on the bar — click to take it off`
-                  : `Keep #${d.number} on this bar, one click away from anywhere in this panel`}
-                className="text-[10px] px-1.5 py-px rounded shrink-0 ml-auto"
-                style={isPinned(repo.nameWithOwner, d.number)
-                  ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-                  : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-                {isPinned(repo.nameWithOwner, d.number) ? `★ Pinned` : `☆ Pin #${d.number}`}
-              </button>
-            )}
-          </div>
           {!d ? (
             // An error is a message and belongs at the top where messages go; a
             // wait belongs in the middle of the space it is about to fill.
