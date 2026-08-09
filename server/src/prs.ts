@@ -770,6 +770,9 @@ export function mapSummary(p: any, withChecks: boolean): PrSummary {
   return {
     number: p.number,
     title: p.title || "",
+    // `gh pr list` gives this straight; anything it does not recognise is
+    // UNKNOWN rather than assumed mergeable — see the field's own comment.
+    mergeable: p.mergeable === "CONFLICTING" || p.mergeable === "MERGEABLE" ? p.mergeable : "UNKNOWN",
     author: p.author?.login || "",
     state: (p.state || "OPEN") as PrSummary["state"],
     isDraft: !!p.isDraft,
@@ -862,7 +865,7 @@ const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
 const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
   search(query:$q, type:ISSUE, first:$first, after:$after){
     nodes{ ... on PullRequest {
-      number additions deletions changedFiles reviewDecision
+      number additions deletions changedFiles reviewDecision mergeable
       reviewRequests(first:5){nodes{requestedReviewer{
         ... on User{login}
         ... on Team{name}
@@ -1000,7 +1003,7 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   // row is complete the moment this lands. A PR missing from the answer keeps
   // the first-pass row: `checksLoaded` stays false, the review chip stays off,
   // and the stats stay at zero — all of which read as "not yet", which is true.
-  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" | "reviewDecision" | "reviewers" | "headSha"> };
+  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" | "reviewDecision" | "reviewers" | "headSha" | "mergeable"> };
   const second = new Map<number, SecondPass>();
   for (const n of checksRes?.data?.search?.nodes ?? []) {
     if (!n?.number) continue;
@@ -1021,6 +1024,19 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
            about THIS commit, and a merge sent without it lands on whatever the
            tip is by then. See mergePr's --match-head-commit. */
         headSha: typeof head?.oid === "string" ? head.oid : undefined,
+        /*
+         * Mergeability rides with the checks, in the same node, for the same
+         * reason the head SHA does: the board files a row by what it needs, and
+         * "it conflicts" is a different fact from "a check is red". It used to
+         * live only on `PrDetail`, so the board could not see it and filed a
+         * conflicting pull request as green — which is what it looked like.
+         *
+         * `UNKNOWN` is passed through rather than smoothed to MERGEABLE: GitHub
+         * answers it while it is still working the merge out, and a caller that
+         * cannot tell "no conflict" from "not computed yet" would show a
+         * conflict flashing on and off.
+         */
+        mergeable: n.mergeable === "CONFLICTING" || n.mergeable === "MERGEABLE" ? n.mergeable : "UNKNOWN",
       },
     });
   }

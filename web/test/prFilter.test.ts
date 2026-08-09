@@ -14,6 +14,8 @@ function pr(over: Partial<PrSummary> = {}): PrSummary {
   seq += 1;
   return {
     number: over.number ?? seq,
+    // Defaulted before the spread, so a case can still say CONFLICTING.
+    mergeable: "MERGEABLE",
     title: "a pull request",
     author: "octocat",
     state: "OPEN",

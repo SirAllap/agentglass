@@ -1779,6 +1779,30 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       .then((r) => { if (req === detailReq.current) setConflictFiles(r.ok ? { files: r.conflicts, stale: !!r.stale, resolvedLocally: r.resolvedLocally } : null); })
       .catch(() => { if (req === detailReq.current) setConflictFiles(null); });
   }, [root]);
+
+  /*
+   * Ask GitHub a second time when it says it does not know yet.
+   *
+   * `mergeable` is computed lazily: the first request starts the work and
+   * answers UNKNOWN, and a request a moment later gets the result. Nothing here
+   * asked again, so the panel sat on "GitHub has not finished working it out"
+   * — with no Resolve conflicts button and no conflict in the lane — until the
+   * next poll came round. Reported as the button taking an age to appear on a
+   * pull request that was already conflicting.
+   *
+   * Once, not a loop, and only from UNKNOWN. If the second answer is still
+   * UNKNOWN then GitHub is genuinely busy and the poll is the right pace;
+   * retrying harder would be one request per render on the one field that
+   * costs GitHub work to compute.
+   */
+  const askedAgain = useRef<number | null>(null);
+  useEffect(() => {
+    const n = detail?.number;
+    if (!root || !n || detail?.mergeable !== "UNKNOWN" || askedAgain.current === n) return;
+    askedAgain.current = n;
+    const t = setTimeout(() => { void loadDetailRef.current?.(n); }, 1500);
+    return () => clearTimeout(t);
+  }, [root, detail?.number, detail?.mergeable]);
   loadDetailRef.current = loadDetail;
 
   useEffect(() => {

@@ -145,6 +145,45 @@ describe("the board", () => {
     expect(b.get("land")![0]!.filed.reason).toContain("merge");
   });
 
+describe("a conflict is not a green pull request", () => {
+  /*
+   * The lane called itself "red checks or conflicts" from the day it was
+   * written and only ever tested the checks. Reported from a board showing
+   * "Open, green, and nobody has been asked to look yet" beside GitHub's own
+   * "Merging is blocked — 1 file conflict with main".
+   */
+  it("files a conflicting pull request of yours under blocked, however green", () => {
+    const { lane, reason } = fileInLane(pr({ mergeable: "CONFLICTING" }), MINE);
+    expect(lane).toBe("blocked");
+    expect(reason).toContain("Conflicts");
+  });
+
+  it("never calls a conflicting one ready to land, even approved and green", () => {
+    // The worst case, because that lane's promise is that a press is all that
+    // is missing — and the press fails.
+    const { lane } = fileInLane(pr({ reviewDecision: "APPROVED", mergeable: "CONFLICTING" }), MINE);
+    expect(lane).not.toBe("land");
+  });
+
+  it("keeps a review that was asked of you, and says it conflicts", () => {
+    // Still yours to read; a reviewer who does not know would approve
+    // something that cannot land.
+    const { lane, reason } = fileInLane(pr({ mergeable: "CONFLICTING" }), ASKED);
+    expect(lane).toBe("review");
+    expect(reason).toContain("conflicts");
+  });
+
+  it("files somebody else's conflicting one where it is not your problem", () => {
+    expect(fileInLane(pr({ mergeable: "CONFLICTING" }), NEITHER).lane).toBe("others");
+  });
+
+  it("does NOT treat UNKNOWN as a conflict", () => {
+    // GitHub answers UNKNOWN while it is still working the merge out. Calling
+    // that blocked would flash every fresh pull request through the red lane.
+    expect(fileInLane(pr({ mergeable: "UNKNOWN" }), MINE).lane).toBe("flight");
+  });
+});
+
   it("caps a lane at something that fits on a screen", () => {
     // Forty cards in a column is a scroll inside a scroll — worse than the flat
     // list the board replaced.
