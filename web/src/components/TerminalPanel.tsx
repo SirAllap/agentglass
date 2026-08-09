@@ -6,7 +6,7 @@
 // running job — reopening reattaches to the live session, scrollback intact.
 import { Fragment, useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
-import { subscribeTermIssue, termIssue, clearTermIssue } from "../lib/termIssue.ts";
+import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { dirName } from "../lib/worktree.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
@@ -144,6 +144,14 @@ type Sess = {
   /** A tmux client is running in this shell — the panel hides its own tabs and
    *  split while that's true, since tmux owns those. */
   tmux: boolean;
+  /** The server refused an open and said why. Read once by whoever asked and
+   *  then cleared: it is an answer to a request, not a state of the shell. */
+  openFail?: string | null;
+  /** A one-use agent ticket this pane was created with, spent on first connect.
+   *  Held rather than passed so a reconnect cannot try to spend it twice — the
+   *  server would refuse the second, but a shell that silently became an agent
+   *  on reconnect is worse than either. */
+  agentTicket?: string | null;
   /** tmux's own windows, as tmux reports them. The panel draws these as tabs so
    *  the strip belongs to the app rather than to whatever .tmux.conf this
    *  machine carries; tmux still decides what is in it and which is active. */
@@ -447,7 +455,11 @@ function connect(s: Sess) {
   if (s.ws || IS_DEMO) return;
   s.status = "connecting";
   notify(s);
-  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows));
+  const ticket = s.agentTicket ?? undefined;
+  // Spent here, not on arrival: a reconnect after a drop must open a shell,
+  // not start the agent a second time in the same worktree.
+  s.agentTicket = null;
+  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket));
   ws.binaryType = "arraybuffer";
   s.ws = ws;
   ws.onmessage = (ev) => {
@@ -495,6 +507,12 @@ function connect(s: Sess) {
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
       s.tmuxClient = f.client ?? null;
       s.tmuxPrefix = Array.isArray(f.prefix) ? f.prefix : [];
+      notify(s);
+    } else if (f.t === "openfail") {
+      // Not fatal to the shell — the socket is fine and this pane keeps
+      // working. It is an answer to something that was asked, so it is recorded
+      // for the asker and also written where the person is looking.
+      s.openFail = f.error || "could not open that";
       notify(s);
     } else if (f.t === "exit" || f.t === "fatal") {
       s.status = f.t === "exit" ? "exited" : "error";
@@ -578,7 +596,7 @@ function reconnected(s: Sess) {
 }
 
 /** A brand-new shell for `root`. Repos hold as many as you open. */
-function createSession(root: string): Sess {
+function createSession(root: string, agentTicket?: string): Sess {
   evictLru();
   const tp = termOptions();
   const term = new Terminal({
@@ -710,7 +728,7 @@ function createSession(root: string): Sess {
       .catch(() => { /* no clipboard permission — the menu stayed shut, nothing pasted */ });
   });
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, openFail: null, agentTicket: agentTicket ?? null, tmuxWindows: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     /*
@@ -1317,7 +1335,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const wtSeen = useRef(new Map<string, string>());
   const wtRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [, force] = useReducer((x: number) => x + 1, 0);
+  // The value is used, not just the dispatch: a session is MUTATED in place
+  // and notified through `subs`, so an effect watching `sess.openFail` has no
+  // identity change to fire on. This tick is that change.
+  const [sessTick, force] = useReducer((x: number) => x + 1, 0);
 
   /*
    * Where a new shell opens. Not a choice any more — the open project.
@@ -1676,6 +1697,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // a split you didn't ask for.
   const tmuxActive = !!sess?.tmux;
   const status: SessStatus = sess?.status ?? "idle";
+  /* Whether a request can be SENT at all — a question about the transport.
+     What used to gate these was `tmuxActive`, which is a question about the
+     machine, and answering it in the client is what made six buttons do
+     nothing on every Mac. The server answers the tmux question now. */
+  const socketLive = status === "live";
+  /** The dispatch we are waiting on an answer for, so a refusal can be served
+   *  by the pane path rather than only reported. */
+  const lastIssue = useRef<TermIssue | null>(null);
 
   /*
    * tmux's windows, drawn by us.
@@ -1916,19 +1945,63 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    */
   const review = useSyncExternalStore(subscribeTermReview, termReview, termReview);
   useEffect(() => {
-    if (!review || !tmuxActive) return;
+    if (!review || !socketLive) return;
     tmuxCmd({ cmd: "review", root: review.root, number: review.number });
     clearTermReview();
-  }, [review, tmuxActive, tmuxCmd]);
+  }, [review, socketLive, tmuxCmd]);
 
   /** The same door for starting work on an issue: a worktree the server has
    *  already cut, and a prompt it wrote. Never a command — see termIssue.ts. */
   const issue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
   useEffect(() => {
-    if (!issue || !tmuxActive) return;
+    if (!issue || !socketLive) return;
+    // Remembered before it is sent, because the fallback below needs it and the
+    // slot is cleared here: a second press must not be blocked waiting on the
+    // first one's answer.
+    lastIssue.current = issue;
     tmuxCmd({ cmd: "issue", cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title });
     clearTermIssue();
-  }, [issue, tmuxActive, tmuxCmd]);
+  }, [issue, socketLive, tmuxCmd]);
+
+  /*
+   * The server refused, so open the agent in a pane instead.
+   *
+   * This is the half of the dispatch that did not exist. Both effects above
+   * used to require `tmuxActive`, so on a machine with no tmux client the
+   * request was dropped before it was sent — and `tmuxActive` came from a
+   * detection that read /proc and returned false on every Mac, whatever was
+   * installed. Six buttons, no message, nothing in a log.
+   *
+   * The gate is the SOCKET now, not tmux: whether this can be sent at all is a
+   * question about the transport, and whether tmux can serve it is the server's
+   * to answer — it resolves its own sweep before refusing, so "not looked up
+   * yet" is never mistaken for "no tmux here".
+   *
+   * A refusal is not an error to show and move on from. It is the request
+   * arriving at the other path: a pane, opened in the same worktree, running
+   * the same agent with the same argv.
+   */
+  useEffect(() => {
+    const why = sess?.openFail;
+    if (!why || !sess) return;
+    sess.openFail = null;
+    const want = lastIssue.current;
+    lastIssue.current = null;
+    if (!want) { sess.term.writeln(`\r\n\x1b[33m${why}\x1b[0m`); return; }
+    void (async () => {
+      const r = await api.termAgentTicket(want.cwd, want.agent ? want.prompt : "", !!want.yolo, want.title ?? "")
+        .catch(() => ({ ok: false, error: "could not reach the server" } as { ok: boolean; ticket?: string; error?: string }));
+      if (!r.ok || !r.ticket) {
+        // Said in the terminal the person is looking at, rather than swallowed.
+        // This is the case the audit was about, so it does not get to be quiet.
+        sess.term.writeln(`\r\n\x1b[33mcould not start the agent here: ${r.error ?? "no ticket"}\x1b[0m`);
+        return;
+      }
+      const pane = createSession(want.cwd, r.ticket);
+      setPaneIds((ids) => (ids.length >= 4 ? [...ids.slice(1), pane.id] : [...ids, pane.id]));
+      setFocusIdx((i) => Math.min(i + 1, 3));
+    })();
+  }, [sess, sessTick]);
 
   const addShell = useCallback(() => {
     if (!root || IS_DEMO) return;

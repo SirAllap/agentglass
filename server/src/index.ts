@@ -44,7 +44,7 @@ import { askBrowser, browserReadyCount, noteBrowserReady, parseAsk, setBrowserSi
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability } from "./git.ts";
+import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
   workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
@@ -99,7 +99,8 @@ import {
   branchBehind,
   prBranches, prsForBranch } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
-import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
+import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
+import { mintAgentTicket } from "./agentticket.ts";
 import { listPanes, focusPaneAnywhere, activePane, sweepPinnedWindows, pinnedSockets } from "./tmuxctl.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
@@ -110,7 +111,7 @@ import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, COD
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
+import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
@@ -857,6 +858,10 @@ const server = Bun.serve<WsData>({
         // nothing else — the server looks it up and builds the command, so a
         // socket path can never arrive from a client. See PtyWsData.pane.
         pane: url.searchParams.get("pane") || undefined,
+        // A single-use ticket for an agent to start in this pane, minted at
+        // POST /terminal/agent. An opaque id, never a prompt and never a
+        // command — see PtyWsData.agent.
+        agent: url.searchParams.get("agent") || undefined,
         // Reflow the tmux window to this client instead of keeping the desk's
         // size. A choice the phone makes per connection — see attachArgvFor.
         fit: url.searchParams.get("fit") === "1",
@@ -2729,6 +2734,35 @@ const server = Bun.serve<WsData>({
       return json(ok ? { ok } : { ok, error: "tmux would not go there — the pane may be gone" }, ok ? 200 : 409);
     }
 
+    /*
+     * A ticket for starting an agent in a pane, for a terminal with no tmux.
+     *
+     * POST rather than a query parameter on the socket because what it carries
+     * is a prompt — a card's description, a review brief — which is kilobytes
+     * and does not belong in a URL. The reply is an opaque id the client hands
+     * back when it opens the pane, good once and for a minute.
+     *
+     * The directory is vetted HERE as well as at claim time. A ticket that
+     * cannot be used is better refused at the press, where there is something
+     * on screen to say so, than at the socket, where there is a blank pane.
+     */
+    if (pathname === "/terminal/agent" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { cwd?: unknown; prompt?: unknown; yolo?: unknown; title?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const cwd = gitSafeAbs(b.cwd);
+      if (!cwd || !inScope(cwd) || !fsExists(cwd)) {
+        return json({ ok: false, error: "that directory is not in the open project" }, 400);
+      }
+      const prompt = typeof b.prompt === "string" ? b.prompt : "";
+      // Bypass is a permission, not a parameter: the same gate the chat engines
+      // go through, so a socket cannot buy the flag the config refuses.
+      const yolo = b.yolo === true && chatBypassAllowed();
+      const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title) });
+      return json({ ok: true, ticket: id });
+    }
+
     if (pathname === "/terminal/commands") {
       const root = url.searchParams.get("root") || "";
       return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));
@@ -2876,7 +2910,7 @@ const server = Bun.serve<WsData>({
     // the panel needs both to draw a single dropdown, and asking twice would
     // let it render a model picker for a CLI that turns out not to be there.
     if (pathname === "/codex/enabled") {
-      return json({ enabled: CODEX_ENABLED, bypass: CODEX_BYPASS_ALLOWED, models: CODEX_ENABLED ? codexModels() : [] });
+      return json({ enabled: CODEX_ENABLED(), bypass: CODEX_BYPASS_ALLOWED, models: CODEX_ENABLED() ? codexModels() : [] });
     }
     if (pathname === "/codex/send" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -2903,7 +2937,7 @@ const server = Bun.serve<WsData>({
     // internal schema, so there is nothing here that could be read without
     // guessing at it — see server/src/antigravity.ts.
     if (pathname === "/antigravity/enabled") {
-      return json({ enabled: ANTIGRAVITY_ENABLED, bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED ? await antigravityModels() : [] });
+      return json({ enabled: ANTIGRAVITY_ENABLED(), bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED() ? await antigravityModels() : [] });
     }
     if (pathname === "/antigravity/send" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

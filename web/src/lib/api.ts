@@ -342,8 +342,12 @@ export function adoptServer(next: { origin?: string | null; token?: string | nul
 }
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
-export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false) =>
+export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false, agent?: string) =>
   withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
+    // A single-use ticket for an agent to start in this pane — never the prompt
+    // itself, which is kilobytes and has no business in a URL. See
+    // api.termAgentTicket and the server's agentticket.ts.
+    + (agent ? `&agent=${encodeURIComponent(agent)}` : "")
     // A file to open instead of a shell. A path — the server decides what runs
     // with it, and refuses one outside the open project.
     + (view ? `&view=${encodeURIComponent(view)}` : "")
@@ -753,6 +757,10 @@ const realApi = {
    *  be on screen before it finishes. */
   issuePrs: (root: string, number: number) =>
     get<IssuePrsReport>(`/issues/prs?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Hand the server a prompt and get a ticket to open a pane with. The way a
+   *  terminal with no tmux starts an agent — see server/src/agentticket.ts. */
+  termAgentTicket: (cwd: string, prompt: string, yolo: boolean, title: string) =>
+    post<{ ok: boolean; ticket?: string; error?: string }>("/terminal/agent", { cwd, prompt, yolo, title }),
   /** Everything with a worktree still on disk, so the list can say what is in
    *  progress without asking per row. */
   issuesWork: (repo = "") => get<{ work: IssueWork[] }>(`/issues/work?repo=${encodeURIComponent(repo)}`),
@@ -1322,6 +1330,8 @@ const demoApi: typeof realApi = {
   // No linked pull requests in the demo: the fixtures have no GitHub graph
   // behind them, and an invented link is a link somebody would click.
   issuePrs: (_r: string, _n: number) => D({ ok: true, prs: [] }),
+  termAgentTicket: (_c: string, _p: string, _y: boolean, _t: string) =>
+    D({ ok: false, error: "not available in the demo" }),
   issuesWork: (_repo?: string) => D(demo.issuesWork()),
   issueStart: (_r: string, _n: number, _m: StartMode) => D({ ok: false, error: "not available in the demo" }),
   issueFinish: (_r: string, _n: number, _f?: boolean) => D({ ok: false, error: "not available in the demo" }),

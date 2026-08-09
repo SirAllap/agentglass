@@ -25,7 +25,16 @@ import { startKeepalive, drainStderr, MODEL_RE, SESSION_RE } from "./chat.ts";
 import type { CodexModel, TimelineEntry } from "../../shared/types.ts";
 
 const codexBin = () => Bun.which("codex");
-export const CODEX_ENABLED = !!codexBin() && process.env.AGENTGLASS_CODEX_DISABLED !== "1";
+/*
+ * Resolved per call, not once at import.
+ *
+ * It used to be a constant computed when this module first loaded, so a
+ * `codex` installed while the server was running stayed invisible until a
+ * restart — with nothing on screen to suggest why. remote.ts documents the
+ * same trap with a measurement against a stub that was silently bypassed;
+ * the lesson was learnt there and not here.
+ */
+export const CODEX_ENABLED = (): boolean => !!codexBin() && process.env.AGENTGLASS_CODEX_DISABLED !== "1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",

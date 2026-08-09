@@ -33,7 +33,8 @@
 export type DepPlatform = "linux" | "darwin" | "win32";
 
 export type DepId =
-  | "git" | "claude" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
+  | "git" | "claude" | "codex" | "agy" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
+  | "tailscale"
   | "setsid" | "script" | "ss" | "dbus-monitor" | "notify-send" | "opener" | "pkexec" | "bash";
 
 export interface DepSpec {
@@ -179,6 +180,24 @@ export const DEPS: DepSpec[] = [
     url: "https://neovim.io",
     note: "With any other $EDITOR the app hands you the command to paste instead.",
     pkg: { apt: "neovim", dnf: "neovim", pacman: "neovim", zypper: "neovim", apk: "neovim", brew: "neovim" },
+  },
+  {
+    id: "codex", bin: "codex", title: "Codex CLI", required: false,
+    what: "Runs chats on OpenAI's Codex instead of Claude, as a second engine in the same panel.",
+    url: "https://developers.openai.com/codex/cli",
+    note: "One of three agent CLIs this app can drive. Missing simply means the engine is not offered.",
+  },
+  {
+    id: "agy", bin: "agy", title: "Antigravity CLI", required: false,
+    what: "Runs chats on Antigravity, as a third engine alongside Claude Code and Codex.",
+    url: "https://antigravity.google",
+    note: "Like Codex, its absence removes an option and nothing else.",
+  },
+  {
+    id: "tailscale", bin: "tailscale", title: "Tailscale", required: false,
+    what: "Reaching this dashboard from your phone over your own tailnet, without opening a port.",
+    url: "https://tailscale.com/download",
+    note: "Only needed for remote access. The remote pane reports its absence rather than failing — everything local works without it.",
   },
   {
     id: "setsid", bin: "setsid", title: "setsid (util-linux)", required: false,

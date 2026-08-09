@@ -175,7 +175,7 @@ const REFRESH_TIMEOUT_MS = 60_000;
  * by the number of windows somebody happens to have open.
  */
 export async function refreshCodexUsage(): Promise<{ ok: boolean; error?: string }> {
-  if (!CODEX_ENABLED) return { ok: false, error: "Codex is not available on this machine" };
+  if (!CODEX_ENABLED()) return { ok: false, error: "Codex is not available on this machine" };
   return singleFlight("codex-usage-refresh", async () => {
     // codexModels() is synchronous and already exported (server/src/codex.ts:127).
     const model = usageRefreshModel(codexModels());

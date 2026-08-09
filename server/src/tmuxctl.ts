@@ -23,6 +23,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import type { TmuxWindow, TmuxPane, AgentPane } from "../../shared/types.ts";
 import { parsePanes, PANE_FORMAT } from "./paneloc.ts";
+import { findTmuxBelow } from "./procchildren.ts";
 
 /** How long a tmux call may take before we give up on it. Generous for a local
  *  socket, and short enough that a wedged tmux server cannot stall the poll. */
@@ -72,23 +73,15 @@ export interface TmuxTarget {
  * the user is halfway through typing. `tmux: client` and `tmux: server` both
  * report as `tmux` in comm, but the server is a daemon and never a child of our
  * shell, so anything found here is a client.
+ *
+ * Portable since the dispatch audit. It used to open with
+ * `process.platform !== "linux"`, which made this null on every Mac — right for
+ * the caller that asks "should the panel hide its own tab strip", and wrong for
+ * the one that asks "may I send this pull request to an agent", which silently
+ * dropped the request instead. See procchildren.ts.
  */
 export function tmuxClientPid(pid: number, depth = 0): number | null {
-  if (process.platform !== "linux" || depth > 4) return null;
-  let children: string[];
-  try {
-    // `children` needs CONFIG_PROC_CHILDREN; when absent this reads empty and
-    // we report no tmux, rather than throwing.
-    children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/).filter(Boolean);
-  } catch { return null; }
-  for (const c of children) {
-    let comm: string;
-    try { comm = readFileSync(`/proc/${c}/comm`, "utf8").trim(); } catch { continue; }
-    if (comm === "tmux" || comm.startsWith("tmux")) return Number(c);
-    const deeper = tmuxClientPid(Number(c), depth + 1);
-    if (deeper) return deeper;
-  }
-  return null;
+  return findTmuxBelow(pid, depth);
 }
 
 /** The terminal a process is attached to, as tmux reports it in `client_tty`. */

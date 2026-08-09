@@ -32,7 +32,16 @@ import { startKeepalive, drainStderr, MODEL_RE, SESSION_RE } from "./chat.ts";
 import type { AgentModel, IngestBody } from "../../shared/types.ts";
 
 const agyBin = () => Bun.which("agy");
-export const ANTIGRAVITY_ENABLED = !!agyBin() && process.env.AGENTGLASS_ANTIGRAVITY_DISABLED !== "1";
+/*
+ * Resolved per call, not once at import.
+ *
+ * It used to be a constant computed when this module first loaded, so a
+ * `agy` installed while the server was running stayed invisible until a
+ * restart — with nothing on screen to suggest why. remote.ts documents the
+ * same trap with a measurement against a stub that was silently bypassed;
+ * the lesson was learnt there and not here.
+ */
+export const ANTIGRAVITY_ENABLED = (): boolean => !!agyBin() && process.env.AGENTGLASS_ANTIGRAVITY_DISABLED !== "1";
 
 /** What `source_app` every synthesized event carries.
  *

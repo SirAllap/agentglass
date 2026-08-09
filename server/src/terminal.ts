@@ -118,6 +118,17 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    *  runs; see editorFor. */
   view?: string;
   /**
+   * A ticket for an agent to start in this pane, minted by POST /terminal/agent.
+   *
+   * A ticket rather than the prompt itself, and that is not indirection for its
+   * own sake: the prompt is a card's description or a review brief, which is
+   * kilobytes and has no business in a query string. What the client holds is
+   * an opaque single-use id for text it supplied a moment earlier; the binary
+   * and every flag are chosen by the server, exactly as for `view`. See
+   * agentticket.ts.
+   */
+  agent?: string;
+  /**
    * Open that file for EDITING rather than for reading.
    *
    * Two different intents, and they must not be one flag with a default. Read
@@ -355,10 +366,23 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
+import { findTmuxBelow } from "./procchildren.ts";
 import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
+import { agentArgv, claimAgentTicket } from "./agentticket.ts";
+
+/*
+ * What a client is told when it sends a tmux-shaped request to a terminal with
+ * no tmux in it.
+ *
+ * Said rather than implied: the panel's own answer is to open the agent in a
+ * pane instead (see the `agent` ticket below), so a client reaching this line
+ * is one that could not — an older build, or the phone, which has no pane to
+ * open. Both deserve the reason.
+ */
+const NO_TMUX = "this terminal has no tmux — open the agent in a pane instead, or start tmux here";
 import { applyThemeTo } from "./themesync.ts";
 
 const enc = new TextEncoder();
@@ -399,27 +423,20 @@ const ctl = (ws: PtyWs, frame: PtyServerFrame) => { try { ws.send(JSON.stringify
  * way instead of forcing everyone into tmux, which would be a poor trade for
  * anyone who doesn't use it.
  *
- * Reads /proc rather than asking the shell: the shell is busy being a terminal
- * and injecting a command to interrogate it would echo into whatever the user
- * is typing. Linux-only by design — on anything else the answer is "no" and
- * the panel keeps its own chrome, which is the correct fallback.
+ * Reads the process tree rather than asking the shell: the shell is busy being
+ * a terminal and injecting a command to interrogate it would echo into whatever
+ * the user is typing.
+ *
+ * It used to say "Linux-only by design — on anything else the answer is 'no'
+ * and the panel keeps its own chrome, which is the correct fallback". That was
+ * true of THIS caller and false of the flag's other reader: `tmuxActive` also
+ * gated the dispatch of a pull request or a card to an agent, where "no" was
+ * not a fallback but a button that did nothing, on every Mac. The walk is
+ * portable now (procchildren.ts); this caller's behaviour is unchanged, since
+ * a machine with no tmux still answers no and still keeps its own chrome.
  */
 function tmuxRunning(pid: number, depth = 0): boolean {
-  if (process.platform !== "linux" || depth > 4) return false;
-  let children: string[];
-  try {
-    // `children` needs CONFIG_PROC_CHILDREN; when absent this simply reads
-    // empty and we report no tmux, rather than throwing.
-    children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/).filter(Boolean);
-  } catch { return false; }
-  for (const c of children) {
-    let comm: string;
-    try { comm = readFileSync(`/proc/${c}/comm`, "utf8").trim(); } catch { continue; }
-    // "tmux: client" / "tmux: server" both report as `tmux` in comm.
-    if (comm === "tmux" || comm.startsWith("tmux")) return true;
-    if (tmuxRunning(Number(c), depth + 1)) return true;
-  }
-  return false;
+  return findTmuxBelow(pid, depth) !== null;
 }
 
 /**
@@ -556,8 +573,39 @@ export function ptyOpen(ws: PtyWs) {
     return;
   }
 
+  /*
+   * An agent, in a pane, for a terminal with no tmux.
+   *
+   * The fourth thing a session can be, alongside a shell, a file in an editor
+   * and an existing tmux pane — and it follows the same rule as the other
+   * three: the client names WHAT (a ticket it was given for text it supplied),
+   * and the server decides HOW. The binary and every flag are chosen here.
+   *
+   * The ticket is claimed once, and a claim that fails is not an error: it is a
+   * reload of a page whose ticket has already been spent, or one that sat past
+   * its minute. Falling back to a plain shell in the requested directory is the
+   * same answer the tmux path gives when there is no agent binary — a shell in
+   * the right tree is still most of what was asked for.
+   */
+  const ticket = typeof d.agent === "string" && d.agent ? claimAgentTicket(d.agent) : null;
+  const agentBin = ticket ? claudeCode.bin() : null;
+  const agentRun = ticket ? agentArgv(agentBin, ticket, supportsSessionName(agentBin)) : [];
+
+  /*
+   * Where the pane opens.
+   *
+   * The ticket's directory wins when it still validates, rather than the `root`
+   * the socket happened to carry: a worktree cut for an issue is the whole
+   * point of the request, and an agent started in the wrong tree is the failure
+   * that is invisible once it has happened. Re-checked here rather than trusted
+   * from the mint — the ticket has been out of our hands, and scope can change
+   * while it is.
+   */
+  const startIn = ticket && inScope(ticket.cwd) && existsSync(ticket.cwd) ? ticket.cwd : cwd;
+
   const run = attach
     ? attach.argv
+    : agentRun.length ? agentRun
     : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : [shell, ...args];
 
   let argv: string[];
@@ -579,7 +627,7 @@ export function ptyOpen(ws: PtyWs) {
 
   let proc: ReturnType<typeof Bun.spawn>;
   try {
-    proc = Bun.spawn(argv, { cwd, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    proc = Bun.spawn(argv, { cwd: startIn, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   } catch (e) {
     ctl(ws, { t: "fatal", error: `could not start shell: ${String(e)}` });
     ws.close(1011, "spawn failed");
@@ -601,7 +649,7 @@ export function ptyOpen(ws: PtyWs) {
   // needs it to know it is looking at a slice: without a fit, tmux renders at
   // the desk's width and the columns past the phone's own never arrive.
   ctl(ws, {
-    t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir,
+    t: "ready", mode, shell: basename(shell), cwd: startIn, resize: !!sizeDir,
     ...(attach?.grid ? { pane: attach.grid } : {}),
   });
 
@@ -1303,8 +1351,6 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       return;
     }
 
-    if (!s.tmux) return;
-
     /*
      * "The pointer is over that pane" — focus follows mouse, inside tmux.
      *
@@ -1315,7 +1361,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
      * unable to do anything a hover should not.
      */
     if (msg.cmd === "selectpane") {
-      if (typeof msg.pane === "string") selectPane(s.tmux, msg.pane);
+      if (s.tmux && typeof msg.pane === "string") selectPane(s.tmux, msg.pane);
       return;
     }
 
@@ -1330,7 +1376,21 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
      * button actions into arbitrary execution in the user's shell.
      */
     if (msg.cmd === "review") {
-      const target = s.tmux;
+      let target = s.tmux;
+      if (!target) {
+        /*
+         * Resolve NOW rather than wait for the next poll.
+         *
+         * The sweep runs every 500ms and the first one is 500ms after the
+         * socket opens, so a button pressed the instant this terminal appears
+         * asks a question nobody has looked up yet. Answering "no tmux" then
+         * would send a tmux user's card to a pane — right answer, wrong
+         * machine. The sweep is synchronous and cheap, so it is simply run.
+         */
+        s.tmuxSweep?.();
+        target = s.tmux;
+      }
+      if (!target) { ctl(ws, { t: "openfail", error: NO_TMUX }); return; }
       const number = msg.number;
       // A review of nothing, in nowhere, is not a request this can serve.
       if (typeof number !== "number" || !msg.root) return;
@@ -1367,7 +1427,21 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
      * this handler can verify.
      */
     if (msg.cmd === "issue") {
-      const target = s.tmux;
+      let target = s.tmux;
+      if (!target) {
+        /*
+         * Resolve NOW rather than wait for the next poll.
+         *
+         * The sweep runs every 500ms and the first one is 500ms after the
+         * socket opens, so a button pressed the instant this terminal appears
+         * asks a question nobody has looked up yet. Answering "no tmux" then
+         * would send a tmux user's card to a pane — right answer, wrong
+         * machine. The sweep is synchronous and cheap, so it is simply run.
+         */
+        s.tmuxSweep?.();
+        target = s.tmux;
+      }
+      if (!target) { ctl(ws, { t: "openfail", error: NO_TMUX }); return; }
       const cwd = safeAbs(msg.cwd);
       if (!cwd || !inScope(cwd) || !existsSync(cwd)) return;
       const name = typeof msg.name === "string" ? msg.name : "issue";
@@ -1376,51 +1450,42 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       if (msg.agent === true && prompt) {
         const bin = claudeCode.bin();
         /*
-         * The permission prompts, off when asked for — and only ever as this
-         * one fixed argument.
+         * What runs is decided HERE, not by the client.
          *
-         * The client sends a boolean and the server owns the string. That is
-         * the same rule this handler already follows for the command itself:
-         * what runs is decided here, so a socket reachable from the UI cannot
-         * become a way to pass arbitrary arguments to a binary. `yolo === true`
-         * buys exactly one flag and nothing else.
-         *
-         * It is worth offering because the failure it prevents is silent: an
-         * agent handed a card, left in another tmux window, stopping on its
-         * first tool call and waiting for an answer nobody is there to give.
-         * And it is worth being a CHOICE for the mirror-image reason.
+         * The client sends text and two booleans; the binary, `--name` and
+         * `--dangerously-skip-permissions` are the server's, so a socket
+         * reachable from the UI cannot become a way to pass arbitrary
+         * arguments. `sessionTitle` is what makes sure a card title cannot be
+         * anything but a title. The reasoning for each flag, and the argv
+         * itself, live in agentticket.ts — shared with the pane path.
          */
-        /*
-         * The session, named after the card.
-         *
-         * Six windows into an afternoon, `claude` in a worktree called
-         * `app-ORBIT-1042` tells you nothing about which of five cards is in
-         * front of you, and the CLI's session picker lists them all as the same
-         * word. `--name` is what `/rename` writes, set before the first turn
-         * instead of after it — so there is no moment where the session exists
-         * unnamed and nothing has to be typed into a program that may not have
-         * finished starting.
-         *
-         * The value is DATA from the client and the flag is ours, which is the
-         * same division this handler already makes for `--dangerously-skip-
-         * permissions`. It reaches tmux as one element of an argv array, never
-         * through a shell, and `sessionTitle` is what makes sure a card title
-         * cannot be anything but a title.
-         */
-        const named = title && supportsSessionName(bin) ? ["--name", title] : [];
-        const args = msg.yolo === true
-          ? [...named, "--dangerously-skip-permissions", prompt]
-          : [...named, prompt];
+        // Built by agentticket.ts, which the tmux-less pane path also uses.
+        // Two call sites building the same command line is how the two paths
+        // would quietly stop doing the same thing.
+        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin));
         // No agent available is not a reason to open nothing: a shell in the
         // right worktree is still most of what was asked for.
-        if (bin) newWindowRunning(target, cwd, name, [bin, ...args]);
-        else newWindowRunning(target, cwd, name, []);
+        newWindowRunning(target, cwd, name, argv);
       } else {
         newWindowRunning(target, cwd, name, []);
       }
       s.tmuxSweep?.();
       return;
     }
+
+    /*
+     * Everything below acts ON tmux, so with none there is nothing to do and
+     * silence is right.
+     *
+     * It used to sit ABOVE `review` and `issue`, and that is what the dispatch
+     * audit found: those two are not commands about tmux, they are a pull
+     * request or a card being sent to an agent, and they were swallowed here on
+     * every machine with no tmux client — which, until procchildren.ts, meant
+     * every Mac, with no message. They answer for themselves now, above.
+     * `cmd:"agent"` was moved out earlier for the same reason: a button with no
+     * way out is worse than one that refuses.
+     */
+    if (!s.tmux) return;
 
     const action = msg.cmd as TmuxAction;
     if (!["select", "new", "kill", "rename", "move", "takeover", "fit"].includes(action)) return;
