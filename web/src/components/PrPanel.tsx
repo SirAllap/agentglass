@@ -947,6 +947,12 @@ const PR_GRID = "78px minmax(0,1fr) 118px 112px 84px 84px";
  * the one row in the table that did not respond to the pointer.
  */
 const PR_ROW_CSS = `
+/* The two links out to GitHub in the header. A border and a hover, because
+   grey text with an arrow after it reads as a caption rather than as a
+   control — which is what the first attempt at this shipped and what it was
+   sent back for. */
+.agx-ghchip{border:1px solid color-mix(in srgb, var(--border) 70%, transparent);background:color-mix(in srgb, var(--bg2) 60%, transparent);color:var(--text2)}
+.agx-ghchip:hover{border-color:color-mix(in srgb, var(--primary) 55%, transparent);background:color-mix(in srgb, var(--primary) 12%, transparent);color:var(--text)}
 .agx-prrow:hover{background:color-mix(in srgb, var(--border) 16%, transparent)}
 .agx-prrow[data-active="1"]{background:color-mix(in srgb, var(--primary) 12%, transparent)}
 .agx-prrow[data-active="1"]:hover{background:color-mix(in srgb, var(--primary) 18%, transparent)}
@@ -2555,19 +2561,24 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             most likely to want, and the one that takes the most clicks to
             reach from a repository landing page. */}
         {repo && (
-          <span className="flex items-center gap-1.5 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
-            <button type="button"
-              className="agx-btn truncate rounded px-1 -mx-1"
-              onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}`)}
-              title={`Open ${repo.nameWithOwner} on GitHub`}>
-              {repo.nameWithOwner}
-            </button>
-            <button type="button"
-              className="agx-btn shrink-0 rounded px-1"
-              onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}/pulls`)}
-              title="Open this repository's pull requests on GitHub">
-              PRs ↗
-            </button>
+          <span className="flex items-center gap-1.5 min-w-0">
+            {/* Two chips rather than two words. Grey text with an arrow after
+                it reads as a caption that happens to have punctuation; the
+                border and the hover are what say "this is a control", and they
+                are the same pill the rest of the app uses for one. Both carry
+                the arrow, because either one leaves the app. */}
+            {([
+              { to: "", label: repo.nameWithOwner, hint: `Open ${repo.nameWithOwner} on GitHub`, grow: true },
+              { to: "/pulls", label: "PRs", hint: "Open this repository's pull requests on GitHub", grow: false },
+            ] as const).map((b) => (
+              <button key={b.to} type="button"
+                onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}${b.to}`)}
+                title={b.hint}
+                className={`agx-btn agx-ghchip inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${b.grow ? "min-w-0" : "shrink-0"}`}>
+                <span className={b.grow ? "truncate" : ""}>{b.label}</span>
+                <span aria-hidden className="shrink-0 opacity-70">↗</span>
+              </button>
+            ))}
           </span>
         )}
         <div className="ml-auto flex items-center gap-2 shrink-0">
