@@ -1849,6 +1849,19 @@ export interface PrSummary {
   reviewers?: PrReviewer[];
   checks: PrCheckRollup;
   /**
+   * Whether GitHub can merge this without a human resolving something.
+   *
+   * On the SUMMARY as well as the detail, because the triage board files a row
+   * by what it needs and a conflict is a different need from a red check. It
+   * was detail-only, so the board read the checks alone and filed a conflicting
+   * pull request as "open, green, nobody has been asked to look yet".
+   *
+   * `UNKNOWN` is a real answer and not a missing one: GitHub computes this
+   * lazily and says UNKNOWN while it is still working, so a caller must not
+   * treat it as "no conflict".
+   */
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  /**
    * The commit `checks` describes — and therefore the only commit a merge
    * started from this row is allowed to land.
    *
@@ -2094,7 +2107,6 @@ export interface PrMergePolicy {
 
 export interface PrDetail extends PrSummary {
   body: string;
-  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   mergeState: PrMergeState;
   /** Parsed out of the body — unchecked boxes are a merge signal on repos
    *  whose template carries a real checklist. */

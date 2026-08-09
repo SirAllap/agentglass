@@ -125,10 +125,41 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
       return { lane: "review",
         reason: `Asked of you — and ${plural(c.failure, "check")} ${c.failure === 1 ? "is" : "are"} red, so read it knowing the author still has work.` };
     }
+    if (p.mergeable === "CONFLICTING") {
+      // Still yours to read — a review that was asked for is the one thing
+      // nobody else can do — but said, because a reviewer who does not know it
+      // conflicts will approve something that cannot land.
+      return { lane: "review",
+        reason: "Asked of you — and it conflicts with the base branch, so it cannot land as it stands." };
+    }
     return { lane: "review",
       reason: changesAsked
         ? "You asked for changes and were re-requested — this is the fix, not the first look."
         : "Asked of you. Nobody else can unblock it." };
+  }
+
+  /*
+   * A conflict, before anything green is said about it.
+   *
+   * The lane below has always CALLED itself "red checks or conflicts" and never
+   * tested the second half: `fileInLane` read the checks and the review and
+   * nothing else. So a pull request with every check green and a file
+   * conflicting with main was filed as "Open, green, and nobody has been asked
+   * to look yet" — reported from a board showing exactly that beside GitHub's
+   * own "Merging is blocked". Worse, it could reach "Green, ready to land",
+   * whose whole promise is that the only thing missing is a press; pressing it
+   * fails.
+   *
+   * Checks and mergeability are two different facts and the board was reading
+   * one of them. `UNKNOWN` is deliberately not treated as a conflict: GitHub
+   * answers it while it is still working the merge out, and calling that
+   * blocked would flash every fresh pull request through the red lane.
+   */
+  if (p.mergeable === "CONFLICTING") {
+    return { lane: stake.mine ? "blocked" : "others",
+      reason: stake.mine
+        ? "Conflicts with the base branch — nothing else can move until they are resolved."
+        : "Conflicts with the base branch. Reviewing it is wasted work until the author rebases." };
   }
 
   /*

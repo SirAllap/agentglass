@@ -802,7 +802,23 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    *  One repo's refs serve every base picker on screen — the header's and one
    *  per worktree row — because a worktree family shares its refs. */
   const [baseRefs, setBaseRefs] = useState<{ name: string; remote: boolean }[]>([]);
-  const mergeState = tree?.branch.state ?? "clean";
+  /*
+   * The tree that is on screen belongs to a root, and until this read said so
+   * it was trusted for whichever root you had just switched to.
+   *
+   * `loadTree` is async and records the root it answered for in `treeFor`. The
+   * conflict screen keys off this value, so between switching worktree and the
+   * new tree arriving, a conflict belonging to the checkout you LEFT was drawn
+   * over the one you opened — reported as the resolver appearing "para todos
+   * los wt/branches", with the file list beside it reading "nothing to commit,
+   * working tree clean" because that half had already caught up.
+   *
+   * A tree from somewhere else is not evidence about here, so it reads clean
+   * until the right one lands. Clean is the safe default: the worst it does is
+   * show the ordinary strip for one refresh, where the alternative locks the
+   * panel into a conflict screen for a repository that has none.
+   */
+  const mergeState = treeFor === root ? (tree?.branch.state ?? "clean") : "clean";
   /**
    * Which two sides git has stopped between, as git has them — not as the
    * checkout's base branch suggests.
@@ -822,10 +838,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    */
   const inConflict = mergeState !== "clean" && mergeState !== "bisecting";
   useEffect(() => {
-    if (!open || !root || mergeState === "clean") { setConflicts([]); setMerge(null); return; }
+    // `treeFor` for the same reason as `mergeState` above: asking the server
+    // about a root whose tree has not arrived yet answers about the wrong one.
+    if (!open || !root || treeFor !== root || mergeState === "clean") { setConflicts([]); setMerge(null); return; }
     api.gitConflicts(root).then((r) => setConflicts(r.files ?? [])).catch(() => {});
     api.gitMergeInfo(root).then((r) => setMerge(r.ok ? r : null)).catch(() => {});
-  }, [open, root, mergeState, tree]);
+  }, [open, root, treeFor, mergeState, tree]);
 
   /**
    * Hand the conflict to Claude, in the repo it happened in.

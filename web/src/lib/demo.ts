@@ -751,6 +751,7 @@ const chk = (name: string, state: PrCheckState, workflow = "CI"): PrCheck =>
 
 const PR_SUMMARIES: PrSummary[] = [
   {
+    mergeable: "MERGEABLE" as const,
     number: 482, title: "Round prices at the cart boundary, not per line",
     author: "rmoreno", state: "OPEN", isDraft: false,
     headRefName: "fix/rounding-boundary", baseRefName: "main",
@@ -761,6 +762,7 @@ const PR_SUMMARIES: PrSummary[] = [
     checks: rollup({ ok: 3, bad: ["e2e (checkout)"], skipped: 1 }), checksLoaded: true,
   },
   {
+    mergeable: "MERGEABLE" as const,
     number: 479, title: "Cache the price table per request",
     author: "jkwan", state: "OPEN", isDraft: false,
     headRefName: "perf/price-cache", baseRefName: "main",
@@ -771,6 +773,7 @@ const PR_SUMMARIES: PrSummary[] = [
     checks: rollup({ ok: 5 }), checksLoaded: true,
   },
   {
+    mergeable: "MERGEABLE" as const,
     number: 476, title: "Bump bun to 1.1.38",
     author: "acme-bot", state: "OPEN", isDraft: false,
     headRefName: "deps/bun-1.1.38", baseRefName: "main",
@@ -781,6 +784,7 @@ const PR_SUMMARIES: PrSummary[] = [
     checks: rollup({ ok: 5 }), checksLoaded: true,
   },
   {
+    mergeable: "MERGEABLE" as const,
     number: 471, title: "Otel spans around the approval gate",
     author: "you", state: "OPEN", isDraft: true,
     headRefName: "feat/gate-spans", baseRefName: "main",
@@ -791,6 +795,7 @@ const PR_SUMMARIES: PrSummary[] = [
     checks: rollup({ ok: 2, pending: 3 }), checksLoaded: true,
   },
   {
+    mergeable: "MERGEABLE" as const,
     number: 468, title: "Stabilise the checkout test under load",
     author: "jkwan", state: "OPEN", isDraft: false,
     headRefName: "test/checkout-flake", baseRefName: "main",
@@ -801,6 +806,7 @@ const PR_SUMMARIES: PrSummary[] = [
     checks: rollup({ ok: 2, bad: ["integration (postgres)"], skipped: 1 }), checksLoaded: true,
   },
   {
+    mergeable: "MERGEABLE" as const,
     number: 465, title: "Retry the charge before failing the order",
     author: "you", state: "OPEN", isDraft: false,
     headRefName: "fix/charge-retry", baseRefName: "main",
@@ -812,6 +818,7 @@ const PR_SUMMARIES: PrSummary[] = [
     isCurrentBranch: true,
   },
   {
+    mergeable: "MERGEABLE" as const,
     number: 461, title: "Drop the legacy coupon table",
     author: "t-okafor", state: "OPEN", isDraft: false,
     headRefName: "chore/drop-coupons-v1", baseRefName: "main",
