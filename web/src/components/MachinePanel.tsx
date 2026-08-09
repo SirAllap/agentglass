@@ -646,7 +646,7 @@ function Line({ label, cpu, rss, depth, title, aside, kind, caret, onClick, spar
   return (
     <Row
       {...(onClick ? { onClick, type: "button" as const } : {})}
-      className={`grid items-center w-full text-left px-3.5 py-[3px] text-[11.5px] ${onClick ? "hover:bg-white/5" : ""}`}
+      className={`grid items-center w-full text-left px-3.5 py-1 text-[11.5px] ${onClick ? "hover:bg-white/5" : ""}`}
       style={{
         gridTemplateColumns: COLS, borderBottom: edge(6),
         background: selected ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined,
@@ -770,7 +770,7 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
             <Card k="Rebuildable" v={mb(data.freeable)} tint="var(--success)" />
             <Card k="Biggest" v={data.dirs[0] ? `${data.dirs[0].name}` : "—"} small />
           </div>
-          <div className="flex flex-col gap-[3px]">
+          <div className="flex flex-col gap-1">
             {data.dirs.slice(0, 8).map((d) => (
               <div key={d.path} className="flex items-center gap-2 text-[10.5px]">
                 {/* A bar, because "676 MB" and "3 MB" in a column of numbers is

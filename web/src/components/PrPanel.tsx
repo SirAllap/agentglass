@@ -2962,7 +2962,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   return <Dot tint={stateTint(sum)} title={`#${p.number} — ${what}`} />;
                 })()}
                 <button onClick={() => openPr(p.number)} title={p.title}
-                  className="text-[10px] pr-1 py-[1px] tabular-nums"
+                  className="text-[10px] pr-1 py-px tabular-nums"
                   style={{ color: p.number === selected ? "var(--text)" : "var(--text2)" }}>
                   #{p.number}
                 </button>
@@ -2986,7 +2986,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 title={isPinned(repo.nameWithOwner, d.number)
                   ? `#${d.number} is on the bar — click to take it off`
                   : `Keep #${d.number} on this bar, one click away from anywhere in this panel`}
-                className="text-[10px] px-1.5 py-[1px] rounded shrink-0 ml-auto"
+                className="text-[10px] px-1.5 py-px rounded shrink-0 ml-auto"
                 style={isPinned(repo.nameWithOwner, d.number)
                   ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
                   : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
@@ -4360,7 +4360,11 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
     <Portal>
       <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
-        <div className="px-3 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        {/* px-5 to match viewHeaderClass, which is the row directly above this
+            one. At px-3 the filter chips started 8px to the left of the repo
+            chips they sit under — two left edges in one header, which is the
+            kind of thing you notice without being able to name. */}
+        <div className="px-5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <div className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>{title}</div>
           <div className="text-[10px]" style={{ color: "var(--text3)" }}>{hint}</div>
         </div>
@@ -5265,7 +5269,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
                     const e = excerpt(m);
                     return (
                       <button key={idx} data-hit={on ? "on" : undefined} onClick={() => onGo(idx)}
-                        className="w-full text-left flex items-baseline gap-2 px-2.5 py-[3px] hover:bg-white/5"
+                        className="w-full text-left flex items-baseline gap-2 px-2.5 py-1 hover:bg-white/5"
                         style={{
                           background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined,
                           // A rail, not a border: the row keeps its height and
@@ -5895,7 +5899,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
             are choosing how much is in front of you. */}
         <span className="inline-flex rounded overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
           {([[true, "One file"], [false, "All files"]] as const).map(([v, label]) => (
-            <button key={label} onClick={() => setOne(v)} className="px-2 py-[1px]"
+            <button key={label} onClick={() => setOne(v)} className="px-2 py-px"
               style={oneFile === v
                 ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--text)" }
                 : { color: "var(--text3)" }}>{label}</button>

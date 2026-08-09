@@ -2145,7 +2145,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           title="Reading which worktree this pane is working in"
                           style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text3)" }}
                         >
-                          <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>WT</span>
+                          <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>WT</span>
                           <span className="animate-pulse">Reading this pane…</span>
                         </span>
                       ) : null;
@@ -2158,7 +2158,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
                       >
                         <span
-                          className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
+                          className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded"
                           title={at.worktreeOf ? `worktree of ${at.worktreeOf}` : "main checkout"}
                           style={at.worktreeOf
                             ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
@@ -2182,7 +2182,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           onMouseDown={keepTermFocus}
                           onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(at.root) })}
                           title={`Open ${dirName(at.root)}'s changes in File changes`}
-                          className="agx-btn shrink-0 flex items-center gap-1 px-2 py-[1px] rounded leading-none"
+                          className="agx-btn shrink-0 flex items-center gap-1 px-2 py-px rounded leading-none"
                           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
                         >Diff <span className="t-dim2 text-[10px]">↗</span></button>
                         {/* Only when the branch HAS one. A dashed "no pull
@@ -2194,7 +2194,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             onMouseDown={keepTermFocus}
                             onClick={() => openPr(chipPr.repo, chipPr.pr.number)}
                             title={`#${chipPr.pr.number} ${chipPr.pr.title}\n${chipPr.pr.state === "OPEN" && chipPr.pr.isDraft ? "Draft" : chipPr.pr.state.toLowerCase()} · open it in Pull requests`}
-                            className="agx-btn shrink-0 flex items-center gap-1 px-2 py-[1px] rounded leading-none tabular-nums"
+                            className="agx-btn shrink-0 flex items-center gap-1 px-2 py-px rounded leading-none tabular-nums"
                             style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                           >PR #{chipPr.pr.number} <span className="t-dim2 text-[10px]">↗</span></button>
                         )}
@@ -2267,7 +2267,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               /* Auto-detected from what the focused pane's agent is doing — the one you
                                  almost certainly want, pinned above the list and out of the filter. */
                               <div className="w-full px-2.5 py-1.5 flex items-center gap-2 shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                                <span className="shrink-0 text-[10px] uppercase tracking-wider px-1 py-[2px] rounded self-start mt-0.5" title="Where this pane's agent is working — from its directory and its transcript" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
+                                <span className="shrink-0 text-[10px] uppercase tracking-wider px-1 py-0.5 rounded self-start mt-0.5" title="Where this pane's agent is working — from its directory and its transcript" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
                                 <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${detected.branch}\n${detected.root}`}>
                                   <span className="truncate font-medium" style={{ color: "var(--text)" }}>{detected.branch}</span>
                                   <span className="truncate text-[10px]" style={{ color: "var(--text3)" }}>{dirName(detected.root)}</span>
@@ -2282,7 +2282,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 const wt = !!r.worktreeOf;
                                 return (
                                   <div key={r.root} className="w-full px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded self-start mt-0.5" title={wt ? `Worktree of ${r.worktreeOf}` : "Main checkout"} style={wt ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" } : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{wt ? "WT" : "REPO"}</span>
+                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded self-start mt-0.5" title={wt ? `Worktree of ${r.worktreeOf}` : "Main checkout"} style={wt ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" } : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{wt ? "WT" : "REPO"}</span>
                                     {/* The branch is the descriptive name (`WEB-1042-fix-the-cart`); the
                                         folder (`orbit-WEB-1042`) is the terse stub below it. A ticket number
                                         alone is not something anyone recognises without having memorised it. */}
@@ -2406,7 +2406,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd({ cmd: "select", window: w.id }); } }}
                           onDoubleClick={() => setRenaming(w.id)}
                           title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
-                          className={`group flex items-center gap-1.5 px-1 py-[1px] text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
+                          className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
                           style={w.id === activeWindow
                             ? { color: "var(--primary-hover)" }
                             : { color: "var(--text2)" }}>

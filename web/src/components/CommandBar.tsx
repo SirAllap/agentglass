@@ -487,7 +487,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                 hidden rather than absent, so revealing it cannot re-flow the
                 row and nothing can clip it. Going back to the dropdown to find
                 the row you pinned is the long way round. */}
-            <CloseButton onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)} style={{ color: "var(--text3)" }} title={`Unpin ${cmd}`} className="shrink-0 w-[15px] pr-[4px] opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100" />
+            <CloseButton onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)} style={{ color: "var(--text3)" }} title={`Unpin ${cmd}`} className="shrink-0 w-[15px] pr-1 opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100" />
           </span>
         ))}
         {!pins.length && !!root && (

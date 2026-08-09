@@ -645,7 +645,7 @@ function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step
 
       <div className="flex-1 min-h-0 overflow-auto agx-scroll py-1">
         {rows.map((r) => (
-          <div key={r.path} className="flex items-center gap-2 px-4 py-[3px] text-[11px] font-mono">
+          <div key={r.path} className="flex items-center gap-2 px-4 py-1 text-[11px] font-mono">
             <span className="shrink-0 w-[1ch]" style={{ color: r.decided ? "var(--warning)" : "var(--text3)" }}>{r.decided ? "◆" : "·"}</span>
             <span className="min-w-0 truncate" style={{ color: r.decided ? "var(--text)" : "var(--text2)" }}>{r.path}</span>
             {r.decided && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>you decided this</span>}

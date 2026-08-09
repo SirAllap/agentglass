@@ -2161,7 +2161,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, 
         </div>
       </div>
       {showWho && (
-        <span className="flex items-center" style={{ paddingLeft: 3 }}>
+        <span className="flex items-center pl-1">
           {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
           {(t.people?.length ?? 0) > 3 && (
             <span className="text-[8.5px] ml-1" style={{ color: "var(--text4)" }}>+{(t.people!.length) - 3}</span>
@@ -2640,7 +2640,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               className="w-full text-left rounded px-1 -mx-1 py-0.5 hover:bg-white/5 text-[11.5px] leading-tight flex items-center gap-1.5"
               style={{ color: t.mine ? "var(--success)" : "var(--text2)" }}>
               {!!t.people?.length && (
-                <span className="inline-flex items-center shrink-0" style={{ paddingLeft: 3 }}>
+                <span className="inline-flex items-center shrink-0 pl-1">
                   {t.people.slice(0, 4).map((p, n) => <Face key={n} p={p} n={n} />)}
                 </span>
               )}

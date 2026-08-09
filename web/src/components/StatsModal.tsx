@@ -27,7 +27,7 @@ function Heatmap({ data }: { data: number[] }) {
   const max = Math.max(1, ...data);
   return (
     <div className="w-full">
-      <div className="grid gap-[4px] w-full" style={{ gridTemplateColumns: "30px repeat(24, minmax(0,1fr))" }}>
+      <div className="grid gap-1 w-full" style={{ gridTemplateColumns: "30px repeat(24, minmax(0,1fr))" }}>
         <span />
         {Array.from({ length: 24 }, (_, h) => (
           <span key={h} className="text-[8px] t-dim2 text-center tabular-nums">{h % 3 === 0 ? h : ""}</span>
@@ -82,7 +82,7 @@ function SpendHistory({ history }: { history: UsageHistory | null }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-end gap-[2px] h-28">
+      <div className="flex items-end gap-0.5 h-28">
         {days.map((d) => {
           const summarised = !!seam && d.day < seam;
           // A day with spend never renders as nothing: a 1px floor keeps a
@@ -348,7 +348,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                             return (
                               <div key={s.skill} className="grid grid-cols-[minmax(0,160px)_1fr_auto] gap-x-3 items-center">
                                 <span className="truncate text-[11px]" style={{ color: "var(--text2)" }} title={s.skill}>{s.skill}</span>
-                                <div className="flex gap-[3px]">
+                                <div className="flex gap-1">
                                   {s.buckets.map((n, i) => (
                                     <div
                                       key={i}

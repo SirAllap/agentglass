@@ -441,7 +441,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
  *  the same treatment the panel gives refs everywhere else. */
 function Ref({ children }: { children: React.ReactNode }) {
   return (
-    <code className="px-1 py-[1px] rounded text-[10.5px]"
+    <code className="px-1 py-px rounded text-[10.5px]"
       style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text2)" }}>{children}</code>
   );
 }

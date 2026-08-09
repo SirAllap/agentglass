@@ -264,7 +264,7 @@ export function Header({
               title={beyond ? `Events are kept for ${retentionDays} days, so this window is answered from the last ${retentionDays}d. Statistics (s) → “spend per day” goes further back.` : undefined}
               style={windowMs === w.ms ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-hover)" } : { color: "var(--text4)" }}>
               {w.label}
-              {beyond && <sup className="ml-[1px] text-[8px] opacity-70" aria-hidden>*</sup>}
+              {beyond && <sup className="ml-px text-[8px] opacity-70" aria-hidden>*</sup>}
             </button>
           );
         })}

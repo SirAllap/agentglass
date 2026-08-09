@@ -342,7 +342,7 @@ export function TopBar({
           edge, a hover state and a pressable surface — and the open project
           carries the weight, since "which project am I in" is the one thing
           this corner exists to answer. */}
-      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1 py-[3px]"
+      <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1 py-1"
         title={workspace ? `${workspace}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open a single project" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
@@ -407,7 +407,7 @@ export function TopBar({
         {alarm ? (
           <button ref={chip} onClick={() => setNeedsOpen((v) => !v)}
             aria-label="What needs you" aria-expanded={needsOpen}
-            className="flex items-center gap-2 px-2.5 py-[1px] rounded-full min-w-0"
+            className="flex items-center gap-2 px-2.5 py-px rounded-full min-w-0"
             style={{
               color: "var(--warning)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)",
@@ -481,7 +481,7 @@ export function TopBar({
         )}
         <span className="shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
         <button onClick={onOpenPalette} title="Search anything (⌘K)"
-          className="hidden sm:block text-[9.5px] px-1.5 py-[1px] rounded shrink-0"
+          className="hidden sm:block text-[9.5px] px-1.5 py-px rounded shrink-0"
           style={{ color: "var(--text3)", border: edge(16), ...NO_DRAG }}>⌘K</button>
         {/*
           * Find a file — shaped like the thing it opens, not like a chip.
@@ -498,7 +498,7 @@ export function TopBar({
           * the clock have the better claim on the space.
           */}
         <button onClick={onOpenFiles} title={`Find a file (${chordLabel(appChordFor("files.palette"))})`}
-          className="agx-topbar-find group flex items-center gap-2 shrink-0 rounded-md px-2 py-[3px]"
+          className="agx-topbar-find group flex items-center gap-2 shrink-0 rounded-md px-2 py-1"
           style={NO_DRAG}>
           {/* 14, not 11. A glyph standing in for a whole control is the one
               thing on a bar that cannot be read at the size of a label. */}
@@ -506,7 +506,7 @@ export function TopBar({
           <span className="hidden md:block text-[10.5px] whitespace-nowrap" style={{ color: "var(--text3)" }}>
             Find a file…
           </span>
-          <span className="hidden md:block text-[9px] px-1 py-[1px] rounded shrink-0 tabular-nums"
+          <span className="hidden md:block text-[9px] px-1 py-px rounded shrink-0 tabular-nums"
             style={{ color: "var(--text4)", border: edge(16) }}>
             {chordLabel(appChordFor("files.palette"))}
           </span>

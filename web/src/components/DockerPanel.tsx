@@ -118,7 +118,7 @@ function Stack({ id, label, n, open, active, onToggle, onActivate, children }: {
 function StackRow({ label, meta, dim, onClick }: { label: string; meta?: string; dim?: boolean; onClick: () => void }) {
   return (
     <div onClick={onClick} title={label}
-      className="flex items-center gap-2 pl-6 pr-2 py-[3px] cursor-pointer rounded-md"
+      className="flex items-center gap-2 pl-6 pr-2 py-1 cursor-pointer rounded-md"
       style={{ opacity: dim ? 0.5 : 1 }}>
       <span className="min-w-0 flex-1 truncate text-[10.5px]" style={{ color: "var(--text2)" }}>{label}</span>
       {meta && <span className="text-[10px] t-dim2 shrink-0 tabular-nums">{meta}</span>}
@@ -137,7 +137,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
   const port = /(\d+)->/.exec(c.ports || "")?.[1];
   return (
     <div onClick={onSelect} data-cid={active ? "active" : undefined}
-      className={`group grid items-center gap-x-2 pl-2 pr-1.5 rounded-md cursor-pointer ${dense ? "py-[2px]" : "py-1"}`}
+      className={`group grid items-center gap-x-2 pl-2 pr-1.5 rounded-md cursor-pointer ${dense ? "py-0.5" : "py-1"}`}
       // A grid, not a flex row: every container's numbers line up in the same
       // columns, which is what makes a list of twelve scannable instead of
       // twelve individually-arranged lines. lazydocker does the same.
@@ -775,7 +775,7 @@ export function DockerView({ active }: { active: boolean }) {
                     >
                       <span style={{ fontSize: 11 }}>{consoleOpen ? "▾" : "▸"}</span>
                       <span>Console</span>
-                      <kbd className="text-[8.5px] px-1 py-[1px] rounded" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: 0.85 }}>shell</kbd>
+                      <kbd className="text-[8.5px] px-1 py-px rounded" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: 0.85 }}>shell</kbd>
                     </button>
                     <span className="ml-auto">Logs auto-refresh · stats every 5s</span>
                   </div>
