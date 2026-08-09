@@ -41,7 +41,7 @@ import {
   sysNotifyOn, setSysNotifyOn, subscribeSysNotifyMode, notifyCapability,
   type SystemNote, type NotifyCapability,
 } from "../lib/sysNotify.ts";
-import { openPrs } from "../lib/openPrs.ts";
+import { openPr, openPrs } from "../lib/openPrs.ts";
 import { Portal } from "./Portal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 
@@ -214,7 +214,7 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
             // (gitDestination), while ours — which hold the repo and the branch
             // as facts — arrived with nothing and could not be clicked.
             recordNote({ app: "git", summary: r.name, body: `${r.behind} commit${r.behind === 1 ? "" : "s"} to pull on ${r.branch}`,
-              goto: { kind: "git", repo: r.name, branch: r.branch } });
+              goto: { kind: "git", repo: r.name, branch: r.branch, root: r.root } });
           }
         }
         setBehind(total);
@@ -371,6 +371,37 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
      and the pull request for its branch — so that row keeps its ordinary
      open-the-message click and offers both as named buttons instead. */
   const go = n.goto && !git ? () => onGoto(n.goto!) : null;
+  /*
+   * "Its PR" used to drop the branch name into the panel's search box as a
+   * filter and leave you there. On a branch whose pull request has been merged
+   * and whose branch has been deleted — which is most of them, an hour later —
+   * that is a panel saying "No pull requests match this filter" over an empty
+   * list, which reads as the pull request being gone rather than as the search
+   * being the wrong question. Reported from a screenshot of exactly that.
+   *
+   * So it asks which pull request the branch HAS, and opens that one by number.
+   * `prsForBranch` answers for merged and closed ones too, because it looks up
+   * the head ref rather than searching titles.
+   *
+   * The answer is kept on the button rather than announced elsewhere: a branch
+   * with no pull request at all is a real answer, and the place somebody is
+   * looking when they ask is the button they just pressed.
+   */
+  const [prMsg, setPrMsg] = useState("");
+  const goToPr = useCallback(async () => {
+    if (!git?.branch) return;
+    // Without a checkout to ask from — a note parsed out of somebody else's
+    // text carries no root — the old behaviour is still the best available.
+    if (!git.root) { openPrs(git.branch, "all"); return; }
+    setPrMsg("Looking…");
+    const r = await api.prsForBranch(git.root, git.branch).catch(() => null);
+    if (r?.ok && r.from && r.repo) { setPrMsg(""); openPr(r.repo, r.from.number); return; }
+    // Said, not swallowed. `needsAuth` is a different fact from "there is none"
+    // and sending somebody to look for a pull request that cannot be seen is
+    // how the empty filter felt in the first place.
+    setPrMsg(r?.needsAuth ? "Sign in to GitHub" : "No PR for this branch");
+    setTimeout(() => setPrMsg(""), 4000);
+  }, [git?.branch, git?.root]);
   const expandable = cut || open;
   // With nowhere to go, the row itself opens the message — which is what the
   // desktop's own list does, and what anyone tries first.
@@ -429,9 +460,9 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
                 ↗ Git · {git.repo}
               </button>
               {git.branch && (
-                <button className="agx-note-link" title={`Find the pull request for ${git.branch}`}
-                  onClick={(e) => { e.stopPropagation(); openPrs(git.branch!, "all"); }}>
-                  ↗ Its PR
+                <button className="agx-note-link" title={prMsg || `Open the pull request for ${git.branch}`}
+                  onClick={(e) => { e.stopPropagation(); void goToPr(); }}>
+                  ↗ {prMsg || "Its PR"}
                 </button>
               )}
             </span>

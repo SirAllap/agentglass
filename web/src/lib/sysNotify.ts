@@ -42,7 +42,14 @@ export type SystemNote = {
      * does come along is a repository and a branch, in a sentence, and those are
      * the two things needed to open the right view scoped to the right place.
      */
-    | { kind: "git"; repo: string; branch?: string }
+    | {
+        kind: "git"; repo: string; branch?: string;
+        /** The checkout the branch lives in, when the note was made from a fact
+         *  rather than parsed out of somebody else's text. It is what lets the
+         *  "Its PR" button ask which pull request that branch has, instead of
+         *  dropping a filter into the panel and hoping. */
+        root?: string;
+      }
     /**
      * A ClickUp card, opened in Tasks rather than in a browser.
      *
