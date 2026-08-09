@@ -816,28 +816,100 @@ const PROMPTS = [
   { key: ".", ask: "move" },
 ] as const;
 
-/** What `list-keys` says this key does right now, verbatim and re-issuable.
- *  Captured before overwriting so release can put back exactly what was there —
- *  the same rule `set-option -u` follows for the options, rather than guessing
- *  at a default that varies by tmux version and by the user's own config. */
-function bindingFor(t: TmuxTarget, key: string): string | null {
-  const out = tmux(t.socket, ["list-keys", "-T", "prefix", key]);
-  return out?.trim() || null;
+/**
+ * What `list-keys` says these keys do right now, verbatim and re-issuable.
+ *
+ * Captured before overwriting so release can put back exactly what was there —
+ * the same rule `set-option -u` follows for the options, rather than guessing at
+ * a default that varies by tmux version and by the user's own config.
+ *
+ * The whole table is listed and matched here rather than asking tmux for the one
+ * key. `list-keys -T prefix .` is the obvious question and is a trap: measured
+ * on 3.7b, the one-key form writes NOTHING to stdout and paints the binding onto
+ * the attached client as a message instead. With the status row taken away by
+ * this same function, that message lands on the top line of the user's shell —
+ * so every take scribbled `bind-key  -T prefix . if-shell …` across the pane
+ * they were looking at, and the answer came back empty on top of it, meaning
+ * their real binding was never saved and never restored. The whole-table form
+ * answers on stdout on every version tried.
+ *
+ * `line` is what release re-issues; `cmd` is the binding without its `bind-key
+ * … <key>` head, which is what the new binding's false branch has to be. Both
+ * come from the same parse because the head is not a fixed width: `-r` and `-N
+ * "note"` ride in front of `-T`, and the key itself comes back escaped (`\#`,
+ * `\$`) exactly as `bind-key` would take it back.
+ */
+export function parseBinding(line: string): { key: string; cmd: string } | null {
+  const m = /^bind-key\s+(?:-\S+\s+(?:"[^"]*"\s+)?)*?-T\s+prefix\s+(\S+)\s+(\S.*)$/.exec(line.trimEnd());
+  return m ? { key: m[1].replace(/\\(.)/g, "$1"), cmd: m[2] } : null;
+}
+
+function bindingsFor(t: TmuxTarget, keys: readonly string[]): Map<string, { line: string; cmd: string }> {
+  const found = new Map<string, { line: string; cmd: string }>();
+  const out = tmux(t.socket, ["list-keys", "-T", "prefix"]);
+  if (!out) return found;
+  for (const line of out.split("\n")) {
+    const b = parseBinding(line);
+    if (!b || !keys.includes(b.key) || found.has(b.key)) continue;
+    found.set(b.key, { line: line.trim(), cmd: b.cmd });
+  }
+  return found;
+}
+
+/** Ours already, from an earlier take on this same server. Recognised so a
+ *  second take does not save our own binding as "what the user had" and nest a
+ *  copy of it inside itself on every sweep. */
+function isOurs(cmd: string): boolean {
+  return cmd.includes("@agx-ask");
+}
+
+/**
+ * The user's command, read back out of ours.
+ *
+ * For the servers a build with the broken query already took: their binding was
+ * never written down, but it was never destroyed either — it is sitting in the
+ * false branch of the binding that replaced it, which is the whole point of
+ * that branch. So the way back is recovered from what is on the server rather
+ * than declared lost, and a machine that has been running the old build gets
+ * its keys back on the next take instead of on the next reboot.
+ *
+ * One level of unquoting, because the branch was a quoted argument when
+ * `list-keys` printed the line: `\"` and `\\` come back as themselves.
+ */
+function ourFalseBranch(cmd: string): string | null {
+  const m = /^if-shell\s+-F\s+"#\{@agx-owned\}"\s+"set-option -w @agx-ask (?:rename|move)"\s+"(.*)"$/.exec(cmd);
+  return m ? m[1].replace(/\\(.)/g, "$1") : null;
 }
 
 function takePrompts(t: TmuxTarget) {
+  const had = bindingsFor(t, PROMPTS.map((p) => p.key));
   for (const { key, ask } of PROMPTS) {
-    const had = bindingFor(t, key);
+    const was = had.get(key);
+    const ours = !!was && isOurs(was.cmd);
     // Stored on the session, so release needs no memory of its own and a server
     // that was killed rather than closed still leaves the way back written down.
-    if (had) tmux(t.socket, ["set-option", "-t", t.id, `@agx-had-${ask}`, had]);
+    if (was && !ours) tmux(t.socket, ["set-option", "-t", t.id, `@agx-had-${ask}`, was.line]);
+    // On a re-take the binding on the server is our own, so the user's is the
+    // one written down last time rather than the one tmux reports now.
+    let stored = ours
+      ? parseBinding((tmux(t.socket, ["show-options", "-qv", "-t", t.id, `@agx-had-${ask}`]) || "").trim())?.cmd
+      : was?.cmd;
+    if (ours && !stored) {
+      // Taken by a build whose query answered on the user's screen instead of
+      // to us. Nothing was written down; the binding itself still carries it.
+      const recovered = ourFalseBranch(was!.cmd);
+      if (recovered) {
+        stored = recovered;
+        tmux(t.socket, ["set-option", "-t", t.id, `@agx-had-${ask}`, `bind-key -T prefix ${key} ${recovered}`]);
+      }
+    }
     tmux(t.socket, [
       "bind-key", "-T", "prefix", key,
       "if-shell", "-F", "#{@agx-owned}",
       `set-option -w @agx-ask ${ask}`,
       // The false branch is the binding as it was, so every session this server
       // is NOT drawing keeps the prompt it has always had.
-      had ? had.replace(/^bind-key\s+(-T\s+\S+\s+)?\S+\s+/, "") : (ask === "rename"
+      stored ?? (ask === "rename"
         ? 'command-prompt -I "#W" "rename-window -- %%"'
         : 'command-prompt "move-window -t \'%%\'"'),
     ]);
@@ -855,11 +927,22 @@ function takePrompts(t: TmuxTarget) {
  */
 function releasePrompts(t: TmuxTarget) {
   const lines: string[] = [];
-  for (const { ask } of PROMPTS) {
+  const now = bindingsFor(t, PROMPTS.map((p) => p.key));
+  for (const { key, ask } of PROMPTS) {
     const had = (tmux(t.socket, ["show-options", "-qv", "-t", t.id, `@agx-had-${ask}`]) || "").trim();
     // `list-keys` prints a complete `bind-key …` line, so this is the user's
     // binding verbatim and not our idea of what the default should have been.
     if (had.startsWith("bind-key")) lines.push(had);
+    else {
+      // Nothing written down. Either we never took this key — in which case the
+      // binding on the server is the user's and there is nothing to do — or it
+      // was taken by the build whose query answered on their screen, and their
+      // command is in the false branch of what is installed. See ourFalseBranch:
+      // this is the path a stale sweep takes on a machine that ran that build.
+      const cmd = now.get(key)?.cmd;
+      const recovered = cmd && isOurs(cmd) ? ourFalseBranch(cmd) : null;
+      if (recovered) lines.push(`bind-key -T prefix ${key} ${recovered}`);
+    }
     tmux(t.socket, ["set-option", "-t", t.id, "-u", `@agx-had-${ask}`]);
   }
   if (!lines.length) return;

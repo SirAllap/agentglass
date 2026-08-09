@@ -97,10 +97,15 @@ afterAll(() => {
 const target = () => ({ pid: 0, socket: SOCK, session: "mine", id: mine });
 const opt = (sess: string, name: string) => out(["show-options", "-qv", "-t", sess, name]);
 const client = () => ({ pid: 0, socket: SOCK, tty: "/dev/null" });
+/** The whole table, then the key — never `list-keys -T prefix ,`. See the note
+ *  on the same helper in tmux-bar.test.ts: the one-key form answers on the
+ *  attached client's screen rather than on stdout. */
+const keyLine = (key: string) => out(["list-keys", "-T", "prefix"]).split("\n")
+  .find((l) => ctl.parseBinding(l)?.key === key) ?? "";
 
 describe.if(has)("a run that was killed does not leave tmux broken", () => {
   test("the takeover is what a crash would leave behind", () => {
-    const before = out(["list-keys", "-T", "prefix", ","]);
+    const before = keyLine(",");
     expect(ctl.setStatusLine(target(), false)).toBe(true);
     // This is the state a SIGKILL freezes: no status row, the claim still set,
     // and the way back written on the session rather than in a variable.
@@ -116,7 +121,7 @@ describe.if(has)("a run that was killed does not leave tmux broken", () => {
     ctl.releaseStale(client());
     expect(out(["show-options", "-t", mine, "-v", "status"])).toBe("");
     expect(opt(mine, "@agx-owned")).toBe("");
-    const back = out(["list-keys", "-T", "prefix", ","]);
+    const back = keyLine(",");
     expect(back).not.toContain("@agx-ask");
     // Restored verbatim, quoting intact — the saved line is re-run through
     // tmux's own parser rather than rebuilt from an argv.
