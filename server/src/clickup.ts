@@ -1238,6 +1238,23 @@ export interface WriteOutcome {
   task?: ProviderTask;
   /** Somebody else changed it between the read and the write. */
   conflict?: boolean;
+  /**
+   * The token was refused — reconnect, rather than try again.
+   *
+   * `conflict` has always been a field rather than a sentence, and this is the
+   * other failure with a different remedy, so it gets the same treatment. The
+   * read path (`CallResult`) has carried it all along and the writes computed
+   * it and threw it away: `put` classifies 401/403 and then every caller
+   * flattened the result to `{ ok: false, error }`.
+   *
+   * NOT a general error taxonomy, and deliberately not: this provider answers
+   * 401 for a card that does not exist (see findTask), so a code claiming to
+   * name the cause would be wrong on exactly the case people hit most. Two
+   * flags for the two remedies the app can actually offer — reload, reconnect
+   * — and prose for the human, which is the only thing that can be honest
+   * about the rest.
+   */
+  unauthorised?: boolean;
 }
 
 /**
@@ -1298,7 +1315,7 @@ export async function assignSelf(taskId: string, on: boolean, expectUpdated?: nu
     assignees: on ? { add: [n] } : { rem: [n] },
   });
   __reset();
-  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error };
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error, unauthorised: r.unauthorised };
 }
 
 /** Move a card to another status. The value must be one the LIST accepts —
@@ -1369,7 +1386,7 @@ export async function setAssignee(taskId: string, userId: number, on: boolean, e
   });
   __reset();
   const me = redacted("clickup")?.accountId;
-  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error };
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error, unauthorised: r.unauthorised };
 }
 
 export async function setStatus(taskId: string, status: string, expectUpdated?: number): Promise<WriteOutcome> {
@@ -1382,7 +1399,7 @@ export async function setStatus(taskId: string, status: string, expectUpdated?: 
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { status });
   __reset();
   const me = redacted("clickup")?.accountId;
-  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error };
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error, unauthorised: r.unauthorised };
 }
 
 /** A drop-down custom field, by id, to one of its own options. */
@@ -1400,7 +1417,10 @@ export async function setField(taskId: string, fieldId: string, optionId: string
       signal: ctl.signal,
     });
     __reset();
-    if (r.status === 401 || r.status === 403) return { ok: false, error: "ClickUp refused this token" };
+    // This one talks to ClickUp directly rather than through `put`, so it
+    // classifies for itself — and has to say the same thing, or a refused token
+    // would be a reconnect prompt on three routes and prose on the fourth.
+    if (r.status === 401 || r.status === 403) return { ok: false, unauthorised: true, error: "ClickUp refused this token" };
     if (!r.ok) return { ok: false, error: `ClickUp answered ${r.status}` };
     return { ok: true };
   } catch {

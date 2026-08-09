@@ -131,6 +131,21 @@ describe("what it says afterwards", () => {
   it("still names the merge first when ClickUp gave no reason at all", () => {
     expect(mergeNote(true, { asked: true, ok: false })).toBe("Merged — but the card did not move: ClickUp refused");
   });
+
+  it("sends a refused token to Settings instead of inviting a retry", () => {
+    // The one failure here that pressing the button again cannot fix. Without
+    // this, "ClickUp refused this token" reads as a hiccup.
+    const said = mergeNote(true, { asked: true, ok: false, unauthorised: true, error: "ClickUp refused this token" });
+    expect(said).toContain("Merged");
+    expect(said).toContain("Reconnect it in Settings");
+  });
+
+  it("still leads with the merge when the token was refused", () => {
+    expect(mergeNote(true, { asked: true, ok: false, unauthorised: true })).toStartWith("Merged");
+    // And a merge that did NOT land is still reported as a failed merge,
+    // whatever ClickUp thought of the token.
+    expect(mergeNote(false, { asked: true, unauthorised: true })).toBe("Merge failed");
+  });
 });
 
 describe("the panel", () => {

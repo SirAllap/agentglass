@@ -61,11 +61,25 @@ const MUTATING = [
   `pathname === "/chat/pane/key"`,
   `pathname === "/codex/send"`,
   `pathname === "/antigravity/send"`,
+  `pathname === "/walkthrough"`,
   `pathname.startsWith("/git/")`,
   `pathname.startsWith("/docker/")`,
   `pathname.startsWith("/issues/")`,
   `pathname.startsWith("/prs/")`,
   `pathname.startsWith("/browser/")`,
+  /*
+   * The five families the first sweep walked past, and they are worth naming
+   * as a group because they share the reason they were missed: none of them
+   * runs a subprocess, so none of them looked like "executes". They change
+   * durable state anyway — a stored credential, a saved command line, a
+   * colleague's card in a shared workspace, the user's own task store, a
+   * scheduled interruption — and "mutates" was always half the rule.
+   */
+  `pathname.startsWith("/providers/")`,
+  `pathname.startsWith("/recipes/")`,
+  `pathname.startsWith("/clickup/")`,
+  `pathname.startsWith("/tasks/write/")`,
+  `pathname.startsWith("/tasks/remind")`,
 ];
 
 describe("the gate a route sits behind", () => {

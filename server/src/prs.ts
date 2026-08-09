@@ -867,7 +867,7 @@ const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
         ... on User{login}
         ... on Team{name}
       }}}
-      commits(last:1){nodes{commit{statusCheckRollup{
+      commits(last:1){nodes{commit{oid statusCheckRollup{
         state
         contexts(first:0){checkRunCountsByState{state count} statusContextCountsByState{state count}}
       }}}}
@@ -1000,11 +1000,12 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   // row is complete the moment this lands. A PR missing from the answer keeps
   // the first-pass row: `checksLoaded` stays false, the review chip stays off,
   // and the stats stay at zero — all of which read as "not yet", which is true.
-  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" | "reviewDecision" | "reviewers"> };
+  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" | "reviewDecision" | "reviewers" | "headSha"> };
   const second = new Map<number, SecondPass>();
   for (const n of checksRes?.data?.search?.nodes ?? []) {
     if (!n?.number) continue;
-    const roll = n.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+    const head = n.commits?.nodes?.[0]?.commit;
+    const roll = head?.statusCheckRollup;
     const ctx = roll?.contexts;
     second.set(n.number, {
       rollup: rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, roll?.state),
@@ -1014,6 +1015,12 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
         changedFiles: n.changedFiles ?? 0,
         reviewDecision: n.reviewDecision ?? null,
         reviewers: mapReviewers(n.reviewRequests?.nodes),
+        /* The commit the rollup above belongs to, read off the same node rather
+           than asked for separately — which is the whole reason it can be
+           trusted as a merge precondition. A row says "green"; that word is
+           about THIS commit, and a merge sent without it lands on whatever the
+           tip is by then. See mergePr's --match-head-commit. */
+        headSha: typeof head?.oid === "string" ? head.oid : undefined,
       },
     });
   }

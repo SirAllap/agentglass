@@ -3,7 +3,11 @@ import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, Di
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
-type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask };
+/* `conflict` and `unauthorised` are the two failures with a remedy the app can
+   name — reload, reconnect — so both are fields. Everything else is prose,
+   because this provider answers 401 for a card that does not exist and a code
+   pretending to know which it was would be wrong on the common case. */
+type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 

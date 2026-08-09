@@ -673,7 +673,18 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-veil { animation: agx-veil-in 140ms ease 220ms both; }
 
 /* A pending request, drawn rather than spelled. Border-only so it costs one
-   element, and paused with every other ambient loop when the page is idle. */
+   element, and paused with every other ambient loop when the page is idle.
+
+   THE definition, and the word matters: this rule used to have a twin. PrPanel
+   carried its own `.agx-spin` in a `<style>` tag it rendered, with a different
+   border and a different reduced-motion answer — and because a style element in
+   the body comes after the stylesheet in the head, the twin won. So every
+   spinner in the app (the workspace's, Docker's, the rescue modal's) quietly
+   changed shape when the pull-request panel was mounted and changed back when
+   it was not. One name, one rule, wherever it is spun.
+
+   Sized by the caller where it is not 11px: `style={{ width, height }}` on the
+   element, which is how the fill-the-pane loader gets its 22. */
 @keyframes agx-spin { to { transform: rotate(360deg); } }
 .agx-spin {
   display: inline-block;
@@ -684,8 +695,13 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   border-top-color: var(--primary);
   animation: agx-spin 0.7s linear infinite;
 }
+/* A pulse, not a slower rotation. This was the twin's answer and it is the
+   better one: a ring still turning, only lazily, reads as a spinner that has
+   hung — which is the opposite of what a spinner is for. Reduced motion asks
+   for less movement, so the movement goes and the "still working" stays. */
+@keyframes agx-breathe { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.85; } }
 @media (prefers-reduced-motion: reduce) {
-  .agx-spin { animation-duration: 2s; }
+  .agx-spin { animation: agx-breathe 1.6s ease-in-out infinite; }
 }
 
 /* The notification list behind the top bar's bell.

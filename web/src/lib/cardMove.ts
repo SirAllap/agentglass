@@ -117,9 +117,19 @@ export function statusColor(statuses: ListStatus[], status: string): string | un
  * request IS merged, and telling somebody otherwise sends them to un-merge
  * something. So the wording always leads with the merge.
  */
-export function mergeNote(merged: boolean, move: { asked: boolean; ok?: boolean; to?: string; error?: string }): string {
+export function mergeNote(
+  merged: boolean,
+  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean },
+): string {
   if (!merged) return "Merge failed";
   if (!move.asked) return "Merged";
   if (move.ok) return `Merged · card moved to ${move.to}`;
+  /*
+   * A refused token is the one failure here that pressing the button again
+   * cannot fix, and the sentence has to say so — otherwise "ClickUp refused
+   * this token" reads as a hiccup and the next move is a retry that will be
+   * refused in exactly the same way. Where to go instead is the actual news.
+   */
+  if (move.unauthorised) return "Merged — the card did not move: ClickUp refused this token. Reconnect it in Settings.";
   return `Merged — but the card did not move: ${move.error || "ClickUp refused"}`;
 }
