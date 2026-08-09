@@ -1476,7 +1476,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const prBranch = chipWt?.branch ?? "";
   useEffect(() => {
     if (!open || IS_DEMO || !prRoot || !prBranch) { setChipPr(null); return; }
-    const key = `${prRoot} ${prBranch}`;
+    const key = `${prRoot}\u0000${prBranch}`;
     const seen = branchPrCache.get(key);
     if (seen && Date.now() - seen.at < BRANCH_PR_TTL) {
       const t = chipTarget(seen.repo, seen.pr);
