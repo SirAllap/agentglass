@@ -148,6 +148,17 @@ type PhoneAttach = {
    * Using this as truth would put the same invisible lie back.
    */
   windowId: string;
+  /**
+   * The pane this socket was opened on — the id the client asked for.
+   *
+   * Routing again, and honest about the same limit as `windowId`: it is where
+   * this attach STARTED, not where the phone has since walked. That is enough
+   * for the one thing it is read for, which is "which project is this person
+   * looking at" when they ask for a new window: a phone that walked away with
+   * `^b n` is not the case the `+` button is for, and the answer would still be
+   * a directory on the same machine rather than a wrong action.
+   */
+  paneId: string;
   /** `window-size` as each window of the group had it before this phone
    *  arrived, so the way out is a restore and not a guess. */
   hadWindowSize: Record<string, string>;
@@ -319,7 +330,7 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
@@ -557,7 +568,7 @@ export function ptyOpen(ws: PtyWs) {
   const session: Session = {
     proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null,
     phoneAttach: attach
-      ? { socket: attach.socket, sessionId: attach.groupedWith, windowId: attach.windowId, hadWindowSize: attach.hadWindowSize, fit: d.fit === true, zoomed: attach.zoomed, phoneSession: attach.session, seq: ++attachSeq }
+      ? { socket: attach.socket, sessionId: attach.groupedWith, windowId: attach.windowId, paneId: String(d.pane), hadWindowSize: attach.hadWindowSize, fit: d.fit === true, zoomed: attach.zoomed, phoneSession: attach.session, seq: ++attachSeq }
       : null,
   };
   sessions.set(ws, session);
@@ -1107,6 +1118,86 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       // is no longer in copy mode.
       if (did.entered) s.copyMode = did.paneId;
       if (!did.inMode) s.copyMode = null;
+      return;
+    }
+
+    /*
+     * The phone's `+`: a new window with the agent in it, in THIS project.
+     *
+     * ── where, and why the server decides it ─────────────────────────────
+     * `new-window` with no `-c` inherits the session's default directory,
+     * which on this machine is the home directory — so the button that was
+     * asked for ("open a Claude here") would have opened one in `~`, in no
+     * repository at all, and the only sign of it would be an agent that
+     * cannot find the file you then ask it about. The pane this socket is
+     * attached to is what "here" means, so its cwd is read from tmux at the
+     * moment of the press (see `paneCwd` — the sweep's copy is up to two
+     * seconds old) and rolled up to that checkout's git root.
+     *
+     * `repoRootOf` and not `projectRootOf`: a pane sitting in a linked
+     * worktree is somebody working on that branch, and folding it up to the
+     * main checkout would open the agent in the wrong tree. A directory that
+     * is not a repository at all keeps the pane's own cwd, which is still
+     * where the person is.
+     *
+     * ── and the flag ─────────────────────────────────────────────────────
+     * The client sends a boolean. Everything that reaches a command line here
+     * — the binary, the flag, the directory — is resolved on this side, which
+     * is the same division `cmd:"issue"` above already makes and the reason
+     * this socket being reachable from the UI is not a way to run things.
+     */
+    if (msg.cmd === "agent") {
+      /*
+       * Above the `!s.tmux` guard below, and that placement is a fix rather
+       * than a style choice.
+       *
+       * Everything under that guard answers a client by DOING something to
+       * tmux, so "there is no tmux" is correctly a silent no-op there. This
+       * command is the one with a caller WAITING on a reply: the phone turns
+       * its `+` into a spinner and only a frame turns it back. Reported from
+       * QA against a session whose sweep had not resolved a target — the press
+       * registered, nothing came back, and the control sat on `…` for as long
+       * as anybody watched. A button with no way out is worse than one that
+       * refuses.
+       */
+      const target = s.tmux;
+      if (!target) {
+        ctl(ws, { t: "openfail", error: "this terminal is not attached to tmux yet — try again in a moment" });
+        return;
+      }
+      const at = s.phoneAttach;
+      const where = at ? paneCwd(target.socket, at.paneId) : null;
+      // Nothing to anchor to is a reason to refuse, not to fall back on a home
+      // directory: an agent in the wrong tree is the failure this exists to
+      // prevent, and it is invisible once it has happened.
+      if (!where || !existsSync(where)) {
+        ctl(ws, { t: "openfail", error: "could not tell which project this pane is in" });
+        return;
+      }
+      const root = repoRootOf(where) ?? where;
+      if (!inScope(root)) {
+        ctl(ws, { t: "openfail", error: "that project is outside the workspace" });
+        return;
+      }
+      const bin = claudeCode.bin();
+      // The window is named after the checkout, which is what tells six of them
+      // apart in a strip — `agentglass`, `width-toast`, `phone-new-tab`.
+      const name = basename(root) || "agent";
+      const opened = bin
+        ? newWindowRunning(target, root, name, [
+            bin,
+            ...(msg.yolo === true ? ["--dangerously-skip-permissions"] : []),
+          ])
+        // No agent on this machine is not a reason to open nothing: a shell in
+        // the right project is still most of what was asked for, and the same
+        // answer `cmd:"issue"` gives.
+        : newWindowRunning(target, root, name, []);
+      if (!opened) {
+        ctl(ws, { t: "openfail", error: "tmux would not open a window" });
+        return;
+      }
+      ctl(ws, { t: "opened", pane: opened.paneId, window: opened.windowId, cwd: root });
+      s.tmuxSweep?.();
       return;
     }
 

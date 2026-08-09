@@ -30,6 +30,15 @@ export type TerminalState = "connecting" | "live" | "gone";
 export interface TerminalHandle {
   /** Send bytes as if they had been typed. The key bar's only route in. */
   send: (bytes: string) => void;
+  /**
+   * Ask the machine's tmux for something, on the socket this pane is on.
+   *
+   * Separate from `send` because it is the opposite kind of thing: `send` puts
+   * bytes on a shell's stdin, this asks the SERVER to act — and the server is
+   * what decides what that means. The only caller today is the `+`, whose whole
+   * security argument is that the client names an intent and never a command.
+   */
+  command: (frame: PtyClientFrame) => void;
   focus: () => void;
 }
 
@@ -62,8 +71,21 @@ interface Props {
    * cursor's row, so it is refusing to guess rather than handing up a line of
    * output. A caller that seeds a field from this must treat `null` as "leave
    * it alone", never as "empty".
+   *
+   * `exact` is whether that text is something an EDIT may be computed against.
+   *
+   * True when the marker was on the cursor's own row, which is the case the
+   * mirror was built for: the field is the line and every keystroke goes on as
+   * the difference. False when the line was rejoined from the rows an agent
+   * wrapped it onto — the text is right to show and its LENGTH is not
+   * trustworthy, because a screen cannot say whether a break was a wrap, a word
+   * wrap that ate its space, or a newline. See boxedLine in terminal-html.ts.
    */
-  onLine?: (text: string | null) => void;
+  onLine?: (text: string | null, exact: boolean) => void;
+  /** A window this client asked the server to open, and the pane it landed on.
+   *  The `+` uses it to put the user inside the tab they just made rather than
+   *  leaving them to find it in a strip that repolls every two seconds. */
+  onOpened?: (opened: { pane: string; window: string; cwd: string } | { error: string }) => void;
   /** How wide and tall the tmux window really is, once the server has said.
    *  Without a fit this is the desk's size, and the difference between it and
    *  what is on screen is exactly what is missing. */
@@ -94,7 +116,7 @@ interface Props {
 const ptyFrame = (frame: PtyClientFrame): string => JSON.stringify(frame);
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { host, pane, root, fit, columns, palette, onState, onTmux, onLine, onGrid, onPane }, ref,
+  { host, pane, root, fit, columns, palette, onState, onTmux, onLine, onGrid, onPane, onOpened }, ref,
 ) {
   const webview = useRef<WebView>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -163,8 +185,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
    * none of them, which is the shape this needs: the socket's lifetime belongs
    * to the pane, not to whoever happens to be listening.
    */
-  const handlers = useRef({ onState, onTmux, onLine, onGrid, onPane });
-  handlers.current = { onState, onTmux, onLine, onGrid, onPane };
+  const handlers = useRef({ onState, onTmux, onLine, onGrid, onPane, onOpened });
+  handlers.current = { onState, onTmux, onLine, onGrid, onPane, onOpened };
 
   const inject = useCallback((js: string): void => {
     webview.current?.injectJavaScript(`${js};true;`);
@@ -179,6 +201,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     send: (bytes: string): void => {
       const ws = socket.current;
       if (ws && ws.readyState === 1) ws.send(ptyFrame({ t: "in", d: bytes }));
+    },
+    command: (frame: PtyClientFrame): void => {
+      const ws = socket.current;
+      if (ws && ws.readyState === 1) ws.send(ptyFrame(frame));
     },
     focus: (): void => inject("window.AGX.focus()"),
   }), [inject]);
@@ -238,6 +264,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         // The only control frame worth surfacing: the server refusing, and
         // saying why. "that pane is gone" is a real answer somebody can act on.
         if (frame.t === "fatal") handlers.current.onState("gone", frame.error);
+        if (frame.t === "opened") {
+          handlers.current.onOpened?.({ pane: frame.pane, window: frame.window, cwd: frame.cwd });
+        }
+        // The refusal, and NOT through onState: see the note on `openfail`.
+        // A button that did not work must not read as a terminal that died.
+        if (frame.t === "openfail") handlers.current.onOpened?.({ error: frame.error });
         if (frame.t === "ready" && frame.pane) handlers.current.onGrid?.(frame.pane);
         // The same numbers as `ready`'s, arriving later because the window
         // moved. `ready` is sent once; this is how a size stays true after it.
@@ -329,7 +361,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }, []);
 
   const onMessage = useCallback((event: WebViewMessageEvent): void => {
-    let message: { t?: string; d?: string; cols?: number; rows?: number; text?: string | null; lines?: number };
+    let message: { t?: string; d?: string; cols?: number; rows?: number; text?: string | null; exact?: boolean; lines?: number };
     try { message = JSON.parse(event.nativeEvent.data) as typeof message; } catch { return; }
     const ws = socket.current;
 
@@ -368,7 +400,14 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
      * that treats the first as the second wipes what somebody is typing.
      */
     if (message.t === "line") {
-      handlers.current.onLine?.(typeof message.text === "string" ? message.text : null);
+      // `exact` absent is the safe reading, not the convenient one: a page from
+      // before this field existed only ever posted a single-row read, which IS
+      // exact. A default of false there would turn every mirror on an older
+      // WebView into a composer.
+      handlers.current.onLine?.(
+        typeof message.text === "string" ? message.text : null,
+        message.exact !== false,
+      );
       return;
     }
     if (message.t === "size" && message.cols && message.rows) {

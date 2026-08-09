@@ -216,10 +216,165 @@ describe("the field's claim on the line", () => {
     expect(screen).toContain("onBlur={() => { claimed.current = false; forgetKeys(); }}");
     const onKey = screen.slice(screen.indexOf("const onKey ="), screen.indexOf("const onState ="));
     expect(onKey).toContain("claimed.current = false;");
-    // Both arms of submit: the one that only sends a carriage return, and the
-    // one that sends the whole line.
-    const submit = screen.slice(screen.indexOf("const submit ="), screen.indexOf("const typed ="));
-    expect(submit.match(/claimed\.current = false;/g)).toHaveLength(2);
+    // All three arms of the send: the exact mirror, which only needs a carriage
+    // return; the line the field READ off a wrapped box, which also only needs
+    // one; and the composer, which sends the whole thing. `submit` was renamed
+    // `commit` when it stopped reading `draft` and started taking the text —
+    // see the note there on the return key arriving inside a change event.
+    const commit = screen.slice(screen.indexOf("const commit ="), screen.indexOf("function typed("));
+    expect(commit.match(/claimed\.current = false;/g)).toHaveLength(3);
+  });
+});
+
+/*
+ * The line an agent wrapped, and the two things that must not happen to it.
+ *
+ * Both were measured on the emulator against a real Claude Code pane, and they
+ * are the same bug seen from two ends. A line longer than the pane is drawn on
+ * rows the PROGRAM lays out — indented under the prompt, no marker of their
+ * own, not flagged as wrapped in the buffer — so the cursor's row has nothing
+ * for `PROMPT` to find and the read answered null:
+ *
+ *   1. the phone's field went EMPTY while the pane held the whole line, which
+ *      is "one shows the text and the other does not";
+ *   2. and the field, now a composer, sent its contents on top of what was
+ *      already there. Captured: `esto es una linea larga escrita en el
+ *      ordenador para ver si el movil la` typed at the computer plus `hola2`
+ *      typed on the phone ran as one prompt, concatenated.
+ */
+describe("a line the field could read but cannot edit", () => {
+  const screen = readFileSync(join(import.meta.dir, "..", "app", "(tabs)", "terminal.tsx"), "utf8");
+  const page = readFileSync(join(import.meta.dir, "..", "src", "terminal", "terminal-html.ts"), "utf8");
+
+  test("the page rejoins the rows rather than answering nothing", () => {
+    expect(page).toContain("var boxedLine = function (end)");
+    expect(page).toContain("if (!match) return boxedLine(end);");
+    // And says which kind of answer it is, every time, so the screen never has
+    // to infer it from the text.
+    expect(page).toContain("exact: true");
+    expect(page).toContain("exact: false");
+  });
+
+  test("it stops at the top of the box instead of walking the transcript", () => {
+    // A marker above the rule belongs to a turn that has already been sent, and
+    // joining one into the field would put an old prompt in front of the live
+    // one. The rule is drawn on the screen, so this is a boundary and not a
+    // guess.
+    expect(page).toContain("if (RULE.test(text.trim())) return null;");
+    expect(page).toContain("for (var up = 1; up <= BOX_ROWS; up++)");
+  });
+
+  test("an inexact read is held as the pane's line, never as the field's", () => {
+    expect(screen).toContain("shadow.current = exact ? text : null;");
+    expect(screen).toContain("onPane.current = exact ? null : text;");
+  });
+
+  test("and Send then sends a carriage return, not the line again", () => {
+    const commit = screen.slice(screen.indexOf("const commit ="), screen.indexOf("function typed("));
+    const from = commit.indexOf("if (onPane.current !== null)");
+    const held = commit.slice(from, commit.indexOf("if (!text) return;", from));
+    expect(held).toContain('terminal.current?.send("\\r")');
+    // The one line that would put the corruption back.
+    expect(held).not.toContain("${text");
+  });
+
+  test("the newline it shows is never put on the wire", () => {
+    /*
+     * Reported from QA: a 102-character line typed at the desk arrives in the
+     * field as 103 characters with a newline at the box's wrap point, because
+     * `boxedLine` joins the rows an agent drew with "\n". The text is whole —
+     * `field.replace("\n","") === original` — and one character wrong.
+     *
+     * It is wrong for DISPLAY only, and this is the assertion that says so. The
+     * field holds what the box looks like; what reaches the pane is a carriage
+     * return and nothing else, because the pane already has the line. So the
+     * newline cannot become a line break inside somebody's prompt, and cannot
+     * become a submit halfway through a shell command.
+     *
+     * Why the join is not simply fixed: the break between two rows is a hard
+     * wrap, a word wrap whose space was never drawn, or a newline somebody
+     * typed, and the screen shows the same pixels for all three. "Ends at the
+     * inner width" does not separate them — Claude word-wraps, so a wrapped row
+     * routinely ends short. That is what `exact: false` means, and this test is
+     * the guarantee that goes with it.
+     */
+    const commit = screen.slice(screen.indexOf("const commit ="), screen.indexOf("function typed("));
+    const from = commit.indexOf("if (onPane.current !== null)");
+    const held = commit.slice(from, commit.indexOf("if (!text) return;", from));
+    // The whole arm: a carriage return, and no path that puts the field's text
+    // — newline and all — on the socket.
+    expect(held).toContain('terminal.current?.send("\\r")');
+    expect(held.match(/terminal\.current\?\.send\(/g)).toHaveLength(1);
+    expect(held).not.toContain("draft");
+    expect(held).not.toContain("${text");
+  });
+
+  test("typing onto it is allowed only where no length has to be believed", () => {
+    /*
+     * An append needs no arithmetic: what to send is the part of the field past
+     * the text that was shown. Everything else does — a DEL count is computed
+     * against a length, and a rejoined line's length is off by one per break
+     * that was a word wrap, because the space at the break is never drawn.
+     */
+    expect(screen).toContain("if (!text.startsWith(onPane.current)) return;");
+    expect(screen).toContain("shadow.current = onPane.current;");
+  });
+});
+
+/*
+ * The return key, and the newline that is not one.
+ *
+ * Measured against a real Claude Code pane: a bare LF does NOT submit — it puts
+ * a second row in the input box, and the cursor then sits on a row with no
+ * prompt marker, which is the state that turns the mirror off. So a keystroke
+ * that arrives as text rather than as an editor action both fails to send and
+ * breaks the field that sent it, which is exactly "I press enter, nothing
+ * happens, and it works the second time".
+ */
+/*
+ * A message with nowhere to appear is not a message.
+ *
+ * Found by QA measuring the `+`'s deadline: the guard released on time and the
+ * sentence saying why never showed up anywhere on screen. `error` had one
+ * reader, inside the "Nothing open" card, which draws only when NO pane is
+ * attached — and a pane is attached whenever the `+` can be pressed. So both
+ * the deadline's words and the server's own "not attached to tmux yet" refusal
+ * were written to a branch that cannot be on screen at the same time as the
+ * button that writes them.
+ */
+describe("where a refusal actually lands", () => {
+  const screen = readFileSync(join(import.meta.dir, "..", "app", "(tabs)", "terminal.tsx"), "utf8");
+
+  test("there is a reader for it while a pane IS open", () => {
+    expect(screen).toContain("{open && error ? (");
+  });
+
+  test("and the empty-state card is no longer the only one", () => {
+    // Two readers, not one: the card for when nothing is attached, and the row
+    // above the key bar for when something is.
+    expect(screen.match(/\{open && error \? \(|tone={error \? "bad" : "quiet"}/g)).toHaveLength(2);
+  });
+
+  test("the deadline writes a sentence, not a code", () => {
+    // Whatever it says has to be readable by somebody holding a phone — this is
+    // the one path where the app is explaining its own silence.
+    expect(screen).toContain('setError("The computer did not answer about the new tab.")');
+  });
+});
+
+describe("what the return key becomes", () => {
+  const screen = readFileSync(join(import.meta.dir, "..", "app", "(tabs)", "terminal.tsx"), "utf8");
+
+  test("a trailing newline in the field is a send, not a character", () => {
+    expect(screen).toContain('if (text.endsWith("\\n"))');
+    expect(screen).toContain('const body = text.replace(/\\n+$/, "");');
+  });
+
+  test("and no newline ever reaches the pane as one", () => {
+    expect(screen).toContain('const forPane = (keys: string): string => keys.replace(/\\n/g, "\\r");');
+    // Both writers of pane bytes from the field go through it.
+    const typed = screen.slice(screen.indexOf("function typedBody("));
+    expect(typed.match(/terminal\.current\?\.send\(forPane\(keys\)\)/g)).toHaveLength(2);
   });
 });
 
