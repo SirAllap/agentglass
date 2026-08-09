@@ -26,6 +26,8 @@ import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs } from "../lib/openPrs.ts";
 import type { CardJump } from "../lib/openCard.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
+import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
+import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { cardSkills, skillCommand, windowName, skillModes, namedForIt, shortName } from "../lib/cardSkills.ts";
@@ -111,11 +113,32 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
    * is, and gone again the moment they pick another one.
    */
   const [forced, setForced] = useState<TaskSourceId | null>(null);
-  const tabs = useMemo(
-    () => sourceTabs(forced && !shown.includes(forced) ? [...shown, forced] : shown),
-    [shown, forced],
-  );
-  const [source, setSource] = useState<SourceId>("all");
+  /* What is actually set up on this machine. Null while the answer is in the
+     air, which `visibleTaskSources` reads as "change nothing yet" — the bar
+     draws the preference and then only ever loses tabs, never gains them, so
+     it cannot be seen rearranging itself. See taskConnected.ts. */
+  const connected = useTaskConnected();
+  const tabs = useMemo(() => {
+    const live = visibleTaskSources(shown, connected);
+    // A forced source is an errand and outranks both the preference and the
+    // connection check: it got here because something asked for a card by id.
+    return sourceTabs(forced && !live.includes(forced) ? [...live, forced] : live);
+  }, [shown, connected, forced]);
+
+  /*
+   * Where this opens, which used to be "all" and nothing else — see
+   * taskLanding.ts for why that was the wrong constant rather than the wrong
+   * default.
+   *
+   * Computed once, lazily, from the bar as it stands at first render. That is
+   * enough to land on: the preference is a synchronous localStorage read, and
+   * the connection check can only ever REMOVE tabs afterwards — so the worst
+   * case is landing on a pinned source that turns out not to be set up, which
+   * the reconcile effect below then steps off. One frame, self-correcting, and
+   * no deferral machinery for the ordinary case.
+   */
+  const [source, setSource] = useState<SourceId>(() => landingSource(tabs.map((t) => t.id)) as SourceId);
+
   /* Standing on a source that has just been hidden — or on "All" when only one
      source is left — is standing on a tab that is no longer there. Step to the
      first one that is. */
@@ -148,8 +171,10 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
         <nav className="flex items-center gap-0.5" aria-label="Sources">
           {tabs.map((s) => (
             // Picking a tab by hand ends the errand, which is what takes a
-            // borrowed tab back off the bar — see `forced`.
-            <button key={s.id} onClick={() => { setForced(null); setSource(s.id); }}
+            // borrowed tab back off the bar — see `forced`. It is also the only
+            // gesture that writes the remembered tab: a jump is somebody
+            // following a link, not moving house. See taskLanding.ts.
+            <button key={s.id} onClick={() => { setForced(null); setSource(s.id); rememberTaskSource(s.id); }}
               aria-current={s.id === source ? "true" : undefined}
               className="text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
               style={s.id === source

@@ -38,7 +38,11 @@ import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRen
 import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, currentTermLineHeight, setTermFont, setTermSize, setTermCursor, setTermLineHeight, SIZE_MIN, SIZE_MAX, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX, type CursorStyle } from "../lib/termPrefs.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "../lib/termFocusPref.ts";
 import { diffSplit, diffWrap, setDiffSplit, setDiffWrap } from "../lib/diffPrefs.ts";
-import { TASK_SOURCES, taskSourceShown, setTaskSourceShown } from "../lib/taskSources.ts";
+import {
+  TASK_SOURCES, taskSourceShown, setTaskSourceShown,
+  orderedTaskSources, moveTaskSource, resetTaskSourceOrder, type TaskSourceId,
+} from "../lib/taskSources.ts";
+import { taskLanding, setTaskLanding, type TaskLanding } from "../lib/taskLanding.ts";
 import {
   SCROLLBACK_SIZES, DEFAULT_SCROLLBACK, DEFAULT_WORD_SEPARATORS,
   currentScrollback, currentWordSeparators, copyOnSelect, rightClickPaste,
@@ -193,18 +197,66 @@ function Toggle({ on, onClick, label, hint, disabled }: {
   return (
     <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled}
       role="switch" ariaChecked={on}
+      /* A real switch: position carries the state, so it reads at a glance
+         instead of having to be parsed. */
+      control={<Switch on={on} />} />
+  );
+}
+
+/** The switch itself, without the row around it. Split out because the task
+ *  sources need one inside a row that is NOT a button — see SourceRow. */
+function Switch({ on }: { on: boolean }) {
+  return (
+    <span className="relative rounded-full transition-colors block" style={{
+      width: 34, height: 19,
+      background: on ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)",
+    }}>
+      <span className="absolute rounded-full transition-transform" style={{
+        width: 15, height: 15, top: 2, left: 2,
+        transform: on ? "translateX(15px)" : "translateX(0)",
+        background: on ? "var(--primary-hover)" : "var(--text3)",
+      }} />
+    </span>
+  );
+}
+
+/**
+ * One task source: whether it is on the bar, and where on it.
+ *
+ * Not a `Toggle`, and the reason is structural rather than cosmetic. `Toggle`
+ * makes the WHOLE ROW the button, which is right for a lone switch and makes a
+ * second control impossible: the arrows would be buttons inside a button, which
+ * is invalid HTML and behaves differently in every browser that has to guess.
+ * So this row is a plain div carrying three controls of its own, and the
+ * trade — losing the click-anywhere target — buys a keyboard-operable reorder.
+ */
+function SourceRow({ id, i, n, onChanged }: {
+  id: TaskSourceId; i: number; n: number; onChanged: () => void;
+}) {
+  const s = TASK_SOURCES.find((x) => x.id === id);
+  if (!s) return null;
+  const on = taskSourceShown(id);
+  return (
+    <SettingRow label={s.label} hint={s.what}
       control={
-        /* A real switch: position carries the state, so it reads at a glance
-           instead of having to be parsed. */
-        <span className="relative rounded-full transition-colors block" style={{
-          width: 34, height: 19,
-          background: on ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)",
-        }}>
-          <span className="absolute rounded-full transition-transform" style={{
-            width: 15, height: 15, top: 2, left: 2,
-            transform: on ? "translateX(15px)" : "translateX(0)",
-            background: on ? "var(--primary-hover)" : "var(--text3)",
-          }} />
+        <span className="flex items-center gap-2.5 justify-self-end">
+          <span className="flex flex-col shrink-0" style={{ gap: 1 }}>
+            {([-1, 1] as const).map((by) => (
+              <button key={by}
+                onClick={() => { moveTaskSource(id, by); onChanged(); }}
+                disabled={by === -1 ? i === 0 : i === n - 1}
+                aria-label={`Move ${s.label} ${by === -1 ? "earlier" : "later"}`}
+                className="agx-btn leading-none px-1 rounded disabled:opacity-25"
+                style={{ color: "var(--text3)", fontSize: 7 }}>
+                {by === -1 ? "▲" : "▼"}
+              </button>
+            ))}
+          </span>
+          <button role="switch" aria-checked={on} aria-label={s.label}
+            onClick={() => { setTaskSourceShown(id, !on); onChanged(); }}
+            className="agx-btn">
+            <Switch on={on} />
+          </button>
         </span>
       } />
   );
@@ -2359,8 +2411,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [dSplit, setDSplitState] = useState(() => diffSplit());
   const [dWrap, setDWrapState] = useState(() => diffWrap());
   /* The source list is read straight from the store on each render; this only
-     exists to ask for that render. */
+     exists to ask for that render. `sourceOrder` is read the same way, so a
+     move is on screen before the write has settled. */
   const [, setSourceTick] = useState(0);
+  const sourceOrder = orderedTaskSources();
+  const [landing, setLandingState] = useState<TaskLanding>(() => taskLanding());
   const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
   useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
 
@@ -2784,21 +2839,44 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   </Section>
                   )}
                   {pane === "tasks" && (
+                  <>
+                  <Section title="Opens on">
+                    {/* There was no setting here before and no default either:
+                        the tab was component state initialised to "all", so
+                        every visit started over — on the one view that does not
+                        include your ClickUp cards. See taskLanding.ts. */}
+                    <Choice<TaskLanding>
+                      label="Tasks view opens on"
+                      hint="Where the Tasks view lands when you come back to it. “Last used” picks up where you left off; naming a source pins it there whatever you did last. Following a card link from a pull request never changes this."
+                      value={landing}
+                      onPick={(v) => { setTaskLanding(v); setLandingState(v); }}
+                      options={[
+                        { v: "last", label: "Last used" },
+                        { v: "all", label: "All" },
+                        ...TASK_SOURCES.map((s) => ({ v: s.id as TaskLanding, label: s.label })),
+                      ]} />
+                  </Section>
                   <Section title="Task sources">
-                    {/* Each one is shown whether or not it is connected — an
-                        unconnected tab says what to do and links to the pane
-                        that does it, and a tab you only find after finding
-                        Settings is a feature nobody discovers. This is for the
-                        person who has read that and is never connecting it. */}
-                    {TASK_SOURCES.map((s) => (
-                      <Toggle key={s.id} on={taskSourceShown(s.id)}
-                        onClick={() => { setTaskSourceShown(s.id, !taskSourceShown(s.id)); setSourceTick((n) => n + 1); }}
-                        label={s.label} hint={s.what} />
+                    {/* Order is the row's own, and the arrows move a source
+                        through the FULL list rather than the visible one — see
+                        moveTaskSource. Arrows rather than dragging: this pane's
+                        every other control works from a keyboard, and a drop
+                        target would be the one that does not. */}
+                    {sourceOrder.map((id, i) => (
+                      <SourceRow key={id} id={id} i={i} n={sourceOrder.length}
+                        onChanged={() => setSourceTick((n) => n + 1)} />
                     ))}
                     <p className="px-3.5 pb-3 -mt-1 text-[10px] t-dim2 max-w-[680px]">
-                      One has to stay. Connecting them lives in Integrations; this only decides what the Tasks view offers.
+                      One has to stay, and a source you have not set up is left off the bar on its own — until nothing is
+                      set up, when all of them show, because that is when the bar is the only place to find them.
+                      Connecting them lives in Integrations.{" "}
+                      <button onClick={() => { resetTaskSourceOrder(); setSourceTick((n) => n + 1); }}
+                        className="agx-btn underline underline-offset-2" style={{ color: "var(--text3)" }}>
+                        Reset order
+                      </button>
                     </p>
                   </Section>
+                  </>
                   )}
                   {pane === "privacy" && <PrivacyPane open={open} />}
                   {pane === "recipes" && <RecipesPane open={open} />}
