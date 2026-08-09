@@ -12,7 +12,7 @@
 // with fourteen checkouts nobody can name.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
-import type { GitRepoRef, IssueDetail, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
+import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
 import type { ProviderTask, ProviderTasksResponse, SavedView, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail } from "../../../shared/providers.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -25,6 +25,7 @@ import { openSettings } from "../lib/openSettings.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs } from "../lib/openPrs.ts";
 import type { CardJump } from "../lib/openCard.ts";
+import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
@@ -83,7 +84,7 @@ const LABEL: Record<string, string> = {
 };
 
 
-export function TasksView({ active, onOpenChatWith, cardJump }: {
+export function TasksView({ active, onOpenChatWith, cardJump, issueJump }: {
   active: boolean;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** A pull request asking for the card it came from — see lib/openCard.ts.
@@ -91,6 +92,9 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
    *  mounted the first time somebody comes here, which may be the click that
    *  sent it: a store read at mount would be a race, a prop is not. */
   cardJump?: CardJump | null;
+  /** A pull request asking for the issue it closes. Same arrangement and same
+   *  reason as `cardJump` — see lib/openIssue.ts. */
+  issueJump?: IssueJump | null;
 }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
@@ -142,6 +146,16 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
     setSource("clickup");
   }, [cardJump?.n]);
 
+  /* The same errand for a GitHub issue. "All" would do — it renders the issue
+     list too — but the tab it belongs to is the honest place to land: what
+     arrives is one issue, and "All" is where you go to see everything at once.
+     Neither this nor the card jump writes the remembered tab. */
+  useEffect(() => {
+    if (!issueJump) return;
+    setForced("github");
+    setSource("github");
+  }, [issueJump?.n]);
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <ViewHeader label="Tasks">
@@ -176,7 +190,7 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
           {source === "all" && <LocalStrip active={active} onOpen={() => setSource("local")} />}
-          {root ? <IssuesBody key={root} root={root} active={active} /> : (
+          {root ? <IssuesBody key={root} root={root} active={active} jump={issueJump} /> : (
             <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>No repository to read issues from.</div>
           )}
         </div>
@@ -186,7 +200,7 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
 }
 
 
-function IssuesBody({ root, active }: { root: string; active: boolean }) {
+function IssuesBody({ root, active, jump }: { root: string; active: boolean; jump?: IssueJump | null }) {
   const [state, setState] = useState<"open" | "closed" | "all">("open");
   const [mine, setMine] = useState(false);
   const [q, setQ] = useState("");
@@ -210,6 +224,27 @@ function IssuesBody({ root, active }: { root: string; active: boolean }) {
     const id = setInterval(load, 60_000);
     return () => clearInterval(id);
   }, [active, load]);
+
+  /*
+   * Serve a "show me this issue" from the pull-request panel.
+   *
+   * Waits for the list, and not out of politeness: an issue that is closed —
+   * which is most of what a merged pull request points at — has no row under
+   * the default "open" filter, so selecting it would open the detail beside a
+   * list that visibly does not contain it. Widening to "all" is the same
+   * courtesy the ClickUp board does when a jump lands on a card its filters
+   * hide.
+   *
+   * `n` is what is compared, so the same issue asked for twice is served twice;
+   * the ref starts at 0, which no request ever is.
+   */
+  const served = useRef(0);
+  useEffect(() => {
+    if (!jump || !rows || jump.n === served.current) return;
+    served.current = jump.n;
+    setSel(jump.number);
+    if (!rows.some((r) => r.number === jump.number)) setState("all");
+  }, [jump?.n, rows]);
 
   const workFor = useMemo(() => new Map(work.map((w) => [w.number, w])), [work]);
   // No timer here any more: NoteStrip owns its own life, and two timers over
@@ -363,6 +398,19 @@ function Detail({ root, number, onSay, onChanged }: {
   }, [root, number]);
   useEffect(load, [load]);
 
+  /* The pull requests for this issue, asked for separately so the description
+     is on screen without waiting on a second round trip to GitHub. */
+  const [prs, setPrs] = useState<IssuePr[]>([]);
+  const [prsErr, setPrsErr] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setPrs([]); setPrsErr(false);
+    api.issuePrs(root, number)
+      .then((r) => { if (live) { setPrs(r.prs ?? []); setPrsErr(!r.ok); } })
+      .catch(() => { if (live) setPrsErr(true); });
+    return () => { live = false; };
+  }, [root, number]);
+
   const act = async (fn: () => Promise<{ ok: boolean; error?: string; detail?: string; dirty?: string[] }>) => {
     setBusy(true);
     const r = await fn();
@@ -441,6 +489,54 @@ function Detail({ root, number, onSay, onChanged }: {
         </Field>
         <Field k="Milestone">{d.milestone ?? "None"}</Field>
       </div>
+
+      {/* The pull requests this issue produced.
+          The mirror of the pull-request sidebar's "Merging this closes", and
+          the reason the pair is worth having: standing on an issue, the
+          question is almost always "is somebody already on this", and the
+          answer was a trip to a browser.
+
+          Better founded than the ClickUp version of the same row. That one
+          searches GitHub for a card id and depends on the team naming its
+          branches after it; this is a real edge in GitHub's own graph. Which
+          is why the two claims are kept apart — a pull request LINKED to this
+          issue will close it, one that merely mentions it has promised
+          nothing. */}
+      {(!!prs.length || prsErr) && (
+        <div className="mb-4 pt-3" style={{ borderTop: edge(10) }}>
+          <div className="text-[8.5px] uppercase tracking-[0.18em] mb-1.5 flex items-center gap-2" style={{ color: "var(--text4)" }}>
+            Pull requests {!!prs.length && <span>{prs.length}</span>}
+            {prsErr && <span style={{ color: "var(--warning)" }}>· could not ask GitHub — this is not “none”</span>}
+          </div>
+          {prs.map((p) => (
+            <div key={p.number} className="flex items-center gap-2 py-1">
+              <button onClick={() => openPrs(String(p.number), p.state === "OPEN" ? "open" : "all")}
+                className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
+                title="Open this in Pull Requests">
+                <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
+                <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
+                  style={p.state === "MERGED"
+                    ? { color: "#a371f7", background: "#a371f721" }
+                    : p.state === "CLOSED"
+                    ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                    : { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
+                  {p.draft ? "DRAFT" : p.state}
+                </span>
+                {/* Said only of the ones it is true of. A row with nothing here
+                    mentioned the issue and made no promise about it. */}
+                {p.linked && (
+                  <span className="ml-1.5 text-[10px]" style={{ color: "var(--text4)" }}
+                    title="linked to this issue on GitHub — merging it closes this">closes this</span>
+                )}
+                <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{p.title || p.url}</div>
+              </button>
+              <a href={externalUrl(p.url)} target="_blank" rel="noreferrer noopener"
+                className="agx-btn text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                style={{ color: "var(--text3)", border: edge(20) }} title="Open on GitHub">↗</a>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
         {d.body.trim() ? <Markdown text={d.body} /> : <span style={{ color: "var(--text3)" }}>No description.</span>}

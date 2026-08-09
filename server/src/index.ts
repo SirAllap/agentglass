@@ -72,7 +72,7 @@ import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
 import { procDetail, revealEnv } from "./procdetail.ts";
 import {
-  listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
+  listIssues, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
@@ -2022,6 +2022,13 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/issues/detail") {
       return json(await issueDetail(url.searchParams.get("root") || "", url.searchParams.get("number")));
+    }
+    /* The pull requests an issue produced — the other half of the link the
+       pull-request panel already draws with `closingIssuesReferences`. Its own
+       route rather than a field on the detail: it is a second round trip to
+       GitHub, and the description should not wait on it. */
+    if (pathname === "/issues/prs") {
+      return json(await issuePullRequests(url.searchParams.get("root") || "", url.searchParams.get("number")));
     }
     if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
 

@@ -36,6 +36,7 @@ import { requestFilesReveal } from "./lib/filesReveal.ts";
 import { onOpenSettings, openSettings } from "./lib/openSettings.ts";
 import { onOpenPrs, onOpenPr } from "./lib/openPrs.ts";
 import { onOpenCard, openCard } from "./lib/openCard.ts";
+import { onOpenIssue } from "./lib/openIssue.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
@@ -167,12 +168,16 @@ export default function App() {
   const [prJump, setPrJump] = useState<import("./lib/openPrs.ts").PrJump | null>(null);
   /** The other direction — a pull request asking for the card it came from. */
   const [cardJump, setCardJump] = useState<import("./lib/openCard.ts").CardJump | null>(null);
+  /** And a pull request asking for the GitHub issue it closes — see
+   *  lib/openIssue.ts for why that link used to leave the app. */
+  const [issueJump, setIssueJump] = useState<import("./lib/openIssue.ts").IssueJump | null>(null);
   useEffect(() => onOpenSettings((pane) => { setSettingsPane(pane ?? null); setSettingsOpen(true); }), []);
   useEffect(() => onOpenPrs((j) => { setPrJump(j); goView("pr"); }), [goView]);
   /* The other half: a sender that knows exactly which pull request it means
      gets the panel's jump, which selects and opens, instead of a search. */
   useEffect(() => onOpenPr(({ repo, number }) => { requestPrJump(repo, number); goView("pr"); }), [goView]);
   useEffect(() => onOpenCard((j) => { setCardJump(j); goView("tasks"); }), [goView]);
+  useEffect(() => onOpenIssue((j) => { setIssueJump(j); goView("tasks"); }), [goView]);
   /** Which machine tab is open, or none. One piece of state for both surfaces:
    *  the dashboard header and the workspace rail open the same panel, and a
    *  second copy would be a second poll of /proc. */
@@ -895,6 +900,7 @@ export default function App() {
       <Workspace
         prJump={prJump}
         cardJump={cardJump}
+        issueJump={issueJump}
         view={wsView} onView={setWsView}
         onSkills={() => setSkillsOpen(true)}
         onSettings={() => setSettingsOpen(true)}

@@ -2214,7 +2214,7 @@ let tokenCache: { at: number; token: string } | null = null;
  * subprocess buys nothing. It stays as the fallback for the case the token
  * cannot be read (an unusual `gh` setup, a keyring that will not answer).
  */
-async function ghGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
+export async function ghGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
   const token = await ghToken();
   if (!token) return ghJson<T>(["api", "graphql", "-f", `query=${query}`,
     ...Object.entries(variables).flatMap(([k, v]) => ["-F", `${k}=${String(v)}`])]);

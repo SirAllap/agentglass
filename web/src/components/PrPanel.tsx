@@ -58,6 +58,7 @@ import { cardRef, chipAction } from "../lib/cardRef.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
+import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -4419,9 +4420,23 @@ function PrSidebar({ d, onEditField }: {
         <SidebarSection title="Development">
           <div className="flex flex-col gap-1">
             <span className="text-[10px]" style={{ color: "var(--text3)" }}>Merging this closes:</span>
+            {/* Into the Issues view, not out to a browser.
+                This link has been here for a while and was the only one in the
+                app that left: everything else that knows about another view
+                goes TO it — a card id opens the board, a PR number opens the
+                pull-request panel. The arrow beside it is the way out, kept
+                because an issue in another repository is a real case and the
+                Issues view reads one repository. See lib/openIssue.ts. */}
             {d.linkedIssues.map((i) => (
-              <a key={i.number} href={externalUrl(i.url)} target="_blank" rel="noreferrer noopener"
-                className="text-[11px] truncate" style={{ color: "var(--primary)" }} title={i.title}>#{i.number} {i.title}</a>
+              <span key={i.number} className="flex items-center gap-1 min-w-0">
+                <button onClick={() => openIssue(i.number)}
+                  className="agx-btn text-[11px] truncate text-left min-w-0"
+                  style={{ color: "var(--primary)" }}
+                  title={`Open #${i.number} in Tasks — ${i.title}`}>#{i.number} {i.title}</button>
+                <a href={externalUrl(i.url)} target="_blank" rel="noreferrer noopener"
+                  className="agx-btn text-[9px] shrink-0" style={{ color: "var(--text4)" }}
+                  title="Open on GitHub">↗</a>
+              </span>
             ))}
           </div>
         </SidebarSection>

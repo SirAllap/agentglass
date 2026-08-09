@@ -2713,6 +2713,25 @@ export interface IssueDetail extends IssueRow {
   milestone: string | null;
   work: IssueWork | null;
 }
+/**
+ * A pull request that has something to do with an issue.
+ *
+ * `linked` is the difference between the two things GitHub's timeline calls a
+ * reference, and it is not cosmetic: a linked pull request is one somebody
+ * attached to the issue and is what will close it, while a mention is a `#123`
+ * that appeared in a body somewhere. Showing the second as the first promises
+ * a fix nobody committed to.
+ */
+export interface IssuePr {
+  number: number;
+  title: string;
+  /** OPEN | CLOSED | MERGED, as GitHub spells it. */
+  state: string;
+  url: string;
+  draft: boolean;
+  linked: boolean;
+}
+export interface IssuePrsReport { ok: boolean; prs: IssuePr[]; error?: string }
 export interface IssuesReport { ok: boolean; issues: IssueRow[]; error?: string }
 export interface IssueStartResult {
   ok: boolean; error?: string; work?: IssueWork; prompt?: string; cwd?: string;
