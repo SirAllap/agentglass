@@ -1380,8 +1380,46 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
      request". Silence used to cover both, and the two want different actions
      from you — one is nothing to do, the other is `gh auth login`. */
   const [prAskFailed, setPrAskFailed] = useState<string | null>(null);
+  /* Two reasons to ask GitHub again — see the effect below. `gitTick` moves on
+     any repository mutation this app can see; `refocus` on coming back to the
+     window, which is the only way a merge done in a browser reaches us. */
+  const [gitTick, setGitTick] = useState(0);
+  const [refocus, setRefocus] = useState(0);
+  useEffect(() => subscribeGitChanged(() => setGitTick((n) => n + 1)), []);
+  useEffect(() => {
+    const back = () => { if (document.visibilityState === "visible") setRefocus((n) => n + 1); };
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
+    return () => { window.removeEventListener("focus", back); document.removeEventListener("visibilitychange", back); };
+  }, []);
   // Whoever opened it. A branch you are standing in is yours to care about
   // however it got its pull request.
+  /*
+   * Asked again, rather than once and for ever.
+   *
+   * The dependencies used to be the root and the branch alone, which means
+   * this asked when you ARRIVED on a branch and never again. A pull request
+   * merged from anywhere else — the browser, another session, an auto-merge —
+   * left the chip saying "2 PRs land here" for as long as the panel stayed on
+   * that branch. Reported from a screenshot of exactly that, two minutes after
+   * both of them had merged.
+   *
+   * Two triggers, and neither is a poll:
+   *
+   *   `gitTick` is the same counter the rest of this panel already re-reads on
+   *   — any repository mutation from this app, another window, or a `git` typed
+   *   into the terminal — so a merge that lands through the app is reflected
+   *   with everything else.
+   *
+   *   `refocus` covers the case the bus cannot see: the merge happened on
+   *   github.com, in a browser, and nothing on this machine moved. Coming back
+   *   to the window is the moment a stale answer is about to be read, and it is
+   *   also the only moment worth spending a GitHub call on.
+   *
+   * Deliberately NOT a timer. `prsForBranch` shells out to `gh`, and the rate
+   * limit is shared with the PR panel; a chip nobody is looking at should cost
+   * nothing.
+   */
   useEffect(() => {
     if (!root || !currentBranchName) { setBranchPr(null); setPrsOntoBranch([]); setPrRepo(null); setPrAskFailed(null); return; }
     let live = true;
@@ -1407,7 +1445,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
          "could not ask". */
       .catch(() => { if (live) { setBranchPr(null); setPrsOntoBranch([]); setPrRepo(null); setPrAskFailed("GitHub did not answer"); } });
     return () => { live = false; };
-  }, [root, currentBranchName]);
+  }, [root, currentBranchName, gitTick, refocus]);
   /* The chip's whole decision, in one value: whether there is anything to draw
      and, if there is, exactly which pull request pressing it opens. Held here
      rather than spelled into the `onClick` because that is where it was when it
