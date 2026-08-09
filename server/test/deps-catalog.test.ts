@@ -67,13 +67,69 @@ describe("the requirements catalogue matches what the app actually runs", () => 
     }
   });
 
-  test("the tools with a working fallback are deliberately absent", () => {
-    // rg and fd make search faster; without them it falls back to `git grep`
-    // and a walk, so nothing stands down and neither earns a row. Written down
-    // because the next person to read the spawn list will wonder why.
-    expect(ALL).toContain('Bun.which("rg")');
-    expect(ALL).toContain('Bun.which("fd")');
-    expect(DEPS.some((d) => d.bin === "rg" || d.bin === "fd")).toBe(false);
+  /**
+   * Every binary the app runs is either catalogued or exempt ON PURPOSE.
+   *
+   * The check above this one runs catalogue → source, and that direction alone
+   * is what let three tools go missing: `tailscale`, `codex` and `agy` were all
+   * being spawned, all gating a whole feature, and none of them listed. Nothing
+   * failed, because nothing was asking this question.
+   *
+   * The exemptions are the point. A tool leaves this list by having a reason
+   * written next to it, so "it is not in the catalogue" stops being something
+   * that happens by omission and becomes something somebody decided.
+   */
+  const EXEMPT: Record<string, string> = {
+    // Faster search and file-finding. Without them it falls back to `git grep`
+    // and `git ls-tree`, so nothing stands down — the feature is there either
+    // way, and the panel reports which one answered. This was the catalogue's
+    // own call before this test existed and it still holds.
+    rg: "search falls back to `git grep`; nothing stands down",
+    fd: "file-finding falls back to `git ls-tree`; nothing stands down",
+    fdfind: "the Debian name for fd, looked for beside it",
+    // POSIX furniture. A machine without these is not a machine this app can be
+    // told to run on, and a row for `cp` would be noise on a page whose value
+    // is that everything on it is worth reading.
+    sh: "POSIX; present anywhere this runs",
+    cp: "POSIX; present anywhere this runs",
+    du: "POSIX; present anywhere this runs",
+    ps: "POSIX; present anywhere this runs, and the fallback when /proc is absent",
+    // Probed as the older alias beside `python3`, which IS catalogued.
+    python: "tried alongside python3, which has the row",
+  };
+
+  test("every binary the app runs is catalogued, or exempt with a reason", () => {
+    const catalogued = new Set(DEPS.map((d) => d.bin));
+    const unexplained = [...spawned()]
+      .filter((bin) => !catalogued.has(bin) && !(bin in EXEMPT))
+      .sort();
+    // The message names them, because "expected [] to equal [x]" on a list of
+    // binaries is a puzzle and this is meant to be read by whoever added one.
+    expect(unexplained.join(", ") || null).toBeNull();
+  });
+
+  test("no exemption outlives the code that earned it", () => {
+    // An exemption for something the app no longer runs is a note about a
+    // decision nobody can check any more.
+    const run = spawned();
+    const stale = Object.keys(EXEMPT).filter((bin) => !run.has(bin)).sort();
+    expect(stale.join(", ") || null).toBeNull();
+  });
+
+  test("the agent CLIs are listed, because each is a whole engine", () => {
+    // The gap this test was written for. `codex` and `agy` are chat engines
+    // beside Claude Code: absent, the engine is simply not offered, which is
+    // exactly the shape `task` has and the reason `task` earned its row.
+    for (const id of ["codex", "agy"]) {
+      const d = DEPS.find((x) => x.id === id);
+      expect(d?.required).toBe(false);
+      expect(ALL).toContain(`Bun.which("${d?.bin}")`);
+    }
+  });
+
+  test("Tailscale is listed, because remote access has no other route", () => {
+    expect(ALL).toContain('Bun.which("tailscale"');
+    expect(DEPS.some((d) => d.bin === "tailscale")).toBe(true);
   });
 
   test("every required tool can be offered, not just linked", () => {
