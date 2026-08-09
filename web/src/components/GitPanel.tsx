@@ -781,6 +781,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [remoteQuery, setRemoteQuery] = useState("");
   const [tags, setTags] = useState<GitTag[]>([]);
   const [reflog, setReflog] = useState<GitReflogEntry[]>([]);
+  /** WIP snapshots — named checkpoints that never touch the tree. */
+  const [snapshots, setSnapshots] = useState<{ sha: string; ref: string; time: string; label: string }[]>([]);
+  const [snapshotLabel, setSnapshotLabel] = useState("");
   /**
    * Whose history the Log shows: this checkout's own, or every branch.
    *
@@ -1111,7 +1114,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       api.gitWorktrees(root).then((r) => { if (seq === viewSeq.current) setWorktrees(r.worktrees); }).catch(() => {});
     }
     else if (view === "log") track(api.gitGraph(root, 500, logScope), (r) => { setGraph(r.lines); setGraphBranch(r.branch); });
-    else if (view === "stashes") track(api.gitStashes(root), (r) => setStashes(r.stashes));
+    else if (view === "stashes") {
+      track(api.gitStashes(root), (r) => setStashes(r.stashes));
+      track(api.gitSnapshots(root), (r) => setSnapshots(r.snapshots ?? []));
+    }
     else if (view === "worktrees") track(api.gitWorktrees(root), (r) => setWorktrees(r.worktrees));
     else if (view === "tidy") track(api.gitTidy(root), setTidy);
     else if (view === "remotes") {
@@ -1831,6 +1837,17 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (op === "drop" && !(await ask({ title: "Drop this stash?", body: "The stashed changes are gone.", danger: true, confirmLabel: "Drop" }))) return;
     const fn = op === "apply" ? api.gitStashApply : op === "pop" ? api.gitStashPop : api.gitStashDrop;
     if (await act(() => fn(root, index), op + "ed")) reloadStashes();
+  };
+  /** Capture the tree as a named checkpoint — touches nothing, restore is
+   *  always possible, cap is 30. */
+  const snapshotNow = async () => {
+    const label = snapshotLabel.trim();
+    const ok = await act(() => api.gitSnapshotCreate(root, label || undefined), label ? `Snapshot "${label}"` : "Snapshot", "snapshot");
+    if (ok) {
+      setSnapshotLabel("");
+      api.gitSnapshots(root).then((r) => setSnapshots(r.snapshots ?? [])).catch(() => {});
+      api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
+    }
   };
 
   /** Repo-relative, which is what the tree nests on — the change list carries
@@ -2934,6 +2951,38 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                 ) : view === "stashes" ? (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
                     {writeEnabled && <button onClick={stashPush} disabled={busy || tree?.clean} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }}>⇩ stash all changes</button>}
+                    {/* Snapshots: named checkpoints that never touch the tree.
+                        stash push MOVES work off the tree; a snapshot copies it
+                        and leaves the tree alone — so "before I try this" can
+                        restore even after the experiment goes sideways. */}
+                    {writeEnabled && (
+                      <div className="flex items-center gap-2 mb-2 max-w-lg">
+                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="flex-1 px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
+                        <button onClick={snapshotNow} disabled={busy || tree?.clean} className="text-[11px] px-3 py-1.5 rounded-lg font-medium whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime">⟳ snapshot now</button>
+                      </div>
+                    )}
+                    {snapshots.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">snapshots</div>
+                        <div className="space-y-0.5">
+                          {snapshots.map((s) => (
+                            <div key={s.ref} className="group px-2.5 py-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--info) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 18%, transparent)" }}>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9.5px] tabular-nums font-mono" style={{ color: "var(--info)" }}>{s.sha.slice(0, 7)}</span>
+                                <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--text)" }}>{s.label || "untitled snapshot"}</span>
+                                <span className="shrink-0 text-[9.5px] t-dim2">{s.time}</span>
+                                {writeEnabled && (
+                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                                    <button onClick={() => act(() => api.gitSnapshotRestore(root, s.sha), "Restored snapshot")} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} title="Apply the snapshot's tree onto the current one">restore</button>
+                                    <button onClick={async () => { if (await ask({ title: "Delete this snapshot?", body: "The checkpoint is gone for good.", danger: true, confirmLabel: "Delete" })) act(() => api.gitSnapshotDelete(root, s.sha), "Deleted snapshot"); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>delete</button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
                     {shownStashes.map((s, i) => (
                       <div key={s.ref} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
@@ -3096,12 +3145,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         reset or rebase recoverable, which is why it earns a tab
                         of its own rather than living inside the log. */}
                     {incReflog.rows.map((e, i) => (
-                      <div key={e.ref} {...rowProps(i === rowIdx)} className="flex items-center gap-3 px-2.5 py-1 rounded-md" onClick={() => setRowIdx(i)}>
+                      <div key={e.ref} {...rowProps(i === rowIdx)} className="group flex items-center gap-3 px-2.5 py-1 rounded-md" onClick={() => setRowIdx(i)}>
                         <span className="shrink-0 text-[9.5px] tabular-nums t-dim2" style={{ minWidth: 68 }}>{e.ref}</span>
                         <span className="shrink-0 text-[9.5px] tabular-nums" style={{ color: "var(--primary-hover)" }}>{e.shortHash}</span>
                         <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ minWidth: 92, color: "var(--text2)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>{e.action}</span>
                         <span className="min-w-0 flex-1 truncate text-[11px]" style={{ color: "var(--text)" }}>{e.subject}</span>
                         <span className="shrink-0 text-[9.5px] t-dim2">{e.date}</span>
+                        <div className={`shrink-0 flex items-center gap-1 transition-opacity ${i === rowIdx ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                          <button onClick={(ev) => { ev.stopPropagation(); navigator.clipboard?.writeText(e.shortHash).catch(() => {}); }} className="agx-btn text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Copy the sha">copy</button>
+                          {/* The point of the reflog: whatever you did, the
+                              entry before it is where HEAD was. Reset here is
+                              the recovery move, and it is hard by default — the
+                              whole reason this list exists. The confirm below
+                              is the guard. */}
+                          <button onClick={(ev) => { ev.stopPropagation(); resetTo(e.shortHash, "hard"); }} className="agx-btn text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }} title={`Reset the current branch to this entry (${e.subject}) — hard, discarding working-tree changes`}>reset here</button>
+                        </div>
                       </div>
                     ))}
                     {!reflog.length && <PaneEmpty busy={busyView === "reflog"} what="reflog entries" />}

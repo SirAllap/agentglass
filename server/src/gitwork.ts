@@ -802,7 +802,9 @@ export function push(rootIn: string): GitActionResult {
 export function pull(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
-  return run(root, ["pull", "--ff-only"]);
+  // Dirty tree + --ff-only fails; auto-stash makes the pull go through and
+  // restores the changes after, or leaves them safely stashed on conflict.
+  return withAutoStash(root, () => run(root, ["pull", "--ff-only"]));
 }
 /**
  * Keep ahead/behind honest, in the background.
@@ -1407,7 +1409,7 @@ export function cherryPick(rootIn: string, hashesIn: unknown, noCommitIn?: unkno
   // panel sends them that way already. Sorting here would only create a
   // second place to get the direction wrong.
   args.push(...hashes);
-  return run(root, args);
+  return withAutoStash(root, () => run(root, args));
 }
 
 /** Finish a paused cherry-pick once every conflict is resolved. */
@@ -1599,7 +1601,7 @@ export function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): G
   const todoFile = join(td, "todo");
   writeFileSync(todoFile, todo.join("\n") + "\n");
   try {
-    return run(root, ["-c", "core.editor=true", "-c", `sequence.editor=cp ${todoFile}`, "rebase", "-i", base]);
+    return withAutoStash(root, () => run(root, ["-c", "core.editor=true", "-c", `sequence.editor=cp ${todoFile}`, "rebase", "-i", base]));
   } finally {
     try { rmSync(td, { recursive: true, force: true }); } catch { /* best effort */ }
   }
@@ -3244,6 +3246,135 @@ function stashOp(rootIn: string, op: "apply" | "pop" | "drop", index: number): G
 export const stashApply = (r: string, i: number) => stashOp(r, "apply", i);
 export const stashPop = (r: string, i: number) => stashOp(r, "pop", i);
 export const stashDrop = (r: string, i: number) => stashOp(r, "drop", i);
+
+// --- WIP snapshots ----------------------------------------------------------
+/**
+ * A named full-tree snapshot: `git stash create` makes a commit that touches
+ * NOTHING in the working tree, and `update-ref` hangs it off
+ * `refs/agx/wip/<timestamp>` where it is visible, listable and deletable
+ * without ever disturbing the working tree. Restore applies that commit's
+ * tree back — the same machinery a stash apply uses, without the stash stack
+ * bookkeeping.
+ *
+ * Cap at 30, pruning the oldest on create: a safety net that grows forever
+ * is a leak, and anything older than the 30 most recent is no longer a
+ * "quick undo" anyway.
+ */
+
+const WIP_CAP = 30;
+
+export type WipSnapshot = { sha: string; ref: string; time: string; label: string };
+
+/** `stash create` mangles its -m into "On <branch>: -m <label>", so the label
+ *  lives in the ref name instead: refs/agx/wip/<ts>-<label>. Sanitised so a
+ *  ref can never be smuggled in via a label. */
+function wipRef(ts: number, label: string): string {
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return `refs/agx/wip/${ts}${slug ? "-" + slug : ""}`;
+}
+function wipLabelFromRef(ref: string): string {
+  const m = /^refs\/agx\/wip\/\d+-(.+)$/.exec(ref);
+  return m ? m[1]!.replace(/-/g, " ") : "";
+}
+/** The timestamp a snapshot ref was created at — embedded in the name because
+ *  `for-each-ref`'s creatordate is the commit's committer date, which the
+ *  stash commits all share to the second. */
+function wipTs(ref: string): number {
+  const m = /^refs\/agx\/wip\/(\d+)/.exec(ref);
+  return m ? Number(m[1]) : 0;
+}
+
+/** All snapshots, newest first. */
+export function listSnapshots(rootIn: unknown): { ok: boolean; snapshots?: WipSnapshot[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const fmt = `%(refname)${US}%(objectname)${US}%(creatordate:iso8601)`;
+  const r = git(root, ["for-each-ref", `--format=${fmt}`, "refs/agx/wip"]);
+  const snapshots: WipSnapshot[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [ref, sha, time] = line.split(US);
+    if (!ref || !sha) continue;
+    snapshots.push({ sha, ref, time: time || "", label: wipLabelFromRef(ref) });
+  }
+  snapshots.sort((a, b) => wipTs(b.ref) - wipTs(a.ref));
+  return { ok: true, snapshots };
+}
+
+/** Capture the working tree as a snapshot. Requires a dirty tree (a clean
+ *  snapshot is a nothing-burger), and label may be empty. */
+export function createSnapshot(rootIn: unknown, labelIn: unknown): GitActionResult & { sha?: string; ref?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (treeState(root) !== "clean") return { ok: false, error: `cannot snapshot while ${treeState(root)}` };
+  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
+  if (!dirty) return { ok: false, error: "the working tree is clean — nothing to snapshot" };
+  const label = typeof labelIn === "string" ? labelIn.trim().slice(0, 80) : "";
+  // Note: no -u. `git stash create` ignores it (it becomes part of the
+  // message) — snapshots capture tracked changes, which is what a safety net
+  // needs to guarantee; untracked files are already cheap to regenerate.
+  const made = git(root, ["stash", "create", "-m", label || "wip snapshot"]);
+  if (made.code !== 0 || !made.stdout.trim()) return { ok: false, error: "could not create a snapshot commit" };
+  const sha = made.stdout.trim();
+  if (!validHash(sha)) return { ok: false, error: "snapshot produced an unusable commit" };
+  const ref = wipRef(Date.now(), label);
+  const upd = run(root, ["update-ref", ref, sha]);
+  if (!upd.ok) return upd;
+  // Prune the oldest beyond the cap — the ts lives in the ref name.
+  const all = git(root, ["for-each-ref", "--format=%(refname)", "refs/agx/wip"]).stdout.trim().split("\n").filter(Boolean);
+  all.sort((a, b) => wipTs(b) - wipTs(a));
+  for (const old of all.slice(WIP_CAP)) run(root, ["update-ref", "-d", old]);
+  return { ok: true, output: upd.output, sha, ref };
+}
+
+/** Bring a snapshot's tree back. Applies the snapshot commit's tree onto the
+ *  current tree — the stash-apply machinery, which leaves the snapshot ref
+ *  in place (restore is not a one-shot ticket). */
+export function restoreSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const sha = typeof shaIn === "string" ? shaIn.trim() : "";
+  if (!validHash(sha)) return { ok: false, error: "invalid snapshot sha" };
+  return run(root, ["stash", "apply", sha]);
+}
+
+/** Delete a snapshot for good. */
+export function deleteSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const sha = typeof shaIn === "string" ? shaIn.trim() : "";
+  if (!validHash(sha)) return { ok: false, error: "invalid snapshot sha" };
+  // The ref is `refs/agx/wip/<timestamp>`, not the sha — find the one that
+  // points at this snapshot.
+  const r = git(root, ["for-each-ref", `--format=%(refname)${US}%(objectname)`, "refs/agx/wip"]);
+  for (const line of r.stdout.split("\n")) {
+    const [ref, obj] = line.split(US);
+    if (obj === sha) return run(root, ["update-ref", "-d", ref || ""]);
+  }
+  return { ok: false, error: "no snapshot with that sha" };
+}
+
+/** Auto-stash wrapper for history surgery: if the tree is dirty, push the
+ *  changes (with untracked) first, run the op, then pop. If the op fails,
+ *  LEAVE the stash — the working tree is exactly as the failure left it, and
+ *  popping would smear the failure's partial state over the WIP. The error
+ *  names the stash index so the user can recover it. */
+export function withAutoStash(root: string, op: () => GitActionResult): GitActionResult {
+  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
+  if (!dirty) return op();
+  const pushed = git(root, ["stash", "push", "--include-untracked", "-m", "agx: auto-stash before surgery"]);
+  if (pushed.code !== 0) return { ok: false, error: "auto-stash failed — the operation was not started" };
+  const r = op();
+  if (!r.ok) return { ...r, error: `${r.error ?? "operation failed"} — your changes are safe in stash@{0} ("agx: auto-stash before surgery")` };
+  const popped = git(root, ["stash", "pop", "stash@{0}"]);
+  if (popped.code !== 0) {
+    // The op succeeded; the pop hit a conflict (the op touched the same files).
+    // Leaving the stash is the only honest option — the tree is NOT dirty by
+    // us, it is the op's result, and the WIP is intact on the stack.
+    return { ...r, error: `${r.error ?? "operation succeeded"}, but restoring your changes hit a conflict — they are safe in stash@{0} ("agx: auto-stash before surgery")` };
+  }
+  return r;
+}
 
 // --- interactive hunk staging (lazygit's signature) --------------------------
 function gitApplyStdin(root: string, args: string[], patch: string): { code: number; stderr: string } {
