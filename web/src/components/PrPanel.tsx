@@ -54,7 +54,7 @@ import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, c
 import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
 import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
-import { cardRef, looksLikeOurs } from "../lib/cardRef.ts";
+import { cardRef, chipAction } from "../lib/cardRef.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
@@ -242,28 +242,28 @@ function ClickUpMark({ size = ICON.xs }: { size?: number }) {
  * is the walk everybody does by hand — read the id off the branch, switch to
  * the board, paste it in. One press instead.
  *
- * It is shown only when it would WORK, which is three different answers:
+ * It is shown only when it would WORK, which is three different answers — and
+ * which of them applies is `chipAction`'s to decide, not this component's:
  *
  *   the body has a ClickUp address   always — nothing else writes that host
  *   an id in the branch, ClickUp here   yes, if the prefix is this workspace's
  *   an id in the branch, no ClickUp     nothing, rather than a mark for a
  *                                       tracker this machine has never heard of
  *
- * With no board to land on but an address to hand, it opens ClickUp itself
+ * With no ClickUp to land in but an address to hand, it opens ClickUp itself
  * instead of a Tasks view that would only ask you to connect one.
  */
 function CardChip({ pr }: { pr: { headRefName?: string; title?: string; body?: string } }) {
   const setup = useClickupSetup();
   const ref = useMemo(() => cardRef(pr), [pr.headRefName, pr.title, pr.body]);
-  if (!ref || !setup) return null;
+  const go = chipAction(ref, setup);
+  if (!ref || !go) return null;
 
-  const inApp = setup.boards > 0 && looksLikeOurs(ref, setup.prefix);
-  if (!inApp && !ref.url) return null;
-
+  const inApp = go.in === "tasks";
   const tint = "var(--primary)";
   return (
     <button
-      onClick={() => { if (inApp) openCard(ref.query, ref.label); else openExternal(ref.url!); }}
+      onClick={() => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); }}
       title={inApp
         ? `Open ${ref.label} in Tasks — the ClickUp card this pull request came from`
         : `Open ${ref.label} in ClickUp`}
@@ -1940,9 +1940,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *
    * Null while the answer is in flight, which is what stops a chip flashing on
    * and off on a machine that has none.
+   *
+   * `connected` rather than a count of boards: the built-in board is in that
+   * list whether or not a token is, so counting it answered yes everywhere and
+   * taskLink.ts's rule — hide a convention-shaped id when nothing can resolve
+   * it — never once fired. See ClickUpSetup.
    */
   const taskSetup = useClickupSetup();
-  const hasTaskProvider = (taskSetup?.boards ?? 0) > 0;
+  const hasTaskProvider = taskSetup?.connected === true;
 
   const [boardMine, setBoardMine] = useState<PrSummary[]>([]);
   const [boardReview, setBoardReview] = useState<PrSummary[]>([]);

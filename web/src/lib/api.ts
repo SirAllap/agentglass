@@ -1269,7 +1269,9 @@ const demoApi: typeof realApi = {
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),
   recipeRemove: (_i: string) => D({ ok: true }),
   recipeRender: (_i: string, _v: Record<string, string>) => D({ ok: false, error: "not available in the demo" }),
-  clickupViews: () => D({ views: [], writeEnabled: false }),
+  // `connected: false` — the demo has no token, and every chip that gates on
+  // this stays off rather than leading somewhere that does not exist.
+  clickupViews: () => D({ views: [], connected: false, writeEnabled: false }),
   clickupSetWrites: (_o: boolean) => D({ ok: false }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),

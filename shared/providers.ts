@@ -364,6 +364,20 @@ export interface ListPlace {
  */
 export interface ClickUpBoards {
   views: SavedView[];
+  /**
+   * Whether there is a ClickUp token on this machine at all.
+   *
+   * Stated rather than inferred, and that is the whole reason it exists. The
+   * obvious inference — "are there any boards" — cannot answer it: `views`
+   * always carries the built-in `ASSIGNED_VIEW_ID`, which ships with the app
+   * and is not stored, so its length is never zero and a reader counting it
+   * concludes ClickUp is set up on a machine that has never seen a token. That
+   * is how a Jira shop ended up with ClickUp marks on its pull requests.
+   *
+   * Surfaces that are not the ClickUp board — the pull-request masthead, the
+   * triage chip — must gate on THIS.
+   */
+  connected: boolean;
   /** The board on screen when you last looked. */
   current?: string;
   /**

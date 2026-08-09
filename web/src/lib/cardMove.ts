@@ -27,11 +27,20 @@ import { cardRef, looksLikeOurs } from "./cardRef.ts";
  * we have actually read from this workspace's own cards is the other proof.
  * With neither, the honest answer is to say nothing rather than open a merge
  * form offering to move a card that does not exist.
+ *
+ * All of which is about the CARD, and there is a question before it: can this
+ * machine write to ClickUp at all. Without a token it cannot, whatever the
+ * evidence — so a pull request carrying a clickup.com address, which is proof
+ * of a card and no proof of a connection, used to open a merge form that spun
+ * on "Looking up ORBIT-1042 on ClickUp…" before admitting there was no ClickUp
+ * to look in. That is a real body: a fork of a team that uses ClickUp, or a
+ * contributor who pasted a link. Asked first, so the rest is never reached.
  */
 export function mergeCardRef(
   pr: { headRefName?: string; title?: string; body?: string },
-  setup: { boards: number; prefix?: string } | null,
+  setup: { connected: boolean; prefix?: string } | null,
 ): { label: string; query: string } | null {
+  if (!setup?.connected) return null;
   const ref = cardRef(pr);
   if (!ref) return null;
   if (ref.from === "url") return { label: ref.label, query: ref.query };

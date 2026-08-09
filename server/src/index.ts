@@ -120,7 +120,7 @@ import { join as joinPath, basename } from "node:path";
 import { privateHost, resolvePeer, originOf } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller, type Origin } from "./auth.ts";
 import { activeDevices, markSeen, revokeDevice, devices, publicDevice, type Scope } from "./devices.ts";
-import { credentialsPath } from "./credentials.ts";
+import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch } from "./clickupwatch.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
@@ -2084,7 +2084,11 @@ const server = Bun.serve<WsData>({
       // only a string — the pull-request masthead reading a branch name — can
       // tell a card id of ours from another tracker's before it offers to open
       // one. Empty means nothing has been read yet, which is "unknown".
-      return json({ views: savedViews(), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+      //
+      // `connected` is said out loud because `views` cannot say it: the
+      // built-in board is always in that list, so its length answers "yes" on a
+      // machine with no ClickUp at all. See ClickUpBoards.
+      return json({ views: savedViews(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
     }
     if (pathname === "/clickup/view") {
       // Falls back to the first board rather than to nothing, and the first

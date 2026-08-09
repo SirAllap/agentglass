@@ -95,7 +95,26 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
   const shown = useSyncExternalStore(subscribeTaskSources, shownTaskSources, shownTaskSources);
-  const tabs = useMemo(() => sourceTabs(shown), [shown]);
+  /*
+   * A source somebody hid, put back for as long as they are being shown a card
+   * from it.
+   *
+   * Without this the jump lands nowhere and says nothing: the effect below sets
+   * the source to "clickup", the reconcile effect above finds no such tab on
+   * the next render and steps to the first one there is, and pressing a card id
+   * on a pull request quietly opens GitHub Issues instead. Hiding a source is a
+   * preference about the TAB BAR, not a refusal to ever see a card again — and
+   * the person most likely to have hidden ClickUp is exactly the person a
+   * ClickUp address in a pull-request body can still send here.
+   *
+   * The preference itself is never rewritten. The tab is here while the errand
+   * is, and gone again the moment they pick another one.
+   */
+  const [forced, setForced] = useState<TaskSourceId | null>(null);
+  const tabs = useMemo(
+    () => sourceTabs(forced && !shown.includes(forced) ? [...shown, forced] : shown),
+    [shown, forced],
+  );
   const [source, setSource] = useState<SourceId>("all");
   /* Standing on a source that has just been hidden — or on "All" when only one
      source is left — is standing on a tab that is no longer there. Step to the
@@ -117,14 +136,20 @@ export function TasksView({ active, onOpenChatWith, cardJump }: {
      the same errand to finish. The count is watched rather than the object, so
      asking for the card you are already looking at still puts you back on this
      tab if you have since wandered to another source. */
-  useEffect(() => { if (cardJump) setSource("clickup"); }, [cardJump?.n]);
+  useEffect(() => {
+    if (!cardJump) return;
+    setForced("clickup");
+    setSource("clickup");
+  }, [cardJump?.n]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
       <ViewHeader label="Tasks">
         <nav className="flex items-center gap-0.5" aria-label="Sources">
           {tabs.map((s) => (
-            <button key={s.id} onClick={() => setSource(s.id)}
+            // Picking a tab by hand ends the errand, which is what takes a
+            // borrowed tab back off the bar — see `forced`.
+            <button key={s.id} onClick={() => { setForced(null); setSource(s.id); }}
               aria-current={s.id === source ? "true" : undefined}
               className="text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
               style={s.id === source
@@ -2618,12 +2643,25 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           them, so they are found the way the team already names things: the
           card id is in the branch, so GitHub's search finds them. Whatever the
           card's own field says is kept too — a link typed by hand outranks a
-          search, and a PR in another repository would never be found by one. */}
-      {!!prs.length && (
+          search, and a PR in another repository would never be found by one.
+
+          Shown when the search FAILED as well as when it found something, and
+          those are different sentences. A card with no pull requests and a card
+          whose search could not run both used to render as nothing at all —
+          `gh` missing, `gh` not logged in, a checkout that is not this card's
+          repository — so "we could not look" was displayed as "there are
+          none", which is the one thing a panel like this must not say. A card
+          that genuinely produced nothing still renders nothing: that is an
+          answer, and it is correct. */}
+      {(!!prs.length || prsErr) && (
         <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
           <div className="text-[8.5px] uppercase tracking-[0.18em] mb-1.5 flex items-center gap-2" style={{ color: "var(--text4)" }}>
-            Pull requests <span>{prs.length}</span>
-            {prsErr && <span style={{ color: "var(--warning)" }}>· search failed, showing what the card states</span>}
+            Pull requests {!!prs.length && <span>{prs.length}</span>}
+            {prsErr && (
+              <span style={{ color: "var(--warning)" }}>
+                {prs.length ? "· search failed, showing what the card states" : "· could not search GitHub — this is not “none”"}
+              </span>
+            )}
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">

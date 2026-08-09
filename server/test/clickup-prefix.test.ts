@@ -98,5 +98,32 @@ describe("which board already holds a card", () => {
   });
 });
 
+/*
+ * The trap that produced ClickUp marks on repositories with no ClickUp.
+ *
+ * `savedViews()` always leads with the built-in board, which is right — nobody
+ * should have to add "assigned to me" — and it means the list is never empty.
+ * The pull-request masthead was asking `views.length > 0` as its "is ClickUp
+ * set up here" test, so it got yes on a machine that has never held a token.
+ *
+ * Pinned as a property of this module rather than as a comment somewhere else,
+ * because the next caller to reach for a count will reach for this one.
+ */
+describe("what the saved-view list can and cannot be asked", () => {
+  it("is never empty, so its length is not a test for having ClickUp", () => {
+    // No views added, no store on disk, no token anywhere.
+    expect(V.savedViews().length).toBe(1);
+    expect(V.savedViews()[0]!.id).toBe(ASSIGNED_VIEW_ID);
+    expect(V.savedViews()[0]!.builtin).toBe(true);
+  });
+
+  it("still cannot be emptied by removing everything in it", () => {
+    V.addView(view("v1"));
+    V.removeView("v1");
+    V.removeView(ASSIGNED_VIEW_ID);
+    expect(V.savedViews().map((v) => v.id)).toEqual([ASSIGNED_VIEW_ID]);
+  });
+});
+
 // The temp directory outlives the individual files each test wrote into it.
 process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* going away anyway */ } });
