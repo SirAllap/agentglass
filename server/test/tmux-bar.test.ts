@@ -101,11 +101,27 @@ const keyLine = (key: string) => out(["list-keys", "-T", "prefix"]).split("\n")
   .find((l) => ctl.parseBinding(l)?.key === key) ?? "";
 
 describe.if(has)("the status row, taken and given back", () => {
-  test("the row is gone, not blanked — there is no gap to leave behind", () => {
-    // The whole point. `status off`, not `status on` with an empty format:
-    // a row held open for prompts that no longer arrive there is just a gap.
+  test("the row is kept and blanked, because tmux still has messages to draw", () => {
+    /*
+     * This test used to assert the opposite — `status off`, "a row held open
+     * for prompts that no longer arrive there is just a gap" — and the premise
+     * was wrong. They do arrive.
+     *
+     * Measured against a real attached client on a private server: with
+     * `status off`, `display-message "Saving… AI00"` reaches the client as a
+     * bare paint at the cursor, with no cursor-home before it and no repaint
+     * after, so it lands in the middle of the pane and stays until something
+     * redraws that line. Reported from a desk running tmux-continuum, where
+     * every autosave stamped a line across an agent's box and ate the line
+     * under it. With the row kept and the format blank, the same message is
+     * written after a `\r\n` into the reserved row and the pane is untouched.
+     *
+     * The cost is one row, paid once, against a pane that is corrupted every
+     * time any plugin says anything.
+     */
     expect(ctl.setStatusLine(target, false)).toBe(true);
-    expect(out(["show-options", "-t", target.id, "-v", "status"])).toBe("off");
+    expect(out(["show-options", "-t", target.id, "-v", "status"])).toBe("on");
+    expect(out(["show-options", "-t", target.id, "-v", "status-format[0]"])).toBe("");
     expect(out(["show-options", "-t", target.id, "-v", "@agx-owned"])).toBe("1");
   });
 

@@ -107,9 +107,11 @@ describe.if(has)("a run that was killed does not leave tmux broken", () => {
   test("the takeover is what a crash would leave behind", () => {
     const before = keyLine(",");
     expect(ctl.setStatusLine(target(), false)).toBe(true);
-    // This is the state a SIGKILL freezes: no status row, the claim still set,
+    // This is the state a SIGKILL freezes: the row kept and blanked (tmux needs
+    // somewhere to draw a message that is not the pane), the claim still set,
     // and the way back written on the session rather than in a variable.
-    expect(out(["show-options", "-t", mine, "-v", "status"])).toBe("off");
+    expect(out(["show-options", "-t", mine, "-v", "status"])).toBe("on");
+    expect(out(["show-options", "-t", mine, "-v", "status-format[0]"])).toBe("");
     expect(opt(mine, "@agx-owned")).toBe("1");
     expect(opt(mine, "@agx-had-rename")).toContain("bind-key");
     expect(before).toContain("command-prompt");

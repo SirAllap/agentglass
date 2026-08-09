@@ -1065,11 +1065,41 @@ export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
   // or without a bar, and the re-assertion the panel runs off this flag
   // depends on the claim being there to find.
   if (statusInConfig(t) === "off") return true;
-  // The row itself. `status off` rather than a blanked `status-format[0]`: a row
-  // held open for prompts that no longer arrive there is just a gap.
-  const off = tmux(t.socket, ["set-option", "-t", t.id, "status", "off"]) !== null;
-  if (!off) { releasePrompts(t); tmux(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]); }
-  return off;
+  /*
+   * The row itself — kept, and blanked, rather than switched off.
+   *
+   * `status off` was the obvious answer and it was wrong, for the reason this
+   * file has now met twice: tmux still has messages to draw, and with no status
+   * row it draws them ON THE PANE. Measured against a real attached client on a
+   * private server: with `status off`, `display-message "Saving… AI00"` arrives
+   * as a bare paint at the cursor — no cursor-home before it, no repaint after —
+   * so it lands in the middle of whatever the pane was showing and stays there
+   * until something else redraws that line. Reported from a desk running
+   * tmux-continuum: every autosave stamped a line across an agent's box and ate
+   * the line under it, and the pane appeared to flicker as the agent redrew.
+   *
+   * Same measurement with the row kept and `status-format[0]` blank: the
+   * message is written after a `\r\n` into the reserved row, the pane is
+   * untouched, and the cursor comes back to the pane's own last line. Nothing
+   * on screen moves.
+   *
+   * It costs one row, which is exactly what the old comment here refused to
+   * spend — "a row held open for prompts that no longer arrive there is just a
+   * gap". The premise was wrong. They do arrive: `prefix ,`, `prefix .`, every
+   * `display-message` any plugin makes, and continuum's autosave. A gap that
+   * catches them is cheaper than a pane they land in.
+   *
+   * `status-style` goes with it so the reserved row takes the terminal's own
+   * background instead of tmux's default green, and all three options are in
+   * BORROWED, so the restore gives back exactly what was taken.
+   */
+  const kept = [
+    ["status", "on"],
+    ["status-format[0]", ""],
+    ["status-style", "bg=default,fg=default"],
+  ].map(([opt, val]) => tmux(t.socket, ["set-option", "-t", t.id, opt!, val!]) !== null).every(Boolean);
+  if (!kept) { releasePrompts(t); tmux(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]); }
+  return kept;
 }
 
 // ---------------------------------------------------------------------------

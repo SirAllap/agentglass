@@ -141,24 +141,42 @@ describe("the bar the panel repaints, kept off", () => {
   });
 
   test("and re-asserting heals it within the sweep's own call", () => {
-    // Exactly what the sweep does when it finds a mirror with `status` on:
-    // setStatusLine takes it again, and the next frame reads off.
+    /*
+     * Exactly what the sweep does when it finds a mirror it does not own:
+     * `setStatusLine` takes it again.
+     *
+     * What "taken" LOOKS like changed, and the change is the point. The row is
+     * now kept and blanked rather than switched off, because with no row at all
+     * tmux draws its messages on the pane — measured, a `display-message`
+     * lands as a bare paint at the cursor with no repaint after it, which is
+     * how continuum's autosave stamped a line across an agent's box. So the
+     * assertion is: the row exists (`status on`), it carries our claim, and it
+     * is blank — not that it is gone.
+     */
     expect(setStatusLine(mirror(), false)).toBe(true);
     const f = readFrame(client())!;
-    expect(f.status).toBe("off");
+    expect(f.status).toBe("on");
     expect(f.owned).toBe(true);
+    expect(out(["show-options", "-qv", "-t", currentMirror, "status-format[0]"])).toBe("");
   });
 
   test("a config reload with `set -g status on` does not bring the bar back", () => {
     // `prefix r` / tpm's `I` and `U` re-source the config, which re-applies
-    // `set -g status on`. The mirror's session-local `off` shadows the global
-    // — measured against a real client — so the frame keeps reporting off and
-    // the sweep has nothing to do.
+    // `set -g status on`. The mirror carries the panel's own session-local
+    // options, which shadow the global — measured against a real client — so a
+    // reload changes nothing the sweep has to answer.
+    //
+    // The row is `on` here because the previous test took it: kept and blanked
+    // rather than switched off, so tmux has somewhere to draw a message that is
+    // not the pane. What the reload must not do is put the user's FORMAT back,
+    // and that is what the second assertion pins.
     const dir = mkdtempSync(join(tmpdir(), "agx-watchdog-reload-"));
     const file = join(dir, "reload.conf");
     writeFileSync(file, "set -g status on\n");
     raw(["source-file", file]);
-    expect(readFrame(client())!.status).toBe("off");
+    expect(readFrame(client())!.status).toBe("on");
+    expect(out(["show-options", "-qv", "-t", currentMirror, "status-format[0]"])).toBe("");
+    expect(readFrame(client())!.owned).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -185,6 +203,9 @@ describe("the bar the panel repaints, kept off", () => {
     const f = readFrame(client())!;
     expect(isPhoneSession(f.target.session)).toBe(true);
     expect(f.target.session).not.toBe("agx-phone-1-abc");
+    // A fresh mirror is created with the row already off — it has nothing to
+    // catch yet and nobody attached. The sweep's first re-assert is what turns
+    // it into the kept-and-blank row the test above pins.
     expect(f.status).toBe("off");
     currentMirror = f.target.session;
     currentMirrorId = out(["display-message", "-p", "-t", currentMirror, "#{session_id}"]);
