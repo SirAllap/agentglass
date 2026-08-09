@@ -8,6 +8,7 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { RebaseModal } from "./RebaseModal.tsx";
+import { CompareModal } from "./CompareModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
@@ -757,6 +758,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [commitMenu, setCommitMenu] = useState<{ hash: string; subject: string; x: number; y: number } | null>(null);
   /** The base of the interactive rebase in flight, or null when closed. */
   const [rebaseBase, setRebaseBase] = useState<string | null>(null);
+  /** The branch a compare dialog is open on, or null when closed. */
+  const [compareTarget, setCompareTarget] = useState<string | null>(null);
   /**
    * Commits picked out of the log for a series cherry-pick — hashes, in the
    * order the user picked them. Empty when nothing is picked.
@@ -2917,6 +2920,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 : <button onClick={(e) => { e.stopPropagation(); checkout(b.name); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Switch this checkout to ${b.name}`}>⎇ Checkout</button>}
                               <button onClick={(e) => { e.stopPropagation(); openBranchOnWeb(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
                               <button onClick={(e) => { e.stopPropagation(); mergeBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
+                              <button onClick={(e) => { e.stopPropagation(); setCompareTarget(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Compare ${b.name} with another ref — how far apart they are`}>compare</button>
                               <button onClick={(e) => { e.stopPropagation(); rebaseBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
                               <button onClick={(e) => { e.stopPropagation(); renameBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
                               <button onClick={(e) => { e.stopPropagation(); deleteBranch(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
@@ -3213,6 +3217,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         <RebaseModal root={root} base={rebaseBase} branch={currentBranchName || branch?.name || "HEAD"}
           onClose={() => setRebaseBase(null)}
           onDone={() => { setRebaseBase(null); reloadGraph(); }} />
+      )}
+      {compareTarget && (
+        <CompareModal root={root} initialBase={compareTarget} onClose={() => setCompareTarget(null)} />
       )}
       {/* The commit row's right-click menu. The reset it offers is the old
           right-click, kept under its own heading so the cherry-pick actions

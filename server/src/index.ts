@@ -51,12 +51,13 @@ import {
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
+  refs,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   cherryPick, cherryPickContinue, cherryPickAbort,
   revertCommit, amendCommit, squashCommits,
-  rebaseSteps, runRebase,
+  rebaseSteps, runRebase, compareRefs,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   prepareConflictMerge,
 } from "./gitwork.ts";
@@ -1853,6 +1854,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/base-candidates") return json(baseCandidates(url.searchParams.get("root") || ""));
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
+    if (pathname === "/git/refs") return json(refs(url.searchParams.get("root") || ""));
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
     // What has piled up in a checkout, and the command that would clear it.
     // Read-only by construction: the response carries commands as strings, and
@@ -2013,6 +2015,7 @@ const server = Bun.serve<WsData>({
         case "/git/squash": res = squashCommits(root, b.oldest, b.newest); break;
         case "/git/rebase-steps": res = rebaseSteps(root, b.base); break;
         case "/git/rebase-run": res = runRebase(root, b.base, b.steps); break;
+        case "/git/compare": res = compareRefs(root, b.base, b.other); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why

@@ -2986,6 +2986,66 @@ export function commitDiff(rootIn: unknown, hash: string): GitFileChange[] {
   return parseDiff(root, r.stdout, false);
 }
 
+/**
+ * The difference between two refs, in the shape a branch-comparison dialog
+ * wants: how far ahead/behind each side is, and the diff between the two
+ * tips. A three-dot range — `other...base` — compares the merge-base, so
+ * the diff is "what your side changed", not the full downstream drift.
+ */
+export function compareRefs(rootIn: unknown, baseIn: unknown, otherIn: unknown): { ok: boolean; ahead?: GitCommit[]; behind?: GitCommit[]; diff?: GitFileChange[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const base = typeof baseIn === "string" ? baseIn.trim() : "";
+  const other = typeof otherIn === "string" ? otherIn.trim() : "";
+  if (!base || !other) return { ok: false, error: "two refs are required" };
+  // git log is silent about refs it cannot resolve — an empty ahead/behind is
+  // indistinguishable from a real \"nothing to compare\" unless we ask.
+  if (git(root, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]).code !== 0) return { ok: false, error: `${base} is not a commit` };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `${other}^{commit}`]).code !== 0) return { ok: false, error: `${other} is not a commit` };
+  const fmt = `%H${US}%h${US}%s${US}%an${US}%ar${US}%D`;
+  // Ahead: commits base has that other lacks (other..base).
+  const aheadOut = git(root, ["log", "--pretty=format:" + fmt, `${other}..${base}`]);
+  // Behind: commits other has that base lacks (base..other).
+  const behindOut = git(root, ["log", "--pretty=format:" + fmt, `${base}..${other}`]);
+  const parse = (text: string): GitCommit[] => text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [hash, shortHash, subject, author, date, refs] = line.split(US);
+      return { hash, shortHash, subject: subject || "", author: author || "", date: date || "", refs: refs || "" };
+    });
+  const diffOut = git(root, ["-c", "core.quotePath=false", "diff", `${other}...${base}`, "--no-color", "--unified=3"]);
+  return {
+    ok: true,
+    ahead: parse(aheadOut.stdout),
+    behind: parse(behindOut.stdout),
+    diff: parseDiff(root, diffOut.stdout, false),
+  };
+}
+
+/**
+ * Every ref a compare dialog could pick: local branches, tags, then remote
+ * branches. Short names, roughly grouped, so a ref menu reads like a menu.
+ */
+export function refs(rootIn: unknown): { ok: boolean; refs?: string[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const out: string[] = [];
+  for (const [prefix, re] of [
+    ["refs/heads", null],
+    ["refs/tags", null],
+    ["refs/remotes", /\/HEAD$/],
+  ] as const) {
+    const r = git(root, ["for-each-ref", "--format=%(refname:short)", prefix]);
+    for (const line of r.stdout.split("\n")) {
+      if (!line) continue;
+      if (re && re.test(line)) continue;
+      out.push(line);
+    }
+  }
+  return { ok: true, refs: out };
+}
+
 /** Configured remotes, with a branch count each so the list says something
  *  before you drill into it. `remote -v` lists fetch and push separately, and
  *  they differ on a fork setup (push to yours, fetch from upstream). */
