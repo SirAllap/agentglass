@@ -25,14 +25,56 @@ export type Answer<T> = { ok: true; value: T } | { ok: false; error: string; sta
  *  dead wifi does not leave a spinner up for a minute. */
 const TIMEOUT_MS = 15_000;
 
-function describe(e: unknown): string {
+/*
+ * Every shape "the computer is not there" arrives in, because there is more
+ * than one and the list was one long.
+ *
+ * `Network request failed` is what React Native's own networking says, and it
+ * was the only case handled. Hermes on Android also surfaces the JVM exception
+ * verbatim — measured on an emulator with the sidecar down:
+ *
+ *   fetch failed: java.net.ConnectException: Failed to connect to /127.0.0.1:4000
+ *
+ * which matched nothing here and went to the screen as-is, twice — once in the
+ * Plan card and once in the status line above it. See `describeFailure`.
+ */
+const UNREACHABLE = /Network request failed|ConnectException|UnknownHostException|SocketTimeoutException|NoRouteToHostException|Unable to resolve host|Failed to connect|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|fetch failed/i;
+
+/*
+ * An address, in any spelling a networking error puts one in.
+ *
+ * Scrubbed from anything that reaches a caller, and this is the half that is
+ * not tidiness. A phone talks to the machine over the LAN, so the address in a
+ * connection error is the user's own network — `192.168.1.20:4000`, or a
+ * tailnet name. A disconnected Home screen that prints it has put where the
+ * machine lives into every screenshot of itself.
+ *
+ * Deliberately NOT "anything with a dot in it". That spelling ate `index.tsx`
+ * and `shared/types.ts` out of messages that mentioned them, which turns a
+ * useful failure into a vague one — so a bare dotted name is left alone unless
+ * it carries a port, and the two host suffixes this app actually pairs over are
+ * named outright.
+ */
+const ADDRESS = /\/?(?:\d{1,3}(?:\.\d{1,3}){3}(?::\d{2,5})?|\[[0-9a-f:]+\](?::\d{2,5})?|localhost(?::\d{2,5})?|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ts\.net|local)|[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5})/gi;
+
+/** Exported for the tests. The failures this maps are unreachable machines and
+ *  addresses, and neither can be produced from a unit test through `ask`. */
+export function describeFailure(e: unknown): string {
   if (e instanceof Error && e.name === "AbortError") return "The computer did not answer in time";
-  if (e instanceof Error && /Network request failed/i.test(e.message)) {
-    // React Native's message for everything from "wrong address" to "wifi is
-    // off". Saying which is beyond what fetch reports, so it does not guess.
+  const raw = e instanceof Error ? e.message : String(e);
+  if (UNREACHABLE.test(raw)) {
+    // Which of "wrong address", "wifi off" and "nothing listening" it is, is
+    // beyond what fetch reports — so this does not guess, and it does not hand
+    // the exception to somebody holding a phone either.
     return "Cannot reach the computer";
   }
-  return e instanceof Error ? e.message : String(e);
+  /*
+   * Anything else keeps its text, because an unrecognised failure that says
+   * nothing is a failure nobody can act on — but it loses any address in it
+   * first. A message this code did not anticipate is exactly the one most
+   * likely to be carrying one.
+   */
+  return raw.replace(ADDRESS, "the computer");
 }
 
 /** Why a 401 here is worth its own sentence: the credential was revoked at the
@@ -71,7 +113,7 @@ export async function ask<T>(
     }
     return { ok: true, value: (await response.json()) as T };
   } catch (e) {
-    return { ok: false, error: describe(e) };
+    return { ok: false, error: describeFailure(e) };
   } finally {
     clearTimeout(timer);
     init?.signal?.removeEventListener("abort", onAbort);
@@ -118,7 +160,7 @@ export async function startTurn(
     // socket alive through a screen lock for nothing.
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: describe(e) };
+    return { ok: false, error: describeFailure(e) };
   } finally {
     clearTimeout(timer);
   }

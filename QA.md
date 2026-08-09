@@ -46,8 +46,13 @@ The device needs **`read` scope or wider**; `answer` is not enough for
    while Anthropic rate-limits, so a stale percentage otherwise looks live.
 
 5. **Airplane mode / server down.** The card stays and says
-   *"The computer did not answer about the plan."* — it does not vanish and does
-   not show a stale number as if it were fresh.
+   *"Cannot reach the computer"* — it does not vanish, does not show a stale
+   number as if it were fresh, and **never prints an address or an exception**.
+   The first QA run failed here: it rendered
+   `fetch failed: java.net.ConnectException: Failed to connect to /127.0.0.1:4000`
+   in the card and again in the status line above it. Fixed at the fetch
+   boundary in `mobile/src/lib/api.ts`; `mobile/test/api-errors.test.ts` covers
+   the six shapes Android produces and the address scrub.
 
 6. **A machine with no quota-reporting agent** answers with the card saying
    *"No agent on this computer reports a plan quota."*
@@ -70,8 +75,8 @@ The device needs **`read` scope or wider**; `answer` is not enough for
 ## What is verified, and what is not
 
 **Verified by me, no hardware:** rebase onto main clean; `npm run typecheck`
-clean; `bun test` **376 pass / 0 fail** across 33 files, including
-`test/quota.test.ts`.
+clean; `bun test` **387 pass / 0 fail** across 34 files, including
+`test/quota.test.ts` and `test/api-errors.test.ts`.
 
 **Verified by the previous owner, before the reboot:** `bun scripts/qa.ts` 9/9
 screens against a scratch server, Home drawing real data (39% left of Claude,
