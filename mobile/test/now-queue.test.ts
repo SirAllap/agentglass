@@ -26,7 +26,9 @@ const rollup = (over: Partial<PrSummary["checks"]> = {}) => ({
 });
 
 const pr = (over: Partial<PrSummary> = {}): PrSummary => ({
-  number: 482, title: "Round prices at the cart boundary", author: "someone",
+  number: 482,
+  // Defaulted before the spread, so a case can still say CONFLICTING.
+  mergeable: "MERGEABLE", title: "Round prices at the cart boundary", author: "someone",
   state: "OPEN", isDraft: false, headRefName: "fix/x", baseRefName: "main",
   url: "https://github.com/a/b/pull/482", updatedAt: new Date(NOW - 60_000).toISOString(),
   reviewDecision: null, additions: 84, deletions: 31, changedFiles: 6,
