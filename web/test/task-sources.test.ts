@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   TASK_SOURCES, shownTaskSources, taskSourceShown, setTaskSourceShown, subscribeTaskSources,
+  orderedTaskSources, moveTaskSource, resetTaskSourceOrder, __forgetTaskSources,
 } from "../src/lib/taskSources.ts";
 
 // bun's test environment has no DOM; the module only ever touches these three.
@@ -59,5 +60,66 @@ describe("what the Tasks view offers", () => {
     off();
     setTaskSourceShown("local", true);
     expect(beats).toBe(1);
+  });
+});
+
+describe("the order they sit in", () => {
+  test("is the catalogue's own until somebody moves something", () => {
+    expect(orderedTaskSources()).toEqual(TASK_SOURCES.map((s) => s.id));
+  });
+
+  test("a move is one step, and the ends do not wrap", () => {
+    expect(moveTaskSource("clickup", -1)).toBe(true);
+    expect(orderedTaskSources()).toEqual(["github", "clickup", "local"]);
+    // Already last after two moves up would be first — check the real end.
+    expect(moveTaskSource("github", -1)).toBe(false);
+    expect(moveTaskSource("local", 1)).toBe(false);
+    expect(orderedTaskSources()).toEqual(["github", "clickup", "local"]);
+  });
+
+  test("the bar follows the order, hidden ones dropped", () => {
+    moveTaskSource("clickup", -1);
+    moveTaskSource("clickup", -1);
+    setTaskSourceShown("github", false);
+    expect(orderedTaskSources()).toEqual(["clickup", "github", "local"]);
+    expect(shownTaskSources()).toEqual(["clickup", "local"]);
+  });
+
+  test("moving steps over a hidden source rather than past it invisibly", () => {
+    // The move happens in the full list. Stepping over something you cannot see
+    // would look like a press that did nothing, and turning that source back on
+    // later would reveal an order nobody asked for.
+    setTaskSourceShown("local", false);
+    expect(moveTaskSource("clickup", -1)).toBe(true);
+    expect(orderedTaskSources()).toEqual(["github", "clickup", "local"]);
+    expect(shownTaskSources()).toEqual(["github", "clickup"]);
+  });
+
+  test("a stored order from another version is reconciled, not trusted", () => {
+    // An id that no longer exists is dropped; one it has never heard of is
+    // appended, which is what lets a new source ship with no migration. A
+    // duplicate is collapsed — React would render the same key twice.
+    store.set("agentglass.tasks.order", JSON.stringify(["clickup", "gone", "clickup"]));
+    __forgetTaskSources();
+    expect(orderedTaskSources()).toEqual(["clickup", "github", "local"]);
+  });
+
+  test("rubbish on disk is ignored rather than fatal", () => {
+    store.set("agentglass.tasks.order", "{not json");
+    __forgetTaskSources();
+    expect(orderedTaskSources()).toEqual(TASK_SOURCES.map((s) => s.id));
+  });
+
+  test("reset puts the catalogue's order back", () => {
+    moveTaskSource("clickup", -1);
+    resetTaskSourceOrder();
+    expect(orderedTaskSources()).toEqual(TASK_SOURCES.map((s) => s.id));
+  });
+
+  test("the ordered snapshot keeps its identity until something changes", () => {
+    expect(orderedTaskSources()).toBe(orderedTaskSources());
+    const before = orderedTaskSources();
+    moveTaskSource("clickup", -1);
+    expect(orderedTaskSources()).not.toBe(before);
   });
 });
