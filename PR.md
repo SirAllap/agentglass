@@ -28,7 +28,23 @@ Native screen is a helper no test can reach, because the test runner cannot
 parse `react-native`'s entry point. That is what makes the 128 lines of
 `quota.test.ts` possible.
 
-A second, unrelated commit fixes the QA harness: it spawned the literal
+A third commit fixes something QA found that is **not this branch's bug**: with
+the machine unreachable, the phone rendered
+`fetch failed: java.net.ConnectException: Failed to connect to /127.0.0.1:4000`
+verbatim — in the card and again in the status line above it. `describeFailure`
+knew only React Native's own `Network request failed`; Hermes on Android hands
+the JVM exception through instead. Checked on `d722871` rather than assumed:
+`describe()` there matches that one string and returns `e.message` for
+everything else, so **this repairs the shipped app, not just this branch** — the
+Plan card is merely the first screen that showed it to somebody.
+
+The address half of that matters more than the wording. A phone pairs over the
+LAN or a tailnet, so the address in a connection error is the user's own
+network, and a screenshot of a disconnected Home screen published where their
+machine lives. Nothing that reaches a caller carries one now, including messages
+this code has never seen.
+
+A fourth, unrelated commit fixes the QA harness: it spawned the literal
 `/usr/bin/google-chrome`, which Arch does not install (it ships
 `google-chrome-stable`), and with `stderr: "ignore"` the failure surfaced twenty
 seconds later as "chrome never opened a page" — a message about the browser that
@@ -40,10 +56,12 @@ says nothing about the binary being missing. It now tries the known paths and
 **Measured:**
 
 * `npm run typecheck` in `mobile/` — clean, both configs.
-* `bun test` in `mobile/` — **376 pass / 0 fail** across 33 files, including
+* `bun test` in `mobile/` — **387 pass / 0 fail** across 34 files, including
   `mobile/test/quota.test.ts` (the tightest-window pick, the clamp on a provider
   reporting over 100%, the tone thresholds, the reset and age labels, and the
-  four states of the card).
+  four states of the card), and `mobile/test/api-errors.test.ts` (the six
+  unreachable shapes Android produces, the timeout keeping its own sentence,
+  every address spelling scrubbed, and two filenames surviving the scrub).
 * `bun scripts/qa.ts` — 9/9 screens against a scratch server, with Home drawing
   real data (39% left of Claude, 5h, resetting in 3h 27m).
 * Rebased onto `d722871` and re-run, so the numbers above are against current
