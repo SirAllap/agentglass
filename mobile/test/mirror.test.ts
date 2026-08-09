@@ -278,6 +278,37 @@ describe("a line the field could read but cannot edit", () => {
     expect(held).not.toContain("${text");
   });
 
+  test("the newline it shows is never put on the wire", () => {
+    /*
+     * Reported from QA: a 102-character line typed at the desk arrives in the
+     * field as 103 characters with a newline at the box's wrap point, because
+     * `boxedLine` joins the rows an agent drew with "\n". The text is whole —
+     * `field.replace("\n","") === original` — and one character wrong.
+     *
+     * It is wrong for DISPLAY only, and this is the assertion that says so. The
+     * field holds what the box looks like; what reaches the pane is a carriage
+     * return and nothing else, because the pane already has the line. So the
+     * newline cannot become a line break inside somebody's prompt, and cannot
+     * become a submit halfway through a shell command.
+     *
+     * Why the join is not simply fixed: the break between two rows is a hard
+     * wrap, a word wrap whose space was never drawn, or a newline somebody
+     * typed, and the screen shows the same pixels for all three. "Ends at the
+     * inner width" does not separate them — Claude word-wraps, so a wrapped row
+     * routinely ends short. That is what `exact: false` means, and this test is
+     * the guarantee that goes with it.
+     */
+    const commit = screen.slice(screen.indexOf("const commit ="), screen.indexOf("function typed("));
+    const from = commit.indexOf("if (onPane.current !== null)");
+    const held = commit.slice(from, commit.indexOf("if (!text) return;", from));
+    // The whole arm: a carriage return, and no path that puts the field's text
+    // — newline and all — on the socket.
+    expect(held).toContain('terminal.current?.send("\\r")');
+    expect(held.match(/terminal\.current\?\.send\(/g)).toHaveLength(1);
+    expect(held).not.toContain("draft");
+    expect(held).not.toContain("${text");
+  });
+
   test("typing onto it is allowed only where no length has to be believed", () => {
     /*
      * An append needs no arithmetic: what to send is the part of the field past
