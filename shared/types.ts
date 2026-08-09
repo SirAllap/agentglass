@@ -1704,6 +1704,18 @@ export type MergeInfo = {
   error?: string;
 };
 
+/**
+ * A multi-commit cherry-pick. `hashes` are full or short commit ids — git's
+ * sequencer replays them in one run, so the set stops together on the first
+ * conflict instead of each commit being an independent attempt.
+ */
+export type CherryPickRequest = {
+  root: string;
+  hashes: string[];
+  /** `-n`: apply to the index and working tree without committing. */
+  noCommit?: boolean;
+};
+
 /** The notes for one release: the tag annotation the GitHub release was made
  *  from, read from the update clone when there is one and from the releases API
  *  otherwise. `source` says which, because "offline" is a useful thing to know

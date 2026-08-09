@@ -1377,6 +1377,57 @@ export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "h
 }
 
 /**
+ * Replay commits onto the current branch.
+ *
+ * One call for the whole set: `git cherry-pick h1 h2 h3` is a single sequencer
+ * run, so a conflict pauses the whole thing mid-series instead of each commit
+ * being an independent attempt that has to be undone before the next. The
+ * existing conflict machinery already knows how to finish it — `treeState()`
+ * reports `cherry-picking`, `mergeInfo()` names the two sides, and
+ * `mergeContinue`/`mergeAbort` already branch on that state.
+ *
+ * Refuses to start while anything else is in progress: a repo mid-merge must
+ * not begin a second sequencer run, and the message names the state so the
+ * panel can point at the banner instead of making the user guess.
+ */
+export function cherryPick(rootIn: string, hashesIn: unknown, noCommitIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before cherry-picking` };
+  // Hashes only, never refs: the sequencer resolves each argument itself, and
+  // letting "HEAD" or a branch name through would replay something that moves
+  // with the run it is part of.
+  const hashes = Array.isArray(hashesIn) ? hashesIn.filter((h): h is string => validHash(h)) : [];
+  if (!hashes.length) return { ok: false, error: "no valid commit hashes to cherry-pick" };
+  const args = ["cherry-pick"];
+  if (noCommitIn === true) args.push("-n");
+  // Preserve the caller's order: the sequencer picks oldest-first, and the
+  // panel sends them that way already. Sorting here would only create a
+  // second place to get the direction wrong.
+  args.push(...hashes);
+  return run(root, args);
+}
+
+/** Finish a paused cherry-pick once every conflict is resolved. */
+export function cherryPickContinue(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (treeState(root) !== "cherry-picking") return { ok: false, error: "nothing to continue" };
+  // The shared path already knows the editor trap: plain `--continue` can open
+  // an editor when a conflict was resolved, so it passes `-c core.editor=true`.
+  return mergeContinue(root);
+}
+
+/** Abandon the paused cherry-pick and put the tree back. */
+export function cherryPickAbort(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (treeState(root) !== "cherry-picking") return { ok: false, error: "nothing to abort" };
+  return mergeAbort(root);
+}
+
+/**
  * `git log --graph` rendered to rows: the graph glyphs plus commit fields
  * (graph-only connector rows carry just `graph`).
  *

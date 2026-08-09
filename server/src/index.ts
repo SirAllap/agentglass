@@ -54,6 +54,7 @@ import {
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
+  cherryPick, cherryPickContinue, cherryPickAbort,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   prepareConflictMerge,
 } from "./gitwork.ts";
@@ -1995,6 +1996,9 @@ const server = Bun.serve<WsData>({
         case "/git/merge-continue": res = mergeContinue(root, b.anyway); break;
         case "/git/reopen-conflict": res = reopenConflict(root, b.path, b.confirm); break;
         case "/git/undo-merge": res = await undoMerge(root); break;
+        case "/git/cherry-pick": res = cherryPick(root, b.hashes, b.noCommit); break;
+        case "/git/cherry-pick-continue": res = cherryPickContinue(root); break;
+        case "/git/cherry-pick-abort": res = cherryPickAbort(root); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why

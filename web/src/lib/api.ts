@@ -620,6 +620,11 @@ const realApi = {
   gitMergeAbort: (root: string) => post<GitActionResult>("/git/merge-abort", { root }),
   gitUndoMerge: (root: string) => post<GitActionResult>("/git/undo-merge", { root }),
   gitMergeContinue: (root: string, anyway?: boolean) => post<GitActionResult>("/git/merge-continue", { root, anyway }),
+  /** One sequencer run for the whole set — a conflict pauses the series, not
+   *  each commit. Order is the caller's, oldest-first. */
+  gitCherryPick: (root: string, hashes: string[], noCommit?: boolean) => post<GitActionResult>("/git/cherry-pick", { root, hashes, noCommit }),
+  gitCherryPickContinue: (root: string) => post<GitActionResult>("/git/cherry-pick-continue", { root }),
+  gitCherryPickAbort: (root: string) => post<GitActionResult>("/git/cherry-pick-abort", { root }),
   // --- live docker panel (lazydocker-style) ---
   /** Installed / daemon-down / OK — so the panel can show install guidance for a
    *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
@@ -1152,6 +1157,9 @@ const demoApi: typeof realApi = {
   gitMergeAbort: (_root: string) => D(demo.gitActionUnavailable()),
   gitUndoMerge: (_root: string) => D(demo.gitActionUnavailable()),
   gitMergeContinue: (_root: string, _anyway?: boolean) => D(demo.gitActionUnavailable()),
+  gitCherryPick: (_root: string, _hashes: string[], _noCommit?: boolean) => D(demo.gitActionUnavailable()),
+  gitCherryPickContinue: (_root: string) => D(demo.gitActionUnavailable()),
+  gitCherryPickAbort: (_root: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),
