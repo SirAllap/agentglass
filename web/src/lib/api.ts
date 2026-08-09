@@ -639,6 +639,10 @@ const realApi = {
   gitAmendStaged: (root: string, title: string, body: string) => post<GitActionResult>("/git/amend-staged", { root, title, body }),
   /** Fold a contiguous tip-span into one commit; ORIG_HEAD is the undo point. */
   gitSquash: (root: string, oldest: string, newest: string) => post<GitActionResult>("/git/squash", { root, oldest, newest }),
+  /** The commits `base..HEAD`, oldest first, for the rebase editor. */
+  gitRebaseSteps: (root: string, base: string) => post<GitActionResult & { steps?: { action: string; hash: string; subject: string }[] }>("/git/rebase-steps", { root, base }),
+  /** Run the edited plan as one interactive rebase. */
+  gitRebaseRun: (root: string, base: string, steps: { action: string; hash: string; subject: string; newMessage?: string }[]) => post<GitActionResult>("/git/rebase-run", { root, base, steps }),
   // --- live docker panel (lazydocker-style) ---
   /** Installed / daemon-down / OK — so the panel can show install guidance for a
    *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
@@ -1178,6 +1182,8 @@ const demoApi: typeof realApi = {
   gitRevert: (_root: string, _hash: string) => D(demo.gitActionUnavailable()),
   gitAmendStaged: (_root: string, _title: string, _body: string) => D(demo.gitActionUnavailable()),
   gitSquash: (_root: string, _oldest: string, _newest: string) => D(demo.gitActionUnavailable()),
+  gitRebaseSteps: (_root: string, _base: string) => D(demo.gitActionUnavailable()),
+  gitRebaseRun: (_root: string, _base: string, _steps: { action: string; hash: string; subject: string; newMessage?: string }[]) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),

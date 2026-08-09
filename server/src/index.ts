@@ -56,6 +56,7 @@ import {
   conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   cherryPick, cherryPickContinue, cherryPickAbort,
   revertCommit, amendCommit, squashCommits,
+  rebaseSteps, runRebase,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   prepareConflictMerge,
 } from "./gitwork.ts";
@@ -2010,6 +2011,8 @@ const server = Bun.serve<WsData>({
         case "/git/revert": res = revertCommit(root, b.hash); break;
         case "/git/amend-staged": res = amendCommit(root, b.title, b.body); break;
         case "/git/squash": res = squashCommits(root, b.oldest, b.newest); break;
+        case "/git/rebase-steps": res = rebaseSteps(root, b.base); break;
+        case "/git/rebase-run": res = runRebase(root, b.base, b.steps); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why

@@ -7,6 +7,7 @@ import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
+import { RebaseModal } from "./RebaseModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
@@ -754,6 +755,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [tidy, setTidy] = useState<TidyReport | null>(null);
   /** The right-click menu on a commit row: what was clicked, where. */
   const [commitMenu, setCommitMenu] = useState<{ hash: string; subject: string; x: number; y: number } | null>(null);
+  /** The base of the interactive rebase in flight, or null when closed. */
+  const [rebaseBase, setRebaseBase] = useState<string | null>(null);
   /**
    * Commits picked out of the log for a series cherry-pick — hashes, in the
    * order the user picked them. Empty when nothing is picked.
@@ -3206,6 +3209,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           to — the rail's views are the destinations, this is a detour. */}
       <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
       {rescue && <RescueModal reports={rescue.reports} progress={rescue.progress} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
+      {rebaseBase && (
+        <RebaseModal root={root} base={rebaseBase} branch={currentBranchName || branch?.name || "HEAD"}
+          onClose={() => setRebaseBase(null)}
+          onDone={() => { setRebaseBase(null); reloadGraph(); }} />
+      )}
       {/* The commit row's right-click menu. The reset it offers is the old
           right-click, kept under its own heading so the cherry-pick actions
           can sit above it without either reading as the other. */}
@@ -3216,6 +3224,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           <MenuItem onClick={() => void cherryPickOne(commitMenu.hash)}>Cherry-pick onto this branch</MenuItem>
           <MenuItem onClick={() => void cherryPickOne(commitMenu.hash, true)}>Cherry-pick, stage only</MenuItem>
           <MenuItem onClick={() => void revertOne(commitMenu.hash)}>Revert (new commit undoing it)</MenuItem>
+          <MenuItem onClick={() => { const m = commitMenu; setCommitMenu(null); setRebaseBase(m.hash); }}>Rebase from here…</MenuItem>
           <div className="my-0.5 h-px" style={{ background: "color-mix(in srgb, var(--border) 60%, transparent)" }} />
           <MenuItem danger onClick={() => {
             const m = commitMenu;

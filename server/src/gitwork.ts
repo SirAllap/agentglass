@@ -5,7 +5,8 @@
 // every mutating op is gated by AGENTGLASS_GIT_WRITE_DISABLED=1.
 
 import { resolve, basename, relative, dirname, sep, delimiter, join } from "node:path";
-import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
@@ -1512,6 +1513,96 @@ export function squashCommits(rootIn: unknown, oldestIn: unknown, newestIn: unkn
     return { ok: false, error: `squash completed but the undo point is missing — the old tip was ${headBefore}` };
   }
   return { ...commit, output: `${commit.output} — old tip saved at ORIG_HEAD (${headBefore.slice(0, 7)})` };
+}
+
+// --- interactive rebase ------------------------------------------------------
+/** One line of an interactive-rebase todo list. `newMessage` is set only for
+ *  reword steps; the engine turns those into `exec git commit --amend` lines,
+ *  because git's own `reword` opens an editor we have no way to drive. */
+export interface RebaseStep {
+  action: "pick" | "squash" | "fixup" | "drop" | "reword" | "edit";
+  hash: string;
+  subject: string;
+  newMessage?: string;
+}
+
+/** The commits `base..HEAD`, oldest first — the list an interactive rebase
+ *  starts from. Read-only; the caller edits it and passes it back to
+ *  `runRebase`. */
+export function rebaseSteps(rootIn: unknown, baseIn: unknown): { ok: boolean; steps?: RebaseStep[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const base = typeof baseIn === "string" && validRef(baseIn) ? baseIn : "";
+  if (!base) return { ok: false, error: "invalid base ref" };
+  if (git(root, ["merge-base", "--is-ancestor", base, "HEAD"]).code !== 0)
+    return { ok: false, error: `${base} is not an ancestor of HEAD — pick the point this branch forked` };
+  const out = git(root, ["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`]).stdout;
+  const steps: RebaseStep[] = [];
+  for (const line of out.split("\n")) {
+    const [hash, subject] = line.split(US);
+    if (hash && subject) steps.push({ action: "pick", hash, subject });
+  }
+  if (!steps.length) return { ok: false, error: `nothing to rebase — ${base} is already an ancestor with no commits in between` };
+  return { ok: true, steps };
+}
+
+const REBASE_ACTIONS = new Set(["pick", "squash", "fixup", "drop", "reword", "edit"]);
+/** One `sh`-safe single-quoted argument, for the exec lines. */
+const shq = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "'\\''")}'`;
+
+/**
+ * Run the todo list `steps` as ONE `git rebase -i` — the whole edit in one
+ * sequencer run, so a conflict stops the series and `mergeContinue`/abort
+ * (which already branch on `rebasing`) finish or abandon it.
+ *
+ * The todo file is handed to git through `sequence.editor`, exactly like
+ * gitcito: git invokes that command with the real todo path, so `cp` of our
+ * prepared file is all it takes. Every commit in `base..HEAD` must appear in
+ * the list exactly once, and every hash must be one of them — otherwise a
+ * stale or tampered list could drop or invent commits silently.
+ */
+export function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const base = typeof baseIn === "string" && validRef(baseIn) ? baseIn : "";
+  if (!base) return { ok: false, error: "invalid base ref" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before rebasing` };
+  if (!Array.isArray(stepsIn) || !stepsIn.length) return { ok: false, error: "empty rebase plan" };
+
+  const todo: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of stepsIn) {
+    const s = raw as RebaseStep;
+    if (!REBASE_ACTIONS.has(s.action) || !validHash(s.hash)) return { ok: false, error: "invalid rebase step" };
+    if (seen.has(s.hash)) return { ok: false, error: `commit ${s.hash.slice(0, 7)} appears more than once in the plan` };
+    seen.add(s.hash);
+    if (s.action === "reword") {
+      const msg = typeof s.newMessage === "string" && s.newMessage.trim() ? s.newMessage.trim() : s.subject;
+      todo.push(`pick ${s.hash} ${s.subject}`);
+      todo.push(`exec git commit --amend -m ${shq(msg)}`);
+    } else if (s.action === "drop") {
+      todo.push(`drop ${s.hash} ${s.subject}`);
+    } else {
+      todo.push(`${s.action} ${s.hash} ${s.subject}`);
+    }
+  }
+  // Every commit between base and HEAD is accounted for, exactly once.
+  const span = git(root, ["rev-list", "--format=%H", base + "..HEAD"]).stdout.split("\n").filter((l) => /^[0-9a-f]{40}$/.test(l));
+  const spanSet = new Set(span);
+  for (const h of seen) if (!spanSet.has(h)) return { ok: false, error: `commit ${h.slice(0, 7)} is not in ${base}..HEAD — the plan no longer matches the branch` };
+  if (span.some((h) => !seen.has(h))) return { ok: false, error: "the plan is missing commits from the branch — every commit must appear exactly once" };
+
+  // A temp dir owned by this call: the todo file is consumed by the sequence
+  // editor, and must not collide with a rebase running at the same time.
+  const td = mkdtempSync(join(tmpdir(), "agx-rebase-"));
+  const todoFile = join(td, "todo");
+  writeFileSync(todoFile, todo.join("\n") + "\n");
+  try {
+    return run(root, ["-c", "core.editor=true", "-c", `sequence.editor=cp ${todoFile}`, "rebase", "-i", base]);
+  } finally {
+    try { rmSync(td, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
 }
 
 /**
