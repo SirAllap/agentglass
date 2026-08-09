@@ -71,7 +71,12 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
     <>
       <span className="min-w-0">
         <span className="block text-[13.5px]" style={{ color: "var(--text)" }}>{label}</span>
-        {hint !== undefined && hint !== "" && <span className="block text-[12px] t-dim mt-0.5">{hint}</span>}
+        {/* mt-1, not mt-0.5. A 2px gap under 13.5px type is not a gap — the
+            sweep found this pair "touching" on every settings pane there is,
+            which is the single most repeated instance of the complaint that
+            started this: things that belong together drawn as one block of
+            text. 4px is the step for "these two are one thought". */}
+        {hint !== undefined && hint !== "" && <span className="block text-[12px] t-dim mt-1">{hint}</span>}
       </span>
       {control !== undefined && <span className="min-w-0">{control}</span>}
     </>
