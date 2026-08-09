@@ -96,6 +96,21 @@ const BRIDGE = materializeBridge(bridgeFile);
 // processes without bound. Each idle shell costs a pty and a sleeping process.
 const MAX_SESSIONS = Math.max(4, Number(process.env.AGENTGLASS_MAX_TERMINALS || 200));
 
+/**
+ * How many times the sweep will re-hide the bar on the same session after it
+ * was turned back on, before the flip stands. Re-asserting FOREVER would make
+ * `prefix : set status on` a fight the user cannot win, and nobody owns a
+ * setting that reverts on its own — so each session gets this many heals per
+ * explicit hide, then the user's choice on it wins. A plugin or reload that
+ * flips the bar once is healed without ceremony; a person who flips it back
+ * three times is deciding. See the sweep in ptyOpen.
+ */
+const TMUX_BAR_HEAL_BUDGET = 3;
+
+/** How many failed remounts in a row buy a minute off — a switch that keeps
+ *  failing must not loop creating and killing a mirror every tick. */
+const REMOUNT_FAILS_BEFORE_QUIET = 3;
+const REMOUNT_QUIET_MS = 60_000;
 export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
   /** A file to open in an editor instead of dropping to a shell. A PATH, never
    *  a command: this socket is reachable from the UI, and "run this string"
@@ -246,6 +261,16 @@ type Session = {
    *  no reason to connect it to us. It is the session and not a boolean because
    *  the one we borrowed from is not always the one we end up on. */
   tmuxStatusHiddenOn?: TmuxTarget | null;
+  /** The re-hides still owed to the session whose bar came back on. Each heal
+   *  spends one; when it reaches zero the flip stands, because re-asserting
+   *  forever is a fight the user cannot win. Reset to a fresh budget whenever
+   *  the panel explicitly asks to hide again — that is a new consent. See
+   *  `TMUX_BAR_HEAL_BUDGET` and the sweep in ptyOpen. */
+  tmuxBarHealBudget?: { sessionId: string; left: number } | null;
+  /** Consecutive failed remounts (each would otherwise have created and killed
+   *  a mirror) and the timestamp until which the sweep stops trying. */
+  remountFails?: number;
+  remountQuietUntil?: number;
   /**
    * The group this session joined, when it is a phone looking at a pane.
    *
@@ -330,7 +355,7 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
@@ -603,12 +628,6 @@ export function ptyOpen(ws: PtyWs) {
     // middle of a themed panel. Best-effort, and silent when there is no theme
     // file yet: this is a repaint, not a precondition.
     applyThemeTo(t.socket);
-    // Re-apply the panel's answer to the new session. Without this a restored
-    // session comes up with tmux's own status line on top of our tabs, and
-    // nothing in the panel changed to make the browser re-ask for it.
-    if (session.tmuxStatusVisible === false && !session.tmuxStatusHiddenOn) {
-      if (setStatusLine(t, false)) session.tmuxStatusHiddenOn = t;
-    }
   };
 
   /*
@@ -664,6 +683,85 @@ export function ptyOpen(ws: PtyWs) {
       lastTarget = frame.target;
       if (frame.target.id !== session.tmux?.id) followSession(frame.target);
       else session.tmux = frame.target; // a rename keeps the id and changes the name
+      /*
+       * The strip's half of the bargain: while the panel draws its own window
+       * list, tmux's own bar must not be on screen — and the ways it can get
+       * there are keybindings, not bugs: `prefix :` and a bare `set status on`,
+       * a plugin's or config's `set status …` without `-g`, a reload that
+       * re-sources one, a client moved onto a session that never had `status
+       * off`. None of them change the session we are tracking, so `followSession`
+       * never sees them — which is exactly how the bar used to come back and
+       * STAY. So the choice is re-asserted every tick, off the two fields the
+       * frame already reads, and a flip heals within half a second instead of
+       * sticking until the session changes or the panel is reopened.
+       *
+       * The block stands back only when the panel has explicitly asked for
+       * tmux's own bar (`visible: true` — the web panel's toggle). Until the
+       * panel says, the strip is the app's and the bar is asserted: the phone
+       * never sends the toggle, and its strip is always the app's.
+       *
+       * Who gets re-asserted depends on whose session the client is on:
+       *
+       *  - OUR mirror (`agx-phone-…`): the bar belongs to the app here, so
+       *    anything that turns it on or drops the claim is undone, with no
+       *    budget. Hiding on the mirror costs nobody else anything, and the
+       *    claim plus the prompt keys are what the phone's own prompts run
+       *    on — which is also why a config that never had a bar still gets
+       *    them on the mirror.
+       *  - A user's own session, on an ATTACH that had a mirror: the client
+       *    wandered (`^b s`, an `attach-session` typed in, a continuum
+       *    restore), and re-hiding there would take the DESK's bar away —
+       *    `status` is a session option and the desk is on that session too.
+       *    A fresh mirror of it is made and the client switched back, which
+       *    is how the panel keeps its strip without touching the user's.
+       *    A switch that keeps failing is braked: three misses in a row buy
+       *    a minute off, because looping a create-and-kill every tick would
+       *    be its own bug.
+       *  - A user's own session with no mirror behind it (a plain shell that
+       *    ran `tmux`): the panel's answer hides it, as it always has, and
+       *    this is also what heals a flip on it — up to a budget. See
+       *    `TMUX_BAR_HEAL_BUDGET`: forever would take the user's own
+       *    override away.
+       */
+      if (session.tmuxStatusVisible !== true) {
+        const t = frame.target;
+        if (isPhoneSession(t.session)) {
+          if (frame.status !== "off" || !frame.owned) {
+            if (setStatusLine(t, false)) session.tmuxStatusHiddenOn = t;
+          }
+        } else if (session.phoneAttach) {
+          if (session.tmuxClient && (session.remountQuietUntil ?? 0) <= Date.now()) {
+            if (remountPhoneClient(session.tmuxClient, t)) {
+              session.remountFails = 0;
+            } else {
+              session.remountFails = (session.remountFails ?? 0) + 1;
+              if (session.remountFails >= REMOUNT_FAILS_BEFORE_QUIET) {
+                session.remountQuietUntil = Date.now() + REMOUNT_QUIET_MS;
+                // The reason, said once at the moment of giving up rather than
+                // every tick: run the failing switch once more and keep what
+                // tmux answers. `remountPhoneClient` swallows stderr, which is
+                // exactly what a loop must not do with it.
+                const r = Bun.spawnSync(
+                  ["tmux", ...session.tmuxClient.socket, "switch-client", "-c", session.tmuxClient.tty, "-t", t.id],
+                  { stdout: "pipe", stderr: "pipe", timeout: 4000, env: process.env },
+                );
+                const why = r.stderr.toString().trim() || r.stdout.toString().trim() || "switch-client failed";
+                console.warn(`[terminal] could not put the phone back on a mirror (${why}); not trying again for a minute`);
+              }
+            }
+          }
+        } else if (frame.status === "on") {
+          const budget = session.tmuxBarHealBudget;
+          if (budget?.sessionId === t.id && budget.left <= 0) {
+            // Argued out: the flip on this session stands — the user won.
+          } else if (setStatusLine(t, false)) {
+            session.tmuxStatusHiddenOn = t;
+            session.tmuxBarHealBudget = budget?.sessionId === t.id
+              ? { sessionId: t.id, left: budget.left - 1 }
+              : { sessionId: t.id, left: TMUX_BAR_HEAL_BUDGET - 1 };
+          }
+        }
+      }
     } else {
       // Unreachable: the server went away, or the client is mid-attach. Drop it
       // and resolve again next tick rather than answer from something stale.
@@ -1084,6 +1182,10 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       // resolved yet: this is a preference about tmux's chrome, not about one
       // session, and it has to survive the client being switched to another.
       s.tmuxStatusVisible = visible;
+      // A fresh explicit hide is a fresh consent: the next session whose bar
+      // comes back on gets a full heal budget again, whatever a previous one
+      // spent arguing.
+      s.tmuxBarHealBudget = null;
       if (!s.tmux) return;
       if (setStatusLine(s.tmux, visible)) s.tmuxStatusHiddenOn = visible ? null : s.tmux;
       return;

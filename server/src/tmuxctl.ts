@@ -278,6 +278,24 @@ export interface TmuxFrame {
    * Null when tmux answered without one, never a guess.
    */
   client: { cols: number; rows: number } | null;
+  /**
+   * Whether the session this client is on is drawing its status line right
+   * now — tmux's own effective answer, and the only thing that decides if
+   * the original bar is on screen.
+   *
+   * Everything that can put the bar back when the panel chose its own strip
+   * lands here: a `set status on` typed through the command prompt, a
+   * plugin's bare `set status …`, a config line without `-g`, a client moved
+   * onto a session that never had `status off`. The sweep reads these two
+   * fields in the call it already makes for the windows, and re-asserts from
+   * them, so a flip heals within a tick instead of sticking until the
+   * session changes.
+   */
+  status: string;
+  /** `@agx-owned` on that session: this app took its bar (and its prompt
+   *  keys) over, and still holds the claim. `releaseStale` sweeps the
+   *  sessions where the claim survived the process that made it. */
+  owned: boolean;
   /** pane id -> window id for every pane of this session. Server-internal, off
    *  the wire: it exists so the sweep can tell which window a finished agent's
    *  pane belongs to. */
@@ -314,7 +332,14 @@ export function readFrame(c: TmuxClient): TmuxFrame | null {
     // against the size of the terminal showing it is a comparison the desk
     // needs twice a second, and it costs nothing here and a subprocess a tick
     // anywhere else.
-    "list-clients", "-F", "c\t#{client_tty}\t#{session_name}\t#{session_id}\t#{client_width}\t#{client_height}",
+    //
+    // `#{status}` and `#{@agx-owned}` ride along for the same reason: the
+    // panel's answer to "whose bar is this" can be flipped by a keybinding,
+    // and the sweep that already reads the windows is where the re-assertion
+    // has to live. Both evaluate against the client's own session — measured,
+    // `list-clients` answers a session-local `status off` and `@agx-owned 1`
+    // for the client attached to that session and nobody else's.
+    "list-clients", "-F", "c\t#{client_tty}\t#{session_name}\t#{session_id}\t#{client_width}\t#{client_height}\t#{status}\t#{@agx-owned}",
     ";",
     "list-windows", "-a",
     // `@agx-ask` rides along in the format string rather than in a second
@@ -336,7 +361,7 @@ export function readFrame(c: TmuxClient): TmuxFrame | null {
   ]);
   if (!out) return null;
   const f = parseFrame(out, c.tty);
-  return f ? { target: { pid: c.pid, socket: c.socket, session: f.session, id: f.id }, windows: f.windows, panes: f.panes, client: f.client, windowOfPane: f.windowOfPane } : null;
+  return f ? { target: { pid: c.pid, socket: c.socket, session: f.session, id: f.id }, windows: f.windows, panes: f.panes, client: f.client, status: f.status, owned: f.owned, windowOfPane: f.windowOfPane } : null;
 }
 
 /**
@@ -347,15 +372,17 @@ export function readFrame(c: TmuxClient): TmuxFrame | null {
  * *names* are not unique enough to bet a `kill-window` on — resurrect happily
  * restores a second session called `main` — and the id is what tmux itself uses.
  */
-export function parseFrame(out: string, tty: string): { session: string; id: string; client: { cols: number; rows: number } | null; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string> } | null {
+export function parseFrame(out: string, tty: string): { session: string; id: string; client: { cols: number; rows: number } | null; status: string; owned: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string> } | null {
   let session: string | null = null;
   let id: string | null = null;
   let client: { cols: number; rows: number } | null = null;
+  let status = "";
+  let owned = false;
   const windowRows: string[] = [];
   const paneRows: string[] = [];
   for (const line of out.split("\n")) {
     if (line.startsWith("c\t")) {
-      const [, clientTty, name, sid, width, height] = line.split("\t");
+      const [, clientTty, name, sid, width, height, st, own] = line.split("\t");
       if (clientTty === tty && name && sid) {
         session = name; id = sid;
         // Only ours. Every other client on this server is on the same list and
@@ -363,6 +390,8 @@ export function parseFrame(out: string, tty: string): { session: string; id: str
         // window against the size of whoever is squeezing it.
         const cols = Number(width), rows = Number(height);
         client = Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0 ? { cols, rows } : null;
+        status = (st ?? "").trim();
+        owned = (own ?? "").trim() === "1";
       }
     } else if (line.startsWith("w\t")) {
       windowRows.push(line);
@@ -385,7 +414,7 @@ export function parseFrame(out: string, tty: string): { session: string; id: str
     if (tag !== "p" || sid !== id || !winId || !paneId || !PANE_ID.test(paneId)) continue;
     windowOfPane.set(paneId, winId);
   }
-  return { session, id, client, windows: parseWindows(mine.join("\n")), panes: parsePaneGeometry(paneRows, id), windowOfPane };
+  return { session, id, client, status, owned, windows: parseWindows(mine.join("\n")), panes: parsePaneGeometry(paneRows, id), windowOfPane };
 }
 
 /**
@@ -1026,13 +1055,16 @@ export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
     // session with an invisible status line and no way to know why.
     return BORROWED.map((opt) => tmux(t.socket, ["set-option", "-t", t.id, "-u", opt]) !== null).every(Boolean);
   }
-  // Nothing to take from someone whose config runs without one — there is no
-  // row to reclaim, and the panel's strip is already the only window list.
-  if (statusInConfig(t) === "off") return false;
   // Set before the rebind, so a keypress landing between the two finds the flag
   // already true rather than falling through to a prompt with nowhere to draw.
   tmux(t.socket, ["set-option", "-t", t.id, "@agx-owned", "1"]);
   takePrompts(t);
+  // Nothing to take from someone whose config runs without a bar — the row
+  // does not exist, so "hidden" is already true. The claim and the prompt
+  // keys still go on: `prefix ,` and `prefix .` draw over the top line with
+  // or without a bar, and the re-assertion the panel runs off this flag
+  // depends on the claim being there to find.
+  if (statusInConfig(t) === "off") return true;
   // The row itself. `status off` rather than a blanked `status-format[0]`: a row
   // held open for prompts that no longer arrive there is just a gap.
   const off = tmux(t.socket, ["set-option", "-t", t.id, "status", "off"]) !== null;
@@ -2181,6 +2213,73 @@ function claimAlive(claim: string): boolean {
  *  built in `attachArgvFor` below. One regex so the two cannot drift, and
  *  declared above both readers rather than between them. */
 const PHONE_SESSION = /^agx-phone-(\d+)-[a-z0-9]+$/;
+
+/** Is this session name one of the mirrors this app makes? The mirror is the
+ *  only session whose bar the panel may re-assert: it is ours, and hiding it
+ *  costs nobody else anything. The session the mirror shares its windows with
+ *  is the user's, and re-asserting there would take the desk's bar away. */
+export function isPhoneSession(session: string | null | undefined): boolean {
+  return typeof session === "string" && PHONE_SESSION.test(session);
+}
+
+/**
+ * Put the phone's view back on one of OUR mirrors when its client has
+ * wandered onto a session that is not ours.
+ *
+ * `prefix s`, an `attach-session` typed into the pane, a continuum restore —
+ * all of them move the tmux client off the grouped mirror this app made, and
+ * the mirror dies with the client (`destroy-unattached`). The session the
+ * client lands on has no `status off` of its own, so tmux's own bar comes
+ * back — and hiding it THERE would take the desk's bar away too, because
+ * `status` is a session option and the desk is attached to that same session.
+ *
+ * So instead of hiding on the moved-to session, a fresh mirror of it is made —
+ * the same shape `attachArgvFor` builds: grouped (`new-session -t`), sharing
+ * the windows, sized `largest` so the desk is not squeezed, `status off` — and
+ * OUR client is switched back onto it by tty. The old mirror is already gone;
+ * the new one dies the same way when the client leaves.
+ *
+ * No fit and no zoom here: both were owed by the window the phone originally
+ * opened, and this move has nothing to do with it. The new mirror renders the
+ * moved-to window at the desk's size, exactly as a fresh attach would.
+ *
+ * `destroy-unattached` is set LAST on purpose: measured, tmux kills a session
+ * carrying it the moment it has no attached client — so a detached mirror
+ * created with it already set would be gone before `switch-client` reached it.
+ *
+ * The name is a contract, not a label: `PHONE_SESSION` (and so `phoneWindows`,
+ * the strip's phone mark, the #487 width notice, and `reclaimPinnedWindow`)
+ * treats any `agx-phone-…` session as "a phone is on this window". That is
+ * correct here — the caller only remounts an attach that HAD a mirror
+ * (`session.phoneAttach`), so the new session is a phone by definition — but
+ * it is load-bearing: a mirror ever remounted for a desk client would need its
+ * own prefix, not a silent fifth reader of this one.
+ */
+export function remountPhoneClient(c: TmuxClient, target: TmuxTarget): boolean {
+  if (!SESSION_ID.test(target.id)) return false;
+  if (isPhoneSession(target.session)) return false;
+  // The digits the regex needs are the client's own pid; the suffix is random
+  // so two remounts on the same client cannot collide.
+  const name = `agx-phone-${c.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  const created = tmux(c.socket, [
+    "new-session", "-d", "-t", target.id, "-s", name,
+    ";", "set-option", "-t", name, "window-size", "largest",
+    ";", "set-option", "-t", name, "status", "off",
+  ]);
+  if (created === null) return false;
+  // Address our own client by its tty: `switch-client` run from the server has
+  // no client context of its own, and the tty is how tmux names the client
+  // back — the same field `readFrame` matches on. The flags are the 3.7 order:
+  // `-c` is the target client, `-t` the target session (`focusPane` uses only
+  // `-t`, so it never met the swap).
+  if (tmux(c.socket, ["switch-client", "-c", c.tty, "-t", name]) === null) {
+    tmux(c.socket, ["kill-session", "-t", name]);
+    return false;
+  }
+  // The client is on it now, so the mirror dies when the phone leaves.
+  tmux(c.socket, ["set-option", "-t", name, "destroy-unattached", "on"]);
+  return true;
+}
 
 /**
  * What a window's zoom is, and whether zooming it would mean anything.
