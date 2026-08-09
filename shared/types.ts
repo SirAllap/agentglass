@@ -1848,6 +1848,16 @@ export interface PrSummary {
    *  "not yet" rather than "nobody was asked". */
   reviewers?: PrReviewer[];
   checks: PrCheckRollup;
+  /**
+   * The commit `checks` describes — and therefore the only commit a merge
+   * started from this row is allowed to land.
+   *
+   * Arrives with the second pass, off the same GraphQL node as the rollup, so
+   * the two can never disagree. Undefined until then, which is honest: before
+   * the checks are in, this row has no opinion about a commit and nothing
+   * should merge from it.
+   */
+  headSha?: string;
   /** This checkout is on the PR's head branch — "you are here". */
   isCurrentBranch?: boolean;
   /** Whether `checks` has actually been fetched. The list arrives in two

@@ -20,6 +20,7 @@ import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forget
 import { loadProfiles } from "../lib/browserProfiles.ts";
 import { addVisible, allSites, bestSource, dropVisible, lockedWhy, reachable, siteView } from "../lib/cookiePick.ts";
 import { PROVIDERS, type ProviderSpec, type ProviderStatus, type ProviderState } from "../../../shared/providers.ts";
+import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo } from "../lib/format.ts";
 import type { ActionRecord, GateRecord } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, type ActivityRow } from "../lib/activity.ts";
@@ -2040,6 +2041,10 @@ function ProviderCard({ spec, status, checking, onChanged }: {
   const connected = status?.state === "connected";
   const wantsToken = spec.auth === "token";
   const line = "1px solid color-mix(in srgb, var(--border) 40%, transparent)";
+  /* Empty while the check is still out: a row that has not answered yet has
+     nothing to be stale about, and "Checked at 14:32" beside "Checking…" is a
+     contradiction on one line. */
+  const checked = waiting ? "" : checkedLine(status?.at);
 
   const connect = async () => {
     if (!token.trim()) return;
@@ -2078,6 +2083,15 @@ function ProviderCard({ spec, status, checking, onChanged }: {
         hint={<>
           <span className="block">{spec.what}</span>
           {status?.detail && <span className="block mt-0.5" style={{ color: "var(--text2)" }}>{status.detail}</span>}
+          {/* When that verdict was actually taken. The row above is read from a
+              cache — deliberately, because asking ClickUp live costs ten
+              seconds of its latency for a question the token answers — and a
+              cached verdict drawn with no date claims to be a live one. Said
+              only once the answer is old enough for the difference to matter;
+              see checkedLine. */}
+          {checked && (
+            <span className="block mt-0.5 text-[11px]" style={{ color: "var(--text3)" }}>{checked}</span>
+          )}
           {/* Half of a provider can be down while the other half looks fine —
               the ClickUp card bell fails on its own three-minute timer and
               used to do it in total silence (T27). Warning-coloured rather

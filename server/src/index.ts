@@ -2062,6 +2062,10 @@ const server = Bun.serve<WsData>({
       return json(await providerWorkspaces((url.searchParams.get("id") ?? "") as ProviderId));
     }
     if (pathname.startsWith("/providers/") && req.method === "POST") {
+      // Connect, disconnect, choose a workspace: this route stores and deletes
+      // the credentials every other integration reads. #469 swept the routes
+      // that run code and missed the one that holds the keys to them.
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const id = String(b.id ?? "") as ProviderId;
       const r = pathname === "/providers/connect"
@@ -2097,6 +2101,10 @@ const server = Bun.serve<WsData>({
       return json({ ok: true, ...renderSteps(r, values) });
     }
     if (pathname.startsWith("/recipes/") && req.method === "POST") {
+      // A recipe is a saved command line the app will later run. Saving one is
+      // therefore a write to the set of things this machine can be asked to
+      // execute, which is the definition the sweep is sorting on.
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const { saveRecipe, removeRecipe } = await import("./recipes.ts");
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const r = pathname === "/recipes/save" ? saveRecipe(b as never)
@@ -2177,6 +2185,11 @@ const server = Bun.serve<WsData>({
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname.startsWith("/clickup/") && req.method === "POST") {
+      // Assign somebody, move a card, set a field, add or drop a board, and
+      // switch writing on. The change does not land on this machine, which is
+      // exactly why it was easy to miss: it lands in a shared workspace where
+      // colleagues can see it and where nothing here can take it back.
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const id = String(b.id ?? "");
       const seen = typeof b.updated === "number" ? b.updated : undefined;
@@ -2323,6 +2336,9 @@ const server = Bun.serve<WsData>({
      * follows.
      */
     if (pathname.startsWith("/tasks/write/") && req.method === "POST") {
+      // `/tasks/write/` — the path says it. Taskwarrior is the user's own
+      // store and these verbs add, complete and delete rows in it.
+      if (!trustedCaller(req, from)) return csrfBlocked();
       // Every verb carries the fingerprint the client was looking at. A write
       // whose precondition has moved answers 409 with the fresh list — it is
       // never retried here, because retrying against a store that moved is
@@ -2346,6 +2362,10 @@ const server = Bun.serve<WsData>({
       return json(r, r.conflict ? 409 : r.ok ? 200 : 400);
     }
     if (pathname.startsWith("/tasks/remind") && req.method === "POST") {
+      // Touching no Taskwarrior lock is not the same as changing nothing: a
+      // reminder is stored here and later fires a desktop notification, so
+      // this route writes state AND schedules something that interrupts.
+      if (!trustedCaller(req, from)) return csrfBlocked();
       // None of these touch Taskwarrior or its lock. That is what keeps the
       // engine working when the task list cannot be read at all.
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
@@ -2900,6 +2920,9 @@ const server = Bun.serve<WsData>({
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---
     if (pathname === "/walkthrough" && req.method === "POST") {
+      // Spawns the `claude` CLI, or spends an API key. It executes and it
+      // costs money — the two properties the strict gate exists for.
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       if (!WALKTHROUGH_ENABLED) {

@@ -66,6 +66,17 @@ import { pins, isPinned, togglePin, subscribePins } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { FileRail } from "./FileRail.tsx";
 
+/**
+ * The second half of a merge, named once.
+ *
+ * A merge from the detail view is two writes to two systems: GitHub, then the
+ * card's status in ClickUp. The button says which one it is on, and the string
+ * is a constant because the tooltip has to recognise it — comparing against a
+ * literal typed twice is how the reassuring sentence ("the merge still stands")
+ * silently stops appearing after a copy edit.
+ */
+const MOVING_CARD = "Moving the card…";
+
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
 // The open/closed axis, orthogonal to the scope views. "closed" holds merged +
@@ -890,17 +901,12 @@ function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink 
  * A spinner in the middle of the space it is going to fill says where the
  * content will be and that something is still happening.
  *
- * Reduced motion gets a pulse rather than nothing: a ring that has stopped
- * turning reads as a spinner that has hung, which is the opposite of the
- * message.
+ * The ring itself is `.agx-spin` from index.css and nothing here. This file
+ * used to inject a second rule under that same name, and a `<style>` in the
+ * body beats a stylesheet in the head — so mounting this panel restyled every
+ * spinner in the app and unmounting it put them back. The reduced-motion pulse
+ * that rule argued for was the better answer and moved to index.css with it.
  */
-const LOADING_CSS = `
-@keyframes agxspin{to{transform:rotate(360deg)}}
-@keyframes agxbreathe{0%,100%{opacity:.3}50%{opacity:.85}}
-.agx-spin{border-radius:50%;border:2px solid color-mix(in srgb,var(--text) 24%,transparent);border-top-color:var(--primary);animation:agxspin .7s linear infinite}
-@media (prefers-reduced-motion:reduce){.agx-spin{animation:agxbreathe 1.6s ease-in-out infinite}}
-`;
-
 function Loading({ label, fill, size = 22 }: { label: string; fill?: boolean; size?: number }) {
   return (
     <div role="status" aria-live="polite"
@@ -1425,6 +1431,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump, repo, openPr]);
   const [busy, setBusy] = useState(false);
+  /** What the merge control is doing right now, "" when it is doing nothing.
+   *  A sentence rather than a boolean because the merge is two writes and they
+   *  fail differently — see doMerge. */
+  const [mergeWork, setMergeWork] = useState("");
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   // Automation comments render in full by default now that they render as
   // markdown rather than as their own source: the fold stays folded, so a 40 KB
@@ -2292,21 +2302,46 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       card: mergeCardRef(detail, clickup),
     });
     if (!choice) return;
-    const merged = await act("Merge", () => api.prMerge(root, detail.number, method, {
-      deleteBranch: choice.deleteBranch, headSha: head,
-      subject: choice.subject, body: choice.body,
-    }));
-    const move = choice.card;
-    if (!merged || !move) return;
-    // `updated` is the precondition, not decoration: somebody else moving the
-    // card while the merge form was open should come back as a conflict rather
-    // than quietly winning.
-    const r = await api.clickupStatus(move.id, move.to, move.updated)
-      .catch((e) => ({ ok: false, error: String(e) }));
-    flash(r.ok, mergeNote(true, {
-      asked: true, ok: r.ok, to: move.to,
-      error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
-    }));
+    /*
+     * What the merge control says while this runs.
+     *
+     * `busy` alone could not say it. It is one flag for every action on the
+     * panel, so a button reading it can only know that SOMETHING is happening —
+     * and the merge button, dimmed and still reading "Squash and merge" through
+     * a `gh` subprocess and then a write to ClickUp, read as a button that had
+     * not registered the press. That is the state people press twice.
+     *
+     * Two names rather than one, because these are two writes to two systems
+     * and the second is the one that can take a while on somebody else's
+     * network. Which half it is on is worth saying: once it reads MOVING_CARD
+     * the irreversible part is already done, and the button's tooltip says so
+     * — that is the difference between waiting and wondering whether to try
+     * the merge again.
+     */
+    try {
+      setMergeWork("Merging…");
+      const merged = await act("Merge", () => api.prMerge(root, detail.number, method, {
+        deleteBranch: choice.deleteBranch, headSha: head,
+        subject: choice.subject, body: choice.body,
+      }));
+      const move = choice.card;
+      if (!merged || !move) return;
+      setMergeWork(MOVING_CARD);
+      // `updated` is the precondition, not decoration: somebody else moving the
+      // card while the merge form was open should come back as a conflict rather
+      // than quietly winning.
+      const r = await api.clickupStatus(move.id, move.to, move.updated)
+        .catch((e) => ({ ok: false, error: String(e) }));
+      flash(r.ok, mergeNote(true, {
+        asked: true, ok: r.ok, to: move.to,
+        unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
+        error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
+      }));
+    } finally {
+      // `finally`, so a throw anywhere above cannot leave the button spinning
+      // for ever — a spinner that never stops is a worse lie than no spinner.
+      setMergeWork("");
+    }
   };
 
   /**
@@ -2546,7 +2581,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     <RepoCtx.Provider value={repo?.nameWithOwner}>
     <MentionCtx.Provider value={mentions}>
     <div className="flex flex-col h-full min-h-0">
-      <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}{PR_ROW_CSS}{LOADING_CSS}</style>
+      <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}{PR_ROW_CSS}</style>
 
       <div className={viewHeaderClass} style={viewHeaderStyle}>
         <h2 className="sr-only">Pull Requests</h2>
@@ -2721,7 +2756,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   // Only what this app can really do. `merge` uses the method
                   // the panel already remembers, so the board never quietly
                   // picks a different one from the detail.
-                  if (what === "merge") void act("Merge", () => api.prMerge(root, p.number, mergeMethod, {}));
+                  //
+                  // `headSha` is not optional here either, and it used to be
+                  // missing. A card lands in "Green, ready to land" because of
+                  // its check rollup, and that rollup is about ONE commit; a
+                  // merge sent with no head to match against lands on whatever
+                  // the tip is when it arrives — the author's push from thirty
+                  // seconds ago, untested in this combination and never seen by
+                  // the person who pressed the button. The detail view has
+                  // always passed it (see doMerge); this was the one merge in
+                  // the app that could land a commit nobody had looked at.
+                  //
+                  // No head means the second pass has not landed, so the row
+                  // has no checks either and no lane that offers Merge. Refused
+                  // rather than sent unguarded, because "the guard was not
+                  // available" is not a reason to skip the guard.
+                  if (what === "merge") {
+                    if (!p.headSha) { flash(false, "Merge — still reading this one's checks"); return; }
+                    void act("Merge", () => api.prMerge(root, p.number, mergeMethod, { headSha: p.headSha }));
+                  }
                   else if (what === "rerun") void act("Re-run checks", () => api.prRerun(root, p.number));
                   else openPr(p.number);
                 }} />
@@ -3014,7 +3067,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     <div className="min-w-0 flex-1">
                       {tab === "overview" ? (
                         <Overview
-                          d={d} root={root} busy={busy} openThreads={openThreads.length}
+                          d={d} root={root} busy={busy} mergeWork={mergeWork} openThreads={openThreads.length}
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
                           behind={behind} localHead={localHead}
                           conflictFiles={conflictFiles}
@@ -3363,12 +3416,17 @@ function ConflictActions({ root, number, branch, base, disabled }: {
   );
 }
 
-function Overview({ d, root, busy, openThreads, conversationCount, behind, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditRequest, awaitingChecks }: {
+function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, behind, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditRequest, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
   root: string;
-  busy: boolean; openThreads: number; conversationCount: number;
+  busy: boolean;
+  /** What the merge is doing, "" when it is not running. `busy` cannot answer
+   *  this: it is true for every action on the panel, so a merge button reading
+   *  it would say "Merging…" while a comment was being posted. */
+  mergeWork: string;
+  openThreads: number; conversationCount: number;
   /** How many commits the branch is behind its base, once asked. Null while the
    *  question is still out, which is why the button appears a beat late rather
    *  than the whole page arriving late. */
@@ -3661,8 +3719,16 @@ function Overview({ d, root, busy, openThreads, conversationCount, behind, local
           {!conflicted && (
           <span className="flex items-center rounded overflow-hidden shrink-0" style={{ border: "1px solid var(--primary)" }}>
             <button onClick={() => { if (isBehind && !confirmBehind) { setConfirmBehind(true); return; } onMerge(method); }}
-              disabled={busy || (!canMerge && !isBehind)}
-              title={canMerge
+              /* `mergeWork` as well as `busy`, and it is not redundant: the card
+                 move runs AFTER the merge action has settled, so for those
+                 seconds `busy` is false again and the button was live while the
+                 second half of its own operation was still in flight. */
+              disabled={busy || !!mergeWork || (!canMerge && !isBehind)}
+              title={mergeWork
+                ? (mergeWork === MOVING_CARD
+                  ? "The pull request is merged. Moving its ClickUp card to the merged status — if this part fails, the merge still stands."
+                  : "Merging…")
+                : canMerge
                 ? `${MERGE_LABEL[method]}${d.mergePolicy?.deletesBranch ? " — GitHub deletes the branch" : " and delete the branch"}`
                 : isBehind
                   ? `${d.baseRefName} has moved on${behind ? ` by ${behind} commit${behind === 1 ? "" : "s"}` : ""}. The checks that passed ran against the old base — merging now is untested in this combination.`
@@ -3688,7 +3754,22 @@ function Overview({ d, root, busy, openThreads, conversationCount, behind, local
                     color: "var(--bg)", fontWeight: 600,
                   }
                 : { background: "var(--primary)", color: "var(--bg)", fontWeight: 500 }}>
-              {isBehind ? (confirmBehind ? "Merge anyway?" : `${MERGE_LABEL[method]} · behind`) : MERGE_LABEL[method]}
+              {mergeWork
+                ? (
+                  /* The ring the rest of the app spins, sized to a 10.5px
+                     button and tinted to the button's own foreground —
+                     `.agx-spin` is drawn in `--primary`, which is this
+                     button's BACKGROUND and would have been an invisible
+                     spinner on the one control that most needs one. */
+                  <span className="inline-flex items-center gap-1.5">
+                    <span aria-hidden className="agx-spin shrink-0"
+                      style={{ width: 9, height: 9,
+                        borderColor: "color-mix(in srgb, currentColor 30%, transparent)",
+                        borderTopColor: "currentColor" }} />
+                    {mergeWork}
+                  </span>
+                )
+                : isBehind ? (confirmBehind ? "Merge anyway?" : `${MERGE_LABEL[method]} · behind`) : MERGE_LABEL[method]}
             </button>
             {methods.length > 1 && (
               <Select
