@@ -1671,31 +1671,31 @@ async function fillPages(p: any, repo: PrRepoId, number: number): Promise<void> 
  * missing a field is worse than a row nobody fetched: it renders, and it is
  * quietly wrong.
  */
-const SEL_REVIEWS = `{nodes{
+const SEL_REVIEWS = `nodes{
       id author{login} state body submittedAt url lastEditedAt authorAssociation viewerDidAuthor
       reactionGroups{content viewerHasReacted users{totalCount}}
-    }}`;
-const SEL_COMMENTS = `{nodes{
+    }`;
+const SEL_COMMENTS = `nodes{
       id databaseId author{login} body createdAt url lastEditedAt authorAssociation viewerDidAuthor
       reactionGroups{content viewerHasReacted users{totalCount}}
-    }}`;
-const SEL_COMMITS = `{nodes{commit{
+    }`;
+const SEL_COMMITS = `nodes{commit{
       oid message committedDate parents{totalCount}
       author{user{login} name}
       authors(first:8){nodes{user{login} name}}
       signature{isValid state}
       statusCheckRollup{state}
-    }}}`;
-const SEL_FILES = `{pageInfo{hasNextPage endCursor} nodes{path additions deletions changeType viewerViewedState}}`;
-const SEL_THREADS = `{nodes{
+    }}`;
+const SEL_FILES = `nodes{path additions deletions changeType viewerViewedState}`;
+const SEL_THREADS = `nodes{
       id isResolved isOutdated path line startLine
       comments(first:50){nodes{
         id databaseId author{login} body createdAt url diffHunk originalLine
         lastEditedAt authorAssociation viewerDidAuthor
         reactionGroups{content viewerHasReacted users{totalCount}}
       }}
-    }}`;
-const SEL_TIMELINE = `{nodes{
+    }`;
+const SEL_TIMELINE = `nodes{
       __typename
       ... on HeadRefForcePushedEvent{createdAt actor{login} beforeCommit{oid} afterCommit{oid}}
       ... on RenamedTitleEvent{createdAt actor{login} previousTitle currentTitle}
@@ -1718,12 +1718,12 @@ const SEL_TIMELINE = `{nodes{
       ... on HeadRefDeletedEvent{createdAt actor{login} headRefName}
       ... on AutoMergeEnabledEvent{createdAt actor{login}}
       ... on AutoMergeDisabledEvent{createdAt actor{login} reason}
-    }}`;
-const SEL_CHECKS = `{nodes{
+    }`;
+const SEL_CHECKS = `nodes{
       __typename
       ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}}}}
       ... on StatusContext{context state targetUrl}
-    }}`;
+    }`;
 const TIMELINE_TYPES = `[
       HEAD_REF_FORCE_PUSHED_EVENT, RENAMED_TITLE_EVENT, LABELED_EVENT, UNLABELED_EVENT,
       ASSIGNED_EVENT, UNASSIGNED_EVENT, REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT,
@@ -1749,7 +1749,7 @@ const CONNECTIONS = [
   { key: "timelineItems", arg: `last:80, itemTypes:${TIMELINE_TYPES}`, dir: "back", pages: 4, sel: SEL_TIMELINE },
 ] as const;
 
-const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
+export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed deleteBranchOnMerge
     pullRequest(number:$number){

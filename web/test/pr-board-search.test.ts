@@ -384,3 +384,16 @@ describe("a reply looks like a reply", () => {
     expect(src.slice(Math.max(0, i - 200), i)).toContain("aria-hidden");
   });
 });
+
+describe("opening a pull request while the panel is still booting", () => {
+  it("does not treat the repository arriving as a scope switch", () => {
+    /*
+     * `root` is empty for the first second — the repository list is its own
+     * call — so the scope string changes once, from one with no root to the
+     * real one. The switch handler took that for "you changed repository" and
+     * cleared the selection, so a pull request opened inside that second threw
+     * you back to the board. Reported exactly that way.
+     */
+    expect(src).toContain('const first = prev === "" || prev.startsWith("\\u0000");');
+  });
+});

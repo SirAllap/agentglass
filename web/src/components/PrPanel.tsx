@@ -1786,7 +1786,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useEffect(() => {
     const scope = `${root}\u0000${filter}\u0000${stateSel}`;
     if (lastScope.current === scope) return; // re-render, not a switch
-    const first = lastScope.current === "";
+    /*
+     * The panel finishing its own boot is not you switching repository.
+     *
+     * `root` is empty for the first second — the repository list is a separate
+     * call — so the scope changes once from "\u0000open\u0000…" to the real
+     * one, and this effect took that for a switch and cleared the selection.
+     * Open a pull request inside that second and it threw you back to the
+     * board, which is exactly how it was reported: "entro en una PR rápido y me
+     * manda al board de nuevo".
+     */
+    const prev = lastScope.current;
+    const first = prev === "" || prev.startsWith("\u0000");
     lastScope.current = scope;
     if (first) return; // nothing on screen yet to clear
     listReq.current++;

@@ -13,6 +13,7 @@
  * and that what is still missing is still counted.
  */
 import { describe, expect, it } from "bun:test";
+import { DETAIL_QUERY } from "../src/prs.ts";
 
 const src = await Bun.file(new URL("../src/prs.ts", import.meta.url)).text();
 
@@ -84,5 +85,53 @@ describe("the lists a pull request is made of", () => {
   it("still says what it never got, and means the cap rather than a page size", () => {
     expect(src).toContain("files: Math.max(0, (p.changedFiles ?? 0) - files.length) || undefined");
     expect(src).toContain("commits: p.commits?.pageInfo?.capped ? (p.commits?.nodes || []).length : undefined");
+  });
+});
+
+/*
+ * The query has to be a query.
+ *
+ * The selections were lifted out of the query text into constants so the
+ * follow-up pages could reuse them — and they came out carrying their own outer
+ * braces, so every connection was rebuilt as `{pageInfo{…} {nodes{…}}`. GitHub
+ * rejected the whole document, `p` came back undefined, and every pull request
+ * in the app read "pull request not found, or gh could not reach the host".
+ *
+ * Every source assertion above passed while that was true. These do not: the
+ * query is built at import time, so its shape can be read here without a
+ * network.
+ */
+describe("the detail query itself", () => {
+  it("is balanced", () => {
+    const q = DETAIL_QUERY;
+    let depth = 0;
+    for (const ch of q) {
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it("has no selection set standing on its own", () => {
+    // `} {` is what the doubled braces looked like, and it is never valid here:
+    // a selection set follows a NAME, not another set.
+    expect(DETAIL_QUERY).not.toMatch(/\}\s*\{/);
+  });
+
+  it("interpolated every constant it names", () => {
+    expect(DETAIL_QUERY).not.toContain("${");
+  });
+
+  it("puts the nodes right after the pageInfo on every paged connection", () => {
+    for (const key of CONNS) {
+      /* Not "the line": `timelineItems` carries its item-type list across
+         several of them. From the connection to its pageInfo is enough, and it
+         is the join that broke. */
+      const i = DETAIL_QUERY.indexOf(`\n    ${key}(`);
+      expect(i, key).toBeGreaterThan(-1);
+      const after = DETAIL_QUERY.slice(i, i + 2000);
+      expect(after, key).toContain("hasPreviousPage startCursor} nodes{");
+    }
   });
 });
