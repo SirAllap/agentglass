@@ -660,3 +660,29 @@ describe("assigning on GitHub, and the card on the other board", () => {
     expect(src).toContain("if (pick) await api.clickupStatus(card.id, pick, card.updated);");
   });
 });
+
+describe("the ClickUp half, as its own controls", () => {
+  it("reuses the card's own status pill and its dropdown", () => {
+    // A status has a colour its board gave it, and a row of bordered words
+    // throws that away — which is the one thing that makes the list readable.
+    expect(src).toContain("<StatusPill status={pick || card.status} color={statusColor(statuses, pick || card.status)} />");
+    expect(src).toContain("leave it where it is");
+  });
+
+  it("draws people as faces, with their own colour when there is no picture", () => {
+    expect(src).toContain("referrerPolicy=\"no-referrer\"");
+    expect(src).toContain("background: m.color || \"var(--bg4)\"");
+  });
+
+  it("is a vertical half, never a fold below", () => {
+    expect(src).toContain('className="fixed rounded-lg overflow-hidden flex flex-row items-stretch"');
+  });
+
+  it("folds to a strip and comes back", () => {
+    /* Most presses of this menu are only about the reviewer. Put away, it
+       leaves the people list the whole width; the strip brings it back. */
+    expect(src).toContain("Not now ›");
+    expect(src).toContain("onClick={() => setFolded(false)}");
+    expect(src).toContain('style={{ width: 28,');
+  });
+});

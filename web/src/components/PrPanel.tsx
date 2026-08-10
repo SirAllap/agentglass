@@ -39,7 +39,7 @@ import { updateBranchMove } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote } from "../lib/cardMove.ts";
+import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
@@ -55,6 +55,7 @@ import {
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict } from "../lib/mergeReason.ts";
 import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
@@ -4959,9 +4960,12 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
 
   return (
     <Portal>
-      <div ref={box} className="fixed rounded-lg overflow-hidden flex"
+      <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-row items-stretch"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
-        <div className="flex flex-col min-w-0" style={{ width: side ? 300 : "100%" }}>
+        {/* Side by side, always: the divider between "who reviews it" and "what
+            happens to the card" is a vertical rule, not a fold. Fixed widths so
+            neither column can push the other into a stack. */}
+        <div className="flex flex-col min-w-0 flex-1" style={{ minWidth: side ? 300 : undefined }}>
         {/* px-5 to match viewHeaderClass, which is the row directly above this
             one. At px-3 the filter chips started 8px to the left of the repo
             chips they sit under — two left edges in one header, which is the
@@ -5031,6 +5035,13 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
   const [was, setWas] = useState<Set<number>>(new Set());
   const [pick, setPick] = useState<string>("");
   const [q, setQ] = useState("");
+  const [stOpen, setStOpen] = useState(false);
+  /* Folded away, and it comes back.
+     This is the optional half of the errand and most presses of this menu are
+     only about the reviewer — so it can be put away to a strip, which leaves
+     the people list the whole width, and pulled out again with one press. The
+     choice is not remembered on purpose: it is per errand, not a setting. */
+  const [folded, setFolded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -5094,10 +5105,30 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
     } finally { setBusy(false); }
   };
 
+  if (folded) {
+    return (
+      <button onClick={() => setFolded(false)} title={`Also move ${ref.label} in ClickUp`}
+        className="agx-btn shrink-0 flex flex-col items-center justify-start gap-2 py-2"
+        style={{ width: 28, borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
+        <span aria-hidden>‹</span>
+        <span className="text-[9px] tracking-[0.16em]" style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}>ClickUp</span>
+      </button>
+    );
+  }
+
   return (
-    <div className="flex flex-col min-w-0" style={{ width: 320, borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="flex flex-col min-w-0 shrink-0" style={{ width: 320, borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-        <div className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>Also in ClickUp <span style={{ color: "var(--text4)", fontWeight: 400 }}>· optional</span></div>
+        <div className="flex items-center gap-2">
+          <div className="text-[11px] font-semibold min-w-0 truncate" style={{ color: "var(--text)" }}>
+            Also in ClickUp <span style={{ color: "var(--text4)", fontWeight: 400 }}>· optional</span>
+          </div>
+          <button onClick={() => setFolded(true)} title="Leave the card alone — this folds away and comes back on the strip"
+            className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
+            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            Not now ›
+          </button>
+        </div>
         <div className="text-[10px] truncate" style={{ color: "var(--text3)" }} title={card?.title}>
           {ref.label}{card ? ` · ${card.title}` : ""}
         </div>
@@ -5110,22 +5141,35 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
         <>
           <div className="px-2 pt-2 pb-1 shrink-0">
             <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Status</div>
-            <div className="flex flex-wrap gap-1">
-              <button onClick={() => setPick("")}
-                className="text-[10px] px-1.5 py-0.5 rounded"
-                style={pick ? { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" } : { color: "var(--text)", border: "1px solid var(--primary)", background: "color-mix(in srgb, var(--primary) 18%, transparent)" }}>
-                leave it
-              </button>
-              {statuses.filter((x) => x.status !== card.status).map((x) => (
-                <button key={x.status} onClick={() => setPick(x.status)}
-                  className="text-[10px] px-1.5 py-0.5 rounded"
-                  style={pick === x.status
-                    ? { color: "var(--bg)", background: x.color || "var(--primary)", border: `1px solid ${x.color || "var(--primary)"}` }
-                    : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-                  {x.status}
+            {/* The card's own control, not a second design for the same choice:
+                a pill you press that opens a list of pills. A status has a
+                colour its board gave it, and a row of bordered words throws
+                that away — which is the one thing that makes this list
+                readable at a glance. */}
+            <button onClick={() => setStOpen((o) => !o)}
+              className="agx-btn w-full text-left rounded px-1 py-1 hover:bg-white/5 flex items-center gap-2">
+              <span className="min-w-0 truncate">
+                <StatusPill status={pick || card.status} color={statusColor(statuses, pick || card.status)} />
+              </span>
+              {!pick && <span className="text-[9.5px]" style={{ color: "var(--text4)" }}>unchanged</span>}
+              <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>▾</span>
+            </button>
+            {stOpen && (
+              <div className="agx-scroll mt-1 rounded-lg flex flex-col overflow-y-auto"
+                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", maxHeight: 220 }}>
+                <button className="text-left px-2 py-1.5 hover:bg-white/5 text-[10.5px]"
+                  style={{ color: "var(--text3)" }}
+                  onClick={() => { setPick(""); setStOpen(false); }}>
+                  leave it where it is
                 </button>
-              ))}
-            </div>
+                {statuses.filter((x) => x.status !== card.status).map((x) => (
+                  <button key={x.status} className="text-left px-2 py-1.5 hover:bg-white/5"
+                    onClick={() => { setPick(x.status); setStOpen(false); }}>
+                    <StatusPill status={x.status} color={x.color} dim={x.type === "done" || x.type === "closed"} />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="px-2 pt-2 shrink-0">
             <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
@@ -5138,8 +5182,19 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
             {people.map((m) => (
               <button key={m.id} onClick={() => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
                 className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
-                <span className="w-3.5 shrink-0 text-center" style={{ color: on.has(m.id) ? "var(--primary)" : "transparent" }}>✓</span>
-                <span className="truncate">{m.name}{m.me ? " · you" : ""}</span>
+                {/* The face, as everywhere else people are drawn in this app.
+                    Two initials is a puzzle in a workspace of five hundred. */}
+                {m.avatar
+                  ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
+                      style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+                  : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
+                      style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
+                      {m.initials}
+                    </span>}
+                <span className="truncate" style={{ color: on.has(m.id) ? "var(--success)" : "var(--text2)" }}>
+                  {m.name}{m.me ? " · you" : ""}
+                </span>
+                {on.has(m.id) && <span className="ml-auto text-[10px]" style={{ color: "var(--success)" }}>✓</span>}
               </button>
             ))}
           </div>
