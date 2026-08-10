@@ -1482,7 +1482,20 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /** Whether the pull request's masthead has given its metadata back to the
    *  page. Reset whenever another pull request is opened, or the second one
    *  would open already collapsed with its scroll at the top. */
-  const [condensed, setCondensed] = useState(false);
+  /*
+   * The facts strip does not fold away any more.
+   *
+   * It used to collapse once you scrolled — author, branch, reviewers, checks —
+   * to buy back a fifth of the window while reading a diff. Two things were
+   * wrong with it. Files never did it (that tab does not scroll the page), so
+   * one tab kept the strip and the rest lost it, which he reported as an
+   * inconsistency. And it changed the HEIGHT of the scroller while you were
+   * scrolling it, which is what made "put me back where I was" a race nobody
+   * could win — three attempts at remembering a scroll position lost to this.
+   *
+   * The strip stays. It costs a row; a panel that moves under you costs more.
+   */
+  const condensed = false;
   /** A file being read whole, over the panel. Null when nothing is open. */
   const [peek, setPeek] = useState<Peek | null>(null);
   const [detail, setDetail] = useState<PrDetail | null>(null);
@@ -1520,14 +1533,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * has three columns that scroll on their own, so the room the fold was buying
    * is room it no longer needs to buy.
    */
-  useEffect(() => { if (tab === "files") setCondensed(false); }, [tab]);
 
   /** The description editor has taken the whole column. Lifted out of
    *  <Description> so the shell can hide the masthead, tabs and sidebar behind
    *  it — editing a body is a mode, not a box wedged into the read view. */
   const [editingBody, setEditingBody] = useState(false);
   /** Open a pull request as a page. Back returns to the list, cursor intact. */
-  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setCondensed(false); setEditingBody(false); }, []);
+  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setEditingBody(false); }, []);
   const backToList = useCallback(() => { setSelected(null); setDetailErr(""); setEditingBody(false); }, []);
 
   /* Only this repository's: the panel shows one at a time, so a chip opening
@@ -3563,16 +3575,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     if (el.scrollTop || el.scrollLeft) { el.scrollTop = 0; el.scrollLeft = 0; }
                     return;
                   }
-                  // Hysteresis, not a threshold: a single line would flip the
-                  // masthead open and shut on every pixel of a trackpad wobble,
-                  // and it takes a row of the page with it each time.
                   const y = el.scrollTop;
                   // Where this TAB was left. One box scrolls all of them, so
                   // without this, reading to the bottom of Conversation and
                   // stepping to Overview landed you at the bottom of Overview —
                   // a page you had never scrolled. Reported exactly that way.
                   tabScroll.current[tab] = y;
-                  setCondensed((was) => (was ? y > 24 : y > 72));
                 }}>
                 {(tab === "overview" || tab === "conversation") ? (
                   <div className="flex gap-4 items-start">

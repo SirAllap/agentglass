@@ -546,3 +546,19 @@ describe("each tab keeps its own place", () => {
     expect(src).toContain("useEffect(() => { tabScroll.current = {}; }, [selected]);");
   });
 });
+
+describe("the facts strip", () => {
+  it("does not fold away while you scroll", () => {
+    /*
+     * It used to collapse once you scrolled, to buy back a fifth of the window
+     * while reading a diff. Files never did it — that tab does not scroll the
+     * page — so one tab kept the strip and the rest lost it, reported as an
+     * inconsistency. And it changed the HEIGHT of the scroller while you were
+     * scrolling it, which is what made "put me back where I was" a race nobody
+     * could win: three attempts at remembering a scroll position lost to it.
+     */
+    expect(src).toContain("const condensed = false;");
+    expect(src).not.toContain("setCondensed((was) => (was ? y > 24 : y > 72));");
+    expect(src).not.toContain("setCondensed(false)");
+  });
+});
