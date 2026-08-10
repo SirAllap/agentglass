@@ -11,6 +11,7 @@ import { RebaseModal } from "./RebaseModal.tsx";
 import { CompareModal } from "./CompareModal.tsx";
 import { InsightsModal } from "./InsightsModal.tsx";
 import { BlameModal } from "./BlameModal.tsx";
+import { BisectModal } from "./BisectModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
@@ -773,6 +774,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [compareTarget, setCompareTarget] = useState<string | null>(null);
   /** Whether the insights modal is open. */
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [bisectOpen, setBisectOpen] = useState(false);
   /**
    * Commits picked out of the log for a series cherry-pick — hashes, in the
    * order the user picked them. Empty when nothing is picked.
@@ -2379,6 +2381,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
                       title="Repo insights — commit pace, contributors, churn, changelog"
                     >☰ insights</button>
+                    {branch?.state === "bisecting" && (
+                      <button
+                        onClick={() => setBisectOpen(true)}
+                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
+                        style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}
+                        title="A bisect is in progress — mark the checked-out commit good or bad"
+                      >◉ bisect</button>
+                    )}
                     {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
                     {/* Offered only while undoing is exact: an unpushed merge
                         at the tip, on a clean tree. Once anything is committed
@@ -3416,6 +3426,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         <BlameModal root={root} path={blamePath.path}
           onClose={() => setBlamePath(null)}
           onOpenCommit={(hash, subject) => { setBlamePath(null); void openCommit(hash, subject); }} />
+      )}
+      {bisectOpen && (
+        <BisectModal root={root} onClose={() => setBisectOpen(false)}
+          onReset={() => setBisectOpen(false)}
+          onOpenCommit={(hash, subject) => { setBisectOpen(false); void openCommit(hash, subject); }}
+          onChanged={() => { loadTree(root); void loadView(); }} />
       )}
       {/* The commit row's right-click menu. The reset it offers is the old
           right-click, kept under its own heading so the cherry-pick actions

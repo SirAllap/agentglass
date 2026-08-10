@@ -1290,6 +1290,16 @@ export interface FileHistoryEntry {
   time: number;
   subject: string;
 }
+/** The state of a `git bisect` session — parsed from `git bisect status`. */
+export interface GitBisectStatus {
+  ok: boolean;
+  bisecting: boolean;
+  error?: string;
+  remaining?: number;
+  steps?: number;
+  current?: { sha: string; subject: string };
+  firstBad?: { sha: string; subject: string };
+}
 export interface GitWorktree {
   path: string;    // absolute
   branch: string;  // branch short name, or "(detached)"

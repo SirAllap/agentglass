@@ -3347,6 +3347,97 @@ export function fileHistory(rootIn: unknown, pathIn: unknown): { ok: boolean; en
   return { ok: true, entries };
 }
 
+// --- Guided bisect ----------------------------------------------------------
+
+/** The shape of a `git bisect` session, parsed from the replayed `bisect log`
+ *  (BISECT_LOG in the git dir — `git bisect status` does not exist on 2.55,
+ *  and the log carries every mark plus the verdict). When `bisecting` is true
+ *  the repo is mid-run (or finished but not reset — git keeps the state until
+ *  `bisect reset`): `current` is the candidate checked out at HEAD, `firstBad`
+ *  the verdict once the run has converged. */
+export type GitBisectStatus = {
+  ok: boolean;
+  bisecting: boolean;
+  error?: string;
+  /** How many candidate commits the current good/bad bounds still contain.
+   *  git's own "N left to test" display does different arithmetic, so this is
+   *  the honest range count rather than a re-parse of its wording. */
+  remaining?: number;
+  steps?: number;
+  current?: { sha: string; subject: string };
+  firstBad?: { sha: string; subject: string };
+};
+
+function headInfo(root: string, ref: string): { sha: string; subject: string } | null {
+  const r = git(root, ["log", "-1", `--format=%H${US}%s`, ref]);
+  if (r.code !== 0) return null;
+  const [sha, subject] = r.stdout.trim().split(US);
+  if (!sha) return null;
+  return { sha, subject: (subject || "").replace(/\x1e$/, "") };
+}
+
+export function bisectStatus(rootIn: unknown): GitBisectStatus {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, bisecting: false, error: "not a git repository root" };
+  const dir = gitDir(root);
+  if (!dir || !existsSync(join(dir, "BISECT_LOG"))) return { ok: true, bisecting: false };
+  const log = readFileSync(join(dir, "BISECT_LOG"), "utf8");
+  const st: GitBisectStatus = { ok: true, bisecting: true };
+  st.current = headInfo(root, "HEAD") ?? undefined;
+  // Converged: "# first <term> commit: [<sha>] <subject>" (terms are quoted
+  // with the default bad/good — "first 'bad' commit" — so accept any term).
+  const verdict = /^# first .* commit: \[([0-9a-f]{7,40})\] (.+)$/m.exec(log);
+  if (verdict) {
+    st.firstBad = headInfo(root, verdict[1]) ?? { sha: verdict[1], subject: verdict[2] };
+    return st;
+  }
+  // Mid-run: the latest bad and good marks bound the remaining suspects.
+  const bads = [...log.matchAll(/^# bad: \[([0-9a-f]{7,40})\]/gm)];
+  const goods = [...log.matchAll(/^# good: \[([0-9a-f]{7,40})\]/gm)];
+  if (bads.length && goods.length) {
+    const n = git(root, ["rev-list", "--count", bads[bads.length - 1][1], `^${goods[goods.length - 1][1]}`]);
+    if (n.code === 0) {
+      st.remaining = Math.max(0, Number(n.stdout.trim()) || 0);
+      st.steps = Math.max(0, Math.ceil(Math.log2(st.remaining + 1)));
+    }
+  }
+  return st;
+}
+
+function bisectRef(root: string, refIn: unknown, label: string): { ok: boolean; ref?: string; error?: string } {
+  const ref = String(refIn ?? "").trim();
+  if (!ref || ref.startsWith("-")) return { ok: false, error: `invalid ${label} ref` };
+  // Refnames like "HEAD~4" legitimately reach a commit; git's own
+  // rev-parse --verify is the judge of whether that is true.
+  if (git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code !== 0) {
+    return { ok: false, error: `${label} ${ref} is not a commit` };
+  }
+  return { ok: true, ref };
+}
+
+export function bisectStart(rootIn: unknown, badIn: unknown, goodIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const bad = bisectRef(root, badIn, "bad");
+  if (!bad.ok) return bad;
+  const good = bisectRef(root, goodIn, "good");
+  if (!good.ok) return good;
+  return run(root, ["bisect", "start", bad.ref!, good.ref!]);
+}
+
+export function bisectMark(rootIn: unknown, markIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const mark = String(markIn ?? "").trim();
+  if (mark !== "good" && mark !== "bad") return { ok: false, error: "mark must be good or bad" };
+  return run(root, ["bisect", mark]);
+}
+
+export function bisectReset(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  return run(root, ["bisect", "reset"]);
+}
+
 // --- Submodules -------------------------------------------------------------
 /** A submodule as the panel shows it: the gitlink the index pins (the source
  *  of truth for what this repo expects), the URL from .gitmodules, and the

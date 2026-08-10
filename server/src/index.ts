@@ -62,7 +62,7 @@ import {
   rebaseSteps, runRebase, compareRefs,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   submodules as gitSubmodules, submoduleAdd, submoduleUpdate, submoduleSync, submoduleDeinit, submoduleRemove,
-  blameFile, fileHistory,
+  blameFile, fileHistory, bisectStatus, bisectStart, bisectMark, bisectReset,
   prepareConflictMerge,
 } from "./gitwork.ts";
 import { repoStats, generateChangelog } from "./gitinsights.ts";
@@ -1865,6 +1865,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/submodules") return json({ submodules: gitSubmodules(url.searchParams.get("root") || "") });
     if (pathname === "/git/blame") return json(blameFile(url.searchParams.get("root") || "", url.searchParams.get("path") || "", url.searchParams.get("ref") || ""));
     if (pathname === "/git/file-history") return json(fileHistory(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
+    if (pathname === "/git/bisect-status") return json(bisectStatus(url.searchParams.get("root") || ""));
     // What has piled up in a checkout, and the command that would clear it.
     // Read-only by construction: the response carries commands as strings, and
     // there is deliberately no endpoint anywhere that runs one.
@@ -2045,6 +2046,9 @@ const server = Bun.serve<WsData>({
         case "/git/submodule-sync": res = submoduleSync(root, b.path); break;
         case "/git/submodule-deinit": res = submoduleDeinit(root, b.path); break;
         case "/git/submodule-remove": res = submoduleRemove(root, b.path); break;
+        case "/git/bisect-start": res = bisectStart(root, b.bad, b.good); break;
+        case "/git/bisect-mark": res = bisectMark(root, b.mark); break;
+        case "/git/bisect-reset": res = bisectReset(root); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why
