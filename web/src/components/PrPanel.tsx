@@ -47,6 +47,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
+import { askingBehind, behindAnswer, forgetOneBehind, onBehind } from "../lib/prBehindStore.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks,
   threadLastAt, threadMovedOn, writeSeen, type NewAtom,
@@ -1946,7 +1947,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       setSelected(null);
       setDetail(null);
       setBehind(null);
-      setBehindAsking(true);
       setDetailErr("");
     }
     setListState((st) => ({ ...st, loading: true }));
@@ -2058,19 +2058,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       else { setDetail(null); setDetailErr(r.error || "Could not load this pull request"); }
     }).catch((e) => { if (req === detailReq.current) setDetailErr(String(e)); })
       .finally(() => { if (req === detailReq.current) setDetailStale(false); });
-    /* And how far behind its base that branch is — see `behind`. Its own call,
-       after the detail, guarded by the same request counter so a fast click
-       through three pull requests cannot leave the third wearing the first
-       one's count. A failure leaves it null: no answer means no offer, which is
-       the safe way round for a button that rewrites a branch on GitHub. */
-    api.prBehind(root, n)
-      .then((r) => {
-        if (req !== detailReq.current) return;
-        setBehind(r.ok ? (r.behind ?? 0) : null);
-        setLocalHead(r.ok ? (r.local ?? null) : null);
-        setBehindAsking(false);
-      })
-      .catch(() => { if (req === detailReq.current) { setBehind(null); setLocalHead(null); setBehindAsking(false); } });
+    /* How far behind its base that branch is comes from the shared store — see
+       the effect below. It used to be asked for here, which meant the board
+       could know a branch was 222 behind and the page you opened from that
+       board went and asked again: seconds of nothing over an answer already in
+       memory. */
     /* And, when there is one, WHICH files conflict. GitHub only ever says that
        a pull request is CONFLICTING; naming the files takes a merge, and this
        one happens entirely in git's object database — the checkout is never
@@ -2624,6 +2616,27 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * loading, and toasting "2 new" at somebody who has just opened it would be
    * announcing the state as if it were an event.
    */
+  /*
+   * How far behind, from the one place that knows.
+   *
+   * Read the moment a pull request is opened — instant when the board has
+   * already asked — and again whenever an answer lands. `asking` drives the
+   * placeholder beside the merge buttons: the space is held while the question
+   * is out, rather than a button appearing from nowhere a second later.
+   */
+  useEffect(() => {
+    if (!root || selected == null) { setBehind(null); setLocalHead(null); setBehindAsking(false); return; }
+    const n = selected;
+    const read = () => {
+      const a = behindAnswer(root, n);
+      setBehind(a.behind);
+      setLocalHead(a.local);
+      setBehindAsking(askingBehind(root, n));
+    };
+    read();
+    return onBehind(read);
+  }, [root, selected]);
+
   const arrivedRef = useRef<{ key: string; last: number } | null>(null);
   useEffect(() => {
     const newest = newAtoms.length ? newAtoms[newAtoms.length - 1]!.at : 0;
@@ -3602,6 +3615,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                             // empty rollup, so the panel has to already know
                             // why it is empty.
                             setPushed({ number: d.number, at: Date.now() });
+                            forgetOneBehind(root, d.number);
                             return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal));
                           }}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}

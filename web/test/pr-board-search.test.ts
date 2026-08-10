@@ -584,3 +584,30 @@ describe("the diff inside a commit", () => {
     expect(src).toContain("/* Capture, because a scroll event does not bubble. */");
   });
 });
+
+describe("how far behind, on the page and on the board", () => {
+  it("is one store, read by both", () => {
+    /*
+     * The board found out a branch was 222 behind and the page you opened from
+     * that board went and asked again — seconds of nothing over an answer
+     * already in memory.
+     */
+    expect(src).toContain("const a = behindAnswer(root, n);");
+    expect(src).not.toContain("api.prBehind(root, n)");
+  });
+
+  it("does not wear the previous pull request's count", () => {
+    /*
+     * Open one at 10294 behind, open another, and the old number sat there for
+     * a few seconds. The effect is keyed by the pull request, so the read for a
+     * number nobody has asked about yet is null — and null draws the
+     * placeholder, not somebody else's answer.
+     */
+    expect(src).toContain("if (!root || selected == null) { setBehind(null); setLocalHead(null); setBehindAsking(false); return; }");
+    expect(src).toContain("}, [root, selected]);");
+  });
+
+  it("throws the count away after an update, which is what stops being true", () => {
+    expect(src).toContain("forgetOneBehind(root, d.number);");
+  });
+});

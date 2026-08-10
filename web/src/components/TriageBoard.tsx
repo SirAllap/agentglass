@@ -697,7 +697,11 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           * Nothing at all while the answer is unknown, and nothing when it is
           * zero: a branch that is up to date has no news.
           */}
-        {behind ? (
+
+        {/* On the right, with the other numbers about the change, rather than
+            wedged against a branch name that is already truncated. */}
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {behind ? (
           <span className="shrink-0 tabular-nums px-1 rounded"
             title={`${behind} commit${behind === 1 ? "" : "s"} on ${p.baseRefName} that this branch does not have — its checks ran against an older base`}
             style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
@@ -712,9 +716,10 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           <span aria-hidden className="shrink-0 rounded animate-pulse"
             title="Working out how far behind its base this branch is"
             style={{ width: 26, height: 11, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
-        ) : null}
-        <span className="ml-auto tabular-nums shrink-0" style={{ color: "var(--text4)" }}>
-          +{p.additions} −{p.deletions} · {p.changedFiles}f
+          ) : null}
+          <span className="tabular-nums" style={{ color: "var(--text4)" }}>
+            +{p.additions} −{p.deletions} · {p.changedFiles}f
+          </span>
         </span>
       </div>
 
