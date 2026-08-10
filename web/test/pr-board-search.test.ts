@@ -118,11 +118,11 @@ const rail = await Bun.file(new URL("../src/components/FileRail.tsx", import.met
 
 describe("the three columns", () => {
   it("each scrolls on its own", () => {
-    expect(css).toContain(".agx-col3 { max-height: 100%; overflow-y: auto; overflow-x: hidden; }");
+    expect(css).toContain(".agx-col3 { height: 100%; max-height: 100%; overflow-y: auto; overflow-x: hidden; }");
     /* Two carry the class; the tree caps itself against the viewport instead,
        for the reason in the test below. */
     expect(src.split("agx-col3").length - 1).toBe(1);
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: calc(100vh - 160px); overflow-y: auto; }");
+    expect(css).toContain(".agx-tree3 { width: 250px; max-height: 100%; overflow-y: auto; }");
     expect(rail).toContain("agx-col3");
   });
 
@@ -148,16 +148,24 @@ describe("the three columns", () => {
     expect(src).toContain('className="flex min-h-0 gap-0 items-start h-full"');
   });
 
-  it("caps the tree against the viewport, because a percentage cannot resolve there", () => {
+  it("caps the tree against its own column, not against the window", () => {
     /*
-     * The tree is `position: sticky` inside the diff's scroller, so its
-     * containing block is a content-sized flex row — and CSS resolves a
-     * percentage max-height against one of those as `none`. Measured with the
-     * tree forced to 2252px: no scrollbar, and a bottom edge at 2584 against a
-     * 617px window. With the viewport cap: max-height 457, scrollHeight 2252,
-     * scrollable true.
+     * A percentage max-height needs a parent with a DEFINITE height, and the
+     * row the tree sits in was content-sized — so the original fix measured the
+     * window instead: `calc(100vh - 160px)`, where 160 stood in for everything
+     * above the column.
+     *
+     * That guess is wrong on any screen where the panel starts lower than 160px
+     * — his does, by about a hundred — and a tree taller than the box holding it
+     * gives the middle column scroll that belongs to nothing. Dragging it took
+     * the toolbar and the file list up with it: "ese scroll raro mueve el
+     * listado de files hacia arriba".
+     *
+     * The row is a flex child with `flex-1 min-h-0` now, which is a definite
+     * height, so the percentage resolves and the cap is the column itself.
      */
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: calc(100vh - 160px); overflow-y: auto; }");
+    expect(src).toContain('className="flex gap-3 items-start flex-1 min-h-0"');
+    expect(css).toContain(".agx-tree3 { width: 250px; max-height: 100%; overflow-y: auto; }");
     expect(src).not.toContain("agx-tree3 agx-col3");
   });
 
@@ -494,5 +502,24 @@ describe("feedback on a request in flight", () => {
   it("says the base is being checked instead of growing a button late", () => {
     expect(src).toContain("Checking the base…");
     expect(src).toContain("{!canUpdate && behindAsking && !conflicted");
+  });
+});
+
+describe("each tab keeps its own place", () => {
+  it("remembers where the tab was left and puts it back before paint", () => {
+    /*
+     * One scroller serves every tab, so reading to the bottom of Conversation
+     * and stepping to Overview landed you at the bottom of a page you had never
+     * scrolled. Reported exactly that way.
+     */
+    expect(src).toContain("tabScroll.current[tab] = y;");
+    expect(src).toContain("if (el) el.scrollTop = tabScroll.current[tab] ?? 0;");
+    // Before paint: after it, the old offset is on screen for a frame and the
+    // jump is the thing you see instead of the thing you asked for.
+    expect(src).toContain("useLayoutEffect(() => {\n    const el = tabBodyRef.current;");
+  });
+
+  it("starts a different pull request at the top", () => {
+    expect(src).toContain("useEffect(() => { tabScroll.current = {}; }, [selected]);");
   });
 });

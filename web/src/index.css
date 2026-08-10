@@ -1352,7 +1352,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    toolbar inside it is full-bleed (`-mx-3 px-3`), so it stuck out by 12px and
    drew a scrollbar the width of the whole panel across the bottom of the app.
    Measured: scrollWidth 1605 against clientWidth 1593. */
-.agx-col3 { max-height: 100%; overflow-y: auto; overflow-x: hidden; }
+.agx-col3 { height: 100%; max-height: 100%; overflow-y: auto; overflow-x: hidden; }
 
 /* 250 and 320 are the mockup's own column widths. They were 190 and 300.
 
@@ -1364,5 +1364,13 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    2252px it reported `scrollHeight === clientHeight`, no scrollbar, and a
    bottom edge at 2584 against a 617px window — the end of a long tree could not
    be reached at all. */
-.agx-tree3 { width: 250px; max-height: calc(100vh - 160px); overflow-y: auto; }
+/* Capped against the COLUMN, not the window.
+   `calc(100vh - 160px)` was a stand-in for the column's height, and on a screen
+   where the panel starts lower than that guess the tree came out taller than
+   the box holding it — so the middle column had a hundred-odd pixels of scroll
+   that belonged to nothing, and dragging it took the toolbar and the tree up
+   with it. Reported as "ese scroll raro mueve el listado de files hacia
+   arriba". The percentage resolves now because the row it sits in is a flex
+   child with a definite height — see `flex-1 min-h-0` on it. */
+.agx-tree3 { width: 250px; max-height: 100%; overflow-y: auto; }
 @media (max-width: 1179px) { .agx-tree3 { width: 200px; } }

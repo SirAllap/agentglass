@@ -1603,6 +1603,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [busy, setBusy] = useState(false);
   /** The label passed to `act` for the request in flight — see Btn `pending`. */
   const [busyWhat, setBusyWhat] = useState("");
+  /* One scroller serves every tab, so each tab's place in it is remembered here
+     and put back on the way in. Cleared when the pull request changes: a new
+     page starts at the top, whatever the last one was showing. */
+  const tabBodyRef = useRef<HTMLDivElement>(null);
+  const tabScroll = useRef<Record<string, number>>({});
+  useEffect(() => { tabScroll.current = {}; }, [selected]);
+  /* Before paint, or the old offset is on screen for a frame and the jump is
+     the thing you see instead of the thing you asked for. */
+  useLayoutEffect(() => {
+    const el = tabBodyRef.current;
+    if (el) el.scrollTop = tabScroll.current[tab] ?? 0;
+  }, [tab, selected]);
   /** What the merge control is doing right now, "" when it is doing nothing.
    *  A sentence rather than a boolean because the merge is two writes and they
    *  fail differently — see doMerge. */
@@ -3467,7 +3479,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   columns scroll inside it, which is what the mockup means by
                   putting `overflow:auto` on each of the three. */}
               <CommitJumpCtx.Provider value={jumpToCommit}>
-              <div className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
+              <div ref={tabBodyRef} className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
                 onScroll={(e) => {
                   /*
                    * Files is a frame, not a page, and frames do not scroll.
@@ -3491,6 +3503,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   // masthead open and shut on every pixel of a trackpad wobble,
                   // and it takes a row of the page with it each time.
                   const y = el.scrollTop;
+                  // Where this TAB was left. One box scrolls all of them, so
+                  // without this, reading to the bottom of Conversation and
+                  // stepping to Overview landed you at the bottom of Overview —
+                  // a page you had never scrolled. Reported exactly that way.
+                  tabScroll.current[tab] = y;
                   setCondensed((was) => (was ? y > 24 : y > 72));
                 }}>
                 {(tab === "overview" || tab === "conversation") ? (
@@ -6391,7 +6408,11 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
       {/* Tree on the left, diffs on the right — the arrangement GitHub uses, and
           the only way to keep your bearings in a change that touches thirty
           files. The tree is the navigator; the stack is still the reading. */}
-      <div className="flex gap-3 items-start">
+      {/* `flex-1 min-h-0`, and it is what makes the tree's cap resolve: a
+          percentage max-height needs a parent with a definite height, and this
+          row is a flex child of the column so it has one. Without it the tree
+          was measured against the window and overflowed its own column. */}
+      <div className="flex gap-3 items-start flex-1 min-h-0">
         {/* Always present in one-file mode: it is the only way to reach the
             other eight, so hiding it below five files would strand you. */}
         {(oneFile || shownFiles.length > 4) && (
