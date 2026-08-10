@@ -607,7 +607,18 @@ describe("how far behind, on the page and on the board", () => {
     expect(src).toContain("}, [root, selected]);");
   });
 
-  it("throws the count away after an update, which is what stops being true", () => {
-    expect(src).toContain("forgetOneBehind(root, d.number);");
+  it("asks again after an update, and not before it", () => {
+    /* Dropped first, the store re-asks GitHub for a number that has not changed
+       yet and caches the old one all over again — the same stale count by
+       another route. */
+    expect(src).toContain(".finally(() => refreshBehind(root, d.number));");
+    expect(src).not.toContain("forgetOneBehind(root, d.number);");
+  });
+
+  it("re-asks while you are looking at it, and on Refresh", () => {
+    // Five minutes is right for a board of twelve and far too long for the page
+    // in front of you.
+    expect(src).toContain("const slow = setInterval(again, 30_000);");
+    expect(src).toContain("onClick={() => { forgetBehind(); loadList(true); }}");
   });
 });

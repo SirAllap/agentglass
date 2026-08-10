@@ -235,3 +235,24 @@ describe("a conflict is not a green pull request", () => {
     expect(LANE_CAP).toBeLessThanOrEqual(8);
   });
 });
+
+describe("a suite that is still running", () => {
+  it("is a wait, even when it is carrying a failure", () => {
+    /*
+     * Measured against GitHub on a pull request whose failing check had just
+     * been re-run: their aggregate answers FAILURE: 1 and IN_PROGRESS: 2,
+     * because the run that failed is still counted alongside the one replacing
+     * it. github.com says "Some checks haven't completed yet". A card sat in
+     * Blocked reading "2 checks failing" over a suite that was busy and green,
+     * and no amount of pressing Refresh could move it.
+     */
+    const f = fileInLane(pr({ fail: 2, pend: 3, ok: 30 }), MINE);
+    expect(f.lane).toBe("flight");
+    expect(f.reason).toContain("which a re-run may be replacing");
+  });
+
+  it("is still blocked once everything has reported", () => {
+    const f = fileInLane(pr({ fail: 2, ok: 30 }), MINE);
+    expect(f.lane).toBe("blocked");
+  });
+});

@@ -517,10 +517,39 @@ function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
   return { state: "failure", done: true };
 }
 
+/**
+ * One run per check name — the newest.
+ *
+ * A re-run does not replace the run it repeats: GitHub keeps both, so a check
+ * that failed and was re-run comes back twice, once FAILURE and once
+ * IN_PROGRESS. Measured on a real pull request: their aggregate answered
+ * `FAILURE: 1, IN_PROGRESS: 2` while github.com'"'"'s own page said "Some checks
+ * haven'"'"'t completed yet" and listed no failures — because their UI keeps the
+ * latest run per name and the aggregate does not.
+ *
+ * Counting both put a pull request in Blocked over a suite that was busy and
+ * green, and no amount of refreshing could move it: the number was real and its
+ * meaning was not. Later in the list wins, which is the order GitHub returns
+ * them in; a run still going wins outright, because a check cannot be finished
+ * and running at the same time and the running one is the attempt that counts.
+ */
+export function latestPerName(raw: RawCheck[]): RawCheck[] {
+  const by = new Map<string, RawCheck>();
+  for (const c of raw) {
+    const name = `${c.workflowName || ""}\u0001${c.name || c.context || "check"}`;
+    const had = by.get(name);
+    if (!had) { by.set(name, c); continue; }
+    const hadRunning = !checkState(had).done;
+    const isRunning = !checkState(c).done;
+    if (isRunning || !hadRunning) by.set(name, c);
+  }
+  return [...by.values()];
+}
+
 export function rollupChecks(raw: RawCheck[] | null | undefined): { rollup: PrCheckRollup; all: PrCheck[] } {
   const all: PrCheck[] = [];
   let success = 0, failure = 0, skipped = 0, pending = 0;
-  for (const c of raw || []) {
+  for (const c of latestPerName(raw || [])) {
     const { state, done } = checkState(c);
     const check: PrCheck = {
       name: c.name || c.context || "check",

@@ -226,8 +226,29 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
   }
 
   /*
-   * Blocked: something has to change before anybody can move. Red beats
-   * running, because red is a fact and running is a wait.
+   * Still running beats red, and that is a correction.
+   *
+   * Measured against GitHub on a pull request whose failing check had just been
+   * re-run: their aggregate answers `FAILURE: 1` and `IN_PROGRESS: 2`, because
+   * the run that failed is still counted alongside the one replacing it.
+   * github.com does not show it that way — it keeps the latest run per check
+   * name and says "Some checks haven't completed yet" — and neither should we.
+   * A card sat in Blocked reading "2 checks failing" over a suite that was
+   * green and busy, and no amount of pressing Refresh could move it, because
+   * the number was real and its meaning was not.
+   *
+   * So a suite with anything still in flight is a wait. The failure it is
+   * carrying is, more often than not, the attempt being replaced.
+   */
+  if (running) {
+    return { lane: stake.mine ? "flight" : "others",
+      reason: red
+        ? `${c.success} of ${c.total} checks in — ${plural(c.failure, "failure")} so far, which a re-run may be replacing.`
+        : `${c.success} of ${c.total} checks in, nothing red yet.` };
+  }
+
+  /*
+   * Blocked: something has to change before anybody can move.
    */
   if (red) {
     const names = c.failing.slice(0, 2).map((f) => f.name).join(", ");
@@ -243,15 +264,6 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
       reason: stake.mine
         ? "Changes were asked for. The ball is with you."
         : "Changes were asked for. The ball is with the author, not you." };
-  }
-
-  /*
-   * Still running is not blocked and not ready — it is a wait, and the honest
-   * place for a wait of yours is your own lane with the count on it.
-   */
-  if (running) {
-    return { lane: stake.mine ? "flight" : "others",
-      reason: `${c.success} of ${c.total} checks in, nothing red yet.` };
   }
 
   if (stake.mine) {

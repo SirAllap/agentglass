@@ -135,3 +135,25 @@ describe("the detail query itself", () => {
     }
   });
 });
+
+/*
+ * A re-run does not replace the run it repeats.
+ *
+ * Measured on a real pull request whose failing check had just been re-run:
+ * GitHub's aggregate answered `FAILURE: 1, IN_PROGRESS: 2`, while github.com's
+ * own page said "Some checks haven't completed yet" and listed no failures —
+ * their UI keeps the latest run per name and the aggregate does not. Counting
+ * both parked the card in Blocked over a suite that was busy and green, and no
+ * amount of refreshing could move it.
+ */
+describe("two runs of the same check", () => {
+  it("keeps one per name, and a running one wins", () => {
+    expect(src).toContain("export function latestPerName(raw: RawCheck[]): RawCheck[] {");
+    expect(src).toContain("if (isRunning || !hadRunning) by.set(name, c);");
+    expect(src).toContain("for (const c of latestPerName(raw || [])) {");
+  });
+
+  it("keys by workflow as well as name, because two workflows may share one", () => {
+    expect(src).toContain('const name = `${c.workflowName || ""}');
+  });
+});
