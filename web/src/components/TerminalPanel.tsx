@@ -2693,7 +2693,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       guess and everything else follows from it. */}
                   {tmuxActive ? (
                     <span className="flex items-center gap-2 flex-wrap">
-                      <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>tmux</span>
+                      <span className="px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>tmux</span>
                       <span>Panel chrome hidden — tmux owns the panes</span>
                       <span className="t-dim2">·</span>
                       {hiddenRows > 0 ? (
@@ -2725,7 +2725,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     // over the pane, because a visitor should be able to read
                     // the session and be told what it is at the same time.
                     <span className="flex items-center gap-2">
-                      <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>demo</span>
+                      <span className="px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>demo</span>
                       <span>A canned session — the terminal is real, nothing is running behind it. Run agentglass locally for a shell you can type in.</span>
                     </span>
                   ) : disabled ? (
@@ -2756,8 +2756,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         it replaced was a third style in a row that already had
                         two, and at that size the letters had no room. */}
                     {detectedWt ? (
-                      <span className="flex items-center gap-1.5 leading-none" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
-                        <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
+                      <span className="flex items-center gap-1.5" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
+                        <span className="px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
                         {/* Branch is the name of the thing you are working on; the
                             folder is where it lives. Show the branch, and the
                             folder after it in a dimmer hand — both on one line, so
@@ -2771,8 +2771,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             they have room around the word — the same ↗ the
                             worktree chip in the header uses for the same promise:
                             pressing this leaves the terminal. */}
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn inline-flex items-center gap-1 px-2 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git <span className="t-dim2">↗</span></button>
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn inline-flex items-center gap-1 px-2 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff <span className="t-dim2">↗</span></button>
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn inline-flex items-center gap-1 px-2 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git <span className="t-dim2">↗</span></button>
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn inline-flex items-center gap-1 px-2 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff <span className="t-dim2">↗</span></button>
                         <span className="t-dim2">·</span>
                       </span>
                     ) : wtDetecting ? (
@@ -2780,8 +2780,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                          Holding the previous pane's worktree here for the ~100ms
                          a first read costs is how the bar came to disagree with
                          the tab strip above it. */
-                      <span className="flex items-center gap-1.5 leading-none" title="Reading which worktree this pane is working in">
-                        <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
+                      <span className="flex items-center gap-1.5" title="Reading which worktree this pane is working in">
+                        <span className="px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
                         <span className="animate-pulse" style={{ color: "var(--text3)" }}>Reading…</span>
                         <span className="t-dim2">·</span>
                       </span>
