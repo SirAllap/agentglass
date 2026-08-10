@@ -233,7 +233,10 @@ export function TriageBoard({
     if (k === "p") { e.preventDefault(); onTogglePin(at); return; }
     // One key for "do the thing this card is asking for", whatever that is in
     // this lane — the same button the card draws, so the two cannot drift.
-    if (k === "a") { e.preventDefault(); onAct(at, suggestedAction(at, at.filed)); return; }
+    /* `a` opens it too. It used to perform the lane's action from the keyboard,
+       which is the same loaded gun as the button — worse, because a cursor you
+       cannot see decides which card it points at. */
+    if (k === "a") { e.preventDefault(); onAct(at, "open"); return; }
   };
 
   return (
@@ -362,7 +365,7 @@ export function TriageBoard({
         <span><K>j</K><K>k</K> card</span>
         <span><K>h</K><K>l</K> across</span>
         <span><K>⏎</K> open</span>
-        <span><K>a</K> do what the card asks</span>
+        <span><K>a</K> open it</span>
         <span><K>p</K> pin</span>
       </div>
 
@@ -534,6 +537,13 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
   onOpen: () => void; onPin: () => void;
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void; busy?: boolean;
 }) {
+  /** Said on the number itself for a moment: a clipboard write is invisible. */
+  const [copied, setCopied] = useState<number | null>(null);
+  const copyNumber = (n: number) => {
+    void navigator.clipboard?.writeText(`#${n}`).catch(() => {});
+    setCopied(n);
+    setTimeout(() => setCopied(null), 1200);
+  };
   const c = p.checks;
   const act = suggestedAction(p, p.filed);
   const task = taskLink(p, hasTaskProvider);
@@ -579,7 +589,21 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
        * the whole square is the button rather than the star inside it.
        */}
       <div className="flex gap-1.5 items-start text-[11.5px]" style={{ color: "var(--text)" }}>
-        <span className="shrink-0 pt-px text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>#{p.number}</span>
+        {/*
+          * The number, and pressing it copies it.
+          *
+          * It is the thing you take away from a board — into a branch name, a
+          * commit, a message to somebody — and copying it meant opening the
+          * pull request to reach the button that does. `stopPropagation`
+          * because the card underneath opens on click, and this press means
+          * "give me the number", not "show me the page".
+          */}
+        <button onClick={(e) => { e.stopPropagation(); copyNumber(p.number); }}
+          title={`Copy #${p.number}`}
+          className="agx-btn shrink-0 pt-px text-[10px] tabular-nums rounded px-0.5"
+          style={{ color: copied === p.number ? "var(--success)" : "var(--text4)" }}>
+          {copied === p.number ? "copied" : `#${p.number}`}
+        </button>
         {/* Two lines, then an ellipsis. A four-line title used to push the
             state, the sentence and the button down by two rows, so a lane of
             long titles was a lane you had to scroll — and the cards stopped
@@ -631,7 +655,12 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         <span style={{ color: "var(--text4)" }}>→</span>
         {/* Where it lands, tinted when it is not the trunk — a stacked pull
             request read as a trunk one is a mistake you make once. */}
-        <span className="truncate" style={{ maxWidth: 90, color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
+        {/* Truncated at 90px, so the one that matters — a stacked branch with a
+            long ticket in its name — is exactly the one you cannot read. The
+            full thing is on hover, both sides of the arrow, because "into
+            what" is only half the question. */}
+        <span className="truncate" title={`${p.headRefName} → ${p.baseRefName}`}
+          style={{ maxWidth: 90, color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
         <span className="ml-auto tabular-nums shrink-0" style={{ color: "var(--text4)" }}>
           +{p.additions} −{p.deletions} · {p.changedFiles}f
         </span>
@@ -650,20 +679,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {p.labels.slice(0, 1).map((l) => <Tag key={l.name}>{l.name}</Tag>)}
           {p.labels.length > 1 && <span title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 1}</span>}
         </span>
-        {!!p.reviewers?.length && (
-          /* Faces, not initials. Two letters is a puzzle on a board where the
-             same pair belongs to two people, and the picture is the thing the
-             eye already knows — the panel draws reviewers this way everywhere
-             else. `Avatar` keeps the initials as its own fallback for anybody
-             without a picture, so nothing is lost where there is no face. */
-          <span className="ml-auto shrink-0 flex items-center" title={`Reviewers: ${p.reviewers.map((r) => r.login).join(", ")}`}>
-            {p.reviewers.slice(0, 3).map((r, i) => (
-              <span key={r.login} style={{ marginLeft: i ? -4 : 0, zIndex: 3 - i, position: "relative" }}>
-                <Avatar login={r.login} size={15} />
-              </span>
-            ))}
-          </span>
-        )}
+
       </div>
 
       {/* The sentence that put it in this lane. Without it a board is a list
@@ -682,11 +698,9 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
       <div className="flex items-center gap-1.5 mt-1.5">
         {/* One button, and it is the one this lane is asking for. A row of five
             is a row nobody reads; the rest are a click away inside. */}
-        <button onClick={(e) => { e.stopPropagation(); onAct(p, act); }} disabled={busy}
+        <button onClick={(e) => { e.stopPropagation(); onAct(p, "open"); }} disabled={busy}
           className="agx-btn rounded px-2 py-0.5 text-[10px] disabled:opacity-40 inline-flex items-center gap-1"
-          style={act === "merge"
-            ? { background: "var(--primary)", color: "var(--bg)", fontWeight: 500 }
-            : { color: "var(--text2)", border: edge(20) }}>
+          style={{ color: "var(--text2)", border: edge(20) }}>
           {/* `busy` is the panel'''s, and on this board only one card can be
               acting at a time — the whole surface disables while it runs. So the
               spinner goes on the card whose action is in flight rather than on
@@ -697,8 +711,39 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
                 borderColor: act === "merge" ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
                 borderTopColor: "transparent" }} />
           )}
-          {ACTION_LABEL[act]}
+          {/* One button, and it opens the pull request.
+              It used to perform the lane's action — Merge on a green card,
+              Re-run on a red one — and a board is a place you scan and point
+              at, not a place to press Merge from. Reported after pressing
+              "Re-run failed" by accident, twice over, on a card that was under
+              the pointer for a different reason. The verdict still travels: the
+              lane and its sentence say what wants doing, and the page that can
+              do it is one click away. */}
+          Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""} →
         </button>
+
+        {/*
+          * Who is on this pull request, bottom right, where the eye lands last.
+          *
+          * The author and whoever was asked to look at it: those are the two
+          * facts a list row carries, and together they answer "whose is this
+          * and who is holding it". Five at most — past that the card is a
+          * contact sheet, and the pull request itself lists them all.
+          *
+          * Overlapped left to right, the way every other row of people in this
+          * app is drawn, so five of them cost the width of two.
+          */}
+        <span className="ml-auto shrink-0 flex items-center"
+          title={`${p.author}${p.reviewers?.length ? ` · asked: ${p.reviewers.map((r) => r.login).join(", ")}` : ""}`}>
+          {[p.author, ...(p.reviewers ?? []).map((r) => r.login)]
+            .filter((l, n, all) => l && all.indexOf(l) === n)
+            .slice(0, 5)
+            .map((login, n) => (
+              <span key={login} style={{ marginLeft: n ? -5 : 0, zIndex: 5 - n, position: "relative" }}>
+                <Avatar login={login} size={16} />
+              </span>
+            ))}
+        </span>
       </div>
     </div>
   );

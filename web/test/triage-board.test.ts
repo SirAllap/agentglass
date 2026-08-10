@@ -524,15 +524,47 @@ describe("finding a card on the board", () => {
   });
 });
 
-describe("who was asked to review it", () => {
+describe("who is on it", () => {
   it("is drawn as faces, not as two letters", () => {
     /*
      * Two letters is a puzzle on a board where the same pair belongs to two
-     * people, and every other surface in the panel draws a reviewer as a
-     * picture. `Avatar` keeps initials as its own fallback, so nothing is lost
-     * where there is no face.
+     * people, and every other surface in the panel draws a person as a picture.
+     * `Avatar` keeps initials as its own fallback, so nothing is lost where
+     * there is no face.
      */
-    expect(board).toContain("<Avatar login={r.login} size={15} />");
+    expect(board).toContain("<Avatar login={login} size={16} />");
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
+  });
+
+  it("is the author and whoever was asked, capped", () => {
+    // The two facts a list row carries. Past five the card is a contact sheet,
+    // and the pull request itself lists them all.
+    expect(board).toContain("[p.author, ...(p.reviewers ?? []).map((r) => r.login)]");
+    expect(board).toContain(".slice(0, 5)");
+  });
+});
+
+describe("a board is for pointing at, not for pressing", () => {
+  it("opens the pull request instead of performing the lane's action", () => {
+    /*
+     * Reported after pressing "Re-run failed" by accident on a card that was
+     * under the pointer for a different reason — and Merge sat in the same
+     * place on the lane next to it.
+     */
+    expect(board).toContain('onAct(p, "open")');
+    expect(board).not.toContain("onAct(p, act)");
+    expect(board).toContain('if (k === "a") { e.preventDefault(); onAct(at, "open"); return; }');
+  });
+
+  it("still says what the card is asking for", () => {
+    // The verdict travels; only the press moves.
+    expect(board).toContain('Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""}');
+  });
+});
+
+describe("the number on a card", () => {
+  it("copies when pressed, without opening the card underneath", () => {
+    expect(board).toContain("copyNumber(p.number)");
+    expect(board).toContain("e.stopPropagation(); copyNumber(p.number)");
   });
 });
