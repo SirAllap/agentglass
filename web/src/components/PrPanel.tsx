@@ -1587,6 +1587,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [reviews, setReviews] = useState<Record<string, ReviewDraft>>(() => loadMap<ReviewDraft>(REVIEW_KEY));
   const [methods, setMethods] = useState<Record<string, MergeMethod>>(() => loadMap<MergeMethod>(METHOD_KEY));
   const [diff, setDiff] = useState("");
+  /** Why there is no diff, when there is a reason. Empty while one is on its
+   *  way — the two states used to be the same empty string. */
+  const [diffErr, setDiffErr] = useState("");
   const [selFile, setSelFile] = useState<string | null>(null);
   /* What the Files tab is drawing right now, which in one-file mode is the
      first file the filter left when nothing has been clicked. The rail follows
@@ -2007,15 +2010,31 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      */
     const held = heldDetail(root, selected);
     setDetail(held); setDetailStale(!!held); setDetailErr("");
-    setDiff(""); setSelFile(null); setSelCommit(null); setCommitText("");
+    setDiff(""); setDiffErr(""); setSelFile(null); setSelCommit(null); setCommitText("");
     loadDetail(selected);
   }, [root, selected, loadDetail]);
 
+  /*
+   * A diff that did not arrive is not a diff that is still arriving.
+   *
+   * A failure set the text to "" and stopped, and "" is also "not fetched yet"
+   * — so the Files tab sat on "Loading the diff…" for ever. Reported on a
+   * 275-file pull request where GitHub answers the whole-diff endpoint with
+   * "HTTP 406: the diff exceeded the maximum number of lines (20000)": a hard
+   * no, dressed as a wait, with no way to tell.
+   *
+   * The error is held so the pane can say what happened, and so this effect
+   * does not re-ask on every render for something that will not come.
+   */
   useEffect(() => {
-    if ((tab !== "files" && tab !== "review") || !detail || diff || !root) return;
+    if ((tab !== "files" && tab !== "review") || !detail || diff || diffErr || !root) return;
     const req = ++diffReq.current; // a later selection's diff must win over a slow earlier one
-    api.prDiff(root, detail.number).then((r) => { if (req === diffReq.current) setDiff(r.ok ? (r.text || "") : ""); }).catch(() => {});
-  }, [tab, detail, diff, root]);
+    api.prDiff(root, detail.number).then((r) => {
+      if (req !== diffReq.current) return;
+      if (r.ok) { setDiff(r.text || ""); setDiffErr(r.text ? "" : "GitHub returned an empty diff for this pull request."); }
+      else setDiffErr(r.error || "The diff could not be fetched.");
+    }).catch((e) => { if (req === diffReq.current) setDiffErr(String(e)); });
+  }, [tab, detail, diff, diffErr, root]);
 
   // Filter the current scope's rows by the search box: PR number (with or
   // without a leading #), title, or author login. Memoized so a 400-row "all"
@@ -3470,7 +3489,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   <div className="flex min-h-0 gap-0 items-start h-full">
                   <div className="flex-1 min-w-0 h-full">
                   <FilesTab
-                    d={d} root={root} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
+                    d={d} root={root} byPath={byPath} loaded={!!diff} diffErr={diffErr} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} onShowing={setShowingFile}
                     split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
                     drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment} onDropDraft={dropDraftItem}
@@ -3533,6 +3552,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     onApprove={canReview ? () => setMyReview({ verb: "approve" }) : undefined}
                     onRequestChanges={canReview ? () => setMyReview({ verb: "request_changes" }) : undefined}
                     onComment={canReview ? () => setMyReview({ verb: "comment" }) : undefined}
+                    /* The same draft the Review tab holds — see `body` on the
+                       rail. Two boxes with two bodies is a way to lose the one
+                       you typed in the other. */
+                    body={myReview.body}
+                    onBody={canReview ? (v: string) => setMyReview({ body: v }) : undefined}
                     /*
                      * The guard stays here, and it is the Review tab's: the rail
                      * cannot see the body being typed, so it cannot know whether
@@ -5551,8 +5575,11 @@ const FILE_HEAD_H = 30;
 const vScrollerOf = (el: Element): HTMLElement | null =>
   verticalScrollerOf(el as HTMLElement, (e) => getComputedStyle(e).overflowY);
 
-function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
+function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
+  /** Why the diff is missing, when it is missing for a reason rather than for a
+   *  moment. Without it a refusal is drawn as a spinner. */
+  diffErr?: string;
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
   /**
@@ -6292,7 +6319,14 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
                       the image put every PNG down the text path and rendered an
                       empty diff pane, which is why the image viewer never
                       appeared at all. */}
-                  {!loaded ? <Loading label="Loading the diff…" size={18} />
+                  {!loaded && diffErr ? (
+                    /* Said, not spun. GitHub refuses the whole-diff endpoint
+                       past 20,000 lines, and a refusal drawn as a spinner is a
+                       pane somebody waits at for ever. */
+                    <div className="text-[11px] p-3" style={{ color: "var(--warning)" }}>
+                      {diffErr}
+                    </div>
+                  ) : !loaded ? <Loading label="Loading the diff…" size={18} />
                     : diffKind(f.path, change?.hunks.length ?? 0) === "image"
                       ? <ImageDiff root={root} number={d.number} path={f.path} status={f.status} />
                     : change?.hunks.length ? (

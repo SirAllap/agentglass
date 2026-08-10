@@ -2204,12 +2204,66 @@ function keepDiff(key: string, text: string): void {
   saveDiffCache();
 }
 
+/**
+ * GitHub refusing to render a diff at all, which it does on the big ones.
+ *
+ * Measured on a real 275-file pull request: `gh pr diff` exits non-zero with
+ * "HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)".
+ * That is the whole-pull-request diff endpoint having a hard cap, not a network
+ * failure and not something a retry fixes.
+ */
+const DIFF_TOO_BIG = /exceeded the maximum number of lines|too_large|HTTP 406/i;
+
+/**
+ * The same diff, rebuilt one file at a time.
+ *
+ * The per-file endpoint has no such cap: it hands back each file's own patch,
+ * a hundred files a page. Stitched back into ordinary unified diff text so
+ * everything downstream — the parser, the file rail, line comments, the
+ * suggestion applier — carries on reading exactly what it always read. The
+ * alternative was a second diff format in the client, which is a second set of
+ * bugs.
+ *
+ * A file GitHub sends without a `patch` (binary, or one file so large it
+ * refuses that too) gets its header and no hunks, so it still appears in the
+ * tree and says nothing rather than vanishing.
+ */
+async function diffFromFiles(nameWithOwner: string, number: number): Promise<string | null> {
+  const parts: string[] = [];
+  for (let page = 1; page <= FILE_PAGES_MAX + 1; page++) {
+    const rows = await ghJson<any[]>([
+      "api", `repos/${nameWithOwner}/pulls/${number}/files?per_page=100&page=${page}`,
+    ]);
+    if (!rows?.length) break;
+    for (const f of rows) {
+      const to = String(f.filename || "");
+      if (!to) continue;
+      const from = String(f.previous_filename || to);
+      parts.push(`diff --git a/${from} b/${to}`);
+      if (f.status === "added") parts.push("new file mode 100644");
+      else if (f.status === "removed") parts.push("deleted file mode 100644");
+      else if (f.status === "renamed") parts.push(`rename from ${from}`, `rename to ${to}`);
+      if (typeof f.patch !== "string" || !f.patch) continue;
+      parts.push(`--- ${f.status === "added" ? "/dev/null" : `a/${from}`}`, `+++ ${f.status === "removed" ? "/dev/null" : `b/${to}`}`);
+      parts.push(f.patch.replace(/\n$/, ""));
+    }
+    if (rows.length < 100) break;
+  }
+  return parts.length ? `${parts.join("\n")}\n` : null;
+}
+
 function fetchDiff(key: string, number: number, nameWithOwner: string) {
   const running = diffInflight.get(key);
   if (running) return running;
   const p = gh(["pr", "diff", String(number), "-R", nameWithOwner])
-    .then((r) => {
-      if (r.code !== 0) return { ok: false as const, error: r.stderr.trim() || "gh pr diff failed" };
+    .then(async (r) => {
+      if (r.code !== 0) {
+        if (!DIFF_TOO_BIG.test(r.stderr)) return { ok: false as const, error: r.stderr.trim() || "gh pr diff failed" };
+        const stitched = await diffFromFiles(nameWithOwner, number);
+        if (!stitched) return { ok: false as const, error: "GitHub will not render this diff, and its file list came back empty" };
+        keepDiff(key, stitched);
+        return { ok: true as const, text: stitched };
+      }
       keepDiff(key, r.stdout);
       return { ok: true as const, text: r.stdout };
     })
