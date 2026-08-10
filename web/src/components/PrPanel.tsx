@@ -1907,6 +1907,23 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return () => { live = false; };
   }, [active, root, stateSel, listState.fetchedAt]);
 
+  /*
+   * A wait with a deadline.
+   *
+   * `gh` is given 25 seconds server-side; the pane was given none, so a request
+   * that never came back was a skeleton for ever — the same failure the diff
+   * had, in another pane. Past the deadline it becomes a message with a retry,
+   * which is something somebody can act on.
+   */
+  useEffect(() => {
+    if (detail || detailErr || selected == null || !root) return;
+    const t = setTimeout(
+      () => setDetailErr("This is taking longer than usual — GitHub or `gh` has not answered."),
+      30_000,
+    );
+    return () => clearTimeout(t);
+  }, [detail, detailErr, selected, root]);
+
   /** Self-reference, so the stale follow-up can call the loader it lives in
    *  without either one having to be declared before the other. */
   const loadDetailRef = useRef<((n: number, force?: boolean) => void) | null>(null);
@@ -2207,6 +2224,34 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * limit) this must go quiet rather than poll for ever behind a view whose
    * whole promise is that it costs two calls.
    */
+  /*
+   * Is the board whole?
+   *
+   * Which lane a pull request belongs in is mostly a question about its checks,
+   * and those arrive in the second pass — so a board painted from the first one
+   * files what it cannot decide under "yours, in flight" and moves it a few
+   * seconds later. Reported as cards hopping between columns while you read.
+   *
+   * A card that moves on its own is worse than a card that is late, so the
+   * skeleton stays up until every row is complete. With a deadline: a rollup
+   * that never lands must not mean a board that never draws, and past it the
+   * cards say for themselves that their checks are still out.
+   */
+  const boardWhole = !boardLoading
+    && ![...boardMine, ...boardReview].some((p) => p.checksLoaded === false);
+  const [boardWaited, setBoardWaited] = useState(false);
+  const boardDrawn = useRef(false);
+  useEffect(() => { if (boardWhole) boardDrawn.current = true; }, [boardWhole]);
+  useEffect(() => {
+    boardDrawn.current = false;
+    setBoardWaited(false);
+    const t = setTimeout(() => setBoardWaited(true), 6_000);
+    return () => clearTimeout(t);
+  }, [boardOn, root, stateSel]);
+  /* Never on a REFRESH: `boardDrawn` means a whole board has been on screen
+     once, and last minute's answer beats a skeleton. */
+  const boardSettling = !boardWhole && !boardDrawn.current && !boardWaited;
+
   const [boardTick, setBoardTick] = useState(0);
   const boardTries = useRef(0);
   useEffect(() => { boardTries.current = 0; }, [boardOn, root, stateSel]);
@@ -3152,7 +3197,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
                 onShowTable={() => { setBoard(false); setFilter("all"); setQuery(""); }}
                 busy={busy}
-                loading={boardLoading}
+                loading={boardLoading} settling={boardSettling}
                 /* Whoever opened them. A pinned pull request of a colleague's
                    is in no lane on this board, which is exactly why the strip
                    exists. */
@@ -3271,11 +3316,28 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             </div>
           )}
           {!d ? (
-            // An error is a message and belongs at the top where messages go; a
-            // wait belongs in the middle of the space it is about to fill.
-            detailErr
-              ? <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{detailErr}</div>
-              : <Loading label={`Loading #${selected}…`} fill />
+            /*
+             * A wait in the SHAPE of the thing being waited for.
+             *
+             * It was a spinner in the middle of the pane, so a pull request did
+             * not arrive, it REPLACED something: a centred word one moment, and
+             * a masthead, a row of tabs and a page of text the next. Everything
+             * on screen moved. The skeleton stands where the real blocks will
+             * stand, so landing is a fill rather than a jump.
+             *
+             * An error is a message and belongs at the top where messages go —
+             * and it now carries the one thing it never had: a way to try again.
+             */
+            detailErr ? (
+              <div className="p-4 flex items-baseline gap-2 flex-wrap text-[11.5px]" style={{ color: "var(--error)" }}>
+                <span>{detailErr}</span>
+                <button onClick={() => { setDetailErr(""); if (selected != null) loadDetail(selected, true); }}
+                  className="agx-btn px-2 py-0.5 rounded text-[10.5px]"
+                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  Try again
+                </button>
+              </div>
+            ) : <DetailSkeleton number={selected} />
           ) : (
             <>
               {/* `onLocalReview` is wrapped rather than passed by reference:
@@ -5627,6 +5689,45 @@ const FILE_HEAD_H = 30;
  *  `verticalScrollerOf`, which is where the rule and the reason live. */
 const vScrollerOf = (el: Element): HTMLElement | null =>
   verticalScrollerOf(el as HTMLElement, (e) => getComputedStyle(e).overflowY);
+
+/**
+ * The pull request, in the shape it will be, while it is being fetched.
+ *
+ * A centred spinner is honest about the wait and wrong about the space: the
+ * pull request does not arrive, it REPLACES the spinner, and a masthead, a row
+ * of tabs and a page of text all appear where a single word was. Standing the
+ * blocks where the real ones stand turns landing into a fill.
+ */
+function DetailSkeleton({ number }: { number: number | null }) {
+  const bar = (h: number, w: string, delay: number) => (
+    <div className="rounded animate-pulse" aria-hidden
+      style={{ height: h, width: w, background: "color-mix(in srgb, var(--text) 7%, transparent)", animationDelay: `${delay}s` }} />
+  );
+  return (
+    <div className="p-3 flex flex-col gap-3" role="status" aria-label={`Loading pull request ${number ?? ""}`}>
+      {/* masthead: title, then the strip of facts under it */}
+      <div className="flex flex-col gap-2">
+        {bar(20, "58%", 0)}
+        <div className="flex gap-4">{["96px", "120px", "88px", "104px"].map((w, i) => bar(11, w, 0.05 * (i + 1)))}</div>
+      </div>
+      {/* the tab row */}
+      <div className="flex gap-3 pt-1" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        {["64px", "92px", "70px", "58px", "62px"].map((w, i) => <div key={i} className="pb-2">{bar(11, w, 0.03 * i)}</div>)}
+      </div>
+      {/* the body: a wide column and the sidebar beside it, same as Overview */}
+      <div className="flex gap-4">
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+          {["100%", "94%", "88%", "62%"].map((w, i) => bar(12, w, 0.04 * i))}
+          <div className="mt-2 rounded-lg animate-pulse" aria-hidden
+            style={{ height: 120, background: "color-mix(in srgb, var(--text) 5%, transparent)" }} />
+        </div>
+        <div className="shrink-0 flex flex-col gap-2" style={{ width: 230 }}>
+          {["70%", "88%", "54%", "76%"].map((w, i) => bar(11, w, 0.05 * i))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;

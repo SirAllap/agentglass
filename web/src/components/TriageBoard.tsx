@@ -47,7 +47,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, loading, pinnedList,
+  onOpen, onTogglePin, onShowTable, onAct, busy, loading, settling, pinnedList,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -91,6 +91,21 @@ export function TriageBoard({
    * cannot say gets today's behaviour rather than a wrong wait.
    */
   loading?: boolean;
+  /**
+   * The rows are here and their check states are not.
+   *
+   * The list arrives in two passes, and which lane a pull request belongs in is
+   * mostly a question about its checks — so a board painted from the first pass
+   * files everything it cannot decide under "yours, in flight" and then moves
+   * it when the second lands. Reported exactly that way: cards appearing in one
+   * column and hopping to another a few seconds later.
+   *
+   * A card that moves on its own is worse than a card that is late. So the
+   * skeleton stays up until the answer is whole — with a deadline, held by the
+   * caller, because a rollup that never arrives must not mean a board that
+   * never draws.
+   */
+  settling?: boolean;
 }) {
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
@@ -111,8 +126,9 @@ export function TriageBoard({
 
   /* Waiting is only waiting while there is nothing to show. A refresh with the
      previous answer still on screen must not blank it: last minute's board is
-     a better answer than a skeleton, and it is about to be right again. */
-  const waiting = !!loading && involved === 0;
+     a better answer than a skeleton, and it is about to be right again.
+     `settling` is the other half — see the prop. */
+  const waiting = (!!loading && involved === 0) || !!settling;
   const rest = total - involved;
   /*
    * Whether `total` can be repeated out loud.

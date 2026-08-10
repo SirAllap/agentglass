@@ -423,3 +423,48 @@ describe("the open pull request survives what happens to the list behind it", ()
     expect(src.indexOf("const selectedRef = useRef")).toBeLessThan(src.indexOf("selectedRef.current == null"));
   });
 });
+
+/*
+ * Loading, as one rule instead of six.
+ *
+ * Reported after a morning of one-at-a-time fixes: "hace cosas raras y da
+ * saltos cuando carga cosas por completo… me parece que no lo estás planeando
+ * bien". He was right. The rule these pin: nothing is asserted twice, nothing
+ * moves once it is on screen, and no wait is unbounded.
+ */
+describe("waiting for a pull request", () => {
+  it("waits in the shape of the thing, not as a spinner in the middle", () => {
+    // A centred word replaced by a masthead, a tab row and a page of text is
+    // every element on screen moving at once.
+    expect(src).toContain("<DetailSkeleton number={selected} />");
+    expect(src).toContain("function DetailSkeleton({ number }");
+    expect(src).not.toContain("<Loading label={`Loading #${selected}…`} fill />");
+  });
+
+  it("has a deadline, and something to press when it passes", () => {
+    expect(src).toContain("This is taking longer than usual");
+    expect(src).toContain("Try again");
+  });
+});
+
+describe("waiting for the board", () => {
+  it("holds the skeleton until the answer is whole, so no card changes lane", () => {
+    /*
+     * Which lane a pull request belongs in is mostly a question about its
+     * checks, and those come in the second pass — so a board painted from the
+     * first files what it cannot decide under "yours, in flight" and moves it
+     * seconds later. A card that moves on its own is worse than a card that is
+     * late.
+     */
+    expect(src).toContain("const boardWhole = !boardLoading");
+    expect(src).toContain("p.checksLoaded === false");
+    expect(src).toContain("settling={boardSettling}");
+  });
+
+  it("never holds it on a refresh, and never for ever", () => {
+    // Last minute's board beats a skeleton; a rollup that never lands must not
+    // mean a board that never draws.
+    expect(src).toContain("const boardSettling = !boardWhole && !boardDrawn.current && !boardWaited;");
+    expect(src).toContain("setTimeout(() => setBoardWaited(true), 6_000)");
+  });
+});
