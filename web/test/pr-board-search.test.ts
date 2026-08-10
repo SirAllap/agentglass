@@ -254,6 +254,16 @@ describe("a thread sorts by when it was last spoken in", () => {
   });
 });
 
+describe("the bar that walks you through what is new", () => {
+  it("is pinned to the top of the scroller, because it is a control", () => {
+    /* Reported the moment it worked: "Next" sends you three screens down and
+       the button that says Next is now three screens up. */
+    expect(src).toContain('position: "sticky", top: 0, zIndex: 8, boxShadow: "0 -12px 0 0 var(--bg)"');
+    // Opaque: comment text slides under it.
+    expect(src).toContain('background: "color-mix(in srgb, var(--warning) 14%, var(--bg))"');
+  });
+});
+
 describe("the mark of when you last looked", () => {
   it("is not the key the viewed-files map already owns", () => {
     /* Both wanted to be called `agentglass.pr.seen`, and one storage key for

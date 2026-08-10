@@ -126,6 +126,24 @@ export function threadMovedOn(t: Pick<PrThread, "comments">, reviewAt: string | 
   return r > 0 && threadLastAt(t) > r;
 }
 
+/**
+ * Does this review actually say anything?
+ *
+ * GitHub records a review for every batch of line comments, so replying on one
+ * line creates a `COMMENTED` review with an empty body. The timeline has always
+ * dropped those — its comments are already on the page, inside their threads,
+ * and a card reading "(commented, no note)" under them is the same remark drawn
+ * twice.
+ *
+ * Which made the count disagree with the page: "3 new" over two visible
+ * markers, and a "3 of 3" that jumped to an anchor that was never rendered.
+ * Reported that way. The rule lives here now so the counter and the timeline
+ * cannot hold different opinions about what counts as somebody speaking.
+ */
+export function reviewSpeaks(r: { body?: string; state?: string }): boolean {
+  return !!(r.body?.trim() || (r.state && r.state !== "COMMENTED"));
+}
+
 /** One thing that has been said since your last visit, in the order it was
  *  said. `key` is the anchor the jump scrolls to. */
 export interface NewAtom {
@@ -188,7 +206,7 @@ export function newSince(
   }
   for (const r of d.reviews ?? []) {
     const when = at(r.submittedAt);
-    if (when <= since || mine(r.viewerDidAuthor) || machine(r.isBot)) continue;
+    if (when <= since || mine(r.viewerDidAuthor) || machine(r.isBot) || !reviewSpeaks(r)) continue;
     out.push({ key: `r${r.author}-${r.submittedAt}`, at: when, author: r.author, kind: "review", where: "a review" });
   }
 

@@ -47,7 +47,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import {
-  anchorId, bootstrapSince, foldedIdx, newKeys, newSince, readSeen, threadLastAt, threadMovedOn, writeSeen,
+  anchorId, bootstrapSince, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks, threadLastAt, threadMovedOn, writeSeen,
   type NewAtom,
 } from "../lib/prNew.ts";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
@@ -2786,7 +2786,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const byTime = <T,>(xs: T[], at: (x: T) => string) =>
       [...xs].sort((p, q) => at(p).localeCompare(at(q)));
     return {
-      humans: byTime(detail.reviews.filter((r) => !r.isBot && (r.body.trim() || r.state !== "COMMENTED")), (r) => r.submittedAt),
+      // `reviewSpeaks` rather than the rule written out here: the counter above
+      // the timeline applies the same test, and when the two drifted apart the
+      // count said three over two visible markers.
+      humans: byTime(detail.reviews.filter((r) => !r.isBot && reviewSpeaks(r)), (r) => r.submittedAt),
       botReviews: byTime(detail.reviews.filter((r) => r.isBot && r.body.trim()), (r) => r.submittedAt),
       humanComments: byTime(detail.comments.filter((c) => !c.isBot), (c) => c.createdAt),
       bots: byTime(detail.comments.filter((c) => c.isBot), (c) => c.createdAt),
@@ -7031,15 +7034,25 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const jump = useCallback((i: number) => {
     const list = atoms;
     if (!list.length) return;
-    const n = ((i % list.length) + list.length) % list.length;
+    /* Step over anything with nothing on the page to land on. One counted
+       remark that the timeline does not draw used to make the button do
+       nothing at all, silently, which reads as broken rather than as a
+       disagreement between a counter and a list. The direction of travel is
+       kept, so "Next" past a gap is still Next. */
+    const step = i < cursor ? -1 : 1;
+    let n = ((i % list.length) + list.length) % list.length;
+    let el = document.getElementById(anchorId(list[n]!.key));
+    for (let tries = 0; !el && tries < list.length; tries++) {
+      n = ((n + step) % list.length + list.length) % list.length;
+      el = document.getElementById(anchorId(list[n]!.key));
+    }
     setCursor(n);
-    const el = document.getElementById(anchorId(list[n]!.key));
     if (!el) return;
     el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     el.classList.remove("agx-found");
     void el.offsetWidth; // restart the animation when it is the same element twice
     el.classList.add("agx-found");
-  }, [atoms]);
+  }, [atoms, cursor]);
 
   /* n and p, because both hands are already on the keyboard when you are
      reading. Ignored while typing — a reply with the letter n in it is not a
@@ -7266,9 +7279,21 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         * when you gave up scrolling.
         */}
       {atoms.length > 0 && (
-        <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 rounded-lg text-[10.5px] flex-wrap"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--warning) 34%, transparent)" }}>
+        /*
+         * Pinned to the top of the scroller, because it is a control and not a
+         * notice. Reported the moment it worked: "Next" sends you three
+         * screens down and the button that says Next is now three screens up,
+         * so walking three replies means scrolling back to the top twice.
+         *
+         * Opaque, not tinted-transparent — comment text slides under it — and
+         * the shadow is the trick that covers the scroller's own 12px of top
+         * padding: sticky `top: 0` parks against the padding edge, and without
+         * the band you get a strip of moving text above a pinned bar.
+         */
+        <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 rounded-lg text-[10.5px] flex-wrap sticky"
+          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, var(--bg))",
+            border: "1px solid color-mix(in srgb, var(--warning) 34%, transparent)",
+            position: "sticky", top: 0, zIndex: 8, boxShadow: "0 -12px 0 0 var(--bg)" }}>
           <span aria-hidden>●</span>
           <span><b style={{ fontWeight: 600 }}>{atoms.length}</b> new since you last looked</span>
           {cursor >= 0 && atoms[cursor] && (

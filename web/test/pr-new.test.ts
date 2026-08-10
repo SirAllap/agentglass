@@ -113,6 +113,24 @@ describe("what has been said since you last looked", () => {
     expect(newSince(withBot, T(DAY2), { includeBots: true }).map((a) => a.author)).toEqual(["orbit-ci"]);
   });
 
+  it("does not count a review that is only the wrapper around line comments", () => {
+    /* Reported from the app: "3 new" over two visible markers. GitHub records a
+       review for every batch of line comments, so replying on one line creates
+       a COMMENTED review with an empty body — which the timeline has always
+       dropped, because those comments are already on the page inside their
+       threads. The counter was counting a card nobody draws. */
+    const wrapper = detail({
+      reviews: [{ author: "nordvik", submittedAt: NOW, state: "COMMENTED", body: "", isBot: false } as never],
+    });
+    expect(newSince(wrapper, T(DAY2))).toEqual([]);
+
+    // A verdict with no note still counts: "approved" is the whole message.
+    const verdict = detail({
+      reviews: [{ author: "nordvik", submittedAt: NOW, state: "APPROVED", body: "", isBot: false } as never],
+    });
+    expect(newSince(verdict, T(DAY2)).map((a) => a.kind)).toEqual(["review"]);
+  });
+
   it("says nothing at all on a pull request you have never opened", () => {
     // Everything on it is new to you, and "41 new" on first sight is noise
     // dressed as news. The visit is recorded; the next arrival is the news.
