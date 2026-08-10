@@ -316,9 +316,23 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
 }
 
 
-function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small }: {
+function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
   danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
+  /**
+   * This button's own request is in flight.
+   *
+   * Every action in this panel is a round trip through `gh`, which is a second
+   * or two on a good day, and the only feedback was the button going grey — the
+   * same grey it wears when it is disabled for a reason that has nothing to do
+   * with you. Reported as the worst thing about the app: "tenemos que dar
+   * feedback en las peticiones async, SIEMPRE".
+   *
+   * The spinner goes IN the button, before the label, and the label stays: a
+   * control that swaps its words for "Working…" moves everything beside it, and
+   * you can no longer tell which of three buttons you pressed.
+   */
+  pending?: boolean;
 }) {
   // `warn` is the amber "this mutates the branch" accent, matching the Source
   // Control bar's sync/behind colour (--warning). Used for update-branch, which
@@ -326,7 +340,8 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
   // read the same as its plain neighbours.
   const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
   return (
-    <button onClick={onClick} disabled={disabled} title={title}
+    <button onClick={onClick} disabled={disabled || pending} title={pending ? "Working…" : title}
+      aria-busy={pending || undefined}
       /*
        * `leading-none`, and it is not a nicety.
        *
@@ -373,7 +388,15 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
         // grey, so fill alone does not separate the two — the label has to say
         // which is which as well.
         fontWeight: primary ? 600 : warn ? 500 : 500,
-      }}>{children}</button>
+      }}>
+      {pending && (
+        <span className="agx-spin mr-1.5 shrink-0" aria-hidden
+          style={{ width: 9, height: 9, borderWidth: 1.5,
+            borderColor: primary ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
+            borderTopColor: "transparent" }} />
+      )}
+      {children}
+    </button>
   );
 }
 
@@ -1476,6 +1499,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * about one branch at one moment.
    */
   const [behind, setBehind] = useState<number | null>(null);
+  /** The answer is not in yet, which is a different thing from "not behind".
+   *  Without it the Update-branch button simply appears a second late, which is
+   *  the jump he reported — see the placeholder in Overview. */
+  const [behindAsking, setBehindAsking] = useState(false);
   /** And what that branch looks like on THIS machine, which is the half the
    *  Update button never mentioned. Same call, no extra round trip. */
   const [localHead, setLocalHead] = useState<PrLocalHead | null>(null);
@@ -1574,6 +1601,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump, repo, openPr]);
   const [busy, setBusy] = useState(false);
+  /** The label passed to `act` for the request in flight — see Btn `pending`. */
+  const [busyWhat, setBusyWhat] = useState("");
   /** What the merge control is doing right now, "" when it is doing nothing.
    *  A sentence rather than a boolean because the merge is two writes and they
    *  fail differently — see doMerge. */
@@ -1843,6 +1872,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       setSelected(null);
       setDetail(null);
       setBehind(null);
+      setBehindAsking(true);
       setDetailErr("");
     }
     setListState((st) => ({ ...st, loading: true }));
@@ -1964,8 +1994,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         if (req !== detailReq.current) return;
         setBehind(r.ok ? (r.behind ?? 0) : null);
         setLocalHead(r.ok ? (r.local ?? null) : null);
+        setBehindAsking(false);
       })
-      .catch(() => { if (req === detailReq.current) { setBehind(null); setLocalHead(null); } });
+      .catch(() => { if (req === detailReq.current) { setBehind(null); setLocalHead(null); setBehindAsking(false); } });
     /* And, when there is one, WHICH files conflict. GitHub only ever says that
        a pull request is CONFLICTING; naming the files takes a merge, and this
        one happens entirely in git's object database — the checkout is never
@@ -2396,6 +2427,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const act = useCallback(async (label: string, fn: () => Promise<{ ok: boolean; error?: string; detail?: string }>) => {
     if (busy) return false;
     setBusy(true);
+    /* WHICH one is running, not just that something is. Every one of these is a
+       round trip through `gh`; a row of buttons all going grey says the app is
+       busy and not which press it heard. */
+    setBusyWhat(label);
     try {
       const r = await fn();
       flash(r.ok, r.ok ? (r.detail || `${label} — done`) : (r.error || `${label} failed`));
@@ -2410,7 +2445,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       if (selected != null) loadDetail(selected, true);
       return r.ok;
     } catch (e) { flash(false, String(e)); return false; }
-    finally { setBusy(false); }
+    finally { setBusy(false); setBusyWhat(""); }
   }, [busy, flash, loadList, selected, loadDetail]);
 
   // One picker for the masthead's "＋" and the sidebar's ✎ both — lifted here
@@ -3158,7 +3193,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               ))}
             </div>
           </div>
-          {repo && prs.length > 0 && (
+          {/* Always, once the repository is known — not "once rows arrived".
+              The bar is built from the rows, so gating it on them made it drop
+              in a second late and shove the board down. It draws its own
+              placeholder row until it has something to count. */}
+          {repo && (
             <PrFilterBar
               query={query}
               filters={filters}
@@ -3461,7 +3500,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         <Overview
                           d={d} root={root} busy={busy} mergeWork={mergeWork} openThreads={openThreads.length}
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
-                          behind={behind} localHead={localHead}
+                          behind={behind} behindAsking={behindAsking} localHead={localHead} busyWhat={busyWhat}
                           conflictFiles={conflictFiles}
                           onEditRequest={() => setEditingBody(true)}
                           onLocalReview={() => doLocalReview()}
@@ -3704,7 +3743,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
                 {tab === "review" && canReview && (
                   <ReviewTab
-                    d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy}
+                    d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
                     draft={myReview} onDraft={setMyReview}
                     onDrop={dropDraft} onSubmit={submitReview} onGoFiles={() => setTab("files")}
                   />
@@ -3815,7 +3854,7 @@ function ConflictActions({ root, number, branch, base, disabled }: {
   );
 }
 
-function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, behind, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditRequest, awaitingChecks }: {
+function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditRequest, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -3843,6 +3882,12 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
    *  the phone — and the button then behaves as it always did. */
   onReviewInTerminal?: () => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
+  /** Still asking how far behind the branch is. The row keeps its place and
+   *  says it is working, rather than growing a button a second later. */
+  behindAsking?: boolean;
+  /** The `act` label of the request in flight, so the button that started it is
+   *  the one that spins. */
+  busyWhat?: string;
   onUpdateBranch: (syncLocal: boolean) => void;
   onEditRequest: () => void;
   /** This panel pushed to the branch a moment ago, so runs are expected — see
@@ -4240,6 +4285,21 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
           {d.mergeable === "CONFLICTING" && (
             <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} disabled={busy} />
           )}
+          {/*
+            * The space the answer will fill, while it is being fetched.
+            *
+            * How far behind the branch is arrives after the pull request does,
+            * so this button used to appear out of nowhere and push the rest of
+            * the row sideways. Reported as: if we know something is loading,
+            * say so there instead of springing a control on somebody.
+            */}
+          {!canUpdate && behindAsking && !conflicted && d.viewerCanUpdate !== false && (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10.5px]"
+              style={{ color: "var(--text4)", border: "1px dashed color-mix(in srgb, var(--text) 18%, transparent)" }}>
+              <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5 }} />
+              Checking the base…
+            </span>
+          )}
           {canUpdate && (
             /*
              * Not while the last push is still landing.
@@ -4253,6 +4313,7 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
              * that has already been closed.
              */
             <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn
+              pending={busyWhat === "Update branch"}
               title={awaitingChecks
                 ? "The branch was just updated — waiting for the checks to start. Pushing again would restart them."
                 : updateMove.title}>
@@ -4260,7 +4321,7 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
           )}
           {/* Only with something to re-run. `failure > 0` already implies the
               rollup is populated, so this cannot appear over an empty one. */}
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks}
+          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks} pending={busyWhat === "Re-run checks"}
             title={awaitingChecks ? "A new run is already starting from the update" : "Run the failed checks again"}>
             Re-run failed</Btn>}
           <span className="ml-auto flex gap-1.5">
@@ -8142,8 +8203,10 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
  * review, and it exists so a reviewer leaves one notification rather than a
  * dozen. The comments and the verdict travel in a single request.
  */
-function ReviewTab({ d, drafts, seen, busy, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
+function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
   d: PrDetail; drafts: DraftComment[]; seen: number; busy: boolean;
+  /** Which request is in flight — see Btn `pending`. */
+  busyWhat?: string;
   /** The unsent review, held by the panel and written to storage — not state of
    *  this tab, which stops existing the moment you go and look at Files. */
   draft: ReviewDraft; onDraft: (patch: Partial<ReviewDraft>) => void;
@@ -8280,6 +8343,7 @@ function ReviewTab({ d, drafts, seen, busy, draft, onDraft, onDrop, onSubmit, on
             </div>
             <span className="ml-auto">
               <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
+                pending={busyWhat === "Review"}
                 title={verb !== "approve" && nothing ? "Say something, or queue a line comment" : undefined}>Submit review</Btn>
             </span>
           </div>

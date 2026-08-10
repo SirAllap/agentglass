@@ -16,6 +16,7 @@ import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, 
 import type { ProviderTask, ProviderTasksResponse, SavedView, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail } from "../../../shared/providers.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { Portal } from "./Portal.tsx";
 import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { StatusPill } from "./StatusPill.tsx";
@@ -656,12 +657,34 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
 }
 
 /** Pick a time, or type one. Anchored to the row it was opened from. */
-function RemindPopover({ task, onClose, onSet }: {
-  task: LocalTask; onClose: () => void; onSet: (civil: string) => void;
+/**
+ * The reminder picker, drawn OUT of the row it belongs to.
+ *
+ * It was `position: absolute` inside the row, and a row lives in a scroller —
+ * so the popover was clipped to a few pixels of itself and could not be used at
+ * all. Reported that way: "ese reminder está como dentro de la línea y no puedo
+ * usarlo".
+ *
+ * Through a Portal, positioned against the button that opened it, which is what
+ * every other menu in the app does. A popover anchored inside content that
+ * scrolls is a popover that will be clipped by something eventually.
+ */
+function RemindPopover({ task, anchor, onClose, onSet }: {
+  task: LocalTask;
+  /** The control it hangs off, measured when it opens. */
+  anchor: HTMLElement | null;
+  onClose: () => void; onSet: (civil: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [free, setFree] = useState("");
   useDismiss(true, ref, onClose);
+  /* Measured once, on open. Following the row while it scrolls would need a
+     listener per popover for a box that is dismissed on the next click
+     anywhere — and a menu that drifts under the pointer is worse than one that
+     stays put. */
+  const box = anchor?.getBoundingClientRect();
+  const top = Math.min((box?.bottom ?? 0) + 6, (typeof window === "undefined" ? 800 : window.innerHeight) - 220);
+  const right = Math.max(8, (typeof window === "undefined" ? 1200 : window.innerWidth) - (box?.right ?? 0));
   const parsed = useMemo(() => {
     const m = free.trim().match(/^(?:(\d{1,2})[:h](\d{2}))$/);
     if (!m) return null;
@@ -670,8 +693,12 @@ function RemindPopover({ task, onClose, onSet }: {
     return d;
   }, [free]);
   return (
-    <div ref={ref} className="absolute right-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
-      style={{ zIndex: 40, background: "var(--bg2)", border: edge(28), minWidth: 240, padding: 4 }}>
+    <Portal>
+      {/* A catcher, so a click anywhere else closes it — the same shape the
+          facet menus use. */}
+      <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={onClose} />
+      <div ref={ref} className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col"
+        style={{ top, right, zIndex: 9999, background: "var(--bg2)", border: edge(28), minWidth: 240, padding: 4 }}>
       {presetTimes().map((p) => (
         <button key={p.label} onClick={() => onSet(civilOf(p.at))}
           className="text-left px-2.5 py-1.5 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
@@ -688,7 +715,8 @@ function RemindPopover({ task, onClose, onSet }: {
         {parsed ? `→ ${remindLabel(parsed.getTime())}` : free.trim() ? "a time like 8:30" : ""}
       </div>
       <span className="sr-only">{task.description}</span>
-    </div>
+      </div>
+    </Portal>
   );
 }
 
@@ -3702,6 +3730,10 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
   marked?: boolean; onMark?: () => void;
   onFilter?: (kind: "tag" | "project", value: string) => void;
 }) {
+  /* The cell the reminder popover hangs off. It is portalled out of this row —
+     a row lives in a scroller, and a popover inside one gets clipped — so the
+     only thing left here is where it should point. */
+  const remindAnchor = useRef<HTMLSpanElement>(null);
   const isDone = t.status === "completed";
   const late = overdue(t, today);
   const dueToday = t.due === today;
@@ -3805,7 +3837,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           actually tell you. So the offer sits here rather than a blank that
           reads as "handled" — and it is an offer, not the announcement that
           nothing is going to happen. */}
-      <span className="relative text-[11px] tabular-nums">
+      <span ref={remindAnchor} className="relative text-[11px] tabular-nums">
         {reminder ? (
           <span style={{ color: reminder.firedAt ? "var(--error)" : reminder.due - Date.now() < 3_600_000 ? "var(--warning)" : "var(--primary)" }}>
             ⏰ {remindLabel(reminder.due)}
@@ -3819,7 +3851,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           </button>
         )}
         {remindOpen && onSetRemind && onCloseRemind && (
-          <RemindPopover task={t} onClose={onCloseRemind} onSet={onSetRemind} />
+          <RemindPopover task={t} anchor={remindAnchor.current} onClose={onCloseRemind} onSet={onSetRemind} />
         )}
       </span>
 

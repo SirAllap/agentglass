@@ -468,3 +468,31 @@ describe("waiting for the board", () => {
     expect(src).toContain("setTimeout(() => setBoardWaited(true), 6_000)");
   });
 });
+
+describe("feedback on a request in flight", () => {
+  it("spins inside the button that started it, not on all of them", () => {
+    /*
+     * Every action here is a round trip through `gh`, and the only feedback was
+     * the button going grey — the same grey it wears when it is disabled for a
+     * reason that has nothing to do with you. Reported as the worst thing about
+     * the app: "tenemos que dar feedback en las peticiones async, SIEMPRE".
+     */
+    expect(src).toContain("pending?: boolean;");
+    expect(src).toContain("setBusyWhat(label);");
+    expect(src).toContain('finally { setBusy(false); setBusyWhat(""); }');
+    for (const label of ["Update branch", "Re-run checks", "Review"]) {
+      expect(src, label).toContain(`pending={busyWhat === "${label}"}`);
+    }
+  });
+
+  it("keeps the label, so you can still tell the buttons apart", () => {
+    // A control that swaps its words for "Working…" moves everything beside it.
+    expect(src).toContain('<span className="agx-spin mr-1.5 shrink-0" aria-hidden');
+    expect(src).toContain("{children}\n    </button>");
+  });
+
+  it("says the base is being checked instead of growing a button late", () => {
+    expect(src).toContain("Checking the base…");
+    expect(src).toContain("{!canUpdate && behindAsking && !conflicted");
+  });
+});
