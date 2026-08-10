@@ -39,9 +39,30 @@ const save = (n: number, session = "workbench"): string => {
   return lines.join("\n") + "\n";
 };
 
-/** Write a save into the resurrect directory and point `last` at it. */
+/**
+ * Write a save into the resurrect directory and point `last` at it.
+ *
+ * The `onlyScratch` line is not a nicety and it is not paranoia — it is here
+ * because this helper HAS written into a real `~/.tmux/resurrect` once. Before
+ * the module honoured `$HOME`, `resurrectDir()` resolved through
+ * `os.homedir()`, which on Bun ignores the variable this suite redirects, so
+ * these writes landed on the developer's own saves and repointed their `last`
+ * at a two-line fixture. The module was fixed; a helper that writes with `fs`
+ * directly bypasses every guard the module has, so it needs its own.
+ *
+ * Loud rather than skipped: a suite that quietly stops testing is worse than
+ * one that fails.
+ */
+const onlyScratch = (p: string): void => {
+  const scratch = tmpdir();
+  if (p !== scratch && !p.startsWith(scratch + "/")) {
+    throw new Error(`refusing to write outside the scratch directory: ${p}`);
+  }
+};
+
 const put = (name: string, text: string, asLast = true): string => {
   const dir = resurrectDir();
+  onlyScratch(dir);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, name);
   writeFileSync(path, text);
