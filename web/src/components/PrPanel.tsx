@@ -3310,7 +3310,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
                 onShowTable={() => { setBoard(false); setFilter("all"); setQuery(""); }}
                 busy={busy}
-                loading={boardLoading} settling={boardSettling} acting={actingOn}
+                loading={boardLoading} settling={boardSettling} acting={actingOn} root={root}
                 /* Whoever opened them. A pinned pull request of a colleague's
                    is in no lane on this board, which is exactly why the strip
                    exists. */

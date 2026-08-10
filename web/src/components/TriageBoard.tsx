@@ -17,6 +17,7 @@ import type { PrSummary } from "../../../shared/types.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed } from "../lib/prLanes.ts";
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
 import { Avatar } from "./Avatar.tsx";
+import { behindOf, onBehind } from "../lib/prBehindStore.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
@@ -48,7 +49,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, pinnedList,
+  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, pinnedList, root,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -110,7 +111,14 @@ export function TriageBoard({
    * never draws.
    */
   settling?: boolean;
+  /** The checkout these pull requests belong to — needed to ask how far behind
+   *  each branch is, which is not on the list payload. See prBehindStore. */
+  root?: string;
 }) {
+  /* Answers arriving one at a time, each one a re-render of the board and
+     nothing else — the cards do not move, a chip appears on one of them. */
+  const [, bump] = useState(0);
+  useEffect(() => onBehind(() => bump((n) => n + 1)), []);
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
@@ -452,7 +460,7 @@ export function TriageBoard({
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider}
                             cursor={cur.lane === i && cur.row === r}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
-                            onAct={onAct} busy={busy} acting={acting} dim={!matches(p)} />
+                            onAct={onAct} busy={busy} acting={acting} dim={!matches(p)} root={root} />
                         ))}
                         {/* Counted, not hidden. A lane may be forty on a bad
                             week, and the column scrolls but the cap is what
@@ -521,7 +529,7 @@ export function TriageBoard({
   );
 }
 
-function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim }: {
+function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root }: {
   p: Card; hasTaskProvider: boolean; pinned: boolean; cursor?: boolean;
   /** The pull request whose action is running, so only its card spins. */
   acting?: number | null;
@@ -534,9 +542,14 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
    * the shape means something.
    */
   dim?: boolean;
+  /** Where to ask how far behind this branch is. Absent means do not ask. */
+  root?: string;
   onOpen: () => void; onPin: () => void;
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void; busy?: boolean;
 }) {
+  /* Asked for the first time by whoever draws the card, which is the thing that
+     knows it is on screen. Null until the answer lands. */
+  const behind = root ? behindOf(root, p.number) : null;
   /** Said on the number itself for a moment: a clipboard write is invisible. */
   const [copied, setCopied] = useState<number | null>(null);
   const copyNumber = (n: number) => {
@@ -671,6 +684,25 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
             what" is only half the question. */}
         <span className="truncate" title={`${p.headRefName} → ${p.baseRefName}`}
           style={{ maxWidth: 90, color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
+        {/*
+          * How far behind the base, when somebody has found out.
+          *
+          * The pull request'"'"'s own page has carried this for a while — "Update
+          * branch & pull · 222 behind" — and the board, which is where you
+          * decide what to open, said nothing at all. It is not on the list
+          * payload and cannot be (see prBehindStore), so it arrives late and
+          * lands as a chip on a card that does not move.
+          *
+          * Nothing at all while the answer is unknown, and nothing when it is
+          * zero: a branch that is up to date has no news.
+          */}
+        {behind ? (
+          <span className="shrink-0 tabular-nums px-1 rounded"
+            title={`${behind} commit${behind === 1 ? "" : "s"} on ${p.baseRefName} that this branch does not have — its checks ran against an older base`}
+            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+            ↻ {behind}
+          </span>
+        ) : null}
         <span className="ml-auto tabular-nums shrink-0" style={{ color: "var(--text4)" }}>
           +{p.additions} −{p.deletions} · {p.changedFiles}f
         </span>
