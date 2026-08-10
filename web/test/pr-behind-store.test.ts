@@ -19,7 +19,7 @@ const mod = await import("../src/lib/api.ts");
   return answer(number);
 };
 
-const { behindOf, onBehind, forgetBehind } = await import("../src/lib/prBehindStore.ts");
+const { behindOf, askingBehind, onBehind, forgetBehind } = await import("../src/lib/prBehindStore.ts");
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
@@ -73,6 +73,16 @@ describe("asking how far behind", () => {
     await settle();
     expect(calls.filter((n) => n === 9).length).toBe(1);
     answer = async (n) => ({ ok: true, behind: n });
+  });
+
+  it("says it is still asking, which is not the same as up to date", async () => {
+    /* Both draw no chip, and only one of them deserves the space kept for it —
+       twelve chips arriving one by one is the board rearranging itself in slow
+       motion. */
+    behindOf("/repo", 4);
+    expect(askingBehind("/repo", 4)).toBe(true);
+    await settle();
+    expect(askingBehind("/repo", 4)).toBe(false);
   });
 
   it("does not ask without a checkout to ask about", () => {

@@ -17,7 +17,7 @@ import type { PrSummary } from "../../../shared/types.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed } from "../lib/prLanes.ts";
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
 import { Avatar } from "./Avatar.tsx";
-import { behindOf, onBehind } from "../lib/prBehindStore.ts";
+import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
@@ -550,6 +550,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
   /* Asked for the first time by whoever draws the card, which is the thing that
      knows it is on screen. Null until the answer lands. */
   const behind = root ? behindOf(root, p.number) : null;
+  const asking = root ? askingBehind(root, p.number) : false;
   /** Said on the number itself for a moment: a clipboard write is invisible. */
   const [copied, setCopied] = useState<number | null>(null);
   const copyNumber = (n: number) => {
@@ -702,6 +703,15 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
             style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
             ↻ {behind}
           </span>
+        ) : asking ? (
+          /* The space, held, while the answer is out. Twelve chips arriving one
+             by one over a few seconds is the board rearranging itself in slow
+             motion; the same shape, drawn quiet, is a board that is filling in.
+             It goes away for a branch that turns out to be up to date — that is
+             not news and its space is not owed to it. */
+          <span aria-hidden className="shrink-0 rounded animate-pulse"
+            title="Working out how far behind its base this branch is"
+            style={{ width: 26, height: 11, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
         ) : null}
         <span className="ml-auto tabular-nums shrink-0" style={{ color: "var(--text4)" }}>
           +{p.additions} −{p.deletions} · {p.changedFiles}f
