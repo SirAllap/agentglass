@@ -2407,12 +2407,13 @@ export function deskAttachArgv(socketPath: string, session: string): string[] | 
    *   - `tmux` with no arguments starts the server and attaches you to the
    *     session IT just made. A resurrect/continuum setup then restores your
    *     real sessions behind you, and you are sitting in `0` watching none of
-   *     them. Reported exactly that way: "las tabs no son ni las de alavera".
+   *     them. Reported exactly that way: the tabs on screen were not the
+   *     ones that session had.
    *   - `start-server` is not a way to wait for the restore either: a server
    *     with no sessions exits immediately, so it leaves nothing behind at all.
    *   - `-A` means attach-or-create, so the same command covers a live server
-   *     that already has it. The name is exact — `-s alav` makes a session
-   *     called `alav` beside `alavera` rather than matching it.
+   *     that already has it. The name is exact — `-s work` makes a session
+   *     called `work` beside `workbench` rather than matching it.
    *
    * What makes it land where it should is that creating the session STARTS the
    * server, which sources their configuration, which is what fires continuum's
