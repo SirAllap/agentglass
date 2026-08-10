@@ -3662,8 +3662,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                             // empty rollup, so the panel has to already know
                             // why it is empty.
                             setPushed({ number: d.number, at: Date.now() });
-                            forgetOneBehind(root, d.number);
-                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal));
+                            /* Thrown away AFTER it lands, not before: dropped
+                               first, the store simply re-asks GitHub for a
+                               count that has not changed yet and caches the old
+                               one all over again. */
+                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal))
+                              .finally(() => refreshBehind(root, d.number));
                           }}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={doAutoMerge}

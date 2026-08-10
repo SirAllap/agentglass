@@ -2994,7 +2994,10 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   if (!root) return r;
-  return { ...r, detail: `updated on GitHub · ${await syncLocalHead(root, Number(number))}` };
+  /* "Synced" first, because what somebody wants to know is whether it worked;
+     the two halves follow, in the order they happened. The old wording opened
+     with "updated on GitHub", which reads as a report rather than an answer. */
+  return { ...r, detail: `Synced — updated on GitHub, and ${await syncLocalHead(root, Number(number))}` };
 }
 
 /**
