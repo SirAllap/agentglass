@@ -566,3 +566,21 @@ describe("the facts strip", () => {
     expect(src).not.toContain("setCondensed(false)");
   });
 });
+
+describe("the diff inside a commit", () => {
+  it("keeps where each file box was scrolled to", () => {
+    /*
+     * Every file in a commit is its own scroller — the box is capped at 520px —
+     * so leaving the tab put every open commit back at the top of every file.
+     * Keyed by commit and path, written on scroll (a node that has left the
+     * document reports zero, which is how the Files tab remembered zero
+     * perfectly for an hour), and re-applied while the diff is still being
+     * highlighted, because until then the box is too short to hold the offset.
+     */
+    expect(src).toContain("const DIFF_SCROLL = new Map<string, number>();");
+    expect(src).toContain("onScrollCapture={(e) => {");
+    expect(src).toContain("scope={c.oid}");
+    // Capture, because a scroll event does not bubble.
+    expect(src).toContain("/* Capture, because a scroll event does not bubble. */");
+  });
+});

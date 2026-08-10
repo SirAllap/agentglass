@@ -3705,7 +3705,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                 <div className="my-2">
                                   {commitBusy ? <Loading label="Loading the diff…" size={18} />
                                     : commitFiles.length === 0 ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>This commit changed nothing textual</div>
-                                    : <FileStack files={commitFiles} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} />}
+                                    : <FileStack files={commitFiles} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} scope={c.oid} />}
                                 </div>
                               )}
                             </div>
@@ -5460,14 +5460,67 @@ function DiffToolbar({ path, add, del, split, wrap, onSplit, onWrap, right }: {
   );
 }
 
+/**
+ * Where each file box inside a commit was scrolled to.
+ *
+ * Every one of them is its own scroller — a diff is capped at 520px and scrolls
+ * inside that — so leaving the tab and coming back put every open commit back
+ * at the top of every file. Keyed by the thing being read (the commit) and the
+ * file, and written on scroll rather than collected on the way out: a node that
+ * has left the document reports a scrollTop of zero, which is how the Files tab
+ * managed to remember zero perfectly for an hour.
+ */
+const DIFF_SCROLL = new Map<string, number>();
+
 /** Several files, each with its own header — how a commit reads. */
-function FileStack({ files, split, wrap, onSplit, onWrap }: {
+function FileStack({ files, split, wrap, onSplit, onWrap, scope }: {
   files: FileChange[]; split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
+  /** What these files belong to — a commit's sha. Without one nothing is
+   *  remembered, which is right for a caller that has no stable identity. */
+  scope?: string;
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const keyOf = (el: HTMLElement): string | null => {
+    const box = el.closest("[data-diff-file]") as HTMLElement | null;
+    const path = box?.dataset.diffFile;
+    if (!scope || !path) return null;
+    // A split diff has two scrollers side by side and they scroll together, but
+    // the key still says which, so restoring cannot cross them over.
+    return `${scope}:${path}:${(el as HTMLElement).dataset.side ?? "u"}`;
+  };
+  /* Put back after mount, and keep trying while the diff is still being
+     highlighted — the box is short until then and the offset gets clamped. */
+  useEffect(() => {
+    const root = wrapRef.current;
+    if (!root || !scope) return;
+    let alive = true;
+    const started = Date.now();
+    const put = () => {
+      if (!alive) return;
+      let done = true;
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-vscroll]"))) {
+        const k = keyOf(el);
+        const want = k ? DIFF_SCROLL.get(k) ?? 0 : 0;
+        if (!want) continue;
+        if (Math.abs(el.scrollTop - want) > 1) { el.scrollTop = want; done = false; }
+      }
+      if (done || Date.now() - started > 6_000) return;
+      requestAnimationFrame(put);
+    };
+    requestAnimationFrame(put);
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, files, split, wrap]);
   return (
-    <div className="flex flex-col gap-2">
+    <div ref={wrapRef} className="flex flex-col gap-2"
+      /* Capture, because a scroll event does not bubble. */
+      onScrollCapture={(e) => {
+        const el = e.target as HTMLElement;
+        const k = keyOf(el);
+        if (k) DIFF_SCROLL.set(k, el.scrollTop);
+      }}>
       {files.map((f, i) => (
-        <div key={f.file_path} className="rounded overflow-hidden flex flex-col"
+        <div key={f.file_path} data-diff-file={f.file_path} className="rounded overflow-hidden flex flex-col"
           style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", maxHeight: 520 }}>
           <DiffToolbar path={f.file_path} add={f.additions} del={f.deletions}
             split={split} wrap={wrap} onSplit={i === 0 ? onSplit : onSplit} onWrap={onWrap} />
