@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
+import { retryLoad } from "../lib/retryLoad.ts";
 import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole, consoleInTmux } from "./TerminalPanel.tsx";
 import { CloseButton } from "./CloseButton.tsx";
@@ -80,6 +81,7 @@ export function RecipesPane({ open }: { open: boolean }) {
             {r.scope === "global" ? "global" : (r.repo?.split("/").pop() ?? "repo")} · {r.steps.length} step{r.steps.length === 1 ? "" : "s"}
             {r.params?.length ? ` · ${r.params.length} param${r.params.length === 1 ? "" : "s"}` : ""}
             {r.tmux ? " · tmux" : ""}
+            {r.boot ? " · at start" : ""}
           </>}
           control={<span className="flex items-center gap-2">
             <button onClick={() => setRunning(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
@@ -122,6 +124,10 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
   onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onDrop: (r: Recipe) => void; onCancel: () => void;
 }) {
   const set = (patch: Partial<Recipe>) => onChange({ ...r, ...patch });
+  /** Boot and the two things that would need asking are mutually exclusive —
+   *  the server refuses saving the combination, so the editor says so up
+   *  front rather than letting the save be the first to find out. */
+  const cannotBoot = !!(r.params?.length) || !!r.confirm;
   const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
   const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
   return (
@@ -165,8 +171,20 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
           Run inside tmux <span style={{ color: "var(--text4)" }}>— survives closing the app</span>
         </label>
         <label className="flex items-center gap-1.5 text-[11px] pb-1.5" style={{ color: "var(--text2)" }}>
-          <input type="checkbox" checked={!!r.confirm} onChange={(e) => set({ confirm: e.target.checked })} />
+          <input type="checkbox" checked={!!r.confirm} onChange={(e) => set({ confirm: e.target.checked })}
+            disabled={!!r.boot} title={r.boot ? "A command that runs at start fires with nobody to ask" : undefined} />
           Always ask first
+        </label>
+        {/* A boot recipe runs the moment the app opens, with nobody to fill a
+            box or click anything. The server refuses saving one that has
+            parameters, asks first, or reads as destructive — these two
+            checkboxes just keep the editor from leading somewhere the save
+            would refuse. */}
+        <label className="flex items-center gap-1.5 text-[11px] pb-1.5" style={{ color: cannotBoot ? "var(--text4)" : "var(--text2)" }}>
+          <input type="checkbox" checked={!!r.boot} disabled={cannotBoot}
+            title={cannotBoot ? "Remove the parameters or the ask-first to run it at start" : undefined}
+            onChange={(e) => set(e.target.checked ? { boot: true, confirm: false } : { boot: false })} />
+          Run when the app starts <span style={{ color: "var(--text4)" }}>— in the docked console, on every open</span>
         </label>
       </div>
 
@@ -193,7 +211,7 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
             <CloseButton onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })} style={{ color: "var(--text4)" }} className="rounded" />
           </div>
         ))}
-        <button onClick={() => set({ params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}
+        <button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}
           className="self-start text-[10.5px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text3)" }}>＋ parameter</button>
       </div>
 
@@ -248,6 +266,38 @@ export function runRecipeSteps(root: string, steps: string[], wrapInTmux: boolea
     }, 150);
   } else send();
   return { ran: true };
+}
+
+/**
+ * Fire the commands marked "run when the app starts".
+ *
+ * Called once per app load, once the live socket is up. The steps go to the
+ * docked console — the same surface every recipe runs in — so the console's
+ * shell starts tmux, attaches to the last session, whatever the saved lines
+ * say, whether or not the console is on screen. The saved set cannot contain
+ * a boot recipe with parameters, an ask-first, or a destructive line: the
+ * server refuses those at save time AND strips `boot` from a hand-written
+ * file that carries them anyway, so nothing this side ever meets one that
+ * would need asking or skipping.
+ *
+ * A module flag rather than a caller's ref: the caller (App) re-renders for
+ * many reasons, but "this app load" is exactly the lifetime of this module.
+ */
+let bootFired = false;
+export function runBootRecipes(): void {
+  if (bootFired) return;
+  bootFired = true;
+  const root = consoleRoot();
+  if (!root) return;
+  // Retried like the command bar's own first read: the window is up before
+  // the sidecar is listening, and a fetch that loses that race must not lose
+  // the whole automation. Four goes over ~8s, then it stops.
+  retryLoad(() => api.recipes(root)
+    .then(({ recipes }) => {
+      for (const r of recipes) if (r.boot) runRecipeSteps(root, r.steps, !!r.tmux);
+      return true;
+    })
+    .catch(() => false));
 }
 
 /**

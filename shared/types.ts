@@ -2988,6 +2988,10 @@ export interface Recipe {
   /** Ask before running, every time. Set by the author, and forced on by the
    *  server for anything that reads as destructive. */
   confirm?: boolean;
+  /** Run in the docked console each time the app starts, without being asked.
+   *  Mutually exclusive with parameters, a confirm, and anything destructive —
+   *  there is nobody at boot to ask. */
+  boot?: boolean;
   addedAt: number;
 }
 

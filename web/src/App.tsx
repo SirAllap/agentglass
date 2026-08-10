@@ -34,6 +34,7 @@ import { FilePalette } from "./components/FilePalette.tsx";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { requestFilesReveal } from "./lib/filesReveal.ts";
 import { onOpenSettings, openSettings } from "./lib/openSettings.ts";
+import { runBootRecipes } from "./components/RecipesPane.tsx";
 import { onOpenPrs, onOpenPr } from "./lib/openPrs.ts";
 import { onOpenCard, openCard } from "./lib/openCard.ts";
 import { onOpenIssue } from "./lib/openIssue.ts";
@@ -255,6 +256,18 @@ export default function App() {
   // fleet spine reads them in every view, and holding them would freeze a
   // streaming answer mid-word.
   const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
+  /*
+   * The saved commands marked "run when the app starts" fire exactly once per
+   * app load, when the live socket first opens — the moment the server is
+   * certainly there. A reconnect later is a server problem, not an app start,
+   * and must not re-fire them.
+   */
+  const bootFired = useRef(false);
+  useEffect(() => {
+    if (conn !== "open" || bootFired.current) return;
+    bootFired.current = true;
+    runBootRecipes();
+  }, [conn]);
   // The live socket is the app's only real-time source, and until now the chat
   // panel was the one view that never saw it — a resumed session sat frozen on
   // whatever had been true when you opened it while the agent kept working.
