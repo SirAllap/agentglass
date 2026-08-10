@@ -119,8 +119,19 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
    * asked for is the one thing on this board that nobody else can do, and
    * burying it under a failing check would hide the only card with your name on
    * it. The state is said in the sentence instead.
+   *
+   * Even APPROVED. This used to read `stake.asked && !approved`, guarding
+   * against "your own approval keeps the card in your face for ever" — a case
+   * that cannot happen: `asked` comes from `review-requested:@me`, and GitHub
+   * drops a pull request from that search the moment you review it. So `asked`
+   * already means "your review is still outstanding", and the guard only ever
+   * fired when somebody ELSE had approved.
+   *
+   * Reported from the app exactly that way: the pill said "Needs my review 1"
+   * and the board's own review lane said "Nothing here. Good." One screen, one
+   * fact, two answers — which is worse than either answer alone.
    */
-  if (stake.asked && !approved) {
+  if (stake.asked) {
     if (red) {
       return { lane: "review",
         reason: `Asked of you — and ${plural(c.failure, "check")} ${c.failure === 1 ? "is" : "are"} red, so read it knowing the author still has work.` };
@@ -131,6 +142,14 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
       // conflicts will approve something that cannot land.
       return { lane: "review",
         reason: "Asked of you — and it conflicts with the base branch, so it cannot land as it stands." };
+    }
+    if (approved) {
+      // Said plainly, because it changes what you do with it: read it if you
+      // want to, or press merge — you are not the thing standing in its way.
+      return { lane: "review",
+        reason: !red && !running && p.checks.total > 0
+          ? "Asked of you — and somebody else has already approved it, so it is green and can land whenever you like."
+          : "Asked of you — somebody else has already approved it, so your review is not what it is waiting on." };
     }
     return { lane: "review",
       reason: changesAsked
@@ -252,6 +271,16 @@ export type Suggested = "open" | "merge" | "rerun";
 
 export function suggestedAction(p: PrSummary, filed: Filed): Suggested {
   if (filed.lane === "land") return "merge";
+  /*
+   * A review asked of you on something already approved and green: the press
+   * that moves it is Merge, not Review. It sits in the review lane because your
+   * name is on it — see `fileInLane` — but offering "Review" on a pull request
+   * whose only missing step is a button would be the board answering a question
+   * nobody asked.
+   */
+  if (filed.lane === "review" && p.reviewDecision === "APPROVED"
+    && p.checks.failure === 0 && p.checks.pending === 0 && p.checks.total > 0
+    && p.mergeable !== "CONFLICTING") return "merge";
   // Yours and red: the useful press is the one that finds out whether it is
   // flake, and it is the only one of these that does not need a human read.
   if (filed.lane === "blocked" && p.checks.failure > 0) return "rerun";

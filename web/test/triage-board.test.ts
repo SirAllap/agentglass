@@ -93,14 +93,23 @@ const segment = (html: string, lane: string): string | null =>
  * rather than by naming lanes directly — if fileInLane changes its mind, these
  * counts move with it instead of asserting a fiction.
  *
- *   review  8 — asked of you, over the cap of six
+ *   review  9 — asked of you, over the cap of six
  *   land    2 — yours, approved and green
  *   blocked 1 — yours, red
  *   flight  1 — yours, still running
- *   others  1 — asked of you, approved, and red: not yours to move
+ *   others  1 — a draft you were asked to look at: nobody's job, including yours
+ *
+ * #300 — asked of you, approved by somebody else, and red — is in `review`, not
+ * in `others`: `asked` comes from `review-requested:@me`, which GitHub empties
+ * the moment you review, so it means YOUR review is still outstanding whatever
+ * anybody else has said.
  */
 const ASKED = Array.from({ length: 8 }, (_, i) => pr(100 + i));
-const REVIEW = [...ASKED, pr(300, { reviewDecision: "APPROVED", fail: 1 })];
+const REVIEW = [
+  ...ASKED,
+  pr(300, { reviewDecision: "APPROVED", fail: 1 }),
+  pr(301, { isDraft: true }),
+];
 const MINE = [
   pr(200, { reviewDecision: "APPROVED" }),
   pr(201, { reviewDecision: "APPROVED" }),
@@ -128,7 +137,7 @@ describe("the markup these tests read", () => {
 describe("the lanes", () => {
   it("counts each lane from the two lists it was handed", () => {
     const html = full();
-    expect(heading(html, "review")).toBe("8");
+    expect(heading(html, "review")).toBe("9");
     expect(heading(html, "land")).toBe("2");
     expect(heading(html, "blocked")).toBe("1");
     expect(heading(html, "others")).toBe("1");
@@ -144,8 +153,8 @@ describe("the lanes", () => {
      */
     const html = full();
     expect(drawn(html, "review")).toBe(6);
-    expect(heading(html, "review")).toBe("8");
-    expect(column(html, "review")).toContain("+2 more in this lane");
+    expect(heading(html, "review")).toBe("9");
+    expect(column(html, "review")).toContain("+3 more in this lane");
   });
 
   it("leaves a lane under the cap alone", () => {
@@ -293,7 +302,7 @@ describe("the footer", () => {
 describe("the summary bar", () => {
   it("carries a segment per lane, with that lane's count", () => {
     const html = full();
-    expect(segment(html, "review")).toBe("8");
+    expect(segment(html, "review")).toBe("9");
     expect(segment(html, "land")).toBe("2");
     expect(segment(html, "blocked")).toBe("1");
     expect(segment(html, "others")).toBe("1");

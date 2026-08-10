@@ -62,9 +62,22 @@ describe("what is asked of you comes first", () => {
     expect(f.reason).toContain("fix, not the first look");
   });
 
-  it("stops asking once you have approved it", () => {
-    // Otherwise your own approval keeps the card in your face for ever.
-    expect(fileInLane(pr({ reviewDecision: "APPROVED" }), ASKED).lane).not.toBe("review");
+  it("still asks when somebody ELSE has approved it", () => {
+    /*
+     * This used to file it anywhere but `review`, guarding against "your own
+     * approval keeps the card in your face for ever" — a case that cannot
+     * happen. `asked` comes from `review-requested:@me`, and GitHub drops a
+     * pull request from that search the moment you review it, so `asked`
+     * already means your review is outstanding.
+     *
+     * Reported from the app: the pill said "Needs my review 1" and the board's
+     * review lane said "Nothing here. Good."
+     */
+    const f = fileInLane(pr({ reviewDecision: "APPROVED" }), ASKED);
+    expect(f.lane).toBe("review");
+    expect(f.reason).toContain("already approved");
+    // And it says the useful part: you are not what it is waiting on.
+    expect(f.reason).toContain("can land whenever you like");
   });
 });
 
