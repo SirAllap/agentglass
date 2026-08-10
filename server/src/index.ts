@@ -64,6 +64,7 @@ import {
   submodules as gitSubmodules, submoduleAdd, submoduleUpdate, submoduleSync, submoduleDeinit, submoduleRemove,
   blameFile, fileHistory,   bisectStatus, bisectStart, bisectMark, bisectReset,
   searchCommits, grepWorkingTree, searchHistory,
+  createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
 } from "./gitwork.ts";
 import { repoStats, generateChangelog } from "./gitinsights.ts";
@@ -2060,6 +2061,10 @@ const server = Bun.serve<WsData>({
         case "/git/bisect-start": res = bisectStart(root, b.bad, b.good); break;
         case "/git/bisect-mark": res = bisectMark(root, b.mark); break;
         case "/git/bisect-reset": res = bisectReset(root); break;
+        case "/git/tag-create": res = createTag(root, b.name, { annotated: b.annotated === true, message: b.message, signed: b.signed === true, target: b.target }); break;
+        case "/git/tag-delete": res = deleteTag(root, b.name); break;
+        case "/git/tag-push": res = pushTag(root, b.name, b.remote); break;
+        case "/git/tag-delete-remote": res = deleteRemoteTag(root, b.name, b.remote); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why

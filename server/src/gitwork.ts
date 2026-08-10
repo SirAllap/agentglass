@@ -3252,6 +3252,79 @@ export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
   return out;
 }
 
+// --- Tags power-ups ---------------------------------------------------------
+
+/** Create a tag. Lightweight by default; `annotated` adds `-a -m`, `signed`
+ *  adds `-s` (which is annotated too and so also needs the message — a signed
+ *  tag without one would open an editor nobody can drive). The target is HEAD
+ *  unless `target` is given. Refuses names that already exist locally. */
+export function createTag(rootIn: unknown, nameIn: unknown, optsIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code === 0) {
+    return { ok: false, error: `tag ${name} already exists` };
+  }
+  const opts = (optsIn ?? {}) as { annotated?: boolean; message?: string; signed?: boolean; target?: string };
+  const args = ["tag"];
+  if (opts.signed) args.push("-s");
+  else if (opts.annotated) args.push("-a");
+  const message = String(opts.message ?? "").trim();
+  if (opts.signed || opts.annotated) {
+    if (!message) return { ok: false, error: "an annotated tag needs a message" };
+    args.push("-m", message);
+  }
+  args.push(name);
+  const target = String(opts.target ?? "").trim();
+  if (target) args.push(target);
+  return run(root, args);
+}
+
+/** Delete a local tag. `tag -d` refuses tags that are not stored in
+ *  `refs/tags` (i.e. on a branch or remote), which is the ownership check the
+ *  plan wants: it never touches a tag you don't have locally. */
+export function deleteTag(rootIn: unknown, nameIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code !== 0) {
+    return { ok: false, error: `no local tag ${name}` };
+  }
+  return run(root, ["tag", "-d", name]);
+}
+
+function tagRemote(root: string, remoteIn?: unknown): string | null {
+  const remote = String(remoteIn ?? "").trim() || "origin";
+  return git(root, ["remote"]).stdout.split("\n").includes(remote) ? remote : null;
+}
+
+/** Push a tag to the remote. */
+export function pushTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code !== 0) {
+    return { ok: false, error: `no local tag ${name}` };
+  }
+  const remote = tagRemote(root, remoteIn);
+  if (!remote) return { ok: false, error: "no such remote" };
+  return run(root, ["push", remote, name]);
+}
+
+/** Delete a tag on the remote (`push <remote> :refs/tags/<name>`). */
+export function deleteRemoteTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  const remote = tagRemote(root, remoteIn);
+  if (!remote) return { ok: false, error: "no such remote" };
+  return run(root, ["push", remote, `:refs/tags/${name}`]);
+}
+
 // --- Blame + file history ---------------------------------------------------
 
 /** A line of blame: the final line number, the commit that wrote it, and the

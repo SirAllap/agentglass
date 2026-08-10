@@ -1898,6 +1898,27 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (!(await ask({ title: `Remove ${path}?`, body: "The gitlink, its checkout and its .gitmodules section are all deleted.", danger: true, confirmLabel: "Remove" }))) return;
     if (await act(() => api.gitSubmoduleRemove(root, path), `Removed ${path}`)) reloadSubmodules();
   };
+  // tags
+  const reloadTags = () => api.gitTags(root).then((r) => setTags(r.tags)).catch(() => {});
+  const createTagAsk = async () => {
+    const name = await askText({ title: "New tag", input: { label: "Tag name (e.g. v1.2.3)", initial: "" }, confirmLabel: "Create" });
+    if (!name || !name.trim()) return;
+    const message = await askText({ title: `Tag ${name.trim()}`, input: { label: "Message — blank for a lightweight tag", initial: "" }, confirmLabel: "Create" });
+    if (message === null) return;
+    const annotated = message.trim().length > 0;
+    if (await act(() => api.gitTagCreate(root, name.trim(), { annotated, message }), `Tagged ${name.trim()}`)) reloadTags();
+  };
+  const tagDeleteAsk = async (name: string) => {
+    if (!(await ask({ title: `Delete tag ${name}?`, body: "Removes the local ref only — the remote copy (if any) is untouched.", danger: true, confirmLabel: "Delete" }))) return;
+    if (await act(() => api.gitTagDelete(root, name), `Deleted ${name}`)) reloadTags();
+  };
+  const tagPush = async (name: string) => {
+    if (await act(() => api.gitTagPush(root, name), `Pushed ${name}`)) reloadTags();
+  };
+  const tagDeleteRemoteAsk = async (name: string) => {
+    if (!(await ask({ title: `Delete ${name} on the remote?`, body: "Runs push <remote> :refs/tags/<name>. The local tag stays.", danger: true, confirmLabel: "Delete remotely" }))) return;
+    if (await act(() => api.gitTagDeleteRemote(root, name), `Deleted ${name} remotely`)) reloadTags();
+  };
   /** Capture the tree as a named checkpoint — touches nothing, restore is
    *  always possible, cap is 30. */
   const snapshotNow = async () => {
@@ -3231,17 +3252,29 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : view === "tags" ? (
                   <div onScroll={incTags.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
+                    {writeEnabled && (
+                      <button onClick={() => void createTagAsk()} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ new tag</button>
+                    )}
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search tags by name, commit or subject…"
                       sort={sort} onSort={(x) => { setSort(x); setRowIdx(0); }}
                       sorts={[{ key: "recent", label: "recent", title: "Newest tag first" }, { key: "name", label: "name", title: "Alphabetical" }]}
                       count={shownTags.length} total={tags.length} />
                     {incTags.rows.map((t, i) => (
-                      <div key={t.name} {...rowProps(i === rowIdx)} className="px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
+                      <div key={t.name} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
                         style={{ ...ROW_GRID, gridTemplateColumns: "minmax(0, 18rem) 5rem minmax(0, 1fr) auto", ...rowProps(i === rowIdx).style }}>
                         <span className="text-[11.5px] font-medium truncate min-w-0" style={{ color: "var(--text)" }} title={t.name}>{t.annotated ? "🏷" : "⚑"} {t.name}</span>
                         <span className="text-[9.5px] tabular-nums t-dim2">{t.hash}</span>
                         <span className="min-w-0 truncate text-[10px] t-dim2" title={t.subject}>{t.subject}</span>
-                        <span className="text-[9.5px] t-dim2 whitespace-nowrap text-right">{t.date}</span>
+                        <span className="flex items-center gap-1 whitespace-nowrap">
+                          <span className="text-[9.5px] t-dim2 text-right">{t.date}</span>
+                          {writeEnabled && (
+                            <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={(e) => { e.stopPropagation(); tagPush(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--info)" }} title="Push to the remote">⇡</button>
+                              <button onClick={(e) => { e.stopPropagation(); void tagDeleteRemoteAsk(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--warning)" }} title="Delete on the remote">↷</button>
+                              <button onClick={(e) => { e.stopPropagation(); void tagDeleteAsk(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--error)" }} title="Delete locally">✕</button>
+                            </span>
+                          )}
+                        </span>
                       </div>
                     ))}
                     {!shownTags.length && <PaneEmpty busy={busyView === "tags"} what="tags" />}

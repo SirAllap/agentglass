@@ -582,6 +582,10 @@ const realApi = {
   gitSearchCommits: (root: string, q: string, author?: string, since?: string) => get<{ ok: boolean; entries: FileHistoryEntry[]; error?: string }>(`/git/search-commits?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${author ? `&author=${encodeURIComponent(author)}` : ""}${since ? `&since=${encodeURIComponent(since)}` : ""}`),
   gitGrep: (root: string, q: string, opts: { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean }) => get<{ ok: boolean; hits: GitGrepHit[]; error?: string }>(`/git/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}&caseSensitive=${opts.caseSensitive ? 1 : 0}&wholeWord=${opts.wholeWord ? 1 : 0}&regex=${opts.regex ? 1 : 0}`),
   gitPickaxe: (root: string, q: string, type?: "S" | "G") => get<{ ok: boolean; entries: FileHistoryEntry[]; error?: string }>(`/git/pickaxe?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}&type=${type ?? "S"}`),
+  gitTagCreate: (root: string, name: string, opts: { annotated?: boolean; message?: string; signed?: boolean; target?: string }) => post<GitActionResult>("/git/tag-create", { root, name, ...opts }),
+  gitTagDelete: (root: string, name: string) => post<GitActionResult>("/git/tag-delete", { root, name }),
+  gitTagPush: (root: string, name: string, remote?: string) => post<GitActionResult>("/git/tag-push", { root, name, remote }),
+  gitTagDeleteRemote: (root: string, name: string, remote?: string) => post<GitActionResult>("/git/tag-delete-remote", { root, name, remote }),
   gitCommandLog: (since = 0) => get<{ entries: GitLogEntry[] }>(`/git/commandlog?since=${since}`),
   /** Is a running nvim reachable for this file? Lets the key be labelled
    *  honestly before it's pressed. */
@@ -1186,6 +1190,10 @@ const demoApi: typeof realApi = {
   gitSearchCommits: (_root: string, _q: string, _author?: string, _since?: string) => D({ ok: false, entries: [], error: "not available in the demo" }),
   gitGrep: (_root: string, _q: string, _opts: { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean }) => D({ ok: false, hits: [], error: "not available in the demo" }),
   gitPickaxe: (_root: string, _q: string, _type?: "S" | "G") => D({ ok: false, entries: [], error: "not available in the demo" }),
+  gitTagCreate: (_root: string, _name: string, _opts: { annotated?: boolean; message?: string; signed?: boolean; target?: string }) => D(demo.gitActionUnavailable()),
+  gitTagDelete: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
+  gitTagPush: (_root: string, _name: string, _remote?: string) => D(demo.gitActionUnavailable()),
+  gitTagDeleteRemote: (_root: string, _name: string, _remote?: string) => D(demo.gitActionUnavailable()),
   gitCommandLog: (_since?: number) => D({ entries: [] as GitLogEntry[] }),
   editorCapability: () => D({ hasNvim: false, editor: null as string | null }),
   editorTarget: (_path: string) => D({ running: false, hasNvim: false }),
