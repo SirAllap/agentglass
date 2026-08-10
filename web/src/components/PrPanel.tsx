@@ -47,8 +47,8 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import {
-  anchorId, bootstrapSince, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks, threadLastAt, threadMovedOn, writeSeen,
-  type NewAtom,
+  anchorId, bootstrapSince, clearSeen, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks,
+  threadLastAt, threadMovedOn, writeSeen, type NewAtom,
 } from "../lib/prNew.ts";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
@@ -2320,16 +2320,20 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     setStoredSeen(readSeen()[key] ?? 0);
   }, [key]);
   useEffect(() => () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); }, []);
-  /* An unmount is not the only way this window ends. Closing the app, or the
-     desktop shell hiding it, runs no React cleanup at all — so a reader who
-     opens one pull request and never opens another would never get a mark
-     written, and every visit would be their first. */
-  useEffect(() => {
-    const put = () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); };
-    window.addEventListener("pagehide", put);
-    document.addEventListener("visibilitychange", put);
-    return () => { window.removeEventListener("pagehide", put); document.removeEventListener("visibilitychange", put); };
-  }, []);
+  /*
+   * And nothing else moves it.
+   *
+   * There was a `pagehide` + `visibilitychange` writer here for about ten
+   * minutes, on the theory that closing the app is another way of leaving a
+   * pull request. It is not. Hiding a window is not reading — and the first
+   * thing that listener did in the wild was eat his markers when the app was
+   * restarted to install the build containing it: "quizás se marcaron como
+   * leídas, aunque yo no le di a marcar como leídas".
+   *
+   * The mark advances in two places, and both are the reader's own doing:
+   * navigating away from this pull request, and pressing the button that says
+   * so. Everything else leaves it exactly where it was.
+   */
 
   /*
    * With no mark of your own, your last word on it stands in for one.
@@ -2352,6 +2356,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     writeSeen(seenKeyRef.current, now);
     setStoredSeen(now);
   }, []);
+  /** Undo that. Throws the mark away, which drops this pull request back to
+   *  "everything since my last word", the state it has before any visit. */
+  const unmarkPrRead = useCallback(() => {
+    if (!seenKeyRef.current) return;
+    clearSeen(seenKeyRef.current);
+    setStoredSeen(0);
+  }, []);
+  /*
+   * What arrived after your last word, whether or not it has been marked read.
+   *
+   * Only used to offer the way back: with nothing new, a conversation where
+   * somebody answered you an hour ago and you have already cleared the mark is
+   * indistinguishable from one where nobody has said anything at all — and the
+   * first is worth a line saying the marks can be brought back.
+   */
+  const sinceMine = useMemo(
+    () => (storedSeen ? newSince(detail, bootstrapSince(detail)).length : 0),
+    [storedSeen, detail],
+  );
 
   /*
    * Something arrived while you were looking at it.
@@ -3303,6 +3326,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         <Conversation
                           d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy} onComment={doComment}
                           atoms={newAtoms} newSet={newSet} onMarkRead={markPrRead}
+                          sinceMine={sinceMine} onUnmarkRead={unmarkPrRead}
                           onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                           onReply={doReply}
                           onApply={doApplySuggestion}
@@ -6999,7 +7023,7 @@ function NewRail({ container, atoms, onGo, depKey }: {
 }
 
 function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, onApply, busy, who, onWho,
-  atoms, newSet, onMarkRead }: {
+  atoms, newSet, onMarkRead, sinceMine, onUnmarkRead }: {
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
@@ -7016,6 +7040,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   /** What has been said since this browser last looked, oldest first, and the
    *  same thing as a set so a comment can ask about itself in one step. */
   atoms: NewAtom[]; newSet: Set<string>; onMarkRead: () => void;
+  /** How much arrived after your own last word here, marked read or not. Only
+   *  to offer the way back when the marks have been cleared. */
+  sinceMine: number; onUnmarkRead: () => void;
 }) {
   const [newest, setNewest] = useState(false);
   const setWho = onWho;
@@ -7313,6 +7340,22 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
               the lot while standing on it should not have to leave to say so. */}
           <button onClick={onMarkRead} title="Clear these marks — everything here counts as read"
             className="agx-btn px-1.5 py-0.5 rounded" style={{ color: "inherit", opacity: 0.85 }}>Mark read</button>
+        </div>
+      )}
+      {/* The way back.
+          With nothing new, a conversation where somebody answered you an hour
+          ago and the mark has since been cleared looks exactly like one where
+          nobody has said anything — so the offer is made where the bar would
+          have been, quietly. Written because the marks were cleared by an app
+          restart with nothing to blame it on and no way to undo it. */}
+      {!atoms.length && sinceMine > 0 && (
+        <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text4)" }}>
+          <span>Nothing new since you last looked.</span>
+          <button onClick={onUnmarkRead} className="agx-btn px-1.5 py-0.5 rounded"
+            title="Forget the mark and show everything said after your own last comment"
+            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            Show the {sinceMine} since your last comment
+          </button>
         </div>
       )}
       <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text3)" }}>

@@ -21,7 +21,7 @@ const cell = new Map<string, string>();
 };
 
 const {
-  at, threadLastAt, threadFirstAt, threadMovedOn, newSince, newKeys, foldedIdx, bootstrapSince,
+  at, threadLastAt, threadFirstAt, threadMovedOn, newSince, newKeys, foldedIdx, bootstrapSince, clearSeen,
   readSeen, writeSeen, prSeenKey, SEEN_KEY, SEEN_MAX, anchorId,
 } = await import("../src/lib/prNew.ts");
 
@@ -226,6 +226,17 @@ describe("the mark of having looked", () => {
     expect(readSeen()).toEqual({});
     localStorage.setItem(SEEN_KEY, JSON.stringify({ a: "yesterday", b: 5 }));
     expect(readSeen()).toEqual({ b: 5 });
+  });
+
+  it("can be thrown away, which is the only way back", () => {
+    // `writeSeen` refusing to go backwards is right for the writes that happen
+    // behind the reader's back and wrong for a reader saying "I had not read
+    // those" — which is what an app restart eating the marks felt like.
+    writeSeen("acme/orbit#482", 2000);
+    clearSeen("acme/orbit#482");
+    expect(readSeen()["acme/orbit#482"]).toBeUndefined();
+    // Clearing one nobody has a mark for is not an error.
+    expect(() => clearSeen("acme/orbit#999")).not.toThrow();
   });
 
   it("drops the oldest visits rather than growing without end", () => {

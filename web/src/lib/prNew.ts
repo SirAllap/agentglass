@@ -85,6 +85,22 @@ export function writeSeen(key: string, at: number): Record<string, number> {
   return all;
 }
 
+/**
+ * Forget having looked at this one, so its last mark stops applying.
+ *
+ * `writeSeen` refuses to move a mark backwards, which is right for the writes
+ * that happen behind the reader's back and wrong for a reader who says "no, I
+ * had not read those". This is the only way back, and it is deliberately its
+ * own function rather than a flag on the other one.
+ */
+export function clearSeen(key: string): Record<string, number> {
+  const all = readSeen();
+  if (!(key in all)) return all;
+  delete all[key];
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+  return all;
+}
+
 /** Epoch milliseconds, or 0 for anything unparseable — an unreadable date must
  *  not read as "just now" and put a NEW badge on a two-year-old comment. */
 export function at(iso: string | undefined | null): number {
