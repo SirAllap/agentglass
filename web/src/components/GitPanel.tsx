@@ -9,6 +9,7 @@ import { ConflictMode } from "./ConflictMode.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { RebaseModal } from "./RebaseModal.tsx";
 import { CompareModal } from "./CompareModal.tsx";
+import { InsightsModal } from "./InsightsModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
@@ -766,6 +767,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [rebaseBase, setRebaseBase] = useState<string | null>(null);
   /** The branch a compare dialog is open on, or null when closed. */
   const [compareTarget, setCompareTarget] = useState<string | null>(null);
+  /** Whether the insights modal is open. */
+  const [insightsOpen, setInsightsOpen] = useState(false);
   /**
    * Commits picked out of the log for a series cherry-pick — hashes, in the
    * order the user picked them. Empty when nothing is picked.
@@ -2340,6 +2343,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         rather than leave the old branch's sync count sitting
                         there looking current. */}
                     {treeStale && <span className="animate-spin shrink-0 text-[12px]" style={{ color: "var(--text3)" }} title="Reading the branch you switched to…">⟳</span>}
+                    <button
+                      onClick={() => setInsightsOpen(true)}
+                      disabled={busy}
+                      className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
+                      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
+                      title="Repo insights — commit pace, contributors, churn, changelog"
+                    >☰ insights</button>
                     {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
                     {/* Offered only while undoing is exact: an unpushed merge
                         at the tip, on a clean tree. Once anything is committed
@@ -3338,6 +3348,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       {compareTarget && (
         <CompareModal root={root} initialBase={compareTarget} onClose={() => setCompareTarget(null)} />
       )}
+      {insightsOpen && <InsightsModal root={root} onClose={() => setInsightsOpen(false)} />}
       {/* The commit row's right-click menu. The reset it offers is the old
           right-click, kept under its own heading so the cherry-pick actions
           can sit above it without either reading as the other. */}

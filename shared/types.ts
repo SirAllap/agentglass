@@ -1247,6 +1247,24 @@ export interface GitReflogEntry {
   subject: string;
   date: string;
 }
+/** Repo analytics over a time window (see /git/stats). */
+export interface RepoInsightContributor { name: string; email: string; commits: number; added: number; deleted: number }
+export interface RepoInsightHotspot { path: string; commits: number; added: number; deleted: number }
+export interface RepoInsightDay { date: string; commits: number; added: number; deleted: number }
+export interface RepoStats {
+  days: number;
+  commitsPerDay: number;
+  contributors: RepoInsightContributor[];
+  filesTouched: number;
+  linesChanged: number;
+  topContributors: RepoInsightContributor[];
+  hotspots: RepoInsightHotspot[];
+  churn: RepoInsightDay[];
+  error?: string;
+}
+export interface ChangelogEntry { kind: string; scope: string; breaking: boolean; subject: string; hash: string }
+export interface ChangelogSection { title: string; entries: ChangelogEntry[] }
+export interface Changelog { from: string; to: string; sections: ChangelogSection[]; error?: string }
 export interface GitWorktree {
   path: string;    // absolute
   branch: string;  // branch short name, or "(detached)"

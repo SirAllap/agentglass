@@ -63,6 +63,7 @@ import {
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   prepareConflictMerge,
 } from "./gitwork.ts";
+import { repoStats, generateChangelog } from "./gitinsights.ts";
 import { saveShot } from "./shots.ts";
 import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
@@ -1882,6 +1883,9 @@ const server = Bun.serve<WsData>({
       return body(await whileRefsHoldAsync(`tags:${root}`, root, async () => ({ tags: await gitTags(root) })));
     }
     if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
+    // Repo analytics and the changelog — async log walks, never on the loop.
+    if (pathname === "/git/stats") return json(await repoStats(url.searchParams.get("root") || "", Number(url.searchParams.get("days") || 30)));
+    if (pathname === "/git/changelog") return json(await generateChangelog(url.searchParams.get("root") || "", url.searchParams.get("from") || "", url.searchParams.get("to") || ""));
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
     if (pathname === "/editor/capability") return json(editorCapability());
     if (pathname === "/theme/status") return json({ ...snippetStatus(), snippets: SNIPPETS });
