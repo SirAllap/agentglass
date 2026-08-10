@@ -6173,7 +6173,10 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
           noticed the hundred-and-first file was missing. Say it. */}
       {d.truncated?.files ? (
         <div className="text-[10px] px-1 py-1" style={{ color: "var(--warning)" }}>
-          {d.truncated.files} more file{d.truncated.files === 1 ? "" : "s"} changed than GitHub will return on one page — open it on GitHub to see the rest.
+          {/* Nine pages of names are fetched now, so this line means a branch of
+              nine hundred files and more — a vendor drop or a generated tree,
+              not a review somebody is reading top to bottom. */}
+          {d.truncated.files} more file{d.truncated.files === 1 ? "" : "s"} changed than this list holds — a branch this size is only listed in full on GitHub.
         </div>
       ) : null}
 

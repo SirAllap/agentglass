@@ -1566,6 +1566,46 @@ export function parseChecklist(body: string): PrChecklistItem[] {
 // Note `comments(last:…)`: GraphQL's `first:` is oldest-first, so a PR with
 // more comments than the page size lost its NEWEST ones — the opposite of what
 // anyone wants from a conversation. `last:` keeps the recent end.
+/**
+ * How many extra pages of file names one pull request may cost.
+ *
+ * Eight, so 900 files. Past that the branch is a vendor drop or a generated
+ * tree, and the list stops being the thing anybody is reading — while the round
+ * trips are sequential and each one holds the detail open.
+ */
+const FILE_PAGES_MAX = 8;
+
+const MORE_FILES_QUERY = `query($owner:String!,$name:String!,$number:Int!,$after:String!){
+  repository(owner:$owner,name:$name){pullRequest(number:$number){
+    files(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{path additions deletions changeType viewerViewedState}}
+  }}
+}`;
+
+/** Every file after the first page, up to the cap. Sequential because a cursor
+ *  is only known once the page before it has answered. */
+async function restOfFiles(repo: PrRepoId, number: number, after: string): Promise<unknown[]> {
+  const out: unknown[] = [];
+  let cursor: string | null = after;
+  for (let page = 0; page < FILE_PAGES_MAX && cursor; page++) {
+    const r: any = await ghJson<any>([
+      "api", "graphql",
+      "-f", `query=${MORE_FILES_QUERY}`,
+      "-F", `owner=${repo.owner}`,
+      "-F", `name=${repo.name}`,
+      "-F", `number=${number}`,
+      "-f", `after=${cursor}`,
+    ]);
+    const conn = r?.data?.repository?.pullRequest?.files;
+    // A failed page is the end of the list, not an error: what is already in
+    // hand is a better answer than none, and `truncated.files` says the rest is
+    // missing either way.
+    if (!conn?.nodes?.length) break;
+    out.push(...conn.nodes);
+    cursor = conn.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+  }
+  return out;
+}
+
 const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed deleteBranchOnMerge
@@ -1600,7 +1640,7 @@ const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
       signature{isValid state}
       statusCheckRollup{state}
     }}}
-    files(first:100){nodes{path additions deletions changeType viewerViewedState}}
+    files(first:100){pageInfo{hasNextPage endCursor} nodes{path additions deletions changeType viewerViewedState}}
     reviewThreads(first:80){nodes{
       id isResolved isOutdated path line startLine
       comments(first:50){nodes{
@@ -1957,7 +1997,27 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   const openByPath = new Map<string, number>();
   for (const t of threads) if (!t.isResolved) openByPath.set(t.path, (openByPath.get(t.path) ?? 0) + 1);
 
-  const files: PrFile[] = (p.files?.nodes || []).map((f: any) => ({
+  /*
+   * The rest of the file list, for a pull request bigger than one page.
+   *
+   * GraphQL hands back 100 files at a time and the panel took the first page as
+   * the whole answer, so a 275-file pull request arrived as 100 files and a line
+   * saying the other 175 were on github.com. That is the exact case somebody
+   * needs this panel for: a review that big is one you want a tree and a filter
+   * for, not a browser tab.
+   *
+   * Paged here, in the detail fetch, because the detail is cached on disk — the
+   * cost is two extra requests once per pull request, not per look. Capped
+   * rather than unbounded: a 4,000-file branch is a merge of a vendor directory,
+   * and forty sequential round trips to list it would hold the panel open on a
+   * question nobody is asking. Past the cap the count still says what is
+   * missing, which is what `truncated.files` has always been for.
+   */
+  if (p.files?.pageInfo?.hasNextPage) {
+    p.files.nodes = [...(p.files.nodes || []), ...await restOfFiles(repo, number, p.files.pageInfo.endCursor)];
+  }
+
+  const files: PrFile[] = ((p.files?.nodes || []) as any[]).map((f: any) => ({
     path: f.path,
     additions: f.additions ?? 0,
     deletions: f.deletions ?? 0,
