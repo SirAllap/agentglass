@@ -96,7 +96,7 @@ import {
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind,
+  branchBehind, localHead,
   prBranches, prsForBranch } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
@@ -2508,6 +2508,26 @@ const server = Bun.serve<WsData>({
       const asked = url.searchParams.get("root") ?? "";
       const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
       return json(await prsForBranch(root, url.searchParams.get("branch") ?? ""));
+    }
+    /*
+     * The LOCAL half on its own, because it changes on a different clock.
+     *
+     * How far behind the base a branch is takes a comparison over the network
+     * and is stable for minutes. Whether your checkout is dirty, or has a
+     * commit GitHub does not, changes the moment you type — and the panel was
+     * reading both together and holding the answer for as long as the slow one
+     * was worth holding. Reported both ways round: it offered to fast-forward a
+     * checkout that had just gone dirty, and went on refusing one that had just
+     * been committed.
+     *
+     * This is git only, no network — a few milliseconds — so it can be asked
+     * again while a pull request is open.
+     */
+    if (pathname === "/prs/local-head") {
+      return json({ ok: true, local: await localHead(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("branch") || "",
+      ) });
     }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";

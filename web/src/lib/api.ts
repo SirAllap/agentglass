@@ -722,6 +722,12 @@ const realApi = {
   prsForBranch: (root: string, branch: string) =>
     get<{ ok: boolean; repo?: string; from?: PrBranchSummary; into: PrBranchSummary[]; needsAuth?: boolean; error?: string }>(
       `/prs/for-branch?${new URLSearchParams({ root, branch })}`),
+  /** Just the local half — whether your checkout is dirty, ahead, or can be
+   *  fast-forwarded. Git only, no network, so it can be asked again while a
+   *  pull request is open; `prBehind` holds the slow half. */
+  prLocalHead: (root: string, branch: string) =>
+    get<{ ok: boolean; local?: PrLocalHead }>(
+      `/prs/local-head?${new URLSearchParams({ root, branch })}`),
   prBehind: (root: string, number: number) =>
     get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }>(
       `/prs/behind?${new URLSearchParams({ root, number: String(number) })}`),
@@ -1303,6 +1309,12 @@ const demoApi: typeof realApi = {
   // shows the whole offer: how far behind, and that the local branch comes
   // along. Everything else keeps the old "no answer, no promises" shape.
   prsForBranch: (_r: string, _b: string) => D({ ok: true, into: [] as PrSummary[] }),
+  /* The demo has no checkout, so the local half is simply absent — the panel
+     then makes no promises about here, which is its oldest behaviour. */
+  prLocalHead: (_r: string, branch: string) => D({
+    ok: true,
+    local: { branch, exists: false, ahead: 0, behind: 0, dirty: false, sync: "absent" as const },
+  }),
   prBehind: (_r: string, n: number) => D(n === 461
     ? {
       ok: true, behind: 12, ahead: 3,

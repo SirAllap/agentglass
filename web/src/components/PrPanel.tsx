@@ -47,7 +47,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
-import { askingBehind, behindAnswer, forgetOneBehind, onBehind } from "../lib/prBehindStore.ts";
+import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks,
   threadLastAt, threadMovedOn, writeSeen, type NewAtom,
@@ -2637,6 +2637,53 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return onBehind(read);
   }, [root, selected]);
 
+  /*
+   * The local half, on its own clock.
+   *
+   * How far behind the base a branch is takes a comparison over the network and
+   * is stable for minutes. Whether your checkout is dirty, or carries a commit
+   * GitHub has not seen, changes the moment you type — and both were arriving
+   * in one answer held for as long as the slow one was worth holding. Reported
+   * both ways round: it offered to fast-forward a checkout that had just gone
+   * dirty, and went on refusing one that had just been committed.
+   *
+   * This read is git only, no network, so it can be asked again while the pull
+   * request is open — every eight seconds, and the moment the window comes
+   * back, which is when somebody has just been in a terminal doing exactly the
+   * thing that changes the answer.
+   */
+  useEffect(() => {
+    const branch = detail?.headRefName;
+    if (!root || !branch) return;
+    let live = true;
+    const read = () => {
+      api.prLocalHead(root, branch)
+        .then((r) => { if (live && r.ok && r.local) setLocalHead(r.local); })
+        .catch(() => {});
+    };
+    read();
+    /* And the count itself, which is the slow half: asked again when you arrive
+       and every half minute you stay. It is cached for five minutes for the
+       board's sake — twelve comparisons over the network — and five minutes is
+       far too long for the pull request in front of you. Measured while he was
+       looking at one: the server said 0 behind, GitHub agreed, and the page
+       still said 936. */
+    const again = () => { refreshBehind(root, selectedRef.current ?? 0); };
+    again();
+    const slow = setInterval(again, 30_000);
+    const t = setInterval(read, 8_000);
+    const onBack = () => { if (document.visibilityState === "visible") { read(); again(); } };
+    window.addEventListener("focus", onBack);
+    document.addEventListener("visibilitychange", onBack);
+    return () => {
+      live = false;
+      clearInterval(t);
+      clearInterval(slow);
+      window.removeEventListener("focus", onBack);
+      document.removeEventListener("visibilitychange", onBack);
+    };
+  }, [root, detail?.headRefName]);
+
   const arrivedRef = useRef<{ key: string; last: number } | null>(null);
   useEffect(() => {
     const newest = newAtoms.length ? newAtoms[newAtoms.length - 1]!.at : 0;
@@ -3206,7 +3253,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}${listState.loading || listState.checksPending ? " · updating" : ""}`
                 : "")}
           </span>
-          <Btn onClick={() => loadList(true)} disabled={busy} small>Refresh</Btn>
+          <Btn onClick={() => { forgetBehind(); loadList(true); }} disabled={busy} small>Refresh</Btn>
         </div>
       </div>
 

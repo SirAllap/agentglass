@@ -19,7 +19,7 @@ const mod = await import("../src/lib/api.ts");
   return answer(number);
 };
 
-const { behindOf, askingBehind, onBehind, forgetBehind } = await import("../src/lib/prBehindStore.ts");
+const { behindOf, askingBehind, onBehind, forgetBehind, refreshBehind } = await import("../src/lib/prBehindStore.ts");
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
@@ -88,5 +88,32 @@ describe("asking how far behind", () => {
   it("does not ask without a checkout to ask about", () => {
     expect(behindOf("", 7)).toBeNull();
     expect(calls).toEqual([]);
+  });
+});
+
+describe("a count you are looking at", () => {
+  beforeEach(() => { calls.length = 0; forgetBehind(); });
+
+  it("can be asked for again without waiting out the cache", async () => {
+    /*
+     * Five minutes is right for a board of twelve — each one is a comparison
+     * over the network — and far too long for the pull request in front of you.
+     * Measured while he was looking at one: the server said 0 behind, GitHub
+     * agreed, and the page still said 936.
+     */
+    behindOf("/repo", 5);
+    await settle();
+    expect(calls).toEqual([5]);
+    refreshBehind("/repo", 5);
+    await settle();
+    expect(calls).toEqual([5, 5]);
+  });
+
+  it("has no separator a key can hide behind", () => {
+    // A raw NUL in the key made the file invisible to grep and tripped the
+    // source-hygiene check. Two colons say the same thing out loud.
+    behindOf("/repo/a", 1);
+    behindOf("/repo", 1);
+    expect(calls.length).toBe(2);
   });
 });
