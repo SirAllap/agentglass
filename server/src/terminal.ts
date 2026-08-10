@@ -370,10 +370,28 @@ export const lastTmuxTarget = (): TmuxTarget | null => {
  * with what discovery finds, and only the path is.
  */
 let remembered = "";
-function rememberTarget(t: TmuxTarget): void {
+let settling = "";
+let settlingSince = 0;
+function rememberTarget(t: TmuxTarget, now = Date.now()): void {
   const path = socketPath(t.socket);
+  if (!path) return;
+  /*
+   * A phone's mirror is a session this app made, not a place the user works.
+   * Remembering one would bring back an empty grouped session on the next cold
+   * start, named after a device that is not here.
+   */
+  if (isPhoneSession(t.session)) return;
+
   const key = `${path}\u0000${t.session}`;
-  if (!path || key === remembered) return;
+  /*
+   * Only once the panel has SETTLED here. tmux moves a client through sessions
+   * on its way past — after a restore it put this one on `docker` for a moment
+   * — and the last one touched is not the one the day was spent in. See
+   * SETTLE_MS.
+   */
+  if (key !== settling) { settling = key; settlingSince = now; return; }
+  if (now - settlingSince < SETTLE_MS) return;
+  if (key === remembered) return;
   remembered = key;
   remember(path, t.session);
 }
@@ -404,7 +422,7 @@ function killGroup(s: Session, sigNum: number) {
 }
 
 import { findTmuxBelow } from "./procchildren.ts";
-import { recall, remember } from "./tmuxmemory.ts";
+import { recall, remember, SETTLE_MS } from "./tmuxmemory.ts";
 import { deskAttachArgv } from "./tmuxctl.ts";
 import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";

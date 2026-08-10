@@ -76,6 +76,19 @@ export interface Remembered {
  *  that a stale path stops being offered on its own. */
 export const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * How long the panel has to stay on a session before it counts as where you
+ * work.
+ *
+ * Without this, "the last session the panel attached to" is what gets written
+ * — and that is not the same question. Measured on the machine this was built
+ * for: a restore finished, tmux put the client on `docker` for a moment on its
+ * way past, and the memory said `docker`. A cold start would then have brought
+ * back a one-window session instead of the five-window one the day was spent
+ * in. A landing is not a choice; thirty seconds of it is.
+ */
+export const SETTLE_MS = 30_000;
+
 export function remember(socketPath: string, session: string, at = Date.now()): void {
   if (!socketPath) return; // the default socket resolved to nothing: nothing to keep
   const p = memoryPath();

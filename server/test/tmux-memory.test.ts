@@ -201,7 +201,28 @@ describe("the command that puts the desk back", () => {
      * restores the session itself. We restore nothing.
      */
     const sock = join(sockdir, "not-started-yet");
-    expect(deskAttachArgv(sock, "workbench")).toEqual(["tmux", "-S", sock]);
+    expect(deskAttachArgv(sock, "workbench"))
+      .toEqual(["tmux", "-S", sock, "new-session", "-A", "-s", "workbench"]);
+  });
+
+  it("asks for the session by name, so the restore fills THAT one in", () => {
+    /*
+     * Bare `tmux` starts the server and attaches you to the session it just
+     * made; the restore then brings your real ones back behind you and you are
+     * sitting in `0` watching none of them. `-A` names the one you want, and
+     * because creating it is what starts the server, the restore lands its
+     * windows in the session already standing.
+     */
+    const sock = join(sockdir, "cold");
+    const argv = deskAttachArgv(sock, "workbench")!;
+    expect(argv).toContain("-A");
+    expect(argv[argv.length - 1]).toBe("workbench");
+  });
+
+  it("falls back to bare tmux when no name was remembered", () => {
+    // Nothing to ask for. What the user would type is the honest answer.
+    const sock = join(sockdir, "cold2");
+    expect(deskAttachArgv(sock, "")).toEqual(["tmux", "-S", sock]);
   });
 
   it("takes the most recently used session when the remembered one is gone", () => {

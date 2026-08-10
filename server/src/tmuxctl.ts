@@ -2401,18 +2401,33 @@ export function deskAttachArgv(socketPath: string, session: string): string[] | 
    * Nothing answered: there is no server on that socket at all, which is what
    * a machine looks like after it has been turned on.
    *
-   * The answer is `tmux` with no arguments, and that is not a shortcut — it is
-   * precisely what the user does by hand, and the ONLY thing that works then:
-   * there is no session to attach to yet. Starting the server is what fires
-   * whatever their configuration does on start, so a resurrect/continuum setup
-   * restores their last session by itself. We restore nothing and install
-   * nothing; we start the server the same way they would and get out of the
-   * way.
+   * `new-session -A -s <name>`, and every word of it was measured on tmux 3.7
+   * because the obvious spellings are wrong:
    *
-   * A socket has to have been remembered for this to run at all, so it only
-   * happens for somebody who was already working in tmux here.
+   *   - `tmux` with no arguments starts the server and attaches you to the
+   *     session IT just made. A resurrect/continuum setup then restores your
+   *     real sessions behind you, and you are sitting in `0` watching none of
+   *     them. Reported exactly that way: "las tabs no son ni las de alavera".
+   *   - `start-server` is not a way to wait for the restore either: a server
+   *     with no sessions exits immediately, so it leaves nothing behind at all.
+   *   - `-A` means attach-or-create, so the same command covers a live server
+   *     that already has it. The name is exact — `-s alav` makes a session
+   *     called `alav` beside `alavera` rather than matching it.
+   *
+   * What makes it land where it should is that creating the session STARTS the
+   * server, which sources their configuration, which is what fires continuum's
+   * restore. resurrect puts missing windows into sessions that already exist,
+   * so the session we just made is filled in with its own windows rather than
+   * competing with the restore. We restore nothing and install nothing.
+   *
+   * With no name remembered there is nothing to ask for, and bare `tmux` — what
+   * the user would type — is the honest fallback.
    */
-  if (out === null || !out.trim()) return ["tmux", ...socket];
+  if (out === null || !out.trim()) {
+    return session
+      ? ["tmux", ...socket, "new-session", "-A", "-s", session]
+      : ["tmux", ...socket];
+  }
 
   for (const line of out.split("\n")) {
     const [id, name] = line.split("\t");
