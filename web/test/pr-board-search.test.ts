@@ -622,3 +622,41 @@ describe("how far behind, on the page and on the board", () => {
     expect(src).toContain("onClick={() => { forgetBehind(); loadList(true); }}");
   });
 });
+
+describe("assigning on GitHub, and the card on the other board", () => {
+  it("offers ClickUp beside the people, never instead of them", () => {
+    /*
+     * A reviewer goes on the pull request and the card goes to Code Review —
+     * one motion in somebody's head, two applications on the screen, and the
+     * second is the one people forget. Optional: assigning on GitHub must never
+     * be conditional on ClickUp being reachable, right, or wanted.
+     */
+    expect(src).toContain("side={<ClickUpSide d={d} onNote={note} />}");
+    expect(src).toContain("Also in ClickUp");
+    expect(src).toContain("· optional");
+  });
+
+  it("only when the pull request really carries a card", () => {
+    // `mergeCardRef` is the strict reader — a reference in a branch name alone
+    // is a convention other trackers share — and the same one the merge dialog
+    // trusts before it writes.
+    expect(src).toContain("const ref = useMemo(() => mergeCardRef(d, setup), [d, setup]);");
+    expect(src).toContain("if (!ref) return null;");
+  });
+
+  it("writes nothing until Apply", () => {
+    expect(src).toContain("Apply in ClickUp");
+    expect(src).toContain("if (!card || !changes) return;");
+  });
+
+  it("finds Code Review by asking the list, not by knowing the word", () => {
+    // One board's "Code Review" is another's "In review"; the match is on the
+    // name because that is all a status has, and the fallback is to leave it.
+    expect(src).toContain('const review = st.find((x) => /review/i.test(x.status)');
+    expect(src).toContain('setPick(review && review.status !== t.status ? review.status : "");');
+  });
+
+  it("moves the status last, so a card never claims a reviewer it has not got", () => {
+    expect(src).toContain("if (pick) await api.clickupStatus(card.id, pick, card.updated);");
+  });
+});

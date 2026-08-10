@@ -66,6 +66,7 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
+import type { ListStatus as CuStatus, ListMember as CuMember } from "../../../shared/providers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
@@ -2517,7 +2518,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // One picker for the masthead's "＋" and the sidebar's ✎ both — lifted here
   // so it can open from the masthead on every tab, not only where the sidebar
   // renders.
-  const fieldPicker = usePrFieldPicker(detail, root, act);
+  const fieldPicker = usePrFieldPicker(detail, root, act, flash);
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
 
@@ -4906,10 +4907,20 @@ type PickOption = { value: string; label: string; sub?: string; color?: string; 
  * the way GitHub's label menu does — so ticking four labels is one write, not
  * four. Single-select (milestone) commits on the click.
  */
-function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose }: {
+function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose, side }: {
   anchor: DOMRect; title: string; hint: string; multi: boolean; loading: boolean;
   options: PickOption[]; selected: string[];
   onCommit: (next: string[]) => void; onClose: () => void;
+  /**
+   * A second column, for the other half of the same errand.
+   *
+   * Assigning a reviewer here and moving the card in ClickUp are one motion in
+   * somebody's head and two applications on the screen. The list of people is
+   * three hundred pixels of a tall menu with room to spare beside it, so the
+   * other half of the errand goes there — optional, never automatic, and only
+   * when the pull request actually has a card.
+   */
+  side?: React.ReactNode;
 }) {
   const [sel, setSel] = useState<string[]>(selected);
   const [q, setQ] = useState("");
@@ -4941,15 +4952,16 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const t = q.trim().toLowerCase();
   const shown = t ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t)) : options;
 
-  const W = 300;
+  const W = side ? 620 : 300;
   const left = Math.round(Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)));
   const top = Math.round(Math.min(anchor.bottom + 6, window.innerHeight - 140));
   const maxH = Math.max(200, window.innerHeight - top - 12);
 
   return (
     <Portal>
-      <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
+      <div ref={box} className="fixed rounded-lg overflow-hidden flex"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+        <div className="flex flex-col min-w-0" style={{ width: side ? 300 : "100%" }}>
         {/* px-5 to match viewHeaderClass, which is the row directly above this
             one. At px-3 the filter chips started 8px to the left of the repo
             chips they sit under — two left edges in one header, which is the
@@ -4989,8 +5001,162 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
               style={{ background: "var(--primary)", color: "var(--bg)" }}>Done</button>
           </div>
         )}
+        </div>
+        {side}
       </div>
     </Portal>
+  );
+}
+
+/**
+ * The same errand, on the other board.
+ *
+ * A reviewer goes on the pull request and the card goes to Code Review — one
+ * motion, two applications, and the second one is the one people forget. It is
+ * offered beside the people list rather than after it, and nothing here happens
+ * until Apply is pressed: assigning on GitHub must never be conditional on
+ * ClickUp being reachable, or right, or wanted.
+ *
+ * Only when the pull request really carries a card. `mergeCardRef` is the
+ * strict reader — a reference in a branch name alone is a convention other
+ * trackers share — and the same one the merge dialog trusts before it writes.
+ */
+function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: string) => void }) {
+  const setup = useClickupSetup();
+  const ref = useMemo(() => mergeCardRef(d, setup), [d, setup]);
+  const [card, setCard] = useState<{ id: string; title: string; status: string; updated?: number; listId?: string } | null>(null);
+  const [statuses, setStatuses] = useState<CuStatus[]>([]);
+  const [members, setMembers] = useState<CuMember[] | null>(null);
+  const [on, setOn] = useState<Set<number>>(new Set());
+  const [was, setWas] = useState<Set<number>>(new Set());
+  const [pick, setPick] = useState<string>("");
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!ref) return;
+    let live = true;
+    void (async () => {
+      const found = await api.clickupFind(ref.query).catch(() => null);
+      if (!live) return;
+      if (!found?.ok || !found.task) { setErr(found?.error || "ClickUp could not find it"); return; }
+      const t = found.task;
+      const people = new Set<number>((t.people ?? []).map((p) => p.id).filter((n): n is number => n != null));
+      setCard({ id: t.id, title: t.title, status: t.status, updated: t.updated, listId: t.listId });
+      setOn(people); setWas(new Set(people));
+      if (!t.listId) return;
+      const [meta, mem] = await Promise.all([
+        api.clickupList(t.listId).catch(() => null),
+        api.clickupMembers(t.listId).catch(() => null),
+      ]);
+      if (!live) return;
+      const st = meta?.ok ? (meta.statuses ?? []) : [];
+      setStatuses(st);
+      setMembers(mem?.ok ? (mem.members ?? []) : []);
+      /* Code review by default, found by asking the LIST rather than by
+         knowing the word: one board's "Code Review" is another's "In review".
+         The match is on the name because that is all a status has, and the
+         fallback is to leave it exactly where it is. */
+      const review = st.find((x) => /review/i.test(x.status) && x.type !== "done" && x.type !== "closed");
+      setPick(review && review.status !== t.status ? review.status : "");
+    })();
+    return () => { live = false; };
+  }, [ref]);
+
+  if (!ref) return null;
+
+  const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
+    .sort((a, b) => {
+      const ah = on.has(a.id) ? 0 : 1, bh = on.has(b.id) ? 0 : 1;
+      if (ah !== bh) return ah - bh;
+      if (a.me !== b.me) return a.me ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  const add = [...on].filter((id) => !was.has(id));
+  const drop = [...was].filter((id) => !on.has(id));
+  const changes = add.length + drop.length + (pick ? 1 : 0);
+
+  const apply = async () => {
+    if (!card || !changes) return;
+    setBusy(true);
+    try {
+      /* One at a time, and the status last: a card that moves to Code Review
+         and then fails to gain its reviewer is a lie on a board; the other way
+         round is merely unfinished. */
+      for (const id of add) await api.clickupAssign(card.id, true, card.updated, id);
+      for (const id of drop) await api.clickupAssign(card.id, false, card.updated, id);
+      if (pick) await api.clickupStatus(card.id, pick, card.updated);
+      setWas(new Set(on));
+      onNote(true, `${ref.label} — ${[add.length && `${add.length} added`, drop.length && `${drop.length} removed`, pick && `moved to ${pick}`].filter(Boolean).join(", ")}`);
+    } catch (e) {
+      onNote(false, `${ref.label} — ${String(e)}`);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="flex flex-col min-w-0" style={{ width: 320, borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        <div className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>Also in ClickUp <span style={{ color: "var(--text4)", fontWeight: 400 }}>· optional</span></div>
+        <div className="text-[10px] truncate" style={{ color: "var(--text3)" }} title={card?.title}>
+          {ref.label}{card ? ` · ${card.title}` : ""}
+        </div>
+      </div>
+      {err ? (
+        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--warning)" }}>{err}</div>
+      ) : !card ? (
+        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Looking it up…</div>
+      ) : (
+        <>
+          <div className="px-2 pt-2 pb-1 shrink-0">
+            <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Status</div>
+            <div className="flex flex-wrap gap-1">
+              <button onClick={() => setPick("")}
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={pick ? { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" } : { color: "var(--text)", border: "1px solid var(--primary)", background: "color-mix(in srgb, var(--primary) 18%, transparent)" }}>
+                leave it
+              </button>
+              {statuses.filter((x) => x.status !== card.status).map((x) => (
+                <button key={x.status} onClick={() => setPick(x.status)}
+                  className="text-[10px] px-1.5 py-0.5 rounded"
+                  style={pick === x.status
+                    ? { color: "var(--bg)", background: x.color || "var(--primary)", border: `1px solid ${x.color || "var(--primary)"}` }
+                    : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+                  {x.status}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="px-2 pt-2 shrink-0">
+            <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter people…" spellCheck={false}
+              className="w-full px-2 py-1 rounded text-[11px] outline-none"
+              style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+          </div>
+          <div className="overflow-y-auto agx-scroll flex-1 min-h-0 py-1">
+            {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
+            {people.map((m) => (
+              <button key={m.id} onClick={() => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
+                className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
+                <span className="w-3.5 shrink-0 text-center" style={{ color: on.has(m.id) ? "var(--primary)" : "transparent" }}>✓</span>
+                <span className="truncate">{m.name}{m.me ? " · you" : ""}</span>
+              </button>
+            ))}
+          </div>
+          <div className="p-1.5 shrink-0 flex items-center gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            <span className="text-[10px]" style={{ color: "var(--text4)" }}>
+              {changes ? `${changes} change${changes === 1 ? "" : "s"}` : "nothing to do"}
+            </span>
+            <button onClick={() => void apply()} disabled={!changes || busy}
+              className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px] disabled:opacity-40 inline-flex items-center gap-1.5"
+              style={{ background: changes ? "var(--primary)" : "transparent", color: changes ? "var(--bg)" : "var(--text3)", border: changes ? undefined : "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+              {busy && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5 }} />}
+              Apply in ClickUp
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -5012,7 +5178,10 @@ type PrAct = (label: string, fn: () => Promise<{ ok: boolean; error?: string; de
  * each write goes through the same add/remove endpoints, diffed against what
  * the PR has now.
  */
-function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct) {
+function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
+  /** How to say what happened on the other board — the panel's own toast, so a
+   *  ClickUp write reports where every other write reports. */
+  note: (ok: boolean, msg: string) => void) {
   const [facets, setFacets] = useState<Facets | null>(null);
   const [mentions, setMentions] = useState<Mentions | null>(null);
   const [loading, setLoading] = useState(false);
@@ -5054,11 +5223,13 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct) {
       const was = d.reviewers.map((r) => r.login);
       node = <FieldPicker anchor={a} title="Request reviewers" hint="Collaborators on this repository" multi loading={loading}
         options={(mentions?.users ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+        side={<ClickUpSide d={d} onNote={note} />}
         selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
         options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+        side={<ClickUpSide d={d} onNote={note} />}
         selected={was} onClose={close} onCommit={commit(was, "Assignees", (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
     } else {
       // Milestone is one-of, not many: picking commits at once, and a leading
