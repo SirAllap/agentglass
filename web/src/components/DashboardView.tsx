@@ -112,7 +112,7 @@ export function DashboardView({
                 style={windowMs === w.ms
                   ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-hover)" }
                   : { color: "var(--text4)" }}>
-                {w.label}{beyond && <sup className="ml-[1px] text-[7px] opacity-70" aria-hidden>*</sup>}
+                {w.label}{beyond && <sup className="ml-px text-[7px] opacity-70" aria-hidden>*</sup>}
               </button>
             );
           })}

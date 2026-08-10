@@ -573,7 +573,12 @@ function FileItem({ c, active, reviewed, onSelect, onToggleReviewed }: { c: File
           {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
         </span>
       </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
+        {/* mt-1.5, and the step matters: mt-1 was tried and measured, and the
+            sweep still reported the pair touching. The path line is 9.5px but
+            the row it sits in inherits a larger size, and 4px under that is
+            still one block of text. 6px is where the filename and its
+            directory read as two lines. */}
+        <div className="flex items-center gap-1.5 mt-1.5 text-[9.5px] t-dim2 pl-[22px]">
           <span className="truncate min-w-0" title={c.file_path}>{dirOf(c.file_path)}</span>
           <span className="ml-auto shrink-0 opacity-80">{c.tool}</span>
           <span className="shrink-0">{fmtTime(c.timestamp)}</span>
@@ -697,7 +702,7 @@ function GroupBlock({ g, collapsed, selId, reviewed, fold, onToggleCollapse, onS
           numeric drops underneath, where it still reads fine. */}
       <div className="flex items-start gap-1.5 px-1.5 py-1 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)" }}>
         <button onClick={onToggleCollapse} className="flex items-start gap-1.5 min-w-0 flex-1 text-left">
-          <span className="text-[10px] t-dim2 transition-transform shrink-0 mt-[3px]" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
+          <span className="text-[10px] t-dim2 transition-transform shrink-0 mt-1" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
           <span className="min-w-0 flex-1">
             <span className="block text-[11px] font-semibold leading-snug" title={g.label}
               style={{ color: "var(--text2, var(--text))", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>

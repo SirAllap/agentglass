@@ -36,7 +36,6 @@ import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browser
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
 import { api } from "../lib/api.ts";
 import { type DrivableWebview } from "../lib/browserDrive.ts";
-import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { PagePicker } from "./browser/PagePicker.tsx";
 import { MarkupLayer } from "./browser/MarkupLayer.tsx";
 import { DemoPage } from "./browser/DemoPage.tsx";
@@ -589,14 +588,21 @@ export function BrowserView(_props: { active: boolean }) {
 
   return (
     <div className="flex flex-col h-full min-h-0 outline-none" tabIndex={-1} onKeyDown={onKey}>
-      <div className={viewHeaderClass} style={viewHeaderStyle}>
-        <h2 className="sr-only">Browser</h2>
-        <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text3)" }}>{active ? tabLabel(active) : ""}</span>
-        {note && (
-          <span className="ml-auto text-[10px] px-2 py-0.5 rounded shrink-0"
-            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>{note}</span>
-        )}
-      </div>
+      {/*
+       * No view header here, and this is the only view without one.
+       *
+       * Every other panel spends those 48px on controls. This one had nothing
+       * to put in them: the page's own title, which the tab strip two rows
+       * below was already showing, and a message that appears for three
+       * seconds a few times a day. A browser is the one view whose content is
+       * a whole other application's chrome — an address bar, a tab strip and
+       * a title above them is a third bar of ours before the page gets a
+       * pixel, and the page is what you came for.
+       *
+       * The heading stays for screen readers, which have no rail to read the
+       * view's name from (see ViewHeader).
+       */}
+      <h2 className="sr-only">Browser</h2>
 
       {/* The strip is always there, even with one page: a tab bar that appears
           on the second tab shoves everything below it down, and the `+` is how
@@ -964,6 +970,20 @@ export function BrowserView(_props: { active: boolean }) {
       )}
 
       <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg2)" }}>
+        {/*
+         * What just happened, over the page rather than above it.
+         *
+         * This lived in the header, which is why the header lived: three
+         * seconds of "told the agent about it" was holding a permanent row
+         * open. Floating it costs the page nothing when there is nothing to
+         * say, and a guest page cannot be drawn over by a sibling, so it sits
+         * on the container rather than inside the tab that owns the webview.
+         */}
+        {note && (
+          <div className="agx-zoom-in absolute bottom-3 right-3 text-[10px] px-2.5 py-1.5 rounded-md shadow-lg pointer-events-none"
+            style={{ zIndex: 20, color: "var(--warning)", background: "var(--bg2)",
+              border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>{note}</div>
+        )}
         {tabs.map((t) => (
           /*
            * The inactive tabs are hidden; the active one says NOTHING.

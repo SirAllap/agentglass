@@ -588,7 +588,7 @@ function RowView({ row, i, on, onHover, onPick }: {
         )}
       </div>
       {row.kind === "file" && row.hits && (
-        <div className="mt-1 flex flex-col gap-[1px]">
+        <div className="mt-1 flex flex-col gap-px">
           {row.hits.slice(0, 4).map((h, n) => (
             <div key={n} className="flex items-baseline gap-2 text-[11px]">
               <span className="shrink-0 tabular-nums w-[42px] text-right" style={{ color: "var(--info)", opacity: 0.75 }}>{h.line}</span>
@@ -702,7 +702,7 @@ function RepoChip({ repo, repos, openState, onPick }: {
               )}
               {shown.map((r) => (
                 <button key={r.root} onClick={() => onPick(r.root)}
-                  className="w-full text-left px-3 py-1.5 flex flex-col gap-[2px]"
+                  className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
                   style={{ background: r.root === repo?.root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                   {/*
                     * The FOLDER leads, not the branch.
@@ -832,7 +832,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
               {copies.length > 0 && <Group first hint="what is on disk now, your uncommitted work included">Working copies</Group>}
               {copies.map((r) => (
                 <button key={r.root} onClick={() => onPickRoot(r.root)}
-                  className="w-full text-left px-3 py-1.5 flex flex-col gap-[2px]"
+                  className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
                   style={{ background: r.root === repo?.root && !ref_ ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                   <span className="flex items-center gap-2 min-w-0">
                     <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
@@ -954,7 +954,7 @@ function RefChip({ value, refs, openState, onPick }: {
                   a branch, so filtering it out with the branch names would take
                   away the way back. */}
               <button onClick={() => onPick("")}
-                className="w-full text-left px-3 py-1.5 flex flex-col gap-[2px]"
+                className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
                 style={{ background: !on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                 <span style={{ color: "var(--text)" }}>working tree</span>
                 <span className="text-[9.5px]" style={{ color: "var(--text4)" }}>what is on disk now, uncommitted changes included</span>

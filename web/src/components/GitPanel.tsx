@@ -2284,7 +2284,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     return (
       <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
         aria-keyshortcuts={String(num)}
-        className="text-[10.5px] leading-none rounded-[5px] transition-colors flex items-baseline gap-[5px] whitespace-nowrap shrink-0"
+        className="text-[10.5px] leading-none rounded-[5px] transition-colors flex items-baseline gap-1.5 whitespace-nowrap shrink-0"
         style={{
           padding: "7px 7px 4px",
           background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
@@ -2387,7 +2387,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       name will not fit a narrow window, and something has to
                       give — a strip you can flick is better than controls
                       pushed off the right edge. */}
-                  <div className="flex items-center gap-[9px] ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
+                  <div className="flex items-center gap-2.5 ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
                   <div className="ml-auto flex items-center gap-1.5 min-w-0" style={{ opacity: treeStale ? 0.5 : 1, transition: "opacity .18s ease" }}>

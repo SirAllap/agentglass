@@ -151,7 +151,7 @@ export function BasePicker({
                     className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
                     style={{ color: "var(--text3)" }}
                     title="Forget the override and go back to the base this app works out on its own">
-                    <span className="shrink-0 text-[8.5px] px-1 py-[1px] rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>AUTO</span>
+                    <span className="shrink-0 text-[8.5px] px-1 py-px rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>AUTO</span>
                     <span className="min-w-0 flex-1 truncate">work it out for me</span>
                   </button>
                   {shown.slice(0, 200).map((b) => (
@@ -162,7 +162,7 @@ export function BasePicker({
                       {/* Which kind of ref this is, because it changes what you
                           get: `master` is your copy, which may be weeks behind
                           the `origin/master` next to it. */}
-                      <span className="shrink-0 text-[8.5px] px-1 py-[1px] rounded"
+                      <span className="shrink-0 text-[8.5px] px-1 py-px rounded"
                         style={b.remote
                           ? { color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
                           : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>

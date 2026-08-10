@@ -58,7 +58,7 @@ function Action({ children, onClick, primary }: { children: React.ReactNode; onC
   return (
     <button
       onClick={onClick}
-      className="text-[10px] px-2 py-[3px] rounded"
+      className="text-[10px] px-2 py-1 rounded"
       style={{
         color: primary ? "var(--bg)" : "var(--text2)",
         background: primary ? "var(--primary)" : "transparent",
@@ -93,7 +93,7 @@ function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
             another one is legitimate — but reading it as though it came from the
             project in front of you is how you go looking in the wrong tree. */}
         {it.otherProject && (
-          <span className="text-[10px] uppercase tracking-wider px-1.5 py-[1px] rounded shrink-0"
+          <span className="text-[10px] uppercase tracking-wider px-1.5 py-px rounded shrink-0"
             style={{ color: "var(--text3)", border: "1px solid var(--border)" }}
             title={`This is not the project you have open — it lives in ${it.project}`}>
             {it.otherProject}
@@ -104,7 +104,7 @@ function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
           strip; this is the place it gets to be read. */}
       <div className="text-[11px]" style={{ color: "var(--text2)", overflowWrap: "anywhere" }}>{it.because}</div>
       {it.cwd && (
-        <div className="text-[10px] mt-[3px] font-mono truncate" style={{ color: "var(--text4)" }} title={it.cwd}>{short(it.cwd)}</div>
+        <div className="text-[10px] mt-1 font-mono truncate" style={{ color: "var(--text4)" }} title={it.cwd}>{short(it.cwd)}</div>
       )}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         {it.chatId && <Action primary onClick={() => onChat(it.chatId!)}>Open its chat</Action>}

@@ -154,7 +154,7 @@ function SetupCard({ title, steps, note, error }: {
         {steps.map((st, i) => (
           <li key={st.title} className="grid items-start gap-x-3 px-4 py-3"
             style={{ gridTemplateColumns: "20px minmax(0,1fr) auto", borderTop: i === 0 ? undefined : "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
-            <span className="mt-[1px] w-5 h-5 rounded-full grid place-items-center text-[10.5px] tabular-nums shrink-0"
+            <span className="mt-px w-5 h-5 rounded-full grid place-items-center text-[10.5px] tabular-nums shrink-0"
               style={st.done === true
                 ? { color: "var(--success)", background: "color-mix(in srgb, var(--success) 16%, transparent)" }
                 : st.done === false
@@ -164,7 +164,10 @@ function SetupCard({ title, steps, note, error }: {
             </span>
             <span className="min-w-0">
               <span className="block text-[13px]" style={{ color: "var(--text)" }}>{st.title}</span>
-              {st.detail && <span className="block text-[12px] t-dim mt-0.5">{st.detail}</span>}
+              {/* mt-1 for the same reason as SettingRow's hint: 2px under
+                  13.5px type reads as one paragraph, not as a label and its
+                  detail. */}
+              {st.detail && <span className="block text-[12px] t-dim mt-1">{st.detail}</span>}
             </span>
             <span className="justify-self-end">
               {st.action
@@ -241,7 +244,7 @@ function SourceRow({ id, i, n, onChanged }: {
     <SettingRow label={s.label} hint={s.what}
       control={
         <span className="flex items-center gap-2.5 justify-self-end">
-          <span className="flex flex-col shrink-0" style={{ gap: 1 }}>
+          <span className="flex flex-col shrink-0 gap-px">
             {([-1, 1] as const).map((by) => (
               <button key={by}
                 onClick={() => { moveTaskSource(id, by); onChanged(); }}
@@ -2606,7 +2609,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   {/* One page per concern instead of one long scroll: four
                       sections stacked vertically meant the shortcuts, the part
                       you come here to change, were always below the fold. */}
-                  <div className="shrink-0 w-[186px] py-2 px-2 flex flex-col gap-0.5 border-r agx-scroll overflow-y-auto" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                  {/* px-2.5, not px-2, and the 2px is the point: every nav item is a
+                      button with its own px-2.5, so the container's padding plus
+                      the button's decides where the TEXT lands. At px-2 it landed
+                      at 18px while "Settings" in the header above starts at 20px
+                      — two left edges in one dialog, close enough to look like a
+                      mistake rather than a choice. */}
+                  <div className="shrink-0 w-[186px] py-2 px-2.5 flex flex-col gap-0.5 border-r agx-scroll overflow-y-auto" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
                     <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings"
                       className="mb-1 px-2.5 py-1.5 rounded-lg text-[12.5px] outline-none shrink-0"
                       style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
@@ -2618,7 +2627,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       if (!groups.length) return <div className="px-2.5 py-3 text-[12.5px]" style={{ color: "var(--text4)" }}>No settings match “{q.trim()}”.</div>;
                       return groups.map(({ g, tabs }) => (
                         <div key={g} className={`flex flex-col gap-0.5${g === "" ? " mt-auto pt-2" : ""}`}>
-                          {g !== "" && <div className="px-2.5 pt-2 pb-0.5 text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{g}</div>}
+                          {/* A group heading gets more room ABOVE it than its
+                              items get between them — measured at 42px either
+                              side before this, which is why "Agents & work"
+                              read as belonging to the row above rather than to
+                              the rows below. The rule is in tailwind.config.js
+                              beside the scale, because it is about meaning
+                              rather than size: a heading hugs what it names. */}
+                          {g !== "" && <div className="px-2.5 pt-4 pb-1 text-[11px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{g}</div>}
                           {tabs.map((t) => (
                             <button key={t.id} onClick={() => setPane(t.id)}
                               className="w-full text-left px-2.5 py-1.5 rounded-lg text-[13px] flex items-center gap-2"

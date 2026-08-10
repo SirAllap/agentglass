@@ -414,7 +414,7 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
         : go && n.goto?.kind === "card" ? `Open ${n.goto.label} in Tasks`
         : expandable ? (open ? "Show less" : "Show the whole message") : undefined}>
       <div className="flex items-start gap-2">
-        <span className="flex flex-col min-w-0 flex-1 gap-[3px]">
+        <span className="flex flex-col min-w-0 flex-1 gap-1">
           <span className="flex items-center gap-2">
             <Cap>{n.app}</Cap>
             <Cap dim>{ago(n.at)}</Cap>

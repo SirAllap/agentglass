@@ -236,7 +236,7 @@ export function ViewRail({
             style={{ background: "var(--primary)" }} />
         )}
         {pip?.count ? (
-          <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
+          <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-1 grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
             style={{ background: "var(--success)", color: "#06281c" }}>{pip.count}</span>
         ) : pip?.dot ? (
           <span className="absolute top-[7px] right-[9px] w-[6px] h-[6px] rounded-full"
@@ -297,7 +297,7 @@ export function ViewRail({
         if (dragId && !e.currentTarget.contains(e.relatedTarget as Node | null)) setSlot(null);
       }}
       onDrop={commit}
-      className="w-[52px] shrink-0 flex flex-col gap-[3px] p-2 overflow-visible"
+      className="w-[52px] shrink-0 flex flex-col gap-1 p-2 overflow-visible"
       style={{
         borderRight: "1px solid color-mix(in srgb, var(--primary) 14%, transparent)",
         background: "color-mix(in srgb, var(--bg) 55%, transparent)",
@@ -308,7 +308,7 @@ export function ViewRail({
           "put it at the bottom of the top group", and a container sized to its
           contents would have quietly refused. */}
       <div
-        className="flex-1 flex flex-col gap-[3px]"
+        className="flex-1 flex flex-col gap-1"
         onDragOver={(e) => overDrawer(e, "work")}
         onDrop={commit}
       >
@@ -316,7 +316,7 @@ export function ViewRail({
       </div>
 
       <div
-        className="pt-2 flex flex-col gap-[3px]"
+        className="pt-2 flex flex-col gap-1"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}
         onDragOver={(e) => overDrawer(e, "utility")}
         onDrop={commit}
@@ -353,7 +353,7 @@ export function ViewRail({
         </div>
       )}
 
-      <div className="flex flex-col gap-[3px]">
+      <div className="flex flex-col gap-1">
         {/* A second hairline, because everything below is not a view at all:
             these open OVER whatever you are in and hand it straight back. A
             divider is the cheapest way to say "these do not change where you
@@ -382,7 +382,7 @@ export function ViewRail({
             style={{ color: restoreAt ? "var(--primary-hover)" : "var(--text4)" }}
           >
             <PlusIcon size={ICON.rail} />
-            <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
+            <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-1 grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
               style={{ background: "color-mix(in srgb, var(--primary) 70%, transparent)", color: "var(--bg)" }}>{hiddenViews.length}</span>
           </button>
         )}
