@@ -528,6 +528,35 @@ describe("what the status TYPE decides", () => {
     expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Blue" }]);
   });
 
+  it("carries the option's own colour, so the board can be read by colour", () => {
+    // The colour is the point of a field like a squad — ClickUp paints those
+    // cells — and it lives on the OPTION, next to the name.
+    const t = CU.toTask({
+      id: "x", name: "n",
+      custom_fields: [{
+        id: "f1", name: "Squad", type: "drop_down", value: 1,
+        type_config: { options: [
+          { id: "a", name: "Purple", orderindex: 0, color: "#c034eb" },
+          { id: "b", name: "Blue", orderindex: 1, color: "#2ea1e5" },
+        ] },
+      }],
+    });
+    expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Blue", color: "#2ea1e5" }]);
+  });
+
+  it("says nothing about colour for an option nobody coloured", () => {
+    // Not `color: undefined` — a grey dot in a colour column reads as a value
+    // pretending to be a category, so the key is absent and the caller can tell.
+    const t = CU.toTask({
+      id: "x", name: "n",
+      custom_fields: [{
+        id: "f1", name: "Squad", type: "drop_down", value: 0,
+        type_config: { options: [{ id: "a", name: "Blue", orderindex: 0 }] },
+      }],
+    });
+    expect(t.custom?.[0]).not.toHaveProperty("color");
+  });
+
   it("leaves an unset custom field out entirely", () => {
     const t = CU.toTask({ id: "x", name: "n", custom_fields: [{ id: "f", name: "Squad", type: "drop_down" }] });
     expect(t.custom).toEqual([]);

@@ -204,7 +204,7 @@ interface RawField {
   name: string;
   type: string;
   value?: unknown;
-  type_config?: { options?: { id: string; name?: string; label?: string; orderindex?: number }[] };
+  type_config?: { options?: { id: string; name?: string; label?: string; orderindex?: number; color?: string | null }[] };
 }
 
 /** ClickUp's epoch-milliseconds-as-a-string, as the local calendar date the
@@ -349,30 +349,38 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     waitsOn: (raw.dependencies ?? []).filter((d) => d.type === 1 && d.task_id === String(raw.id)).map((d) => d.depends_on).filter(Boolean) as string[],
     blocks: (raw.dependencies ?? []).filter((d) => d.type === 1 && d.depends_on === String(raw.id)).map((d) => d.task_id).filter(Boolean) as string[],
     custom: (raw.custom_fields ?? [])
-      .map((f) => ({ id: f.id, name: f.name, value: fieldText(f) }))
+      .map((f) => ({ id: f.id, name: f.name, ...fieldValue(f) }))
       .filter((f) => f.value),
   };
 }
 
 /**
- * A custom field's value as something readable.
+ * A custom field's value as something readable, and its colour when it has one.
  *
  * ClickUp answers with the raw storage: a drop-down is the INDEX of the chosen
  * option, not its name, so printing `value` gives you "3" where the board says
  * "Purple". Resolved against `type_config.options` here so nothing downstream
  * has to know that.
+ *
+ * The option carries the colour the workspace gave it, and that colour is the
+ * whole point of a field like a squad: ClickUp paints those cells, and a second
+ * window onto the same board that renders them as grey text is asking its
+ * reader to translate a word back into the colour they already know. The key is
+ * left off rather than set to undefined when there is none, so a field nobody
+ * coloured stays exactly the shape it was.
  */
-function fieldText(f: RawField): string {
+function fieldValue(f: RawField): { value: string; color?: string } {
   const v = f.value;
-  if (v === undefined || v === null || v === "") return "";
+  if (v === undefined || v === null || v === "") return { value: "" };
   if (f.type === "drop_down") {
     const opts = f.type_config?.options ?? [];
     const hit = opts.find((o) => o.orderindex === Number(v) || o.id === String(v));
-    return hit?.name ?? hit?.label ?? "";
+    const value = hit?.name ?? hit?.label ?? "";
+    return hit?.color ? { value, color: hit.color } : { value };
   }
-  if (Array.isArray(v)) return v.map((x) => (typeof x === "object" && x ? String((x as { name?: string }).name ?? "") : String(x))).filter(Boolean).join(", ");
-  if (typeof v === "object") return String((v as { username?: string }).username ?? "");
-  return String(v);
+  if (Array.isArray(v)) return { value: v.map((x) => (typeof x === "object" && x ? String((x as { name?: string }).name ?? "") : String(x))).filter(Boolean).join(", ") };
+  if (typeof v === "object") return { value: String((v as { username?: string }).username ?? "") };
+  return { value: String(v) };
 }
 
 export interface TaskPage {
@@ -1079,7 +1087,7 @@ export async function listMeta(
     `/list/${encodeURIComponent(listId)}`, token,
   );
   if (!l.ok) return { ...l, data: undefined };
-  const f = await call<{ fields?: { id: string; name: string; type: string; type_config?: { options?: { id: string; name?: string; label?: string }[] } }[] }>(
+  const f = await call<{ fields?: { id: string; name: string; type: string; type_config?: { options?: { id: string; name?: string; label?: string; color?: string | null }[] } }[] }>(
     `/list/${encodeURIComponent(listId)}/field`, token,
   );
   return {
@@ -1097,7 +1105,7 @@ export async function listMeta(
       })).sort((a, b) => a.orderindex - b.orderindex),
       fields: (f.data?.fields ?? []).map((x) => ({
         id: x.id, name: x.name, type: x.type,
-        options: (x.type_config?.options ?? []).map((o) => ({ id: o.id, name: o.name ?? o.label ?? "" })).filter((o) => o.name),
+        options: (x.type_config?.options ?? []).map((o) => ({ id: o.id, name: o.name ?? o.label ?? "", ...(o.color ? { color: o.color } : {}) })).filter((o) => o.name),
         // Somebody wrote the warning into the field's own name because the API
         // has nowhere else to put it. Reading it is the least we can do.
         readOnly: /do not edit/i.test(x.name),
