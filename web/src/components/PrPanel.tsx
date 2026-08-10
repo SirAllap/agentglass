@@ -46,6 +46,7 @@ import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
+import { keepLoadedChecks } from "../lib/prMerge.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks,
   threadLastAt, threadMovedOn, writeSeen, type NewAtom,
@@ -1740,7 +1741,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     api.prList(root, filter, stateSel, force, cursor, serverQuery).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
-      setPrs(r.prs);
+      // Same rule as the board: a refresh may add and correct, but it may not
+      // un-know. Every fetch starts at the fast pass, so without this a list
+      // that had its check states dropped back to "not in yet" on every poll.
+      setPrs((cur) => keepLoadedChecks(cur, r.prs));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
@@ -2167,8 +2171,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        waiting for ever on the other. A failed list is an empty one, and the
        board then says so honestly instead of spinning. */
     void Promise.allSettled([
-      api.prList(root, "mine", stateSel, false).then((r) => { if (live) setBoardMine(r.prs ?? []); }),
-      api.prList(root, "review", stateSel, false).then((r) => { if (live) setBoardReview(r.prs ?? []); }),
+      api.prList(root, "mine", stateSel, false).then((r) => { if (live) setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
+      api.prList(root, "review", stateSel, false).then((r) => { if (live) setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
     ]).then(() => { if (live) setBoardLoading(false); });
     return () => { live = false; };
   }, [boardOn, root, stateSel, listState.fetchedAt, boardTick]);
