@@ -3333,10 +3333,28 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <CommitJumpCtx.Provider value={jumpToCommit}>
               <div className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
                 onScroll={(e) => {
+                  /*
+                   * Files is a frame, not a page, and frames do not scroll.
+                   *
+                   * `overflow: hidden` stops a SCROLLBAR; it does not stop the
+                   * box from being scrolled. Anything inside that reveals
+                   * itself — a focused field, a `scrollIntoView` — walks up the
+                   * ancestors and moves this one, and with no scrollbar there
+                   * is nothing to put it back. Reported as the whole three
+                   * columns and the masthead sliding up by a few pixels and
+                   * staying there. Snapped back rather than prevented, because
+                   * the browser does it for reasons of its own and there is no
+                   * one place to intercept.
+                   */
+                  const el = e.currentTarget;
+                  if (tab === "files") {
+                    if (el.scrollTop || el.scrollLeft) { el.scrollTop = 0; el.scrollLeft = 0; }
+                    return;
+                  }
                   // Hysteresis, not a threshold: a single line would flip the
                   // masthead open and shut on every pixel of a trackpad wobble,
                   // and it takes a row of the page with it each time.
-                  const y = e.currentTarget.scrollTop;
+                  const y = el.scrollTop;
                   setCondensed((was) => (was ? y > 24 : y > 72));
                 }}>
                 {(tab === "overview" || tab === "conversation") ? (
@@ -3472,7 +3490,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     ))}
                     {d.truncated?.commits && (
                       <div className="text-[10px] px-1" style={{ color: "var(--warning)" }}>
-                        Showing the most recent {d.truncated.commits} commits — GitHub caps a page at that.
+                        Showing the most recent {d.truncated.commits} commits — a branch with more history than that is only listed in full on GitHub.
                       </div>
                     )}
                   </div>
