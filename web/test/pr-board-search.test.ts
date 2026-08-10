@@ -397,3 +397,29 @@ describe("opening a pull request while the panel is still booting", () => {
     expect(src).toContain('const first = prev === "" || prev.startsWith("\\u0000");');
   });
 });
+
+describe("the open pull request survives what happens to the list behind it", () => {
+  it("is only closed by a change of repository", () => {
+    /*
+     * Reported twice. The panel falls back from "Needs my review" to "Mine"
+     * when the first comes back empty, and that filter change was read as a
+     * scope switch — so a pull request opened in the first seconds was thrown
+     * back to the board on its own. A filter is a question about the LIST; the
+     * page you are reading is not the list.
+     */
+    expect(src).toContain("if (!sameRepo) {");
+    expect(src).toContain('const sameRepo = prev.slice(0, prev.indexOf("\\u0000")) === root;');
+  });
+
+  it("does not change the filter under an open pull request either", () => {
+    // Even with the selection surviving, a pane that rearranges itself while
+    // you read is its own bug.
+    expect(src).toContain("&& !fellBack.current && selectedRef.current == null) {");
+  });
+
+  it("declares that ref above every callback that reads it", () => {
+    // A `const` referenced before its line is a temporal dead zone waiting for
+    // the day somebody calls one of those during render.
+    expect(src.indexOf("const selectedRef = useRef")).toBeLessThan(src.indexOf("selectedRef.current == null"));
+  });
+});

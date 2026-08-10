@@ -1449,6 +1449,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // rows without opening (and fetching) every one it passes over. Named apart
   // from the pagination `cursor` above, which is a GitHub page token.
   const [selected, setSelected] = useState<number | null>(null);
+  /* Read from callbacks that must not re-create themselves every time the
+     selection changes — and declared HERE, above every one of them, because a
+     `const` referenced before its line is a temporal dead zone waiting for the
+     day somebody calls one of those during render. */
+  const selectedRef = useRef<number | null>(null);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [rowCursor, setRowCursor] = useState<number | null>(null);
   /** Whether the pull request's masthead has given its metadata back to the
    *  page. Reset whenever another pull request is opened, or the second one
@@ -1764,7 +1770,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       settleDelay.current = settle.next;
       // Nothing waiting on you: show your own instead of an empty pane. Once
       // only, so choosing "Needs my review" yourself is never overruled.
-      if (want === "review" && stateSel === "open" && r.prs.length === 0 && !r.loading && !r.error && !fellBack.current) {
+      /* …and never out from under an open pull request. Even with the
+         selection now surviving a scope change, a filter that changes itself
+         while you are reading is a pane rearranging behind your back. */
+      if (want === "review" && stateSel === "open" && r.prs.length === 0 && !r.loading && !r.error
+        && !fellBack.current && selectedRef.current == null) {
         fellBack.current = true;
         setFilter("mine");
       }
@@ -1798,6 +1808,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      */
     const prev = lastScope.current;
     const first = prev === "" || prev.startsWith("\u0000");
+    const sameRepo = prev.slice(0, prev.indexOf("\u0000")) === root;
     lastScope.current = scope;
     if (first) return; // nothing on screen yet to clear
     listReq.current++;
@@ -1815,10 +1826,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // and labelled as loading) is what GitHub does, and it turns that second and
     // a half from a wait into a redraw. `listReq` still guards the answer, so a
     // slow reply for the scope you left can never land on the one you are in.
-    setSelected(null);
-    setDetail(null);
-    setBehind(null);
-    setDetailErr("");
+    /*
+     * The open pull request survives a change of scope in the same repository.
+     *
+     * A filter is a question about the LIST. The page you are reading is not
+     * the list, and closing it because the rows behind it changed is the same
+     * mistake the row cursor already avoids two comments up. It also happens on
+     * its own: the panel falls back from "Needs my review" to "Mine" when the
+     * first comes back empty, so opening a pull request in the first seconds
+     * threw you straight back to the board — reported twice, and the second
+     * time after the boot guard above had already fixed a different half of it.
+     *
+     * A different REPOSITORY is another matter: that pull request is not in it.
+     */
+    if (!sameRepo) {
+      setSelected(null);
+      setDetail(null);
+      setBehind(null);
+      setDetailErr("");
+    }
     setListState((st) => ({ ...st, loading: true }));
   }, [filter, root, stateSel]);
 
@@ -1993,8 +2019,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * restore and nothing to reload.
    */
   const loadedFor = useRef<number | null>(null);
-  const selectedRef = useRef<number | null>(null);
-  useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => {
     if (!root || selected == null) { setDetail(null); loadedFor.current = null; return; }
     if (loadedFor.current === selected) return; // same pull request, already here
