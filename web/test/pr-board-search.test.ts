@@ -690,3 +690,14 @@ describe("the ClickUp half, as its own controls", () => {
     expect(src).toContain("Also move {ref.label} in ClickUp");
   });
 });
+
+describe("the picker's own height", () => {
+  it("lets the people scroll inside it rather than growing past it", () => {
+    /*
+     * A flex child's default floor is its content, so without `min-h-0` the
+     * list grew past the menu instead of scrolling inside it — taking the
+     * ClickUp half and Done off the bottom, and leaving nothing to scroll.
+     */
+    expect(src).toContain('className="flex flex-col min-w-0 min-h-0 flex-1"');
+  });
+});

@@ -4965,7 +4965,11 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
     <Portal>
       <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
-        <div className="flex flex-col min-w-0 flex-1">
+        {/* `min-h-0`, and it is the whole bug: a flex child'"'"'s default floor is
+            its content, so the people list grew past the menu instead of
+            scrolling inside it — taking the ClickUp half and Done off the
+            bottom with it, and leaving nothing to scroll. */}
+        <div className="flex flex-col min-w-0 min-h-0 flex-1">
         {/* px-5 to match viewHeaderClass, which is the row directly above this
             one. At px-3 the filter chips started 8px to the left of the repo
             chips they sit under — two left edges in one header, which is the
