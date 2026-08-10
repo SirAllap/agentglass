@@ -24,6 +24,7 @@ import { dirname, join, normalize } from "node:path";
 import type { TmuxWindow, TmuxPane, AgentPane } from "../../shared/types.ts";
 import { parsePanes, PANE_FORMAT } from "./paneloc.ts";
 import { findTmuxBelow } from "./procchildren.ts";
+import { recall } from "./tmuxmemory.ts";
 
 /** How long a tmux call may take before we give up on it. Generous for a local
  *  socket, and short enough that a wedged tmux server cannot stall the poll. */
@@ -1573,15 +1574,32 @@ export type PaneWireRow = Omit<AgentPane, "agentSession"> & { socket: string[] }
 
 export function listPanes(known?: string[]): PaneWireRow[] {
   const rows: PaneWireRow[] = [];
+  /* The server we were last on, read once rather than per socket. Null when
+     nothing is remembered, which is exactly how this behaved before. */
+  const ours = recall()?.socket ?? null;
   for (const socket of tmuxSockets(known)) {
-    // Only servers somebody is attached to. "Take me there" means nothing on a
-    // server nobody is looking at, and skipping them is not a nicety: this
-    // project's own test suite leaves a tmux server behind on a stray socket,
-    // and a resurrect/continuum config then restores the user's real sessions
-    // into it — so an unattached server can be a convincing duplicate of the
-    // one you actually work in, with different pane ids. Offering those was
-    // offering to move a window nobody would see move.
-    if (!tmux(socket, ["list-clients", "-F", "#{client_tty}"])?.trim()) continue;
+    /*
+     * Servers somebody is attached to — or the one we ourselves were last on.
+     *
+     * The filter is doing a real job and keeps it: this project's own test
+     * suite leaves a tmux server behind on a stray socket, and a
+     * resurrect/continuum config then restores the user's real sessions into
+     * it, so an unattached server CAN be a convincing duplicate of the one you
+     * work in, with different pane ids. Offering those was offering to move a
+     * window nobody would see move.
+     *
+     * But agentglass's own panel is usually the only client on the server it
+     * shows, so closing the app detaches that session — and this line then hid
+     * the session the app had just put down. Reported as having to run
+     * `tmux attach -t <name>` in a terminal outside the app after every
+     * restart, to be shown your own work again.
+     *
+     * A socket this app was demonstrably attached to is not a stray, whatever
+     * the client count says now, and it is the ONE detached server that gets
+     * through. Everything else is unchanged. See tmuxmemory.ts.
+     */
+    const mine = ours !== null && socketPath(socket) === ours;
+    if (!mine && !tmux(socket, ["list-clients", "-F", "#{client_tty}"])?.trim()) continue;
     const out = tmux(socket, ["list-panes", "-a", "-F", PANE_FORMAT]);
     if (!out) continue;
     const nested = nestedSessions(socket);

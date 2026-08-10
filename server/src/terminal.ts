@@ -339,7 +339,44 @@ const owed = new Set<PhoneAttach>();
  * not know which of the machine's tmux servers is the user's.
  */
 let lastTarget: TmuxTarget | null = null;
-export const lastTmuxTarget = (): TmuxTarget | null => lastTarget;
+
+/**
+ * Seeded from disk, so the answer survives a restart.
+ *
+ * "Null until a terminal has been opened once this run" was honest and it was
+ * also the whole of the complaint: close the app, reopen it, and the session
+ * you were in is not on offer — the panel's client was the only one on that
+ * server, so closing detached it, and a detached server is one `listPanes`
+ * skips. You had to attach from a terminal outside the app to be shown your
+ * own session back.
+ *
+ * A remembered socket is not a live client and is not pretended to be one: the
+ * pid is 0, the id is empty, and nothing that needs a client will accept it.
+ * What it does carry is the socket, which is the durable half and the only part
+ * anybody asks a stale target for.
+ */
+export const lastTmuxTarget = (): TmuxTarget | null => {
+  if (lastTarget) return lastTarget;
+  const seen = recall();
+  return seen ? { pid: 0, socket: ["-S", seen.socket], session: seen.session, id: "" } : null;
+};
+
+/**
+ * Write it down, when it has changed.
+ *
+ * `readFrame` runs on a poll, so this is reached constantly; the guard is what
+ * keeps that from being a write per tick. `socketPath` resolves `-L work` and
+ * the path it means to one spelling — the stored value has to be comparable
+ * with what discovery finds, and only the path is.
+ */
+let remembered = "";
+function rememberTarget(t: TmuxTarget): void {
+  const path = socketPath(t.socket);
+  const key = `${path}\u0000${t.session}`;
+  if (!path || key === remembered) return;
+  remembered = key;
+  remember(path, t.session);
+}
 
 const clampCols = (v: unknown) => Math.min(500, Math.max(20, Math.floor(Number(v)) || 0));
 const clampRows = (v: unknown) => Math.min(300, Math.max(5, Math.floor(Number(v)) || 0));
@@ -367,6 +404,7 @@ function killGroup(s: Session, sigNum: number) {
 }
 
 import { findTmuxBelow } from "./procchildren.ts";
+import { recall, remember } from "./tmuxmemory.ts";
 import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
@@ -729,6 +767,9 @@ export function ptyOpen(ws: PtyWs) {
     const frame = session.tmuxClient ? readFrame(session.tmuxClient) : null;
     if (frame) {
       lastTarget = frame.target;
+      // And on disk, so the next run knows where you were. Cheap enough to do
+      // on every frame: it is one small write and only when the target changed.
+      rememberTarget(frame.target);
       if (frame.target.id !== session.tmux?.id) followSession(frame.target);
       else session.tmux = frame.target; // a rename keeps the id and changes the name
       /*
