@@ -46,6 +46,10 @@ import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
+import {
+  anchorId, foldedIdx, newKeys, newSince, readSeen, threadLastAt, threadMovedOn, writeSeen,
+  type NewAtom,
+} from "../lib/prNew.ts";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -130,6 +134,11 @@ function rememberDetail(root: string, n: number, d: PrDetail): void {
 }
 
 const SEEN_KEY = "agentglass.pr.seen";
+
+/** Which voices the conversation is showing. `new` is not a voice — it is
+ *  "only what arrived since I last looked", which cuts across all of them and
+ *  is the one filter that answers "where is the reply I came back for". */
+type ConvWho = "all" | "human" | "bot" | "new";
 const DRAFT_KEY = "agentglass.pr.drafts";
 /** The unsent review itself — the verdict you picked and the note you typed,
  *  which used to live only in the Review tab's own state. Switching to Files to
@@ -954,6 +963,17 @@ const PR_GRID = "78px minmax(0,1fr) 118px 112px 84px 84px";
  * the one row in the table that did not respond to the pointer.
  */
 const PR_ROW_CSS = `
+/* Where the jump landed you.
+   A scroll that ends in silence is indistinguishable from a scroll that did
+   nothing, so the reader carries on scrolling to check — which is exactly the
+   behaviour the jump exists to stop. A ring that fades over a second says "this
+   one" without leaving a mark that has to be cleared. Honoured for reduced
+   motion by holding the ring instead of animating it: the message is the point,
+   the animation is only how it is delivered. */
+@keyframes agx-found{from{box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 65%, transparent)}
+to{box-shadow:0 0 0 14px transparent}}
+.agx-found{animation:agx-found 1100ms ease-out}
+@media (prefers-reduced-motion: reduce){.agx-found{animation:none;outline:2px solid var(--warning);outline-offset:2px}}
 /* The two links out to GitHub in the header. A border and a hover, because
    grey text with an arrow after it reads as a caption rather than as a
    control — which is what the first attempt at this shipped and what it was
@@ -1560,7 +1580,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [rawBots, setRawBots] = useState(true);
   /* Which voices the Conversation is showing. Up here because the rail's jump
      has to clear it before scrolling — see onGoToMention. */
-  const [convWho, setConvWho] = useState<"all" | "human" | "bot">("all");
+  const [convWho, setConvWho] = useState<ConvWho>("all");
   const [seen, setSeen] = useState<Record<string, string[]>>(() => loadMap<string[]>(SEEN_KEY));
   const [drafts, setDrafts] = useState<Record<string, DraftComment[]>>(() => loadMap<DraftComment[]>(DRAFT_KEY));
   const [reviews, setReviews] = useState<Record<string, ReviewDraft>>(() => loadMap<ReviewDraft>(REVIEW_KEY));
@@ -2273,6 +2293,71 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const fieldPicker = usePrFieldPicker(detail, root, act);
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
+
+  /*
+   * When you last looked at this pull request — and why it is frozen.
+   *
+   * Read once, when the pull request opens, and held still for as long as it is
+   * open. A mark that advanced as you read would erase the very markers it puts
+   * up: you would open a conversation with three new replies on it, and by the
+   * time the poll came round they would all be "old" without you having found
+   * any of them.
+   *
+   * It moves in exactly two places: when you leave the pull request (you have
+   * had your chance to read it) and when you press "Mark read" (you say so).
+   */
+  const [prSeenAt, setPrSeenAt] = useState(0);
+  const seenKeyRef = useRef("");
+  useEffect(() => {
+    if (!key) { seenKeyRef.current = ""; setPrSeenAt(0); return; }
+    if (seenKeyRef.current === key) return;
+    /* Leaving one pull request for another writes the mark for the one being
+       left — the same thing the unmount below does, and the reason it is a ref:
+       by the time this effect runs, `key` is already the new one. */
+    const leaving = seenKeyRef.current;
+    if (leaving) writeSeen(leaving, Date.now());
+    seenKeyRef.current = key;
+    setPrSeenAt(readSeen()[key] ?? 0);
+  }, [key]);
+  useEffect(() => () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); }, []);
+
+  /** Everything said since that mark, oldest first, and the same set by key so
+   *  a comment can ask "am I new" without walking the list. */
+  const newAtoms = useMemo(() => newSince(detail, prSeenAt), [detail, prSeenAt]);
+  const newSet = useMemo(() => newKeys(newAtoms), [newAtoms]);
+  const markPrRead = useCallback(() => {
+    if (!seenKeyRef.current) return;
+    const now = Date.now();
+    writeSeen(seenKeyRef.current, now);
+    setPrSeenAt(now);
+  }, []);
+
+  /*
+   * Something arrived while you were looking at it.
+   *
+   * The poll already re-reads the open pull request every twenty seconds; all
+   * this does is notice that the answer grew. Announced rather than left to be
+   * found: the whole failure this feature is about is a remark that was on the
+   * page and invisible, and one that lands while you are reading is the most
+   * invisible of the lot — nothing on screen moves.
+   *
+   * The first answer for a pull request is not an arrival. It is the page
+   * loading, and toasting "2 new" at somebody who has just opened it would be
+   * announcing the state as if it were an event.
+   */
+  const arrivedRef = useRef<{ key: string; last: number } | null>(null);
+  useEffect(() => {
+    const newest = newAtoms.length ? newAtoms[newAtoms.length - 1]!.at : 0;
+    const before = arrivedRef.current;
+    arrivedRef.current = { key, last: newest };
+    if (!key || !before || before.key !== key || newest <= before.last) return;
+    const fresh = newAtoms.filter((a) => a.at > before.last);
+    const who = [...new Set(fresh.map((a) => a.author))].join(", ");
+    flash(true, fresh.length === 1
+      ? `${who} just commented — ${fresh[0]!.where}`
+      : `${fresh.length} new comments — ${who}`);
+  }, [key, newAtoms, flash]);
+
   // How this repository merges: your last choice on it if it still allows that
   // method, and otherwise the one GitHub's own button would have arrived on.
   const mergeMethod = pickMergeMethod(repo ? methods[repo.key] : undefined, detail?.mergePolicy);
@@ -2702,9 +2787,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // already merged or been closed — GitHub takes the review form away too.
   const canReview = !!d && !d.viewerDidAuthor && d.state === "OPEN";
 
-  const TABS: { id: Tab; label: string; n?: number; warn?: boolean; one?: boolean }[] = d ? [
+  const TABS: { id: Tab; label: string; n?: number; warn?: boolean; one?: boolean; hot?: number }[] = d ? [
     { id: "overview", label: "Overview" },
-    { id: "conversation", label: "Conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length },
+    // `hot` is what has been said since you last looked. Its own field rather
+    // than `warn`: amber on Checks means something is broken, and a colleague
+    // answering you is not a failure — it is the one thing on this panel worth
+    // walking towards.
+    { id: "conversation", label: "Conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length, hot: newAtoms.length },
     { id: "commits", label: "Commits", n: d.commits.length },
     // `one` because Files stopped being a list of diffs: it is the tree, the
     // diff and the rail at once, and a tab that behaves unlike its neighbours
@@ -3098,6 +3187,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         with no count at all — a verdict is owed and nothing is
                         queued — which is a tint with nothing to tint. */}
                     {t.warn && <span className="ml-1" style={{ color: "var(--warning)" }}>●</span>}
+                    {/* Said as a number, not a dot: "somebody replied" and
+                        "seven people replied while you were at lunch" are
+                        different sizes of the same news, and the second is why
+                        you would leave what you are doing. */}
+                    {!!t.hot && (
+                      <span className="ml-1.5 text-[9.5px] px-1.5 rounded-full tabular-nums align-middle"
+                        title={`${t.hot} new since you last looked`}
+                        style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
+                          border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                        {t.hot} new
+                      </span>
+                    )}
                     {t.one && (
                       <span className="ml-1.5 text-[10px] px-1 rounded align-middle"
                         title="The tree, the diff and what the rest of the pull request says about the file you are on — all at once"
@@ -3177,6 +3278,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                       ) : (
                         <Conversation
                           d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy} onComment={doComment}
+                          atoms={newAtoms} newSet={newSet} onMarkRead={markPrRead}
                           onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                           onReply={doReply}
                           onApply={doApplySuggestion}
@@ -6405,13 +6507,18 @@ function AssocChip({ a }: { a?: PrAuthorAssociation }) {
   return <Chip text={label} tint={tint} title={`GitHub says this author is ${label}`} />;
 }
 
-function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, onReact, children }: {
+function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, onReact, fresh, children }: {
   who: string; chip?: React.ReactNode; when?: string; tone?: "chg" | "appr" | "bot"; url?: string;
   edited?: string | null; assoc?: PrAuthorAssociation;
   nodeId?: string; reactions?: PrReaction[]; onReact?: (nodeId: string, content: string, on: boolean) => void;
+  /** Said since this browser last looked at the pull request. Wins over the
+   *  verdict tint: a two-day-old "requested changes" being green or red is
+   *  history, and "this arrived while you were away" is news. */
+  fresh?: boolean;
   children: React.ReactNode;
 }) {
-  const edge = tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : tone === "bot" ? "var(--info)" : "var(--border)";
+  const edge = fresh ? "var(--warning)"
+    : tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : tone === "bot" ? "var(--info)" : "var(--border)";
   return (
     /* `data-node` is the address the rail jumps to. The timeline's own entry
        key is positional inside a FILTERED lane, so it changes when the Humans
@@ -6425,6 +6532,10 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         <AssocChip a={assoc} />
         {chip}
+        {fresh && (
+          <span className="text-[9px] px-1.5 rounded-full"
+            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>new</span>
+        )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {when && <span className="text-[10px]" style={{ color: "var(--text3)" }}>{when}</span>}
           {/* GitHub says "edited" here, and it matters: the words you are
@@ -6487,9 +6598,18 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
   );
 }
 
-function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
+function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom }: {
   t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
+  /** The comments said since this browser last looked, by `${threadId}:${id}`.
+   *  Absent where the question does not arise — a thread drawn under a line in
+   *  the diff is somewhere you went deliberately, not somewhere you are being
+   *  told to look. */
+  newSet?: Set<string>;
+  /** The review this thread was submitted with, when it has been pulled out to
+   *  the top of the timeline for having moved on since. Without this the
+   *  promotion loses the one thing the nesting was for. */
+  cameFrom?: string;
   /** Rendered anchored under its line in the diff, not in the file's thread
    *  list: drop the path (obvious from where it sits) and the duplicated code
    *  snippet (the line is right above it). */
@@ -6512,8 +6632,31 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
    * Opening it again is one click and the state is local, so it stays open
    * while you read it and folds again on the next load.
    */
-  const [open, setOpen] = useState(!t.isResolved);
-  useEffect(() => { setOpen(!t.isResolved); }, [t.isResolved]);
+  /* A resolved thread with an unread reply in it opens anyway: "resolved" is a
+     statement about the code, and somebody answering after it is exactly the
+     case where folding hides the thing you came for. */
+  const hot = useMemo(
+    () => new Set(t.comments.map((c, i) => (newSet?.has(`${t.id}:${c.id}`) ? i : -1)).filter((i) => i >= 0)),
+    [t.comments, t.id, newSet],
+  );
+  const [open, setOpen] = useState(!t.isResolved || hot.size > 0);
+  useEffect(() => { setOpen(!t.isResolved || hot.size > 0); }, [t.isResolved, hot.size]);
+
+  /*
+   * The middle of a long thread, folded.
+   *
+   * A thread is read from its ends — what was raised, and what was last said.
+   * On the one this was written for, three long comments sat between the reader
+   * and the reply they were looking for, and none of the three was the point.
+   * The ends stay, anything new stays wherever it sits, and the rest becomes
+   * one line you can open.
+   */
+  const [unfolded, setUnfolded] = useState(false);
+  const hidden = useMemo(
+    () => (unfolded ? new Set<number>() : foldedIdx(t.comments.length, hot)),
+    [unfolded, t.comments.length, hot],
+  );
+  const last = t.comments[t.comments.length - 1];
   // A suggestion inside this thread knows the file and the lines because the
   // thread does. An outdated thread is refused: its lines have moved, so the
   // range in hand no longer points where the comment meant.
@@ -6541,7 +6684,28 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
             : `${t.path}${t.line ? `:${t.line}` : ""}`}
         </span>
         {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="The code under this comment has changed since" />}
+        {/* Where it came from, now that it no longer sits under it. */}
+        {cameFrom && (
+          <Chip text={`from ${cameFrom}'s review`} tint="var(--text3)"
+            title="Submitted with that review, and answered since — so it is shown at the time of its last reply rather than the review's" />
+        )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {/* How much conversation, and when it last moved. A thread carries two
+              dates and only one of them was ever on screen: "opened two days
+              ago" says nothing about the argument that happened this morning. */}
+          {t.comments.length > 1 && (
+            <span className="text-[10px] tabular-nums" style={{ color: "var(--text3)" }}
+              title={`Last reply ${ago(last?.createdAt ?? "")}`}>
+              {t.comments.length} replies · {ago(last?.createdAt ?? "")}
+            </span>
+          )}
+          {hot.size > 0 && (
+            <span className="text-[9.5px] px-1.5 rounded-full tabular-nums"
+              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--warning) 42%, transparent)" }}>
+              {hot.size} new
+            </span>
+          )}
           {t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}
           {/* The count is the whole point of a folded row: it says how much is
               under it, so you can tell a one-line "done" from an argument. */}
@@ -6556,8 +6720,20 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
       </div>
       {open && <>
       {!inline && <ThreadSnippet hunk={t.diffHunk} line={t.originalLine ?? t.line} />}
-      {t.comments.map((c, i) => (
-        <div key={c.id} className="px-3 py-3 relative"
+      {t.comments.map((c, i) => hidden.has(i) ? (
+        /* One line where the folded run is, drawn once — at the first of them,
+           so the button sits where the missing comments were rather than at the
+           end of the thread. */
+        i > 0 && !hidden.has(i - 1) ? (
+          <button key={c.id} onClick={() => setUnfolded(true)}
+            className="agx-btn w-full text-left px-3 py-1.5 text-[10.5px]"
+            style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+              background: "color-mix(in srgb, var(--border) 9%, transparent)" }}>
+            ▸ {hidden.size} earlier {hidden.size === 1 ? "reply" : "replies"}
+          </button>
+        ) : null
+      ) : (
+        <div key={c.id} id={anchorId(`${t.id}:${c.id}`)} className="px-3 py-3 relative"
           style={{
             paddingLeft: i ? 30 : 12,
             /* A reply hangs off what it answers, and now it looks like it. The
@@ -6569,6 +6745,13 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
                line back to the remark they all hang from. */
             borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined,
             background: i ? "color-mix(in srgb, var(--border) 9%, transparent)" : undefined,
+            /* Last, so it wins over the reply tint above rather than being
+               quietly overwritten by it — the whole point is that this one
+               block does not look like the others. */
+            ...(newSet?.has(`${t.id}:${c.id}`)
+              ? { background: "color-mix(in srgb, var(--warning) 10%, transparent)",
+                  boxShadow: "inset 2px 0 0 0 var(--warning)" }
+              : null),
           }}>
           {i > 0 && (
             <span aria-hidden className="absolute"
@@ -6578,6 +6761,12 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
           <div className="flex items-center gap-1.5 mb-1.5 text-[10px]">
             <Avatar login={c.author} size={15} />
             <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
+            {newSet?.has(`${t.id}:${c.id}`) && (
+              <span className="text-[9px] px-1.5 rounded-full"
+                style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
+                new
+              </span>
+            )}
             {c.isBot && <Chip text="automation" tint="var(--info)" />}
             <span className="ml-auto flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
               {ago(c.createdAt)}
@@ -6704,7 +6893,89 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   );
 }
 
-function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, onApply, busy, who, onWho }: {
+/**
+ * A minimap of what is new, down the side of the timeline.
+ *
+ * The bar above says how many; this says WHERE, against the length of the page
+ * they are hiding in — which is the thing a reader is actually estimating while
+ * they scroll ("is it worth carrying on, or has it gone past?"). Every entry
+ * gets a faint tick and the new ones an amber one, because a rail carrying only
+ * the amber marks says where they are without saying how much is between them.
+ *
+ * Sticky against the scroller so it stays in view like a scrollbar, with a band
+ * showing the part of the conversation currently on screen. Measured from the
+ * DOM rather than computed: the entries are markdown of unknown height, and
+ * anything else would be a guess that drifts the longer the page gets.
+ */
+function NewRail({ container, atoms, onGo, depKey }: {
+  container: React.RefObject<HTMLDivElement | null>;
+  atoms: NewAtom[];
+  onGo: (i: number) => void;
+  /** Changes whenever the timeline is redrawn — the marks are positions, and a
+   *  position measured before a filter changed is a lie. */
+  depKey: string;
+}) {
+  const [marks, setMarks] = useState<{ key: string; pct: number; i: number }[]>([]);
+  const [rows, setRows] = useState<number[]>([]);
+  const [view, setView] = useState<{ top: number; height: number } | null>(null);
+  const [tall, setTall] = useState(0);
+
+  useEffect(() => {
+    const el = container.current;
+    if (!el) return;
+    const scroller = vScrollerOf(el);
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      const h = box.height || 1;
+      const pctOf = (n: Element) => Math.max(0, Math.min(100, ((n.getBoundingClientRect().top - box.top) / h) * 100));
+      setMarks(atoms.flatMap((a, i) => {
+        const n = document.getElementById(anchorId(a.key));
+        return n ? [{ key: a.key, pct: pctOf(n), i }] : [];
+      }));
+      setRows([...el.querySelectorAll(".agx-ev")].map(pctOf));
+      if (scroller) {
+        setTall(scroller.clientHeight);
+        const sBox = scroller.getBoundingClientRect();
+        setView({
+          top: Math.max(0, Math.min(100, ((sBox.top - box.top) / h) * 100)),
+          height: Math.max(2, Math.min(100, (scroller.clientHeight / h) * 100)),
+        });
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    scroller?.addEventListener("scroll", measure, { passive: true });
+    return () => { ro.disconnect(); scroller?.removeEventListener("scroll", measure); };
+  }, [container, atoms, depKey]);
+
+  if (!marks.length) return null;
+  return (
+    <div className="shrink-0 self-start sticky" aria-hidden
+      style={{ top: 0, width: 9, height: tall || 240, position: "sticky" }}>
+      <div className="relative w-full h-full rounded"
+        style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)" }}>
+        {view && (
+          <span className="absolute left-0 right-0 rounded"
+            style={{ top: `${view.top}%`, height: `${view.height}%`, background: "color-mix(in srgb, var(--text) 7%, transparent)" }} />
+        )}
+        {rows.map((pct, i) => (
+          <span key={`r${i}`} className="absolute rounded-full"
+            style={{ top: `calc(${pct}% - 1px)`, left: 3, width: 3, height: 3, background: "color-mix(in srgb, var(--text) 26%, transparent)" }} />
+        ))}
+        {marks.map((m) => (
+          <button key={m.key} onClick={() => onGo(m.i)} title="Go to this one"
+            className="absolute rounded-full"
+            style={{ top: `calc(${m.pct}% - 2px)`, left: 1, width: 7, height: 5, background: "var(--warning)",
+              boxShadow: "0 0 5px color-mix(in srgb, var(--warning) 70%, transparent)", pointerEvents: "auto" }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, onApply, busy, who, onWho,
+  atoms, newSet, onMarkRead }: {
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
@@ -6717,31 +6988,114 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      to clear it: the row you are being sent to may be a bot's, and landing on a
      conversation filtered to Humans scrolls to nothing and reads as a dead
      button. */
-  who: "all" | "human" | "bot"; onWho: (v: "all" | "human" | "bot") => void;
+  who: ConvWho; onWho: (v: ConvWho) => void;
+  /** What has been said since this browser last looked, oldest first, and the
+   *  same thing as a set so a comment can ask about itself in one step. */
+  atoms: NewAtom[]; newSet: Set<string>; onMarkRead: () => void;
 }) {
   const [newest, setNewest] = useState(false);
   const setWho = onWho;
+  const [cursor, setCursor] = useState(-1);
+  const tlRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * Walk to the next thing said since you last looked.
+   *
+   * The scroll is the point, and so is the flash: on a conversation this long
+   * a jump that lands silently is indistinguishable from a jump that did
+   * nothing, and the reader starts scrolling anyway to check. `block: "center"`
+   * for the same reason — a reply flush against the top edge of a scroller
+   * reads as the top of a section rather than as the thing you were sent to.
+   */
+  const jump = useCallback((i: number) => {
+    const list = atoms;
+    if (!list.length) return;
+    const n = ((i % list.length) + list.length) % list.length;
+    setCursor(n);
+    const el = document.getElementById(anchorId(list[n]!.key));
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.classList.remove("agx-found");
+    void el.offsetWidth; // restart the animation when it is the same element twice
+    el.classList.add("agx-found");
+  }, [atoms]);
+
+  /* n and p, because both hands are already on the keyboard when you are
+     reading. Ignored while typing — a reply with the letter n in it is not a
+     navigation command, and that bug is only found by whoever writes "nothing"
+     into a review and watches the page jump. */
+  useEffect(() => {
+    if (!atoms.length) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (e.key === "n") { e.preventDefault(); jump(cursor + 1); }
+      else if (e.key === "p") { e.preventDefault(); jump(cursor - 1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [atoms.length, cursor, jump]);
+
+  /* A filter that empties itself is a dead end: mark everything read while
+     "New" is showing and you are left staring at nothing with no clue why. */
+  useEffect(() => { if (who === "new" && !atoms.length) setWho("all"); }, [who, atoms.length, setWho]);
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
   const reviewAuthors = new Set(lanes.humans.map((r) => r.author));
-  const orphanThreads = d.threads.filter((t) => !reviewAuthors.has(t.comments[0]?.author ?? ""));
+
+  /*
+   * The threads that have moved on since the review they were submitted with.
+   *
+   * A review owns its threads, and that grouping is the meaning of a "requested
+   * changes": the verdict, with its reasons under it. But it is also what
+   * buries a live argument — the review is dated two days ago, so everything
+   * nested under it sits two days back on the page however recently anybody
+   * spoke. Measured on a real one: a reply nine minutes old, three comments
+   * deep, in the middle of a long page, and no sign anywhere that it existed.
+   *
+   * So a thread that has been answered SINCE its review comes out to the top
+   * level and takes its place by its last reply. It keeps a chip naming the
+   * review it came from, so the grouping is still readable — trading one loss
+   * for another would not be a fix.
+   */
+  const cameFrom = new Map<string, string>();
+  for (const r of lanes.humans) {
+    for (const t of d.threads) {
+      if (t.comments[0]?.author !== r.author) continue;
+      if (threadMovedOn(t, r.submittedAt)) cameFrom.set(t.id, r.author);
+    }
+  }
+  const orphanThreads = d.threads.filter(
+    (t) => cameFrom.has(t.id) || !reviewAuthors.has(t.comments[0]?.author ?? ""),
+  );
 
   /** Who said it, so the timeline can be narrowed to one kind of voice. An
    *  `event` is nobody speaking — a push, a label — and belongs to neither
    *  side, so it shows in the whole timeline and in no filtered view. */
   type Lane = "human" | "bot" | "event";
-  type Entry = { at: string; key: string; lane: Lane; node: React.ReactNode; body: React.ReactNode };
+  /** `ms` is what the timeline sorts on, and for a thread it is its LAST
+   *  comment. It used to be the first, which is the ordering bug this whole
+   *  feature was written for. */
+  type Entry = { at: string; ms: number; key: string; lane: Lane; hot?: number; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
+  const ms = (iso: string) => Date.parse(iso) || 0;
+  /** How many of the things said since your last visit are inside this one. */
+  const hotOf = (keys: string[]) => keys.filter((k) => newSet.has(k)).length;
+  const threadHot = (t: PrThread) => hotOf(t.comments.map((c) => `${t.id}:${c.id}`));
 
   for (const [i, r] of lanes.humans.entries()) {
-    const mine = d.threads.filter((t) => t.comments[0]?.author === r.author);
+    const mine = d.threads.filter((t) => t.comments[0]?.author === r.author && !cameFrom.has(t.id));
     const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
     entries.push({
-      at: r.submittedAt, key: `r${i}`, lane: "human",
+      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human",
+      hot: hotOf([`r${r.author}-${r.submittedAt}`]) + mine.reduce((n, t) => n + threadHot(t), 0),
       node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
         {r.state === "CHANGES_REQUESTED" ? "✕" : r.state === "APPROVED" ? "✓" : "💬"}</span>,
       body: (
         <>
+          <span id={anchorId(`r${r.author}-${r.submittedAt}`)} />
           <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
+            fresh={newSet.has(`r${r.author}-${r.submittedAt}`)}
             edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
             chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
               : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
@@ -6750,7 +7104,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           </Card>
           {mine.length > 0 && (
             <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
+              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} newSet={newSet} />)}
             </div>
           )}
         </>
@@ -6759,9 +7113,11 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.humanComments) {
     entries.push({
-      at: c.createdAt, key: `c${c.id}`, lane: "human", node: <span style={{ color: "var(--text3)" }}>💬</span>,
-      body: <Card who={c.author} when={ago(c.createdAt)} url={c.url}
-        edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}><Md body={c.body} /></Card>,
+      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", hot: hotOf([`c${c.id}`]),
+      node: <span style={{ color: "var(--text3)" }}>💬</span>,
+      body: <><span id={anchorId(`c${c.id}`)} />
+        <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
+          edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}><Md body={c.body} /></Card></>,
     });
   }
   for (const t of orphanThreads) {
@@ -6783,14 +7139,18 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      */
     const lane: Lane = t.comments[0]?.isBot ? "bot" : "human";
     entries.push({
-      at: t.comments[0]?.createdAt ?? "", key: `t${t.id}`, lane,
+      // Its LAST comment, not its first. A thread nobody has touched sorts
+      // exactly where it always did; one that has just been answered arrives
+      // where the answer belongs.
+      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, hot: threadHot(t),
       node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? "✓" : "○"}</span>,
-      body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />,
+      body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy}
+        newSet={newSet} cameFrom={cameFrom.get(t.id)} />,
     });
   }
   for (const [i, r] of lanes.botReviews.entries()) {
     entries.push({
-      at: r.submittedAt, key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      at: r.submittedAt, ms: ms(r.submittedAt), key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
       body: <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot"
         nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
         chip={<Chip text="automation" tint="var(--info)" />}><Md body={r.body} /></Card>,
@@ -6798,7 +7158,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.bots) {
     entries.push({
-      at: c.createdAt, key: `b${c.id}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      at: c.createdAt, ms: ms(c.createdAt), key: `b${c.id}`, lane: "bot", hot: hotOf([`c${c.id}`]),
+      node: <span style={{ color: "var(--info)" }}>⌬</span>,
       body: (
         <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
           nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
@@ -6821,20 +7182,22 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   // — the force-push that invalidated a review simply is not there.
   for (const [i, e] of d.timeline.entries()) {
     entries.push({
-      at: e.at, key: `e${i}`, lane: "event",
+      at: e.at, ms: ms(e.at), key: `e${i}`, lane: "event",
       node: <span style={{ color: EVENT_TINT[e.kind] ?? "var(--text3)" }}>{EVENT_GLYPH[e.kind] ?? "•"}</span>,
       body: <TimelineEvent e={e} />,
     });
   }
 
-  entries.sort((a, b) => (newest ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at)));
+  entries.sort((a, b) => (newest ? b.ms - a.ms : a.ms - b.ms));
 
   // Events are not remarks, so they are not counted — Humans plus Bots adds up
   // to All, which is the sum a reader checks. They still show in the whole
   // timeline, where the push that invalidated a review is part of the story.
   const humanCount = entries.filter((e) => e.lane === "human").length;
   const botCount = entries.filter((e) => e.lane === "bot").length;
-  const shown = who === "all" ? entries : entries.filter((e) => e.lane === who);
+  const shown = who === "all" ? entries
+    : who === "new" ? entries.filter((e) => !!e.hot)
+    : entries.filter((e) => e.lane === who);
 
   /* The events between the comments. GitHub has no timestamp on either of these
      — "opened" is not on the detail payload and a force-push is a boolean —
@@ -6870,6 +7233,42 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
 
   return (
     <div className="text-[11px]">
+      {/*
+        * What has been said since you last looked, and a way to walk to it.
+        *
+        * The number alone would be no better than GitHub's: knowing there are
+        * three is not the same as finding them, and on the pull request this
+        * was written for the third one was three comments deep in a thread
+        * dated two days earlier. So the bar is a control — next, previous, and
+        * where you are in the set — and it says WHERE the one you are on lives,
+        * because "src/billing/receipts.py:420" is the part you were looking for
+        * when you gave up scrolling.
+        */}
+      {atoms.length > 0 && (
+        <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 rounded-lg text-[10.5px] flex-wrap"
+          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--warning) 34%, transparent)" }}>
+          <span aria-hidden>●</span>
+          <span><b style={{ fontWeight: 600 }}>{atoms.length}</b> new since you last looked</span>
+          {cursor >= 0 && atoms[cursor] && (
+            <span style={{ color: "color-mix(in srgb, var(--warning) 80%, var(--text))" }}>
+              · {cursor + 1} of {atoms.length} · {atoms[cursor]!.author} · {atoms[cursor]!.where}
+            </span>
+          )}
+          <span className="flex-1" />
+          <button onClick={() => jump(cursor - 1)} title="Previous new one (p)"
+            className="agx-btn px-1.5 py-0.5 rounded" style={{ color: "inherit", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>◂</button>
+          <button onClick={() => jump(cursor + 1)} title="Next new one (n)"
+            className="agx-btn px-2 py-0.5 rounded" style={{ color: "inherit", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+            {cursor < 0 ? "Take me to it" : "Next"} ▸
+          </button>
+          {/* Clears the marks for good. Its own button because leaving the pull
+              request does the same thing silently, and somebody who has read
+              the lot while standing on it should not have to leave to say so. */}
+          <button onClick={onMarkRead} title="Clear these marks — everything here counts as read"
+            className="agx-btn px-1.5 py-0.5 rounded" style={{ color: "inherit", opacity: 0.85 }}>Mark read</button>
+        </div>
+      )}
       <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text3)" }}>
         <span>One timeline — reviews, comments, threads and events in the order they happened</span>
         {d.truncated?.comments ? (
@@ -6892,31 +7291,52 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           "Humans 0" is the most useful thing this row can say, so it shows
           wherever there is automation at all rather than only where both sides
           spoke. */}
-      {botCount > 0 && (
+      {/* "New" earns its place beside the voices even though it is not one:
+          on a long pull request it is the only filter that answers the question
+          you came back with. It appears only when there is something under it —
+          a filter that is always there and usually empty teaches people not to
+          press it. */}
+      {(botCount > 0 || atoms.length > 0) && (
         <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-          {([["all", "All", humanCount + botCount], ["human", "Humans", humanCount], ["bot", "Bots", botCount]] as const).map(([id, label, n]) => (
+          {([
+            ["all", "All", humanCount + botCount] as const,
+            ...(botCount > 0 ? [["human", "Humans", humanCount] as const, ["bot", "Bots", botCount] as const] : []),
+            ...(atoms.length ? [["new", "New", atoms.length] as const] : []),
+          ]).map(([id, label, n]) => (
             <button key={id} onClick={() => setWho(id)}
               className="agx-btn flex-1 text-[10.5px] py-1.5 flex items-center justify-center gap-1.5"
               style={{
-                color: who === id ? "var(--text)" : "var(--text3)",
-                background: who === id ? "color-mix(in srgb, var(--border) 30%, transparent)" : "transparent",
+                color: id === "new" && who !== id ? "var(--warning)" : who === id ? "var(--text)" : "var(--text3)",
+                background: who === id
+                  ? (id === "new" ? "color-mix(in srgb, var(--warning) 22%, transparent)" : "color-mix(in srgb, var(--border) 30%, transparent)")
+                  : "transparent",
               }}>
               {label}<span className="tabular-nums opacity-70">{n}</span>
             </button>
           ))}
         </div>
       )}
-      <div className="agx-tl">
-        {!newest && opened}
-        {newest && forced}
-        {shown.map((e) => (
-          <div key={e.key} className="agx-ev">
-            <span className="agx-node">{e.node}</span>
-            {e.body}
-          </div>
-        ))}
-        {!newest && forced}
-        {newest && opened}
+      {/* The timeline, with a rail of marks beside it.
+          The rail answers "how much page is between me and the next new thing"
+          — which is the question you are actually asking while you scroll, and
+          the one a count in a bar cannot answer. */}
+      <div className="flex gap-2 items-stretch">
+        <div className="agx-tl flex-1 min-w-0" ref={tlRef}>
+          {!newest && opened}
+          {newest && forced}
+          {shown.map((e) => (
+            <div key={e.key} className="agx-ev" data-hot={e.hot ? "1" : undefined}>
+              <span className="agx-node">{e.node}</span>
+              {e.body}
+            </div>
+          ))}
+          {!newest && forced}
+          {newest && opened}
+        </div>
+        {atoms.length > 0 && (
+          <NewRail container={tlRef} atoms={atoms} onGo={jump}
+            depKey={`${shown.length}|${who}|${newest}|${raw}`} />
+        )}
       </div>
       <div className="mt-3">{composer}</div>
     </div>

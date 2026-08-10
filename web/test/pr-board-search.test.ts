@@ -218,13 +218,55 @@ describe("who is talking, in the Humans/Bots filter", () => {
 
 describe("a resolved thread arrives folded", () => {
   it("opens on the flag, so pressing Resolve folds it there and then", () => {
-    expect(src).toContain("const [open, setOpen] = useState(!t.isResolved);");
-    expect(src).toContain("useEffect(() => { setOpen(!t.isResolved); }, [t.isResolved]);");
+    /* …unless somebody has answered since you last looked. A resolved thread
+       with an unread reply in it is precisely the case where folding hides the
+       thing you came back for, so the fold yields to it. */
+    expect(src).toContain("const [open, setOpen] = useState(!t.isResolved || hot.size > 0);");
+    expect(src).toContain("useEffect(() => { setOpen(!t.isResolved || hot.size > 0); }, [t.isResolved, hot.size]);");
   });
 
   it("says how much is under it, so a done can be told from an argument", () => {
     expect(src).toContain("Show resolved · ");
     expect(src).toContain("{t.comments.length}");
+  });
+});
+
+/*
+ * Finding what was said while you were away.
+ *
+ * The logic has a seam and is tested through it in `pr-new.test.ts`. What has
+ * no seam is the WIRING, and the wiring is where the original bug lived: a
+ * thread entered the timeline at the timestamp of its first comment, so a reply
+ * left nine minutes ago sorted two days back and could not be found at all.
+ * These are one-literal guards on exactly that.
+ */
+describe("a thread sorts by when it was last spoken in", () => {
+  it("uses the last comment, not the first, in the timeline entry", () => {
+    expect(src).toContain("ms: threadLastAt(t)");
+    // The old ordering, and the reason for all of this.
+    expect(src).not.toContain("entries.sort((a, b) => (newest ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at)))");
+  });
+
+  it("pulls a thread out of the review it came with once it has moved on", () => {
+    expect(src).toContain("if (threadMovedOn(t, r.submittedAt)) cameFrom.set(t.id, r.author);");
+    // …and still says where it came from, which is what the nesting was for.
+    expect(src).toContain("from ${cameFrom}'s review");
+  });
+});
+
+describe("the mark of when you last looked", () => {
+  it("is not the key the viewed-files map already owns", () => {
+    /* Both wanted to be called `agentglass.pr.seen`, and one storage key for
+       two questions means each feature silently deletes the other's answer. */
+    const lib = Bun.file(new URL("../src/lib/prNew.ts", import.meta.url));
+    expect(src).toContain('const SEEN_KEY = "agentglass.pr.seen"');
+    expect(lib.text()).resolves.toContain('export const SEEN_KEY = "agentglass.pr.lastlooked"');
+  });
+
+  it("is frozen while the pull request is open, so reading it does not erase it", () => {
+    // Advanced in two places only: leaving the pull request, and saying so.
+    expect(src).toContain("if (leaving) writeSeen(leaving, Date.now());");
+    expect(src).toContain("useEffect(() => () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); }, []);");
   });
 });
 
