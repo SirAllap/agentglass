@@ -2394,6 +2394,25 @@ function unzoomWindow(socket: string[], sessionId: string, windowId: string, onl
  */
 export function deskAttachArgv(socketPath: string, session: string): string[] | null {
   if (!socketPath) return null;
+  /*
+   * No tmux on this machine, so there is no command to build.
+   *
+   * Everything below reads "no server answered" as "the machine has just been
+   * turned on" and offers to start one — and a missing BINARY answers exactly
+   * the same way, because both make `tmux()` return null. Without this the
+   * panel would open on `tmux: command not found` instead of on a shell.
+   *
+   * Only reachable for somebody who had tmux when the memory was written and
+   * does not now, which is narrow and is still a broken terminal. Same check
+   * `tmuxpane.ts` already makes before it offers a pane.
+   *
+   * The PATH is passed explicitly because `Bun.which()` SNAPSHOTS it —
+   * measured on 1.3.9, changing `process.env.PATH` afterwards does not change
+   * its answer, while the `{ PATH }` option does. So the bare call answers
+   * about the environment this process started in rather than the one it is
+   * in, and cannot be asked about a machine without tmux at all.
+   */
+  if (!Bun.which("tmux", { PATH: process.env.PATH ?? "" })) return null;
   const socket = ["-S", socketPath];
   const out = tmux(socket, ["list-sessions", "-F", "#{session_id}\t#{session_name}"]);
 
