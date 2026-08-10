@@ -631,7 +631,7 @@ describe("assigning on GitHub, and the card on the other board", () => {
      * second is the one people forget. Optional: assigning on GitHub must never
      * be conditional on ClickUp being reachable, right, or wanted.
      */
-    expect(src).toContain("side={<ClickUpSide d={d} onNote={note} />}");
+    expect(src).toContain("side={(h) => <ClickUpSide d={d} {...h} />}");
     expect(src).toContain("Also in ClickUp");
     expect(src).toContain("· optional");
   });
@@ -644,9 +644,26 @@ describe("assigning on GitHub, and the card on the other board", () => {
     expect(src).toContain("if (!ref) return null;");
   });
 
-  it("writes nothing until Apply", () => {
-    expect(src).toContain("Apply in ClickUp");
-    expect(src).toContain("if (!card || !changes) return;");
+  it("writes nothing until the summary is accepted", () => {
+    /* One button for both halves, and a summary before either happens: the two
+       writes land on two different companies' servers and only one of them can
+       be undone from here. */
+    expect(src).toContain('{asking ? "Yes, do both"');
+    expect(src).toContain('if (!asking) { setAsking(true); return; }');
+  });
+
+  it("sends nothing to ClickUp when nothing there would change", () => {
+    /* A card already in Code Review being "moved" to Code Review is not a
+       change, and leaving yourself on it is not an assignment. */
+    expect(src).toContain("Nothing changes in ClickUp, so nothing is sent there.");
+    expect(src).toContain("if (!plan.lines.length) { commitClose(); return; }");
+    expect(src).toContain("if (folded || !card || !changes) return true;");
+  });
+
+  it("does GitHub first and ClickUp only after it", () => {
+    // A card saying "code review, assigned to you" over a pull request nobody
+    // was asked to review is a worse state than an unfinished one.
+    expect(src).toContain("onCommit(selRef.current);\n                  await plan.run();");
   });
 
   it("finds Code Review by asking the list, not by knowing the word", () => {
@@ -683,10 +700,10 @@ describe("the ClickUp half, as its own controls", () => {
     expect(src).toContain('className="fixed rounded-lg overflow-hidden flex flex-col"');
   });
 
-  it("folds to one line and comes back", () => {
-    // Most presses of this menu are only about the reviewer.
+  it("starts folded, on a line above Done", () => {
+    // The errand is the reviewer; this is the thing you may also want.
+    expect(src).toContain("const [sideFolded, setSideFolded] = useState(true);");
     expect(src).toContain("Not now ▾");
-    expect(src).toContain("onClick={() => setFolded(false)}");
     expect(src).toContain("Also move {ref.label} in ClickUp");
   });
 });

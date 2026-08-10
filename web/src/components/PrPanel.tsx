@@ -4913,7 +4913,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   options: PickOption[]; selected: string[];
   onCommit: (next: string[]) => void; onClose: () => void;
   /**
-   * A second column, for the other half of the same errand.
+   * The other half of the same errand, under the people.
    *
    * Assigning a reviewer here and moving the card in ClickUp are one motion in
    * somebody's head and two applications on the screen. The list of people is
@@ -4921,8 +4921,21 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
    * other half of the errand goes there — optional, never automatic, and only
    * when the pull request actually has a card.
    */
-  side?: React.ReactNode;
+  side?: (h: {
+    folded: boolean;
+    onFold: (v: boolean) => void;
+    onPlan: (p: { lines: string[]; run: () => Promise<boolean> }) => void;
+  }) => React.ReactNode;
 }) {
+  /* Folded to a line by default, and the line sits ABOVE Done: the errand is
+     the reviewer, and this is the thing you may also want. */
+  const [sideFolded, setSideFolded] = useState(true);
+  const [plan, setPlan] = useState<{ lines: string[]; run: () => Promise<boolean> }>({ lines: [], run: async () => true });
+  /* One button for both halves, and a summary before either happens: the two
+     writes land on two different companies' servers and only one of them can be
+     undone from here. */
+  const [asking, setAsking] = useState(false);
+  const [running, setRunning] = useState(false);
   const [sel, setSel] = useState<string[]>(selected);
   const [q, setQ] = useState("");
   const selRef = useRef(sel); selRef.current = sel;
@@ -5003,14 +5016,52 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             );
           })}
         </div>
+        </div>
+        {side?.({ folded: sideFolded, onFold: setSideFolded, onPlan: setPlan })}
         {multi && (
-          <div className="p-1.5 shrink-0 flex" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-            <button onClick={commitClose} className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px]"
-              style={{ background: "var(--primary)", color: "var(--bg)" }}>Done</button>
+          <div className="p-1.5 shrink-0 flex flex-col gap-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            {asking && (
+              /* What is about to happen, in the order it will happen, and
+                 nothing that is not a change. Read once and accepted, rather
+                 than two buttons pressed hopefully. */
+              <div className="px-1 text-[10.5px]" style={{ color: "var(--text2)" }}>
+                <div className="mb-1" style={{ color: "var(--text4)" }}>This will:</div>
+                <div>· Set reviewers on GitHub</div>
+                {plan.lines.map((l) => <div key={l}>· {l}</div>)}
+                {!plan.lines.length && (
+                  <div style={{ color: "var(--text4)" }}>Nothing changes in ClickUp, so nothing is sent there.</div>
+                )}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              {asking && (
+                <button onClick={() => setAsking(false)} className="agx-btn px-2 py-1 rounded text-[10.5px]"
+                  style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>Back</button>
+              )}
+              <button
+                onClick={async () => {
+                  /* Nothing to confirm when this is only the GitHub half. */
+                  if (!plan.lines.length) { commitClose(); return; }
+                  if (!asking) { setAsking(true); return; }
+                  setRunning(true);
+                  /* GitHub first, and ClickUp only if it landed: a card that
+                     says "code review, assigned to you" over a pull request
+                     nobody was asked to review is a worse state than an
+                     unfinished one. */
+                  onCommit(selRef.current);
+                  await plan.run();
+                  setRunning(false);
+                  onClose();
+                }}
+                disabled={running}
+                className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px] inline-flex items-center gap-1.5 disabled:opacity-50"
+                style={{ background: "var(--primary)", color: "var(--bg)" }}>
+                {running && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />}
+                {asking ? "Yes, do both" : plan.lines.length ? "Done · and ClickUp" : "Done"}
+              </button>
+            </div>
           </div>
         )}
-        </div>
-        {side}
       </div>
     </Portal>
   );
@@ -5029,7 +5080,22 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
  * strict reader — a reference in a branch name alone is a convention other
  * trackers share — and the same one the merge dialog trusts before it writes.
  */
-function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: string) => void }) {
+function ClickUpSide({ d, folded, onFold, onPlan }: {
+  d: PrDetail;
+  /** Folded by default: most presses of this menu are only about the reviewer. */
+  folded: boolean;
+  onFold: (v: boolean) => void;
+  /**
+   * What this half would do, and how to do it — handed up so the menu can put
+   * ONE button at the bottom for both halves of the errand.
+   *
+   * `lines` is the summary somebody confirms. It lists only what actually
+   * changes: a card already in Code Review being "moved" to Code Review is not
+   * a change, and neither is leaving yourself on it. With nothing in it, this
+   * half sends nothing at all and the press is a GitHub assignment.
+   */
+  onPlan: (plan: { lines: string[]; run: () => Promise<boolean> }) => void;
+}) {
   const setup = useClickupSetup();
   const ref = useMemo(() => mergeCardRef(d, setup), [d, setup]);
   const [card, setCard] = useState<{ id: string; title: string; status: string; updated?: number; listId?: string } | null>(null);
@@ -5045,8 +5111,7 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
      only about the reviewer — so it can be put away to a strip, which leaves
      the people list the whole width, and pulled out again with one press. The
      choice is not remembered on purpose: it is per errand, not a setting. */
-  const [folded, setFolded] = useState(false);
-  const [busy, setBusy] = useState(false);
+
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -5091,10 +5156,33 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
   const add = [...on].filter((id) => !was.has(id));
   const drop = [...was].filter((id) => !on.has(id));
   const changes = add.length + drop.length + (pick ? 1 : 0);
+  /*
+   * Only what actually changes.
+   *
+   * `pick` is empty unless a DIFFERENT status was chosen — a card already in
+   * Code Review being "moved" to Code Review is not a change, and sending it
+   * writes a no-op to somebody's board and dates the card for nothing. Same for
+   * the people: leaving yourself on it is not an assignment. With none of them,
+   * this half is silent and the press is a GitHub assignment, which is exactly
+   * what it is.
+   */
+  const nameOf = (id: number) => (members ?? []).find((m) => m.id === id)?.name || `#${id}`;
+  const lines = useMemo(() => {
+    if (!card) return [];
+    const out: string[] = [];
+    if (pick) out.push(`Move ${ref.label} to ${pick}`);
+    if (add.length) out.push(`Put ${add.map(nameOf).join(", ")} on the card`);
+    if (drop.length) out.push(`Take ${drop.map(nameOf).join(", ")} off the card`);
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card, pick, add.join(","), drop.join(","), members]);
 
-  const apply = async () => {
-    if (!card || !changes) return;
-    setBusy(true);
+  useEffect(() => { onPlan({ lines, run }); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lines.join("|"), folded]);
+
+  const run = async () => {
+    if (folded || !card || !changes) return true;
     try {
       /* One at a time, and the status last: a card that moves to Code Review
          and then fails to gain its reviewer is a lie on a board; the other way
@@ -5103,15 +5191,15 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
       for (const id of drop) await api.clickupAssign(card.id, false, card.updated, id);
       if (pick) await api.clickupStatus(card.id, pick, card.updated);
       setWas(new Set(on));
-      onNote(true, `${ref.label} — ${[add.length && `${add.length} added`, drop.length && `${drop.length} removed`, pick && `moved to ${pick}`].filter(Boolean).join(", ")}`);
-    } catch (e) {
-      onNote(false, `${ref.label} — ${String(e)}`);
-    } finally { setBusy(false); }
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   if (folded) {
     return (
-      <button onClick={() => setFolded(false)} title={`Also move ${ref.label} in ClickUp`}
+      <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
         className="agx-btn shrink-0 w-full flex items-center gap-2 px-3 py-1.5 text-[10.5px]"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
         <span aria-hidden>▴</span>
@@ -5130,7 +5218,7 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
           <div className="text-[11px] font-semibold min-w-0 truncate" style={{ color: "var(--text)" }}>
             Also in ClickUp <span style={{ color: "var(--text4)", fontWeight: 400 }}>· optional</span>
           </div>
-          <button onClick={() => setFolded(true)} title="Leave the card alone — this folds away and comes back on the strip"
+          <button onClick={() => onFold(true)} title="Leave the card alone — this folds away and comes back on the strip"
             className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
             style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
             Not now ▾
@@ -5205,17 +5293,6 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
               </button>
             ))}
           </div>
-          <div className="p-1.5 shrink-0 flex items-center gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-            <span className="text-[10px]" style={{ color: "var(--text4)" }}>
-              {changes ? `${changes} change${changes === 1 ? "" : "s"}` : "nothing to do"}
-            </span>
-            <button onClick={() => void apply()} disabled={!changes || busy}
-              className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px] disabled:opacity-40 inline-flex items-center gap-1.5"
-              style={{ background: changes ? "var(--primary)" : "transparent", color: changes ? "var(--bg)" : "var(--text3)", border: changes ? undefined : "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-              {busy && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5 }} />}
-              Apply in ClickUp
-            </button>
-          </div>
         </>
       )}
     </div>
@@ -5285,13 +5362,13 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       const was = d.reviewers.map((r) => r.login);
       node = <FieldPicker anchor={a} title="Request reviewers" hint="Collaborators on this repository" multi loading={loading}
         options={(mentions?.users ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
-        side={<ClickUpSide d={d} onNote={note} />}
+        side={(h) => <ClickUpSide d={d} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
         options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
-        side={<ClickUpSide d={d} onNote={note} />}
+        side={(h) => <ClickUpSide d={d} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Assignees", (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
     } else {
       // Milestone is one-of, not many: picking commits at once, and a leading
