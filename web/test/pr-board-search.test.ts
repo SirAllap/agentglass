@@ -122,7 +122,7 @@ describe("the three columns", () => {
     /* Two carry the class; the tree caps itself against the viewport instead,
        for the reason in the test below. */
     expect(src.split("agx-col3").length - 1).toBe(1);
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: 100%; overflow-y: auto; }");
+    expect(css).toContain(".agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
     expect(rail).toContain("agx-col3");
   });
 
@@ -164,8 +164,16 @@ describe("the three columns", () => {
      * The row is a flex child with `flex-1 min-h-0` now, which is a definite
      * height, so the percentage resolves and the cap is the column itself.
      */
-    expect(src).toContain('className="flex gap-3 items-start flex-1 min-h-0"');
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: 100%; overflow-y: auto; }");
+    /* Not a percentage and not a viewport formula: the tree is sticky in a row
+       as tall as the diff, so a percentage resolves against a column of diff,
+       and `100vh - something` is a guess about everything above the frame that
+       is wrong on a screen where the frame starts lower. The frame measures
+       itself. */
+    expect(src).toContain('el.style.setProperty("--agx-tree-max"');
+    // The row must NOT be capped: a sticky element only stays put while its own
+    // row is on screen, and capping it unpinned the tree after one screenful.
+    expect(src).not.toContain('className="flex gap-3 items-start flex-1 min-h-0"');
+    expect(css).toContain(".agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
     expect(src).not.toContain("agx-tree3 agx-col3");
   });
 
@@ -513,10 +521,14 @@ describe("each tab keeps its own place", () => {
      * scrolled. Reported exactly that way.
      */
     expect(src).toContain("tabScroll.current[tab] = y;");
-    expect(src).toContain("if (el) el.scrollTop = tabScroll.current[tab] ?? 0;");
     // Before paint: after it, the old offset is on screen for a frame and the
     // jump is the thing you see instead of the thing you asked for.
-    expect(src).toContain("useLayoutEffect(() => {\n    const el = tabBodyRef.current;");
+    expect(src).toContain("const want = tabScroll.current[tab] ?? 0;");
+    expect(src).toContain("el.scrollTop = want;");
+    /* And again once the tab has its height: content mounts empty and fills, so
+       the first assignment is clamped to nothing. Reported as Commits losing
+       its place every time you came back. */
+    expect(src).toContain("requestAnimationFrame(() => { put(); requestAnimationFrame(put); });");
   });
 
   it("starts a different pull request at the top", () => {

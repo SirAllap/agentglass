@@ -80,7 +80,7 @@ export type RailVerdict = "approve" | "request_changes" | "comment";
 export function FileRail({
   d, path, drafts, loading, queuedCount, verdict,
   onGoConversation, onGoChecks, onGoReview, onGoToMention, onMerge, canMerge, awaitingChecks,
-  onApprove, onRequestChanges, onComment, onSubmit, body, onBody,
+  onApprove, onRequestChanges, onComment, onSubmit, body, onBody, busyWhat,
 }: {
   d: PrDetail;
   /** The file the diff is showing. Null means nothing is selected yet, which is
@@ -172,6 +172,10 @@ export function FileRail({
    */
   body?: string;
   onBody?: (v: string) => void;
+  /** The request in flight, by the label the panel gave it. The button that
+   *  started it says so — a round trip through `gh` with no feedback but a grey
+   *  button is the thing this app was worst at. */
+  busyWhat?: string;
 }) {
   /*
    * One walk, remembered.
@@ -546,9 +550,13 @@ export function FileRail({
             )}
             <p className="m-0 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{goesWith}</p>
             {onSubmit && (
-              <button onClick={onSubmit}
-                className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px]"
+              <button onClick={onSubmit} disabled={busyWhat === "Review"}
+                className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
                 style={{ background: "var(--primary)", color: "var(--bg)", border: edge(20) }}>
+                {busyWhat === "Review" && (
+                  <span className="agx-spin" aria-hidden
+                    style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />
+                )}
                 Submit review
               </button>
             )}
@@ -576,11 +584,15 @@ export function FileRail({
             `mergeBlockedWhy`, and "1 check still running" twice in two lines is
             how a box starts reading like a form letter. */}
         {under && <p className="m-0 mt-1 text-[10px]" style={{ color: "var(--text4)" }}>{under}</p>}
-        <button onClick={onMerge} disabled={!canMerge}
-          className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] disabled:opacity-40"
+        <button onClick={onMerge} disabled={!canMerge || busyWhat === "Merge"}
+          className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
           style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: edge(20) }}>
           {/* "anyway" is a word about overriding something. With nothing to
               override it turned a plain press into a dare. */}
+          {busyWhat === "Merge" && (
+            <span className="agx-spin" aria-hidden
+              style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: allClear ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor", borderTopColor: "transparent" }} />
+          )}
           {willTake ? "Merge" : "Merge anyway…"}
         </button>
         <p className="m-0 mt-1.5 text-[9.5px] leading-snug" style={{ color: "var(--text4)" }}>

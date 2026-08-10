@@ -47,7 +47,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, loading, settling, pinnedList,
+  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, pinnedList,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -67,6 +67,9 @@ export function TriageBoard({
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void;
   /** True while an action is in flight, so a card cannot be pressed twice. */
   busy?: boolean;
+  /** Which pull request that action is on. The board disables every card while
+   *  one runs; the spinner belongs to the one you pressed. */
+  acting?: number | null;
   /**
    * The ones you pinned, whoever opened them.
    *
@@ -378,7 +381,7 @@ export function TriageBoard({
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider}
                             cursor={cur.lane === i && cur.row === r}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
-                            onAct={onAct} busy={busy} />
+                            onAct={onAct} busy={busy} acting={acting} />
                         ))}
                         {/* Counted, not hidden. A lane may be forty on a bad
                             week, and the column scrolls but the cap is what
@@ -447,8 +450,10 @@ export function TriageBoard({
   );
 }
 
-function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy }: {
+function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting }: {
   p: Card; hasTaskProvider: boolean; pinned: boolean; cursor?: boolean;
+  /** The pull request whose action is running, so only its card spins. */
+  acting?: number | null;
   onOpen: () => void; onPin: () => void;
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void; busy?: boolean;
 }) {
@@ -583,10 +588,20 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         {/* One button, and it is the one this lane is asking for. A row of five
             is a row nobody reads; the rest are a click away inside. */}
         <button onClick={(e) => { e.stopPropagation(); onAct(p, act); }} disabled={busy}
-          className="agx-btn rounded px-2 py-0.5 text-[10px] disabled:opacity-40"
+          className="agx-btn rounded px-2 py-0.5 text-[10px] disabled:opacity-40 inline-flex items-center gap-1"
           style={act === "merge"
             ? { background: "var(--primary)", color: "var(--bg)", fontWeight: 500 }
             : { color: "var(--text2)", border: edge(20) }}>
+          {/* `busy` is the panel'''s, and on this board only one card can be
+              acting at a time — the whole surface disables while it runs. So the
+              spinner goes on the card whose action is in flight rather than on
+              all of them: `acting` is the number the panel is working on. */}
+          {acting === p.number && (
+            <span className="agx-spin" aria-hidden
+              style={{ width: 8, height: 8, borderWidth: 1.5,
+                borderColor: act === "merge" ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
+                borderTopColor: "transparent" }} />
+          )}
           {ACTION_LABEL[act]}
         </button>
       </div>

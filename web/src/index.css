@@ -1372,5 +1372,5 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    with it. Reported as "ese scroll raro mueve el listado de files hacia
    arriba". The percentage resolves now because the row it sits in is a flex
    child with a definite height — see `flex-1 min-h-0` on it. */
-.agx-tree3 { width: 250px; max-height: 100%; overflow-y: auto; }
+.agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }
 @media (max-width: 1179px) { .agx-tree3 { width: 200px; } }

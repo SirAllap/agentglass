@@ -1606,6 +1606,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* One scroller serves every tab, so each tab's place in it is remembered here
      and put back on the way in. Cleared when the pull request changes: a new
      page starts at the top, whatever the last one was showing. */
+  /** The board card whose action is running — the board disables all of them
+   *  while one does, and the spinner belongs to the one you pressed. */
+  const [actingOn, setActingOn] = useState<number | null>(null);
   const tabBodyRef = useRef<HTMLDivElement>(null);
   const tabScroll = useRef<Record<string, number>>({});
   useEffect(() => { tabScroll.current = {}; }, [selected]);
@@ -1613,7 +1616,27 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      the thing you see instead of the thing you asked for. */
   useLayoutEffect(() => {
     const el = tabBodyRef.current;
-    if (el) el.scrollTop = tabScroll.current[tab] ?? 0;
+    if (!el) return;
+    const want = tabScroll.current[tab] ?? 0;
+    el.scrollTop = want;
+    if (!want) return;
+    /*
+     * And again, once the tab has its height.
+     *
+     * A tab's content mounts empty and fills — the diffs highlight, the
+     * markdown lays out — so the first assignment is clamped to whatever the
+     * box was tall at that instant, which for Commits is nothing. Reported as
+     * the scroll resetting when you came back to it. Two frames and a
+     * ResizeObserver: the frames cover the ordinary case, the observer the one
+     * where the content arrives later than that.
+     */
+    let alive = true;
+    const put = () => { if (alive && Math.abs(el.scrollTop - want) > 1) el.scrollTop = want; };
+    requestAnimationFrame(() => { put(); requestAnimationFrame(put); });
+    const ro = new ResizeObserver(put);
+    ro.observe(el);
+    const stop = setTimeout(() => ro.disconnect(), 2_000);
+    return () => { alive = false; clearTimeout(stop); ro.disconnect(); };
   }, [tab, selected]);
   /** What the merge control is doing right now, "" when it is doing nothing.
    *  A sentence rather than a boolean because the merge is two writes and they
@@ -3248,7 +3271,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
                 onShowTable={() => { setBoard(false); setFilter("all"); setQuery(""); }}
                 busy={busy}
-                loading={boardLoading} settling={boardSettling}
+                loading={boardLoading} settling={boardSettling} acting={actingOn}
                 /* Whoever opened them. A pinned pull request of a colleague's
                    is in no lane on this board, which is exactly why the strip
                    exists. */
@@ -3274,9 +3297,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   // available" is not a reason to skip the guard.
                   if (what === "merge") {
                     if (!p.headSha) { flash(false, "Merge — still reading this one's checks"); return; }
-                    void act("Merge", () => api.prMerge(root, p.number, mergeMethod, { headSha: p.headSha }));
+                    setActingOn(p.number);
+                    void act("Merge", () => api.prMerge(root, p.number, mergeMethod, { headSha: p.headSha }))
+                      .finally(() => setActingOn(null));
                   }
-                  else if (what === "rerun") void act("Re-run checks", () => api.prRerun(root, p.number));
+                  else if (what === "rerun") {
+                    setActingOn(p.number);
+                    void act("Re-run checks", () => api.prRerun(root, p.number)).finally(() => setActingOn(null));
+                  }
                   else openPr(p.number);
                 }} />
             ) : listState.needsAuth ? (
@@ -3726,7 +3754,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     /* The same draft the Review tab holds — see `body` on the
                        rail. Two boxes with two bodies is a way to lose the one
                        you typed in the other. */
-                    body={myReview.body}
+                    body={myReview.body} busyWhat={busyWhat}
                     onBody={canReview ? (v: string) => setMyReview({ body: v }) : undefined}
                     /*
                      * The guard stays here, and it is the Review tab's: the rail
@@ -3751,7 +3779,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
                 {tab === "checks" && (
                   <Checks
-                    d={d} root={root} jobs={jobs} busy={busy}
+                    d={d} root={root} jobs={jobs} busy={busy} busyWhat={busyWhat}
                     onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                     onRerunJobs={(what, id) => act("Re-run", () => api.prRerunJobs(root, what, id))}
                     onAsk={onOpenChatWith ? (k) => askClaudeAboutCheck(k) : undefined}
@@ -4033,7 +4061,7 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
           </div>
           <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
             style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-            {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} title="Put it back to open, with its comments and reviews intact">↺ Reopen</Btn>}
+            {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} pending={busyWhat === "Reopen"} title="Put it back to open, with its comments and reviews intact">↺ Reopen</Btn>}
             <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open on GitHub ↗</a>
           </div>
@@ -4251,12 +4279,12 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
               would leave it armed with no way to disarm it. Arming a new one
               over a conflict is not offered. */}
           {d.autoMerge
-            ? <Btn onClick={onCancelAutoMerge} disabled={busy} warn title={`Armed by ${d.autoMerge.enabledBy}`}>Cancel auto-merge</Btn>
+            ? <Btn onClick={onCancelAutoMerge} disabled={busy} warn pending={busyWhat === "Auto-merge cancelled"} title={`Armed by ${d.autoMerge.enabledBy}`}>Cancel auto-merge</Btn>
             : !conflicted && (
               /* The right button in the waiting window, so it says so there.
                  Somebody who has just restarted CI and wants to stop thinking
                  about this pull request is asking for exactly this. */
-              <Btn onClick={onAutoMerge} disabled={busy || autoOff}
+              <Btn onClick={onAutoMerge} disabled={busy || autoOff} pending={busyWhat === "Auto-merge"}
                 title={autoOff
                   ? "Auto-merge is off for this repository — Settings › General › Pull requests › Allow auto-merge"
                   : awaitingChecks
@@ -4342,8 +4370,8 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
             title={awaitingChecks ? "A new run is already starting from the update" : "Run the failed checks again"}>
             Re-run failed</Btn>}
           <span className="ml-auto flex gap-1.5">
-            <Btn onClick={onDraft} disabled={busy} small>{d.isDraft ? "Mark ready" : "To draft"}</Btn>
-            <Btn onClick={onClose} disabled={busy} danger small>Close</Btn>
+            <Btn onClick={onDraft} disabled={busy} small pending={busyWhat === "Mark ready" || busyWhat === "Convert to draft"}>{d.isDraft ? "Mark ready" : "To draft"}</Btn>
+            <Btn onClick={onClose} disabled={busy} danger small pending={busyWhat === "Close"}>Close</Btn>
           </span>
           {/* Last in the row, so its own line is UNDER everything rather than
               between the update button and the pair pinned to the right — which
@@ -5945,6 +5973,29 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
   const threadsFor = (p: string) => d.threads.filter((t) => t.path === p)
     .sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
   const frameRef = useRef<HTMLDivElement>(null);
+  /*
+   * How tall the tree may be, measured rather than guessed.
+   *
+   * It cannot be a percentage: the tree is `sticky` in a row whose height is
+   * the diff's, so a percentage would resolve against a column of diff and let
+   * the tree grow past the screen. It cannot be `100vh - something` either:
+   * that "something" is a guess about everything above this frame, and on a
+   * screen where the guess is short the tree comes out taller than its own
+   * column — which is the scroll that belongs to nothing, dragging the toolbar
+   * and the file list up with it.
+   *
+   * So: the frame's own height, minus where the tree starts inside it, kept up
+   * to date by a ResizeObserver and published as a CSS variable.
+   */
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const put = () => el.style.setProperty("--agx-tree-max", `${Math.max(160, el.clientHeight - 76)}px`);
+    put();
+    const ro = new ResizeObserver(put);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   /**
    * How tall the sticky toolbar is, right now.
    *
@@ -6408,11 +6459,13 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
       {/* Tree on the left, diffs on the right — the arrangement GitHub uses, and
           the only way to keep your bearings in a change that touches thirty
           files. The tree is the navigator; the stack is still the reading. */}
-      {/* `flex-1 min-h-0`, and it is what makes the tree's cap resolve: a
-          percentage max-height needs a parent with a definite height, and this
-          row is a flex child of the column so it has one. Without it the tree
-          was measured against the window and overflowed its own column. */}
-      <div className="flex gap-3 items-start flex-1 min-h-0">
+      {/* The row is as tall as the diff, on purpose: the tree is `sticky` inside
+          it, and a sticky element only stays put while its own row is still on
+          screen. Capping this row to the viewport — which is what the first fix
+          for the phantom scroll did — meant the tree unpinned and scrolled away
+          with the diff the moment you went past one screen. Reported that way.
+          The tree is capped by measurement instead, see `--agx-tree-max`. */}
+      <div className="flex gap-3 items-start">
         {/* Always present in one-file mode: it is the only way to reach the
             other eight, so hiding it below five files would strand you. */}
         {(oneFile || shownFiles.length > 4) && (
@@ -8087,7 +8140,10 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
   );
 }
 
-function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean }) {
+function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
+  /** Which request is in flight, so the button that started it is the one that
+   *  spins — see Btn `pending`. */
+  busyWhat?: string }) {
   const c = d.checks;
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [showSkipped, setShowSkipped] = useState(false);
@@ -8124,7 +8180,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
           </span>
         </span>
         <span className="ml-auto shrink-0 flex items-center gap-2">
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} small>Re-run failed</Btn>}
+          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"}>Re-run failed</Btn>}
           <span className="text-[10px]" style={{ color: "var(--text3)" }}>{c.allDone ? "Notified once, not " + c.total : "You will be told once, at the end"}</span>
         </span>
       </div>
@@ -8174,7 +8230,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
                         <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
                           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open run ↗</a>
                       )}
-                      <Btn onClick={onRerun} disabled={busy} small title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
+                      <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
                       {/* GitHub offers all three, and "the whole run failed
                           again for one flaky job" is exactly when you want the
                           single-job one. */}
@@ -8183,8 +8239,8 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
                         if (!job || !onRerunJobs) return null;
                         return (
                           <>
-                            <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small title={`Re-run only ${job.name}`}>↻ This job</Btn>
-                            <Btn onClick={() => onRerunJobs("all", job.runId)} disabled={busy} small title="Re-run every job in this run, passing ones included">↻ All jobs</Btn>
+                            <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small pending={busyWhat === "Re-run"} title={`Re-run only ${job.name}`}>↻ This job</Btn>
+                            <Btn onClick={() => onRerunJobs("all", job.runId)} disabled={busy} small pending={busyWhat === "Re-run"} title="Re-run every job in this run, passing ones included">↻ All jobs</Btn>
                           </>
                         );
                       })()}
