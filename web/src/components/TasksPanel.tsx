@@ -1163,7 +1163,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   const anyWho = (data?.tasks ?? []).some((t) => t.assignees.length);
   const anySprint = (data?.tasks ?? []).some((t) => t.sprint);
   const anyEst = (data?.tasks ?? []).some((t) => t.estimateHours);
-  const grid = cuGrid(anyWho, anySprint, anyEst);
+  /* The swatch column names itself after the field it is showing — "Squad" on
+     one board, "Pod" on the next — so the heading is the board's word rather
+     than ours. Taken from the first row that has one; they are all the same
+     field, since `swatch` picks by name across every card. */
+  const squadLabel = (data?.tasks ?? []).map(swatch).find(Boolean)?.name ?? "";
+  const grid = cuGrid(anyWho, !!squadLabel, anySprint, anyEst);
 
   /* The looked-up cards, by where each one lives. The search box filters these
      too — it is the only chip that still means anything on this board. */
@@ -1570,6 +1575,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               borderTop: edge(10), borderBottom: edge(10) }}>
             <span>Task</span>
             {anyWho && <span className="text-center">Who</span>}
+            {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
             {anySprint && <span>Sprint</span>}
             {/* Centred over the columns they label, because those columns hold
                 two-character numbers in a 30px track — a heading hard against
@@ -1639,7 +1645,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 {g.rows.map((t) => (
                   <div key={t.id} className="relative group">
                     <ClickUpRow t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                      grid={grid} showWho={anyWho} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard} />
+                      grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard} />
                     {/* One card at a time, because a history you can only throw
                         away whole is one nobody prunes. */}
                     <CloseButton onClick={() => { setLooked((cur) => { const left = cur.filter((x) => x.id !== t.id); if (!left.length) setOnLooked(false); return left; }); if (sel === t.id) setSel(null); }} title="Forget this one" style={{ color: "var(--text3)", background: "var(--bg2)", border: edge(14) }} className="absolute top-1.5 right-1.5 rounded opacity-0 group-hover:opacity-100" />
@@ -1694,7 +1700,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 </button>
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard} />
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard} />
                 ))}
               </div>
             ))}
@@ -1972,7 +1978,7 @@ const CU_POLL_SLOW_MS = 300_000;
  * `Who` and `Sprint` appear only once some card actually has one. A column of
  * blanks costs the title its width and tells you nothing.
  */
-const cuGrid = (who: boolean, sprint: boolean, est: boolean) =>
+const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean) =>
   // The comments column is unconditional, unlike Who and Sprint. Those come and
   // go because a board where nobody is assigned has nothing to put in them; a
   // count of zero is a real answer and worth the 30px — "nobody has said
@@ -1982,7 +1988,33 @@ const cuGrid = (who: boolean, sprint: boolean, est: boolean) =>
   // pixels tall — so a card with 3 points and 8 comments read as either. Two
   // columns of the same shape need something between them, and Due is the
   // widest thing on the row.
-  ["1fr", who ? "50px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px"].filter(Boolean).join(" ");
+  // The swatch track is 36px for a dot that is 18: the width belongs to the
+  // HEADING, not the dot. A colour with no word over it is a code the reader has
+  // to have been told, and this column is the one thing on the row that is pure
+  // colour — so it pays for the label that says which field it is.
+  ["1fr", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px"].filter(Boolean).join(" ");
+
+/**
+ * The one custom field worth a column of its own: a coloured drop-down.
+ *
+ * A squad, a pod, a team — whatever the board calls it, it is the field people
+ * scan a board BY, and ClickUp itself renders it as a block of colour rather
+ * than as a word. Picked by name first, so a board with several coloured
+ * drop-downs shows the one that means "whose work is this"; otherwise the first
+ * coloured one, which on a board with exactly one is the same answer without
+ * anybody having to configure it.
+ *
+ * Null for a field nobody coloured: a grey dot in a colour column is a value
+ * pretending to be a category, and the card still spells the value out.
+ */
+function swatch(t: ProviderTask): { name: string; value: string; color: string } | null {
+  const coloured = (t.custom ?? []).filter((c) => c.color);
+  const hit = coloured.find((c) => /squad|team|pod|tribe/i.test(c.name)) ?? coloured[0];
+  // The "(DO NOT EDIT!!!)" kind of parenthesis is a note to whoever edits the
+  // field, not part of its name, and the card already strips it. A heading is
+  // three characters wide here — it cannot carry an aside as well.
+  return hit ? { name: hit.name.replace(/\s*\(.*\)\s*$/, ""), value: hit.value, color: hit.color! } : null;
+}
 
 /**
  * A status, spelled and coloured the way the board spells and colours it.
@@ -2082,9 +2114,9 @@ function PriorityChip({ p }: { p: NonNullable<ProviderTask["priority"]> }) {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, blocked, onHand }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
-  grid: string; showWho: boolean; showSprint: boolean; showEst: boolean;
+  grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
   blocked: ProviderTask[];
   /** Hand this card over without opening it. Absent where there is no checkout
@@ -2112,6 +2144,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, 
   const late = !!t.due && t.due < today;
   const now = t.due === today;
   const done = t.statusKind === "done";
+  const sq = showSquad ? swatch(t) : null;
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
@@ -2165,6 +2198,26 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, 
           {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
           {(t.people?.length ?? 0) > 3 && (
             <span className="text-[8.5px] ml-1" style={{ color: "var(--text4)" }}>+{(t.people!.length) - 3}</span>
+          )}
+        </span>
+      )}
+      {/* The squad as the board paints it, at the size of a face.
+          Colour is how a multi-squad board is read — ClickUp itself gives that
+          field a solid block of it — and the word was one click deep, on the
+          card. A dot the size of an avatar sits on the same optical line as the
+          faces beside it, so the two columns read as one glance. The name and
+          the value are both on hover, because a colour on its own is only
+          learnable by someone who already knows the board. */}
+      {showSquad && (
+        <span className="flex items-center justify-center">
+          {sq && (
+            <span title={`${sq.name}: ${sq.value}`} aria-label={`${sq.name}: ${sq.value}`}
+              style={{
+                width: 18, height: 18, borderRadius: 999, background: sq.color,
+                // The same ring the faces wear, so a pale option does not float
+                // off a dark row and a dark one does not sink into it.
+                boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent)",
+              }} />
           )}
         </span>
       )}
@@ -2711,11 +2764,30 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             <span style={{ color: "var(--text3)" }} title={new Date(t.updated).toLocaleString()}>{fmtAgo(t.updated)}</span>
           </CardField>
         ) : null}
+        {/* A coloured drop-down as a chip in its own colour, the way the board
+            draws it. "Blue" printed in grey is a value you have to read and
+            then translate back into the colour you already recognise — and the
+            colour is ClickUp's own, so this window and that one agree. Fill and
+            border at low alpha rather than ClickUp's solid block: this is a
+            value in a column of values, and a saturated rectangle here would
+            outshout the status pill, which is the thing on the card that
+            actually changes. */}
         {t.custom?.map((c) => {
           const spec = fields.find((f) => f.id === c.id);
           return (
             <CardField key={c.id} label={c.name.replace(/\s*\(.*\)\s*$/, "")}>
-              <span style={{ color: "var(--text2)" }}>{c.value}{spec?.readOnly ? " 🔒" : ""}</span>
+              {c.color ? (
+                <span className="text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap" title={c.value}
+                  style={{
+                    color: c.color,
+                    background: `color-mix(in srgb, ${c.color} 15%, transparent)`,
+                    border: `1px solid color-mix(in srgb, ${c.color} 34%, transparent)`,
+                  }}>
+                  {c.value}{spec?.readOnly ? " 🔒" : ""}
+                </span>
+              ) : (
+                <span style={{ color: "var(--text2)" }}>{c.value}{spec?.readOnly ? " 🔒" : ""}</span>
+              )}
             </CardField>
           );
         })}
