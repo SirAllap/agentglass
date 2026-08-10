@@ -24,6 +24,7 @@ import { dirname, join, normalize } from "node:path";
 import type { TmuxWindow, TmuxPane, AgentPane } from "../../shared/types.ts";
 import { parsePanes, PANE_FORMAT } from "./paneloc.ts";
 import { findTmuxBelow } from "./procchildren.ts";
+import { recall } from "./tmuxmemory.ts";
 
 /** How long a tmux call may take before we give up on it. Generous for a local
  *  socket, and short enough that a wedged tmux server cannot stall the poll. */
@@ -1573,15 +1574,32 @@ export type PaneWireRow = Omit<AgentPane, "agentSession"> & { socket: string[] }
 
 export function listPanes(known?: string[]): PaneWireRow[] {
   const rows: PaneWireRow[] = [];
+  /* The server we were last on, read once rather than per socket. Null when
+     nothing is remembered, which is exactly how this behaved before. */
+  const ours = recall()?.socket ?? null;
   for (const socket of tmuxSockets(known)) {
-    // Only servers somebody is attached to. "Take me there" means nothing on a
-    // server nobody is looking at, and skipping them is not a nicety: this
-    // project's own test suite leaves a tmux server behind on a stray socket,
-    // and a resurrect/continuum config then restores the user's real sessions
-    // into it — so an unattached server can be a convincing duplicate of the
-    // one you actually work in, with different pane ids. Offering those was
-    // offering to move a window nobody would see move.
-    if (!tmux(socket, ["list-clients", "-F", "#{client_tty}"])?.trim()) continue;
+    /*
+     * Servers somebody is attached to — or the one we ourselves were last on.
+     *
+     * The filter is doing a real job and keeps it: this project's own test
+     * suite leaves a tmux server behind on a stray socket, and a
+     * resurrect/continuum config then restores the user's real sessions into
+     * it, so an unattached server CAN be a convincing duplicate of the one you
+     * work in, with different pane ids. Offering those was offering to move a
+     * window nobody would see move.
+     *
+     * But agentglass's own panel is usually the only client on the server it
+     * shows, so closing the app detaches that session — and this line then hid
+     * the session the app had just put down. Reported as having to run
+     * `tmux attach -t <name>` in a terminal outside the app after every
+     * restart, to be shown your own work again.
+     *
+     * A socket this app was demonstrably attached to is not a stray, whatever
+     * the client count says now, and it is the ONE detached server that gets
+     * through. Everything else is unchanged. See tmuxmemory.ts.
+     */
+    const mine = ours !== null && socketPath(socket) === ours;
+    if (!mine && !tmux(socket, ["list-clients", "-F", "#{client_tty}"])?.trim()) continue;
     const out = tmux(socket, ["list-panes", "-a", "-F", PANE_FORMAT]);
     if (!out) continue;
     const nested = nestedSessions(socket);
@@ -2355,6 +2373,81 @@ function unzoomWindow(socket: string[], sessionId: string, windowId: string, onl
   if (flag !== "1") return false;
   if (onlyPane !== undefined && active !== onlyPane) return false;
   return tmux(socket, ["resize-pane", "-Z", "-t", target]) !== null;
+}
+
+/**
+ * The command that puts the desk back where it was.
+ *
+ * Deliberately NOT `attachArgvFor`. That one is the phone's: it makes a grouped
+ * session of its own so two screens can look at one window at different sizes,
+ * and it marks `window-size` so the desk's width can be handed back. The desk
+ * is the session — it wants the real one, at its own size, with no group and
+ * nothing owed on the way out. What the user was typing by hand is exactly
+ * this, and this is what they should stop having to type.
+ *
+ * Resolved to a session ID before it is run. A name is matched by PREFIX
+ * unless you fight the syntax, so attaching to a remembered `work` could land
+ * you in `workbench` — silently, and in somebody else's windows. `$3` is
+ * unambiguous. Null when the session is not there any more, which is the whole
+ * check: a socket path is reused across boots, so "remembered" is a lead and
+ * the live list is the answer.
+ */
+export function deskAttachArgv(socketPath: string, session: string): string[] | null {
+  if (!socketPath) return null;
+  const socket = ["-S", socketPath];
+  const out = tmux(socket, ["list-sessions", "-F", "#{session_id}\t#{session_name}"]);
+
+  /*
+   * Nothing answered: there is no server on that socket at all, which is what
+   * a machine looks like after it has been turned on.
+   *
+   * `new-session -A -s <name>`, and every word of it was measured on tmux 3.7
+   * because the obvious spellings are wrong:
+   *
+   *   - `tmux` with no arguments starts the server and attaches you to the
+   *     session IT just made. A resurrect/continuum setup then restores your
+   *     real sessions behind you, and you are sitting in `0` watching none of
+   *     them. Reported exactly that way: "las tabs no son ni las de alavera".
+   *   - `start-server` is not a way to wait for the restore either: a server
+   *     with no sessions exits immediately, so it leaves nothing behind at all.
+   *   - `-A` means attach-or-create, so the same command covers a live server
+   *     that already has it. The name is exact — `-s alav` makes a session
+   *     called `alav` beside `alavera` rather than matching it.
+   *
+   * What makes it land where it should is that creating the session STARTS the
+   * server, which sources their configuration, which is what fires continuum's
+   * restore. resurrect puts missing windows into sessions that already exist,
+   * so the session we just made is filled in with its own windows rather than
+   * competing with the restore. We restore nothing and install nothing.
+   *
+   * With no name remembered there is nothing to ask for, and bare `tmux` — what
+   * the user would type — is the honest fallback.
+   */
+  if (out === null || !out.trim()) {
+    return session
+      ? ["tmux", ...socket, "new-session", "-A", "-s", session]
+      : ["tmux", ...socket];
+  }
+
+  for (const line of out.split("\n")) {
+    const [id, name] = line.split("\t");
+    // Exact, not a prefix, and the id has to be one before it is passed on.
+    if (session && name === session && id && SESSION_ID.test(id)) {
+      return ["tmux", ...socket, "attach-session", "-t", id];
+    }
+  }
+
+  /*
+   * The server is up but the remembered session is not in it — renamed, killed,
+   * or restored under another name. Attaching with no `-t` takes the most
+   * recently used session, which is the closest thing to "where I was" that
+   * tmux itself can answer, and is what a bare `tmux attach` does.
+   *
+   * Better than starting a server here: `tmux` with a server already running
+   * would make ANOTHER session beside the ones that exist, which is how you end
+   * up with `0`, `1`, `2` beside the work.
+   */
+  return ["tmux", ...socket, "attach-session"];
 }
 
 export function attachArgvFor(

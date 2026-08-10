@@ -339,7 +339,62 @@ const owed = new Set<PhoneAttach>();
  * not know which of the machine's tmux servers is the user's.
  */
 let lastTarget: TmuxTarget | null = null;
-export const lastTmuxTarget = (): TmuxTarget | null => lastTarget;
+
+/**
+ * Seeded from disk, so the answer survives a restart.
+ *
+ * "Null until a terminal has been opened once this run" was honest and it was
+ * also the whole of the complaint: close the app, reopen it, and the session
+ * you were in is not on offer — the panel's client was the only one on that
+ * server, so closing detached it, and a detached server is one `listPanes`
+ * skips. You had to attach from a terminal outside the app to be shown your
+ * own session back.
+ *
+ * A remembered socket is not a live client and is not pretended to be one: the
+ * pid is 0, the id is empty, and nothing that needs a client will accept it.
+ * What it does carry is the socket, which is the durable half and the only part
+ * anybody asks a stale target for.
+ */
+export const lastTmuxTarget = (): TmuxTarget | null => {
+  if (lastTarget) return lastTarget;
+  const seen = recall();
+  return seen ? { pid: 0, socket: ["-S", seen.socket], session: seen.session, id: "" } : null;
+};
+
+/**
+ * Write it down, when it has changed.
+ *
+ * `readFrame` runs on a poll, so this is reached constantly; the guard is what
+ * keeps that from being a write per tick. `socketPath` resolves `-L work` and
+ * the path it means to one spelling — the stored value has to be comparable
+ * with what discovery finds, and only the path is.
+ */
+let remembered = "";
+let settling = "";
+let settlingSince = 0;
+function rememberTarget(t: TmuxTarget, now = Date.now()): void {
+  const path = socketPath(t.socket);
+  if (!path) return;
+  /*
+   * A phone's mirror is a session this app made, not a place the user works.
+   * Remembering one would bring back an empty grouped session on the next cold
+   * start, named after a device that is not here.
+   */
+  if (isPhoneSession(t.session)) return;
+
+  const key = `${path}\u0000${t.session}`;
+  /*
+   * Only once the panel has SETTLED here. tmux moves a client through sessions
+   * on its way past — after a restore it put this one on `docker` for a moment
+   * — and the last one touched is not the one the day was spent in. See
+   * SETTLE_MS.
+   */
+  if (key !== settling) { settling = key; settlingSince = now; return; }
+  if (now - settlingSince < SETTLE_MS) return;
+  if (key === remembered) return;
+  remembered = key;
+  remember(path, t.session);
+}
 
 const clampCols = (v: unknown) => Math.min(500, Math.max(20, Math.floor(Number(v)) || 0));
 const clampRows = (v: unknown) => Math.min(300, Math.max(5, Math.floor(Number(v)) || 0));
@@ -367,6 +422,8 @@ function killGroup(s: Session, sigNum: number) {
 }
 
 import { findTmuxBelow } from "./procchildren.ts";
+import { recall, remember, SETTLE_MS } from "./tmuxmemory.ts";
+import { deskAttachArgv } from "./tmuxctl.ts";
 import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
@@ -603,10 +660,33 @@ export function ptyOpen(ws: PtyWs) {
    */
   const startIn = ticket && inScope(ticket.cwd) && existsSync(ticket.cwd) ? ticket.cwd : cwd;
 
+  /*
+   * A plain terminal, opened where you left it.
+   *
+   * The panel's client is normally the only client on its tmux server, so
+   * closing agentglass detaches the session — and opening it again started a
+   * BARE SHELL, so the work was still running and simply not on screen. The
+   * way back was `tmux attach -t <name>` typed into that new shell, every
+   * time, which is the complaint this answers.
+   *
+   * Last on purpose, so it can only ever replace the bare shell: a tap on a
+   * specific pane, an agent ticket and the file viewer all still win, because
+   * each of those is somebody asking for a particular thing. This is the case
+   * where nobody asked for anything, and "the session you were in" is a better
+   * answer to that than "a fresh prompt".
+   *
+   * `deskAttachArgv` returns null unless that session is still live on that
+   * socket, so a machine rebooted since — or a session killed — falls through
+   * to the shell exactly as before. See tmuxmemory.ts.
+   */
+  const resume = (!attach && !agentRun.length && !editor && !d.pane)
+    ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
+    : null;
+
   const run = attach
     ? attach.argv
     : agentRun.length ? agentRun
-    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : [shell, ...args];
+    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : resume ?? [shell, ...args];
 
   let argv: string[];
   let mode: Session["mode"] = "pty";
@@ -729,6 +809,9 @@ export function ptyOpen(ws: PtyWs) {
     const frame = session.tmuxClient ? readFrame(session.tmuxClient) : null;
     if (frame) {
       lastTarget = frame.target;
+      // And on disk, so the next run knows where you were. Cheap enough to do
+      // on every frame: it is one small write and only when the target changed.
+      rememberTarget(frame.target);
       if (frame.target.id !== session.tmux?.id) followSession(frame.target);
       else session.tmux = frame.target; // a rename keeps the id and changes the name
       /*
