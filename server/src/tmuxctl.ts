@@ -2375,6 +2375,38 @@ function unzoomWindow(socket: string[], sessionId: string, windowId: string, onl
   return tmux(socket, ["resize-pane", "-Z", "-t", target]) !== null;
 }
 
+/**
+ * The command that puts the desk back where it was: a plain `tmux attach`.
+ *
+ * Deliberately NOT `attachArgvFor`. That one is the phone's: it makes a grouped
+ * session of its own so two screens can look at one window at different sizes,
+ * and it marks `window-size` so the desk's width can be handed back. The desk
+ * is the session — it wants the real one, at its own size, with no group and
+ * nothing owed on the way out. What the user was typing by hand is exactly
+ * this, and this is what they should stop having to type.
+ *
+ * Resolved to a session ID before it is run. A name is matched by PREFIX
+ * unless you fight the syntax, so attaching to a remembered `work` could land
+ * you in `workbench` — silently, and in somebody else's windows. `$3` is
+ * unambiguous. Null when the session is not there any more, which is the whole
+ * check: a socket path is reused across boots, so "remembered" is a lead and
+ * the live list is the answer.
+ */
+export function deskAttachArgv(socketPath: string, session: string): string[] | null {
+  if (!socketPath || !session) return null;
+  const socket = ["-S", socketPath];
+  const out = tmux(socket, ["list-sessions", "-F", "#{session_id}\t#{session_name}"]);
+  if (!out) return null;
+  for (const line of out.split("\n")) {
+    const [id, name] = line.split("\t");
+    // Exact, not a prefix, and the id has to be one before it is passed on.
+    if (name === session && id && SESSION_ID.test(id)) {
+      return ["tmux", ...socket, "attach-session", "-t", id];
+    }
+  }
+  return null;
+}
+
 export function attachArgvFor(
   known: string[] | undefined,
   paneId: string,

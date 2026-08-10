@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { memoryPath, recall, remember, STALE_AFTER_MS } from "../src/tmuxmemory.ts";
-import { listPanes } from "../src/tmuxctl.ts";
+import { deskAttachArgv, listPanes } from "../src/tmuxctl.ts";
 
 let home = "";
 let sockdir = "";
@@ -155,5 +155,51 @@ describe("the session you left is on offer again", () => {
     remember(sock, "workbench");
     tmux(sock, "kill-server");
     expect(listPanes([]).map((r) => r.session)).not.toContain("workbench");
+  });
+});
+
+describe("the command that puts the desk back", () => {
+  it("attaches to the remembered session by its id, not its name", () => {
+    /*
+     * A name is matched by PREFIX unless you fight the syntax, so attaching to
+     * a remembered `work` could land in `workbench` — silently, in somebody
+     * else's windows. Asserted with exactly that pair.
+     */
+    const sock = detachedServer("work");
+    tmux(sock, "new-session", "-d", "-s", "workbench", "sleep 300");
+    const argv = deskAttachArgv(sock, "work");
+    /*
+     * Read through `list-sessions` rather than `display-message -t =work`:
+     * measured on tmux 3.7, the `=name` form answers NOTHING here — the same
+     * shape as `set-option -t =name` being refused outright while
+     * `list-windows -t =name` accepts it. Asserting through it made the code
+     * look wrong when it had returned the right id.
+     */
+    const id = tmux(sock, "list-sessions", "-F", "#{session_id}\t#{session_name}")
+      .split("\n").find((l) => l.endsWith("\twork"))!.split("\t")[0];
+    expect(argv).toEqual(["tmux", "-S", sock, "attach-session", "-t", id]);
+  });
+
+  it("is a plain attach — no grouped session, nothing owed back", () => {
+    // Deliberately not the phone's attach: that one makes a session of its own
+    // so two screens can differ in size, and marks window-size to hand back.
+    // The desk IS the session.
+    const sock = detachedServer("workbench");
+    const argv = deskAttachArgv(sock, "workbench")!;
+    expect(argv).toContain("attach-session");
+    expect(argv).not.toContain("new-session");
+    expect(argv.join(" ")).not.toContain("window-size");
+  });
+
+  it("says no when that session is gone, so the panel opens a shell instead", () => {
+    const sock = detachedServer("workbench");
+    expect(deskAttachArgv(sock, "gone")).toBe(null);
+    tmux(sock, "kill-server");
+    expect(deskAttachArgv(sock, "workbench")).toBe(null);
+  });
+
+  it("says no to an empty socket or an empty name rather than attaching to whatever", () => {
+    expect(deskAttachArgv("", "workbench")).toBe(null);
+    expect(deskAttachArgv("/nope", "")).toBe(null);
   });
 });
