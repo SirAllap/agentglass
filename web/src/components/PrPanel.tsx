@@ -1646,11 +1646,24 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       if (Math.abs(el.scrollTop - want) > 1 && el.scrollTop < want) el.scrollTop = want;
       /* Stop as soon as it lands, or when the content has been still for a
          while — two seconds is the ceiling, not the plan. */
-      if ((Math.abs(el.scrollTop - want) <= 1 && !grew) || Date.now() - started > 2_000) return;
+      if ((Math.abs(el.scrollTop - want) <= 1 && !grew) || Date.now() - started > 8_000) return;
       requestAnimationFrame(put);
     };
     requestAnimationFrame(put);
-    return () => { alive = false; };
+    /* Eight seconds is a long time to keep pushing a scroller around, so any
+       sign of the reader touching it ends the attempt at once. Restoring a
+       position on top of somebody who has started reading is worse than not
+       restoring it. */
+    const stop = () => { alive = false; };
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("touchstart", stop, { passive: true });
+    el.addEventListener("keydown", stop);
+    return () => {
+      alive = false;
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("touchstart", stop);
+      el.removeEventListener("keydown", stop);
+    };
   }, [tab, selected]);
   /** What the merge control is doing right now, "" when it is doing nothing.
    *  A sentence rather than a boolean because the merge is two writes and they
@@ -6018,7 +6031,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
       const put = () => {
         if (!alive) return;
         if (el.scrollTop < want - 1) el.scrollTop = want;
-        if (Math.abs(el.scrollTop - want) <= 1 || Date.now() - started > 2_000) return;
+        if (Math.abs(el.scrollTop - want) <= 1 || Date.now() - started > 8_000) return;
         requestAnimationFrame(put);
       };
       requestAnimationFrame(put);
