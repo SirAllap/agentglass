@@ -540,6 +540,10 @@ describe("each tab keeps its own place", () => {
     // Files scrolls inside itself, so it keeps its own place, outside the
     // component — the component is what goes away when you change tab.
     expect(src).toContain("const FILES_SCROLL = new Map<string, number>();");
+    /* Written on every scroll, never on the way out: by the time a passive
+       cleanup runs the node is out of the document, where `scrollTop` reads 0 —
+       so it faithfully remembered zero every time. */
+    expect(src).toContain("onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); }}");
   });
 
   it("starts a different pull request at the top", () => {

@@ -6043,10 +6043,9 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
         requestAnimationFrame(put);
       };
       requestAnimationFrame(put);
-      // eslint-disable-next-line consistent-return
-      return () => { alive = false; FILES_SCROLL.set(key, el.scrollTop); };
+      return () => { alive = false; };
     }
-    return () => { FILES_SCROLL.set(key, el.scrollTop); };
+    return;
   }, [root, d.number]);
   /*
    * How tall the tree may be, measured rather than guessed.
@@ -6449,7 +6448,18 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
      * `vScrollerOf` finds this rather than the page, so j/k and the file jump
      * follow it without being told.
      */
-    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey} className="agx-col3 agx-scroll text-[11px] flex flex-col gap-2 outline-none">
+    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
+      /*
+       * Written on every scroll, never on the way out.
+       *
+       * The first version saved in the effect's cleanup — and by the time a
+       * passive cleanup runs the node is already out of the document, where
+       * `scrollTop` reads 0. So it faithfully remembered zero, every time, and
+       * the tab always came back at the top. Reported as "el scroll de la file
+       * abierta no se mantiene nunca".
+       */
+      onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); }}
+      className="agx-col3 agx-scroll text-[11px] flex flex-col gap-2 outline-none">
       {/* One bar, and it stays put: filter, view mode, progress. Everything that
           used to be repeated on each file's own toolbar lives here once.
 
