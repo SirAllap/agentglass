@@ -30,7 +30,7 @@ import type { PrSummary } from "../../../shared/types.ts";
  * this merge was written.
  */
 const SECOND_PASS = ["checks", "checksLoaded", "additions", "deletions", "changedFiles",
-  "reviewDecision", "mergeable"] as const;
+  "reviewDecision", "mergeable", "reviewers"] as const;
 
 export function keepLoadedChecks(prev: PrSummary[], next: PrSummary[]): PrSummary[] {
   if (!prev.length || !next.length) return next;

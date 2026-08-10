@@ -87,3 +87,13 @@ describe("what the fast pass empties", () => {
     expect(keepLoadedChecks([before], [fresh])[0]!.reviewDecision).toBe("CHANGES_REQUESTED");
   });
 });
+
+describe("the reviewer chip", () => {
+  it("does not blink out on a refresh", () => {
+    // Measured the same way as the rest: the early rows come back with nobody
+    // on them, so the chip vanished and returned on every poll.
+    const before = row(1, { checksLoaded: true, reviewers: [{ login: "nordvik" }] });
+    const fastRow = row(1, { checksLoaded: false, reviewers: [] });
+    expect(keepLoadedChecks([before], [fastRow])[0]!.reviewers).toEqual([{ login: "nordvik" }]);
+  });
+});

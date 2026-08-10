@@ -1143,7 +1143,8 @@ export function rollupFromCounts(checkRun: StateCount[] | undefined, statusCtx: 
  *
  * Measured, not guessed — sampling the running server through a forced refresh,
  * the early rows come back with exactly these fields emptied: the review
- * decision, mergeability, the check rollup and the diff stats. Everything else
+ * decision, mergeability, the reviewers, the check rollup and the diff stats.
+ * Everything else
  * (title, state, labels, assignees, `updatedAt`) IS fresher in the new row and
  * is taken from it.
  */
@@ -1158,6 +1159,9 @@ function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummary {
     changedFiles: next.changedFiles || old.changedFiles,
     reviewDecision: next.reviewDecision ?? old.reviewDecision,
     mergeable: next.mergeable === "UNKNOWN" ? old.mergeable : next.mergeable,
+    /* Measured the same way: the early rows come back with nobody on them, and
+       the card's reviewer chip blinked out and back on every refresh. */
+    reviewers: next.reviewers?.length ? next.reviewers : old.reviewers,
   };
 }
 

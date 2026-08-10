@@ -523,3 +523,16 @@ describe("finding a card on the board", () => {
     expect(board).toContain("`#${p.number}`, String(p.number), p.title, p.author, p.headRefName, p.baseRefName,");
   });
 });
+
+describe("who was asked to review it", () => {
+  it("is drawn as faces, not as two letters", () => {
+    /*
+     * Two letters is a puzzle on a board where the same pair belongs to two
+     * people, and every other surface in the panel draws a reviewer as a
+     * picture. `Avatar` keeps initials as its own fallback, so nothing is lost
+     * where there is no face.
+     */
+    expect(board).toContain("<Avatar login={r.login} size={15} />");
+    expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
+  });
+});

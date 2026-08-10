@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PrSummary } from "../../../shared/types.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed } from "../lib/prLanes.ts";
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
+import { Avatar } from "./Avatar.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
@@ -650,8 +651,17 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {p.labels.length > 1 && <span title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 1}</span>}
         </span>
         {!!p.reviewers?.length && (
-          <span className="ml-auto shrink-0 text-[9.5px]" title={`Reviewers: ${p.reviewers.map((r) => r.login).join(", ")}`}>
-            {p.reviewers.slice(0, 3).map((r) => r.login.slice(0, 2).toUpperCase()).join(" ")}
+          /* Faces, not initials. Two letters is a puzzle on a board where the
+             same pair belongs to two people, and the picture is the thing the
+             eye already knows — the panel draws reviewers this way everywhere
+             else. `Avatar` keeps the initials as its own fallback for anybody
+             without a picture, so nothing is lost where there is no face. */
+          <span className="ml-auto shrink-0 flex items-center" title={`Reviewers: ${p.reviewers.map((r) => r.login).join(", ")}`}>
+            {p.reviewers.slice(0, 3).map((r, i) => (
+              <span key={r.login} style={{ marginLeft: i ? -4 : 0, zIndex: 3 - i, position: "relative" }}>
+                <Avatar login={r.login} size={15} />
+              </span>
+            ))}
           </span>
         )}
       </div>
