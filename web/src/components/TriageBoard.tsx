@@ -135,9 +135,21 @@ export function TriageBoard({
    * lane would wrap into the top of the next — which reads as the cursor
    * teleporting. Lane and row, and `j` at the end of a lane simply stops.
    */
+  /*
+   * The columns actually drawn.
+   *
+   * `LANES` is the policy; this is the screen. Only one lane opts out of being
+   * shown empty — see `hideWhenEmpty` — and everything downstream counts
+   * columns rather than lanes so the keyboard's 1–5, the h/l walk and the grid
+   * template all agree with what is in front of you.
+   */
+  const cols = useMemo(
+    () => LANES.filter((l) => !l.hideWhenEmpty || (lanes.get(l.id)?.length ?? 0) > 0),
+    [lanes],
+  );
   const [cur, setCur] = useState<{ lane: number; row: number }>({ lane: 0, row: 0 });
   const frame = useRef<HTMLDivElement>(null);
-  const shown = useCallback((i: number) => (lanes.get(LANES[i]!.id) ?? []).slice(0, LANE_CAP), [lanes]);
+  const shown = useCallback((i: number) => (lanes.get(cols[i]?.id ?? "review") ?? []).slice(0, LANE_CAP), [lanes, cols]);
   const at = shown(cur.lane)[cur.row];
 
   // Keep the cursor on something. Lanes empty and fill as checks land, and a
@@ -145,10 +157,10 @@ export function TriageBoard({
   useEffect(() => {
     const n = shown(cur.lane).length;
     if (n === 0) {
-      const next = LANES.findIndex((_, i) => shown(i).length > 0);
+      const next = cols.findIndex((_, i) => shown(i).length > 0);
       if (next >= 0) setCur({ lane: next, row: 0 });
     } else if (cur.row >= n) setCur((c) => ({ ...c, row: n - 1 }));
-  }, [lanes, cur.lane, cur.row, shown]);
+  }, [lanes, cur.lane, cur.row, shown, cols]);
 
   useEffect(() => {
     frame.current?.querySelector<HTMLElement>("[data-cur=\"1\"]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -158,7 +170,7 @@ export function TriageBoard({
     // Never while somebody is typing in the filter above.
     if ((e.target as HTMLElement)?.closest?.("input,textarea")) return;
     const k = e.key;
-    if (k >= "1" && k <= String(LANES.length)) {
+    if (k >= "1" && k <= String(cols.length)) {
       const i = Number(k) - 1;
       if (shown(i).length) { e.preventDefault(); setCur({ lane: i, row: 0 }); }
       return;
@@ -166,7 +178,7 @@ export function TriageBoard({
     if (k === "j" || k === "ArrowDown") { e.preventDefault(); setCur((c) => ({ ...c, row: Math.min(c.row + 1, Math.max(0, shown(c.lane).length - 1)) })); return; }
     if (k === "k" || k === "ArrowUp") { e.preventDefault(); setCur((c) => ({ ...c, row: Math.max(0, c.row - 1) })); return; }
     if (k === "h" || k === "ArrowLeft") { e.preventDefault(); setCur((c) => ({ lane: Math.max(0, c.lane - 1), row: 0 })); return; }
-    if (k === "l" || k === "ArrowRight") { e.preventDefault(); setCur((c) => ({ lane: Math.min(LANES.length - 1, c.lane + 1), row: 0 })); return; }
+    if (k === "l" || k === "ArrowRight") { e.preventDefault(); setCur((c) => ({ lane: Math.min(cols.length - 1, c.lane + 1), row: 0 })); return; }
     if (!at) return;
     if (k === "Enter") { e.preventDefault(); onOpen(at.number); return; }
     if (k === "p") { e.preventDefault(); onTogglePin(at); return; }
@@ -232,7 +244,7 @@ export function TriageBoard({
         */}
       {!waiting && (
         <div className="shrink-0 flex flex-wrap gap-1 px-4 pb-1.5">
-          {LANES.map((l) => {
+          {cols.map((l) => {
             const n = lanes.get(l.id)?.length ?? 0;
             return (
               <span key={l.id} data-seg={l.id}
@@ -259,7 +271,7 @@ export function TriageBoard({
       {/* The keys, printed. A board with a keyboard nobody is told about is a
           board with no keyboard. */}
       <div className="shrink-0 flex gap-3 flex-wrap px-4 pb-1.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
-        <span><K>1</K>–<K>{LANES.length}</K> lane</span>
+        <span><K>1</K>–<K>{cols.length}</K> lane</span>
         <span><K>j</K><K>k</K> card</span>
         <span><K>h</K><K>l</K> across</span>
         <span><K>⏎</K> open</span>
@@ -294,8 +306,8 @@ export function TriageBoard({
             </div>
           </div>
         ) : (
-          <div className="grid gap-2.5 h-full" style={{ gridTemplateColumns: `repeat(${LANES.length}, minmax(268px, 1fr))` }}>
-            {LANES.map((l, i) => {
+          <div className="grid gap-2.5 h-full" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(268px, 1fr))` }}>
+            {cols.map((l, i) => {
               const all = lanes.get(l.id) ?? [];
               const rows = all.slice(0, LANE_CAP);
               const more = all.length - rows.length;

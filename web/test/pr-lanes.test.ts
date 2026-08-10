@@ -81,6 +81,38 @@ describe("what is asked of you comes first", () => {
   });
 });
 
+describe("before the check rollups have landed", () => {
+  /*
+   * The list arrives in two passes: rows in ~1.5s, check rollups about four
+   * seconds behind. For that moment every rollup is empty — and read as fact,
+   * an empty rollup says "no checks". Reported from the app: after a restart
+   * the whole board sat in "yours, in flight" reading "Open, green, and nobody
+   * has been asked to look yet", and came right on Refresh.
+   */
+  it("says it is still loading rather than calling it green", () => {
+    const f = fileInLane(pr({ checksLoaded: false, ok: 0 } as never), MINE);
+    expect(f.lane).toBe("flight");
+    expect(f.reason).toContain("Still reading its checks");
+  });
+
+  it("does not let it reach ready-to-land on an empty rollup", () => {
+    expect(fileInLane(pr({ reviewDecision: "APPROVED", checksLoaded: false, ok: 0 } as never), MINE).lane)
+      .not.toBe("land");
+  });
+
+  it("still hands you a review that was asked of you", () => {
+    // Whether the checks are in has nothing to do with whether your name is on
+    // it, and the review lane is above this test for that reason.
+    expect(fileInLane(pr({ checksLoaded: false, ok: 0 } as never), ASKED).lane).toBe("review");
+  });
+
+  it("leaves a caller that never had two passes alone", () => {
+    // `undefined` is "this summary was not built that way"; only an explicit
+    // false is the server saying the second pass is still out.
+    expect(fileInLane(pr({ ok: 0 }), MINE).reason).not.toContain("Still reading");
+  });
+});
+
 describe("ready to land", () => {
   it("is approved, green, and nothing running", () => {
     const f = fileInLane(pr({ reviewDecision: "APPROVED" }), MINE);

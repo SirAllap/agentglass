@@ -2136,6 +2136,29 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * two before the first resolves — a claim, and the wrong one.
    */
   const [boardLoading, setBoardLoading] = useState(true);
+  /*
+   * The board asks again while the check rollups are still out.
+   *
+   * The two lists arrive in two passes — rows first, checks about four seconds
+   * behind — and the board used to read whatever the first pass said and stop
+   * there. So after a restart every card sat in the wrong lane until somebody
+   * pressed Refresh, which was the only thing that asked again. Reported that
+   * way.
+   *
+   * Counted, not endless: if the rollup never lands (a failed fetch, a rate
+   * limit) this must go quiet rather than poll for ever behind a view whose
+   * whole promise is that it costs two calls.
+   */
+  const [boardTick, setBoardTick] = useState(0);
+  const boardTries = useRef(0);
+  useEffect(() => { boardTries.current = 0; }, [boardOn, root, stateSel]);
+  useEffect(() => {
+    if (!boardOn) return;
+    const waiting = [...boardMine, ...boardReview].some((p) => p.checksLoaded === false);
+    if (!waiting || boardTries.current >= 8) return;
+    const t = setTimeout(() => { boardTries.current += 1; setBoardTick((n) => n + 1); }, 2_000);
+    return () => clearTimeout(t);
+  }, [boardOn, boardMine, boardReview]);
   useEffect(() => {
     if (!boardOn || !root) return;
     let live = true;
@@ -2148,7 +2171,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       api.prList(root, "review", stateSel, false).then((r) => { if (live) setBoardReview(r.prs ?? []); }),
     ]).then(() => { if (live) setBoardLoading(false); });
     return () => { live = false; };
-  }, [boardOn, root, stateSel, listState.fetchedAt]);
+  }, [boardOn, root, stateSel, listState.fetchedAt, boardTick]);
 
   // If the cursor's row is filtered out, move it to the first row still visible
   // rather than leaving a phantom highlight on a hidden PR — the same

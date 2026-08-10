@@ -32,6 +32,19 @@ export interface Lane {
   why: string;
   /** Which CSS variable tints it. */
   tint: string;
+  /**
+   * Drawn only when it holds something.
+   *
+   * An empty lane is usually the most valuable thing on this board — "Needs
+   * your review · Nothing here. Good." is the answer somebody came for. That
+   * only holds where the zero is news. `others` can only ever be fed by the two
+   * lists the board is given, yours and the ones you were asked to look at, so
+   * for it to have a card at all somebody must have asked you to review a draft
+   * or something conflicting. Reported after weeks of use: "0 waiting on
+   * someone else, nunca he visto una PR ahí". A column that is always empty is
+   * a column that teaches you to skip a fifth of the screen.
+   */
+  hideWhenEmpty?: boolean;
 }
 
 export const LANES: Lane[] = [
@@ -42,7 +55,7 @@ export const LANES: Lane[] = [
   { id: "blocked", label: "Blocked", tint: "var(--error)",
     why: "Red checks or conflicts. Reviewing these is wasted work until they move." },
   { id: "others", label: "Waiting on someone else", tint: "var(--info)",
-    why: "Not yours to move. The only useful action is a poke." },
+    why: "Not yours to move. The only useful action is a poke.", hideWhenEmpty: true },
   { id: "flight", label: "Yours, in flight", tint: "var(--primary)",
     why: "Open by you and still moving. Nothing is owed by you right now." },
 ];
@@ -155,6 +168,25 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
       reason: changesAsked
         ? "You asked for changes and were re-requested — this is the fix, not the first look."
         : "Asked of you. Nobody else can unblock it." };
+  }
+
+  /*
+   * The checks have not come back yet, and that is not the same as none.
+   *
+   * The list arrives in two passes on purpose — the rows in 1.5s, the check
+   * rollups four seconds behind them — so for a moment every pull request has
+   * an empty rollup. Read as fact, that empty rollup says "no checks", and the
+   * board filed a whole repository under "Open, green, and nobody has been
+   * asked to look yet". Reported exactly that way: every card in the wrong lane
+   * after a restart, correct after pressing Refresh.
+   *
+   * Said as a wait instead. `checksLoaded === false` is the server telling us
+   * the second pass is still out; `undefined` is a caller that never had two
+   * passes, and is left alone.
+   */
+  if (p.checksLoaded === false) {
+    return { lane: stake.mine ? "flight" : "others",
+      reason: "Still reading its checks — this card is not finished loading." };
   }
 
   /*

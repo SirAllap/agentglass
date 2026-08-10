@@ -382,8 +382,18 @@ describe("the lane headings line up", () => {
   it("keeps every why as something you can still read", () => {
     // Hidden, not deleted: it is what the ⓘ says, read once while you are
     // learning what a lane means rather than on every glance for ever after.
+    //
+    // Every lane DRAWN, which is not every lane declared: `others` opts out of
+    // being shown empty, and on this board it is empty. Asserting over all five
+    // would be asserting that a column nobody can see explains itself.
     const html = render({ mine: [pr(1)] });
-    for (const l of LANES) expect(html).toContain(l.why);
+    for (const l of LANES) {
+      if (l.hideWhenEmpty) continue;
+      expect(html).toContain(l.why);
+    }
+    // And with something in it, it is a column again, ⓘ and all.
+    const withOthers = render({ review: [pr(9, { isDraft: true })] });
+    for (const l of LANES) expect(withOthers).toContain(l.why);
   });
 });
 
