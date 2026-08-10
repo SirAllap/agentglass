@@ -191,15 +191,28 @@ describe("the command that puts the desk back", () => {
     expect(argv.join(" ")).not.toContain("window-size");
   });
 
-  it("says no when that session is gone, so the panel opens a shell instead", () => {
-    const sock = detachedServer("workbench");
-    expect(deskAttachArgv(sock, "gone")).toBe(null);
-    tmux(sock, "kill-server");
-    expect(deskAttachArgv(sock, "workbench")).toBe(null);
+  it("starts the server when the machine has just been turned on", () => {
+    /*
+     * The case the first version of this got wrong. After a reboot there is no
+     * server and nothing to attach TO — `attach -t <name>` cannot work, and
+     * falling through to a bare shell is what left the user typing `tmux` by
+     * hand. Bare `tmux` is exactly what they type, and starting the server is
+     * what fires their own configuration, so a resurrect/continuum setup
+     * restores the session itself. We restore nothing.
+     */
+    const sock = join(sockdir, "not-started-yet");
+    expect(deskAttachArgv(sock, "workbench")).toEqual(["tmux", "-S", sock]);
   });
 
-  it("says no to an empty socket or an empty name rather than attaching to whatever", () => {
+  it("takes the most recently used session when the remembered one is gone", () => {
+    // Renamed, killed, or restored under another name. Attaching with no -t is
+    // the closest thing to "where I was" that tmux itself can answer — and it
+    // beats starting a server, which would add a session beside the work.
+    const sock = detachedServer("workbench");
+    expect(deskAttachArgv(sock, "gone")).toEqual(["tmux", "-S", sock, "attach-session"]);
+  });
+
+  it("says no to an empty socket rather than attaching to whatever", () => {
     expect(deskAttachArgv("", "workbench")).toBe(null);
-    expect(deskAttachArgv("/nope", "")).toBe(null);
   });
 });

@@ -2376,7 +2376,7 @@ function unzoomWindow(socket: string[], sessionId: string, windowId: string, onl
 }
 
 /**
- * The command that puts the desk back where it was: a plain `tmux attach`.
+ * The command that puts the desk back where it was.
  *
  * Deliberately NOT `attachArgvFor`. That one is the phone's: it makes a grouped
  * session of its own so two screens can look at one window at different sizes,
@@ -2393,18 +2393,46 @@ function unzoomWindow(socket: string[], sessionId: string, windowId: string, onl
  * the live list is the answer.
  */
 export function deskAttachArgv(socketPath: string, session: string): string[] | null {
-  if (!socketPath || !session) return null;
+  if (!socketPath) return null;
   const socket = ["-S", socketPath];
   const out = tmux(socket, ["list-sessions", "-F", "#{session_id}\t#{session_name}"]);
-  if (!out) return null;
+
+  /*
+   * Nothing answered: there is no server on that socket at all, which is what
+   * a machine looks like after it has been turned on.
+   *
+   * The answer is `tmux` with no arguments, and that is not a shortcut — it is
+   * precisely what the user does by hand, and the ONLY thing that works then:
+   * there is no session to attach to yet. Starting the server is what fires
+   * whatever their configuration does on start, so a resurrect/continuum setup
+   * restores their last session by itself. We restore nothing and install
+   * nothing; we start the server the same way they would and get out of the
+   * way.
+   *
+   * A socket has to have been remembered for this to run at all, so it only
+   * happens for somebody who was already working in tmux here.
+   */
+  if (out === null || !out.trim()) return ["tmux", ...socket];
+
   for (const line of out.split("\n")) {
     const [id, name] = line.split("\t");
     // Exact, not a prefix, and the id has to be one before it is passed on.
-    if (name === session && id && SESSION_ID.test(id)) {
+    if (session && name === session && id && SESSION_ID.test(id)) {
       return ["tmux", ...socket, "attach-session", "-t", id];
     }
   }
-  return null;
+
+  /*
+   * The server is up but the remembered session is not in it — renamed, killed,
+   * or restored under another name. Attaching with no `-t` takes the most
+   * recently used session, which is the closest thing to "where I was" that
+   * tmux itself can answer, and is what a bare `tmux attach` does.
+   *
+   * Better than starting a server here: `tmux` with a server already running
+   * would make ANOTHER session beside the ones that exist, which is how you end
+   * up with `0`, `1`, `2` beside the work.
+   */
+  return ["tmux", ...socket, "attach-session"];
 }
 
 export function attachArgvFor(
