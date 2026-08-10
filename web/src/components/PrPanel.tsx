@@ -4936,6 +4936,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
      undone from here. */
   const [asking, setAsking] = useState(false);
   const [running, setRunning] = useState(false);
+  useEffect(() => { if (!plan.lines.length) setAsking(false); }, [plan.lines.length]);
   const [sel, setSel] = useState<string[]>(selected);
   const [q, setQ] = useState("");
   const selRef = useRef(sel); selRef.current = sel;
@@ -5177,7 +5178,11 @@ function ClickUpSide({ d, folded, onFold, onPlan }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card, pick, add.join(","), drop.join(","), members]);
 
-  useEffect(() => { onPlan({ lines, run }); },
+  /* Folded means "not this time": the plan it publishes is empty, so the
+     button downstairs goes back to plain Done. It was still announcing its
+     changes while put away, which left "Done · and ClickUp" on a menu with
+     nothing showing. */
+  useEffect(() => { onPlan({ lines: folded ? [] : lines, run }); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [lines.join("|"), folded]);
 

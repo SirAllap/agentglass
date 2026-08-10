@@ -718,3 +718,17 @@ describe("the picker's own height", () => {
     expect(src).toContain('className="flex flex-col min-w-0 min-h-0 flex-1"');
   });
 });
+
+describe("folding it away", () => {
+  it("takes its plan with it", () => {
+    /* It was still announcing its changes while put away, which left "Done ·
+       and ClickUp" on a menu with nothing showing. Folded means "not this
+       time". */
+    expect(src).toContain("onPlan({ lines: folded ? [] : lines, run })");
+    expect(src).toContain("if (folded || !card || !changes) return true;");
+  });
+
+  it("drops a summary that no longer has anything to summarise", () => {
+    expect(src).toContain("useEffect(() => { if (!plan.lines.length) setAsking(false); }, [plan.lines.length]);");
+  });
+});
