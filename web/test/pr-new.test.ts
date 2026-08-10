@@ -228,6 +228,19 @@ describe("the mark of having looked", () => {
     expect(readSeen()).toEqual({ b: 5 });
   });
 
+  it("throws away everything a broken build wrote, once", () => {
+    /* A build advanced the mark on every open pull request when the app was
+       restarted. An honest mark and one of those are the same number, so all of
+       them go — and the fallback is "since your last comment", which is what a
+       pull request has before its first visit anyway. */
+    cell.set(SEEN_KEY, JSON.stringify({ "acme/orbit#482": 9_999 }));
+    cell.delete(`${SEEN_KEY}.epoch`);
+    expect(readSeen()).toEqual({});
+    // Once. A mark written after the migration survives the next read.
+    writeSeen("acme/orbit#482", 1234);
+    expect(readSeen()["acme/orbit#482"]).toBe(1234);
+  });
+
   it("can be thrown away, which is the only way back", () => {
     // `writeSeen` refusing to go backwards is right for the writes that happen
     // behind the reader's back and wrong for a reader saying "I had not read

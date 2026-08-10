@@ -49,7 +49,38 @@ export function prSeenKey(repo: string | undefined, number: number): string {
   return `${repo || "?"}#${number}`;
 }
 
+/**
+ * Marks written by a build that wrote them wrong are thrown away, once.
+ *
+ * A build shipped with a `visibilitychange` writer in it — the theory being
+ * that closing the app is another way of leaving a pull request. It is not, and
+ * the first thing it did was advance the mark on every pull request that was
+ * open when the app was restarted, burying the very replies this feature exists
+ * to surface. There is no way to tell a mark written that way from an honest
+ * one, so all of them go.
+ *
+ * The cost of being wrong here is one visit's worth of "since your last
+ * comment", which is the state a pull request has before its first visit
+ * anyway. The cost of leaving them is somebody staring at a conversation that
+ * says nothing happened when two people replied to them.
+ *
+ * Bump `SEEN_EPOCH` if that ever happens again. Nothing else should.
+ */
+export const SEEN_EPOCH = 2;
+const EPOCH_KEY = `${SEEN_KEY}.epoch`;
+
+export function migrateSeen(): void {
+  try {
+    if (Number(localStorage.getItem(EPOCH_KEY)) === SEEN_EPOCH) return;
+    localStorage.removeItem(SEEN_KEY);
+    localStorage.setItem(EPOCH_KEY, String(SEEN_EPOCH));
+  } catch { /* private mode — nothing was stored to migrate */ }
+}
+
 export function readSeen(): Record<string, number> {
+  // Here rather than wired into the panel, so there is no ordering to get
+  // wrong: nothing can read the map before the migration has had its say.
+  migrateSeen();
   try {
     const raw = JSON.parse(localStorage.getItem(SEEN_KEY) || "{}") as unknown;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
