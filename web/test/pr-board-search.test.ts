@@ -528,7 +528,18 @@ describe("each tab keeps its own place", () => {
     /* And again once the tab has its height: content mounts empty and fills, so
        the first assignment is clamped to nothing. Reported as Commits losing
        its place every time you came back. */
-    expect(src).toContain("requestAnimationFrame(() => { put(); requestAnimationFrame(put); });");
+    /* The first retry observed the SCROLLER, whose own box never changes — what
+       grows is its content — so it never fired. This watches `scrollHeight`,
+       which is the number that decides whether the offset can be honoured. */
+    expect(src).toContain("let tall = el.scrollHeight;");
+    expect(src).toContain("const grew = now !== tall;");
+    /* And the position is written on the way OUT as well: a tab whose content
+       shrinks is clamped by the browser the moment the next one renders, and a
+       value read after that is zero. */
+    expect(src).toContain('if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;');
+    // Files scrolls inside itself, so it keeps its own place, outside the
+    // component — the component is what goes away when you change tab.
+    expect(src).toContain("const FILES_SCROLL = new Map<string, number>();");
   });
 
   it("starts a different pull request at the top", () => {

@@ -1631,12 +1631,26 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      * where the content arrives later than that.
      */
     let alive = true;
-    const put = () => { if (alive && Math.abs(el.scrollTop - want) > 1) el.scrollTop = want; };
-    requestAnimationFrame(() => { put(); requestAnimationFrame(put); });
-    const ro = new ResizeObserver(put);
-    ro.observe(el);
-    const stop = setTimeout(() => ro.disconnect(), 2_000);
-    return () => { alive = false; clearTimeout(stop); ro.disconnect(); };
+    /* The first attempt observed the SCROLLER, whose own box never changes —
+       what grows is its content, so the observer never fired and the retry was
+       decoration. This watches `scrollHeight` instead, which is the number that
+       decides whether the offset can be honoured at all, and keeps trying while
+       it is still growing. */
+    let tall = el.scrollHeight;
+    const started = Date.now();
+    const put = () => {
+      if (!alive) return;
+      const now = el.scrollHeight;
+      const grew = now !== tall;
+      tall = now;
+      if (Math.abs(el.scrollTop - want) > 1 && el.scrollTop < want) el.scrollTop = want;
+      /* Stop as soon as it lands, or when the content has been still for a
+         while — two seconds is the ceiling, not the plan. */
+      if ((Math.abs(el.scrollTop - want) <= 1 && !grew) || Date.now() - started > 2_000) return;
+      requestAnimationFrame(put);
+    };
+    requestAnimationFrame(put);
+    return () => { alive = false; };
   }, [tab, selected]);
   /** What the merge control is doing right now, "" when it is doing nothing.
    *  A sentence rather than a boolean because the merge is two writes and they
@@ -3438,7 +3452,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               {fieldPicker.node}
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
                 {TABS.map((t) => (
-                  <button key={t.id} onClick={() => setTab(t.id)} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
+                  <button key={t.id}
+                    /* Written from the live element on the way out, as well as
+                       on scroll. A tab whose content shrinks is clamped by the
+                       browser the moment the new one renders, and a value read
+                       after that is zero. */
+                    onClick={() => {
+                      const el = tabBodyRef.current;
+                      if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;
+                      setTab(t.id);
+                    }} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
                     style={{
                       color: tab === t.id ? "var(--text)" : "var(--text3)",
                       borderBottom: `2px solid ${tab === t.id ? "var(--primary)" : "transparent"}`,
@@ -5835,6 +5858,10 @@ function DetailSkeleton({ number }: { number: number | null }) {
   );
 }
 
+/** Where the Files tab was left, per pull request. Outside the component
+ *  because the component is what goes away when you change tab. */
+const FILES_SCROLL = new Map<string, number>();
+
 function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   /** Why the diff is missing, when it is missing for a reason rather than for a
@@ -5973,6 +6000,33 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
   const threadsFor = (p: string) => d.threads.filter((t) => t.path === p)
     .sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
   const frameRef = useRef<HTMLDivElement>(null);
+  /*
+   * Files scrolls inside itself, so the panel's per-tab memory cannot see it.
+   *
+   * This component unmounts when you step to another tab, which is why the
+   * store is outside it: a ref would go with the component. Keyed by pull
+   * request, so a different one starts at the top.
+   */
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const key = `${root}#${d.number}`;
+    const want = FILES_SCROLL.get(key) ?? 0;
+    if (want) {
+      let alive = true;
+      const started = Date.now();
+      const put = () => {
+        if (!alive) return;
+        if (el.scrollTop < want - 1) el.scrollTop = want;
+        if (Math.abs(el.scrollTop - want) <= 1 || Date.now() - started > 2_000) return;
+        requestAnimationFrame(put);
+      };
+      requestAnimationFrame(put);
+      // eslint-disable-next-line consistent-return
+      return () => { alive = false; FILES_SCROLL.set(key, el.scrollTop); };
+    }
+    return () => { FILES_SCROLL.set(key, el.scrollTop); };
+  }, [root, d.number]);
   /*
    * How tall the tree may be, measured rather than guessed.
    *
