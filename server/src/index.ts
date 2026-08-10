@@ -61,6 +61,7 @@ import {
   revertCommit, amendCommit, squashCommits,
   rebaseSteps, runRebase, compareRefs,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
+  submodules as gitSubmodules, submoduleAdd, submoduleUpdate, submoduleSync, submoduleDeinit, submoduleRemove,
   prepareConflictMerge,
 } from "./gitwork.ts";
 import { repoStats, generateChangelog } from "./gitinsights.ts";
@@ -1860,6 +1861,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/refs") return json(refs(url.searchParams.get("root") || ""));
     if (pathname === "/git/snapshots") return json(listSnapshots(url.searchParams.get("root") || ""));
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
+    if (pathname === "/git/submodules") return json({ submodules: gitSubmodules(url.searchParams.get("root") || "") });
     // What has piled up in a checkout, and the command that would clear it.
     // Read-only by construction: the response carries commands as strings, and
     // there is deliberately no endpoint anywhere that runs one.
@@ -2035,6 +2037,11 @@ const server = Bun.serve<WsData>({
         case "/git/protected-branches": res = protectedBranches(root); break;
         case "/git/protected-branches-set": res = setProtectedBranches(root, b.names); break;
         case "/git/push": res = gitPush(root, { force: b.force === true }); break;
+        case "/git/submodule-add": res = submoduleAdd(root, b.url, b.path); break;
+        case "/git/submodule-update": res = await submoduleUpdate(root, b.path); break;
+        case "/git/submodule-sync": res = submoduleSync(root, b.path); break;
+        case "/git/submodule-deinit": res = submoduleDeinit(root, b.path); break;
+        case "/git/submodule-remove": res = submoduleRemove(root, b.path); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why

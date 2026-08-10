@@ -1265,6 +1265,15 @@ export interface RepoStats {
 export interface ChangelogEntry { kind: string; scope: string; breaking: boolean; subject: string; hash: string }
 export interface ChangelogSection { title: string; entries: ChangelogEntry[] }
 export interface Changelog { from: string; to: string; sections: ChangelogSection[]; error?: string }
+/** A submodule as the panel shows it — the index pin, the URL, the checkout state. */
+export interface GitSubmodule {
+  name: string;
+  path: string;
+  url: string;
+  sha: string;
+  branch?: string;
+  status: "clean" | "modified" | "uninitialized" | "conflict";
+}
 export interface GitWorktree {
   path: string;    // absolute
   branch: string;  // branch short name, or "(detached)"

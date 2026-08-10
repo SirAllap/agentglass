@@ -1,5 +1,5 @@
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, GitFileChange, RepoStats, Changelog } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, GitFileChange, RepoStats, Changelog, GitSubmodule } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -567,6 +567,12 @@ const realApi = {
   gitReflog: (root: string) => get<{ entries: GitReflogEntry[] }>(`/git/reflog?root=${encodeURIComponent(root)}`),
   gitRepoStats: (root: string, days?: number) => get<RepoStats>(`/git/stats?root=${encodeURIComponent(root)}&days=${days ?? 30}`),
   gitChangelog: (root: string, from?: string, to?: string) => get<Changelog>(`/git/changelog?root=${encodeURIComponent(root)}&from=${encodeURIComponent(from ?? "")}&to=${encodeURIComponent(to ?? "")}`),
+  gitSubmodules: (root: string) => get<{ submodules: GitSubmodule[] }>(`/git/submodules?root=${encodeURIComponent(root)}`),
+  gitSubmoduleAdd: (root: string, url: string, path: string) => post<GitActionResult>("/git/submodule-add", { root, url, path }),
+  gitSubmoduleUpdate: (root: string, path?: string) => post<GitActionResult>("/git/submodule-update", { root, path }),
+  gitSubmoduleSync: (root: string, path?: string) => post<GitActionResult>("/git/submodule-sync", { root, path }),
+  gitSubmoduleDeinit: (root: string, path: string) => post<GitActionResult>("/git/submodule-deinit", { root, path }),
+  gitSubmoduleRemove: (root: string, path: string) => post<GitActionResult>("/git/submodule-remove", { root, path }),
   gitCommandLog: (since = 0) => get<{ entries: GitLogEntry[] }>(`/git/commandlog?since=${since}`),
   /** Is a running nvim reachable for this file? Lets the key be labelled
    *  honestly before it's pressed. */
@@ -1156,6 +1162,12 @@ const demoApi: typeof realApi = {
   gitReflog: (_root: string) => D({ entries: [] as GitReflogEntry[] }),
   gitRepoStats: (_root: string, _days?: number) => D({ days: 30, commitsPerDay: 0, contributors: [], filesTouched: 0, linesChanged: 0, topContributors: [], hotspots: [], churn: [] } as RepoStats),
   gitChangelog: (_root: string, _from?: string, _to?: string) => D({ from: "", to: "", sections: [] } as Changelog),
+  gitSubmodules: (_root: string) => D({ submodules: [] as GitSubmodule[] }),
+  gitSubmoduleAdd: (_root: string, _url: string, _path: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleUpdate: (_root: string, _path?: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleSync: (_root: string, _path?: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleDeinit: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleRemove: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
   gitCommandLog: (_since?: number) => D({ entries: [] as GitLogEntry[] }),
   editorCapability: () => D({ hasNvim: false, editor: null as string | null }),
   editorTarget: (_path: string) => D({ running: false, hasNvim: false }),

@@ -13,7 +13,7 @@ import { InsightsModal } from "./InsightsModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding } from "../../../shared/types.ts";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding, GitSubmodule } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { BasePicker } from "./BasePicker.tsx";
@@ -41,7 +41,7 @@ import type { PrBranchSummary } from "../../../shared/types.ts";
 
 const unifiedText = (c: GitFileChange) => c.hunks.map((h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${h.lines.join("\n")}`).join("\n");
 
-type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "stashes" | "worktrees" | "tidy";
+type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "stashes" | "worktrees" | "tidy" | "submodules";
 
 /**
  * Views, grouped the way lazygit groups its panels.
@@ -218,7 +218,7 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
 const VIEW_GROUPS: { label: string; views: View[] }[] = [
   { label: "Files", views: ["changes"] },
   { label: "History", views: ["log", "reflog"] },
-  { label: "Refs", views: ["branches", "remotes", "tags"] },
+  { label: "Refs", views: ["branches", "remotes", "tags", "submodules"] },
   { label: "Worktrees", views: ["worktrees"] },
   { label: "Stash", views: ["stashes"] },
   // Last, and it earns the place: this is the tab you open when the others
@@ -228,7 +228,7 @@ const VIEW_GROUPS: { label: string; views: View[] }[] = [
 const VIEW_LABEL: Record<View, string> = {
   changes: "Changes", log: "Log", reflog: "Reflog", branches: "Branches",
   remotes: "Remotes", tags: "Tags", stashes: "Stashes", worktrees: "Worktrees",
-  tidy: "Tidy",
+  tidy: "Tidy", submodules: "Submodules",
 };
 /** Left-to-right order — the order `[` / `]` walk, and the order the number
  *  keys index into. Derived from the groups so the two can't drift apart. */
@@ -327,6 +327,7 @@ const VIEW_KEYS: Record<View, [string, string][]> = {
   // worktree both move something on disk and stay mouse-only.
   remotes: [["j/k", "branch"], ["space", "+ local"]],
   tags: [["j/k", "tag"]],
+  submodules: [["j/k", "submodule"]],
   stashes: [["j/k", "stash"], ["space", "apply"], ["d", "drop"]],
   worktrees: [["j/k", "worktree"], ["space", "open"], ["d", "remove"]],
 };
@@ -790,6 +791,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [remoteQuery, setRemoteQuery] = useState("");
   const [tags, setTags] = useState<GitTag[]>([]);
   const [reflog, setReflog] = useState<GitReflogEntry[]>([]);
+  const [submodules, setSubmodules] = useState<GitSubmodule[]>([]);
   /** WIP snapshots — named checkpoints that never touch the tree. */
   const [snapshots, setSnapshots] = useState<{ sha: string; ref: string; time: string; label: string }[]>([]);
   const [snapshotLabel, setSnapshotLabel] = useState("");
@@ -1143,6 +1145,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     }
     else if (view === "tags") track(api.gitTags(root), (r) => setTags(r.tags));
     else if (view === "reflog") track(api.gitReflog(root), (r) => setReflog(r.entries));
+    else if (view === "submodules") track(api.gitSubmodules(root), (r) => setSubmodules(r.submodules));
   }, [open, root, view, logScope, remoteSel]);
 
   /**
@@ -1867,6 +1870,27 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       setPartialOpen(false);
       reloadStashes();
     }
+  };
+  // submodules
+  const reloadSubmodules = () => api.gitSubmodules(root).then((r) => setSubmodules(r.submodules)).catch(() => {});
+  const submoduleAddAsk = async () => {
+    const url = await askText({ title: "Add a submodule", input: { label: "Clone URL" }, confirmLabel: "Add" });
+    if (!url || !url.trim()) return;
+    const path = await askText({ title: "Where should it live?", input: { label: "Submodule path (e.g. vendor/lib)", initial: url.trim().split("/").pop()?.replace(/\.git$/, "") || "" }, confirmLabel: "Add" });
+    if (!path || !path.trim()) return;
+    if (await act(() => api.gitSubmoduleAdd(root, url.trim(), path.trim()), `Added ${path.trim()}`)) reloadSubmodules();
+  };
+  const submoduleOp = async (op: "update" | "sync", path: string, okMsg: string) => {
+    const fn = op === "update" ? api.gitSubmoduleUpdate : api.gitSubmoduleSync;
+    if (await act(() => fn(root, path), okMsg)) reloadSubmodules();
+  };
+  const submoduleDeinitAsk = async (path: string) => {
+    if (!(await ask({ title: `Deinit ${path}?`, body: "The checkout is removed; the gitlink and .gitmodules entry stay. Re-run update to bring it back.", confirmLabel: "Deinit" }))) return;
+    if (await act(() => api.gitSubmoduleDeinit(root, path), `Deinitialized ${path}`)) reloadSubmodules();
+  };
+  const submoduleRemoveAsk = async (path: string) => {
+    if (!(await ask({ title: `Remove ${path}?`, body: "The gitlink, its checkout and its .gitmodules section are all deleted.", danger: true, confirmLabel: "Remove" }))) return;
+    if (await act(() => api.gitSubmoduleRemove(root, path), `Removed ${path}`)) reloadSubmodules();
   };
   /** Capture the tree as a named checkpoint — touches nothing, restore is
    *  always possible, cap is 30. */
@@ -3207,6 +3231,40 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     ))}
                     {!shownTags.length && <PaneEmpty busy={busyView === "tags"} what="tags" />}
                     <MoreRows shown={incTags.rows.length} total={shownTags.length} onAll={incTags.showAll} />
+                  </div>
+                ) : view === "submodules" ? (
+                  <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
+                    {writeEnabled && (
+                      <button onClick={submoduleAddAsk} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ add submodule</button>
+                    )}
+                    {submodules.length === 0 && !busy && <PaneEmpty busy={false} what="submodules" />}
+                    {submodules.map((s) => (
+                      <div key={s.path} className="group px-2.5 py-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", marginBottom: 6 }}>
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium" style={{ color: "var(--text)" }}>{s.path}</span>
+                          <span className="shrink-0 rounded px-1.5 py-px text-[9px] font-medium" style={{
+                            background: s.status === "clean" ? "color-mix(in srgb, var(--success) 16%, transparent)" : s.status === "modified" ? "color-mix(in srgb, var(--warning) 16%, transparent)" : s.status === "conflict" ? "color-mix(in srgb, var(--error) 16%, transparent)" : "color-mix(in srgb, var(--text3) 16%, transparent)",
+                            color: s.status === "clean" ? "var(--success)" : s.status === "modified" ? "var(--warning)" : s.status === "conflict" ? "var(--error)" : "var(--text2)",
+                            border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)",
+                          }}>
+                            {s.status === "clean" ? "clean" : s.status === "modified" ? "modified" : s.status === "conflict" ? "conflict" : "uninitialized"}
+                          </span>
+                          <span className="shrink-0 font-mono text-[9.5px] t-dim2">{s.sha.slice(0, 7)}</span>
+                          {writeEnabled && (
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                              <button onClick={() => submoduleOp("update", s.path, `Updated ${s.path}`)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="git submodule update --init --recursive">update</button>
+                              <button onClick={() => submoduleOp("sync", s.path, `Synced ${s.path}`)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Re-write URLs from .gitmodules into the checkout">sync</button>
+                              <button onClick={() => submoduleDeinitAsk(s.path)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>deinit</button>
+                              <button onClick={() => submoduleRemoveAsk(s.path)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>remove</button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 text-[9.5px] t-dim2">
+                          <span className="truncate">{s.url || "no url in .gitmodules"}</span>
+                          {s.branch && <span className="shrink-0">· {s.branch}</span>}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ) : view === "reflog" ? (
                   <div onScroll={incReflog.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">

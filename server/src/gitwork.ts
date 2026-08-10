@@ -3251,6 +3251,168 @@ export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
   return out;
 }
 
+// --- Submodules -------------------------------------------------------------
+
+/** A submodule as the panel shows it: the gitlink the index pins (the source
+ *  of truth for what this repo expects), the URL from .gitmodules, and the
+ *  checked-out state from `git submodule status`. */
+export type GitSubmodule = {
+  name: string;
+  path: string;
+  url: string;
+  sha: string;
+  branch?: string;
+  status: "clean" | "modified" | "uninitialized" | "conflict";
+};
+
+/** Merge three sources: the .gitmodules sections (name → path/url/branch),
+ *  the index gitlinks (mode 160000 — what this repo pins), and `submodule
+ *  status` (where the checkout actually is: "-" uninitialized, "+" ahead of
+ *  the pin, "U" conflicted). */
+export function submodules(rootIn: unknown): GitSubmodule[] {
+  const root = repoRoot(rootIn);
+  if (!root) return [];
+  // .gitmodules sections: submodule.<name>.path / .url / .branch. The path is
+  // the stable join key with the index gitlinks below.
+  const byName = new Map<string, { name: string; path: string; url: string; branch: string }>();
+  const cfg = git(root, ["config", "-f", ".gitmodules", "--null", "--list"]);
+  // --null emits "<key>\n<value>\0" per entry — the parts split on \0 and the
+  // key/value pair is joined by the first \n.
+  for (const part of cfg.stdout.split("\0")) {
+    if (!part) continue;
+    const nl = part.indexOf("\n");
+    if (nl === -1) continue;
+    const m = /^submodule\.([^.\s]+)\.(path|url|branch)$/.exec(part.slice(0, nl));
+    if (!m) continue;
+    const e = byName.get(m[1]) ?? { name: m[1], path: "", url: "", branch: "" };
+    if (m[2] === "path") e.path = part.slice(nl + 1);
+    else if (m[2] === "url") e.url = part.slice(nl + 1);
+    else e.branch = part.slice(nl + 1);
+    byName.set(m[1], e);
+  }
+  const byPath2 = new Map<string, GitSubmodule>();
+  for (const e of byName.values()) {
+    if (!e.path) continue;
+    byPath2.set(e.path, { name: e.name, path: e.path, url: e.url, sha: "", branch: e.branch, status: "uninitialized" });
+  }
+  // Gitlinks in the index (mode 160000) — the authoritative submodule set.
+  // The index rather than HEAD: `submodule add` only stages, and a remove only
+  // un-stages; reading HEAD would ghost in or out entries that never moved.
+  const ls = git(root, ["ls-files", "-s"]);
+  for (const line of ls.stdout.split("\n")) {
+    const m = /^160000 ([0-9a-f]{40}) \d+\t(.+)$/.exec(line.trim());
+    if (!m) continue;
+    const path = m[2];
+    const existing = byPath2.get(path);
+    byPath2.set(path, existing
+      ? { ...existing, sha: m[1], status: existing.status === "uninitialized" ? "uninitialized" : "clean" }
+      : { name: path, path, url: "", sha: m[1], status: "uninitialized" });
+  }
+  // The checkout state from `git submodule status` — "-" uninitialized, "+"
+  // checked-out differs from the pin, "U" conflicted.
+  const st = git(root, ["submodule", "status"]);
+  for (const line of st.stdout.split("\n")) {
+    const m = /^([-+U]?)([0-9a-f]{40})\s+(.+?)(?:\s+\((.*)\))?$/.exec(line.trim());
+    if (!m) continue;
+    const [_, flag, sha, path, describe] = m;
+    const e = byPath2.get(path);
+    if (!e) continue;
+    e.sha = sha;
+    if (flag === "-") e.status = "uninitialized";
+    else if (flag === "+") e.status = "modified";
+    else if (flag === "U") e.status = "conflict";
+    else e.status = "clean";
+    if (describe) e.branch = describe;
+  }
+  return [...byPath2.values()];
+}
+
+function submodulePath(root: string, pathIn: unknown): string | null {
+  if (typeof pathIn !== "string" || !pathIn.trim()) return null;
+  const p = pathIn.trim();
+  return submodules(root).some((s) => s.path === p) ? p : null;
+}
+
+/** Add a submodule: clone `url` into `path` and record the gitlink. A network
+ *  op like pull, so it is bounded by the same machinery. */
+export function submoduleAdd(rootIn: unknown, urlIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const url = String(urlIn ?? "").trim();
+  if (!url || url.startsWith("-")) return { ok: false, error: "invalid submodule URL" };
+  const path = String(pathIn ?? "").trim();
+  if (!path || path.startsWith("-") || path.includes("..") || !validRef(path.replace(/\//g, "-"))) {
+    return { ok: false, error: "invalid submodule path" };
+  }
+  if (git(root, ["ls-files", "--error-unmatch", "--", path]).code === 0) {
+    return { ok: false, error: `${path} is already tracked` };
+  }
+  return run(root, ["submodule", "add", url, path]);
+}
+
+/** Initialize and check out submodules (optionally one). A network op —
+ *  async so the terminal's loop never blocks on it. */
+export async function submoduleUpdate(rootIn: unknown, pathIn: unknown): Promise<GitActionResult> {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const args = ["submodule", "update", "--init", "--recursive"];
+  const path = submodulePath(root, pathIn);
+  if (path) args.push("--", path);
+  const r = await gitAsync(root, args);
+  afterMutation(root);
+  return { ok: r.code === 0, error: r.code !== 0 ? (r.stderr.trim() || r.stdout.trim() || "submodule update failed") : undefined, output: (r.stdout + r.stderr).trim() };
+}
+
+/** Re-write the submodule URLs from .gitmodules into the checkouts (and into
+ *  .git/config) — what you run after the remote URL moves. */
+export function submoduleSync(rootIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const args = ["submodule", "sync", "--recursive"];
+  const path = submodulePath(root, pathIn);
+  if (path) args.push("--", path);
+  return run(root, args);
+}
+
+/** Detach a submodule's checkout: the directory goes, the gitlink and the
+ *  .gitmodules section stay. */
+export function submoduleDeinit(rootIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const path = submodulePath(root, pathIn);
+  if (!path) return { ok: false, error: "pick a submodule from the list" };
+  return run(root, ["submodule", "deinit", "-f", "--", path]);
+}
+
+/** Remove a submodule for good: deinit (directory goes), drop the gitlink,
+ *  strip its .gitmodules section (and the file itself if it empties). */
+export function submoduleRemove(rootIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const path = submodulePath(root, pathIn);
+  if (!path) return { ok: false, error: "pick a submodule from the list" };
+  const sm = submodules(root).find((s) => s.path === path);
+  const name = sm?.name || path;
+  let r = run(root, ["submodule", "deinit", "-f", "--", path]);
+  if (!r.ok) return r;
+  r = run(root, ["rm", "--cached", "-f", "--", path]);
+  if (!r.ok) return r;
+  // deinit only empties the directory; the shell of it can survive, and a
+  // stale checkout directory at the gitlink path would shadow the next add.
+  const absPath = inRepo(root, path);
+  if (absPath && existsSync(absPath)) rmSync(absPath, { recursive: true, force: true });
+  r = run(root, ["config", "-f", ".gitmodules", "--remove-section", `submodule.${name}`]);
+  if (!r.ok) return r;
+  const modulesFile = join(root, ".gitmodules");
+  const remaining = existsSync(modulesFile) ? readFileSync(modulesFile, "utf8").trim() : "";
+  if (!remaining) {
+    r = run(root, ["rm", "-f", "--", ".gitmodules"]);
+  } else {
+    r = run(root, ["add", "-A", "--", ".gitmodules"]);
+  }
+  return r;
+}
+
 /**
  * Where HEAD has been — the trail that makes a bad reset or rebase recoverable.
  *
