@@ -920,11 +920,30 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   /** What this board costs to ask, which is what decides how often we do. */
   const pollMs = data?.view?.builtin ? CU_POLL_SLOW_MS : CU_POLL_MS;
 
+  /*
+   * A filter belongs to the board it was set on.
+   *
+   * They were panel state, so narrowing one board to `backend` and stepping to
+   * another arrived with `backend` still on — over a board where it means
+   * something else, or nothing. Reported that way. Kept per board instead: what
+   * you set is still there when you come back, and never travels.
+   */
+  const filtersByBoard = useRef<Record<string, {
+    q: string; tag: string | null; mineOnly: boolean; statusPick: string[]; readyOnly: boolean;
+  }>>({});
   const landedOn = useRef<string | null>(null);
   useEffect(() => {
     const id = data?.view?.id;
     if (!id || landedOn.current === id) return;
+    const leaving = landedOn.current;
+    if (leaving) filtersByBoard.current[leaving] = { q, tag, mineOnly, statusPick, readyOnly };
     landedOn.current = id;
+    const kept = filtersByBoard.current[id];
+    setQ(kept?.q ?? "");
+    setTag(kept?.tag ?? null);
+    setMineOnly(kept?.mineOnly ?? false);
+    setStatusPick(kept?.statusPick ?? []);
+    setReadyOnly(kept?.readyOnly ?? false);
     setShowDone(!!data?.view?.builtin);
     /* An open address bar belongs to the board it was opened from. Left alone
        it stays on screen carrying the PREVIOUS board's address, over a board it
@@ -1514,22 +1533,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title="Cards nothing unfinished is blocking"
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={readyOnly
-            ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+            ? ON_CHIP
             : { border: edge(14), color: "var(--text2)" }}>
-          ready <span style={{ color: "var(--text3)" }}>{counts.ready}</span>
+          {/* The count has to survive the fill: --text3 on the accent is a
+              number you cannot read. */}
+          ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{counts.ready}</span>
         </button>
         <button onClick={() => setMineOnly((v) => !v)} aria-pressed={mineOnly}
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={mineOnly
-            ? { background: "color-mix(in srgb, var(--success) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)", color: "var(--text)" }
+            ? ON_CHIP_OK
             : { border: edge(14), color: "var(--text2)" }}>
-          mine <span style={{ color: "var(--text3)" }}>{counts.mine}</span>
+          mine <span style={{ color: mineOnly ? "var(--bg)" : "var(--text3)", opacity: mineOnly ? 0.75 : 1 }}>{counts.mine}</span>
         </button>
         {tags.slice(0, 6).map((t) => (
           <button key={t} onClick={() => setTag((cur) => (cur === t ? null : t))} aria-pressed={tag === t}
             className="text-[11px] px-2.5 py-0.5 rounded-full"
             style={tag === t
-              ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+              ? ON_CHIP
               : { border: edge(14), color: "var(--text3)" }}>{t}</button>
         ))}
         <StatusFilter statuses={data?.statuses ?? []} tasks={data?.tasks ?? []}
@@ -1993,6 +2014,22 @@ const WIDE_KEY = "agentglass.clickup.wideCard";
 /** How many looked-up cards to keep. A history you have to scroll is not a
  *  history, and these are all one click from being fetched again. */
 const LOOKED_MAX = 12;
+/*
+ * A filter that is ON has to look ON.
+ *
+ * The old treatment was the accent at 18% behind a normal-weight label, which
+ * beside five identical outlined chips reads as "slightly warmer", not as "this
+ * one is doing something". Reported as not being able to tell what was picked.
+ * Filled, in the accent'"'"'s own colour, with the panel'"'"'s background for the text —
+ * the same way the app marks a pressed control everywhere else.
+ */
+const ON_CHIP = {
+  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--bg)", fontWeight: 600,
+} as const;
+const ON_CHIP_OK = {
+  background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,
+} as const;
+
 const CU_POLL_MS = 60_000;
 const CU_POLL_SLOW_MS = 300_000;
 
@@ -2375,12 +2412,9 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
     <div className="relative" ref={box}>
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
         className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
-        style={picked.length
-          ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-          : { border: edge(14), color: "var(--text2)" }}>
+        style={picked.length ? ON_CHIP : { border: edge(14), color: "var(--text2)" }}>
         {picked.length ? `${picked.length} selected` : "Status"}
-        <span style={{ color: "var(--text4)" }}>▾</span>
+        <span style={{ color: picked.length ? "var(--bg)" : "var(--text4)", opacity: picked.length ? 0.7 : 1 }}>▾</span>
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"

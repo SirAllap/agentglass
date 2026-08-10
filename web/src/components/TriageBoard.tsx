@@ -166,6 +166,26 @@ export function TriageBoard({
     () => LANES.filter((l) => !l.hideWhenEmpty || (lanes.get(l.id)?.length ?? 0) > 0),
     [lanes],
   );
+  /*
+   * What is being looked for in the cards on screen.
+   *
+   * Everything a card SHOWS is searchable, and nothing it does not: the number,
+   * the title, the author, both branches and the labels. Matching on something
+   * invisible is how a search comes back with a card whose row says nothing
+   * about why it is there.
+   */
+  const [find, setFind] = useState("");
+  const findRef = useRef<HTMLInputElement>(null);
+  const needle = find.trim().toLowerCase();
+  const matches = useCallback((p: PrSummary) => {
+    if (!needle) return true;
+    const hay = [
+      `#${p.number}`, String(p.number), p.title, p.author, p.headRefName, p.baseRefName,
+      ...(p.labels ?? []).map((l) => l.name),
+    ].join(" ").toLowerCase();
+    return hay.includes(needle);
+  }, [needle]);
+  const hits = useMemo(() => (needle ? cards.filter(matches).length : 0), [needle, cards, matches]);
   const [cur, setCur] = useState<{ lane: number; row: number }>({ lane: 0, row: 0 });
   const frame = useRef<HTMLDivElement>(null);
   const shown = useCallback((i: number) => (lanes.get(cols[i]?.id ?? "review") ?? []).slice(0, LANE_CAP), [lanes, cols]);
@@ -186,6 +206,15 @@ export function TriageBoard({
   }, [cur]);
 
   const onKey = (e: React.KeyboardEvent) => {
+    /* ⌃F before the typing guard, because the whole point of it is to reach the
+       box from wherever you are — including from inside it, where it selects
+       what is already there rather than doing nothing. */
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      findRef.current?.focus();
+      findRef.current?.select();
+      return;
+    }
     // Never while somebody is typing in the filter above.
     if ((e.target as HTMLElement)?.closest?.("input,textarea")) return;
     const k = e.key;
@@ -222,7 +251,8 @@ export function TriageBoard({
       {/* The scope, said out loud. A board whose reach nobody states is a board
           nobody trusts — and the first question anybody asks it is "where are
           the other three hundred". */}
-      <div className="shrink-0 px-4 pt-3 pb-1 text-[12.5px]">
+      <div className="shrink-0 px-4 pt-3 pb-1 text-[12.5px] flex items-start gap-4">
+        <div className="min-w-0 flex-1">
         {waiting ? (
           <>
             {/* No number, because there is no number yet. A zero here is the
@@ -248,6 +278,43 @@ export function TriageBoard({
               {canLand > 0 && <> <span style={{ color: "var(--success)" }}>{canLand}</span> can land right now.</>}
             </span>
           </>
+        )}
+        </div>
+        {/*
+          * Find, in the board, in the space the summary leaves.
+          *
+          * Not the bar at the top: that one asks GitHub, and pressing return in
+          * it leaves the board for a table of every pull request in the
+          * repository. This is the other question — "which of THESE twelve" —
+          * and the honest answer to it is not a shorter board. A card that
+          * stops being drawn takes its lane'"'"'s shape with it, and the counts
+          * above would start disagreeing with what is under them.
+          *
+          * So nothing is removed: the ones that match keep their colour and the
+          * rest go quiet. Same board, same places, one part of it lit.
+          */}
+        {!waiting && involved > 0 && (
+          <div className="shrink-0 flex items-center gap-1.5">
+            <input
+              ref={findRef}
+              value={find}
+              onChange={(e) => setFind(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") { setFind(""); (e.target as HTMLInputElement).blur(); }
+              }}
+              placeholder="Find in these  ⌃F"
+              spellCheck={false}
+              className="text-[11px] px-2 py-1 rounded-md outline-none"
+              style={{ width: 190, background: "var(--bg2)", color: "var(--text)",
+                border: `1px solid ${find ? "var(--primary)" : "color-mix(in srgb, var(--text) 16%, transparent)"}` }} />
+            {find && (
+              <span className="text-[10.5px] tabular-nums whitespace-nowrap"
+                style={{ color: hits ? "var(--primary)" : "var(--warning)" }}>
+                {hits} of {involved}
+              </span>
+            )}
+          </div>
         )}
       </div>
 
@@ -381,7 +448,7 @@ export function TriageBoard({
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider}
                             cursor={cur.lane === i && cur.row === r}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
-                            onAct={onAct} busy={busy} acting={acting} />
+                            onAct={onAct} busy={busy} acting={acting} dim={!matches(p)} />
                         ))}
                         {/* Counted, not hidden. A lane may be forty on a bad
                             week, and the column scrolls but the cap is what
@@ -450,10 +517,19 @@ export function TriageBoard({
   );
 }
 
-function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting }: {
+function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim }: {
   p: Card; hasTaskProvider: boolean; pinned: boolean; cursor?: boolean;
   /** The pull request whose action is running, so only its card spins. */
   acting?: number | null;
+  /**
+   * A find is running and this card is not one of the answers.
+   *
+   * Quietened, never removed. A card that stops being drawn takes its lane's
+   * shape with it and the counts above start disagreeing with what is under
+   * them — and the reason you are looking at a board rather than a list is that
+   * the shape means something.
+   */
+  dim?: boolean;
   onOpen: () => void; onPin: () => void;
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void; busy?: boolean;
 }) {
@@ -477,11 +553,20 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
        is measuring. The number is already on screen; this just makes it
        addressable without reading the design. */
     <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number} data-cur={cursor ? "1" : undefined}
+      data-dim={dim ? "1" : undefined}
       className="rounded-lg p-2 mb-2 cursor-pointer agx-btn"
       style={{
         border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : edge(16),
         background: "var(--bg2)",
         boxShadow: cursor ? "inset 2px 0 0 var(--primary)" : undefined,
+        /* Saturation as well as opacity: these cards are read by colour — green
+           lane, red checks, amber waiting — and dimming alone leaves a row of
+           paler versions of the same signal still competing for the eye.
+           Draining the colour takes them out of that conversation while leaving
+           every word legible, which is the difference between "not this one"
+           and "gone". */
+        ...(dim ? { opacity: 0.32, filter: "saturate(0.25)" } : null),
+        transition: "opacity 120ms ease, filter 120ms ease",
       }}>
       {/*
        * Title first, and the pin beside it.

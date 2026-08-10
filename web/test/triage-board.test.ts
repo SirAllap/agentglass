@@ -22,6 +22,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TriageBoard } from "../src/components/TriageBoard.tsx";
 import { LANES } from "../src/lib/prLanes.ts";
+
+const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
 import type { PrSummary } from "../../shared/types.ts";
 
 const day = 86_400_000;
@@ -481,5 +483,43 @@ describe("a long title cannot decide the card's height", () => {
     const html = render({ mine: [pr(1, { title: long })] });
     expect(html).toContain("-webkit-line-clamp:2");
     expect(html).toContain(long.slice(0, 40)); // still there, still in the title attribute
+  });
+});
+
+/*
+ * Find, inside the board.
+ *
+ * The bar at the top of the panel asks GitHub, and pressing return in it leaves
+ * the board for a table of every pull request in the repository. This is the
+ * other question — "which of THESE twelve" — asked in the space the summary
+ * leaves empty.
+ */
+describe("finding a card on the board", () => {
+  it("has a box, once there is something to look through", () => {
+    expect(full()).toContain("Find in these");
+    // Nothing to search on an empty board, and nothing to search while the two
+    // lists are still arriving.
+    expect(render({ mine: [], review: [], total: 0 })).not.toContain("Find in these");
+  });
+
+  it("quietens what does not match rather than removing it", () => {
+    /*
+     * A card that stops being drawn takes its lane's shape with it, and the
+     * counts above start disagreeing with what is under them — and the shape is
+     * the reason this is a board and not a list.
+     *
+     * Read from the source: nothing is dimmed until somebody types, and there
+     * is no typing in `renderToStaticMarkup`.
+     */
+    expect(board).toContain("dim={!matches(p)}");
+    expect(board).toContain('...(dim ? { opacity: 0.32, filter: "saturate(0.25)" } : null),');
+    // Never a filtered list: every card is still rendered.
+    expect(board).not.toContain(".filter(matches)</");
+  });
+
+  it("searches only what the card shows", () => {
+    // Matching on something invisible is how a search comes back with a card
+    // whose row says nothing about why it is there.
+    expect(board).toContain("`#${p.number}`, String(p.number), p.title, p.author, p.headRefName, p.baseRefName,");
   });
 });
