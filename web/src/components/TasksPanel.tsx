@@ -1225,6 +1225,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      never the same, which is the whole reason the card carries one. */
   const cardPlaceShown = otherList || !data?.place ? cardPlace : undefined;
 
+  /* Everybody who appears on a card of this board — the people the assignee
+     picker shows first. A workspace answers with five hundred names; these are
+     the dozen who actually work here. */
+  const boardPeople = useMemo(() => {
+    const ids = new Set<number>();
+    for (const t of data?.tasks ?? []) for (const p of t.people ?? []) if (p.id != null) ids.add(p.id);
+    return ids;
+  }, [data?.tasks]);
   const anyWho = (data?.tasks ?? []).some((t) => t.assignees.length);
   const anySprint = (data?.tasks ?? []).some((t) => t.sprint);
   const anyEst = (data?.tasks ?? []).some((t) => t.estimateHours);
@@ -1853,7 +1861,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   writable={boards.writeEnabled} repos={repos} here={here}
                   onOpenChatWith={onOpenChatWith}
                   wide={wide}
-                  byId={byId} onGo={(id) => setSel(id)}
+                  byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
                   skills={skills}
                   onNote={(text) => setNote({ ok: true, text })}
                   onAsk={(p) => setConfirm(p)} />
@@ -2496,7 +2504,7 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
  * then does anything leave this machine. That is not ceremony. A status change
  * here fires automations and notifies people, and there is no undo.
  */
-function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onAsk, skills, onNote, wide, byId, onGo }: {
+function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onAsk, skills, onNote, wide, byId, onGo, boardPeople }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   /** Space / Folder / List, for the card in hand. */
@@ -2512,6 +2520,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   /** The board's own cards, for resolving dependencies without a call each. */
   byId: Map<string, ProviderTask>;
   onGo: (id: string) => void;
+  /** Everybody already on a card of the board being shown. They go to the top
+   *  of the people picker, which is what ClickUp does with its own list. */
+  boardPeople?: Set<number>;
 }) {
   const [full, setFull] = useState<(Partial<TaskDetail> & { ok?: boolean; error?: string }) | null>(null);
   /** Which comment threads are open, by comment id. Closed by default: a card
@@ -2533,8 +2544,38 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * avoid, not to tune; the request belongs to the click that asked for it.
    */
   const [whoOpen, setWhoOpen] = useState(false);
+  /** What is typed into the people filter. A real workspace answers with five
+   *  hundred names; without this the picker is a scroll, not a choice. */
+  const [whoQ, setWhoQ] = useState("");
   const [members, setMembers] = useState<ListMember[] | null>(null);
   const [membersBusy, setMembersBusy] = useState(false);
+  /*
+   * Who to show first: the people this board already runs on.
+   *
+   * `/list/{id}/member` answered with twenty names that included none of the
+   * six ClickUp itself offers for these cards, so the picker now takes the
+   * workspace too — and a workspace here is five hundred and twenty-seven
+   * people. The ones already on the cards in front of you are the answer nine
+   * times in ten, and they are the group ClickUp puts at the top of its own
+   * picker.
+   */
+  const onBoard = useMemo(() => {
+    const ids = new Set<number>();
+    for (const p of t.people ?? []) if (p.id != null) ids.add(p.id);
+    for (const id of boardPeople ?? []) ids.add(id);
+    return ids;
+  }, [t.people, boardPeople]);
+  const shownMembers = useMemo(() => {
+    const needle = whoQ.trim().toLowerCase();
+    return (members ?? [])
+      .filter((m) => m.name && (!needle || m.name.toLowerCase().includes(needle)))
+      .sort((a, b) => {
+        const ah = onBoard.has(a.id) ? 0 : 1, bh = onBoard.has(b.id) ? 0 : 1;
+        if (ah !== bh) return ah - bh;
+        if (a.me !== b.me) return a.me ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  }, [members, whoQ, onBoard]);
   /** The card this answer is for, so a click on the next card cannot be
    *  answered by the last card's request. */
   const asked = useRef<string | null>(null);
@@ -2798,16 +2839,32 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                  ellipsis and a title, not cropped by a container. */
               <div className="agx-scroll absolute right-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
                 style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 200, maxWidth: 260, maxHeight: 300 }}>
+                {/* 527 names on a real workspace, which is why this is here.
+                    ClickUp'"'"'s own picker opens on the people already on the card
+                    and the ones around it, and keeps everybody else behind a
+                    search box; a flat alphabetical list of the company is a
+                    list nobody scrolls twice. */}
+                {!membersBusy && (members?.length ?? 0) > 12 && (
+                  <input value={whoQ} onChange={(e) => setWhoQ(e.target.value)} autoFocus
+                    placeholder="Filter people…" spellCheck={false}
+                    className="mx-1 mb-1 px-2 py-1 rounded text-[11px] outline-none shrink-0"
+                    style={{ background: "var(--bg3)", border: edge(16), color: "var(--text)" }} />
+                )}
                 {membersBusy && <Spinner label="Reading the team…" />}
                 {!membersBusy && members?.length === 0 && (
                   <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
                     Nobody is a member of this list.
                   </div>
                 )}
-                {!membersBusy && members?.map((m) => {
+                {!membersBusy && shownMembers.map((m, i) => {
+                  /* One rule between the two groups: everybody above it works
+                     this board, everybody below it merely could. */
+                  const divide = i > 0 && onBoard.has(m.id) !== onBoard.has(shownMembers[i - 1]!.id);
                   const on = (t.people ?? []).some((p) => p.id === m.id);
                   return (
-                    <button key={m.id} className="text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2"
+                    <div key={m.id}>
+                    {divide && <div className="my-1" style={{ borderTop: edge(14) }} />}
+                    <button className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2"
                       onClick={() => {
                         setWhoOpen(false);
                         onAsk({
@@ -2823,8 +2880,12 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                       </span>
                       {on && <span className="text-[10px]" style={{ color: "var(--success)" }}>✓</span>}
                     </button>
+                    </div>
                   );
                 })}
+                {!membersBusy && !shownMembers.length && (members?.length ?? 0) > 0 && (
+                  <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Nobody matches that.</div>
+                )}
               </div>
             )}
           </div>

@@ -1341,8 +1341,34 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   const me = redacted("clickup")?.accountId;
-  const r = await call<{ members?: NonNullable<RawTask["assignees"]>[number][] }>(`/list/${encodeURIComponent(listId)}/member`, token);
-  if (!r.ok) return { ok: false, error: r.error };
+  /*
+   * The list AND the workspace, because the list alone is wrong here.
+   *
+   * The comment above was the theory. Measured against a real board: both of
+   * his lists answered with the same twenty people — Alex Koh, Brett Carpenter,
+   * Canny, Chuck Williams — and not one of the six ClickUp'"'"'s own picker offers
+   * for those very cards. Whatever `/list/{id}/member` is reporting, it is not
+   * the team that works the board, and it was leaving the people he actually
+   * assigns out of the picker entirely.
+   *
+   * So both sources, de-duplicated: nobody who can be assigned is missing, and
+   * the client puts the ones already on this board'"'"'s cards at the top — which
+   * is what ClickUp does with its own "Assignees" group.
+   */
+  const me2 = me ? redacted("clickup") : null;
+  const [fromList, fromTeam] = await Promise.all([
+    call<{ members?: NonNullable<RawTask["assignees"]>[number][] }>(`/list/${encodeURIComponent(listId)}/member`, token),
+    me2?.workspaceId
+      ? call<{ teams?: { members?: { user?: NonNullable<RawTask["assignees"]>[number] }[] }[] }>(`/team`, token)
+      : Promise.resolve({ ok: false } as CallResult<{ teams?: never[] }>),
+  ]);
+  if (!fromList.ok && !fromTeam.ok) return { ok: false, error: fromList.error };
+  const workspace = (fromTeam.ok ? fromTeam.data?.teams ?? [] : [])
+    .filter((t: any) => !me2?.workspaceId || String(t.id) === me2.workspaceId)
+    .flatMap((t: any) => (t.members ?? []).map((m: any) => m.user).filter(Boolean));
+  const seenIds = new Set<string>();
+  const r = { ok: true as const, data: { members: [...(fromList.data?.members ?? []), ...workspace]
+    .filter((m: any) => m?.id != null && !seenIds.has(String(m.id)) && seenIds.add(String(m.id))) } };
   const members: ListMember[] = (r.data?.members ?? [])
     .filter((m) => m.id != null)
     .map((m) => ({
