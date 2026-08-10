@@ -64,3 +64,26 @@ describe("merging a list that has not finished loading", () => {
     expect(keepLoadedChecks([], next)).toBe(next);
   });
 });
+
+describe("what the fast pass empties", () => {
+  it("keeps the review decision and mergeability too", () => {
+    /*
+     * Measured on the running server through a forced refresh: for about a
+     * second and a half the early rows carry `reviewDecision: null` and
+     * `mergeable: "UNKNOWN"` as well as an empty rollup. Those two are what the
+     * board files a card by, so keeping only the checks left the cards jumping
+     * lanes anyway.
+     */
+    const before = row(1, { checks: green, checksLoaded: true, reviewDecision: "APPROVED", mergeable: "MERGEABLE" });
+    const fastRow = row(1, { checksLoaded: false, reviewDecision: null, mergeable: "UNKNOWN" });
+    const [p] = keepLoadedChecks([before], [fastRow]);
+    expect(p!.reviewDecision).toBe("APPROVED");
+    expect(p!.mergeable).toBe("MERGEABLE");
+  });
+
+  it("still takes a real change over a remembered one", () => {
+    const before = row(1, { checks: green, checksLoaded: true, reviewDecision: "APPROVED" });
+    const fresh = row(1, { checks: green, checksLoaded: true, reviewDecision: "CHANGES_REQUESTED" });
+    expect(keepLoadedChecks([before], [fresh])[0]!.reviewDecision).toBe("CHANGES_REQUESTED");
+  });
+});

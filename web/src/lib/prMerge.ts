@@ -19,8 +19,18 @@
 
 import type { PrSummary } from "../../../shared/types.ts";
 
-/** The fields that only exist once the second pass has landed. */
-const SECOND_PASS = ["checks", "checksLoaded", "additions", "deletions", "changedFiles"] as const;
+/**
+ * The fields that only exist once the second pass has landed.
+ *
+ * Measured against the running server, sampling a forced refresh: the early
+ * rows come back with the rollup empty, the diff stats zero, `reviewDecision`
+ * null and `mergeable` UNKNOWN. The first three were on this list; the last two
+ * were not, and they are the ones the board files a card by — which is why
+ * approved-and-green cards still jumped lanes for a second and a half after
+ * this merge was written.
+ */
+const SECOND_PASS = ["checks", "checksLoaded", "additions", "deletions", "changedFiles",
+  "reviewDecision", "mergeable"] as const;
 
 export function keepLoadedChecks(prev: PrSummary[], next: PrSummary[]): PrSummary[] {
   if (!prev.length || !next.length) return next;

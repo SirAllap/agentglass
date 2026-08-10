@@ -1138,6 +1138,29 @@ export function rollupFromCounts(checkRun: StateCount[] | undefined, statusCtx: 
  * absent from the answer (or a failed call) is simply left out, and its row
  * keeps saying "checks…" rather than claiming "no checks".
  */
+/**
+ * What the fast pass cannot answer, kept from the answer before it.
+ *
+ * Measured, not guessed — sampling the running server through a forced refresh,
+ * the early rows come back with exactly these fields emptied: the review
+ * decision, mergeability, the check rollup and the diff stats. Everything else
+ * (title, state, labels, assignees, `updatedAt`) IS fresher in the new row and
+ * is taken from it.
+ */
+function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummary {
+  if (!old || next.checksLoaded) return next;
+  return {
+    ...next,
+    checks: next.checksLoaded ? next.checks : old.checks,
+    checksLoaded: old.checksLoaded,
+    additions: next.additions || old.additions,
+    deletions: next.deletions || old.deletions,
+    changedFiles: next.changedFiles || old.changedFiles,
+    reviewDecision: next.reviewDecision ?? old.reviewDecision,
+    mergeable: next.mergeable === "UNKNOWN" ? old.mergeable : next.mergeable,
+  };
+}
+
 async function fetchCheckRollups(repo: PrRepoId, numbers: number[]): Promise<Map<number, PrCheckRollup>> {
   const out = new Map<number, PrCheckRollup>();
   if (!numbers.length) return out;
@@ -1237,8 +1260,25 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
       // Put the rows on screen the moment they arrive; the checks land a beat
       // later and only fill in the dots.
       const page = await fetchList(repo, filter, state, after, (early) => {
+        /*
+         * The early rows, with the last full answer laid underneath them.
+         *
+         * Measured against the running app: for about a second and a half of
+         * every refresh this pass publishes rows where `reviewDecision` is
+         * null, `mergeable` is UNKNOWN, the rollup is empty and the diff stats
+         * are zero — and the board, which files a pull request mostly by those,
+         * moved every approved and green card into "yours, in flight" and moved
+         * it back when the second pass landed. Reported twice as the app
+         * looking broken.
+         *
+         * A refresh may add and it may correct. It may not un-know. So where
+         * this pass has no answer for a pull request we already had one for,
+         * the previous answer stands until a real one replaces it.
+         */
+        const before = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
         listCache.set(key, {
-          at: Date.now(), prs: early.rows, loading: false, checksPending: true,
+          at: Date.now(), prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
+          loading: false, checksPending: true,
           total: early.total, hasNext: early.hasNext, cursor: early.cursor,
         });
       }, query);
