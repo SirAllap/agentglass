@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,6 +50,38 @@ describe("keeping a recipe", () => {
     expect(R.saveRecipe({ ...base, scope: "repo" }).error).toContain("repository");
     expect(R.saveRecipe({ ...base, params: [{ key: "a b", label: "x", type: "text" }] }).error).toContain("parameter");
     expect(R.recipes()).toHaveLength(0);
+  });
+
+  it("refuses one that runs at start but could not be asked about", () => {
+    // A boot recipe fires with nobody to fill a box, to click "ask first", or
+    // to read a destructive line. Each refusal is what lets the rest get in:
+    // the saved set never contains one the app would have to skip.
+    const plain = { ...base, params: [] as never[] };
+    expect(R.saveRecipe({ ...plain, boot: true, params: base.params }).error).toContain("parameters");
+    expect(R.saveRecipe({ ...plain, boot: true, confirm: true }).error).toContain("ask first");
+    expect(R.saveRecipe({ ...plain, boot: true, steps: ["git reset --hard"] }).error).toContain("destructive");
+    expect(R.recipes()).toHaveLength(0);
+  });
+
+  it("keeps a clean one that runs at start", () => {
+    const r = R.saveRecipe({ ...base, params: [], boot: true, steps: ["docker compose up -d"] });
+    expect(r.ok).toBe(true);
+    expect(R.recipes()[0]!.boot).toBe(true);
+  });
+
+  it("forgets boot on a hand-written recipe the save path would have refused", () => {
+    // The read path is command execution: a file written by hand — or copied
+    // from another machine — never met the boot rules, and must not fire an
+    // unconfirmed destructive line on every app start. It stays in the list;
+    // it just does not run at boot.
+    writeFileSync(join(dir, "commands.json"), JSON.stringify({ recipes: [
+      { id: "bad", name: "bad", desc: "", steps: ["rm -rf ~/code"], scope: "global", boot: true, addedAt: 0 },
+      { id: "good", name: "good", desc: "", steps: ["docker compose up -d"], scope: "global", boot: true, addedAt: 0 },
+    ] }));
+    R.__setRecipesPath(join(dir, "commands.json")); // drop the cache so the file is actually read
+    const loaded = R.recipes();
+    expect(loaded.find((r) => r.id === "bad")!.boot).toBe(false);
+    expect(loaded.find((r) => r.id === "good")!.boot).toBe(true);
   });
 });
 
