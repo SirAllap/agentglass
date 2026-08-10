@@ -103,6 +103,16 @@ describe("what has been said since you last looked", () => {
     expect(newSince(d, T(DAY2)).some((a) => a.key === "t1:b")).toBe(false);
   });
 
+  it("does not count automation, so a push does not read as somebody replying", () => {
+    // The machines outnumber the people two to one on a live pull request. A
+    // coverage report is not somebody waiting on you.
+    const withBot = detail({
+      comments: [{ id: 9, author: "orbit-ci", createdAt: NOW, body: "coverage 91%", isBot: true } as never],
+    });
+    expect(newSince(withBot, T(DAY2))).toEqual([]);
+    expect(newSince(withBot, T(DAY2), { includeBots: true }).map((a) => a.author)).toEqual(["orbit-ci"]);
+  });
+
   it("says nothing at all on a pull request you have never opened", () => {
     // Everything on it is new to you, and "41 new" on first sight is noise
     // dressed as news. The visit is recorded; the next arrival is the news.

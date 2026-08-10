@@ -153,16 +153,27 @@ export const anchorId = (key: string): string => `agx-new-${key}`;
  *
  * Your own remarks never count. A reply you just posted is not something to go
  * and find, and counting it means the badge lights up because you spoke.
+ *
+ * Neither does automation, unless asked for. On a live pull request the
+ * machines outnumber the people two to one — that ratio is the whole reason
+ * this panel has a Humans filter — so counting them would light this up on
+ * every push and turn "3 new" into a number nobody reads. A coverage report is
+ * not somebody waiting on you.
  */
-export function newSince(d: PrDetail | null | undefined, since: number): NewAtom[] {
+export function newSince(
+  d: PrDetail | null | undefined,
+  since: number,
+  opts: { includeBots?: boolean } = {},
+): NewAtom[] {
   if (!d || !since) return [];
   const out: NewAtom[] = [];
   const mine = (viewerDidAuthor?: boolean) => viewerDidAuthor === true;
+  const machine = (isBot?: boolean) => !opts.includeBots && isBot === true;
 
   for (const t of d.threads ?? []) {
     for (const c of t.comments) {
       const when = at(c.createdAt);
-      if (when <= since || mine(c.viewerDidAuthor)) continue;
+      if (when <= since || mine(c.viewerDidAuthor) || machine(c.isBot)) continue;
       out.push({
         key: `${t.id}:${c.id}`, at: when, author: c.author, kind: "thread",
         where: t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "a line comment",
@@ -172,12 +183,12 @@ export function newSince(d: PrDetail | null | undefined, since: number): NewAtom
   }
   for (const c of d.comments ?? []) {
     const when = at(c.createdAt);
-    if (when <= since || mine(c.viewerDidAuthor)) continue;
+    if (when <= since || mine(c.viewerDidAuthor) || machine(c.isBot)) continue;
     out.push({ key: `c${c.id}`, at: when, author: c.author, kind: "comment", where: "the conversation" });
   }
   for (const r of d.reviews ?? []) {
     const when = at(r.submittedAt);
-    if (when <= since || mine(r.viewerDidAuthor)) continue;
+    if (when <= since || mine(r.viewerDidAuthor) || machine(r.isBot)) continue;
     out.push({ key: `r${r.author}-${r.submittedAt}`, at: when, author: r.author, kind: "review", where: "a review" });
   }
 
