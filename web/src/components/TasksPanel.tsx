@@ -891,16 +891,34 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     }
   }, []);
 
+  /*
+   * Which board was asked for last, so a slow answer cannot win.
+   *
+   * Reported: open one board, step to another and come back quickly, and a few
+   * seconds later the panel moves you to the one you left. That is the first
+   * board's answer landing after the second — and the settle loop behind it,
+   * which keeps re-reading for up to 45 seconds and painting whatever it finds.
+   * Neither of them checked whether you were still looking.
+   */
+  const asking = useRef(0);
   const load = useCallback(async (id?: string, force = false, asked = false) => {
+    const ticket = ++asking.current;
+    /* Any settle still running belongs to the board being left. Bumping the
+       counter is how it is told to stand down — see `settle`. */
+    settling.current++;
     setBusy(true);
     if (asked && id) setWanted(id);
     try {
       const r = await api.clickupView(id, force);
+      if (ticket !== asking.current) return; // a later board already won
       setData(r);
       if (r.revalidating && r.view?.id) void settle(r.view.id, r.at);
     } catch {
+      if (ticket !== asking.current) return;
       setData({ tasks: [], statuses: [], fields: [], at: 0, error: "Could not reach the server" });
-    } finally { setBusy(false); setWanted(null); }
+    } finally {
+      if (ticket === asking.current) { setBusy(false); setWanted(null); }
+    }
   }, [settle]);
 
   useEffect(() => { if (active) { void loadBoards(); void load(); } }, [active, loadBoards, load]);

@@ -1042,7 +1042,17 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   }
   const rows: PrSummary[] = bare.map((r) => {
     const hit = second.get(r.number);
-    return hit ? { ...r, ...hit.stats, checks: hit.rollup, checksLoaded: true } : r;
+    /*
+     * `false`, spelled out, for a row the second pass has not reached.
+     *
+     * It used to be left off entirely, and `undefined` reads as "this caller
+     * never had two passes" — which is exactly what the panel treats as a
+     * complete answer. So every guard built on it was dead on real data: the
+     * board painted half-loaded rows on every refresh, filed the approved and
+     * green ones under "yours, in flight" for four seconds, and put them back.
+     * Reported as the app looking broken.
+     */
+    return hit ? { ...r, ...hit.stats, checks: hit.rollup, checksLoaded: true } : { ...r, checksLoaded: false };
   });
   return { rows, ...meta };
 }
@@ -1186,7 +1196,7 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: P
       // newer list may have replaced it while the fetch was in flight.
       const cur = listCache.get(key);
       if (!cur) return;
-      const next = cur.prs.map((p) => (rollups.has(p.number) ? { ...p, checks: rollups.get(p.number)!, checksLoaded: true } : p));
+      const next = cur.prs.map((p) => (rollups.has(p.number) ? { ...p, checks: rollups.get(p.number)!, checksLoaded: true } : { ...p, checksLoaded: p.checksLoaded ?? false }));
       listCache.set(key, { ...cur, prs: next, checksPending: false });
       // Notify only for the filters the user has a stake in (never the
       // passively-warmed `all`, see #244). The latch dedupes, so a cache hit with
