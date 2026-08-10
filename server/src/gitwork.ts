@@ -976,6 +976,7 @@ export function fetch(rootIn: string): GitActionResult {
 
 // --- branches / log / stash --------------------------------------------------
 const US = "\x1f"; // field separator
+const RS = "\x1e"; // record separator (same convention as gitinsights)
 const validRef = (n: string) => typeof n === "string" && /^(?!-)(?!.*\.\.)[A-Za-z0-9._\/-]+$/.test(n) && !n.endsWith("/") && !n.endsWith(".lock");
 const validHash = (h: string) => typeof h === "string" && /^[0-9a-fA-F]{4,40}$/.test(h);
 
@@ -3334,7 +3335,6 @@ export function fileHistory(rootIn: unknown, pathIn: unknown): { ok: boolean; en
   const abs = inRepo(root, pathStr);
   if (!abs) return { ok: false, error: "invalid path" };
   const path = relative(root, abs);
-  const RS = "\x1e"; // record separator, same convention as gitinsights
   const r = git(root, ["log", "--follow", `--format=%H${US}%an${US}%at${US}%s${RS}`, "--", path]);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "git log failed" };
   const entries: FileHistoryEntry[] = [];
@@ -3436,6 +3436,90 @@ export function bisectReset(rootIn: unknown): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   return run(root, ["bisect", "reset"]);
+}
+
+// --- Commit + code search ---------------------------------------------------
+
+export type GitGrepHit = {
+  path: string;
+  line: number;
+  text: string;
+};
+
+/** Commits whose message matches the query (case-insensitive substring), plus
+ *  the commit itself when the query looks like a sha prefix. Reuses the
+ *  FileHistoryEntry shape, so commit rows render one way across the UI. */
+export function searchCommits(rootIn: unknown, qIn: unknown, authorIn?: unknown, sinceIn?: unknown): { ok: boolean; entries: FileHistoryEntry[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, entries: [], error: "not a git repository root" };
+  const q = String(qIn ?? "").trim();
+  if (!q || q.startsWith("-")) return { ok: false, entries: [], error: "empty or invalid query" };
+  const args = ["log", "--all", "-i", "-F", `--grep=${q}`, `--format=%H${US}%an${US}%at${US}%s${RS}`];
+  if (authorIn) { const a = String(authorIn).trim(); if (a) args.push(`--author=${a}`); }
+  if (sinceIn) { const s = String(sinceIn).trim(); if (s) args.push(`--since=${s}`); }
+  const r = git(root, args);
+  if (r.code !== 0) return { ok: false, entries: [], error: r.stderr.trim() || "git log failed" };
+  const entries: FileHistoryEntry[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [hash, author, at, subject] = line.split(US);
+    if (!hash) continue;
+    entries.push({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+  }
+  // A sha prefix is not a message. Resolve it directly and prepend it.
+  if (/^[0-9a-f]{4,40}$/i.test(q) && git(root, ["rev-parse", "--verify", "--quiet", q]).code === 0) {
+    const r2 = git(root, ["log", "-1", `--format=%H${US}%an${US}%at${US}%s${RS}`, q]);
+    if (r2.code === 0) {
+      const [hash, author, at, subject] = r2.stdout.trim().split(US);
+      if (hash && !entries.some((e) => e.fullHash === hash)) {
+        entries.unshift({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+      }
+    }
+  }
+  return { ok: true, entries };
+}
+
+/** Grep the working tree. Exit 1 is "no matches", not an error. */
+export function grepWorkingTree(rootIn: unknown, qIn: unknown, optsIn?: unknown): { ok: boolean; hits: GitGrepHit[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, hits: [], error: "not a git repository root" };
+  const q = String(qIn ?? "").trim();
+  if (!q) return { ok: false, hits: [], error: "empty query" };
+  const opts = (optsIn ?? {}) as { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean };
+  const args = ["grep", "-n", "-I"];
+  if (opts.wholeWord) args.push("-w");
+  if (!opts.regex) args.push("-F");
+  if (!opts.caseSensitive) args.push("-i");
+  args.push("--", q);
+  const r = git(root, args);
+  if (r.code === 1) return { ok: true, hits: [] };
+  if (r.code !== 0) return { ok: false, hits: [], error: r.stderr.trim() || "git grep failed" };
+  const hits: GitGrepHit[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const i = line.indexOf(":");
+    const j = i === -1 ? -1 : line.indexOf(":", i + 1);
+    if (i === -1 || j === -1) continue;
+    hits.push({ path: line.slice(0, i), line: Number(line.slice(i + 1, j)) || 0, text: line.slice(j + 1) });
+  }
+  return { ok: true, hits };
+}
+
+/** Pickaxe: which commits added/removed a string (`-S`, exact) or matched a
+ *  regex in the patch (`-G`). */
+export function searchHistory(rootIn: unknown, qIn: unknown, typeIn?: unknown): { ok: boolean; entries: FileHistoryEntry[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, entries: [], error: "not a git repository root" };
+  const q = String(qIn ?? "").trim();
+  if (!q || q.startsWith("-")) return { ok: false, entries: [], error: "empty or invalid query" };
+  const pickaxe = String(typeIn ?? "").trim() === "G" ? "G" : "S";
+  const r = git(root, ["log", "--all", `-${pickaxe}${q}`, `--format=%H${US}%an${US}%at${US}%s${RS}`]);
+  if (r.code !== 0) return { ok: false, entries: [], error: r.stderr.trim() || "git log failed" };
+  const entries: FileHistoryEntry[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [hash, author, at, subject] = line.split(US);
+    if (!hash) continue;
+    entries.push({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+  }
+  return { ok: true, entries };
 }
 
 // --- Submodules -------------------------------------------------------------

@@ -1300,6 +1300,12 @@ export interface GitBisectStatus {
   current?: { sha: string; subject: string };
   firstBad?: { sha: string; subject: string };
 }
+/** One `git grep` hit — path:line + the matching line. */
+export interface GitGrepHit {
+  path: string;
+  line: number;
+  text: string;
+}
 export interface GitWorktree {
   path: string;    // absolute
   branch: string;  // branch short name, or "(detached)"

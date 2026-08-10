@@ -62,7 +62,8 @@ import {
   rebaseSteps, runRebase, compareRefs,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   submodules as gitSubmodules, submoduleAdd, submoduleUpdate, submoduleSync, submoduleDeinit, submoduleRemove,
-  blameFile, fileHistory, bisectStatus, bisectStart, bisectMark, bisectReset,
+  blameFile, fileHistory,   bisectStatus, bisectStart, bisectMark, bisectReset,
+  searchCommits, grepWorkingTree, searchHistory,
   prepareConflictMerge,
 } from "./gitwork.ts";
 import { repoStats, generateChangelog } from "./gitinsights.ts";
@@ -1866,6 +1867,16 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/blame") return json(blameFile(url.searchParams.get("root") || "", url.searchParams.get("path") || "", url.searchParams.get("ref") || ""));
     if (pathname === "/git/file-history") return json(fileHistory(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
     if (pathname === "/git/bisect-status") return json(bisectStatus(url.searchParams.get("root") || ""));
+    if (pathname === "/git/search-commits") return json(searchCommits(url.searchParams.get("root") || "", url.searchParams.get("q") || "", url.searchParams.get("author") || undefined, url.searchParams.get("since") || undefined));
+    if (pathname === "/git/grep") {
+      const p = url.searchParams;
+      return json(grepWorkingTree(p.get("root") || "", p.get("q") || "", {
+        caseSensitive: p.get("caseSensitive") === "1",
+        wholeWord: p.get("wholeWord") === "1",
+        regex: p.get("regex") === "1",
+      }));
+    }
+    if (pathname === "/git/pickaxe") return json(searchHistory(url.searchParams.get("root") || "", url.searchParams.get("q") || "", url.searchParams.get("type") || "S"));
     // What has piled up in a checkout, and the command that would clear it.
     // Read-only by construction: the response carries commands as strings, and
     // there is deliberately no endpoint anywhere that runs one.
