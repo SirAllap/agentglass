@@ -93,13 +93,13 @@ The most valuable stealable pieces, with their gitcito locations:
 - Consumes: `treeState()` (`gitwork.ts:177`), `conflicts()` (`gitwork.ts:1743`), `mergeContinue`/`mergeAbort` (`gitwork.ts:1786/1769`), existing `GitActionResult`.
 - Produces: `cherryPick(root, hashes, opts: { noCommit?: boolean })` and `cherryPickContinue(root)` / `cherryPickAbort(root)`.
 
-- [ ] **Step 1: Types.** Add to `shared/types.ts` next to `MergeInfo`:
+- [x] **Step 1: Types.** Add to `shared/types.ts` next to `MergeInfo`:
 ```ts
 export type CherryPickRequest = { root: string; hashes: string[]; noCommit?: boolean };
 ```
 No new response type — `GitActionResult` covers it.
 
-- [ ] **Step 2: Engine.** In `gitwork.ts`:
+- [x] **Step 2: Engine.** In `gitwork.ts`:
 ```ts
 export function cherryPick(rootIn: string, hashesIn: unknown, noCommit?: boolean): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
@@ -114,9 +114,9 @@ export function cherryPick(rootIn: string, hashesIn: unknown, noCommit?: boolean
 Also `export function cherryPickContinue(rootIn)` → `run(root, ["cherry-pick", "--continue"])` and `cherryPickAbort(rootIn)` → `run(root, ["cherry-pick", "--abort"])`.
 Note the conflict-continue editor trap: plain `--continue` can open an editor when a conflict was resolved. If `run` ever hangs there, pass `-c core.editor=true` (see gitcito `git.ts:802-814`; and its `allowUnsafeEditor` gotcha does not apply here — agentglass uses raw argv, no simple-git).
 
-- [ ] **Step 3: Guard against mid-state.** Refuse a new cherry-pick when `treeState(root) !== "clean"` (a repo mid-merge must not start a second sequencer run). Error message names the state.
+- [x] **Step 3: Guard against mid-state.** Refuse a new cherry-pick when `treeState(root) !== "clean"` (a repo mid-merge must not start a second sequencer run). Error message names the state.
 
-- [ ] **Step 4: Tests.** Fixture: create a repo in `server/test/`, commit A, B, C on a side branch, checkout main, `cherryPick([B, C])` → main tip subject is C, log contains B and C; conflict case: make C edit the same line as an existing main commit → `ok:false`, then `conflicts()` lists the file, `mergeContinue` after resolving with `resolveWith(root, [file], "theirs")` completes the pick. Assert `-n` mode stages without committing (index has the change, HEAD untouched). Assert bad-hash and mid-state rejections.
+- [x] **Step 4: Tests.** Fixture: create a repo in `server/test/`, commit A, B, C on a side branch, checkout main, `cherryPick([B, C])` → main tip subject is C, log contains B and C; conflict case: make C edit the same line as an existing main commit → `ok:false`, then `conflicts()` lists the file, `mergeContinue` after resolving with `resolveWith(root, [file], "theirs")` completes the pick. Assert `-n` mode stages without committing (index has the change, HEAD untouched). Assert bad-hash and mid-state rejections.
 
 ### Task 2: Cherry-pick endpoint + API wrapper
 
@@ -128,8 +128,8 @@ Note the conflict-continue editor trap: plain `--continue` can open an editor wh
 - Consumes: Task 1 engine.
 - Produces: `POST /git/cherry-pick`, `POST /git/cherry-pick-continue`, `POST /git/cherry-pick-abort`.
 
-- [ ] **Step 1: Endpoints.** Three POST handlers beside the existing `merge-abort`/`merge-continue` (`index.ts` near line 2350). Body: `{ root, hashes?, noCommit? }`. Must respect the Origin-validation rule (#496) the other mutating routes use.
-- [ ] **Step 2: API wrappers.** In `web/src/lib/api.ts` next to `gitReset` (`api.ts:595`):
+- [x] **Step 1: Endpoints.** Three POST handlers beside the existing `merge-abort`/`merge-continue` (`index.ts` near line 2350). Body: `{ root, hashes?, noCommit? }`. Must respect the Origin-validation rule (#496) the other mutating routes use.
+- [x] **Step 2: API wrappers.** In `web/src/lib/api.ts` next to `gitReset` (`api.ts:595`):
 ```ts
 gitCherryPick: (root: string, hashes: string[], noCommit?: boolean) => post<GitActionResult>("/git/cherry-pick", { root, hashes, noCommit }),
 gitCherryPickContinue: (root: string) => post<GitActionResult>("/git/cherry-pick-continue", { root }),
@@ -146,10 +146,10 @@ gitCherryPickAbort: (root: string) => post<GitActionResult>("/git/cherry-pick-ab
 - Consumes: Task 2 API wrappers, existing `act()` helper, existing merge-paused banner (`GitPanel.tsx:2402-2406` region).
 - Produces: row context menu with **Cherry-pick onto current**, multi-select via `⇧`/`⌘`-click (check whether log rows are selectable today; if not, add a minimal selection set), and a paused-cherry-pick banner with Continue/Abort wired to the new endpoints.
 
-- [ ] **Step 1: Context menu on log rows.** Right-click a commit row → menu: Cherry-pick (single) / Cherry-pick (no commit), Revert, Copy SHA, Create branch here, Reset here (soft/mixed/hard — reuse `gitReset`). Menu component exists: `ContextMenu.tsx` — check how it is used by other panels and match it.
-- [ ] **Step 2: Multi-select.** `⇧`-click range + `⌘`-click toggle on log rows; when ≥2 selected show "Cherry-pick N commits (in order)". Order: oldest first (reverse of selection if user selected top-down).
-- [ ] **Step 3: Paused state.** When `tree.state === "cherry-picking"` show the merge-paused style banner with the conflict files (reuse `conflicts()`), Continue and Abort buttons. The state already flows through `workingTree()` → `GitTreeState`.
-- [ ] **Step 4: Toast copy.** Success: `cherry-picked <sha-short>`; conflict: surface the `run()` error (`CONFLICT (...)`), leave the sequencer paused.
+- [x] **Step 1: Context menu on log rows.** Right-click a commit row → menu: Cherry-pick (single) / Cherry-pick (no commit), Revert, Copy SHA, Create branch here, Reset here (soft/mixed/hard — reuse `gitReset`). Menu component exists: `ContextMenu.tsx` — check how it is used by other panels and match it.
+- [x] **Step 2: Multi-select.** `⇧`-click range + `⌘`-click toggle on log rows; when ≥2 selected show "Cherry-pick N commits (in order)". Order: oldest first (reverse of selection if user selected top-down).
+- [x] **Step 3: Paused state.** When `tree.state === "cherry-picking"` show the merge-paused style banner with the conflict files (reuse `conflicts()`), Continue and Abort buttons. The state already flows through `workingTree()` → `GitTreeState`.
+- [x] **Step 4: Toast copy.** Success: `cherry-picked <sha-short>`; conflict: surface the `run()` error (`CONFLICT (...)`), leave the sequencer paused.
 
 ### Task 4: Revert, amend, squash
 
@@ -160,10 +160,10 @@ gitCherryPickAbort: (root: string) => post<GitActionResult>("/git/cherry-pick-ab
 - Consumes: Task 1's patterns.
 - Produces: `revert(root, hash)`; `amend(root, title, body)`; `squashCommits(root, oldestHash, newestHash)`.
 
-- [ ] **Step 1: Revert.** `git revert --no-edit <hash>` (non-interactive editor kill). Endpoint `POST /git/revert`. Conflict path = same as cherry-pick (`REVERT_HEAD` already detected by `treeState`; `mergeAbort` already aborts reverts). Menu entry in Task 3's context menu.
-- [ ] **Step 2: Amend.** `git commit --amend -m title [-m body]` — only when `treeState === "clean"` besides staged changes; refuse when mid-op. In `CommitModal.tsx`, add an "Amend" toggle next to Commit that calls it instead.
-- [ ] **Step 3: Squash.** Multi-select on log → "Squash N commits": verify contiguous run (walk `rev-list oldest..newest` length equals N and newest is an ancestor of HEAD; otherwise refuse). Implement per gitcito: soft `reset --soft oldest^` + `commit -m` with `ORIG_HEAD` left as the undo point (`gitcito git.ts:1179-1183`). Endpoint `POST /git/squash`.
-- [ ] **Step 4: Tests** for all three (fixture repos: revert order, amend replaces message, squash produces one commit whose tree equals the squashed tip, `ORIG_HEAD` points at the old tip).
+- [x] **Step 1: Revert.** `git revert --no-edit <hash>` (non-interactive editor kill). Endpoint `POST /git/revert`. Conflict path = same as cherry-pick (`REVERT_HEAD` already detected by `treeState`; `mergeAbort` already aborts reverts). Menu entry in Task 3's context menu.
+- [x] **Step 2: Amend.** `git commit --amend -m title [-m body]` — only when `treeState === "clean"` besides staged changes; refuse when mid-op. In `CommitModal.tsx`, add an "Amend" toggle next to Commit that calls it instead.
+- [x] **Step 3: Squash.** Multi-select on log → "Squash N commits": verify contiguous run (walk `rev-list oldest..newest` length equals N and newest is an ancestor of HEAD; otherwise refuse). Implement per gitcito: soft `reset --soft oldest^` + `commit -m` with `ORIG_HEAD` left as the undo point (`gitcito git.ts:1179-1183`). Endpoint `POST /git/squash`.
+- [x] **Step 4: Tests** for all three (fixture repos: revert order, amend replaces message, squash produces one commit whose tree equals the squashed tip, `ORIG_HEAD` points at the old tip).
 
 ### Task 5: Interactive rebase
 
@@ -176,14 +176,14 @@ gitCherryPickAbort: (root: string) => post<GitActionResult>("/git/cherry-pick-ab
 - Consumes: `logGraph`/`gitLog` for step enumeration.
 - Produces: `rebaseSteps(root, base): RebaseStep[]` (read-only) and `runRebase(root, base, steps)` (mutating); types `RebaseStep = { action: "pick"|"squash"|"fixup"|"drop"|"reword"|"edit"; hash: string; subject: string; newMessage?: string }`.
 
-- [ ] **Step 1: Enumeration.** `git log --reverse base..HEAD --format=%H\x1f%s\x1e` (the `\x1f`/`\x1e` record parsing from the Analysis table — reuse `parseDiff`-style splitting, or the separator constants already in `gitwork.ts` if present).
-- [ ] **Step 2: Todo execution.** Write the todo list to a temp file, then:
+- [x] **Step 1: Enumeration.** `git log --reverse base..HEAD --format=%H\x1f%s\x1e` (the `\x1f`/`\x1e` record parsing from the Analysis table — reuse `parseDiff`-style splitting, or the separator constants already in `gitwork.ts` if present).
+- [x] **Step 2: Todo execution.** Write the todo list to a temp file, then:
 ```
 git -C <root> -c sequence.editor='cp <tmpfile>' -c core.editor=true rebase -i <base>
 ```
 gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commit --amend -m '<escaped>'` line (`\` → `\\`, `'` → `'\''`). Drop = `drop <shortsha> <subject>`. Use `gitAsync`-style bounded timeout (rebases are not instant).
-- [ ] **Step 3: UI.** `RebaseModal.tsx`: pick a base (or "from this commit" from the log context menu), render steps, drag to reorder (check for a drag util already used in the codebase — `GitPanel` reorders tabs? if none, up/down buttons), per-row action dropdown (pick/squash/fixup/reword/drop/edit). Reword shows a message input. "Start rebase" button; on conflict, `treeState` reports `rebasing` and the existing merge-paused UI must offer `rebase --continue`/`--abort` — add those two to `mergeContinue`/`mergeAbort`'s state switch (`gitwork.ts:1770-1790` area) if not already handled.
-- [ ] **Step 4: Tests.** Reorder swaps commit order; squash folds; drop removes; reword changes message; conflict pauses with `treeState()==="rebasing"` and abort restores the original `ORIG_HEAD`-safe state.
+- [x] **Step 3: UI.** `RebaseModal.tsx`: pick a base (or "from this commit" from the log context menu), render steps, drag to reorder (check for a drag util already used in the codebase — `GitPanel` reorders tabs? if none, up/down buttons), per-row action dropdown (pick/squash/fixup/reword/drop/edit). Reword shows a message input. "Start rebase" button; on conflict, `treeState` reports `rebasing` and the existing merge-paused UI must offer `rebase --continue`/`--abort` — add those two to `mergeContinue`/`mergeAbort`'s state switch (`gitwork.ts:1770-1790` area) if not already handled.
+- [x] **Step 4: Tests.** Reorder swaps commit order; squash folds; drop removes; reword changes message; conflict pauses with `treeState()==="rebasing"` and abort restores the original `ORIG_HEAD`-safe state.
 
 ### Task 6: Compare refs
 
@@ -195,9 +195,9 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 - Consumes: `baseCandidates()` (`gitwork.ts:1871`) for the ref picker.
 - Produces: `compareRefs(root, base, other): { ahead: GitCommit[]; behind: GitCommit[]; diff: GitFileChange[] }`.
 
-- [ ] **Step 1: Engine.** `git log other..base` (ahead), `base..other` (behind), `git diff other...base` → `GitFileChange[]` via the existing diff parser (`parseDiff` at `gitwork.ts:75`). Two async calls via `gitAsync`, one diff.
-- [ ] **Step 2: Endpoint + wrapper** (`GET /git/compare?root=&base=&other=`).
-- [ ] **Step 3: UI.** Modal from the branches view ("compare with current") and the log header: base/other pickers with swap button, ahead/behind counts, unified diff list reusing the existing `ChangesModal`/file-diff rendering. Offer "open a PR" only if `prs.ts` already exposes the shape (else leave a "checkout base" affordance).
+- [x] **Step 1: Engine.** `git log other..base` (ahead), `base..other` (behind), `git diff other...base` → `GitFileChange[]` via the existing diff parser (`parseDiff` at `gitwork.ts:75`). Two async calls via `gitAsync`, one diff.
+- [x] **Step 2: Endpoint + wrapper** (`GET /git/compare?root=&base=&other=`).
+- [x] **Step 3: UI.** Modal from the branches view ("compare with current") and the log header: base/other pickers with swap button, ahead/behind counts, unified diff list reusing the existing `ChangesModal`/file-diff rendering. Offer "open a PR" only if `prs.ts` already exposes the shape (else leave a "checkout base" affordance).
 
 ### Task 7: Safety net — WIP snapshots + reflog recovery
 
@@ -209,10 +209,10 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `createSnapshot(root, label?)`, `listSnapshots(root)`, `restoreSnapshot(root, sha)`, `deleteSnapshot(root, sha)`; snapshot type `{ sha, ref, time, label }`.
 
-- [ ] **Step 1: Snapshots.** `git stash create -m <label>` (makes a commit, touches NOTHING), then `git update-ref refs/agx/wip/<timestamp> <sha>`. List via `for-each-ref refs/agx/wip --format=%(refname:short)\x1f%(objectname:short)\x1f%(creatordate:iso8601)`. Restore = `git stash apply <sha>` (or `git stash apply <sha> --index`), delete = `update-ref -d`. Cap at 30, prune oldest on create (gitcito pattern `git.ts:2929-2978`).
-- [ ] **Step 2: Reflog recovery.** In the existing Reflog view, each entry gets "reset here" (hard reset with a confirm dialog — the panel already confirms destructive ops) and "copy SHA". Reuses `gitReset` from `api.ts:595`.
-- [ ] **Step 3: Auto-stash on history surgery.** Wrap cherry-pick/rebase/pull in `withAutoStash`: if `git status --porcelain` is non-empty, `stash push --include-untracked -m "agx: auto-stash before <op>"`, run, then `stash pop`. On failure leave the stash and report its index in the error (gitcito `git.ts:226-238`). Do this in the engine, not the UI.
-- [ ] **Step 4: Tests.** Snapshot round-trip (dirty tree → snapshot → clean → restore → dirty again), prune cap, reflog reset restores a hard-reset casualty.
+- [x] **Step 1: Snapshots.** `git stash create -m <label>` (makes a commit, touches NOTHING), then `git update-ref refs/agx/wip/<timestamp> <sha>`. List via `for-each-ref refs/agx/wip --format=%(refname:short)\x1f%(objectname:short)\x1f%(creatordate:iso8601)`. Restore = `git stash apply <sha>` (or `git stash apply <sha> --index`), delete = `update-ref -d`. Cap at 30, prune oldest on create (gitcito pattern `git.ts:2929-2978`).
+- [x] **Step 2: Reflog recovery.** In the existing Reflog view, each entry gets "reset here" (hard reset with a confirm dialog — the panel already confirms destructive ops) and "copy SHA". Reuses `gitReset` from `api.ts:595`.
+- [x] **Step 3: Auto-stash on history surgery.** Wrap cherry-pick/rebase/pull in `withAutoStash`: if `git status --porcelain` is non-empty, `stash push --include-untracked -m "agx: auto-stash before <op>"`, run, then `stash pop`. On failure leave the stash and report its index in the error (gitcito `git.ts:226-238`). Do this in the engine, not the UI.
+- [x] **Step 4: Tests.** Snapshot round-trip (dirty tree → snapshot → clean → restore → dirty again), prune cap, reflog reset restores a hard-reset casualty.
 
 ### Task 8: Guardrails — protected branches + force-with-lease
 
@@ -222,9 +222,9 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `protectedBranches(root)`, `setProtectedBranches(root, names)`; `push(root, opts: { force?: boolean })`.
 
-- [ ] **Step 1: Storage.** In git config (like gitcito): `git config agx.protectedbranches` comma-joined, default `main,master`. Read + write helpers.
-- [ ] **Step 2: Enforcement.** `resetTo` with `hard` refuses when current branch is protected (unless an explicit `force` flag). Commit-to-protected shows a one-click confirm in the UI (`CommitModal`). Add `--force-with-lease` (never `--force`) support to `push` behind an explicit UI confirm.
-- [ ] **Step 3: Tests.** Protected reset refuses; unprotected allows; config round-trip.
+- [x] **Step 1: Storage.** In git config (like gitcito): `git config agx.protectedbranches` comma-joined, default `main,master`. Read + write helpers.
+- [x] **Step 2: Enforcement.** `resetTo` with `hard` refuses when current branch is protected (unless an explicit `force` flag). Commit-to-protected shows a one-click confirm in the UI (`CommitModal`). Add `--force-with-lease` (never `--force`) support to `push` behind an explicit UI confirm.
+- [x] **Step 3: Tests.** Protected reset refuses; unprotected allows; config round-trip.
 
 ### Task 9: Stash power-ups
 
@@ -234,11 +234,11 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `stashRename(root, index, message)`, `stashToBranch(root, index, branch)`, `stashPartial(root, paths, keepIndex?)`, `stashApplyOverwrite(root, index)`.
 
-- [ ] **Step 1: Rename.** Rewrite the reflog line (`logs/refs/stash`), preserving the `WIP on <branch>:` prefix (gitcito `git.ts:1266-1287`).
-- [ ] **Step 2: To branch.** `git stash branch <branch> stash@{<i>}`.
-- [ ] **Step 3: Partial stash.** `git stash push -- <paths> [--keep-index]` from file checkboxes in the stash view.
-- [ ] **Step 4: Apply overwrite.** For stashes that won't apply cleanly: delete colliding working-tree paths then `git stash apply` (gitcito `stashApplyOverwrite`, `git.ts:1289-1313`) — behind a confirm.
-- [ ] **Step 5: Tests** for rename (message changes, prefix preserved) and to-branch.
+- [x] **Step 1: Rename.** Rewrite the reflog line (`logs/refs/stash`), preserving the `WIP on <branch>:` prefix (gitcito `git.ts:1266-1287`).
+- [x] **Step 2: To branch.** `git stash branch <branch> stash@{<i>}`.
+- [x] **Step 3: Partial stash.** `git stash push -- <paths> [--keep-index]` from file checkboxes in the stash view.
+- [x] **Step 4: Apply overwrite.** For stashes that won't apply cleanly: delete colliding working-tree paths then `git stash apply` (gitcito `stashApplyOverwrite`, `git.ts:1289-1313`) — behind a confirm.
+- [x] **Step 5: Tests** for rename (message changes, prefix preserved) and to-branch.
 
 ### Task 10: Bonus — insights + changelog
 
@@ -250,9 +250,9 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `repoStats(root, days)` → `{ commitsPerDay, contributors, filesTouched, linesChanged, churn[], topContributors[], hotspots[] }`; `generateChangelog(root, from?, to?)` → markdown.
 
-- [ ] **Step 1: Stats.** `git log --no-merges --since=... --pretty=%at\x1f%an\x1f%ae\x1e` + `git log --numstat -M --since=...` with `\x01`-prefixed commit markers to disambiguate rows from numstat lines (gitcito `repoInsights`, `git.ts:2719-2839`). All `gitAsync` (fan-out, must not block the loop).
-- [ ] **Step 2: Changelog.** Conventional-commits regex `^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.+)$`, breaking changes first, grouped Features/Fixes/Performance, `from`/`to` default latest tag → HEAD.
-- [ ] **Step 3: UI.** Modal reachable from the repo picker header; simple stat cards + a churn sparkline (reuse an existing chart primitive if one exists — check `Kpis.tsx`/`Throughput.tsx`).
+- [x] **Step 1: Stats.** `git log --no-merges --since=... --pretty=%at\x1f%an\x1f%ae\x1e` + `git log --numstat -M --since=...` with `\x01`-prefixed commit markers to disambiguate rows from numstat lines (gitcito `repoInsights`, `git.ts:2719-2839`). All `gitAsync` (fan-out, must not block the loop).
+- [x] **Step 2: Changelog.** Conventional-commits regex `^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.+)$`, breaking changes first, grouped Features/Fixes/Performance, `from`/`to` default latest tag → HEAD.
+- [x] **Step 3: UI.** Modal reachable from the repo picker header; simple stat cards + a churn sparkline (reuse an existing chart primitive if one exists — check `Kpis.tsx`/`Throughput.tsx`).
 
 ### Task 11: Submodules
 
@@ -262,10 +262,10 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `submodules(root)` read + `submoduleAdd(root, url, path)`, `submoduleUpdate(root, path?)`, `submoduleSync(root)`, `submoduleDeinit(root, path)`, `submoduleRemove(root, path)`.
 
-- [ ] **Step 1: Read.** Three-source merge like gitcito (`git.ts:2302-2379`): `.gitmodules` config parse, `git submodule status` (initialized/uninitialized/modified prefixes `-`/`+`/`U`), and gitlink `ls-tree` entries (mode `160000`) for sha + ahead/behind.
-- [ ] **Step 2: Write ops.** Add (`submodule add <url> <path>`), update (`submodule update --init --recursive` for the picked ones, or `--remote` variant), sync (`submodule sync --recursive`), deinit (`submodule deinit -f`), remove (deinit + `git rm` + strip `.gitmodules` block + remove dir).
-- [ ] **Step 3: UI.** Submodule rows in a sidebar/remotes view with per-module status chip and act buttons; `update` runs via `gitAsync` (network op — never block the loop).
-- [ ] **Step 4: Tests.** Fixture with a nested repo added as a submodule; status reads `+`/`-`; remove strips `.gitmodules`.
+- [x] **Step 1: Read.** Three-source merge like gitcito (`git.ts:2302-2379`): `.gitmodules` config parse, `git submodule status` (initialized/uninitialized/modified prefixes `-`/`+`/`U`), and gitlink `ls-tree` entries (mode `160000`) for sha + ahead/behind.
+- [x] **Step 2: Write ops.** Add (`submodule add <url> <path>`), update (`submodule update --init --recursive` for the picked ones, or `--remote` variant), sync (`submodule sync --recursive`), deinit (`submodule deinit -f`), remove (deinit + `git rm` + strip `.gitmodules` block + remove dir).
+- [x] **Step 3: UI.** Submodule rows in a sidebar/remotes view with per-module status chip and act buttons; `update` runs via `gitAsync` (network op — never block the loop).
+- [x] **Step 4: Tests.** Fixture with a nested repo added as a submodule; status reads `+`/`-`; remove strips `.gitmodules`.
 
 ### Task 12: Per-file blame + history
 
@@ -275,10 +275,10 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `blameFile(root, path, ref?)` → `BlameLine[]`; `fileHistory(root, path)` → `FileHistoryEntry[]`; endpoint `GET /git/blame?root=&path=&ref=`.
 
-- [ ] **Step 1: Blame.** `git blame --line-porcelain <ref> -- <path>` — the parser maps `\t`-separated fields (commit sha, original line, final line, group count) + `author`, `author-time` lines; gitcito's `blame --line-porcelain` parse (`git.ts:2204-2221`) is directly portable.
-- [ ] **Step 2: History.** `git log --follow --format=%H\x1f%an\x1f%at\x1f%s\x1e -- <path>`.
-- [ ] **Step 3: UI.** Blame opens as a side panel next to the file preview (`PeekFile`/editor integration — check `editor.ts`); a right-click **"blame"** on any changed file row; clicking a blame line scrolls to the commit. Follow-the-line jump into the diff, and a "reblame before this commit" affordance if cheap.
-- [ ] **Step 4: Tests.** Blame on a fixture file after two commits; `--follow` rename case.
+- [x] **Step 1: Blame.** `git blame --line-porcelain <ref> -- <path>` — the parser maps `\t`-separated fields (commit sha, original line, final line, group count) + `author`, `author-time` lines; gitcito's `blame --line-porcelain` parse (`git.ts:2204-2221`) is directly portable.
+- [x] **Step 2: History.** `git log --follow --format=%H\x1f%an\x1f%at\x1f%s\x1e -- <path>`.
+- [x] **Step 3: UI.** Blame opens as a side panel next to the file preview (`PeekFile`/editor integration — check `editor.ts`); a right-click **"blame"** on any changed file row; clicking a blame line scrolls to the commit. Follow-the-line jump into the diff, and a "reblame before this commit" affordance if cheap.
+- [x] **Step 4: Tests.** Blame on a fixture file after two commits; `--follow` rename case.
 
 ### Task 13: Guided bisect
 
@@ -290,9 +290,9 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 - Consumes: `treeState()` already returns `"bisecting"` (`gitwork.ts:184`) — the plumbing exists.
 - Produces: `bisectStatus(root)`, `bisectStart(root, bad, good)`, `bisectMark(root, "good"|"bad")`, `bisectReset(root)`.
 
-- [ ] **Step 1: Engine.** `bisect start` / `bisect bad <sha>` / `bisect good <sha>` then `bisect status` — parse the human progress text with regexes like gitcito's `buildBisectStatus` (`git.ts:480-529`): `"Bisecting: N revisions left"`, `"<sha> is the first bad commit"`, and the `BISECT_HEAD` sha.
-- [ ] **Step 2: UI.** Modal when a checkout is mid-bisect: current candidate sha + subject, mark good/bad buttons, remaining count, and when done — the first-bad commit with a one-click "create branch at / view diff".
-- [ ] **Step 3: Tests.** Fixture with a known bad commit; mark through the range; assert first-bad detection.
+- [x] **Step 1: Engine.** `bisect start` / `bisect bad <sha>` / `bisect good <sha>` then `bisect status` — parse the human progress text with regexes like gitcito's `buildBisectStatus` (`git.ts:480-529`): `"Bisecting: N revisions left"`, `"<sha> is the first bad commit"`, and the `BISECT_HEAD` sha.
+- [x] **Step 2: UI.** Modal when a checkout is mid-bisect: current candidate sha + subject, mark good/bad buttons, remaining count, and when done — the first-bad commit with a one-click "create branch at / view diff".
+- [x] **Step 3: Tests.** Fixture with a known bad commit; mark through the range; assert first-bad detection.
 
 ### Task 14: Commit search + code search
 
@@ -303,11 +303,11 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `searchCommits(root, query, author?, since?)` (message/SHA filter over the graph), `grepWorkingTree(root, query, { caseSensitive, wholeWord, regex })`, `searchHistory(root, query, pickaxe: "S"|"G")`.
 
-- [ ] **Step 1: Commit filter.** Filter the existing `logGraph` output by message/SHA regex server-side or client-side; add a filter input in the Log view header (`git log --grep=... --author=...` when the panel wants precision).
-- [ ] **Step 2: Grep.** `git grep -n <flags> <query>` with exit-code-1 = no matches (gitcito `git.ts:2121-2148`); results carry path:line + snippet.
-- [ ] **Step 3: Pickaxe.** `git log -S<query>` (adds/removes count) and `-G<regex>` (patch match) with `--format=%H\x1f%s\x1e` — answers "which commit introduced this string".
-- [ ] **Step 4: UI.** Extend `SearchModal.tsx` with three modes: commits / working tree / history; hit rows jump to the commit or file. Word-level highlight on the hit line.
-- [ ] **Step 5: Tests.** Grep finds tracked + untracked; pickaxe `-S` finds the introducing commit.
+- [x] **Step 1: Commit filter.** Filter the existing `logGraph` output by message/SHA regex server-side or client-side; add a filter input in the Log view header (`git log --grep=... --author=...` when the panel wants precision).
+- [x] **Step 2: Grep.** `git grep -n <flags> <query>` with exit-code-1 = no matches (gitcito `git.ts:2121-2148`); results carry path:line + snippet.
+- [x] **Step 3: Pickaxe.** `git log -S<query>` (adds/removes count) and `-G<regex>` (patch match) with `--format=%H\x1f%s\x1e` — answers "which commit introduced this string".
+- [x] **Step 4: UI.** Extend `SearchModal.tsx` with three modes: commits / working tree / history; hit rows jump to the commit or file. Word-level highlight on the hit line.
+- [x] **Step 5: Tests.** Grep finds tracked + untracked; pickaxe `-S` finds the introducing commit.
 
 ### Task 15: Tags power-ups
 
@@ -317,9 +317,9 @@ gitcito's exact approach (`git.ts:2508-2540`). Reword = `pick` + `exec git commi
 **Interfaces:**
 - Produces: `createTag(root, name, { annotated?, message?, signed? })`, `deleteTag(root, name)`, `pushTag(root, name, remote?)`, `deleteRemoteTag(root, name, remote?)`.
 
-- [ ] **Step 1: Create.** Lightweight default; annotated adds `-a -m`; signed adds `-s`. Refuse names that already exist (`tag --list` check).
-- [ ] **Step 2: Push/delete.** `push <remote> <name>` and `push <remote> :refs/tags/<name>` for remote delete.
-- [ ] **Step 3: Tests.** Annotated round-trips its message; delete refuses to touch a tag you don't own locally (`-d` semantics).
+- [x] **Step 1: Create.** Lightweight default; annotated adds `-a -m`; signed adds `-s`. Refuse names that already exist (`tag --list` check).
+- [x] **Step 2: Push/delete.** `push <remote> <name>` and `push <remote> :refs/tags/<name>` for remote delete.
+- [x] **Step 3: Tests.** Annotated round-trips its message; delete refuses to touch a tag you don't own locally (`-d` semantics).
 
 ---
 
