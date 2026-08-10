@@ -674,15 +674,19 @@ describe("the ClickUp half, as its own controls", () => {
     expect(src).toContain("background: m.color || \"var(--bg4)\"");
   });
 
-  it("is a vertical half, never a fold below", () => {
-    expect(src).toContain('className="fixed rounded-lg overflow-hidden flex flex-row items-stretch"');
+  it("stacks under the people rather than widening the menu", () => {
+    /* The menu is already tall — that is the space going spare, not the width.
+       Widening it to 620 pushed a second column across the pane; this uses the
+       height that was already there. */
+    expect(src).toContain("const W = 300;");
+    expect(src).not.toContain("const W = side ? 620 : 300;");
+    expect(src).toContain('className="fixed rounded-lg overflow-hidden flex flex-col"');
   });
 
-  it("folds to a strip and comes back", () => {
-    /* Most presses of this menu are only about the reviewer. Put away, it
-       leaves the people list the whole width; the strip brings it back. */
-    expect(src).toContain("Not now ›");
+  it("folds to one line and comes back", () => {
+    // Most presses of this menu are only about the reviewer.
+    expect(src).toContain("Not now ▾");
     expect(src).toContain("onClick={() => setFolded(false)}");
-    expect(src).toContain('style={{ width: 28,');
+    expect(src).toContain("Also move {ref.label} in ClickUp");
   });
 });

@@ -4953,19 +4953,19 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const t = q.trim().toLowerCase();
   const shown = t ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t)) : options;
 
-  const W = side ? 620 : 300;
+  /* One width, always. The menu is already tall — that is the space going
+     spare, not the width — so the other half of the errand stacks under the
+     people rather than beside them. */
+  const W = 300;
   const left = Math.round(Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)));
   const top = Math.round(Math.min(anchor.bottom + 6, window.innerHeight - 140));
   const maxH = Math.max(200, window.innerHeight - top - 12);
 
   return (
     <Portal>
-      <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-row items-stretch"
+      <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
-        {/* Side by side, always: the divider between "who reviews it" and "what
-            happens to the card" is a vertical rule, not a fold. Fixed widths so
-            neither column can push the other into a stack. */}
-        <div className="flex flex-col min-w-0 flex-1" style={{ minWidth: side ? 300 : undefined }}>
+        <div className="flex flex-col min-w-0 flex-1">
         {/* px-5 to match viewHeaderClass, which is the row directly above this
             one. At px-3 the filter chips started 8px to the left of the repo
             chips they sit under — two left edges in one header, which is the
@@ -5108,16 +5108,19 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
   if (folded) {
     return (
       <button onClick={() => setFolded(false)} title={`Also move ${ref.label} in ClickUp`}
-        className="agx-btn shrink-0 flex flex-col items-center justify-start gap-2 py-2"
-        style={{ width: 28, borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
-        <span aria-hidden>‹</span>
-        <span className="text-[9px] tracking-[0.16em]" style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}>ClickUp</span>
+        className="agx-btn shrink-0 w-full flex items-center gap-2 px-3 py-1.5 text-[10.5px]"
+        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
+        <span aria-hidden>▴</span>
+        <span className="truncate">Also move {ref.label} in ClickUp</span>
       </button>
     );
   }
 
   return (
-    <div className="flex flex-col min-w-0 shrink-0" style={{ width: 320, borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    /* Under the people, not beside them: the menu'"'"'s height is what was going
+       spare. Capped, so the list above it keeps most of the window and this
+       never pushes Done off the bottom. */
+    <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
         <div className="flex items-center gap-2">
           <div className="text-[11px] font-semibold min-w-0 truncate" style={{ color: "var(--text)" }}>
@@ -5126,7 +5129,7 @@ function ClickUpSide({ d, onNote }: { d: PrDetail; onNote: (ok: boolean, msg: st
           <button onClick={() => setFolded(true)} title="Leave the card alone — this folds away and comes back on the strip"
             className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
             style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-            Not now ›
+            Not now ▾
           </button>
         </div>
         <div className="text-[10px] truncate" style={{ color: "var(--text3)" }} title={card?.title}>
