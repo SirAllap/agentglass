@@ -49,6 +49,7 @@ import { dependencyReport } from "./deps.ts";
 import {
   workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
+  protectedBranches, setProtectedBranches,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   refs, listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot,
@@ -1972,7 +1973,7 @@ const server = Bun.serve<WsData>({
         case "/git/unstage-all": res = unstageAll(root); break;
         case "/git/discard": res = discard(root, paths); break;
         case "/git/commit-staged": res = commitStaged(root, String(b.title || ""), String(b.body || "")); break;
-        case "/git/push": res = gitPush(root); break;
+        case "/git/push": res = gitPush(root, { force: b.force === true }); break;
         case "/git/pull": res = gitPull(root); break;
         case "/git/fetch": res = gitFetch(root); break;
         case "/git/checkout": res = gitCheckout(root, String(b.name || "")); break;
@@ -1986,7 +1987,7 @@ const server = Bun.serve<WsData>({
         case "/git/merge": res = mergeBranch(root, String(b.name || "")); break;
         case "/git/rebase": res = rebaseBranch(root, String(b.name || "")); break;
         case "/git/branch-rename": res = renameBranch(root, String(b.name || ""), String(b.to || "")); break;
-        case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode); break;
+        case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode, b.force === true); break;
         case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch, b.startPoint); break;
         // Bring a remote branch local. `switch` moves this checkout onto it;
         // without it the branch is created and nothing else moves.
@@ -2020,6 +2021,11 @@ const server = Bun.serve<WsData>({
         case "/git/snapshot-create": res = createSnapshot(root, b.label); break;
         case "/git/snapshot-restore": res = restoreSnapshot(root, b.sha); break;
         case "/git/snapshot-delete": res = deleteSnapshot(root, b.sha); break;
+        case "/git/protected-branches": res = protectedBranches(root); break;
+        case "/git/protected-branches-set": res = setProtectedBranches(root, b.names); break;
+        case "/git/protected-branches": res = protectedBranches(root); break;
+        case "/git/protected-branches-set": res = setProtectedBranches(root, b.names); break;
+        case "/git/push": res = gitPush(root, { force: b.force === true }); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why

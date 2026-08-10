@@ -794,10 +794,60 @@ export function commitStaged(rootIn: string, title: string, body: string): GitAc
 }
 
 // Network ops — bounded and gated. pull is --ff-only to avoid surprise merges.
-export function push(rootIn: string): GitActionResult {
+
+/** Branches the guardrails treat as shared — the default list, plus whatever
+ *  the repo's own config says on top of it. Stored as a comma-joined config
+ *  value (`git config agx.protectedbranches`), so a terminal user can see and
+ *  edit it with plain git, and it travels with the repo, not the panel. */
+export function protectedBranches(rootIn: unknown): { ok: boolean; branches?: string[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const set = new Set<string>(["main", "master"]);
+  const raw = git(root, ["config", "--get", "agx.protectedbranches"]).stdout.trim();
+  for (const name of raw.split(",")) {
+    const n = name.trim();
+    if (n) set.add(n);
+  }
+  return { ok: true, branches: [...set] };
+}
+
+/** Replace the protected list with exactly these names (main/master always
+ *  survive — unprotecting the default trunk is the user shooting their own
+ *  foot, and they can do it in a terminal if they really mean it). */
+export function setProtectedBranches(rootIn: unknown, namesIn: unknown): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
-  return run(root, ["push"]);
+  const names = Array.isArray(namesIn)
+    ? namesIn.filter((n): n is string => typeof n === "string" && validRef(n.trim()))
+    : [];
+  const joined = [...new Set(["main", "master", ...names.map((n) => n.trim())])].join(",");
+  return run(root, ["config", "agx.protectedbranches", joined]);
+}
+
+/** Is this branch on the protected list? (List read fresh each call — the
+ *  guard is a config read, not a cache that can go stale.) */
+function isProtected(root: string, branch: string): boolean {
+  if (!branch) return false;
+  return (protectedBranches(root).branches ?? []).includes(branch);
+}
+
+export function push(rootIn: string, optsIn?: { force?: boolean }): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const force = optsIn?.force === true;
+  // The refspec is explicit: a bare `git push` reads push.default and can
+  // resolve to nothing ("src refspec main does not match any") or to more
+  // than one branch. "Push the current branch to its own upstream" is the
+  // only reading this panel ever means.
+  const branch = git(root, ["symbolic-ref", "--short", "HEAD"]).stdout.trim();
+  const remote = git(root, ["config", "--get", `branch.${branch}.remote`]).stdout.trim() || "origin";
+  if (!branch) return { ok: false, error: "not on a branch (detached HEAD) — nothing to push" };
+  // A force-push from the panel is ALWAYS --force-with-lease: it refuses to
+  // overwrite a remote that has moved since the last fetch, which is the
+  // only thing that protects the work of whoever else shares the branch.
+  // Plain `--force` is what "a colleague's push got clobbered" is made of,
+  // and no panel button is worth that.
+  return run(root, force ? ["push", "--force-with-lease", remote, branch] : ["push", remote, branch]);
 }
 export function pull(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
@@ -1371,11 +1421,20 @@ export function renameBranch(rootIn: string, name: string, to: string): GitActio
   if (!validRef(name) || !validRef(to)) return { ok: false, error: "invalid branch name" };
   return run(root, ["branch", "-m", name, to]);
 }
-export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "hard"): GitActionResult {
+/** Hard-reset a protected branch: refused unless `force` — the escape hatch
+ *  the reflog's own "reset here" uses (that path already double-confirms). */
+export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "hard", force = false): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   if (!validHash(ref) && !validRef(ref)) return { ok: false, error: "invalid ref" };
   if (!["soft", "mixed", "hard"].includes(mode)) return { ok: false, error: "invalid reset mode" };
+  // Hard resetting a protected branch rewrites its history — the same act a
+  // force-push then ships. The guardrails refuse the act outright; an
+  // unprotect in the Branches tab is the way around it, not a louder confirm.
+  if (mode === "hard" && !force) {
+    const branch = git(root, ["symbolic-ref", "--short", "HEAD"]).stdout.trim();
+    if (isProtected(root, branch)) return { ok: false, error: `${branch} is protected — unprotect it in the Branches tab to hard-reset it` };
+  }
   return run(root, ["reset", `--${mode}`, ref]);
 }
 
