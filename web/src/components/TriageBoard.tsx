@@ -598,11 +598,21 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           * because the card underneath opens on click, and this press means
           * "give me the number", not "show me the page".
           */}
+        {/* The same chip the pull request's own masthead wears — a bordered
+            number with ⧉ after it. Written as plain grey text it was a label,
+            and nobody presses a label; this one says what it does before you
+            try it, and the tick afterwards says it happened. */}
         <button onClick={(e) => { e.stopPropagation(); copyNumber(p.number); }}
-          title={`Copy #${p.number}`}
-          className="agx-btn shrink-0 pt-px text-[10px] tabular-nums rounded px-0.5"
-          style={{ color: copied === p.number ? "var(--success)" : "var(--text4)" }}>
-          {copied === p.number ? "copied" : `#${p.number}`}
+          aria-live="polite"
+          title={copied === p.number ? "Copied!" : `Copy #${p.number}`}
+          className="agx-btn shrink-0 tabular-nums inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px]"
+          style={{
+            color: copied === p.number ? "var(--success)" : "var(--text3)",
+            border: `1px solid color-mix(in srgb, ${copied === p.number ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`,
+            background: "color-mix(in srgb, var(--border) 14%, transparent)",
+          }}>
+          #{p.number}
+          <span aria-hidden style={{ fontSize: 9, opacity: 0.7 }}>{copied === p.number ? "✓" : "⧉"}</span>
         </button>
         {/* Two lines, then an ellipsis. A four-line title used to push the
             state, the sentence and the button down by two rows, so a lane of

@@ -567,4 +567,10 @@ describe("the number on a card", () => {
     expect(board).toContain("copyNumber(p.number)");
     expect(board).toContain("e.stopPropagation(); copyNumber(p.number)");
   });
+
+  it("wears the same chip the masthead does, so it reads as pressable", () => {
+    // Plain grey text is a label, and nobody presses a label.
+    expect(board).toContain('{copied === p.number ? "✓" : "⧉"}');
+    expect(board).toContain("border: `1px solid color-mix(in srgb, ${copied === p.number ? \"var(--success) 50%\" : \"var(--border) 55%\"}, transparent)`,");
+  });
 });
