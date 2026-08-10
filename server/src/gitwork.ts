@@ -3251,8 +3251,103 @@ export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
   return out;
 }
 
-// --- Submodules -------------------------------------------------------------
+// --- Blame + file history ---------------------------------------------------
 
+/** A line of blame: the final line number, the commit that wrote it, and the
+ *  content. `sha` is empty for lines not yet committed (working-tree edits). */
+export type BlameLine = {
+  line: number;
+  sha: string;
+  author: string;
+  time: number;
+  subject: string;
+  content: string;
+};
+
+export type FileHistoryEntry = {
+  hash: string;      // short
+  fullHash: string;
+  author: string;
+  time: number;
+  subject: string;
+};
+
+/** `git blame --line-porcelain`: every group of consecutive lines from one
+ *  commit carries its own header block, then the content lines (tab-prefixed).
+ *  The header fields we keep are `author`, `author-time` and `summary`. */
+export function blameFile(rootIn: unknown, pathIn: unknown, refIn: unknown): { ok: boolean; lines?: BlameLine[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const pathStr = String(pathIn ?? "").trim();
+  if (!pathStr || pathStr.startsWith("-")) return { ok: false, error: "invalid path" };
+  const abs = inRepo(root, pathStr);
+  if (!abs) return { ok: false, error: "invalid path" };
+  const path = relative(root, abs);
+  const ref = typeof refIn === "string" && refIn.trim() && refIn.trim() !== "HEAD" ? refIn.trim() : null;
+  const inTree = git(root, ["cat-file", "-e", `${ref ?? "HEAD"}:${path}`]);
+  if (inTree.code !== 0) return { ok: false, error: `${path} is not in ${ref ?? "HEAD"} — nothing to blame` };
+  // Only pass the revision when there is one. With a rev git blames the file
+  // CONTENT at that rev — which is exactly what "reblame as of this commit"
+  // wants — while without one it blames the working tree, where the lines not
+  // yet committed come out as zero-sha "local" entries. Measured on 2.55.0.
+  const r = git(root, ["blame", "--line-porcelain", ...(ref ? [ref] : []), "--", path]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "blame failed" };
+  const lines: BlameLine[] = [];
+  let cur: BlameLine | null = null;
+  for (const line of r.stdout.split("\n")) {
+    if (line.startsWith("\t")) {
+      // Content line: completes the current header block.
+      const c = cur ?? { line: 0, sha: "", author: "", time: 0, subject: "", content: "" };
+      c.content = line.slice(1);
+      lines.push(c);
+      cur = null;
+      continue;
+    }
+    // `sha orig final [count] [boundary]` — the count only appears on the
+    // FIRST line of a commit's group; later lines of the same group carry
+    // just `sha orig final`. (Measured on 2.55.0.)
+    const m = /^([0-9a-f]{40})\s+(\d+)\s+(\d+)(?:\s+\d+)?(?:\s+boundary)?$/.exec(line);
+    if (m) {
+      const zero = m[1].replace(/0/g, "").length === 0;
+      cur = { line: Number(m[3]), sha: zero ? "" : m[1], author: "", time: 0, subject: "", content: "" };
+      continue;
+    }
+    if (!cur) continue;
+    const colon = line.indexOf(" ");
+    if (colon === -1) continue;
+    const key = line.slice(0, colon);
+    const value = line.slice(colon + 1);
+    if (key === "author") cur.author = value;
+    else if (key === "author-time") cur.time = Number(value) || 0;
+    // Zero-sha groups carry a placeholder like "Version of a.txt from a.txt"
+    // as their summary; a local edit has no commit, so it gets no subject.
+    else if (key === "summary") cur.subject = cur.sha ? value : "";
+  }
+  return { ok: true, lines };
+}
+
+/** A file's commit history, following renames. `--follow` only accepts a
+ *  single path, which is exactly what this takes. */
+export function fileHistory(rootIn: unknown, pathIn: unknown): { ok: boolean; entries?: FileHistoryEntry[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const pathStr = String(pathIn ?? "").trim();
+  if (!pathStr || pathStr.startsWith("-")) return { ok: false, error: "invalid path" };
+  const abs = inRepo(root, pathStr);
+  if (!abs) return { ok: false, error: "invalid path" };
+  const path = relative(root, abs);
+  const RS = "\x1e"; // record separator, same convention as gitinsights
+  const r = git(root, ["log", "--follow", `--format=%H${US}%an${US}%at${US}%s${RS}`, "--", path]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "git log failed" };
+  const entries: FileHistoryEntry[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [hash, author, at, subject] = line.split(US);
+    if (!hash) continue;
+    entries.push({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+  }
+  return { ok: true, entries };
+}
+
+// --- Submodules -------------------------------------------------------------
 /** A submodule as the panel shows it: the gitlink the index pins (the source
  *  of truth for what this repo expects), the URL from .gitmodules, and the
  *  checked-out state from `git submodule status`. */

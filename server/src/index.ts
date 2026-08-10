@@ -62,6 +62,7 @@ import {
   rebaseSteps, runRebase, compareRefs,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   submodules as gitSubmodules, submoduleAdd, submoduleUpdate, submoduleSync, submoduleDeinit, submoduleRemove,
+  blameFile, fileHistory,
   prepareConflictMerge,
 } from "./gitwork.ts";
 import { repoStats, generateChangelog } from "./gitinsights.ts";
@@ -1862,6 +1863,8 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/snapshots") return json(listSnapshots(url.searchParams.get("root") || ""));
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
     if (pathname === "/git/submodules") return json({ submodules: gitSubmodules(url.searchParams.get("root") || "") });
+    if (pathname === "/git/blame") return json(blameFile(url.searchParams.get("root") || "", url.searchParams.get("path") || "", url.searchParams.get("ref") || ""));
+    if (pathname === "/git/file-history") return json(fileHistory(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
     // What has piled up in a checkout, and the command that would clear it.
     // Read-only by construction: the response carries commands as strings, and
     // there is deliberately no endpoint anywhere that runs one.

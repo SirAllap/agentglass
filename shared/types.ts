@@ -1274,6 +1274,22 @@ export interface GitSubmodule {
   branch?: string;
   status: "clean" | "modified" | "uninitialized" | "conflict";
 }
+/** One line of blame — which commit wrote it, and the content. */
+export interface BlameLine {
+  line: number;
+  sha: string;
+  author: string;
+  time: number;
+  subject: string;
+  content: string;
+}
+export interface FileHistoryEntry {
+  hash: string;
+  fullHash: string;
+  author: string;
+  time: number;
+  subject: string;
+}
 export interface GitWorktree {
   path: string;    // absolute
   branch: string;  // branch short name, or "(detached)"

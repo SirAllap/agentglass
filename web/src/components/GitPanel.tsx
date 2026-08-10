@@ -10,6 +10,7 @@ import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { RebaseModal } from "./RebaseModal.tsx";
 import { CompareModal } from "./CompareModal.tsx";
 import { InsightsModal } from "./InsightsModal.tsx";
+import { BlameModal } from "./BlameModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
@@ -567,16 +568,18 @@ function DirRow({ name, depth, count, collapsed, onToggle }: {
   );
 }
 
-function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onAction, onDiscard, depth }: {
+function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onAction, onDiscard, onBlame, depth }: {
   c: GitFileChange; root: string; active: boolean; writeEnabled: boolean; desc?: string; onSelect: () => void;
   action: "stage" | "unstage"; onAction: () => void; onDiscard?: () => void;
+  /** Right-click a row for its file's blame — who wrote each line. */
+  onBlame?: () => void;
   /** Set in tree mode; the directory rows above carry the path, so the row
    *  indents instead of repeating it. Undefined means the old flat list. */
   depth?: number;
 }) {
   const dir = dirName(c.file_path, root);
   return (
-    <div onClick={onSelect} data-file={active ? "active" : undefined}
+    <div onClick={onSelect} data-file={active ? "active" : undefined} onContextMenu={onBlame ? (e) => { e.preventDefault(); onBlame(); } : undefined}
       className="group flex items-center gap-2 pr-1.5 py-1 rounded-md cursor-pointer"
       style={{ background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", paddingLeft: depth == null ? 8 : 8 + depth * 12 }}>
       <span className="w-3.5 text-center text-[10px] font-bold shrink-0 self-start mt-0.5" style={{ color: STATUS_TINT[c.status] }} title={c.status}>{STATUS_LETTER[c.status]}</span>
@@ -961,6 +964,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [rowIdx, setRowIdx] = useState(0);
   const [newWtBranch, setNewWtBranch] = useState("");
   const [commitView, setCommitView] = useState<{ changes: FileChange[]; title: string } | null>(null);
+  const [blamePath, setBlamePath] = useState<{ path: string } | null>(null);
   const [walk, setWalk] = useState<WalkthroughResult | null>(null);
   const [walkLoading, setWalkLoading] = useState(false);
   const walkReqSig = useRef<string | null>(null);
@@ -2099,6 +2103,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       <FileRow key={prefix + c.file_path} c={c} root={root} writeEnabled={writeEnabled} depth={depth}
         desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)}
         onSelect={() => setSelKey(keyOf(c))} action={action} onAction={() => onAction(c)}
+        onBlame={writeEnabled ? () => setBlamePath({ path: c.file_path }) : undefined}
         onDiscard={action === "stage" && writeEnabled ? () => discard(c) : undefined} />
     );
     if (!treeMode) return changes.map((c) => row(c));
@@ -3407,6 +3412,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         <CompareModal root={root} initialBase={compareTarget} onClose={() => setCompareTarget(null)} />
       )}
       {insightsOpen && <InsightsModal root={root} onClose={() => setInsightsOpen(false)} />}
+      {blamePath && (
+        <BlameModal root={root} path={blamePath.path}
+          onClose={() => setBlamePath(null)}
+          onOpenCommit={(hash, subject) => { setBlamePath(null); void openCommit(hash, subject); }} />
+      )}
       {/* The commit row's right-click menu. The reset it offers is the old
           right-click, kept under its own heading so the cherry-pick actions
           can sit above it without either reading as the other. */}
