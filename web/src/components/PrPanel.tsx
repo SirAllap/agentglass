@@ -47,7 +47,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import {
-  anchorId, foldedIdx, newKeys, newSince, readSeen, threadLastAt, threadMovedOn, writeSeen,
+  anchorId, bootstrapSince, foldedIdx, newKeys, newSince, readSeen, threadLastAt, threadMovedOn, writeSeen,
   type NewAtom,
 } from "../lib/prNew.ts";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
@@ -2306,10 +2306,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * It moves in exactly two places: when you leave the pull request (you have
    * had your chance to read it) and when you press "Mark read" (you say so).
    */
-  const [prSeenAt, setPrSeenAt] = useState(0);
+  const [storedSeen, setStoredSeen] = useState(0);
   const seenKeyRef = useRef("");
   useEffect(() => {
-    if (!key) { seenKeyRef.current = ""; setPrSeenAt(0); return; }
+    if (!key) { seenKeyRef.current = ""; setStoredSeen(0); return; }
     if (seenKeyRef.current === key) return;
     /* Leaving one pull request for another writes the mark for the one being
        left — the same thing the unmount below does, and the reason it is a ref:
@@ -2317,9 +2317,30 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const leaving = seenKeyRef.current;
     if (leaving) writeSeen(leaving, Date.now());
     seenKeyRef.current = key;
-    setPrSeenAt(readSeen()[key] ?? 0);
+    setStoredSeen(readSeen()[key] ?? 0);
   }, [key]);
   useEffect(() => () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); }, []);
+  /* An unmount is not the only way this window ends. Closing the app, or the
+     desktop shell hiding it, runs no React cleanup at all — so a reader who
+     opens one pull request and never opens another would never get a mark
+     written, and every visit would be their first. */
+  useEffect(() => {
+    const put = () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); };
+    window.addEventListener("pagehide", put);
+    document.addEventListener("visibilitychange", put);
+    return () => { window.removeEventListener("pagehide", put); document.removeEventListener("visibilitychange", put); };
+  }, []);
+
+  /*
+   * With no mark of your own, your last word on it stands in for one.
+   *
+   * Reported from the app: everything worked and nothing showed, because the
+   * pull request being looked at is precisely the one this browser has never
+   * recorded a visit to. "Nothing is new until you have been here once" is
+   * defensible and useless — it means the feature introduces itself by doing
+   * nothing. See `bootstrapSince`.
+   */
+  const prSeenAt = useMemo(() => storedSeen || bootstrapSince(detail), [storedSeen, detail]);
 
   /** Everything said since that mark, oldest first, and the same set by key so
    *  a comment can ask "am I new" without walking the list. */
@@ -2329,7 +2350,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!seenKeyRef.current) return;
     const now = Date.now();
     writeSeen(seenKeyRef.current, now);
-    setPrSeenAt(now);
+    setStoredSeen(now);
   }, []);
 
   /*

@@ -202,6 +202,37 @@ export function newKeys(atoms: NewAtom[]): Set<string> {
 }
 
 /**
+ * What counts as "last looked" on a pull request this browser has no mark for.
+ *
+ * The first version had no answer to this and returned nothing, which is
+ * defensible and useless: the pull request you are staring at right now is
+ * exactly the one with no mark, so the feature announced itself by doing
+ * nothing at all. Reported that way — "pero yo lo veo igual" — with the panel
+ * open on a thread where somebody had answered him two days after he wrote.
+ *
+ * The honest fallback is your own last word. Everything after the last thing
+ * YOU said on a pull request is, by definition, the part you have not answered
+ * — it is the same question as "what came in while I was away", asked of a
+ * pull request instead of of a browser. And it is exactly the case that hurts:
+ * a reply to your comment, buried in a thread you started.
+ *
+ * Still 0 for a pull request you have never spoken on. There, everything is
+ * somebody else's conversation and marking all of it as owed to you would be
+ * an opinion, not a fact.
+ */
+export function bootstrapSince(d: PrDetail | null | undefined): number {
+  if (!d) return 0;
+  let last = 0;
+  const mine = (v: boolean | undefined, iso: string | undefined) => {
+    if (v === true) last = Math.max(last, at(iso));
+  };
+  for (const t of d.threads ?? []) for (const c of t.comments) mine(c.viewerDidAuthor, c.createdAt);
+  for (const c of d.comments ?? []) mine(c.viewerDidAuthor, c.createdAt);
+  for (const r of d.reviews ?? []) mine(r.viewerDidAuthor, r.submittedAt);
+  return last;
+}
+
+/**
  * Which replies to hide when a thread is long.
  *
  * A thread is read from its ends: the remark that started it and the last thing

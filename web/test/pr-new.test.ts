@@ -21,7 +21,7 @@ const cell = new Map<string, string>();
 };
 
 const {
-  at, threadLastAt, threadFirstAt, threadMovedOn, newSince, newKeys, foldedIdx,
+  at, threadLastAt, threadFirstAt, threadMovedOn, newSince, newKeys, foldedIdx, bootstrapSince,
   readSeen, writeSeen, prSeenKey, SEEN_KEY, SEEN_MAX, anchorId,
 } = await import("../src/lib/prNew.ts");
 
@@ -133,6 +133,36 @@ describe("what has been said since you last looked", () => {
     const keys = newKeys(newSince(d, T(DAY2_LATER)));
     expect(keys.has("t1:c")).toBe(true);
     expect(keys.has("t1:a")).toBe(false);
+  });
+});
+
+describe("a pull request this browser has no mark for", () => {
+  /* Reported from the app: everything worked and nothing showed, because the
+     pull request in front of you is exactly the one with no recorded visit. */
+  const d = detail({
+    threads: [thread("t1", [
+      comment("a", "nordvik", DAY2),
+      comment("b", "you", DAY2_LATER, { viewerDidAuthor: true }),
+      comment("c", "nordvik", NOW),
+    ])],
+  });
+
+  it("falls back to the last thing you said on it", () => {
+    expect(bootstrapSince(d)).toBe(T(DAY2_LATER));
+    // Which makes the reply to you the one thing marked — the exact case.
+    expect(newSince(d, bootstrapSince(d)).map((a) => a.key)).toEqual(["t1:c"]);
+  });
+
+  it("stays silent on one you have never spoken on", () => {
+    // Everything there is somebody else's conversation, and marking all of it
+    // as owed to you would be an opinion, not a fact.
+    expect(bootstrapSince(thread("t2", [comment("a", "nordvik", DAY2)]) && detail({
+      threads: [thread("t2", [comment("a", "nordvik", DAY2)])],
+    }))).toBe(0);
+  });
+
+  it("has nothing to fall back on before the pull request has loaded", () => {
+    expect(bootstrapSince(null)).toBe(0);
   });
 });
 
