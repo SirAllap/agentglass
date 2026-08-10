@@ -705,8 +705,7 @@ function validRels(root: string, rels: unknown): string[] | null {
 let onGitChange: (() => void) | null = null;
 export function setGitChangeHook(fn: (() => void) | null): void { onGitChange = fn; }
 
-function run(root: string, args: string[]): GitActionResult {
-  const r = git(root, args);
+function afterMutation(root: string): void {
   // Every mutating path goes through here, so this is the one place that has to
   // know the merged-set may have moved — rather than each of the twenty callers
   // remembering to say so.
@@ -725,6 +724,11 @@ function run(root: string, args: string[]): GitActionResult {
   // One signal out to every panel. Without it each of them discovered the
   // change on its own clock — 5s, 90s, or not until it was remounted.
   try { onGitChange?.(); } catch { /* a broken listener must not fail the op */ }
+}
+
+function run(root: string, args: string[]): GitActionResult {
+  const r = git(root, args);
+  afterMutation(root);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || r.stdout.trim() || `git ${args[0]} failed`, output: (r.stdout + r.stderr).trim() };
   return { ok: true, output: (r.stdout + r.stderr).trim() };
 }
@@ -3305,6 +3309,115 @@ function stashOp(rootIn: string, op: "apply" | "pop" | "drop", index: number): G
 export const stashApply = (r: string, i: number) => stashOp(r, "apply", i);
 export const stashPop = (r: string, i: number) => stashOp(r, "pop", i);
 export const stashDrop = (r: string, i: number) => stashOp(r, "drop", i);
+
+/** The stash is a reflog: `logs/refs/stash`, oldest entry first, so entry i is
+ *  `lines[len - 1 - i]`. Each line is "<sha> <sha> <name> <email> <ts> <tz>\t
+ *  <subject>" and the subject is what `git stash list` shows. */
+function stashReflog(root: string): string {
+  const common = git(root, ["rev-parse", "--git-common-dir"]).stdout.trim();
+  return join(resolve(root, common), "logs", "refs", "stash");
+}
+
+/** Rename a stash, keeping the "On <branch>: " / "WIP on <branch>: " prefix so
+ *  the row still says which branch it belongs to. There is no porcelain for
+ *  this — `update-ref` can only append entries — so the reflog file is
+ *  rewritten in place, preserving identity, timestamp and every other field. */
+export function stashRename(rootIn: unknown, indexIn: unknown, messageIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const index = Number(indexIn);
+  if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
+  const message = String(messageIn ?? "").trim();
+  if (!message) return { ok: false, error: "stash message required" };
+  const file = stashReflog(root);
+  if (!existsSync(file)) return { ok: false, error: "no stashes to rename" };
+  const lines = readFileSync(file, "utf8").split("\n");
+  const pos = lines.length - 2 - index; // -1 for the trailing newline, -index for the entry
+  if (pos < 0 || pos >= lines.length - 1) return { ok: false, error: `no stash@{${index}}` };
+  const line = lines[pos];
+  const tab = line.indexOf("\t");
+  if (tab === -1) return { ok: false, error: `stash@{${index}} has no message to rename` };
+  const subject = line.slice(tab + 1);
+  // Prefix = everything through the first ": " ("On main: ", "WIP on main: ").
+  // Branch names cannot contain ":", so the first colon is always the split.
+  const colon = subject.indexOf(":");
+  const prefix = colon === -1 ? "" : subject.slice(0, colon + 2);
+  lines[pos] = line.slice(0, tab + 1) + prefix + message;
+  try {
+    writeFileSync(file, lines.join("\n"));
+  } catch (e) {
+    return { ok: false, error: `could not rewrite the stash reflog: ${String(e)}` };
+  }
+  afterMutation(root);
+  return { ok: true, output: `renamed ${message}` };
+}
+
+/** Split a stash off onto its own branch: `git stash branch` checks out a new
+ *  branch at the stash's base, applies the stash onto it, and drops the stash
+ *  on success (on a conflict it keeps the stash and says so). */
+export function stashToBranch(rootIn: unknown, indexIn: unknown, branchIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const index = Number(indexIn);
+  if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
+  const branch = String(branchIn ?? "").trim();
+  if (!validRef(branch)) return { ok: false, error: "invalid branch name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0) {
+    return { ok: false, error: `a branch called ${branch} already exists` };
+  }
+  return run(root, ["stash", "branch", branch, `stash@{${index}}`]);
+}
+
+/** Stash only the given paths (with an optional keep-index). Untracked files
+ *  among them come along, matching the panel's "stash all" behavior. */
+export function stashPartial(rootIn: unknown, pathsIn: unknown, keepIndexIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const v = validRels(root, pathsIn); if (!v || !v.length) return { ok: false, error: "no valid paths" };
+  const keep = keepIndexIn === true;
+  // "stash & keep" means the picked files stay in the working tree, staged and
+  // ready to commit. --keep-index only preserves changes that are in the
+  // index, so the picked paths are staged first.
+  if (keep) {
+    const r = run(root, ["add", "-A", "--", ...v]);
+    if (!r.ok) return r;
+  }
+  const args = ["stash", "push", "--include-untracked"];
+  if (keep) args.push("--keep-index");
+  args.push("--", ...v);
+  return run(root, args);
+}
+
+/** Apply a stash even when the working tree has moved on at the stashed paths:
+ *  delete the colliding working-tree versions first, then apply. The deleted
+ *  content is replaced by the stash's — which is why the panel confirms this
+ *  before calling it. */
+export function stashApplyOverwrite(rootIn: unknown, indexIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const index = Number(indexIn);
+  if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
+  const sha = git(root, ["rev-parse", "--verify", "--quiet", `refs/stash@{${index}}`]).stdout.trim();
+  if (!sha) return { ok: false, error: `no stash@{${index}}` };
+  // Paths the working tree currently differs on, plus untracked files that the
+  // stash's tree contains (a plain apply dies on both with "already exists" /
+  // "local changes would be overwritten"). The stash's tree is tracked-only;
+  // its untracked files live in the third parent, which exists exactly when
+  // the stash was taken with --include-untracked.
+  const differ = git(root, ["diff", "--name-only", sha, "--", "."]).stdout.split("\n").filter(Boolean);
+  const inStash = new Set(git(root, ["ls-tree", "-r", "--name-only", sha]).stdout.split("\n").filter(Boolean));
+  const hasUntrackedParent = git(root, ["rev-parse", "--verify", "--quiet", `${sha}^3`]).code === 0;
+  if (hasUntrackedParent) {
+    for (const p of git(root, ["ls-tree", "-r", "--name-only", `${sha}^3`]).stdout.split("\n").filter(Boolean)) inStash.add(p);
+  }
+  const untracked = git(root, ["ls-files", "--others", "--exclude-standard"]).stdout.split("\n").filter(Boolean);
+  const doomed = [...new Set([...differ, ...untracked.filter((p) => inStash.has(p))])];
+  for (const p of doomed) {
+    const abs = inRepo(root, p);
+    if (abs) rmSync(abs, { force: true });
+  }
+  return run(root, ["stash", "apply", `stash@{${index}}`]);
+}
 
 // --- WIP snapshots ----------------------------------------------------------
 /**

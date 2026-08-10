@@ -52,6 +52,7 @@ import {
   protectedBranches, setProtectedBranches,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
+  stashRename, stashToBranch, stashPartial, stashApplyOverwrite,
   refs, listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
@@ -1983,6 +1984,10 @@ const server = Bun.serve<WsData>({
         case "/git/stash-apply": res = stashApply(root, Number(b.index)); break;
         case "/git/stash-pop": res = stashPop(root, Number(b.index)); break;
         case "/git/stash-drop": res = stashDrop(root, Number(b.index)); break;
+        case "/git/stash-rename": res = stashRename(root, b.index, b.message); break;
+        case "/git/stash-to-branch": res = stashToBranch(root, b.index, b.branch); break;
+        case "/git/stash-partial": res = stashPartial(root, b.paths, b.keepIndex === true); break;
+        case "/git/stash-apply-overwrite": res = stashApplyOverwrite(root, Number(b.index)); break;
         case "/git/apply-hunk": res = applyHunk(root, b.path, !!b.staged, b.action, b.hunk); break;
         case "/git/merge": res = mergeBranch(root, String(b.name || "")); break;
         case "/git/rebase": res = rebaseBranch(root, String(b.name || "")); break;

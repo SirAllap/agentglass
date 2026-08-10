@@ -752,6 +752,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [newBranch, setNewBranch] = useState("");
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
+  /** The partial-stash picker: open, selected files, keep-index. Files are
+   *  picked from the working tree's unstaged set (the stash moves work off the
+   *  tree, so there is nothing to pick once it is gone). */
+  const [partialOpen, setPartialOpen] = useState(false);
+  const [partialSel, setPartialSel] = useState<ReadonlySet<string>>(new Set());
+  const [partialKeep, setPartialKeep] = useState(false);
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
   const [tidy, setTidy] = useState<TidyReport | null>(null);
   /** The right-click menu on a commit row: what was clicked, where. */
@@ -1837,6 +1843,27 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (op === "drop" && !(await ask({ title: "Drop this stash?", body: "The stashed changes are gone.", danger: true, confirmLabel: "Drop" }))) return;
     const fn = op === "apply" ? api.gitStashApply : op === "pop" ? api.gitStashPop : api.gitStashDrop;
     if (await act(() => fn(root, index), op + "ed")) reloadStashes();
+  };
+  const stashRename = async (index: number, message: string) => {
+    const to = await askText({ title: "Rename this stash", input: { label: "New label — the \"On <branch>: \" prefix is kept", initial: message }, confirmLabel: "Rename" });
+    if (to && to.trim() && to.trim() !== message) act(() => api.gitStashRename(root, index, to.trim()), "Renamed stash").then((ok) => { if (ok) reloadStashes(); });
+  };
+  const stashToBranch = async (index: number) => {
+    const name = await askText({ title: "Turn this stash into a branch", input: { label: "Branch name", initial: "wip-" + Date.now().toString(36) }, confirmLabel: "Branch it" });
+    if (name && name.trim()) act(() => api.gitStashToBranch(root, index, name.trim()), `Branched ${name.trim()}`).then((ok) => { if (ok) { reloadStashes(); reloadBranches(); } });
+  };
+  const stashOverwrite = async (index: number, message: string) => {
+    if (!(await ask({ title: "Apply this stash over your working tree?", body: `Anything you changed at the same paths is replaced by the stash's version of them (${message}).`, danger: true, confirmLabel: "Apply over" }))) return;
+    act(() => api.gitStashApplyOverwrite(root, index), "Applied over").then((ok) => { if (ok) reloadStashes(); });
+  };
+  const stashPartialNow = async () => {
+    const paths = [...partialSel];
+    if (!paths.length) return;
+    if (await act(() => api.gitStashPartial(root, paths, partialKeep), `Stashed ${paths.length} file${paths.length === 1 ? "" : "s"}`)) {
+      setPartialSel(new Set());
+      setPartialOpen(false);
+      reloadStashes();
+    }
   };
   /** Capture the tree as a named checkpoint — touches nothing, restore is
    *  always possible, cap is 30. */
@@ -2983,16 +3010,48 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         </div>
                       </div>
                     )}
+                    {writeEnabled && (
+                      <div className="mb-2">
+                        <button onClick={() => { setPartialOpen(!partialOpen); }} className="text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", color: "var(--text)" }}>▣ stash some files…</button>
+                        {partialOpen && (
+                          <div className="mt-2 rounded-lg p-2.5 max-w-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                            <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">pick from the working tree</div>
+                            <div className="space-y-1 max-h-48 overflow-y-auto mb-2">
+                              {(tree?.unstaged ?? []).map((c) => {
+                                const p = relOf(c);
+                                return (
+                                  <label key={p} className="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" checked={partialSel.has(p)} onChange={(e) => { const n = new Set(partialSel); if (e.target.checked) n.add(p); else n.delete(p); setPartialSel(n); }} className="accent-[var(--primary)]" />
+                                    <span className="truncate text-[11px]" style={{ color: "var(--text)" }}>{p}</span>
+                                  </label>
+                                );
+                              })}
+                              {!tree?.unstaged.length && <div className="text-[10.5px] t-dim2">nothing to pick — the tree is clean</div>}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <label className="flex items-center gap-1.5 text-[10.5px] cursor-pointer" style={{ color: "var(--text2)" }}>
+                                <input type="checkbox" checked={partialKeep} onChange={(e) => setPartialKeep(e.target.checked)} className="accent-[var(--primary)]" />
+                                keep in working tree (stash & keep)
+                              </label>
+                              <button onClick={stashPartialNow} disabled={!partialSel.size} className="text-[11px] px-3 py-1 rounded-lg font-medium ml-auto" style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: partialSel.size ? 1 : 0.45 }}>stash {partialSel.size || ""} file{partialSel.size === 1 ? "" : "s"}</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
                     {shownStashes.map((s, i) => (
                       <div key={s.ref} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
-                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "10rem" : "0px" }}>
+                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "18rem" : "0px" }}>
                         <span className="text-[10px] tabular-nums t-dim2">{s.ref}</span>
                         <span className="min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={s.message}>{s.message}</span>
                         {writeEnabled ? (
                           <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
                             <button onClick={() => stashOp("apply", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>apply</button>
                             <button onClick={() => stashOp("pop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }}>pop</button>
+                            <button onClick={() => stashToBranch(s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Check out a new branch at the stash's base, apply onto it, drop the stash">branch</button>
+                            <button onClick={() => stashOverwrite(s.index, s.message)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }} title="Apply even where the working tree has moved on — replaces those paths">overwrite</button>
+                            <button onClick={() => stashRename(s.index, s.message.replace(/^[^:]*: /, ""))} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>rename</button>
                             <button onClick={() => stashOp("drop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>drop</button>
                           </div>
                         ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}

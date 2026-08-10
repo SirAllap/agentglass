@@ -890,6 +890,8 @@ const VERBS: Record<string, string> = {
   "/git/merge": "merged", "/git/rebase": "rebased", "/git/reset": "reset",
   "/git/stash-push": "stashed", "/git/stash-apply": "applied stash",
   "/git/stash-pop": "popped stash", "/git/stash-drop": "dropped stash",
+  "/git/stash-rename": "renamed stash", "/git/stash-to-branch": "branched from stash",
+  "/git/stash-partial": "stashed files", "/git/stash-apply-overwrite": "applied stash over",
   "/git/apply-hunk": "staged a hunk", "/git/undo-merge": "undid the merge",
   "/git/worktree-add": "added worktree", "/git/worktree-remove": "removed worktree",
   "/docker/start": "started container", "/docker/stop": "stopped container",
