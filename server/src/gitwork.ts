@@ -1621,9 +1621,10 @@ const shq = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "'\\''")}'
  * sequencer run, so a conflict stops the series and `mergeContinue`/abort
  * (which already branch on `rebasing`) finish or abandon it.
  *
- * The todo file is handed to git through `sequence.editor`, exactly like
- * gitcito: git invokes that command with the real todo path, so `cp` of our
- * prepared file is all it takes. Every commit in `base..HEAD` must appear in
+ * The todo file is handed to git through `sequence.editor`, which is the whole
+ * trick: git invokes that command with the path of the todo it just wrote, so
+ * `cp` of our prepared file over it is all an "editor" has to do. No pty, no
+ * keystrokes, nothing interactive. Every commit in `base..HEAD` must appear in
  * the list exactly once, and every hash must be one of them — otherwise a
  * stale or tampered list could drop or invent commits silently.
  */
