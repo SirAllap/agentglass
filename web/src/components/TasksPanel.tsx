@@ -2267,6 +2267,15 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           <MenuItem onClick={() => copy(t.id, "the ClickUp id")}>
             Copy {t.id} <span style={{ color: "var(--text4)" }}>· ClickUp&apos;s own</span>
           </MenuItem>
+          {/* The link, not the id. Pasting a card into a message, a commit or a
+              PR body wants the address somebody can click — and until now the
+              only way to get it was to open the card in a browser and read it
+              out of the bar. Next to the ids because it is the third thing this
+              row can hand you, and above "Open" because copying is what you
+              came to the menu for; opening has a ↗ on the row itself. */}
+          {t.url && (
+            <MenuItem onClick={() => copy(t.url, "the card link")}>Copy card URL</MenuItem>
+          )}
           {externalUrl(t.url) && (
             <MenuItem onClick={() => { openExternal(t.url); setMenu(null); }}>Open in ClickUp ↗</MenuItem>
           )}
@@ -2467,7 +2476,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   const [askOpen, setAskOpen] = useState(false);
   /** Where a hand-off goes. Read once and kept, so the pills reflect it. */
   const [to, setTo] = useState<HandoffTo>(handoffTo);
-  const [copied, setCopied] = useState<"human" | "raw" | null>(null);
+  const [copied, setCopied] = useState<"human" | "raw" | "url" | null>(null);
   /*
    * Which half of the card you are reading.
    *
@@ -2548,7 +2557,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * of the time. Both are offered, and both are SHOWN — the internal id was
    * invisible before, so there was no way to read it off the screen at all.
    */
-  const copyIt = async (v: string, which: "human" | "raw") => {
+  const copyIt = async (v: string, which: "human" | "raw" | "url") => {
     try { await navigator.clipboard.writeText(v); setCopied(which); setTimeout(() => setCopied(null), 1200); } catch { /* no clipboard */ }
   };
 
@@ -3178,6 +3187,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         </div>
         <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2 py-1 rounded-lg"
           style={{ border: line, color: "var(--text2)" }}>Copy {t.customId ? "PROJ id" : "id"}</button>
+        {/* Beside the id it belongs with, and before Open: the two buttons are
+            the two ways to take this card somewhere else, and the one that
+            leaves the app should not be the only way to get its address. */}
+        {t.url && (
+          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2 py-1 rounded-lg"
+            style={{ border: line, color: "var(--text2)" }}
+            title={t.url}>{copied === "url" ? "copied ✓" : "Copy URL"}</button>
+        )}
         {t.url && (
           <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2 py-1 rounded-lg"
             style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
