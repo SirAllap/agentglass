@@ -219,6 +219,24 @@ describe("the command that puts the desk back", () => {
     expect(argv[argv.length - 1]).toBe("workbench");
   });
 
+  it("says no on a machine with no tmux at all", () => {
+    /*
+     * A missing binary and an unstarted server answer identically — both make
+     * the tmux call return null — so without an explicit check the cold-boot
+     * branch would hand the panel `tmux new-session …` to run on a machine
+     * that has no tmux, and the terminal would open on `command not found`
+     * instead of on a shell.
+     *
+     * Reachable only for somebody who had tmux when the memory was written and
+     * does not now. Measured by hiding it: PATH is restored straight after.
+     */
+    const was = process.env.PATH;
+    process.env.PATH = join(home, "no-binaries-here");
+    try {
+      expect(deskAttachArgv(join(sockdir, "cold3"), "workbench")).toBe(null);
+    } finally { process.env.PATH = was; }
+  });
+
   it("falls back to bare tmux when no name was remembered", () => {
     // Nothing to ask for. What the user would type is the honest answer.
     const sock = join(sockdir, "cold2");
