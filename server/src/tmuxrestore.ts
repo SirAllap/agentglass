@@ -24,6 +24,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
 import { tmux, listPanes, validSessionName } from "./tmuxpane.ts";
+import { paneAgentNote } from "./panewt.ts";
+import { claudeCode } from "./agents/claudecode.ts";
 import { windowTree, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
 import { tmuxResume } from "./config.ts";
 
@@ -31,6 +33,21 @@ import { tmuxResume } from "./config.ts";
  *  with — replaying it in "all" mode is what resumes agent sessions. */
 export interface CapturedPane extends TmuxPaneRow {
   startCommand: string;
+  /**
+   * The agent conversation that was live in this pane, when there was one.
+   *
+   * `startCommand` alone cannot bring an agent back, and measuring it is what
+   * made that plain: tmux only reports a start command for a pane it CREATED
+   * with one. A `claude` somebody typed into a shell — which is most of them —
+   * leaves it empty, so the first real restore gave back six windows of login
+   * shells and nothing else.
+   *
+   * This is the other half, and the app already knew it: the hook that watches
+   * each pane records which conversation is in it (see panewt.ts, and the same
+   * note the chat panel reads). With the id, a restored pane can start on
+   * `claude --resume <id>` and the conversation carries on.
+   */
+  agentSession?: string;
 }
 
 export interface CapturedWindow extends TmuxWindowDetail {
@@ -61,6 +78,34 @@ async function startCommandOf(name: string, windowId: string, paneId: string): P
   return r.ok ? r.stdout.trim() : "";
 }
 
+/**
+ * The conversation id from the command line of what is running in the pane.
+ *
+ * A fallback for the note, and worth having because the two fail differently:
+ * the note is written by our own hook when a session starts, so a pane that was
+ * itself restored — started as `claude --resume <id>` — has the id in its argv
+ * before any hook has fired. tmux-assistant-resurrect, which does this job on
+ * the user's own tmux, keeps exactly these two methods in the same order, and
+ * the second one is the reason a restored desk survives a SECOND reboot.
+ *
+ * `#{pane_current_command}` is only the binary, so the arguments come from the
+ * process itself. The id is checked against a UUID before it can reach a
+ * command line.
+ */
+async function resumeIdOf(name: string, windowId: string, paneId: string): Promise<string | undefined> {
+  const r = await tmux(["display-message", "-t", `=${name}:${windowId}.${paneId}`, "-p", "#{pane_pid}"]);
+  const pid = Number(r.stdout.trim());
+  if (!r.ok || !Number.isInteger(pid) || pid <= 1) return undefined;
+  try {
+    // The pane's process is a shell; the agent is its child. `ps` walks that
+    // for us rather than us reading /proc by hand for every pane on the desk.
+    const ps = Bun.spawnSync(["ps", "-o", "args=", "--ppid", String(pid)], { stdout: "pipe", stderr: "pipe" });
+    const line = new TextDecoder().decode(ps.stdout);
+    const m = /--resume[= ]\s*([0-9a-fA-F-]{36})/.exec(line);
+    return m?.[1] && SESSION_ID_RE.test(m[1]) ? m[1] : undefined;
+  } catch { return undefined; }
+}
+
 /** Capture every session on the engine's socket into the state dir. Safe to
  *  call on a timer and safe to call twice — both are the same overwrite. */
 export async function captureLayout(now = Date.now()): Promise<RestoreState | null> {
@@ -75,7 +120,11 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
       const panes: CapturedPane[] = [];
       for (const p of w.panes) {
         const startCommand = await startCommandOf(name, w.id, p.id);
-        panes.push({ ...p, startCommand });
+        // The pane id is this server's, and so is the note — both die with the
+        // server, which is why the id is copied into the photograph rather than
+        // looked up again at restore time.
+        const agentSession = paneAgentNote(p.id)?.session_id || await resumeIdOf(name, w.id, p.id);
+        panes.push({ ...p, startCommand, agentSession });
       }
       out.push({ ...w, panes });
     }
@@ -117,12 +166,34 @@ export function lastCaptureAt(): number | null {
  * types last week into your shell is worse than an empty one.
  */
 
-/** What a restored pane runs: the captured start command in "all" mode, and
- *  nothing — a login shell in the pane's directory — in "lazy". */
+/**
+ * What a restored pane runs.
+ *
+ * "lazy" is a login shell in the pane's directory, always: the desk comes back
+ * and nothing starts talking to a model until somebody asks it to.
+ *
+ * "all" resumes the conversation. Two ways in, and the second is the one that
+ * covers a real desk: a pane the app CREATED carries its whole command line in
+ * `startCommand` and is replayed verbatim; a `claude` typed into a shell leaves
+ * that empty — measured — so the conversation id recorded for the pane is used
+ * to build `claude --resume <id>` instead.
+ *
+ * The command is passed as argv, never through a shell, and the id it contains
+ * came from our own hook rather than from anything a page could set.
+ */
 function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined): string[] {
-  const cmd = mode === "all" ? pane?.startCommand : "";
-  return cmd ? ["sh", "-c", cmd] : [];
+  if (mode !== "all" || !pane) return [];
+  if (pane.startCommand) return ["sh", "-c", pane.startCommand];
+  const id = pane.agentSession;
+  if (!id || !SESSION_ID_RE.test(id)) return [];
+  const bin = claudeCode.bin();
+  if (!bin) return [];
+  return [bin, "--resume", id];
 }
+
+/** A conversation id as the CLI writes them: a UUID, and nothing else goes on
+ *  a command line built here. */
+const SESSION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /** The id tmux just printed, or "" — `-P -F` gives us the NEW id, which is the
  *  only way to address something we have just made. */
