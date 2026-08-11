@@ -408,6 +408,41 @@ const realApi = {
   /** Put one in front of whoever is attached to tmux. */
   focusPane: (p: { sessionId: string; windowId: string; paneId: string }) =>
     post<{ ok: boolean; error?: string }>("/terminal/panes/focus", p),
+  // --- the pane engine's tmux, driven entirely from the UI ---
+  /** Everything the settings panel needs to describe the engine's tmux. */
+  tmuxStatus: () => get<{
+    ok: boolean;
+    bin: { available: boolean; source: string; path: string; version: string | null; reason: string };
+    capability: { available: boolean; reason: string };
+    confMode: string;
+    override: string;
+    overrideActive: boolean;
+    broken: boolean;
+    brokenReason: string;
+    restoreEnabled: boolean;
+    resumeMode: string;
+    source: string;
+    lastCaptureAt: number | null;
+  }>("/terminal/tmux-status"),
+  /** Save the conf override (validated server-side before it lands). */
+  tmuxConfSave: (confMode: string, override: string) =>
+    post<{ ok: boolean; error?: string; appliedAtNextStart?: boolean }>("/terminal/tmux-conf", { confMode, override }),
+  /** Save the binary/restore settings. */
+  tmuxSettingsSave: (f: { source?: string; path?: string; restore?: boolean; resume?: string }) =>
+    post<{ ok: boolean; persisted?: boolean; error?: string }>("/terminal/tmux-settings", f),
+  /** Restore the generated conf, override cleared, our server killed. */
+  tmuxReset: () =>
+    post<{ ok: boolean; error?: string }>("/terminal/tmux-reset", {}),
+  /** capture | restore | clear for the layout persistence. */
+  tmuxRestoreAction: (action: "capture" | "restore" | "clear", mode?: "lazy" | "all") =>
+    post<{ ok: boolean; error?: string; restored?: number; capturedAt?: number | null }>("/terminal/tmux-restore", { action, mode }),
+  /** A session's windows with their panes — the tab strip's data. */
+  tmuxWindows: (session: string) =>
+    get<{ ok: boolean; windows: Array<{ id: string; index: number; name: string; active: boolean; flags: string; panes: Array<{ id: string; index: number; active: boolean; command: string; path: string }> }> }>(
+      `/terminal/tmux/windows?session=${encodeURIComponent(session)}`),
+  /** Tabs/splits/focus/kill/rename/resize on the engine's tmux. */
+  tmuxWindowOp: (op: string, body: Record<string, unknown>) =>
+    post<{ ok: boolean; stdout?: string; stderr?: string; error?: string }>("/terminal/tmux/windows", { op, ...body }),
   /** Scope + discovered projects. `workspace` is set when this instance was
    *  opened for a single project. */
   projects: () => get<{ projects: { source_app: string; path: string }[]; scanning: boolean; workspace: string | null }>("/projects"),
@@ -1371,6 +1406,13 @@ const demoApi: typeof realApi = {
   issuePrs: (_r: string, _n: number) => D({ ok: true, prs: [] }),
   termAgentTicket: (_c: string, _p: string, _y: boolean, _t: string) =>
     D({ ok: false, error: "not available in the demo" }),
+  tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", source: "auto", lastCaptureAt: null }),
+  tmuxConfSave: (_m: string, _o: string) => D({ ok: false, error: "not available in the demo" }),
+  tmuxSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
+  tmuxReset: () => D({ ok: false, error: "not available in the demo" }),
+  tmuxRestoreAction: (_a: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
+  tmuxWindows: (_s: string) => D({ ok: false, windows: [] }),
+  tmuxWindowOp: (_o: string, _b: object) => D({ ok: false, error: "not available in the demo" }),
   issuesWork: (_repo?: string) => D(demo.issuesWork()),
   issueStart: (_r: string, _n: number, _m: StartMode) => D({ ok: false, error: "not available in the demo" }),
   issueFinish: (_r: string, _n: number, _f?: boolean) => D({ ok: false, error: "not available in the demo" }),

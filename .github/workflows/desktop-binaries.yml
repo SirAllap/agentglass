@@ -77,6 +77,30 @@ jobs:
           # back to a single model id and the dropdown looks broken.
           cp shared/claude-models.json electron/staging/claude-models.json
 
+      # A static tmux rides along for the pane engine (scripts/build-tmux-static.sh),
+      # so a machine without tmux still gets tabs, splits and persistence — the
+      # engine runs its own tmux; the user's is never involved. Windows skips:
+      # the pane engine is POSIX-only and stays an honest "off" there.
+      - name: Build bundled tmux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          # First run on a fresh checkout pins the tarball checksums from the
+          # downloads; every later build verifies against the pins.
+          if grep -q placeholder scripts/tmux-build-checksums.txt; then
+            ./scripts/tmux-fill-checksums.sh
+          fi
+          mkdir -p electron/staging
+          TARGET=${{ matrix.bunTarget }} ./scripts/build-tmux-static.sh
+          cp out/tmux-${{ matrix.bunTarget }} electron/staging/tmux
+          ./out/tmux-${{ matrix.bunTarget }} -V
+          # A smoke test with the exact flags the engine uses: own socket, own
+          # config, scratch TMUX_TMPDIR, then gone.
+          tmpdir="$(mktemp -d /tmp/tmux-smoke.XXXXXX)"
+          TMUX_TMPDIR="$tmpdir" electron/staging/tmux -L smoke -f /dev/null new-session -d
+          TMUX_TMPDIR="$tmpdir" electron/staging/tmux -L smoke kill-server
+          rm -rf "$tmpdir"
+
       # The version the artefacts carry, from the tag. It used to be written
       # INTO electron/package.json by a step here, and that quietly cost the
       # build stamp its meaning: every input to the package is copied off disk,

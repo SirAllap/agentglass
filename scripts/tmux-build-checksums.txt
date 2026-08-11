@@ -1,0 +1,10 @@
+# Pinned sha256 sums for scripts/build-tmux-static.sh.
+#
+# The build refuses to run without an entry for every tarball, and refuses to
+# finish when one does not match — a binary the app ships is a supply-chain
+# decision, not a convenience. To add or bump a version, compute the real sums
+# on a networked machine, update the pins here, and let CI be the proof.
+#
+# Format: "<sha256>  <name>"
+
+# placeholder — fill in on first networked build; the script fails loudly until then

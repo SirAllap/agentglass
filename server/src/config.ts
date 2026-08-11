@@ -71,6 +71,31 @@ interface Config {
   /** Projects the picker should stop offering. Absolute paths. See
    *  hiddenProjects(). */
   hiddenProjects?: string[];
+  /** Which tmux binary the pane engine runs. "auto" (default) prefers the
+   *  bundled static tmux and falls back to the system one; "system" skips the
+   *  bundle; "custom" uses `tmuxPath`. See tmuxbin.ts — AGENTGLASS_TMUX_PATH
+   *  overrides all of this when set. */
+  tmuxSource?: "auto" | "bundled" | "system" | "custom";
+  /** Absolute path to a tmux binary, used when `tmuxSource` is "custom". */
+  tmuxPath?: string;
+  /** How agentglass's own tmux server gets its config: "append" runs the
+   *  generated base conf then the user's override; "replace" uses a user file
+   *  wholesale. Either way the user's ~/.tmux.conf is never loaded. See
+   *  tmuxconf.ts. */
+  tmuxConfMode?: "append" | "replace";
+  /** The user's extra config lines for agentglass's tmux server (Level 1).
+   *  Plain text, validated before it is ever applied. */
+  tmuxOverride?: string;
+  /** Restore the pane layout (windows, splits, scrollback) at boot, after a
+   *  reboot took the tmux server down. Off by default. See tmuxrestore.ts. */
+  tmuxRestore?: boolean;
+  /** How restored agent panes relaunch their CLI: "lazy" restores the layout
+   *  and waits for the chat to be reopened before resuming the session;
+   *  "all" resumes every recorded session at restore time. */
+  tmuxResume?: "lazy" | "all";
+  /** Set when the validation gate rejected the generated conf. The pane
+   *  engine degrades (chat still works) and the settings panel shows why. */
+  tmuxConfBroken?: { broken: boolean; reason: string };
 }
 
 function load(path: string): Config {
@@ -501,4 +526,92 @@ export function configuredRepoDirs(): string[] {
   const raw = fromEnv.length ? fromEnv : config().repoDirs ?? [];
   const dirs = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string") : [];
   return dirs.map(expand);
+}
+
+// --- tmux engine settings ---------------------------------------------------
+// Read one field at a time, each checked on read: config.json is hand-editable,
+// and every one of these reaches a spawned binary or a filesystem path.
+
+const TMUX_SOURCES = new Set(["auto", "bundled", "system", "custom"]);
+export function tmuxSource(): "auto" | "bundled" | "system" | "custom" {
+  const v = config().tmuxSource;
+  return v !== undefined && TMUX_SOURCES.has(v) ? v : "auto";
+}
+
+export function tmuxPathSetting(): string {
+  const v = config().tmuxPath;
+  return typeof v === "string" && v.trim() && !v.includes("\0") ? v.trim() : "";
+}
+
+export function tmuxConfMode(): "append" | "replace" {
+  const v = config().tmuxConfMode;
+  return v === "replace" ? "replace" : "append";
+}
+
+export function tmuxOverride(): string {
+  const v = config().tmuxOverride;
+  return typeof v === "string" ? v.slice(0, 128_000) : "";
+}
+
+/** Was the generated conf rejected by the validation gate? Persisted so the
+ *  reason survives a restart — a broken config is a property of what is on
+ *  disk, not of this process. */
+export function tmuxConfBroken(): { broken: boolean; reason: string } {
+  const v = config().tmuxConfBroken;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { broken: false, reason: "" };
+  return { broken: v.broken === true, reason: typeof v.reason === "string" ? v.reason.slice(0, 500) : "" };
+}
+export function setTmuxConfBroken(broken: boolean, reason = ""): void {
+  writeTmuxSettings(broken ? { tmuxConfBroken: { broken, reason } } : { tmuxConfBroken: undefined });
+}
+
+export function tmuxRestoreEnabled(): boolean {
+  return config().tmuxRestore === true;
+}
+
+export function tmuxResume(): "lazy" | "all" {
+  const v = config().tmuxResume;
+  return v === "all" ? "all" : "lazy";
+}
+
+/** Persist any subset of the tmux settings, preserving everything else in the
+ *  file. Same write path and same guard as writeBudgets: a config it cannot
+ *  parse is refused, not overwritten; tests write only under scratch. */
+export function writeTmuxSettings(fields: {
+  tmuxSource?: "auto" | "bundled" | "system" | "custom";
+  tmuxPath?: string;
+  tmuxConfMode?: "append" | "replace";
+  tmuxOverride?: string;
+  tmuxRestore?: boolean;
+  tmuxResume?: "lazy" | "all";
+  tmuxConfBroken?: { broken: boolean; reason: string } | undefined;
+}): { ok: boolean; persisted: boolean; error?: string } {
+  const path = configPath();
+  if (realConfigOffLimits(path)) {
+    return { ok: false, persisted: false, error: "not persisted: tests write settings only under os.tmpdir()" };
+  }
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(path)) {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save tmux settings` };
+      }
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch (e) {
+    return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save tmux settings (${e instanceof Error ? e.message : e})` };
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const merged: Record<string, unknown> = { ...existing };
+    for (const [k, v] of Object.entries(fields)) {
+      if (v === undefined) delete merged[k]; else merged[k] = v;
+    }
+    writeFileSync(path, JSON.stringify(merged, null, 2) + "\n");
+    cached = null; // the file changed under us; next read picks it up
+    return { ok: true, persisted: true };
+  } catch (e) {
+    return { ok: false, persisted: false, error: `could not write ${path}: ${e instanceof Error ? e.message : e}` };
+  }
 }

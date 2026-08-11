@@ -2214,8 +2214,7 @@ function RequirementsPane({ open }: { open: boolean }) {
   // second copy of somebody else's storage schema, and it would have gone on
   // reading a key that had quietly stopped being written.
   const shellRoot = lastTerminalRoot();
-  const [deps, setDeps] = useState<DepReport[] | null>(null);
-  const [platform, setPlatform] = useState<string>("");
+
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -2304,6 +2303,223 @@ function RequirementsPane({ open }: { open: boolean }) {
     </Section>
   );
 }
+
+/**
+ * The pane engine's tmux: which binary, what config, and the reboot restore.
+ *
+ * Everything tmux's own bar used to own — tabs, splits, the status line — is
+ * the agentglass UI's job now, so this pane is about the engine itself: where
+ * the binary comes from, whether the generated config is healthy (and can be
+ * reset when it is not), and how much of the layout survives a reboot.
+ */
+function TmuxPane({ open }: { open: boolean }) {
+  const [st, setSt] = useState<Awaited<ReturnType<typeof api.tmuxStatus>> | null>(null);
+  const [source, setSource] = useState("auto");
+  const [path, setPath] = useState("");
+  const [confMode, setConfMode] = useState("append");
+  const [override, setOverride] = useState("");
+  const [restore, setRestore] = useState(false);
+  const [resume, setResume] = useState("lazy");
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    setBusy(true);
+    return api.tmuxStatus()
+      .then((r) => {
+        setSt(r);
+        setSource(r.source);
+        setPath(r.bin.path || "");
+        setConfMode(r.confMode);
+        setOverride(r.override);
+        setRestore(r.restoreEnabled);
+        setResume(r.resumeMode);
+        setErr(null);
+      })
+      .catch(() => setErr("Could not reach the server — the tmux settings are unavailable."))
+      .finally(() => setBusy(false));
+  };
+  useEffect(() => { if (open) void load(); }, [open]);
+
+  const saveSettings = () => {
+    setBusy(true); setNote(null);
+    api.tmuxSettingsSave({ source, path: source === "custom" ? path : undefined, restore, resume })
+      .then((r) => { setNote(r.ok ? "Saved. The binary choice applies to new panes." : r.error ?? "Could not save."); void load(); })
+      .catch(() => setErr("Could not save — server unreachable."))
+      .finally(() => setBusy(false));
+  };
+
+  const saveConf = () => {
+    setBusy(true); setNote(null);
+    api.tmuxConfSave(confMode, override)
+      .then((r) => {
+        if (r.ok) { setNote("Config accepted by tmux. It applies to the next server start."); }
+        else setErr(r.error ?? "tmux rejected the config.");
+        void load();
+      })
+      .catch(() => setErr("Could not save — server unreachable."))
+      .finally(() => setBusy(false));
+  };
+
+  const resetAll = () => {
+    if (!window.confirm("Reset the tmux engine to defaults? Your override config is cleared and the engine's own tmux server restarts. Chat conversations are unaffected.")) return;
+    setBusy(true); setNote(null);
+    api.tmuxReset()
+      .then((r) => { setNote(r.ok ? "Reset to defaults." : r.error ?? "Reset failed."); void load(); })
+      .catch(() => setErr("Could not reset — server unreachable."))
+      .finally(() => setBusy(false));
+  };
+
+  const restoreAction = (action: "capture" | "restore" | "clear") => {
+    setBusy(true); setNote(null);
+    api.tmuxRestoreAction(action, resume as "lazy" | "all")
+      .then((r) => {
+        if (r.ok && action === "restore") setNote(`Restored ${r.restored ?? 0} session${(r.restored ?? 0) === 1 ? "" : "s"}.`);
+        else if (r.ok && action === "capture") setNote("Layout captured.");
+        else if (r.ok) setNote("Restore state cleared.");
+        else setErr(r.error ?? "That did not work.");
+        void load();
+      })
+      .catch(() => setErr("Could not reach the server."))
+      .finally(() => setBusy(false));
+  };
+
+  if (err) return <Section><div className="py-2 text-[12px]" style={{ color: "var(--error)" }}>{err}</div></Section>;
+
+  const cap = st?.capability;
+  return (
+    <Section title="tmux engine">
+      <SettingRow
+        label={<span style={{ color: cap && !cap.available ? "var(--error)" : cap?.available ? "var(--success)" : undefined }}>
+          {cap?.available ? "Pane engine ready" : "Pane engine unavailable"}
+        </span>}
+        hint={<>
+          The engine runs its own tmux server (its own socket, its own config —
+          your ~/.tmux.conf is never loaded, and neither is your tmux touched).
+          {st?.bin.path ? <> Currently <span className="t-mono text-[11px]">{st.bin.path}</span></> : null}
+          {st?.bin.version ? <> — {st.bin.version}</> : null}
+          {st?.bin.source === "env" ? " (AGENTGLASS_TMUX_PATH override)" : null}
+          {cap && !cap.available ? <> — {cap.reason}</> : null}
+          {st?.broken ? <> <b style={{ color: "var(--error)" }}>{st.brokenReason}</b></> : null}
+        </>}
+        control={st ? <button onClick={resetAll} disabled={busy}
+          className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+          Reset tmux to defaults
+        </button> : undefined}
+      />
+
+      <SettingRow
+        label="tmux binary"
+        hint={<>Which executable the engine spawns. "Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</>}
+        control={<span className="flex items-center gap-2 justify-self-end">
+          <select value={source} onChange={(e) => setSource(e.target.value)} disabled={busy}
+            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            <option value="auto">Auto (bundled first)</option>
+            <option value="bundled">Bundled</option>
+            <option value="system">System</option>
+            <option value="custom">Custom…</option>
+          </select>
+          {source === "custom" && (
+            <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/tmux"
+              className="text-[12px] px-2 py-1 rounded-lg bg-transparent w-[180px]"
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+          )}
+          <button onClick={saveSettings} disabled={busy}
+            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+            Save
+          </button>
+        </span>}
+      />
+
+      <SettingRow
+        label="Engine config"
+        hint={<>Extra config lines for the engine's own server. "Append" runs them after the generated base (the UI's status bar stays off — that line is re-asserted after yours); "Replace" makes your text the whole config. Plugins work by adding their own <span className="t-mono text-[11px]">run-shell</span> line. Validated by tmux before it applies; a rejected config leaves the engine off and chat unaffected, and Reset brings it back.</>}
+        control={undefined}
+      />
+      <div className="pl-2 pb-2 agx-settings-rows">
+        <SettingRow
+          label="Mode"
+          control={<select value={confMode} onChange={(e) => setConfMode(e.target.value)} disabled={busy}
+            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            <option value="append">Append to base</option>
+            <option value="replace">Replace everything</option>
+          </select>}
+        />
+        <SettingRow
+          label="Override config"
+          hint="Plain tmux commands, one per line. Your ~/.tmux.conf is never read."
+          control={<span className="flex items-end gap-2 justify-self-end">
+            <textarea value={override} onChange={(e) => setOverride(e.target.value)} spellCheck={false} rows={6} disabled={busy}
+              placeholder={"set -g prefix C-b\nbind-key v split-window -h"}
+              className="text-[11px] t-mono px-2 py-1.5 rounded-lg bg-transparent w-[320px] resize-y"
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+            <button onClick={saveConf} disabled={busy}
+              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0"
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              Validate & save
+            </button>
+          </span>}
+        />
+      </div>
+
+      <SettingRow
+        label="Restore after reboot"
+        hint={<>When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, scrollback, each pane's directory and start command) and rebuilds it at the next boot. "Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation. Nothing here touches your own tmux or its resurrect saves.</>}
+        control={<span className="flex items-center gap-2 justify-self-end">
+          <select value={resume} onChange={(e) => setResume(e.target.value)} disabled={busy}
+            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: restore ? 1 : 0.4 }}>
+            <option value="lazy">Lazy resume</option>
+            <option value="all">Resume all</option>
+          </select>
+          <button onClick={() => setRestore(!restore)} disabled={busy}
+            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+            style={{ color: restore ? "var(--success)" : "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            {restore ? "On" : "Off"}
+          </button>
+        </span>}
+      />
+      {st?.lastCaptureAt ? (
+        <SettingRow
+          label="Last layout capture"
+          hint={`Taken ${new Date(st.lastCaptureAt).toLocaleString()}. Captures run every minute while the engine is on.`}
+          control={<span className="flex items-center gap-2 justify-self-end">
+            <button onClick={() => restoreAction("capture")} disabled={busy}
+              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              Capture now
+            </button>
+            <button onClick={() => restoreAction("restore")} disabled={busy}
+              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              Restore now
+            </button>
+            <button onClick={() => restoreAction("clear")} disabled={busy}
+              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              Clear
+            </button>
+          </span>}
+        />
+      ) : (
+        <SettingRow
+          label="Restore state"
+          hint="Nothing captured yet — enable Restore and the next sweep photographs the layout."
+          control={undefined}
+        />
+      )}
+      {note && <div className="pt-1 pl-2 text-[12px]" style={{ color: "var(--success)" }}>{note}</div>}
+    </Section>
+  );
+}
+
+  const [deps, setDeps] = useState<DepReport[] | null>(null);
+  const [platform, setPlatform] = useState<string>("");
 
 export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp, theme, onTheme, jumpTo }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
@@ -3244,7 +3460,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
 
                   {pane === "hooks" && <><HooksPane open={open} /><AgentsSection open={open} /></>}
 
-                  {pane === "connections" && <><RequirementsPane open={open} /><IntegrationsPane open={open} /><GhBudget open={open} /></>}
+                  {pane === "connections" && <><TmuxPane open={open} /><RequirementsPane open={open} /><IntegrationsPane open={open} /><GhBudget open={open} /></>}
 
                   {pane === "remote" && <RemoteAccessPane open={open} />}
 

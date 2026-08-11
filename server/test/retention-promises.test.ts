@@ -123,6 +123,12 @@ describe("the promises SECURITY.md makes about retention", () => {
     // agentglass is removed; the events database is not opened. The check
     // below holds it to that.
     "/browser/places/forget",
+    // Kills OUR tmux server and rewrites the generated tmux.conf after a
+    // rejected override — the settings panel's self-recovery button. It
+    // touches no database and deletes no state: restore captures stay until
+    // the user clears them, chat transcripts live elsewhere. The check below
+    // holds it to that.
+    "/terminal/tmux-reset",
   ]);
 
   test("the reviewed exceptions still touch no stored data", () => {

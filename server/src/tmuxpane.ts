@@ -15,9 +15,9 @@
 // theirs. `tmux ls` in their terminal cannot see any of this, and ours cannot see
 // their sessions — which is also what makes `tmux -L agentglass attach` a safe
 // thing to hand them.
-import { mkdirSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { resolveTmuxBin } from "./tmuxbin.ts";
+import { confPath, confHealth } from "./tmuxconf.ts";
 
 /** Our socket name. Overridable so tests get a server of their own and never
  *  race, kill, or inherit the one a running app is using.
@@ -39,53 +39,6 @@ export const tmuxSocket = (): string => process.env.AGENTGLASS_TMUX_SOCKET || "a
 const IS_TEST = process.env.NODE_ENV === "test";
 const underScratch = (p: string): boolean => p.startsWith(tmpdir());
 
-/** Where our tmux config lives. Under the state dir rather than a temp path so
- *  the same file is reused across restarts — a server started by yesterday's
- *  process must not be talked to with a config that has since been deleted. */
-function stateDir(): string {
-  const asked = process.env.AGENTGLASS_STATE_DIR;
-  if (asked) {
-    if (!IS_TEST || underScratch(asked)) return asked;
-  } else if (!IS_TEST) {
-    const base = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
-    return join(base, "agentglass");
-  }
-  // A test that did not redirect, or redirected somewhere real, gets scratch
-  // rather than the developer's state directory.
-  return join(tmpdir(), "agentglass-test-state");
-}
-
-const CONF = `# Written by agentglass. Do not edit — it is regenerated.
-#
-# This server must never load the user's tmux.conf. Theirs loads tpm, and
-# through it tmux-continuum, whose autosave would write our chat panes over
-# their own saved layout in ~/.tmux/resurrect/. Hence \`-f\` on every call.
-set -g default-terminal "tmux-256color"
-set -g history-limit 20000
-# Nothing ever looks at our status line; the chat UI is the status line. Off
-# also removes the one place a plugin would have hooked itself in.
-set -g status off
-set -g mouse on
-set -g escape-time 0
-# Claude Code asks for this by name and warns in the pane without it.
-set -g focus-events on
-`;
-
-let confPath: string | null = null;
-/** Write (once per process) and return our config path. */
-function ensureConf(): string {
-  if (confPath) return confPath;
-  const dir = stateDir();
-  mkdirSync(dir, { recursive: true });
-  const p = join(dir, "tmux.conf");
-  // Rewritten every process start rather than only when missing: the file is
-  // ours, tiny, and a stale one from an older version is a silent behaviour
-  // difference that would be very hard to see from the symptoms.
-  Bun.write(p, CONF);
-  confPath = p;
-  return p;
-}
-
 /** How long a tmux call may take before we give up. A local socket answers in
  *  single-digit milliseconds; anything near this means the server is wedged, and
  *  a wedged tmux must not be able to hang a chat turn. */
@@ -95,11 +48,13 @@ export interface TmuxResult { ok: boolean; stdout: string; stderr: string }
 
 /** Run one tmux command against our server. `stdin` feeds commands that read it
  *  (`load-buffer -`), which is how prompt text gets in without ever being
- *  interpreted as arguments. */
+ *  interpreted as arguments. The binary comes from the resolver (tmuxbin.ts) —
+ *  bundled, system or env-override — and the config from the generation gate
+ *  (tmuxconf.ts); this call only ever talks to OUR socket. */
 export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> {
-  const bin = Bun.which("tmux");
+  const bin = resolveTmuxBin();
   if (!bin) return { ok: false, stdout: "", stderr: "tmux is not installed" };
-  const argv = [bin, "-L", tmuxSocket(), "-f", ensureConf(), ...args];
+  const argv = [bin, "-L", tmuxSocket(), "-f", confPath(), ...args];
   try {
     const proc = Bun.spawn(argv, {
       stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
@@ -152,7 +107,9 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
  *  honestly absent one. */
 export function tmuxCapability(): { available: boolean; reason: string } {
   if (process.platform === "win32") return { available: false, reason: "tmux chat panes need a Unix shell — not available on Windows" };
-  if (!Bun.which("tmux")) return { available: false, reason: "tmux is not installed" };
+  if (!resolveTmuxBin()) return { available: false, reason: "tmux is not installed — install it, or use the bundled binary from the settings panel" };
+  const health = confHealth();
+  if (!health.ok) return { available: false, reason: health.reason };
   return { available: true, reason: "" };
 }
 
