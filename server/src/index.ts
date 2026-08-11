@@ -866,6 +866,10 @@ const server = Bun.serve<WsData>({
         // Reflow the tmux window to this client instead of keeping the desk's
         // size. A choice the phone makes per connection — see attachArgvFor.
         fit: url.searchParams.get("fit") === "1",
+        // A shell in a directory, rather than the tmux session the desk was
+        // last in. Sent by the consoles docked inside other views — see
+        // PtyWsData.fresh for the three clients this was measured on.
+        fresh: url.searchParams.get("fresh") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,

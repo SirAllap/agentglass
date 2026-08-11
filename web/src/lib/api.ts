@@ -342,7 +342,17 @@ export function adoptServer(next: { origin?: string | null; token?: string | nul
 }
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
-export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false, agent?: string) =>
+export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false, agent?: string,
+  /**
+   * A shell in `root`, and not the tmux session the desk was last in.
+   *
+   * The server resumes that session for a plain shell, which is what the
+   * terminal view wants and what the phone wants. A console docked inside
+   * another view does not: it becomes a second client on the session, showing
+   * whichever tab the terminal is on and typing into whatever pane that tab has
+   * — an agent's, in the case that was reported.
+   */
+  fresh = false) =>
   withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
     // A single-use ticket for an agent to start in this pane — never the prompt
     // itself, which is kilobytes and has no business in a URL. See
@@ -355,7 +365,8 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
     // the two intents are different: a pull request is somebody else's code in
     // a temp copy, a file tree is your checkout. The server refuses this for a
     // temp copy however loudly the client asks.
-    + (view && edit ? "&edit=1" : ""));
+    + (view && edit ? "&edit=1" : "")
+    + (fresh ? "&fresh=1" : ""));
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(SERVER + path, { headers: authHeaders() });

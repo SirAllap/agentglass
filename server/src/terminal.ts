@@ -150,7 +150,24 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    */
   pane?: string;
   /** Let this client's size win over the desk's — see attachArgvFor. */
-  fit?: boolean };
+  fit?: boolean;
+  /**
+   * A shell in a directory, and nothing clever: do not resume the tmux session
+   * the desk was last in.
+   *
+   * The resume below is for the terminal VIEW, whose whole promise is "the work
+   * you left running". Every other shell this app opens is a shell somebody
+   * asked for in a place — the console docked under Docker's logs, the one that
+   * pre-types an install command — and joining the desk's session makes those a
+   * SECOND CLIENT on it. Measured on his machine: three clients, all on session
+   * `orbit`, so the Docker console mirrored whichever tab the terminal was
+   * showing, and anything typed into it would have gone to the pane running an
+   * agent.
+   *
+   * Opt-out rather than opt-in because the phone connects with a root and no
+   * pane and does want the desk — see mobile/src/terminal/TerminalView.tsx.
+   */
+  fresh?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 /**
@@ -534,6 +551,27 @@ export function editorFor(env: NodeJS.ProcessEnv = process.env): string | null {
 }
 
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
+/**
+ * Whether this socket gets the tmux session the desk was last in.
+ *
+ * Its own function because it is a rule rather than a line: four things beat
+ * the resume, each of them somebody asking for a particular thing — a tap on a
+ * live pane, an agent's ticket, a file to read, and a caller that said plainly
+ * it wants a shell in a directory. What is left is the case where nobody asked
+ * for anything, which is the terminal view opening, and there "the session you
+ * left running" is the better answer than a fresh prompt.
+ *
+ * The fourth was missing, and a console docked inside another view had no way
+ * to say so: it became a second client on the desk's session, showing whichever
+ * tab the terminal view had selected. See PtyWsData.fresh.
+ */
+export function wantsDeskResume(
+  d: Pick<PtyWsData, "pane" | "fresh">,
+  chose: { attach: boolean; agent: boolean; editor: boolean },
+): boolean {
+  return !chose.attach && !chose.agent && !chose.editor && !d.pane && !d.fresh;
+}
+
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) {
@@ -675,11 +713,15 @@ export function ptyOpen(ws: PtyWs) {
    * where nobody asked for anything, and "the session you were in" is a better
    * answer to that than "a fresh prompt".
    *
+   * `fresh` is the fourth thing that wins, and it is the one that was missing:
+   * a caller who did ask for a particular thing — a plain shell in a directory
+   * — and had no way to say so. See PtyWsData.fresh.
+   *
    * `deskAttachArgv` returns null unless that session is still live on that
    * socket, so a machine rebooted since — or a session killed — falls through
    * to the shell exactly as before. See tmuxmemory.ts.
    */
-  const resume = (!attach && !agentRun.length && !editor && !d.pane)
+  const resume = wantsDeskResume(d, { attach: !!attach, agent: agentRun.length > 0, editor: !!editor })
     ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
     : null;
 

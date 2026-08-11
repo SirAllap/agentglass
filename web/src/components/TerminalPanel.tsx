@@ -147,6 +147,17 @@ type Sess = {
   /** The server refused an open and said why. Read once by whoever asked and
    *  then cleared: it is an answer to a request, not a state of the shell. */
   openFail?: string | null;
+  /**
+   * A console docked in another view, rather than one of this view's tabs.
+   *
+   * It changes one thing on the wire: the server resumes the tmux session the
+   * desk was last in for any plain shell, and a docked console must not join
+   * it. Measured on his machine — three tmux clients, all on session `orbit` —
+   * so the console under Docker's logs mirrored whichever tab the terminal view
+   * had selected, and a `docker exec` typed there would have gone to the pane
+   * running an agent. See PtyWsData.fresh.
+   */
+  console?: boolean;
   /** A one-use agent ticket this pane was created with, spent on first connect.
    *  Held rather than passed so a reconnect cannot try to spend it twice — the
    *  server would refuse the second, but a shell that silently became an agent
@@ -459,7 +470,7 @@ function connect(s: Sess) {
   // Spent here, not on arrival: a reconnect after a drop must open a shell,
   // not start the agent a second time in the same worktree.
   s.agentTicket = null;
-  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket));
+  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true));
   ws.binaryType = "arraybuffer";
   s.ws = ws;
   ws.onmessage = (ev) => {
@@ -1000,6 +1011,8 @@ export function runInConsole(root: string, cmd: string): boolean {
   const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
   const s = existing ?? createSession(root);
   s.title = CONSOLE_TITLE;
+  // Its own shell, never the desk's tmux session — see Sess.console.
+  s.console = true;
   const sent = runInShell(s, cmd);
   if (!sent) consoleBlocked(cmd);
   return sent;
@@ -1108,6 +1121,8 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
     const s = existing ?? createSession(root);
     s.title = CONSOLE_TITLE;
+    // Its own shell, never the desk's tmux session — see Sess.console.
+    s.console = true;
     setSid(s.id);
   }, [open, root]);
 

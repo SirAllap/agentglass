@@ -67,7 +67,11 @@ export function ShellConsole({ command, cwd, onClose }: {
     term.open(el);
     try { fit.fit(); } catch { /* not laid out yet; the observer below refits */ }
 
-    const ws = new WebSocket(ptyWsUrl(cwd, term.cols, term.rows));
+    /* `fresh`: a shell of our own, never the tmux session the desk was last in.
+       This console pre-types a command and leaves the Enter to you — and on a
+       machine where the server resumed that session, the command would have
+       been typed into whatever pane the terminal view was showing. */
+    const ws = new WebSocket(ptyWsUrl(cwd, term.cols, term.rows, undefined, false, undefined, true));
     let typed = false;
     /**
      * Our own teardown is not a failure, and it has to say so.
