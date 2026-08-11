@@ -466,6 +466,20 @@
   outline-offset: -2px;
 }
 
+/* The list a <select> drops down is painted by the platform, not by the page.
+ *
+ * An <option> with no background of its own lands on the toolkit's default —
+ * white here — while it inherits the page's light text, so the choices you are
+ * not on read as blank grey on white. Reported with a screenshot of the tmux
+ * pane, where three selects sit together and all three did it.
+ *
+ * Two colours, once, for every select in the app: a panel that fixed only its
+ * own would be the next one to look broken. Tokens, so both themes follow. */
+select option {
+  background-color: var(--bg2);
+  color: var(--text);
+}
+
 /* A placeholder at a contrast we chose.
  *
  * Chromium's default is a grey derived from the text colour with an opacity on

@@ -392,7 +392,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   /* Its own section, not a block inside Tools & services: it is the engine
      every pane and every chat runs on, with a binary, a config and a restore of
      its own — three settings deep is not a row in a list of "is it installed". */
-  { id: "tmux", label: "tmux engine", group: "Agents & work", kw: "tmux engine pane prefix key binary bundled config override restore reboot layout scrollback resume socket status bar", what: "The tmux these panes run on — its binary, its config, its prefix, and what survives a reboot." },
+  { id: "tmux", label: "Pane engine", group: "Agents & work", kw: "tmux engine pane prefix key binary bundled config override restore reboot layout scrollback resume socket status bar", what: "The tmux these panes run on — its binary, its config, its prefix, and what survives a reboot." },
   { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup", what: "Wire Claude Code into this app, and see what else is installed." },
   /*
    * One page for everything outside this app.
@@ -2433,7 +2433,7 @@ function TmuxPane({ open }: { open: boolean }) {
 
   const cap = st?.capability;
   return (
-    <Section title="tmux engine">
+    <Section title="Pane engine">
       <SettingRow
         label={<span style={{ color: cap && !cap.available ? "var(--error)" : cap?.available ? "var(--success)" : undefined }}>
           {cap?.available ? "Pane engine ready" : "Pane engine unavailable"}
@@ -2459,8 +2459,8 @@ function TmuxPane({ open }: { open: boolean }) {
         hint={<>Which executable the engine spawns. "Auto" prefers the bundled static tmux and falls back to the system one; "Custom" points at your own binary (e.g. a newer tmux). Tabs, splits and status are drawn by agentglass either way.</>}
         control={<span className="flex items-center gap-2 justify-self-end">
           <select value={source} onChange={(e) => setSource(e.target.value)} disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            className="text-[12px] px-2 py-1 rounded-lg"
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
             <option value="auto">Auto (bundled first)</option>
             <option value="bundled">Bundled</option>
             <option value="system">System</option>
@@ -2491,8 +2491,8 @@ function TmuxPane({ open }: { open: boolean }) {
             value={PREFIXES.some((p) => p.value === prefix) ? prefix : "custom"}
             onChange={(e) => { setPrefixCustom(e.target.value === "custom"); if (e.target.value !== "custom") setPrefix(e.target.value); }}
             disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            className="text-[12px] px-2 py-1 rounded-lg"
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
             {PREFIXES.map((p) => <option key={p.value || "default"} value={p.value}>{p.label}</option>)}
             <option value="custom">Custom…</option>
           </select>
@@ -2518,8 +2518,8 @@ function TmuxPane({ open }: { open: boolean }) {
         <SettingRow
           label="Mode"
           control={<select value={confMode} onChange={(e) => setConfMode(e.target.value)} disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            className="text-[12px] px-2 py-1 rounded-lg"
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
             <option value="append">Append to base</option>
             <option value="replace">Replace everything</option>
           </select>}
@@ -2546,8 +2546,8 @@ function TmuxPane({ open }: { open: boolean }) {
         hint={<>When the host reboots, the engine's tmux dies with it — this photographs the layout (sessions, tabs, splits, scrollback, each pane's directory and start command) and rebuilds it at the next boot. "Lazy" restores the tree and resumes each agent when you reopen its chat; "All" relaunches every recorded CLI, resuming each conversation. Nothing here touches your own tmux or its resurrect saves.</>}
         control={<span className="flex items-center gap-2 justify-self-end">
           <select value={resume} onChange={(e) => setResume(e.target.value)} disabled={busy}
-            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: restore ? 1 : 0.4 }}>
+            className="text-[12px] px-2 py-1 rounded-lg"
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: restore ? 1 : 0.4 }}>
             <option value="lazy">Lazy resume</option>
             <option value="all">Resume all</option>
           </select>
