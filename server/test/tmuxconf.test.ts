@@ -249,6 +249,9 @@ test("tabs are numbered from 1, where the number keys are", () => {
   const content = conf.confContent();
   expect(content).toContain("set -g base-index 1");
   expect(content).toContain("setw -g pane-base-index 1");
-  expect(content).toContain("set -g renumber-windows on");
+  /* Off, like tmux's own default and like the machine's tmux. Closing a tab
+     leaves its neighbours' numbers alone; the drag path renumbers on its own
+     (see tmux-move-window.test.ts), so the two cases are separate decisions. */
+  expect(content).toContain("set -g renumber-windows off");
   expect(conf.validateConf(content).ok).toBe(true);
 });
