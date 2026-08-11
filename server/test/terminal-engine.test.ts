@@ -77,6 +77,24 @@ describe("a saved config reaching the server that is already running", () => {
   });
 });
 
+describe("the labels that say which key to press", () => {
+  const src = Bun.file(new URL("../src/terminal.ts", import.meta.url));
+
+  it("re-read the prefix instead of remembering the one from the attach", async () => {
+    /*
+     * It was captured once, when tmux was first noticed, so the tab strip and
+     * the hint bar drew that key for the life of the shell. Change it in the
+     * panel — where it now reaches the running server — and every label still
+     * said the old one. That reads exactly like a setting that did nothing,
+     * and was reported as "I have to restart agentglass anyway".
+     */
+    const text = await src.text();
+    expect(text).toContain("if (session.tmux) session.tmuxPrefix = prefixKeys(session.tmux);");
+    // …and it counts as a change, or the sweep would read it and say nothing.
+    expect(text).toContain("session.onEngine === true, session.tmuxPrefix ?? []]);");
+  });
+});
+
 describe("the shape of the command", () => {
   const src = Bun.file(new URL("../src/tmuxpane.ts", import.meta.url));
 

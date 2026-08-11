@@ -2402,6 +2402,22 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         one you are looking at — a distinction that stopped
                         being academic the moment a restore could move the
                         client from one session to another underneath you. */}
+                    {/* WHOSE tmux, before which session of it.
+                        Two servers can be on one screen — the engine's and the
+                        machine's own — and nothing said which was which. That
+                        is not a detail: the prefix in the settings panel moves
+                        one of them, so pressing the new key in a pane belonging
+                        to the other looks exactly like a setting that did not
+                        apply. Reported as precisely that, twice. */}
+                    <span className="shrink-0 px-1.5 rounded text-[9.5px] uppercase tracking-wider"
+                      style={sess?.tmuxEngine
+                        ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 13%, transparent)" }
+                        : { color: "var(--text4)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
+                      title={sess?.tmuxEngine
+                        ? "agentglass's own tmux — the Pane engine. Its prefix, config and restore are in Settings ▸ Pane engine."
+                        : "the tmux on this machine — your ~/.tmux.conf, your bindings. The Pane engine settings do not touch it."}>
+                      {sess?.tmuxEngine ? "engine" : "your tmux"}
+                    </span>
                     {sess?.tmuxSession && (
                       <span className="shrink-0 px-1 text-[10px] max-w-[9rem] truncate" style={{ color: "var(--text4)" }} title={`tmux session: ${sess.tmuxSession}`}>
                         {sess.tmuxSession}

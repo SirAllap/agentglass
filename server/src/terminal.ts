@@ -1023,6 +1023,19 @@ export function ptyOpen(ws: PtyWs) {
     // parsePaneGeometry. Empty is the honest answer for an unsplit window too:
     // one pane covering everything is nothing to choose between.
     const panes = (frame?.panes ?? []).length > 1 ? frame!.panes : [];
+    /*
+     * Re-read, not remembered from the attach.
+     *
+     * The prefix was captured once, when tmux was first noticed, and the strip
+     * and the hint bar drew that for the life of the shell. Change the key in
+     * the settings panel — which now applies to the running server — and every
+     * label still said the old one, which reads exactly like a setting that
+     * did nothing. Reported as "I have to restart agentglass anyway".
+     *
+     * One `show -g prefix` per sweep against a local socket; the same sweep
+     * already asks for the windows and the panes.
+     */
+    if (session.tmux) session.tmuxPrefix = prefixKeys(session.tmux);
     /**
      * A prompt tmux would have drawn, taken off the window and forwarded once.
      *
@@ -1062,7 +1075,7 @@ export function ptyOpen(ws: PtyWs) {
      * including the case of somebody resizing back to matching, where it is the
      * TERMINAL that changed and no window did.
      */
-    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null, session.onEngine === true]);
+    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null, session.onEngine === true, session.tmuxPrefix ?? []]);
     if (shape === sent) return;
     sent = shape;
     ctl(ws, {
