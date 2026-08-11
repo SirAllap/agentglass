@@ -224,10 +224,15 @@ export function confHealth(): { ok: boolean; reason: string } {
       setTmuxConfBroken(true, check.stderr);
       return { ok: false, reason: `tmux config is broken (${check.stderr}) — reset it in the settings panel` };
     }
-    if (tmuxConfBroken()) setTmuxConfBroken(false);
+    // `.broken`, not the object. `tmuxConfBroken()` returns
+    // `{ broken, reason }` — always truthy — so this and the line below read
+    // "rejected" for every config that had ever been written. That is why the
+    // panel said "Pane engine unavailable" on a machine whose config passed the
+    // gate by hand, and why the engine's socket never existed.
+    if (tmuxConfBroken().broken) setTmuxConfBroken(false);
     return { ok: true, reason: "" };
   }
-  if (tmuxConfBroken()) return { ok: false, reason: "tmux config was rejected — reset it in the settings panel" };
+  if (tmuxConfBroken().broken) return { ok: false, reason: "tmux config was rejected — reset it in the settings panel" };
   return { ok: true, reason: "" };
 }
 

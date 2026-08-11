@@ -124,6 +124,27 @@ test("a mark left by a config that has since been fixed does not keep the engine
   expect(cfg.tmuxConfBroken().broken).toBe(false);
 });
 
+test("a healthy engine is not reported as rejected on every read after the first", () => {
+  /*
+   * The check that was missing, and the bug it hid: `tmuxConfBroken()` returns
+   * `{ broken, reason }` — an object, so always truthy — and both readers here
+   * asked `if (tmuxConfBroken())`. Every config that had ever been written
+   * therefore read as rejected. That is why a machine whose conf passed this
+   * very gate by hand sat on "Pane engine unavailable", and why the engine's
+   * socket never existed at all.
+   *
+   * The first call takes the validate path, which is why it has to be asked
+   * twice: the second read is the one that consults the flag.
+   */
+  expect(conf.applyTmuxConf("append", "# healthy\nset -g prefix C-z\n").ok).toBe(true);
+  conf.ensureConf();
+  cfg.setTmuxConfBroken(false);
+  conf.__resetTmuxConfState();
+
+  expect(conf.confHealth().ok).toBe(true);
+  expect(conf.confHealth().ok).toBe(true);
+});
+
 test("a config that really is broken still says so, in tmux's own words", () => {
   // The other direction of the same check: self-healing must not become
   // self-ignoring.
