@@ -42,6 +42,16 @@ set -g history-limit 20000
 set -g status off
 set -g mouse on
 set -g escape-time 0
+# Tabs start at 1, because that is where the number keys are.
+#
+# tmux counts from 0 and nobody binds a prefix to 0 — every real config on this
+# machine's own tmux included flips this, and a strip whose first tab answers to
+# a key one place away from where it is drawn is a strip you mis-hit all day.
+# renumber-windows is the other half: without it, closing tab 2 of four leaves
+# 1, 3, 4 and the keys stop matching what is on screen.
+set -g base-index 1
+setw -g pane-base-index 1
+set -g renumber-windows on
 # Claude Code asks for this by name and warns in the pane without it.
 set -g focus-events on
 `;

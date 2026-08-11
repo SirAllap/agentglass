@@ -222,3 +222,33 @@ test("replace mode makes the override the whole config", () => {
   expect(content).not.toContain("history-limit");
   expect(content).not.toContain("mouse");
 });
+
+test("the generated config is a template literal, and stays one", () => {
+  // Append, because an earlier test leaves the mode on "replace" — where the
+  // base is deliberately absent. The suite shares one config file.
+  conf.applyTmuxConf("append", "");
+  /*
+   * A backtick in a COMMENT inside BASE closed the template literal early and
+   * the file stopped parsing — caught by the type checker, which is the only
+   * reason it did not ship, and worth a test because the next person writing a
+   * comment about a tmux option will reach for backticks by habit.
+   */
+  const src = require("node:fs").readFileSync(new URL("../src/tmuxconf.ts", import.meta.url).pathname, "utf8") as string;
+  const base = src.slice(src.indexOf("const BASE = `") + 14, src.indexOf("\n`;"));
+  // Escaped ones are fine and one is deliberate; a BARE backtick is what ended
+  // the literal early.
+  expect(base.replace(/\\`/g, "")).not.toContain("`");
+  expect(conf.confContent()).toContain("set -g base-index 1");
+});
+
+test("tabs are numbered from 1, where the number keys are", () => {
+  // tmux counts from 0 and nobody binds a prefix to 0. renumber-windows is the
+  // other half: without it, closing tab 2 of four leaves 1, 3, 4 and the keys
+  // stop matching what is drawn.
+  conf.applyTmuxConf("append", "");
+  const content = conf.confContent();
+  expect(content).toContain("set -g base-index 1");
+  expect(content).toContain("setw -g pane-base-index 1");
+  expect(content).toContain("set -g renumber-windows on");
+  expect(conf.validateConf(content).ok).toBe(true);
+});
