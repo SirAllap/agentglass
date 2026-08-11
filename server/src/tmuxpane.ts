@@ -17,7 +17,7 @@
 // thing to hand them.
 import { tmpdir } from "node:os";
 import { resolveTmuxBin } from "./tmuxbin.ts";
-import { confPath, confHealth } from "./tmuxconf.ts";
+import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
 
 /** Our socket name. Overridable so tests get a server of their own and never
  *  race, kill, or inherit the one a running app is using.
@@ -28,6 +28,44 @@ import { confPath, confHealth } from "./tmuxconf.ts";
  *  imported this module first — and here that means a test's redirected socket
  *  silently reverting to the real one the running app is using. */
 export const tmuxSocket = (): string => process.env.AGENTGLASS_TMUX_SOCKET || "agentglass";
+
+/**
+ * One engine session per checkout, named after it.
+ *
+ * tmux refuses `.` and `:` in a session name, and the error it gives — "bad
+ * session name" — says nothing about which character it minded. Everything
+ * outside a safe set becomes `-`, so a worktree called `agentglass.tmux` or a
+ * path with a colon in it opens a terminal instead of an error.
+ */
+export function engineSessionName(root: string): string {
+  const base = root.split("/").filter(Boolean).pop() || "shell";
+  // Trimmed of the dashes the substitution leaves behind: a directory named
+  // entirely in characters tmux will not take would otherwise become "-", which
+  // is a legal name and an unreadable one.
+  const safe = base.replace(/[^A-Za-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  return safe || "shell";
+}
+
+/**
+ * The command that opens a terminal ON THE ENGINE rather than on the user's own
+ * tmux.
+ *
+ * Attach-or-create, so the second tab of the same checkout lands in the session
+ * the first one made, and closing the app leaves it running exactly as their
+ * own tmux would. `-f` is the engine's config, as everywhere else here: the
+ * user's ~/.tmux.conf is never loaded on this server.
+ *
+ * Null when there is no tmux to run, which is the caller's cue to fall back to
+ * a plain shell — a terminal that opens on "command not found" is worse than
+ * one that opens somewhere unremarkable.
+ */
+export function engineAttachArgv(root: string): string[] | null {
+  const bin = resolveTmuxBin();
+  if (!bin) return null;
+  if (!confHealth().ok) return null;
+  ensureConf();
+  return [bin, "-L", tmuxSocket(), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root];
+}
 
 /** Under `bun test`, nothing this module touches may be real.
  *

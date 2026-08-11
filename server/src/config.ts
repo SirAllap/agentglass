@@ -98,6 +98,9 @@ interface Config {
    *  it is the one binding everybody changes, and it goes into a config file
    *  the engine runs — so it is validated, never escaped. */
   tmuxPrefix?: string;
+  /** Which tmux the terminal VIEW opens on: the engine's server, or the tmux on
+   *  this machine resumed where it was left. Absent means the engine. */
+  tmuxTerminal?: "engine" | "desk";
   /** Set when the validation gate rejected the generated conf. The pane
    *  engine degrades (chat still works) and the settings panel shows why. */
   tmuxConfBroken?: { broken: boolean; reason: string };
@@ -590,6 +593,21 @@ export function tmuxResume(): "lazy" | "all" {
  * Validated on the way in as well as here: this string is interpolated into a
  * config file the engine runs, so it may only ever be a key name.
  */
+/**
+ * Which tmux the TERMINAL VIEW opens on.
+ *
+ * "engine" — agentglass's own server: its config, its prefix, its restore, and
+ * a session per checkout. "desk" — the tmux on this machine, resumed where it
+ * was left, which is what the app did before there was an engine to offer.
+ *
+ * The two never mix. Whichever is not chosen goes on running untouched, so the
+ * switch is reversible in both directions and nothing is migrated by flipping
+ * it: a tmux session cannot move between servers, by anybody.
+ */
+export function tmuxTerminal(): "engine" | "desk" {
+  return config().tmuxTerminal === "desk" ? "desk" : "engine";
+}
+
 export function tmuxPrefix(): string {
   const v = config().tmuxPrefix;
   return typeof v === "string" && validTmuxPrefix(v) ? v : "";
@@ -617,6 +635,7 @@ export function writeTmuxSettings(fields: {
   tmuxRestore?: boolean;
   tmuxResume?: "lazy" | "all";
   tmuxPrefix?: string;
+  tmuxTerminal?: "engine" | "desk";
   tmuxConfBroken?: { broken: boolean; reason: string } | undefined;
 }): { ok: boolean; persisted: boolean; error?: string } {
   const path = configPath();

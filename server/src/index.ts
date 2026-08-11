@@ -114,7 +114,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, validTmuxPrefix, writeTmuxSettings } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -2833,6 +2833,8 @@ const server = Bun.serve<WsData>({
         resumeMode: tmuxResume(),
         // The engine's prefix key. Empty means tmux's own default (C-b).
         prefix: tmuxPrefix(),
+        // Which tmux the terminal VIEW opens on.
+        terminal: tmuxTerminal(),
         source: tmuxSource(),
         lastCaptureAt: lastCaptureAt(),
       });
@@ -2862,6 +2864,10 @@ const server = Bun.serve<WsData>({
       if (b.resume !== undefined) fields.tmuxResume = b.resume === "all" ? "all" : "lazy";
       // The prefix is a key name, and it is interpolated into a config file the
       // engine executes — so it is checked here rather than escaped later.
+      if (b.terminal !== undefined) {
+        if (!["engine", "desk"].includes(String(b.terminal))) return json({ ok: false, error: "unknown terminal mode" }, 400);
+        fields.tmuxTerminal = b.terminal;
+      }
       if (b.prefix !== undefined) {
         const key = String(b.prefix).trim();
         if (key && !validTmuxPrefix(key)) {

@@ -24,7 +24,8 @@ import { isViewTemp, viewTempDirOf } from "./viewtemp.ts";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
-import { inScope, workspaceRoot, terminalDisabledSource } from "./config.ts";
+import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal } from "./config.ts";
+import { engineAttachArgv } from "./tmuxpane.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -721,14 +722,26 @@ export function ptyOpen(ws: PtyWs) {
    * socket, so a machine rebooted since — or a session killed — falls through
    * to the shell exactly as before. See tmuxmemory.ts.
    */
-  const resume = wantsDeskResume(d, { attach: !!attach, agent: agentRun.length > 0, editor: !!editor })
+  /*
+   * The engine, or the tmux on this machine.
+   *
+   * Same four things stand aside for both — a tapped pane, an agent's ticket, a
+   * file to read, a caller that asked for a plain shell — so the choice is only
+   * ever made for the case where somebody opened a terminal and said nothing
+   * else. The engine wins when it is chosen, and falls through to the resume
+   * (and then to a bare shell) when it cannot run: `engineAttachArgv` answers
+   * null with no tmux and with a config the gate has refused.
+   */
+  const plain = wantsDeskResume(d, { attach: !!attach, agent: agentRun.length > 0, editor: !!editor });
+  const engine = plain && tmuxTerminal() === "engine" ? engineAttachArgv(startIn) : null;
+  const resume = !engine && plain
     ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
     : null;
 
   const run = attach
     ? attach.argv
     : agentRun.length ? agentRun
-    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : resume ?? [shell, ...args];
+    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : engine ?? resume ?? [shell, ...args];
 
   let argv: string[];
   let mode: Session["mode"] = "pty";

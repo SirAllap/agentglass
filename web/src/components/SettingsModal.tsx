@@ -2341,6 +2341,7 @@ const PREFIXES: { value: string; label: string }[] = [
 function TmuxPane({ open }: { open: boolean }) {
   const [st, setSt] = useState<Awaited<ReturnType<typeof api.tmuxStatus>> | null>(null);
   const [prefix, setPrefix] = useState("");
+  const [terminal, setTerminal] = useState("engine");
   /** Sticky, so typing a custom key does not fold the box the moment the text
    *  stops matching a listed one. */
   const [prefixCustom, setPrefixCustom] = useState(false);
@@ -2366,6 +2367,7 @@ function TmuxPane({ open }: { open: boolean }) {
         setRestore(r.restoreEnabled);
         setResume(r.resumeMode);
         setPrefix(r.prefix || "");
+        setTerminal(r.terminal || "engine");
         setPrefixCustom(!!r.prefix && !PREFIXES.some((p) => p.value === r.prefix));
         setErr(null);
       })
@@ -2378,6 +2380,21 @@ function TmuxPane({ open }: { open: boolean }) {
     setBusy(true); setNote(null);
     api.tmuxSettingsSave({ source, path: source === "custom" ? path : undefined, restore, resume })
       .then((r) => { setNote(r.ok ? "Saved. The binary choice applies to new panes." : r.error ?? "Could not save."); void load(); })
+      .catch(() => setErr("Could not save — server unreachable."))
+      .finally(() => setBusy(false));
+  };
+
+  const saveTerminal = (mode: string) => {
+    setTerminal(mode);
+    setBusy(true); setNote(null); setErr(null);
+    api.tmuxSettingsSave({ terminal: mode })
+      .then((r) => {
+        if (r.ok) setNote(mode === "engine"
+          ? "New terminals open on the engine. The ones already open stay where they are."
+          : "New terminals resume the tmux on this machine.");
+        else setErr(r.error ?? "Could not save that.");
+        void load();
+      })
       .catch(() => setErr("Could not save — server unreachable."))
       .finally(() => setBusy(false));
   };
@@ -2477,6 +2494,21 @@ function TmuxPane({ open }: { open: boolean }) {
             Save
           </button>
         </span>}
+      />
+
+      {/* The choice that decides whether any of the rest is ever seen: a
+          terminal that resumes the machine's own tmux never touches the engine,
+          which is how somebody can have all of this configured and none of it
+          running. */}
+      <SettingRow
+        label="Terminal runs on"
+        hint={<>Where the Terminal view opens a shell. "The engine" gives it this section's tmux — agentglass draws the tabs and splits, the prefix above applies, and Restore below can bring it back after a reboot; one session per checkout. "This machine's tmux" resumes the session you left in your own tmux, with your own <span className="t-mono text-[11px]">~/.tmux.conf</span>. They are separate servers: switching moves nothing and loses nothing, and whichever you are not using keeps running.</>}
+        control={<select value={terminal} onChange={(e) => saveTerminal(e.target.value)} disabled={busy}
+          className="text-[12px] px-2 py-1 rounded-lg justify-self-end"
+          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+          <option value="engine">The engine</option>
+          <option value="desk">This machine's tmux</option>
+        </select>}
       />
 
       {/* The one binding everybody changes, as a choice rather than as three

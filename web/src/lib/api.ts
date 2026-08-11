@@ -423,6 +423,8 @@ const realApi = {
     resumeMode: string;
     /** The engine's prefix key in tmux spelling; "" is tmux's own C-b. */
     prefix: string;
+    /** Which tmux the terminal view opens on. */
+    terminal: string;
     source: string;
     lastCaptureAt: number | null;
   }>("/terminal/tmux-status"),
@@ -430,7 +432,7 @@ const realApi = {
   tmuxConfSave: (confMode: string, override: string) =>
     post<{ ok: boolean; error?: string; appliedAtNextStart?: boolean }>("/terminal/tmux-conf", { confMode, override }),
   /** Save the binary/restore settings. */
-  tmuxSettingsSave: (f: { source?: string; path?: string; restore?: boolean; resume?: string; prefix?: string }) =>
+  tmuxSettingsSave: (f: { source?: string; path?: string; restore?: boolean; resume?: string; prefix?: string; terminal?: string }) =>
     post<{ ok: boolean; persisted?: boolean; error?: string }>("/terminal/tmux-settings", f),
   /** Restore the generated conf, override cleared, our server killed. */
   tmuxReset: () =>
@@ -1408,7 +1410,7 @@ const demoApi: typeof realApi = {
   issuePrs: (_r: string, _n: number) => D({ ok: true, prs: [] }),
   termAgentTicket: (_c: string, _p: string, _y: boolean, _t: string) =>
     D({ ok: false, error: "not available in the demo" }),
-  tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", prefix: "", source: "auto", lastCaptureAt: null }),
+  tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", prefix: "", terminal: "engine", source: "auto", lastCaptureAt: null }),
   tmuxConfSave: (_m: string, _o: string) => D({ ok: false, error: "not available in the demo" }),
   tmuxSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   tmuxReset: () => D({ ok: false, error: "not available in the demo" }),
