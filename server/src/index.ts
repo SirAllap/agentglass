@@ -96,7 +96,7 @@ import {
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind, localHead,
+  branchBehind, localHead, prRollup,
   prBranches, prsForBranch } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
@@ -2524,6 +2524,12 @@ const server = Bun.serve<WsData>({
      * This is git only, no network — a few milliseconds — so it can be asked
      * again while a pull request is open.
      */
+    /* The truth about one pull request's checks — see prRollup. The list's own
+       rollup counts a re-run's old attempt beside the new one, and a card
+       cannot tell without asking. */
+    if (pathname === "/prs/rollup") {
+      return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0));
+    }
     if (pathname === "/prs/local-head") {
       return json({ ok: true, local: await localHead(
         url.searchParams.get("root") || "",

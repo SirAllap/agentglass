@@ -574,3 +574,26 @@ describe("the number on a card", () => {
     expect(board).toContain("border: `1px solid color-mix(in srgb, ${copied === p.number ? \"var(--success) 50%\" : \"var(--border) 55%\"}, transparent)`,");
   });
 });
+
+/*
+ * A card that claims failure asks whether it is true.
+ *
+ * The list's rollup is GitHub's aggregate counts, and those count a re-run's
+ * old attempt beside the new one. Measured on a pull request their own page
+ * calls "All checks have passed": counts of 45 SUCCESS, 20 SKIPPED, 1
+ * CANCELLED, 1 FAILURE — and `state: FAILURE`, which their page does not use
+ * either. Aggregates have no names to de-duplicate by, so the only honest fix
+ * is to ask per card.
+ */
+describe("a red card", () => {
+  it("checks itself against the latest run per name", () => {
+    expect(board).toContain("const real = rollupOf(root, p.number);");
+    expect(board).toContain("return real ? { ...p, checks: real } : p;");
+  });
+
+  it("only asks when it claims red, and only with a checkout to ask from", () => {
+    // Everything green is already telling the truth; asking for it would be a
+    // request per card on every board paint.
+    expect(board).toContain("if (!root || !p.checks || p.checks.failure === 0) return p;");
+  });
+});

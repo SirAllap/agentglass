@@ -18,6 +18,7 @@ import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type 
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
+import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
@@ -119,15 +120,33 @@ export function TriageBoard({
      nothing else — the cards do not move, a chip appears on one of them. */
   const [, bump] = useState(0);
   useEffect(() => onBehind(() => bump((n) => n + 1)), []);
+  /*
+   * A card that claims failure asks whether it is true.
+   *
+   * The list's rollup is GitHub's aggregate counts, which count a re-run's old
+   * attempt beside the new one — measured on a pull request their own page
+   * calls "All checks have passed" and whose aggregate says FAILURE. Only the
+   * cards claiming red ask, only while they are on screen, and the answer is
+   * remembered for a minute. Everything green is already telling the truth.
+   */
+  const [, bumpRollup] = useState(0);
+  useEffect(() => onRollup(() => bumpRollup((n) => n + 1)), []);
+  const trueChecks = useCallback((p: PrSummary): PrSummary => {
+    if (!root || !p.checks || p.checks.failure === 0) return p;
+    const real = rollupOf(root, p.number);
+    return real ? { ...p, checks: real } : p;
+  }, [root]);
+
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
     const by = new Map<number, PrSummary>();
-    for (const p of [...mine, ...review]) if (!by.has(p.number)) by.set(p.number, p);
+    for (const p of [...mine, ...review]) if (!by.has(p.number)) by.set(p.number, trueChecks(p));
     const m = new Set(mine.map((p) => p.number));
     const r = new Set(review.map((p) => p.number));
     return fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }));
-  }, [mine, review]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mine, review, trueChecks, bumpRollup]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   const involved = cards.length;

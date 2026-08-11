@@ -253,6 +253,37 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
   return { ok: true, repo: id.nameWithOwner, from: out[0] ? shape(out[0]) : undefined, into: incoming.map(shape) };
 }
 
+/**
+ * The true rollup for ONE pull request — the latest run per check name.
+ *
+ * The list cannot have this. Its rollup is GitHub'"'"'s aggregate counts, and those
+ * count a re-run'"'"'s old attempt alongside the new one: measured on a pull
+ * request github.com calls "All checks have passed", the aggregate answers
+ * `state: FAILURE` with one FAILURE in the counts. Even their own `state` field
+ * is wrong here, because their page does not use it either — it keeps the
+ * latest run per name, which is what `latestPerName` does.
+ *
+ * So a card that claims failure can ask for the truth, one pull request at a
+ * time and only when it is on screen. One GraphQL call, the same contexts the
+ * detail view already reads.
+ */
+export async function prRollup(rootIn: unknown, numberIn: unknown): Promise<{ ok: boolean; checks?: PrCheckRollup; error?: string }> {
+  const number = Number(numberIn);
+  const repo = await repoIdFor(rootIn);
+  if (!repo || !Number.isFinite(number)) return { ok: false, error: "no GitHub remote here" };
+  const q = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){`
+    + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){${SEL_CHECKS}}}}}}`
+    + `}}}`;
+  const r = await ghJson<any>([
+    "api", "graphql", "-f", `query=${q}`,
+    "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
+  ]);
+  const raw = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
+  if (!raw) return { ok: false, error: "GitHub would not list its checks" };
+  const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
+  return { ok: true, checks: rollupChecks(normalised).rollup };
+}
+
 export async function branchBehind(root: string, number: number): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }> {
   const id = await repoIdFor(root);
   if (!id) return { ok: false, error: "no GitHub remote here" };
