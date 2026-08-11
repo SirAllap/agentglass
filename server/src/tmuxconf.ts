@@ -149,13 +149,25 @@ export function validateConf(text: string, now = Date.now(), socket = `agx-val-$
  *  server restarts, which is the safe direction).
  */
 export function applyTmuxConf(mode: "append" | "replace", override: string): { ok: boolean; error?: string; appliedAtNextStart: boolean } {
+  /*
+   * Read what is there BEFORE writing over it.
+   *
+   * The rollback below called these same readers AFTER the write, so it put
+   * back the values it had just saved — a no-op wearing the shape of a revert.
+   * A rejected override stayed in config.json, came back in the box on the next
+   * open, and was regenerated into the conf at the next start.
+   */
+  const wasMode = tmuxConfMode();
+  const wasOverride = tmuxOverride();
   const write = writeTmuxSettings({ tmuxConfMode: mode, tmuxOverride: override });
   if (!write.ok) return { ok: false, error: write.error, appliedAtNextStart: false };
   const full = confContent();
   const check = validateConf(full);
   if (!check.ok) {
-    // Do not leave the bad override on disk: revert both fields, report why.
-    writeTmuxSettings({ tmuxConfMode: tmuxConfMode(), tmuxOverride: tmuxOverride() });
+    // Do not leave the bad override on disk: put back what was there, and
+    // regenerate so the file on disk and the settings cannot disagree.
+    writeTmuxSettings({ tmuxConfMode: wasMode, tmuxOverride: wasOverride });
+    ensureConf();
     return { ok: false, error: `config rejected by tmux — ${check.stderr}`, appliedAtNextStart: false };
   }
   setTmuxConfBroken(false);
@@ -173,7 +185,17 @@ export function applyTmuxConf(mode: "append" | "replace", override: string): { o
 let bootChecked = false;
 export function confHealth(): { ok: boolean; reason: string } {
   if (!existsSync(confPath())) return { ok: true, reason: "" };
-  if (tmuxConfBroken()) return { ok: false, reason: "tmux config was rejected — reset it in the settings panel" };
+  /*
+   * The file first, the flag second — and once per process, because the check
+   * spawns tmux twice.
+   *
+   * The flag used to short-circuit this, which made it permanent: a mark left
+   * by a config that had since been fixed kept the engine off, and the only
+   * way out was Reset. Measured on a real machine — the conf on disk passed
+   * this very check by hand while the panel read "Pane engine unavailable".
+   * A config that is good now is good now; one that is genuinely broken still
+   * says so below, with tmux's own words.
+   */
   if (!bootChecked) {
     bootChecked = true;
     const check = validateConf(readFileSync(confPath(), "utf8"));
@@ -181,7 +203,10 @@ export function confHealth(): { ok: boolean; reason: string } {
       setTmuxConfBroken(true, check.stderr);
       return { ok: false, reason: `tmux config is broken (${check.stderr}) — reset it in the settings panel` };
     }
+    if (tmuxConfBroken()) setTmuxConfBroken(false);
+    return { ok: true, reason: "" };
   }
+  if (tmuxConfBroken()) return { ok: false, reason: "tmux config was rejected — reset it in the settings panel" };
   return { ok: true, reason: "" };
 }
 

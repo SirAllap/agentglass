@@ -80,6 +80,67 @@ test("applyTmuxConf accepts a good override and writes it", () => {
   expect(cfg.tmuxOverride()).toContain("C-z");
 });
 
+test("a rejected override leaves the one that was working in place", () => {
+  /*
+   * The revert used to read the settings back AFTER writing them, so it saved
+   * the values it had just saved: a no-op wearing the shape of a rollback. The
+   * rejected text stayed in config.json, came back in the settings box on the
+   * next open, and was regenerated into the conf at the next start — which is
+   * how a machine ended up with the engine off and the bad line still on screen.
+   */
+  const good = conf.applyTmuxConf("append", "# keep me\nset -g prefix C-z\n");
+  expect(good.ok).toBe(true);
+
+  /* What the gate can actually catch, measured on tmux 3.6a: nothing in a
+     config makes it exit non-zero — an unknown option, an unterminated quote
+     and `source-file` on a missing path all exit 0 — so the only real refusal
+     is the probe, and `set -g status on` alone loses to the footer that
+     re-asserts it off. A hook fires AFTER that footer, which is how a plugin
+     would take the bar back, and is exactly the case worth refusing. */
+  const bad = conf.applyTmuxConf("append", '# nope\nset-hook -g after-new-session "set -g status on"\n');
+  expect(bad.ok).toBe(false);
+  expect(bad.appliedAtNextStart).toBe(false);
+
+  expect(cfg.tmuxOverride()).toContain("keep me");
+  expect(cfg.tmuxOverride()).not.toContain("nope");
+  expect(cfg.tmuxConfMode()).toBe("append");
+  // And the generated file agrees with the settings rather than lagging them.
+  expect(conf.confContent()).toContain("C-z");
+});
+
+test("a mark left by a config that has since been fixed does not keep the engine off", () => {
+  /*
+   * `confHealth` short-circuited on the flag, so once set it was permanent:
+   * the panel read "Pane engine unavailable" while the conf on disk passed the
+   * gate by hand. The file is the truth; the flag is a note about the file.
+   */
+  expect(conf.applyTmuxConf("append", "# fine\nset -g prefix C-z\n").ok).toBe(true);
+  conf.ensureConf();
+  cfg.setTmuxConfBroken(true, "something that is no longer true");
+  conf.__resetTmuxConfState();
+
+  const health = conf.confHealth();
+  expect(health.ok).toBe(true);
+  expect(cfg.tmuxConfBroken().broken).toBe(false);
+});
+
+test("a config that really is broken still says so, in tmux's own words", () => {
+  // The other direction of the same check: self-healing must not become
+  // self-ignoring.
+  const { writeFileSync } = require("node:fs") as typeof import("node:fs");
+  writeFileSync(conf.confPath(), "set -g status on\n");
+  conf.__resetTmuxConfState();
+  const health = conf.confHealth();
+  expect(health.ok).toBe(false);
+  expect(health.reason).toContain("status bar");
+  // Left marked, so the next reader does not pay for the check again.
+  expect(cfg.tmuxConfBroken().broken).toBe(true);
+  // Put the suite back where it found it.
+  cfg.setTmuxConfBroken(false);
+  conf.ensureConf();
+  conf.__resetTmuxConfState();
+});
+
 test("replace mode makes the override the whole config", () => {
   const r = conf.applyTmuxConf("replace", "# bare\nset -g default-terminal screen-256color\n");
   expect(r.ok).toBe(true);
