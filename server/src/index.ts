@@ -102,6 +102,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { mintAgentTicket } from "./agentticket.ts";
 import { listPanes, focusPaneAnywhere, activePane, sweepPinnedWindows, pinnedSockets } from "./tmuxctl.ts";
+import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
@@ -3453,6 +3454,33 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
  */
 const unpinned = sweepPinnedWindows(pinnedSockets());
 if (unpinned) console.log(`🪟 tmux: ${unpinned} window(s) released — a previous run was killed before it could put window-size back`);
+
+/*
+ * Keep a copy of the user's last good resurrect save, and put `last` back if a
+ * dying server's save has landed on top of it.
+ *
+ * Measured on a real machine, and it cost a working session: a save fired while
+ * tmux was being killed, wrote a file with one pane in it, and `last` moved to
+ * that — leaving a nine-pane save from ten minutes earlier on disk and
+ * unreachable by anything that restores. resurrect has no notion of "poorer",
+ * and racing continuum's timer would be two savers on one server, which is its
+ * own way to lose sessions. So: copy, and repair the pointer THEIR restore
+ * reads. See tmuxsnapshot.ts for what it will and will not touch.
+ *
+ * At boot and then every few minutes. A tick that finds the same save does
+ * nothing at all, which is nearly every tick.
+ */
+const SNAPSHOT_TICK_MS = 4 * 60 * 1000;
+function guardResurrect(): void {
+  const put = repairLast();
+  if (put) {
+    console.log(`💾 tmux: restored resurrect's "last" to ${put.restored} — a save from a dying server had replaced it (the poor one is kept as last.clobbered)`);
+  }
+  const took = snapshot();
+  if (took) console.log(`💾 tmux: kept a copy of ${took.split("/").pop()}`);
+}
+guardResurrect();
+setInterval(guardResurrect, SNAPSHOT_TICK_MS).unref?.();
 
 // Parent-death watchdog: a server must never outlive whoever launched it.
 //

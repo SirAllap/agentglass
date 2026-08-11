@@ -48,6 +48,18 @@ function load(): Store {
     cache = { recipes: [] };
   }
   cache!.recipes = Array.isArray(cache!.recipes) ? cache!.recipes : [];
+  /*
+   * A file that did not go through saveRecipe has not met its guards.
+   *
+   * A boot recipe is command execution at start — the one thing the save path
+   * polices hardest, and the one thing a hand-written file can carry without
+   * ever being asked. So the read path runs the same check and forgets the
+   * boot flag on anything that would have been refused, rather than fire it
+   * on faith. The recipe still shows in the list, only a hand-edited
+   * `rm -rf` with `"boot": true` no longer runs.
+   */
+  cache!.recipes = cache!.recipes.map((r) =>
+    r && r.boot && invalid(r) ? { ...r, boot: false } : r);
   return cache!;
 }
 
@@ -156,6 +168,20 @@ export function invalid(r: Partial<Recipe>): string | null {
   if (r.scope === "repo" && !r.repo) return "A recipe scoped to a repository needs one";
   for (const p of r.params ?? []) {
     if (!/^[A-Za-z0-9_-]+$/.test(p.key || "")) return `"${p.key}" is not a usable parameter name`;
+  }
+  /*
+   * A command that runs at start runs with nobody watching it start. That is
+   * fine for a `docker compose up -d`, and it is not fine for anything the
+   * file would otherwise make somebody confirm first: there is no Run dialog
+   * at boot to hold a value, to say "always ask first", or to stand between a
+   * line and `rm -rf`. Each of these is refused here, once, so a boot recipe
+   * that got in can actually run — and the app never meets one it has to
+   * silently skip.
+   */
+  if (r.boot) {
+    if ((r.params ?? []).length) return "A command that runs at start cannot have parameters — nothing is there to fill them in";
+    if (r.confirm) return "A command that runs at start cannot ask first — it fires with nobody to ask";
+    if (looksDestructive(r.steps)) return "A command that runs at start cannot read as destructive — it fires with nobody to confirm it";
   }
   return null;
 }
