@@ -33,7 +33,7 @@ afterAll(async () => {
   try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* never made */ }
 });
 
-test("captureLayout writes a layout and scrollback for a live session", async () => {
+test("captureLayout writes the tree of a live session", async () => {
   const mk = await pane.tmux(["new-session", "-d", "-s", SESSION, "-c", "/tmp"]);
   expect(mk.ok).toBe(true);
   // A second pane so the tree has a split to capture.
@@ -49,8 +49,11 @@ test("captureLayout writes a layout and scrollback for a live session", async ()
   const s = state!.sessions.find((x) => x.name === SESSION)!;
   expect(s.windows.length).toBeGreaterThan(0);
   expect(s.windows[0].panes.length).toBeGreaterThanOrEqual(2);
-  // Scrollback file for at least the first pane.
-  expect(existsSync(join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore", SESSION, `${s.windows[0].panes[0].id}.txt`))).toBe(true);
+  /* No scrollback file, and on purpose: the replay was removed. The only way
+     tmux offers to put text into a pane is as INPUT, so a restored pane's live
+     shell ran the old screen — "Unknown command: Enter". The desk is what is
+     worth rebuilding; the text that scrolled past is not. */
+  expect(existsSync(join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore", SESSION, `${s.windows[0].panes[0].id}.txt`))).toBe(false);
 });
 
 test("restoreLayout rebuilds a session that no longer exists and skips a live one", async () => {

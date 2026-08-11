@@ -27,11 +27,6 @@ import { tmux, listPanes, validSessionName } from "./tmuxpane.ts";
 import { windowTree, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
 import { tmuxResume } from "./config.ts";
 
-/** How much scrollback is kept per pane. The panel's own terminals keep 20k;
- *  disk and capture cost say 2k here, which is a working window back from a
- *  reboot, not an archive. */
-const SCROLLBACK_LINES = 2000;
-
 /** A pane as captured. `startCommand` is the exact argv the pane was born
  *  with — replaying it in "all" mode is what resumes agent sessions. */
 export interface CapturedPane extends TmuxPaneRow {
@@ -58,10 +53,6 @@ function restoreDir(): string {
 function layoutPath(): string {
   return join(restoreDir(), "layout.json");
 }
-function scrollbackPath(name: string, paneId: string): string {
-  return join(restoreDir(), name, `${paneId}.txt`);
-}
-
 /** The pane's born-with command. `#{pane_start_command}` is empty for a plain
  *  shell (tmux only records explicit commands), which is the right thing: a
  *  shell restores as a shell in the same directory. */
@@ -85,13 +76,6 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
       for (const p of w.panes) {
         const startCommand = await startCommandOf(name, w.id, p.id);
         panes.push({ ...p, startCommand });
-        // Scrollback: read now, write now, so a pane that dies between the
-        // sweep's list and its capture still leaves the layout honest.
-        const cap = await tmux(["capture-pane", "-p", "-S", `-${SCROLLBACK_LINES}`, "-t", `=${name}:${w.id}.${p.id}`]);
-        if (cap.ok && cap.stdout) {
-          mkdirSync(join(restoreDir(), name), { recursive: true });
-          writeFileSync(scrollbackPath(name, p.id), cap.stdout);
-        }
       }
       out.push({ ...w, panes });
     }
@@ -118,25 +102,20 @@ export function lastCaptureAt(): number | null {
   return readRestoreState()?.capturedAt ?? null;
 }
 
-/**
- * Put a pane's scrollback back, into the pane that exists NOW.
+/*
+ * There is no scrollback replay, and that is deliberate.
  *
- * `target` is a live target in the new server; the file is keyed by the pane id
- * from the CAPTURE. Those two are different things, and conflating them is what
- * made this a no-op: the replay addressed `=session:@3.%7` — ids from a server
- * that had died — so `paste-buffer` failed and nothing said so.
+ * It existed and it was harmful. The only way tmux offers to put text into a
+ * pane is to send it as INPUT, and a restored pane holds a live shell: the old
+ * screen was pasted into the prompt and fish ran it, line by line, answering
+ * "Unknown command: Enter" to the tail of a previous session. Seen on the first
+ * real restore, in a screenshot.
+ *
+ * What a person gets back is the desk — sessions, windows, their names, their
+ * splits and each pane's directory — which is the part that is expensive to
+ * rebuild by hand. The text that scrolled past is not, and a terminal that
+ * types last week into your shell is worse than an empty one.
  */
-function replayScrollback(name: string, capturedPaneId: string, target: string): void {
-  const file = scrollbackPath(name, capturedPaneId);
-  if (!existsSync(file)) return;
-  const text = readFileSync(file, "utf8");
-  if (!text) return;
-  const buf = `agx-restore-${capturedPaneId}`;
-  void (async () => {
-    const load = await tmux(["load-buffer", "-b", buf, "-"], text);
-    if (load.ok) await tmux(["paste-buffer", "-b", buf, "-t", target, "-d", "-p"]);
-  })();
-}
 
 /** What a restored pane runs: the captured start command in "all" mode, and
  *  nothing — a login shell in the pane's directory — in "lazy". */
@@ -156,7 +135,6 @@ async function restorePanes(name: string, windowId: string, panes: CapturedPane[
     const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", `=${name}:${windowId}`,
       "-c", p.path || ".", ...runArgs(mode, p)]);
     const pid = printed(r);
-    if (pid) replayScrollback(name, p.id, `=${name}:${windowId}.${pid}`);
   }
 }
 
@@ -196,7 +174,6 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
     if (!firstWin) continue;
     restored++;
     const firstPane = printed(await tmux(["display-message", "-p", "-t", `=${s.name}:${firstWin}`, "#{pane_id}"]));
-    if (firstPane && first.panes[0]) replayScrollback(s.name, first.panes[0].id, `=${s.name}:${firstWin}.${firstPane}`);
     await restorePanes(s.name, firstWin, first.panes.slice(1), mode);
 
     for (const w of s.windows.slice(1)) {
@@ -205,7 +182,6 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
       const wid = printed(nw);
       if (!wid) continue;
       const pid = printed(await tmux(["display-message", "-p", "-t", `=${s.name}:${wid}`, "#{pane_id}"]));
-      if (pid && w.panes[0]) replayScrollback(s.name, w.panes[0].id, `=${s.name}:${wid}.${pid}`);
       await restorePanes(s.name, wid, w.panes.slice(1), mode);
     }
   }
