@@ -40,6 +40,7 @@ import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
+import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
@@ -4939,7 +4940,10 @@ type PickOption = { value: string; label: string; sub?: string; color?: string; 
 function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose, side }: {
   anchor: DOMRect; title: string; hint: string; multi: boolean; loading: boolean;
   options: PickOption[]; selected: string[];
-  onCommit: (next: string[]) => void; onClose: () => void;
+  /** Writes the difference, and says whether it landed. `true` when there was
+   *  nothing to write — this is "is it safe to go on", not "did it write". */
+  onCommit: (next: string[]) => boolean | Promise<boolean>;
+  onClose: () => void;
   /**
    * The other half of the same errand, under the people.
    *
@@ -4964,33 +4968,47 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
      undone from here. */
   const [asking, setAsking] = useState(false);
   const [running, setRunning] = useState(false);
+  /** What went wrong, kept on the menu: it is still open over the toast. */
+  const [failed, setFailed] = useState("");
   useEffect(() => { if (!plan.lines.length) setAsking(false); }, [plan.lines.length]);
   const [sel, setSel] = useState<string[]>(selected);
   const [q, setQ] = useState("");
   const selRef = useRef(sel); selRef.current = sel;
   const box = useRef<HTMLDivElement>(null);
 
-  const commitClose = useCallback(() => { onCommit(selRef.current); onClose(); }, [onCommit, onClose]);
-
   useEffect(() => {
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) commitClose(); };
-    // Escape abandons without writing; an outside click or a resize commits, so
-    // the change you made by ticking is not silently lost by looking away.
+    /*
+     * Looking away does not write.
+     *
+     * An outside click used to commit, the way GitHub's own label menu does —
+     * and with a Done button on the menu that is a second, invisible way to
+     * write: he ticked a reviewer, never pressed Done, and the request went out
+     * anyway. One writer, and it is the button. Escape and clicking away both
+     * abandon, which is what a button at the bottom promises.
+     */
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) onClose(); };
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
     document.addEventListener("mousedown", away);
     document.addEventListener("keydown", key, true);
-    window.addEventListener("resize", commitClose);
+    // The menu is placed against a rectangle measured when it opened, so a
+    // resize leaves it somewhere else entirely. Closing is honest; writing on
+    // the way out is not.
+    window.addEventListener("resize", onClose);
     return () => {
       document.removeEventListener("mousedown", away);
       document.removeEventListener("keydown", key, true);
-      window.removeEventListener("resize", commitClose);
+      window.removeEventListener("resize", onClose);
     };
-  }, [commitClose, onClose]);
+  }, [onClose]);
 
   const toggle = (v: string) => {
-    if (!multi) { onCommit([v]); onClose(); return; }
+    if (!multi) { void onCommit([v]); onClose(); return; }
     setSel((s) => s.includes(v) ? s.filter((x) => x !== v) : [...s, v]);
   };
+
+  /* What the GitHub half would do — nothing, most of the time. The summary said
+     "Set reviewers on GitHub" whether or not a single tick had moved. */
+  const ghChanged = sel.filter((x) => !selected.includes(x)).length + selected.filter((x) => !sel.includes(x)).length;
 
   const t = q.trim().toLowerCase();
   const shown = t ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t)) : options;
@@ -5055,12 +5073,16 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
                  than two buttons pressed hopefully. */
               <div className="px-1 text-[10.5px]" style={{ color: "var(--text2)" }}>
                 <div className="mb-1" style={{ color: "var(--text4)" }}>This will:</div>
-                <div>· Set reviewers on GitHub</div>
+                {ghChanged > 0 && <div>· {title} on GitHub</div>}
+                {/* Nothing that is not a change: with an empty plan there is
+                    nothing to confirm and this step does not happen at all. */}
                 {plan.lines.map((l) => <div key={l}>· {l}</div>)}
-                {!plan.lines.length && (
-                  <div style={{ color: "var(--text4)" }}>Nothing changes in ClickUp, so nothing is sent there.</div>
-                )}
               </div>
+            )}
+            {failed && (
+              /* Said here rather than only in the toast: the menu is still open
+                 over it, and the toast is behind the menu. */
+              <div className="px-1 text-[10.5px]" style={{ color: "var(--warning)" }}>{failed}</div>
             )}
             <div className="flex items-center gap-2">
               {asking && (
@@ -5070,23 +5092,38 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
               <button
                 onClick={async () => {
                   /* Nothing to confirm when this is only the GitHub half. */
-                  if (!plan.lines.length) { commitClose(); return; }
+                  if (!plan.lines.length) { void onCommit(selRef.current); onClose(); return; }
                   if (!asking) { setAsking(true); return; }
                   setRunning(true);
-                  /* GitHub first, and ClickUp only if it landed: a card that
+                  setFailed("");
+                  /* GitHub first, and ClickUp only if it landed — and now it is
+                     awaited, which is what makes that sentence true. A card that
                      says "code review, assigned to you" over a pull request
                      nobody was asked to review is a worse state than an
                      unfinished one. */
-                  onCommit(selRef.current);
-                  await plan.run();
+                  const wrote = await onCommit(selRef.current);
+                  if (wrote === false) {
+                    setRunning(false);
+                    setFailed("GitHub refused that, so the card was left alone.");
+                    return;
+                  }
+                  const moved = await plan.run();
                   setRunning(false);
+                  if (!moved) { setFailed("The card did not move — GitHub is done."); return; }
                   onClose();
                 }}
                 disabled={running}
                 className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px] inline-flex items-center gap-1.5 disabled:opacity-50"
                 style={{ background: "var(--primary)", color: "var(--bg)" }}>
                 {running && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />}
-                {asking ? "Yes, do both" : plan.lines.length ? "Done · and ClickUp" : "Done"}
+                {/* The button names what it is about to do. "Done · and
+                    ClickUp" over a menu where only the card changed claimed a
+                    GitHub write that was not going to happen. */}
+                {asking
+                  ? (ghChanged ? "Yes, do both" : "Yes, move the card")
+                  : plan.lines.length
+                    ? (ghChanged ? "Done · and ClickUp" : "Move the card")
+                    : "Done"}
               </button>
             </div>
           </div>
@@ -5109,11 +5146,14 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
  * strict reader — a reference in a branch name alone is a convention other
  * trackers share — and the same one the merge dialog trusts before it writes.
  */
-function ClickUpSide({ d, folded, onFold, onPlan }: {
+function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   d: PrDetail;
   /** Folded by default: most presses of this menu are only about the reviewer. */
   folded: boolean;
   onFold: (v: boolean) => void;
+  /** How this half says what happened. It used to say nothing at all — which is
+   *  why a card that refused two of its three writes looked like a success. */
+  note: (ok: boolean, msg: string) => void;
   /**
    * What this half would do, and how to do it — handed up so the menu can put
    * ONE button at the bottom for both halves of the errand.
@@ -5126,7 +5166,20 @@ function ClickUpSide({ d, folded, onFold, onPlan }: {
   onPlan: (plan: { lines: string[]; run: () => Promise<boolean> }) => void;
 }) {
   const setup = useClickupSetup();
-  const ref = useMemo(() => mergeCardRef(d, setup), [d, setup]);
+  /*
+   * On the branch and the title, not on the object they arrived in.
+   *
+   * `d` is a new object on every poll of the pull request, carrying the same
+   * card — and this was memoized on `d`, so a new `ref` appeared every few
+   * seconds, the effect below started over, and whoever you had just ticked was
+   * replaced by whoever the card had on it. Reported after measuring it: "a los
+   * segundos lo seleccionado se ha reiniciado al estado inicial".
+   */
+  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  /* The card, as a string. Everything below keys off this rather than off `ref`
+     — an object rebuilt each render is a dependency that is never equal. */
+  const query = ref?.query ?? "";
+  const label = ref?.label ?? "";
   const [card, setCard] = useState<{ id: string; title: string; status: string; updated?: number; listId?: string } | null>(null);
   const [statuses, setStatuses] = useState<CuStatus[]>([]);
   const [members, setMembers] = useState<CuMember[] | null>(null);
@@ -5144,10 +5197,11 @@ function ClickUpSide({ d, folded, onFold, onPlan }: {
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    if (!ref) return;
+    if (!query) return;
     let live = true;
+    setErr("");
     void (async () => {
-      const found = await api.clickupFind(ref.query).catch(() => null);
+      const found = await api.clickupFind(query).catch(() => null);
       if (!live) return;
       if (!found?.ok || !found.task) { setErr(found?.error || "ClickUp could not find it"); return; }
       const t = found.task;
@@ -5171,8 +5225,67 @@ function ClickUpSide({ d, folded, onFold, onPlan }: {
       setPick(review && review.status !== t.status ? review.status : "");
     })();
     return () => { live = false; };
-  }, [ref]);
+  }, [query]);
 
+  const nameOf = useCallback(
+    (id: number) => (members ?? []).find((m) => m.id === id)?.name || `#${id}`,
+    [members],
+  );
+
+  /*
+   * Only what actually changes, worked out in one place.
+   *
+   * A card already in Code Review being "moved" to Code Review is not a change,
+   * and leaving yourself on it is not an assignment. With none of them this half
+   * is silent and the press is a GitHub assignment, which is exactly what it is.
+   */
+  const plan = useMemo(
+    () => cardPlan({ label, pick, statusNow: card?.status, on, was, nameOf }),
+    [label, pick, card?.status, on, was, nameOf],
+  );
+
+  const run = useCallback(async () => {
+    if (folded || !card || !plan.lines.length) return true;
+    /*
+     * One write, not three.
+     *
+     * It used to be a loop of assignments and then the status, each carrying
+     * `card.updated` — the stamp read when the menu opened. The first write
+     * moves that stamp, so ClickUp refused the rest as "somebody changed this
+     * card while you had it open", and nothing checked the answer: he was told
+     * the card would move to Code Review, gain Ana and lose him, and what
+     * happened was only the first of the three.
+     */
+    const r = await api.clickupCard(
+      card.id,
+      { add: plan.add, rem: plan.drop, status: plan.status || undefined },
+      card.updated,
+    ).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    note(r.ok, r.ok ? cardPlanNote(plan, label) : (r.error || `${label} did not move`));
+    if (r.ok) {
+      setWas(new Set(on));
+      setPick("");
+      const moved = plan.status;
+      setCard((c) => c ? { ...c, status: moved || c.status, updated: r.task?.updated ?? c.updated } : c);
+    }
+    return r.ok;
+  }, [folded, card, plan, on, label, note]);
+
+  /* Folded means "not this time": the plan it publishes is empty, so the button
+     downstairs goes back to plain Done. It was still announcing its changes
+     while put away, which left "Done · and ClickUp" on a menu with nothing
+     showing. */
+  useEffect(() => { onPlan({ lines: folded ? [] : plan.lines, run }); }, [folded, plan, run, onPlan]);
+
+  /*
+   * Every hook above this line, and that is not a style rule.
+   *
+   * `ref` is null until `useClickupSetup` answers — a read cached for a minute,
+   * so on a menu opened a while later the first render has no card and the
+   * second one does. With the plan and the write below this return, those two
+   * renders ran a different number of hooks, React threw, and the window went
+   * black. That is the blank app in his screenshot.
+   */
   if (!ref) return null;
 
   const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
@@ -5182,54 +5295,6 @@ function ClickUpSide({ d, folded, onFold, onPlan }: {
       if (a.me !== b.me) return a.me ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
-  const add = [...on].filter((id) => !was.has(id));
-  const drop = [...was].filter((id) => !on.has(id));
-  const changes = add.length + drop.length + (pick ? 1 : 0);
-  /*
-   * Only what actually changes.
-   *
-   * `pick` is empty unless a DIFFERENT status was chosen — a card already in
-   * Code Review being "moved" to Code Review is not a change, and sending it
-   * writes a no-op to somebody's board and dates the card for nothing. Same for
-   * the people: leaving yourself on it is not an assignment. With none of them,
-   * this half is silent and the press is a GitHub assignment, which is exactly
-   * what it is.
-   */
-  const nameOf = (id: number) => (members ?? []).find((m) => m.id === id)?.name || `#${id}`;
-  const lines = useMemo(() => {
-    if (!card) return [];
-    const out: string[] = [];
-    if (pick) out.push(`Move ${ref.label} to ${pick}`);
-    if (add.length) out.push(`Put ${add.map(nameOf).join(", ")} on the card`);
-    if (drop.length) out.push(`Take ${drop.map(nameOf).join(", ")} off the card`);
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [card, pick, add.join(","), drop.join(","), members]);
-
-  /* Folded means "not this time": the plan it publishes is empty, so the
-     button downstairs goes back to plain Done. It was still announcing its
-     changes while put away, which left "Done · and ClickUp" on a menu with
-     nothing showing. */
-  useEffect(() => { onPlan({ lines: folded ? [] : lines, run }); },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [lines.join("|"), folded]);
-
-  const run = async () => {
-    if (folded || !card || !changes) return true;
-    try {
-      /* One at a time, and the status last: a card that moves to Code Review
-         and then fails to gain its reviewer is a lie on a board; the other way
-         round is merely unfinished. */
-      for (const id of add) await api.clickupAssign(card.id, true, card.updated, id);
-      for (const id of drop) await api.clickupAssign(card.id, false, card.updated, id);
-      if (pick) await api.clickupStatus(card.id, pick, card.updated);
-      setWas(new Set(on));
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
   if (folded) {
     return (
       <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
@@ -5380,7 +5445,11 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
   const commit = (was: string[], label: string, fn: (add: string[], remove: string[]) => Promise<{ ok: boolean; error?: string; detail?: string }>) => (next: string[]) => {
     const add = next.filter((x) => !was.includes(x));
     const remove = was.filter((x) => !next.includes(x));
-    if (add.length || remove.length) void act(label, () => fn(add, remove));
+    // Nothing to write is not a failure — and the answer is awaited now, so
+    // "GitHub first, and the card only if it landed" is true rather than
+    // aspirational.
+    if (!add.length && !remove.length) return true;
+    return act(label, () => fn(add, remove));
   };
 
   let node: React.ReactNode = null;
@@ -5395,13 +5464,13 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       const was = d.reviewers.map((r) => r.login);
       node = <FieldPicker anchor={a} title="Request reviewers" hint="Collaborators on this repository" multi loading={loading}
         options={(mentions?.users ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
-        side={(h) => <ClickUpSide d={d} {...h} />}
+        side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
         options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
-        side={(h) => <ClickUpSide d={d} {...h} />}
+        side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Assignees", (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
     } else {
       // Milestone is one-of, not many: picking commits at once, and a leading
@@ -5411,7 +5480,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       node = <FieldPicker anchor={a} title="Set milestone" hint="Choose one, or clear it" multi={false} loading={loading}
         options={[{ value: "", label: "No milestone" }, ...(facets?.milestones ?? []).map((m) => ({ value: m, label: m }))]}
         selected={was} onClose={close}
-        onCommit={(next) => { const title = next[0] ?? ""; if (title !== (d.milestone ?? "")) void act("Milestone", () => api.prMilestone(root, d.number, title)); }} />;
+        onCommit={(next) => { const title = next[0] ?? ""; return title === (d.milestone ?? "") ? true : act("Milestone", () => api.prMilestone(root, d.number, title)); }} />;
     }
   }
 

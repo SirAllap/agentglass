@@ -631,7 +631,7 @@ describe("assigning on GitHub, and the card on the other board", () => {
      * second is the one people forget. Optional: assigning on GitHub must never
      * be conditional on ClickUp being reachable, right, or wanted.
      */
-    expect(src).toContain("side={(h) => <ClickUpSide d={d} {...h} />}");
+    expect(src).toContain("side={(h) => <ClickUpSide d={d} note={note} {...h} />}");
     expect(src).toContain("Also in ClickUp");
     expect(src).toContain("· optional");
   });
@@ -639,8 +639,9 @@ describe("assigning on GitHub, and the card on the other board", () => {
   it("only when the pull request really carries a card", () => {
     // `mergeCardRef` is the strict reader — a reference in a branch name alone
     // is a convention other trackers share — and the same one the merge dialog
-    // trusts before it writes.
-    expect(src).toContain("const ref = useMemo(() => mergeCardRef(d, setup), [d, setup]);");
+    // trusts before it writes. Read off the fields rather than off `d`: see
+    // pr-card-picker.test.ts, where a new `d` every poll wiped the selection.
+    expect(src).toContain("const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);");
     expect(src).toContain("if (!ref) return null;");
   });
 
@@ -648,22 +649,25 @@ describe("assigning on GitHub, and the card on the other board", () => {
     /* One button for both halves, and a summary before either happens: the two
        writes land on two different companies' servers and only one of them can
        be undone from here. */
-    expect(src).toContain('{asking ? "Yes, do both"');
+    expect(src).toContain('? (ghChanged ? "Yes, do both" : "Yes, move the card")');
     expect(src).toContain('if (!asking) { setAsking(true); return; }');
   });
 
   it("sends nothing to ClickUp when nothing there would change", () => {
     /* A card already in Code Review being "moved" to Code Review is not a
-       change, and leaving yourself on it is not an assignment. */
-    expect(src).toContain("Nothing changes in ClickUp, so nothing is sent there.");
-    expect(src).toContain("if (!plan.lines.length) { commitClose(); return; }");
-    expect(src).toContain("if (folded || !card || !changes) return true;");
+       change, and leaving yourself on it is not an assignment. An empty plan
+       skips the confirmation entirely and the press is a GitHub assignment. */
+    expect(src).toContain("if (!plan.lines.length) { void onCommit(selRef.current); onClose(); return; }");
+    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
   });
 
   it("does GitHub first and ClickUp only after it", () => {
     // A card saying "code review, assigned to you" over a pull request nobody
-    // was asked to review is a worse state than an unfinished one.
-    expect(src).toContain("onCommit(selRef.current);\n                  await plan.run();");
+    // was asked to review is a worse state than an unfinished one — and the
+    // GitHub half is now awaited, which is what makes that true rather than
+    // hoped for.
+    expect(src).toContain("const wrote = await onCommit(selRef.current);");
+    expect(src).toContain("const moved = await plan.run();");
   });
 
   it("finds Code Review by asking the list, not by knowing the word", () => {
@@ -673,8 +677,16 @@ describe("assigning on GitHub, and the card on the other board", () => {
     expect(src).toContain('setPick(review && review.status !== t.status ? review.status : "");');
   });
 
-  it("moves the status last, so a card never claims a reviewer it has not got", () => {
-    expect(src).toContain("if (pick) await api.clickupStatus(card.id, pick, card.updated);");
+  it("moves the people and the status together, or not at all", () => {
+    /*
+     * It used to be three writes in a row — each person, then the status —
+     * ordered so that a failure left the card unfinished rather than lying.
+     * They all carried the same `updated`, the first one moved it, and ClickUp
+     * refused the rest: the card gained an assignee, lost nobody and never
+     * moved. One PUT has one precondition and no order to get wrong.
+     */
+    expect(src).toContain("{ add: plan.add, rem: plan.drop, status: plan.status || undefined }");
+    expect(src).not.toContain("await api.clickupStatus(card.id");
   });
 });
 
@@ -724,8 +736,8 @@ describe("folding it away", () => {
     /* It was still announcing its changes while put away, which left "Done ·
        and ClickUp" on a menu with nothing showing. Folded means "not this
        time". */
-    expect(src).toContain("onPlan({ lines: folded ? [] : lines, run })");
-    expect(src).toContain("if (folded || !card || !changes) return true;");
+    expect(src).toContain("onPlan({ lines: folded ? [] : plan.lines, run })");
+    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
   });
 
   it("drops a summary that no longer has anything to summarise", () => {

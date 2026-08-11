@@ -76,7 +76,7 @@ import {
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setAssignee, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -2208,6 +2208,15 @@ const server = Bun.serve<WsData>({
           ? (b.user != null
             ? await setAssignee(id, Number(b.user), b.on !== false, seen)
             : await assignSelf(id, b.on !== false, seen))
+        // Several changes to one card, as one write. Three writes each carrying
+        // the stamp read when the menu opened meant only the first could land:
+        // the first one moves the stamp the other two are checked against.
+        : pathname === "/clickup/card"
+          ? await setCard(id, {
+            add: Array.isArray(b.add) ? (b.add as unknown[]).map(Number) : undefined,
+            rem: Array.isArray(b.rem) ? (b.rem as unknown[]).map(Number) : undefined,
+            status: b.status != null ? String(b.status) : undefined,
+          }, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
         : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })

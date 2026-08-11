@@ -747,6 +747,15 @@ const realApi = {
     post<ClickUpWrite>("/clickup/assign", { id, on, updated, ...(user != null ? { user } : null) }),
   clickupStatus: (id: string, status: string, updated?: number) =>
     post<ClickUpWrite>("/clickup/status", { id, status, updated }),
+  /**
+   * Several changes to one card, as one write.
+   *
+   * Not three calls in a row: `updated` is the precondition, the first write
+   * moves it, and the second and third were refused as "somebody changed this
+   * card while you had it open" — by us.
+   */
+  clickupCard: (id: string, changes: { add?: number[]; rem?: number[]; status?: string }, updated?: number) =>
+    post<ClickUpWrite>("/clickup/card", { id, updated, ...changes }),
   clickupField: (id: string, field: string, value: string) =>
     post<ClickUpWrite>("/clickup/field", { id, field, value }),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
@@ -1337,6 +1346,7 @@ const demoApi: typeof realApi = {
   clickupAssign: (_i: string, _o: boolean, _u?: number, _w?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupMembers: (_l: string) => D({ ok: false, error: "not available in the demo" }),
   clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupCard: (_i: string, _c: { add?: number[]; rem?: number[]; status?: string }, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupField: (_i: string, _f: string, _v: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),

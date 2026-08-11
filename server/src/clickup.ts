@@ -1423,6 +1423,51 @@ export async function setAssignee(taskId: string, userId: number, on: boolean, e
   return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error, unauthorised: r.unauthorised };
 }
 
+/**
+ * Everything one visit to a card changed, in one write.
+ *
+ * The reviewer picker used to send three: add each person, remove each person,
+ * then the status — and every one of them carried the same `expectUpdated`, the
+ * stamp read when the menu opened. The FIRST write moves that stamp, so
+ * ClickUp's honest answer to the second and third was "somebody changed this
+ * card while you had it open", and nothing on the screen said so.
+ *
+ * Measured on a real card: the person went on, the person who asked never came
+ * off, the status never moved, and the app reported success.
+ *
+ * A card is one resource, so this is one PUT. `assignees.add`, `assignees.rem`
+ * and `status` travel together: one precondition to satisfy, and no window in
+ * which the card is half-moved. Add and remove rather than replace, because a
+ * card holds several assignees and replacing would take off whoever else was
+ * on it.
+ */
+export async function setCard(
+  taskId: string,
+  changes: { add?: number[]; rem?: number[]; status?: string },
+  expectUpdated?: number,
+): Promise<WriteOutcome> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
+  const add = (changes.add ?? []).filter((n) => Number.isFinite(n));
+  const rem = (changes.rem ?? []).filter((n) => Number.isFinite(n));
+  const status = (changes.status ?? "").trim();
+  // A no-op is a mistake upstream, not a write: sending one dates somebody
+  // else's card for nothing.
+  if (!add.length && !rem.length && !status) return { ok: false, error: "nothing to change" };
+  const stale = await guardUnchanged(token, taskId, expectUpdated);
+  if (stale) return { ok: false, conflict: true, error: stale };
+  const body: Record<string, unknown> = {};
+  if (add.length || rem.length) {
+    body.assignees = { ...(add.length ? { add } : null), ...(rem.length ? { rem } : null) };
+  }
+  if (status) body.status = status;
+  const r = await put(`/task/${encodeURIComponent(taskId)}`, token, body);
+  __reset();
+  const me = redacted("clickup")?.accountId;
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error, unauthorised: r.unauthorised };
+}
+
 export async function setStatus(taskId: string, status: string, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
