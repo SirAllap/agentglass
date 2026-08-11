@@ -2215,6 +2215,13 @@ function RequirementsPane({ open }: { open: boolean }) {
   // reading a key that had quietly stopped being written.
   const shellRoot = lastTerminalRoot();
 
+  /* These two belong to this pane and had come adrift: they were sitting at the
+     top level of the module, between the pane above and SettingsModal. A hook
+     at module scope runs when the file is IMPORTED, where React has no
+     dispatcher — so `useState` read `null.useState`, the renderer threw before
+     it drew anything, and the window stayed on "loading the interface…". */
+  const [deps, setDeps] = useState<DepReport[] | null>(null);
+  const [platform, setPlatform] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -2517,9 +2524,6 @@ function TmuxPane({ open }: { open: boolean }) {
     </Section>
   );
 }
-
-  const [deps, setDeps] = useState<DepReport[] | null>(null);
-  const [platform, setPlatform] = useState<string>("");
 
 export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp, theme, onTheme, jumpTo }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
