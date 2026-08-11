@@ -180,6 +180,30 @@ export function tmuxCapability(): { available: boolean; reason: string } {
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
 export const validPaneName = (n: string): boolean => NAME_RE.test(n);
 
+/**
+ * A session name this app is willing to ADDRESS — as opposed to one it made.
+ *
+ * `validPaneName` guards the names we generate for chat panes: UUID-shaped,
+ * eight characters minimum. Using it to gate the layout and the restore made
+ * both inert for every session a person had named — `orbit`, `scratch`, `7` —
+ * silently: the first real capture on a machine using the engine for its
+ * terminal held one session, the chat's, and had dropped the four that mattered.
+ *
+ * What needs guarding here is different and smaller. The name is passed to tmux
+ * as its own argv entry, never through a shell, and it becomes a DIRECTORY under
+ * the restore dir where the scrollback is written. So: nothing that can climb
+ * out of that directory, nothing an option parser would read as a flag, no
+ * control characters, and a length a filesystem takes. tmux itself already
+ * refuses `.` and `:` in a session name.
+ */
+export function validSessionName(n: string): boolean {
+  if (!n || n.length > 64) return false;
+  if (n.startsWith("-")) return false;
+  if (n.includes("/") || n.includes("\\") || n === "." || n === "..") return false;
+  // eslint-disable-next-line no-control-regex
+  return !/[\u0000-\u001f\u007f]/.test(n);
+}
+
 /** How a session is addressed as a *session*: `=` is tmux's exact-match prefix,
  *  so a name can never prefix-match its way onto a different session. */
 const sessionTarget = (name: string): string => `=${name}`;

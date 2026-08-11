@@ -11,7 +11,7 @@
 // panes, names via validPaneName) before they reach a command — these ids come
 // from browser requests, and tmux treats `:` and `.` as separators it would
 // happily resolve onto a target we did not mean.
-import { tmux, validPaneName, type TmuxResult } from "./tmuxpane.ts";
+import { tmux, validSessionName, type TmuxResult } from "./tmuxpane.ts";
 import type { TmuxWindow } from "../../shared/types.ts";
 
 /** A pane row, as the UI needs it. */
@@ -36,7 +36,7 @@ const PANE_RE = /^%\d+$/;
 
 /** One window row for a session, or null when the session is gone. */
 export async function listWindows(name: string): Promise<TmuxWindow[]> {
-  if (!validPaneName(name)) return [];
+  if (!validSessionName(name)) return [];
   const r = await tmux([
     "list-windows", "-t", `=${name}`,
     "-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_flags}",
@@ -50,7 +50,7 @@ export async function listWindows(name: string): Promise<TmuxWindow[]> {
 
 /** The panes inside one window, or null when the window is gone. */
 export async function windowPanes(name: string, windowId: string): Promise<TmuxPaneRow[] | null> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId)) return null;
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return null;
   const r = await tmux([
     "list-panes", "-t", `=${name}:${windowId}`,
     "-F", "#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}",
@@ -85,7 +85,7 @@ function paneCommand(argv: string[]): string {
 
 /** A new window (tab) in the session, running `argv` in `cwd` when given. */
 export async function newWindow(name: string, cwd: string, argv: string[] = [], title?: string): Promise<TmuxResult> {
-  if (!validPaneName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
+  if (!validSessionName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
   const args = ["new-window", "-d", "-t", `=${name}`, "-c", cwd];
   if (title && /^[\w ._/-]{1,40}$/.test(title)) args.push("-n", title);
   if (argv.length) args.push(...["sh", "-c", paneCommand(argv)]);
@@ -97,7 +97,7 @@ export async function newWindow(name: string, cwd: string, argv: string[] = [], 
 export async function splitPane(
   name: string, windowId: string, direction: "horizontal" | "vertical", cwd: string, argv: string[] = [],
 ): Promise<TmuxResult> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
   const args = ["split-window", "-d", direction === "horizontal" ? "-h" : "-v", "-t", `=${name}:${windowId}`, "-c", cwd];
   if (argv.length) args.push(...["sh", "-c", paneCommand(argv)]);
   return tmux(args);
@@ -105,39 +105,39 @@ export async function splitPane(
 
 /** Kill one window (tab) and everything in it. */
 export async function killWindow(name: string, windowId: string): Promise<TmuxResult> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
   return tmux(["kill-window", "-t", `=${name}:${windowId}`]);
 }
 
 /** Kill one pane. Pane ids are unique server-wide, so the window is only used
  *  to keep the request shape honest. */
 export async function killPane(name: string, windowId: string, paneId: string): Promise<TmuxResult> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId) || !PANE_RE.test(paneId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId) || !PANE_RE.test(paneId)) return { ok: false, stdout: "", stderr: "invalid target" };
   return tmux(["kill-pane", "-t", paneId]);
 }
 
 /** Bring a window to the front of its session. */
 export async function selectWindow(name: string, windowId: string): Promise<TmuxResult> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
   return tmux(["select-window", "-t", `=${name}:${windowId}`]);
 }
 
 /** Focus a pane within its window. */
 export async function selectPane(name: string, windowId: string, paneId: string): Promise<TmuxResult> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId) || !PANE_RE.test(paneId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId) || !PANE_RE.test(paneId)) return { ok: false, stdout: "", stderr: "invalid target" };
   return tmux(["select-pane", "-t", `=${name}:${windowId}.${paneId}`]);
 }
 
 /** Rename a tab. Newlines and tmux separators are rejected outright. */
 export async function renameWindow(name: string, windowId: string, title: string): Promise<TmuxResult> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
   if (!/^[\w ._/-]{1,40}$/.test(title)) return { ok: false, stdout: "", stderr: "title must be 1-40 characters of letters, digits, spaces, dots, underscores, dashes or slashes" };
   return tmux(["rename-window", "-t", `=${name}:${windowId}`, title]);
 }
 
 /** Resize a pane by rows/columns (both clamped to sane bounds). */
 export async function resizePane(name: string, windowId: string, paneId: string, x: number, y: number): Promise<TmuxResult> {
-  if (!validPaneName(name) || !WINDOW_RE.test(windowId) || !PANE_RE.test(paneId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  if (!validSessionName(name) || !WINDOW_RE.test(windowId) || !PANE_RE.test(paneId)) return { ok: false, stdout: "", stderr: "invalid target" };
   const cx = Math.max(2, Math.min(400, Math.round(x)));
   const cy = Math.max(2, Math.min(200, Math.round(y)));
   return tmux(["resize-pane", "-t", paneId, "-x", String(cx), "-y", String(cy)]);

@@ -23,7 +23,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
-import { tmux, validPaneName, listPanes } from "./tmuxpane.ts";
+import { tmux, listPanes, validSessionName } from "./tmuxpane.ts";
 import { windowTree, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
 import { tmuxResume } from "./config.ts";
 
@@ -77,7 +77,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
   if (!names.length) return null;
   const sessions: CapturedSession[] = [];
   for (const name of names) {
-    if (!validPaneName(name)) continue;
+    if (!validSessionName(name)) continue;
     const windows = await windowTree(name);
     const out: CapturedWindow[] = [];
     for (const w of windows) {
@@ -157,7 +157,7 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
   if (!state || !state.sessions.length) return { ok: false, restored: 0, error: "nothing captured yet — no restore state" };
   let restored = 0;
   for (const s of state.sessions) {
-    if (!validPaneName(s.name)) continue;
+    if (!validSessionName(s.name)) continue;
     const have = await tmux(["has-session", "-t", `=${s.name}`]);
     if (have.ok) continue; // already back, or a live session never died
     const first = s.windows[0];
