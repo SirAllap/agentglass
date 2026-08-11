@@ -499,7 +499,15 @@ export type PtyServerFrame =
    * no session to name when tmux has gone — so they are optional here and the
    * inactive frame is `{ active: false, windows: [], panes: [] }`.
    */
-  | { t: "tmux"; active: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; session?: string | null; prefix?: string[]; client?: { cols: number; rows: number } | null }
+  | {
+      t: "tmux"; active: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; session?: string | null;
+      prefix?: string[]; client?: { cols: number; rows: number } | null;
+      /** This shell is on agentglass's OWN tmux, not the machine's. The panel
+       *  hides "Use tmux's bar" there: that server keeps its status line off by
+       *  design — the config gate refuses any config that turns it on — so the
+       *  button would offer a bar that cannot arrive. */
+      engine?: boolean;
+    }
   /**
    * A window this socket was asked to open, and the pane it landed on.
    *

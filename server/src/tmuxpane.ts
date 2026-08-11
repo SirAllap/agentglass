@@ -67,6 +67,26 @@ export function engineAttachArgv(root: string): string[] | null {
   return [bin, "-L", tmuxSocket(), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root];
 }
 
+/**
+ * Hand the running engine its config again, without restarting anything.
+ *
+ * tmux reads its config when the SERVER starts, so a saved prefix used to wait
+ * for the engine to be restarted — and restarting it takes every pane on it
+ * with it. `source-file` re-runs the generated conf in the live server instead:
+ * `set -g`, `bind` and `unbind` are all idempotent, so the new key is in your
+ * fingers a moment after Save and the sessions are untouched.
+ *
+ * False when there is no server to tell (nothing running yet, or no tmux),
+ * which is not a failure: the config is on disk and the next start reads it.
+ * Replace mode keeps one honest limit — an option the old config set and the
+ * new one does not is not un-set by re-sourcing, and only a restart clears it.
+ */
+export async function reloadEngineConf(): Promise<boolean> {
+  if (!resolveTmuxBin()) return false;
+  const r = await tmux(["source-file", confPath()]);
+  return r.ok;
+}
+
 /** Under `bun test`, nothing this module touches may be real.
  *
  *  Same guard main adopted for settings (#321) and the database (#319), for the

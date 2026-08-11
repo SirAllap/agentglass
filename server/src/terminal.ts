@@ -247,6 +247,10 @@ let attachSeq = 0;
 
 type Session = {
   proc: ReturnType<typeof Bun.spawn>;
+  /** This shell was opened on agentglass's own tmux rather than the machine's.
+   *  Carried to the panel so it can hide the one control that makes no sense
+   *  there — see the `engine` field on the tmux frame. */
+  onEngine?: boolean;
   mode: "pty" | "pipe";
   grouped: boolean;
   sizeDir: string | null; // tmp dir holding the resize file (pty_bridge mode)
@@ -775,6 +779,7 @@ export function ptyOpen(ws: PtyWs) {
   const viewDir = editor ? viewTempDirOf(wanted!) : null;
   const session: Session = {
     proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null,
+    onEngine: !!engine,
     phoneAttach: attach
       ? { socket: attach.socket, sessionId: attach.groupedWith, windowId: attach.windowId, paneId: String(d.pane), hadWindowSize: attach.hadWindowSize, fit: d.fit === true, zoomed: attach.zoomed, phoneSession: attach.session, seq: ++attachSeq }
       : null,
@@ -1057,12 +1062,13 @@ export function ptyOpen(ws: PtyWs) {
      * including the case of somebody resizing back to matching, where it is the
      * TERMINAL that changed and no window did.
      */
-    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null]);
+    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null, session.onEngine === true]);
     if (shape === sent) return;
     sent = shape;
     ctl(ws, {
       t: "tmux", active: true, session: session.tmux?.session ?? null,
       prefix: session.tmuxPrefix ?? [], windows, panes, client: frame?.client ?? null,
+      engine: session.onEngine === true,
     });
   };
   session.tmuxSweep = sweep;

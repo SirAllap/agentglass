@@ -118,7 +118,7 @@ import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource,
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
@@ -2847,7 +2847,10 @@ const server = Bun.serve<WsData>({
       const mode = b.confMode === "replace" ? "replace" : "append";
       const override = typeof b.override === "string" ? b.override : tmuxOverride();
       const applied = applyTmuxConf(mode, override);
-      return json(applied, applied.ok ? 200 : 400);
+      // Same as the prefix: hand the live server its new config instead of
+      // making somebody restart the engine — which would take every pane on it.
+      const appliedNow = applied.ok ? await reloadEngineConf() : false;
+      return json({ ...applied, appliedNow }, applied.ok ? 200 : 400);
     }
 
     if (pathname === "/terminal/tmux-settings" && req.method === "POST") {
@@ -2876,10 +2879,12 @@ const server = Bun.serve<WsData>({
         fields.tmuxPrefix = key;
       }
       const w = writeTmuxSettings(fields);
-      // Regenerate, so the key applies at the next server start rather than
-      // waiting for something else to touch the config.
-      if (w.ok && b.prefix !== undefined) ensureConf();
-      return json(w, w.ok ? 200 : 400);
+      // Regenerate AND hand it to the running server: tmux reads its config
+      // when the server starts, so without this a saved prefix waited for a
+      // restart — and restarting the engine takes every pane on it with it.
+      let appliedNow = false;
+      if (w.ok && b.prefix !== undefined) { ensureConf(); appliedNow = await reloadEngineConf(); }
+      return json({ ...w, appliedNow }, w.ok ? 200 : 400);
     }
 
     if (pathname === "/terminal/tmux-reset" && req.method === "POST") {

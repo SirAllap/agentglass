@@ -430,10 +430,10 @@ const realApi = {
   }>("/terminal/tmux-status"),
   /** Save the conf override (validated server-side before it lands). */
   tmuxConfSave: (confMode: string, override: string) =>
-    post<{ ok: boolean; error?: string; appliedAtNextStart?: boolean }>("/terminal/tmux-conf", { confMode, override }),
+    post<{ ok: boolean; error?: string; appliedAtNextStart?: boolean; appliedNow?: boolean }>("/terminal/tmux-conf", { confMode, override }),
   /** Save the binary/restore settings. */
   tmuxSettingsSave: (f: { source?: string; path?: string; restore?: boolean; resume?: string; prefix?: string; terminal?: string }) =>
-    post<{ ok: boolean; persisted?: boolean; error?: string }>("/terminal/tmux-settings", f),
+    post<{ ok: boolean; persisted?: boolean; error?: string; appliedNow?: boolean }>("/terminal/tmux-settings", f),
   /** Restore the generated conf, override cleared, our server killed. */
   tmuxReset: () =>
     post<{ ok: boolean; error?: string }>("/terminal/tmux-reset", {}),

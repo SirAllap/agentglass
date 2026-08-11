@@ -52,6 +52,31 @@ describe("what the choice may never take over", () => {
   });
 });
 
+describe("a saved config reaching the server that is already running", () => {
+  const pane = Bun.file(new URL("../src/tmuxpane.ts", import.meta.url));
+  const routes = Bun.file(new URL("../src/index.ts", import.meta.url));
+
+  it("re-sources the generated conf rather than asking for a restart", async () => {
+    /*
+     * tmux reads its config when the SERVER starts. Saving a prefix therefore
+     * did nothing until the engine was restarted — and restarting it takes
+     * every pane on it, which on a machine using the engine for its terminal is
+     * the whole desk. `source-file` applies it in place: `set -g`, `bind` and
+     * `unbind` are idempotent, so the key changes and the sessions do not move.
+     */
+    expect(await pane.text()).toContain('const r = await tmux(["source-file", confPath()]);');
+  });
+
+  it("does it for both the prefix and the override, and says which happened", async () => {
+    const text = await routes.text();
+    expect(text).toContain("appliedNow = await reloadEngineConf();");
+    expect(text).toContain("const appliedNow = applied.ok ? await reloadEngineConf() : false;");
+    // The UI tells the two apart — "live, in the panes already open" against
+    // "when the engine next starts" — so the answer is never a guess.
+    expect(text).toContain("{ ...w, appliedNow }");
+  });
+});
+
 describe("the shape of the command", () => {
   const src = Bun.file(new URL("../src/tmuxpane.ts", import.meta.url));
 

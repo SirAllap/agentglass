@@ -2403,7 +2403,9 @@ function TmuxPane({ open }: { open: boolean }) {
     setBusy(true); setNote(null); setErr(null);
     api.tmuxSettingsSave({ prefix })
       .then((r) => {
-        if (r.ok) setNote(prefix ? `Prefix is ${prefix} for panes started from now on.` : "Prefix back to tmux's own C-b.");
+        if (r.ok) setNote(r.appliedNow
+          ? (prefix ? `Prefix is ${prefix} — live, in the panes already open.` : "Prefix back to tmux's own C-b — live.")
+          : (prefix ? `Prefix is ${prefix}. It applies when the engine next starts.` : "Prefix back to tmux's own C-b, when the engine next starts."));
         else setErr(r.error ?? "Could not save that key.");
         void load();
       })
@@ -2415,7 +2417,7 @@ function TmuxPane({ open }: { open: boolean }) {
     setBusy(true); setNote(null);
     api.tmuxConfSave(confMode, override)
       .then((r) => {
-        if (r.ok) { setNote("Config accepted by tmux. It applies to the next server start."); }
+        if (r.ok) { setNote(r.appliedNow ? "Config accepted by tmux, and applied to the running engine." : "Config accepted by tmux. It applies when the engine next starts."); }
         else setErr(r.error ?? "tmux rejected the config.");
         void load();
       })
@@ -2517,7 +2519,7 @@ function TmuxPane({ open }: { open: boolean }) {
           program inside the pane. The generator writes all three. */}
       <SettingRow
         label="Prefix key"
-        hint={<>The chord that starts every tmux command in these panes — the engine's own, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. "Custom" takes tmux's spelling: <span className="t-mono text-[11px]">C-a</span>, <span className="t-mono text-[11px]">M-Space</span>, <span className="t-mono text-[11px]">F5</span>. It applies to panes started after the save.</>}
+        hint={<>The chord that starts every tmux command in these panes — the engine's own, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. "Custom" takes tmux's spelling: <span className="t-mono text-[11px]">C-a</span>, <span className="t-mono text-[11px]">M-Space</span>, <span className="t-mono text-[11px]">F5</span>. Saving hands it to the running engine, so it applies to the panes already open — no restart.</>}
         control={<span className="flex items-center gap-2 justify-self-end">
           <select
             value={PREFIXES.some((p) => p.value === prefix) ? prefix : "custom"}
@@ -2536,7 +2538,10 @@ function TmuxPane({ open }: { open: boolean }) {
           <button onClick={savePrefix} disabled={busy}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
             style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
-            Save
+            {/* It reloads as well as saves, and a button that only says "Save"
+                over a change that lands immediately is a button people press
+                twice. */}
+            Save &amp; apply
           </button>
         </span>}
       />
@@ -2567,7 +2572,7 @@ function TmuxPane({ open }: { open: boolean }) {
             <button onClick={saveConf} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0"
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
-              Validate & save
+              Validate & apply
             </button>
           </span>}
         />

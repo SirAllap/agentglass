@@ -167,6 +167,9 @@ type Sess = {
    *  the strip belongs to the app rather than to whatever .tmux.conf this
    *  machine carries; tmux still decides what is in it and which is active. */
   tmuxWindows: TmuxWindow[];
+  /** This shell is on agentglass's own tmux, not the machine's. The strip hides
+   *  "Use tmux's bar" there: that server's status line is off by design. */
+  tmuxEngine?: boolean;
   /** The panes of the tmux window on screen, when it has more than one. Empty
    *  otherwise — see the server's sweep. */
   tmuxPanes: TmuxPane[];
@@ -506,6 +509,7 @@ function connect(s: Sess) {
       ws.send(ptyFrame({ t: "resize", cols: s.term.cols, rows: s.term.rows }));
       notify(s);
     } else if (f.t === "tmux") {
+      s.tmuxEngine = f.engine === true;
       // tmux brings its own tabs, splits and status line. The panel's split and
       // its own shell tabs stand down while it runs, since two pane models is
       // how you get a split inside a split you didn't ask for. The *window*
@@ -2525,10 +2529,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       );
                     })}
                     <button onClick={() => tmuxCmd({ cmd: "new" })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
-                    <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-0.5 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
-                      title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
-                      Use tmux's bar
-                    </button>
+                    {/* Not on the engine. That server keeps its status line off
+                        by design — the config gate refuses any config that turns
+                        it on — so the button would be offering a bar that cannot
+                        arrive. On the machine's own tmux it is a real choice,
+                        because that bar is the user's and they may prefer it. */}
+                    {!sess?.tmuxEngine && (
+                      <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-0.5 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
+                        title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
+                        Use tmux's bar
+                      </button>
+                    )}
                   </div>
                 )}
 
