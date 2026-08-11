@@ -141,6 +141,46 @@ test("a config that really is broken still says so, in tmux's own words", () => 
   conf.__resetTmuxConfState();
 });
 
+test("the prefix is written as the three lines tmux needs, not one", () => {
+  /*
+   * `set -g prefix` alone leaves C-b bound, so both keys work and the change
+   * reads as half-applied; `send-prefix` is what lets the new chord be typed
+   * through to a program inside the pane. Three lines to move one keystroke is
+   * exactly why this is a setting rather than a paragraph in the override box.
+   */
+  expect(cfg.writeTmuxSettings({ tmuxPrefix: "C-a" }).ok).toBe(true);
+  const content = conf.confContent();
+  expect(content).toContain("unbind C-b");
+  expect(content).toContain("set -g prefix C-a");
+  expect(content).toContain("bind C-a send-prefix");
+  expect(conf.validateConf(content).ok).toBe(true);
+});
+
+test("an empty prefix leaves tmux's own default alone", () => {
+  expect(cfg.writeTmuxSettings({ tmuxPrefix: "" }).ok).toBe(true);
+  // The generated block, not the words: an override of the user's own may well
+  // set a prefix, and that is their business.
+  expect(conf.confContent()).not.toContain("# The prefix, from the settings panel.");
+});
+
+test("only a key name can reach the config file", () => {
+  /* The value is interpolated into a file tmux executes, so anything that
+     could end that command and start another one is refused rather than
+     escaped. The reader enforces it too, in case something else writes the
+     file: a bad value on disk reads as "no prefix". */
+  for (const bad of ["C-a; kill-server", "a b", "'C-a'", "$(id)", "C-a\nkill-server", ""]) {
+    expect(cfg.validTmuxPrefix(bad), bad).toBe(false);
+  }
+  for (const good of ["C-a", "C-Space", "M-x", "F5", "C-M-a"]) {
+    expect(cfg.validTmuxPrefix(good), good).toBe(true);
+  }
+  cfg.writeTmuxSettings({ tmuxPrefix: "C-a; kill-server" });
+  expect(cfg.tmuxPrefix()).toBe("");
+  expect(conf.confContent()).not.toContain("kill-server");
+  expect(conf.confContent()).not.toContain("# The prefix, from the settings panel.");
+  cfg.writeTmuxSettings({ tmuxPrefix: "" });
+});
+
 test("replace mode makes the override the whole config", () => {
   const r = conf.applyTmuxConf("replace", "# bare\nset -g default-terminal screen-256color\n");
   expect(r.ok).toBe(true);

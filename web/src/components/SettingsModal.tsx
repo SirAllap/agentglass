@@ -321,7 +321,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
   );
 }
 
-type Pane = "recipes" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "chat" | "notifications" | "browser" | "rail" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "connections" | "remote" | "about";
+type Pane = "recipes" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "chat" | "notifications" | "browser" | "rail" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "connections" | "tmux" | "remote" | "about";
 /** "" is the ungrouped tail: a heading over one item is a rule that separates
  *  nothing, so About sits alone at the foot of the nav. */
 type TabGroup = "Interface" | "Agents & work" | "Connections" | "Your data" | "";
@@ -389,6 +389,10 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "open", label: "Opening files", group: "Interface", kw: "open external editor file reveal", what: "What opens a file when you ask for it outside the app." },
   { id: "recipes", label: "Commands", group: "Agents & work", kw: "commands recipes custom script make run shortcut alias task saved own", what: "Commands you keep, with the parts that change asked for when you run them." },
   { id: "export", label: "Export", group: "Your data", kw: "export download data json csv", what: "Take your data out, in a shape a spreadsheet or a script can read." },
+  /* Its own section, not a block inside Tools & services: it is the engine
+     every pane and every chat runs on, with a binary, a config and a restore of
+     its own — three settings deep is not a row in a list of "is it installed". */
+  { id: "tmux", label: "tmux engine", group: "Agents & work", kw: "tmux engine pane prefix key binary bundled config override restore reboot layout scrollback resume socket status bar", what: "The tmux these panes run on — its binary, its config, its prefix, and what survives a reboot." },
   { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup", what: "Wire Claude Code into this app, and see what else is installed." },
   /*
    * One page for everything outside this app.
@@ -2319,8 +2323,27 @@ function RequirementsPane({ open }: { open: boolean }) {
  * the binary comes from, whether the generated config is healthy (and can be
  * reset when it is not), and how much of the layout survives a reboot.
  */
+/**
+ * The keys people actually move the prefix to, in tmux's spelling.
+ *
+ * C-a because screen used it and half the world's fingers still expect it, C-f
+ * and C-space because they are the two chords least likely to be taken by a
+ * shell or an editor. Anything else goes through "Custom" — the server refuses
+ * a value that is not a key name, since it lands in a config file tmux runs.
+ */
+const PREFIXES: { value: string; label: string }[] = [
+  { value: "", label: "C-b (tmux default)" },
+  { value: "C-a", label: "C-a (screen)" },
+  { value: "C-f", label: "C-f" },
+  { value: "C-Space", label: "C-Space" },
+];
+
 function TmuxPane({ open }: { open: boolean }) {
   const [st, setSt] = useState<Awaited<ReturnType<typeof api.tmuxStatus>> | null>(null);
+  const [prefix, setPrefix] = useState("");
+  /** Sticky, so typing a custom key does not fold the box the moment the text
+   *  stops matching a listed one. */
+  const [prefixCustom, setPrefixCustom] = useState(false);
   const [source, setSource] = useState("auto");
   const [path, setPath] = useState("");
   const [confMode, setConfMode] = useState("append");
@@ -2342,6 +2365,8 @@ function TmuxPane({ open }: { open: boolean }) {
         setOverride(r.override);
         setRestore(r.restoreEnabled);
         setResume(r.resumeMode);
+        setPrefix(r.prefix || "");
+        setPrefixCustom(!!r.prefix && !PREFIXES.some((p) => p.value === r.prefix));
         setErr(null);
       })
       .catch(() => setErr("Could not reach the server — the tmux settings are unavailable."))
@@ -2353,6 +2378,18 @@ function TmuxPane({ open }: { open: boolean }) {
     setBusy(true); setNote(null);
     api.tmuxSettingsSave({ source, path: source === "custom" ? path : undefined, restore, resume })
       .then((r) => { setNote(r.ok ? "Saved. The binary choice applies to new panes." : r.error ?? "Could not save."); void load(); })
+      .catch(() => setErr("Could not save — server unreachable."))
+      .finally(() => setBusy(false));
+  };
+
+  const savePrefix = () => {
+    setBusy(true); setNote(null); setErr(null);
+    api.tmuxSettingsSave({ prefix })
+      .then((r) => {
+        if (r.ok) setNote(prefix ? `Prefix is ${prefix} for panes started from now on.` : "Prefix back to tmux's own C-b.");
+        else setErr(r.error ?? "Could not save that key.");
+        void load();
+      })
       .catch(() => setErr("Could not save — server unreachable."))
       .finally(() => setBusy(false));
   };
@@ -2435,6 +2472,36 @@ function TmuxPane({ open }: { open: boolean }) {
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
           )}
           <button onClick={saveSettings} disabled={busy}
+            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+            Save
+          </button>
+        </span>}
+      />
+
+      {/* The one binding everybody changes, as a choice rather than as three
+          lines of tmux to remember: `set -g prefix` alone leaves C-b working,
+          and without `send-prefix` the new key cannot be typed through to a
+          program inside the pane. The generator writes all three. */}
+      <SettingRow
+        label="Prefix key"
+        hint={<>The chord that starts every tmux command in these panes — the engine's own, not your tmux's. tmux's default is <span className="t-mono text-[11px]">C-b</span>; pick another if that is taken by something you use. "Custom" takes tmux's spelling: <span className="t-mono text-[11px]">C-a</span>, <span className="t-mono text-[11px]">M-Space</span>, <span className="t-mono text-[11px]">F5</span>. It applies to panes started after the save.</>}
+        control={<span className="flex items-center gap-2 justify-self-end">
+          <select
+            value={PREFIXES.some((p) => p.value === prefix) ? prefix : "custom"}
+            onChange={(e) => { setPrefixCustom(e.target.value === "custom"); if (e.target.value !== "custom") setPrefix(e.target.value); }}
+            disabled={busy}
+            className="text-[12px] px-2 py-1 rounded-lg bg-transparent"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            {PREFIXES.map((p) => <option key={p.value || "default"} value={p.value}>{p.label}</option>)}
+            <option value="custom">Custom…</option>
+          </select>
+          {(prefixCustom || !PREFIXES.some((p) => p.value === prefix)) && (
+            <input value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="C-a" spellCheck={false}
+              className="text-[12px] t-mono px-2 py-1 rounded-lg bg-transparent w-[90px]"
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+          )}
+          <button onClick={savePrefix} disabled={busy}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
             style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
             Save
@@ -3464,7 +3531,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
 
                   {pane === "hooks" && <><HooksPane open={open} /><AgentsSection open={open} /></>}
 
-                  {pane === "connections" && <><TmuxPane open={open} /><RequirementsPane open={open} /><IntegrationsPane open={open} /><GhBudget open={open} /></>}
+                  {pane === "tmux" && <TmuxPane open={open} />}
+                  {pane === "connections" && <><RequirementsPane open={open} /><IntegrationsPane open={open} /><GhBudget open={open} /></>}
 
                   {pane === "remote" && <RemoteAccessPane open={open} />}
 

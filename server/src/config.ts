@@ -93,6 +93,11 @@ interface Config {
    *  and waits for the chat to be reopened before resuming the session;
    *  "all" resumes every recorded session at restore time. */
   tmuxResume?: "lazy" | "all";
+  /** The engine's prefix key in tmux's spelling (`C-a`, `M-Space`). Empty or
+   *  absent leaves tmux's own default. Written from the settings panel because
+   *  it is the one binding everybody changes, and it goes into a config file
+   *  the engine runs — so it is validated, never escaped. */
+  tmuxPrefix?: string;
   /** Set when the validation gate rejected the generated conf. The pane
    *  engine degrades (chat still works) and the settings panel shows why. */
   tmuxConfBroken?: { broken: boolean; reason: string };
@@ -574,6 +579,33 @@ export function tmuxResume(): "lazy" | "all" {
   return v === "all" ? "all" : "lazy";
 }
 
+/**
+ * The engine's prefix key, in tmux's own spelling — `C-b`, `C-a`, `M-x`.
+ *
+ * A setting rather than something to be typed into the override, because it is
+ * the one tmux binding everybody changes and asking for three lines of config
+ * to move a keystroke is a wall in front of the commonest edit there is. Empty
+ * means "leave tmux's default alone".
+ *
+ * Validated on the way in as well as here: this string is interpolated into a
+ * config file the engine runs, so it may only ever be a key name.
+ */
+export function tmuxPrefix(): string {
+  const v = config().tmuxPrefix;
+  return typeof v === "string" && validTmuxPrefix(v) ? v : "";
+}
+
+/**
+ * A key name and nothing else.
+ *
+ * `C-a`, `M-Space`, `F5`. No spaces, no quotes, no semicolons — the value goes
+ * into `set -g prefix <key>` in a file tmux executes, so anything that could
+ * end the command and start another one is refused rather than escaped.
+ */
+export function validTmuxPrefix(v: string): boolean {
+  return /^(C-|M-|C-M-)?[A-Za-z0-9]{1,10}$/.test(v);
+}
+
 /** Persist any subset of the tmux settings, preserving everything else in the
  *  file. Same write path and same guard as writeBudgets: a config it cannot
  *  parse is refused, not overwritten; tests write only under scratch. */
@@ -584,6 +616,7 @@ export function writeTmuxSettings(fields: {
   tmuxOverride?: string;
   tmuxRestore?: boolean;
   tmuxResume?: "lazy" | "all";
+  tmuxPrefix?: string;
   tmuxConfBroken?: { broken: boolean; reason: string } | undefined;
 }): { ok: boolean; persisted: boolean; error?: string } {
   const path = configPath();

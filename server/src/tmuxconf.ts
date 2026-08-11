@@ -26,7 +26,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveTmuxBin, tmuxStateDir } from "./tmuxbin.ts";
-import { tmuxConfMode, tmuxOverride, writeTmuxSettings, tmuxConfBroken, setTmuxConfBroken } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, writeTmuxSettings, tmuxConfBroken, setTmuxConfBroken, tmuxPrefix } from "./config.ts";
 
 /** The generated base config. Kept here rather than in tmuxpane.ts because the
  *  generation, the validation gate and the override all belong to one seam. */
@@ -60,6 +60,24 @@ export function overridePath(): string {
   return join(tmuxStateDir(), "override.conf");
 }
 
+/**
+ * The prefix, as the three lines tmux wants for it.
+ *
+ * `set -g prefix` alone leaves C-b still bound, so the old key goes on working
+ * and the change reads as half-applied; `send-prefix` is what lets the new key
+ * be typed through to a program inside the pane. Three lines nobody should
+ * have to remember to move one keystroke — which is why this is a setting and
+ * not a paragraph in the override box.
+ *
+ * Empty means tmux's own default, and the key is validated before it is
+ * written (see validTmuxPrefix): it lands in a file the engine executes.
+ */
+function prefixLines(): string {
+  const key = tmuxPrefix();
+  if (!key) return "";
+  return `# The prefix, from the settings panel.\nunbind C-b\nset -g prefix ${key}\nbind ${key} send-prefix\n`;
+}
+
 /** The full config text the engine will run, for the current mode. */
 export function confContent(): string {
   const mode = tmuxConfMode();
@@ -69,13 +87,16 @@ export function confContent(): string {
     // config", which tmux treats as defaults — a plausible choice for somebody
     // who wants a bare server. The status-off footer is enforced structurally
     // either way: the UI owns the bar, no override may hand it back.
-    return `${override || "# agentglass: replace mode with an empty override\n"}\n# The UI owns the status line. Enforced in replace mode too.\nset -g status off\n`;
+    // The prefix goes FIRST here, so a replace-mode config that binds keys of
+    // its own has the last word on its own key — the setting is a convenience,
+    // not a claim on somebody who has taken the whole config over.
+    return `${prefixLines()}${override || "# agentglass: replace mode with an empty override\n"}\n# The UI owns the status line. Enforced in replace mode too.\nset -g status off\n`;
   }
   // Append mode. The status-off line is re-asserted LAST so the override
   // cannot hand the status bar back to tmux — the UI owns it.
   const user = override.trim();
   const body = user ? `\n# --- user override (settings panel) ---\n${user}\n` : "";
-  return `${BASE}${body}\n# The UI owns the status line. Re-asserted after any override.\nset -g status off\n`;
+  return `${BASE}${prefixLines()}${body}\n# The UI owns the status line. Re-asserted after any override.\nset -g status off\n`;
 }
 
 let written: string | null = null;
@@ -214,7 +235,9 @@ export function confHealth(): { ok: boolean; reason: string } {
  *  restored, broken flag cleared, generated conf rewritten, and the tmux
  *  server (ours, and only ours) killed so the next pane starts clean. */
 export async function resetTmuxConf(killServer: (name?: string) => Promise<unknown>): Promise<{ ok: boolean; error?: string }> {
-  const w = writeTmuxSettings({ tmuxConfMode: "append", tmuxOverride: "" });
+  // The prefix goes back to tmux's own too: "defaults" has to mean defaults, or
+  // the button is a partial reset somebody has to guess the shape of.
+  const w = writeTmuxSettings({ tmuxConfMode: "append", tmuxOverride: "", tmuxPrefix: "" });
   if (!w.ok) return { ok: false, error: w.error };
   setTmuxConfBroken(false);
   ensureConf();

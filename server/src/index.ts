@@ -108,13 +108,13 @@ import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { tmuxBinStatus } from "./tmuxbin.ts";
-import { applyTmuxConf, resetTmuxConf, confHealth } from "./tmuxconf.ts";
+import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf } from "./tmuxconf.ts";
 import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper } from "./tmuxrestore.ts";
 import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, writeTmuxSettings } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, validTmuxPrefix, writeTmuxSettings } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -2831,6 +2831,8 @@ const server = Bun.serve<WsData>({
         brokenReason: health.ok ? "" : health.reason,
         restoreEnabled: tmuxRestoreEnabled(),
         resumeMode: tmuxResume(),
+        // The engine's prefix key. Empty means tmux's own default (C-b).
+        prefix: tmuxPrefix(),
         source: tmuxSource(),
         lastCaptureAt: lastCaptureAt(),
       });
@@ -2858,7 +2860,19 @@ const server = Bun.serve<WsData>({
       if (b.path !== undefined) fields.tmuxPath = typeof b.path === "string" ? b.path.trim() : "";
       if (b.restore !== undefined) fields.tmuxRestore = b.restore === true;
       if (b.resume !== undefined) fields.tmuxResume = b.resume === "all" ? "all" : "lazy";
+      // The prefix is a key name, and it is interpolated into a config file the
+      // engine executes — so it is checked here rather than escaped later.
+      if (b.prefix !== undefined) {
+        const key = String(b.prefix).trim();
+        if (key && !validTmuxPrefix(key)) {
+          return json({ ok: false, error: "that is not a key tmux would take — try C-a, M-Space or F5" }, 400);
+        }
+        fields.tmuxPrefix = key;
+      }
       const w = writeTmuxSettings(fields);
+      // Regenerate, so the key applies at the next server start rather than
+      // waiting for something else to touch the config.
+      if (w.ok && b.prefix !== undefined) ensureConf();
       return json(w, w.ok ? 200 : 400);
     }
 
