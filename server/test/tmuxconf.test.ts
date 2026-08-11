@@ -177,11 +177,20 @@ test("the prefix is written as the three lines tmux needs, not one", () => {
   expect(conf.validateConf(content).ok).toBe(true);
 });
 
-test("an empty prefix leaves tmux's own default alone", () => {
+test("choosing the default writes it out, rather than saying nothing", () => {
+  /*
+   * The bug this replaces: leaving the block out when the setting was empty.
+   * A saved config is handed to the RUNNING server with `source-file`, which
+   * can only add — so re-sourcing a file that no longer mentions the prefix did
+   * not undo the `set -g prefix C-a` the previous one applied. Going back to
+   * the default was the one direction that really needed a restart. Measured on
+   * a live engine: no prefix on disk, server still on C-a.
+   */
   expect(cfg.writeTmuxSettings({ tmuxPrefix: "" }).ok).toBe(true);
-  // The generated block, not the words: an override of the user's own may well
-  // set a prefix, and that is their business.
-  expect(conf.confContent()).not.toContain("# The prefix, from the settings panel.");
+  const content = conf.confContent();
+  expect(content).toContain("set -g prefix C-b");
+  expect(content).toContain("bind C-b send-prefix");
+  expect(conf.validateConf(content).ok).toBe(true);
 });
 
 test("only a key name can reach the config file", () => {
@@ -197,8 +206,11 @@ test("only a key name can reach the config file", () => {
   }
   cfg.writeTmuxSettings({ tmuxPrefix: "C-a; kill-server" });
   expect(cfg.tmuxPrefix()).toBe("");
+  // Not silence — the default, spelled out. A value the reader refuses lands
+  // the config on C-b, which is a state, rather than on "whatever the running
+  // server happens to have".
   expect(conf.confContent()).not.toContain("kill-server");
-  expect(conf.confContent()).not.toContain("# The prefix, from the settings panel.");
+  expect(conf.confContent()).toContain("set -g prefix C-b");
   cfg.writeTmuxSettings({ tmuxPrefix: "" });
 });
 

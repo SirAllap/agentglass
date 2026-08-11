@@ -73,8 +73,18 @@ export function overridePath(): string {
  * written (see validTmuxPrefix): it lands in a file the engine executes.
  */
 function prefixLines(): string {
-  const key = tmuxPrefix();
-  if (!key) return "";
+  /*
+   * Written even when it is the default, and that is the whole point.
+   *
+   * Choosing "C-b (tmux default)" used to leave the block out — and a saved
+   * config is handed to the RUNNING server with `source-file`, which can only
+   * add. Re-sourcing a file that no longer mentions the prefix does not undo
+   * the `set -g prefix C-a` the previous one applied, so going back to the
+   * default was the one direction that really did need a restart. Measured on
+   * a live engine: the conf on disk had no prefix at all and the server was
+   * still on C-a.
+   */
+  const key = tmuxPrefix() || "C-b";
   return `# The prefix, from the settings panel.\nunbind C-b\nset -g prefix ${key}\nbind ${key} send-prefix\n`;
 }
 
