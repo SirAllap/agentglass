@@ -118,25 +118,46 @@ export function lastCaptureAt(): number | null {
   return readRestoreState()?.capturedAt ?? null;
 }
 
-function paneArgv(pane: CapturedPane): string[] {
-  // A captured start command is `sh -c '<quoted argv>; printf ...; exec sleep 86400`
-  // for agent panes. Replaying it whole is exactly right; for plain shells it
-  // is empty and we fall back to nothing (a login shell in the pane's cwd).
-  return pane.startCommand ? ["sh", "-c", pane.startCommand] : [];
-}
-
-function replayScrollback(name: string, windowId: string, paneId: string, cwd: string): void {
-  const file = scrollbackPath(name, paneId);
+/**
+ * Put a pane's scrollback back, into the pane that exists NOW.
+ *
+ * `target` is a live target in the new server; the file is keyed by the pane id
+ * from the CAPTURE. Those two are different things, and conflating them is what
+ * made this a no-op: the replay addressed `=session:@3.%7` — ids from a server
+ * that had died — so `paste-buffer` failed and nothing said so.
+ */
+function replayScrollback(name: string, capturedPaneId: string, target: string): void {
+  const file = scrollbackPath(name, capturedPaneId);
   if (!existsSync(file)) return;
   const text = readFileSync(file, "utf8");
   if (!text) return;
-  const buf = `agx-restore-${paneId}`;
+  const buf = `agx-restore-${capturedPaneId}`;
   void (async () => {
     const load = await tmux(["load-buffer", "-b", buf, "-"], text);
-    if (load.ok) {
-      await tmux(["paste-buffer", "-b", buf, "-t", `=${name}:${windowId}.${paneId}`, "-d", "-p"]);
-    }
+    if (load.ok) await tmux(["paste-buffer", "-b", buf, "-t", target, "-d", "-p"]);
   })();
+}
+
+/** What a restored pane runs: the captured start command in "all" mode, and
+ *  nothing — a login shell in the pane's directory — in "lazy". */
+function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined): string[] {
+  const cmd = mode === "all" ? pane?.startCommand : "";
+  return cmd ? ["sh", "-c", cmd] : [];
+}
+
+/** The id tmux just printed, or "" — `-P -F` gives us the NEW id, which is the
+ *  only way to address something we have just made. */
+const printed = (r: { ok: boolean; stdout: string }): string => (r.ok ? r.stdout.trim() : "");
+
+/** The panes of a window beyond its first, split into the window that exists
+ *  now and given their scrollback back. */
+async function restorePanes(name: string, windowId: string, panes: CapturedPane[], mode: "lazy" | "all"): Promise<void> {
+  for (const p of panes) {
+    const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", `=${name}:${windowId}`,
+      "-c", p.path || ".", ...runArgs(mode, p)]);
+    const pid = printed(r);
+    if (pid) replayScrollback(name, p.id, `=${name}:${windowId}.${pid}`);
+  }
 }
 
 /**
@@ -163,24 +184,30 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
     const first = s.windows[0];
     if (!first) continue;
     const cwd0 = first.panes[0]?.path || ".";
-    const argv0 = mode === "all" ? paneArgv(first.panes[0]) : [];
-    const mk = await tmux(["new-session", "-d", "-s", s.name, "-c", cwd0, ...(argv0.length ? ["sh", "-c", argv0[0] === "sh" ? (argv0[2] as string) : argv0.join(" ")] : [])]);
-    if (!mk.ok) continue;
-    replayScrollback(s.name, first.id, first.panes[0]?.id ?? "", cwd0);
+    /* `-P -F` on every creation, and that is the fix.
+       This used to address the windows and panes by the ids in the capture —
+       `@3`, `%7` — which belong to the server that died. `split-window -t
+       =session:@3` fails, and the failure was swallowed by `if (r.ok)`, so a
+       session with six windows came back with one and nobody was told. tmux
+       hands back the id of what it has just made; everything below uses that. */
+    const mk = await tmux(["new-session", "-d", "-P", "-F", "#{window_id}", "-s", s.name,
+      ...(first.name ? ["-n", first.name] : []), "-c", cwd0, ...runArgs(mode, first.panes[0])]);
+    const firstWin = printed(mk);
+    if (!firstWin) continue;
     restored++;
-    // The remaining panes of the first window, then the other windows.
-    const others: { w: CapturedWindow; p: CapturedPane }[] = [];
-    for (let i = 1; i < first.panes.length; i++) others.push({ w: first, p: first.panes[i] });
-    for (const w of s.windows.slice(1)) for (const p of w.panes) others.push({ w, p });
-    for (const { w, p } of others) {
-      const argv = mode === "all" ? paneArgv(p) : [];
-      const r = await tmux(["split-window", "-d", "-v", "-t", `=${s.name}:${w.id}`, "-c", p.path || ".", ...(argv.length ? ["sh", "-c", argv[0] === "sh" ? (argv[2] as string) : argv.join(" ")] : [])]);
-      if (r.ok) replayScrollback(s.name, w.id, p.id, p.path || ".");
+    const firstPane = printed(await tmux(["display-message", "-p", "-t", `=${s.name}:${firstWin}`, "#{pane_id}"]));
+    if (firstPane && first.panes[0]) replayScrollback(s.name, first.panes[0].id, `=${s.name}:${firstWin}.${firstPane}`);
+    await restorePanes(s.name, firstWin, first.panes.slice(1), mode);
+
+    for (const w of s.windows.slice(1)) {
+      const nw = await tmux(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${s.name}:`,
+        ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...runArgs(mode, w.panes[0])]);
+      const wid = printed(nw);
+      if (!wid) continue;
+      const pid = printed(await tmux(["display-message", "-p", "-t", `=${s.name}:${wid}`, "#{pane_id}"]));
+      if (pid && w.panes[0]) replayScrollback(s.name, w.panes[0].id, `=${s.name}:${wid}.${pid}`);
+      await restorePanes(s.name, wid, w.panes.slice(1), mode);
     }
-    // Re-create windows beyond the first. The split loop above populated the
-    // first window with its own panes; windows after it become fresh windows.
-    // (A captured window that no longer exists on disk stays captured but is
-    // not recreated — tmux windows have no independent on-disk identity.)
   }
   return { ok: true, restored };
 }
