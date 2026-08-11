@@ -2448,7 +2448,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                            the strip stays 1..N. */
                         <div key={w.id}
                           draggable
-                          onDragStart={(e) => { setDragging(w.id); e.dataTransfer.effectAllowed = "move"; }}
+                          onDragStart={(e) => {
+                            setDragging(w.id);
+                            e.dataTransfer.effectAllowed = "move";
+                            // A drag carrying no data at all is refused outright
+                            // by some targets — the rail learned this first, and
+                            // without it the tab simply would not lift.
+                            try { e.dataTransfer.setData("text/plain", w.id); } catch { /* not fatal */ }
+                          }}
                           onDragEnd={() => { setDragging(null); setDropOn(null); }}
                           onDragOver={(e) => {
                             if (!dragging || dragging === w.id) return;
@@ -2467,7 +2474,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             if (!from || from === w.id) return;
                             tmuxCmd({ cmd: "move", window: from, name: String(w.index) });
                           }}
-                          onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd({ cmd: "select", window: w.id }); } }}
+                          /* The focus is handed back here rather than kept by
+                             the strip's `keepTermFocus`: that works by calling
+                             preventDefault on the mousedown, which is ALSO how
+                             you tell the browser not to start a drag, so a
+                             draggable tab is exempt from it. Same outcome —
+                             click a tab, keep typing — reached the other way
+                             round. */
+                          onClick={() => {
+                            if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd({ cmd: "select", window: w.id }); }
+                            focusTerm();
+                          }}
                           onDoubleClick={() => setRenaming(w.id)}
                           title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename, drag to reorder`}
                           className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
