@@ -1904,6 +1904,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** The tab being carried, and the one it would land before. */
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);
   /** The same box, for `move-window`: a number rather than a name, so it is a
    *  separate mode rather than a flag on the one above. */
   const [moving, setMoving] = useState<string | null>(null);
@@ -2437,14 +2440,47 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       // there, which is confusing precisely when it is invisible.
                       const zoomed = w.flags.includes("Z");
                       return (
+                        /* Draggable, because typing a number to reorder tabs is
+                           not how anyone reorders tabs. The drop sends the same
+                           `move` the number box does — one path to the server,
+                           one behaviour — and `move-window -b` inserts before
+                           the tab you dropped on and pushes the rest along, so
+                           the strip stays 1..N. */
                         <div key={w.id}
+                          draggable
+                          onDragStart={(e) => { setDragging(w.id); e.dataTransfer.effectAllowed = "move"; }}
+                          onDragEnd={() => { setDragging(null); setDropOn(null); }}
+                          onDragOver={(e) => {
+                            if (!dragging || dragging === w.id) return;
+                            // Without this the drop never fires: the default is
+                            // "not a drop target", and preventDefault is how an
+                            // element says otherwise.
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = "move";
+                            setDropOn(w.id);
+                          }}
+                          onDragLeave={() => setDropOn((cur) => (cur === w.id ? null : cur))}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const from = dragging;
+                            setDragging(null); setDropOn(null);
+                            if (!from || from === w.id) return;
+                            tmuxCmd({ cmd: "move", window: from, name: String(w.index) });
+                          }}
                           onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd({ cmd: "select", window: w.id }); } }}
                           onDoubleClick={() => setRenaming(w.id)}
-                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
+                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename, drag to reorder`}
                           className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
-                          style={w.id === activeWindow
-                            ? { color: "var(--primary-hover)" }
-                            : { color: "var(--text2)" }}>
+                          style={{
+                            ...(w.id === activeWindow ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }),
+                            // The tab being carried fades; the one it would land
+                            // before takes a line on its leading edge, which is
+                            // where it will actually go.
+                            ...(dragging === w.id ? { opacity: 0.4 } : null),
+                            ...(dropOn === w.id && dragging && dragging !== w.id
+                              ? { boxShadow: "inset 2px 0 0 0 var(--primary)" }
+                              : null),
+                          }}>
                           {/* The index doubles as the move box: `prefix .`
                               asks which number, and the number it is asking
                               about is right here. Typing over it is a more
@@ -2544,6 +2580,35 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         </div>
                       );
                     })}
+                    {/* The end of the strip is a drop target of its own.
+                        Dropping ON a tab inserts BEFORE it — which is what the
+                        line on its leading edge promises — so without this
+                        there is no way to make a window the last one. It sends
+                        `after` on the last tab, because `-b` against an index
+                        one past the end silently puts the window at the FRONT
+                        (measured on 3.6a). */}
+                    <span
+                      onDragOver={(e) => {
+                        if (!dragging) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        setDropOn("__end__");
+                      }}
+                      onDragLeave={() => setDropOn((cur) => (cur === "__end__" ? null : cur))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const from = dragging;
+                        const last = tmuxWindows[tmuxWindows.length - 1];
+                        setDragging(null); setDropOn(null);
+                        if (!from || !last || from === last.id) return;
+                        tmuxCmd({ cmd: "move", window: from, name: String(last.index), after: true });
+                      }}
+                      className="shrink-0 self-stretch"
+                      style={{
+                        width: dragging ? 18 : 2,
+                        boxShadow: dropOn === "__end__" ? "inset -2px 0 0 0 var(--primary)" : undefined,
+                      }}
+                      aria-hidden />
                     <button onClick={() => tmuxCmd({ cmd: "new" })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
                     {/* Not on the engine. That server keeps its status line off
                         by design — the config gate refuses any config that turns

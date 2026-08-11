@@ -1666,7 +1666,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     // The panel's own grid goes with it, for `fit`: only the client knows how
     // big the thing you are looking at is. Range-checked in runAction, because
     // it ends up as an argument to `resize-window`.
-    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows)) return;
+    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows, msg.after === true)) return;
     if (action === "takeover") tellPhonesTheWindowMoved(s.tmux, msg.window!);
     // Answer now rather than at the next tick. The command has already been
     // applied by the time it returns, so the strip can be correct within a

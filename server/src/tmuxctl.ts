@@ -544,6 +544,9 @@ export function runAction(
   /** The asking client's grid. Only `fit` uses it — see that case for why an
    *  explicit size is the only honest answer to "size it to what I see". */
   cols?: number, rows?: number,
+  /** `move` only: land AFTER the named window rather than before it. The one
+   *  way to make a window the last in its strip — see that case. */
+  after?: boolean,
 ): boolean {
   // Windows are addressed by tmux's id, never by the index the tab is showing.
   // The strip is up to a poll out of date, and an index is not a name: kill
@@ -590,9 +593,33 @@ export function runAction(
       const to = Number(raw);
       if (id === null || !/^\d{1,3}$/.test(raw)) return false;
       // `-s` is what moves; `-t` on its own would move the *current* window.
-      // Bare, not `-b`: the user named an index and that is the index they get,
-      // with tmux renumbering around it exactly as `prefix .` would have.
-      return tmux(t.socket, ["move-window", "-s", id, "-t", `${t.id}:${to}`]) !== null;
+      /*
+       * Insert beside that window and push the rest along, then renumber.
+       *
+       * Three things measured on tmux 3.6a, each of which was wrong here
+       * before:
+       *
+       *   - bare `move-window -t 3` onto an occupied index answers `index in
+       *     use: 3` and moves nothing. Every index in a strip is occupied, so
+       *     typing a number did nothing at all and said nothing. The comment
+       *     that used to sit here claimed tmux would "renumber around it".
+       *   - `renumber-windows on` does NOT fire on a move, only on a close. A
+       *     move alone leaves `1 3 4 5 6 7 8` — a hole and a number past the
+       *     end — so the renumber is explicit.
+       *   - `-b` against an index that does not exist (one past the last, to
+       *     mean "the end") silently puts the window at the FRONT. Hence `-a`
+       *     for that case rather than arithmetic.
+       *
+       * `-b` is what a drop indicator on a tab's leading edge promises: the
+       * window lands where the line is drawn. `-a` is the trailing zone at the
+       * end of the strip, which is the only way to make a window the last one.
+       */
+      const where = after ? "-a" : "-b";
+      if (tmux(t.socket, ["move-window", where, "-s", id, "-t", `${t.id}:${to}`]) === null) return false;
+      // A failure here is not a failed move: the window is where it was asked
+      // to go and the numbers are merely untidy.
+      tmux(t.socket, ["move-window", "-r", "-t", t.id]);
+      return true;
     }
     /*
      * Give the window back to THIS client.

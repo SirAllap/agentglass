@@ -161,9 +161,19 @@ describe.if(has)("the status row, taken and given back", () => {
   });
 
   test("move-window takes an index and refuses anything else", () => {
+    /*
+     * The move INSERTS beside that index and renumbers, rather than landing on
+     * it. Measured on 3.6a and the reason this changed: a bare move onto an
+     * occupied index answers "index in use" and moves nothing — which is every
+     * index in a real strip, so this control did nothing at all for its whole
+     * life. What it asserts now is that the window moved and the strip has no
+     * holes; where exactly it lands is tmux-move-window.test.ts's business.
+     */
     const two = win("two");
-    expect(ctl.runAction(target, "move", two[1]!, "7")).toBe(true);
-    expect(win("two")[2]).toBe("7");
+    // Two windows, `one` then `two`. Dropping `two` before `one` swaps them,
+    // and the indexes stay contiguous.
+    expect(ctl.runAction(target, "move", two[1]!, win("one")[2]!)).toBe(true);
+    expect(Number(win("two")[2])).toBeLessThan(Number(win("one")[2]));
     // A target spec rather than a number is how a client would reach another
     // session; it never gets that far.
     expect(ctl.runAction(target, "move", two[1]!, "other:0")).toBe(false);

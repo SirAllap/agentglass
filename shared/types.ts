@@ -611,7 +611,11 @@ export type PtyClientFrame =
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
        *  than to trust. */
-      cols?: number; rows?: number };
+      cols?: number; rows?: number;
+      /** `move` only: land AFTER the named window instead of before it. What
+       *  the trailing drop zone at the end of the tab strip sends — it is the
+       *  only way to make a window the last one. */
+      after?: boolean };
 
 /**
  * Every key any member of a union carries, and what that key can hold.
