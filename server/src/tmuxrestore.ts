@@ -79,6 +79,19 @@ async function startCommandOf(name: string, windowId: string, paneId: string): P
 }
 
 /**
+ * Is this pane running an agent at all?
+ *
+ * `pane_current_command` is the binary of the foreground process — `claude`,
+ * `fish`, `nvim`. Compared against the CLI's own basename rather than a literal,
+ * so a machine whose binary is named otherwise is not silently excluded.
+ */
+function looksLikeAgent(command: string | undefined): boolean {
+  if (!command) return false;
+  const bin = (claudeCode.bin() || "claude").split("/").pop() || "claude";
+  return command === bin;
+}
+
+/**
  * The conversation id from the command line of what is running in the pane.
  *
  * A fallback for the note, and worth having because the two fail differently:
@@ -123,7 +136,19 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
         // The pane id is this server's, and so is the note — both die with the
         // server, which is why the id is copied into the photograph rather than
         // looked up again at restore time.
-        const agentSession = paneAgentNote(p.id)?.session_id || await resumeIdOf(name, w.id, p.id);
+        /*
+         * Only for a pane that is RUNNING one.
+         *
+         * The note outlives the agent: a pane where somebody ran `claude`, quit
+         * it and went back to their shell keeps its note, and pane ids are
+         * reused. Measured on a test desk — two plain shells were photographed
+         * carrying conversation ids, and in "all" mode both would have come
+         * back as agents where their owner had left a prompt. What is running
+         * now is the question, so ask what is running now.
+         */
+        const agentSession = looksLikeAgent(p.command)
+          ? (paneAgentNote(p.id)?.session_id || await resumeIdOf(name, w.id, p.id))
+          : undefined;
         panes.push({ ...p, startCommand, agentSession });
       }
       out.push({ ...w, panes });

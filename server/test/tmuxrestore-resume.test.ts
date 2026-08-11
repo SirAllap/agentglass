@@ -70,3 +70,26 @@ describe("where the id comes from", () => {
     expect(src).toContain("agentSession?: string;");
   });
 });
+
+describe("a note that outlived its agent", () => {
+  it("does not turn a plain shell into one", () => {
+    /*
+     * The note is written when a session starts and stays on the pane; pane ids
+     * are reused, and somebody who quits `claude` and goes back to their prompt
+     * still has one. Measured on a test desk: two plain shells were captured
+     * carrying conversation ids, and in "all" mode both would have come back as
+     * agents where their owner had left a shell.
+     *
+     * `pane_current_command` answers what is running NOW, which is the actual
+     * question.
+     */
+    expect(src).toContain("const agentSession = looksLikeAgent(p.command)");
+    expect(src).toContain("function looksLikeAgent(command: string | undefined): boolean {");
+  });
+
+  it("compares against the CLI's own basename, not a literal", () => {
+    // A machine whose binary lives elsewhere or is named otherwise must not be
+    // silently excluded from the one feature this is for.
+    expect(src).toContain('const bin = (claudeCode.bin() || "claude").split("/").pop() || "claude";');
+  });
+});
