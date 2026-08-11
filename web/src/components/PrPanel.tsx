@@ -41,6 +41,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
+import { cardOf, askingCard, onCard, forgetCard } from "../lib/prCardStore.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
@@ -5267,9 +5268,13 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       setPick("");
       const moved = plan.status;
       setCard((c) => c ? { ...c, status: moved || c.status, updated: r.task?.updated ?? c.updated } : c);
+      /* The sidebar is holding the status this write just changed. Throwing it
+         away is what makes the card's own section agree with the menu that
+         moved it, without waiting out the minute. */
+      forgetCard(query);
     }
     return r.ok;
-  }, [folded, card, plan, on, label, note]);
+  }, [folded, card, plan, on, label, note, query]);
 
   /* Folded means "not this time": the plan it publishes is empty, so the button
      downstairs goes back to plain Done. It was still announcing its changes
@@ -5487,6 +5492,80 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
   return { open, node };
 }
 
+/**
+ * Where the card stands, beside where the pull request stands.
+ *
+ * The panel already knows which card this is — the masthead chip opens it, and
+ * the reviewer menu moves it — and every answer to "has anybody picked this up"
+ * was on the other board, behind a click. Two facts, the two that decide
+ * whether it is waiting on somebody: the status, in the colour its board gave
+ * it, and who is on it.
+ *
+ * Read-only on purpose. Moving a card is the reviewer menu's errand, where it
+ * belongs to a GitHub assignment somebody is already making; a second place to
+ * change it is a second place to change it by accident.
+ */
+function CardFacts({ d }: { d: PrDetail }) {
+  const setup = useClickupSetup();
+  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  const query = ref?.query ?? "";
+  /* The store tells everyone when an answer lands; this only has to redraw.
+     Subscribed before the early return below — a pull request with no card
+     still runs every hook, because `setup` arrives a render late and a
+     component whose hook count changes takes the window with it. */
+  const [, redraw] = useState(0);
+  useEffect(() => onCard(() => redraw((n) => n + 1)), []);
+  const hit = cardOf(query);
+  const asking = askingCard(query);
+
+  if (!ref) return null;
+
+  const task = hit?.task ?? null;
+  return (
+    <SidebarSection title="ClickUp">
+      <div className="flex flex-col gap-1.5 min-w-0">
+        <button onClick={() => openCard(ref.query, ref.label)}
+          title={`Open ${ref.label} in Tasks${task ? ` — ${task.title}` : ""}`}
+          className="agx-btn text-[11px] text-left truncate" style={{ color: "var(--primary)" }}>
+          {ref.label}
+        </button>
+        {/* Something in the hole while it is asked for, rather than a section
+            that appears a second after the rest of the sidebar. */}
+        {!task ? (
+          <span className="text-[10.5px]" style={{ color: asking ? "var(--text3)" : "var(--warning)" }}>
+            {asking ? "Reading the card…" : (hit?.error || "ClickUp could not find it")}
+          </span>
+        ) : (
+          <>
+            <span className="min-w-0"><StatusPill status={task.status} color={task.statusColor} dim={task.statusKind === "done"} /></span>
+            {task.people?.length
+              ? (
+                <div className="flex flex-col gap-1">
+                  {task.people.map((p, i) => (
+                    <span key={p.id ?? `${p.name}-${i}`} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}>
+                      {/* The face, as everywhere else people are drawn here.
+                          Two initials is a puzzle in a workspace of five
+                          hundred. */}
+                      {p.avatar
+                        ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
+                            style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+                        : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
+                            style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
+                            {p.initials}
+                          </span>}
+                      <span className="truncate">{p.name}{p.me ? " · you" : ""}</span>
+                    </span>
+                  ))}
+                </div>
+              )
+              : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No one assigned</span>}
+          </>
+        )}
+      </div>
+    </SidebarSection>
+  );
+}
+
 function PrSidebar({ d, onEditField }: {
   d: PrDetail;
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -5559,6 +5638,9 @@ function PrSidebar({ d, onEditField }: {
           </div>
         </SidebarSection>
       )}
+      {/* Under the GitHub facts, where he asked for it: the pull request first,
+          and then the card it came from. */}
+      <CardFacts d={d} />
       {d.autoMerge && (
         <SidebarSection title="Auto-merge">
           <span className="text-[10.5px]" style={{ color: "var(--warning)" }}>

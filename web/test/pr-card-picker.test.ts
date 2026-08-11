@@ -35,6 +35,7 @@ const bodyOf = (name: string) => {
 
 const CLICKUP = bodyOf("ClickUpSide");
 const PICKER = bodyOf("FieldPicker");
+const FACTS = bodyOf("CardFacts");
 
 describe("the window that went black", () => {
   it("runs every hook before the render that may not happen", () => {
@@ -55,6 +56,42 @@ describe("the window that went black", () => {
     // The fix is not "always render": a pull request with no card must draw
     // nothing here at all.
     expect(CLICKUP).toContain("if (!ref) return null;");
+  });
+
+  it("holds the same line in the sidebar, which has the same shape", () => {
+    // `CardFacts` reads the same setup and returns null the same way. It is one
+    // `useMemo` away from the same black window.
+    const tail = FACTS.slice(FACTS.indexOf("if (!ref) return null;"));
+    expect(tail.length).toBeGreaterThan(200);
+    expect(/\buse[A-Z]\w*\(/.exec(tail)?.[0] ?? "none").toBe("none");
+  });
+});
+
+describe("where the card stands, beside the pull request", () => {
+  it("shows the status in the colour its own board gave it", () => {
+    // A board is read by colour before it is read by word; a status torn out of
+    // its colour is one somebody has to stop and parse.
+    expect(FACTS).toContain("<StatusPill status={task.status} color={task.statusColor}");
+  });
+
+  it("shows who is on it, as faces", () => {
+    expect(FACTS).toContain("task.people?.length");
+    expect(FACTS).toContain("No one assigned");
+  });
+
+  it("fills the hole while it is asking rather than appearing late", () => {
+    // His words about the board, and it applies here: a section that pops in a
+    // second after the rest of the sidebar reads as a glitch.
+    expect(FACTS).toContain("Reading the card…");
+  });
+
+  it("reads through the shared store, not its own request", () => {
+    expect(FACTS).toContain("const hit = cardOf(query);");
+    expect(FACTS).not.toContain("api.clickupFind");
+  });
+
+  it("is the second reader of a lookup the menu invalidates when it writes", () => {
+    expect(CLICKUP).toContain("forgetCard(query);");
   });
 });
 
