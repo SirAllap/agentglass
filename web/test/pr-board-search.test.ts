@@ -619,7 +619,7 @@ describe("how far behind, on the page and on the board", () => {
     // Five minutes is right for a board of twelve and far too long for the page
     // in front of you.
     expect(src).toContain("const slow = setInterval(again, 30_000);");
-    expect(src).toContain("onClick={() => { forgetBehind(); loadList(true); }}");
+    expect(src).toContain("forgetBehind();");
   });
 });
 
@@ -730,5 +730,26 @@ describe("folding it away", () => {
 
   it("drops a summary that no longer has anything to summarise", () => {
     expect(src).toContain("useEffect(() => { if (!plan.lines.length) setAsking(false); }, [plan.lines.length]);");
+  });
+});
+
+describe("what Refresh asks for", () => {
+  it("asks again for everything on screen, not only the main list", () => {
+    /*
+     * It forced the main list and nothing else, so the board's own two lists
+     * were re-read from the server's cache — and a review requested of him,
+     * present in the list the server serves, stayed invisible however many
+     * times he pressed it.
+     */
+    expect(src).toContain("boardForce.current = true;");
+    expect(src).toContain("if (selected != null) loadDetail(selected, true);");
+    expect(src).toContain("forgetRollups();");
+  });
+
+  it("forces the board once, and leaves the poll on the cache", () => {
+    // That cache is what makes this board cost two calls; a forced poll would
+    // spend a `gh` run every twenty seconds for nothing.
+    expect(src).toContain("const force = boardForce.current;\n    boardForce.current = false;");
+    expect(src).toContain('api.prList(root, "mine", stateSel, force)');
   });
 });

@@ -48,6 +48,7 @@ import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
+import { forgetRollups } from "../lib/prRollupStore.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks,
   threadLastAt, threadMovedOn, writeSeen, type NewAtom,
@@ -2352,6 +2353,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const boardSettling = !boardWhole && !boardDrawn.current && !boardWaited;
 
   const [boardTick, setBoardTick] = useState(0);
+  /** Set by Refresh, read once by the board's fetch. See the button. */
+  const boardForce = useRef(false);
   const boardTries = useRef(0);
   useEffect(() => { boardTries.current = 0; }, [boardOn, root, stateSel]);
   useEffect(() => {
@@ -2368,9 +2371,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     /* Settled rather than all: one scope failing must not leave the board
        waiting for ever on the other. A failed list is an empty one, and the
        board then says so honestly instead of spinning. */
+    /* Forced only when somebody asked for it. The poll reads the server's
+       cache — that is what makes this board cost two calls — and Refresh is the
+       one press that means "go and look again". */
+    const force = boardForce.current;
+    boardForce.current = false;
     void Promise.allSettled([
-      api.prList(root, "mine", stateSel, false).then((r) => { if (live) setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
-      api.prList(root, "review", stateSel, false).then((r) => { if (live) setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
+      api.prList(root, "mine", stateSel, force).then((r) => { if (live) setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
+      api.prList(root, "review", stateSel, force).then((r) => { if (live) setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
     ]).then(() => { if (live) setBoardLoading(false); });
     return () => { live = false; };
   }, [boardOn, root, stateSel, listState.fetchedAt, boardTick]);
@@ -3255,7 +3263,27 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}${listState.loading || listState.checksPending ? " · updating" : ""}`
                 : "")}
           </span>
-          <Btn onClick={() => { forgetBehind(); loadList(true); }} disabled={busy} small>Refresh</Btn>
+          {/*
+            * Refresh means "ask again for what is in front of me".
+            *
+            * It forced the main list and nothing else: the board'"'"'s own two
+            * lists were re-read from the server'"'"'s cache, so a pull request that
+            * arrived after that cache was filled stayed invisible however many
+            * times it was pressed. Reported that way — a review requested of
+            * him, present in the list the server serves, and absent from the
+            * lane for it.
+            *
+            * Now: both board lists forced, the open pull request forced, and
+            * the counts that go stale with them dropped.
+            */}
+          <Btn onClick={() => {
+            forgetBehind();
+            forgetRollups();
+            boardForce.current = true;
+            setBoardTick((n) => n + 1);
+            loadList(true);
+            if (selected != null) loadDetail(selected, true);
+          }} disabled={busy} small>Refresh</Btn>
         </div>
       </div>
 
