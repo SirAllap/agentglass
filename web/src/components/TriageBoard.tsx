@@ -572,6 +572,14 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
   const asking = root ? askingBehind(root, p.number) : false;
   /** Said on the number itself for a moment: a clipboard write is invisible. */
   const [copied, setCopied] = useState<number | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const copyLink = () => {
+    /* The URL GitHub itself would give you: `p.url` is already on the row, so
+       there is nothing to build and nothing to build wrong. */
+    void navigator.clipboard?.writeText(p.url || "").catch(() => {});
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 1200);
+  };
   const copyNumber = (n: number) => {
     void navigator.clipboard?.writeText(`#${n}`).catch(() => {});
     setCopied(n);
@@ -656,6 +664,28 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
           {p.title}
         </span>
+        {/* Its address, beside the pin and the same size as it.
+            The number copies the number, which is what goes in a branch or a
+            commit; this is the other thing a card gets taken away as — a link
+            to paste into a message. A chain link, because that is what every
+            application on this machine draws for one. */}
+        <button onClick={(e) => { e.stopPropagation(); copyLink(); }}
+          title={copiedLink ? "Copied!" : `Copy the link to #${p.number}`}
+          aria-label={`Copy the link to #${p.number}`}
+          className="agx-btn shrink-0 -mt-0.5 grid place-items-center rounded-md"
+          style={{ width: 26, height: 26, lineHeight: 1,
+            color: copiedLink ? "var(--success)" : "var(--text3)",
+            border: "1px solid transparent", background: "transparent" }}>
+          {copiedLink ? (
+            <span style={{ fontSize: 13 }}>✓</span>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" />
+              <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
+            </svg>
+          )}
+        </button>
         <button onClick={(e) => { e.stopPropagation(); onPin(); }}
           title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
           aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}

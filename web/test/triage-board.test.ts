@@ -597,3 +597,15 @@ describe("a red card", () => {
     expect(board).toContain("if (!root || !p.checks || p.checks.failure === 0) return p;");
   });
 });
+
+describe("taking a card away with you", () => {
+  it("copies its link, beside the pin and the same size", () => {
+    /* The number copies the number — what goes in a branch or a commit. This is
+       the other thing a card gets taken away as: a link to paste into a
+       message. */
+    expect(board).toContain("copyLink()");
+    expect(board).toContain('navigator.clipboard?.writeText(p.url || "")');
+    // Same 26px box as the star it sits next to.
+    expect(board.split("width: 26, height: 26").length - 1).toBe(2);
+  });
+});
