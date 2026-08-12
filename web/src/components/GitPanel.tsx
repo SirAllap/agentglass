@@ -32,6 +32,7 @@ import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { openPrs, openPr } from "../lib/openPrs.ts";
+import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
 import type { PrBranchSummary } from "../../../shared/types.ts";
 
@@ -1335,7 +1336,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const base = onlyGone ? goneBranches : branchData.branches;
     const needle = q.trim().toLowerCase();
     const hits = needle
-      ? base.filter((b) => `${b.name} ${b.subject ?? ""} ${b.upstream ?? ""}`.toLowerCase().includes(needle))
+      /* The word on the chip is searchable, which is the whole cleanup mode:
+         typing "scratch" leaves exactly the branches cut to read a pull
+         request. Cheaper than a filter button, and it needs no explaining
+         because the word is already on screen. */
+      ? base.filter((b) => `${b.name} ${b.subject ?? ""} ${b.upstream ?? ""} ${isScratchBranch(b.name) ? "scratch" : ""}`.toLowerCase().includes(needle))
       : base;
     if (sort === "recent") return hits;
     const out = [...hits];
@@ -2783,6 +2788,17 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 Safe to delete locally, and the usual reason a branch
                                 list grows to 57 entries. */}
                             {t.gone && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }} title={`${b.upstream} no longer exists on the remote — this branch was probably merged`}>gone</span>}
+                            {/* Cut to read a pull request, not to build anything —
+                                see lib/scratchBranch.ts for why the rule is this
+                                narrow. Drawn in the quiet neutral rather than a
+                                warning colour: this is a classification, not a
+                                problem, and the row beside it uses red for a
+                                branch whose remote is gone. */}
+                            {isScratchBranch(b.name) && (
+                              <span className="shrink-0 text-[10px] px-1 py-px rounded"
+                                style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
+                                title={scratchNote(b.name)}>scratch</span>
+                            )}
                             {/* In sync, and freshly enough fetched to mean it. */}
                             {b.upstream && !t.gone && !t.ahead && !t.behind && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--success)" }} title={`in sync with ${b.upstream}`}>✓</span>}
                           </span>
