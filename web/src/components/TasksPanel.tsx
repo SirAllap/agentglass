@@ -25,6 +25,7 @@ import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
+import { matchesQuery } from "../lib/boardSearch.ts";
 import type { CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
@@ -1082,7 +1083,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
 
   const rows = useMemo(() => {
     const all = data?.tasks ?? [];
-    const needle = q.trim().toLowerCase();
     return all.filter((t) =>
       // An explicit pick overrides the done/not-done default: asking to see
       // "in production" and getting nothing would be absurd.
@@ -1090,7 +1090,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
       && (!mineOnly || t.mine)
       && (!tag || t.tags.includes(tag))
       && (!readyOnly || !blockedBy(t).length)
-      && (!needle || t.title.toLowerCase().includes(needle)));
+      && matchesQuery(t, q));
   }, [data, q, tag, mineOnly, showDone, statusPick, readyOnly, blockedBy]);
 
   const tags = useMemo(() => {
@@ -1264,10 +1264,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   /* The looked-up cards, by where each one lives. The search box filters these
      too — it is the only chip that still means anything on this board. */
   const lookedGroups = useMemo(() => {
-    const needle = q.trim().toLowerCase();
     const by = new Map<string, ProviderTask[]>();
     for (const t of looked) {
-      if (needle && !t.title.toLowerCase().includes(needle) && !(t.customId ?? "").toLowerCase().includes(needle)) continue;
+      if (!matchesQuery(t, q)) continue;
       const k = t.list || "Elsewhere";
       (by.get(k) ?? by.set(k, []).get(k)!).push(t);
     }
