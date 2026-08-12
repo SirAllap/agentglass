@@ -24,7 +24,7 @@ import { Spinner } from "./Spinner.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
-import { openPrs } from "../lib/openPrs.ts";
+import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import type { CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
@@ -536,9 +536,17 @@ function Detail({ root, number, onSay, onChanged }: {
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
-              <button onClick={() => openPrs(String(p.number), p.state === "OPEN" ? "open" : "all")}
+              {/* The pull request itself, not a search for its number. The row
+                  carries the URL, and the URL carries the repository — which is
+                  the half `openPrs` was missing, and why pressing this landed on
+                  a filtered list instead of on the pull request. */}
+              <button onClick={() => {
+                const ref = prRefFromUrl(p.url);
+                if (ref) openPr(ref.repo, p.number);
+                else openPrs(String(p.number), p.state === "OPEN" ? "open" : "all");
+              }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
-                title="Open this in Pull Requests">
+                title="Open this pull request">
                 <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
                 <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
                   style={p.state === "MERGED"
@@ -3008,9 +3016,13 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
-              <button onClick={() => openPrs(String(p.number), p.state === "OPEN" || !p.state ? "open" : "all")}
+              <button onClick={() => {
+                const ref = prRefFromUrl(p.url);
+                if (ref) openPr(ref.repo, p.number);
+                else openPrs(String(p.number), p.state === "OPEN" || !p.state ? "open" : "all");
+              }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
-                title="Open this in Pull Requests">
+                title="Open this pull request">
                 <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
                 {p.state && (
                   <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
