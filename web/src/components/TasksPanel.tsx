@@ -870,6 +870,23 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     if (!needle) return all;
     return all.filter((v) => `${v.listName ?? ""} ${v.name}`.toLowerCase().includes(needle));
   }, [boards, railQ]);
+  /* Sidebar or modal. Global for the same reason the width is: how you like to
+     read a card is about you, not about which list you are on. Full screen was
+     offered and turned down — it covers the table entirely, and in an app that
+     already lives in tabs it does nothing the modal does not. */
+  const [cardMode, setCardMode] = useState<"side" | "modal">(() => {
+    try { return localStorage.getItem(CARD_MODE_KEY) === "modal" ? "modal" : "side"; } catch { return "side"; }
+  });
+  useEffect(() => { try { localStorage.setItem(CARD_MODE_KEY, cardMode); } catch { /* private mode */ } }, [cardMode]);
+  /* Escape closes the modal, and only the modal: in the sidebar the card is
+     part of the layout rather than something laid over it, and a key that
+     empties a pane you did not open is a key that loses your place. */
+  useEffect(() => {
+    if (cardMode !== "modal" || !sel) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSel(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cardMode, sel]);
   const [cardW, setCardW] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(CARD_W_KEY));
@@ -1364,6 +1381,21 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    * The exception is a re-read of the board you are already looking at: its
    * rows are real and still true, so they stay uncovered and the bar carries it.
    */
+  /* The card, built once and put in whichever shell is chosen. Two copies of
+     this would be two places for a field to go stale. */
+  const cardBody = (
+    picked
+    ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
+    writable={boards.writeEnabled} repos={repos} here={here}
+    onOpenChatWith={onOpenChatWith}
+    wide={wide}
+    byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
+    skills={skills}
+    onNote={(text) => setNote({ ok: true, text })}
+    onAsk={(p) => setConfirm(p)} />
+    : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>
+  );
+
   const veiled = !!wanted && (stale || !data?.tasks.length);
 
   return (
@@ -1444,6 +1476,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             Open ↗
           </a>
         )}
+        {/* Where a card opens. Two, not three: full screen was offered and
+            turned down — it covers the table entirely, and in an app that
+            already lives in tabs it does nothing the modal does not. */}
+        <div className="flex rounded-lg overflow-hidden shrink-0" style={{ border: edge(16) }}>
+          {([["side", "Sidebar"], ["modal", "Modal"]] as const).map(([id, label]) => (
+            <button key={id} onClick={() => setCardMode(id)}
+              aria-pressed={cardMode === id}
+              title={id === "side"
+                ? "Open a card beside the list, in a pane you can drag wider"
+                : "Open a card over the list, with room for a long description"}
+              className="text-[10.5px] px-2 py-0.5"
+              style={cardMode === id
+                ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" }
+                : { color: "var(--text3)" }}>
+              {label}
+            </button>
+          ))}
+        </div>
         <button onClick={() => void load(data?.view?.id, true, true)} disabled={busy}
           className="text-[10.5px] px-2 py-0.5 rounded-lg"
           style={{ border: edge(16), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
@@ -1967,9 +2017,19 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             unbroken URL in a card pushed the whole pane sideways and dragged the
             list with it — which is the horizontal scrollbar that appeared under
             everything. */}
+        {/* Two shells, one card.
+            Chosen from a mockup: the sidebar, which is what this always was,
+            and a modal for a card that is a page of prose rather than six
+            fields — where the pane's width is the thing in the way. Full screen
+            was in the mockup too and was turned down: it covers the table
+            entirely, and in an app that already lives in tabs it does nothing
+            the modal does not.
+
+            The card itself is the same element in both, built once above. Two
+            copies of it would be two places for a field to be wrong. */}
         {/* The handle lives in the gap, wide enough for a pointer even though
             the line it draws is one pixel. */}
-        <div role="separator" aria-orientation="vertical" tabIndex={0}
+        {cardMode === "side" && <div role="separator" aria-orientation="vertical" tabIndex={0}
           aria-label="Drag to resize the card pane"
           title="Drag to resize · double-click for the usual width"
           onDoubleClick={() => setCardW(CARD_W_DEFAULT)}
@@ -1996,7 +2056,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             window.addEventListener("pointerup", up);
           }}
           className="shrink-0 self-stretch"
-          style={{ width: 5, marginRight: -5, cursor: "col-resize", zIndex: 5 }} />
+          style={{ width: 5, marginRight: -5, cursor: "col-resize", zIndex: 5 }} />}
+        {cardMode === "side" && (
         <aside className="flex flex-col shrink-0 min-w-0"
           style={{ width: cardW, borderLeft: edge(12) }}>
           {/* No eyebrow over this pane. It said the word "Card" above a card,
@@ -2006,18 +2067,29 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               this pane starts level with the table's own heading instead. */}
           <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col"
             style={{ paddingTop: 0 }}>
-            {picked
-              ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
-                  writable={boards.writeEnabled} repos={repos} here={here}
-                  onOpenChatWith={onOpenChatWith}
-                  wide={wide}
-                  byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
-                  skills={skills}
-                  onNote={(text) => setNote({ ok: true, text })}
-                  onAsk={(p) => setConfirm(p)} />
-              : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>}
+            {cardBody}
           </div>
         </aside>
+        )}
+        {/* Laid over the panel, with the list dimmed behind rather than gone:
+            you are reading one card OUT of a list, and the list is the context
+            that makes it mean anything. Click the dimmed part or press Escape
+            to come back. */}
+        {cardMode === "modal" && picked && (
+          <div className="absolute inset-0 z-30 flex items-start justify-center p-6"
+            style={{ background: "color-mix(in srgb, var(--bg) 62%, transparent)" }}
+            onClick={() => setSel(null)}>
+            <div role="dialog" aria-modal="true" aria-label={picked.title}
+              onClick={(e) => e.stopPropagation()}
+              className="flex flex-col min-h-0 rounded-xl overflow-hidden"
+              style={{ width: "min(760px, 100%)", maxHeight: "100%",
+                background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)" }}>
+              <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col">
+              {cardBody}
+          </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2161,6 +2233,7 @@ const YOLO_KEY = "agentglass.clickup.skipPermissions";
 const WIDE_KEY = "agentglass.clickup.wideCard";
 const CARD_W_KEY = "agentglass.clickup.cardWidth";
 const RAIL_KEY = "agentglass.clickup.listRail";
+const CARD_MODE_KEY = "agentglass.clickup.cardMode";
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */
 const CARD_W_DEFAULT = 380;
