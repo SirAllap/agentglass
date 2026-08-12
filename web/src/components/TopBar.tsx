@@ -17,7 +17,7 @@
 import type { SystemNote } from "../lib/sysNotify.ts";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
-import { subscribeProviderUsage, usageOf } from "../lib/usageStore.ts";
+import { subscribeProviderUsage, usageOf, busiestOf, providerUsage } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
@@ -293,7 +293,12 @@ export function TopBar({
   const [, bumpUsage] = useState(0);
   useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
   const ctx = providerInContext(focusedAgent, filterProvider);
-  const u = ctx ? usageOf(ctx) : null;
+  /* No context is not "no quota". `providerInContext` answers null whenever no
+     chat is focused and the filter names no provider — on the dashboard, in the
+     terminal, in a browser tab — and the meters simply stopped being drawn.
+     Reported as "sometimes it does not appear at all"; it was never about the
+     plan, it was about where you happened to be standing. */
+  const u = (ctx ? usageOf(ctx) : null) ?? (ctx ? null : busiestOf(providerUsage()));
   // A provider that has no reading to give right now — rate-limited, signed
   // out, or one that never reports at all. Worth saying out loud: a meter that
   // silently stops moving reads as "you have used nothing", the opposite of
