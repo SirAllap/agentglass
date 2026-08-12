@@ -7518,12 +7518,18 @@ function GhLink({ href, title }: { href: string; title: string }) {
   if (!safe) return null;
   const box = "shrink-0 inline-grid place-items-center rounded";
   const style = { width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" };
+  /* Two glyphs need more than the square the single-glyph button uses: at 20
+     wide the mark and the arrow touched the border and each other. Same height,
+     so the pair still reads as one row of controls. */
+  const wide = { ...style, width: 32 };
   return (
     <span className="shrink-0 inline-flex items-center gap-1">
-      <a href={safe} target="_blank" rel="noreferrer noopener" title={title} className={box} style={style}>
+      <a href={safe} target="_blank" rel="noreferrer noopener" title={title} className={box} style={wide}>
         <span className="inline-flex items-center" style={{ gap: 2 }}>
           <GhMark size={ICON.xs} />
-          <span aria-hidden style={{ fontSize: 9, lineHeight: 1, opacity: 0.75 }}>↗</span>
+          {/* Raised like a superscript rather than sat on the baseline, where it
+              read as a second glyph of equal weight instead of a modifier. */}
+          <span aria-hidden style={{ fontSize: 8, lineHeight: 1, opacity: 0.75, transform: "translateY(-3px)" }}>↗</span>
         </span>
       </a>
       <button type="button" className={box} style={{ ...style, color: copied ? "var(--success)" : style.color }}
