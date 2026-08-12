@@ -91,9 +91,11 @@ export function Workspace({
     onView("chat");
   }, [onView]);
 
-  /** Send a pull request review to the user's own tmux, and go there to watch
-   *  it. Left as a request rather than called directly: the terminal view owns
-   *  the socket, and may not be mounted when the button is pressed. */
+  /** Send a pull request review to a window on the ENGINE, and go there to
+   *  watch it. It used to go to the user's own tmux, and refused outright when
+   *  their shell was not inside one — see terminal.ts's `review` handler.
+   *  Left as a request rather than called directly: the terminal view owns the
+   *  socket, and may not be mounted when the button is pressed. */
   const reviewInTerminal = useCallback((root: string, number: number) => {
     requestTermReview(root, number);
     onView("term");
