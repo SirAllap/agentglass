@@ -956,13 +956,20 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    */
   const filtersByBoard = useRef<Record<string, {
     q: string; tag: string | null; mineOnly: boolean; statusPick: string[]; readyOnly: boolean;
+    /* Which status groups are rolled up. It rode on the status NAME alone and
+       nothing said which board — so folding "In development" away on one list
+       folded it on every other list that happens to use the same word, which is
+       all of them: the statuses come from one workspace. Reported as boards
+       sharing what you do on them, and it belongs here for the same reason the
+       filters do — a board is a place, and what you set in it stays in it. */
+    folded: Record<string, boolean>;
   }>>({});
   const landedOn = useRef<string | null>(null);
   useEffect(() => {
     const id = data?.view?.id;
     if (!id || landedOn.current === id) return;
     const leaving = landedOn.current;
-    if (leaving) filtersByBoard.current[leaving] = { q, tag, mineOnly, statusPick, readyOnly };
+    if (leaving) filtersByBoard.current[leaving] = { q, tag, mineOnly, statusPick, readyOnly, folded };
     landedOn.current = id;
     const kept = filtersByBoard.current[id];
     setQ(kept?.q ?? "");
@@ -970,6 +977,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     setMineOnly(kept?.mineOnly ?? false);
     setStatusPick(kept?.statusPick ?? []);
     setReadyOnly(kept?.readyOnly ?? false);
+    // Nothing kept means a board arrives fully expanded, which is what you want
+    // the first time you open one.
+    setFolded(kept?.folded ?? {});
     setShowDone(!!data?.view?.builtin);
     /* An open address bar belongs to the board it was opened from. Left alone
        it stays on screen carrying the PREVIOUS board's address, over a board it
