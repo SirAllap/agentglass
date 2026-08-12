@@ -1462,11 +1462,22 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         * silent, because a bar that appears on its own is a flicker, not
         * progress.
         */}
+      {/* The progress line is ALWAYS here, and only sometimes visible.
+          Two pixels, which sounds like nothing and is the whole complaint: as a
+          conditional block it appeared on every board you clicked, pushed the
+          table down by its own height and pulled it back. A gap that is always
+          the same size cannot move anything, so the track is drawn either way
+          and only its contents come and go. */}
+      <div className="shrink-0" role="status" aria-live="polite" style={{ paddingBottom: 4 }}>
+        {/* The 4px below is part of the reserved gap, not a margin that comes
+            and goes: the line sat directly on the search box, and a progress
+            bar touching an input reads as the input's own underline. */}
+        <div aria-hidden style={{ height: 2, overflow: "hidden", background: wanted ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+          {wanted && <div className="agx-indeterminate" style={{ height: "100%", background: "var(--primary)" }} />}
+        </div>
+      </div>
       {wanted && (
-        <div className="shrink-0" role="status" aria-live="polite">
-          <div aria-hidden style={{ height: 2, overflow: "hidden", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
-            <div className="agx-indeterminate" style={{ height: "100%", background: "var(--primary)" }} />
-          </div>
+        <div className="shrink-0">
           {/* Only when nothing else is saying it. A board being re-read has its
               own rows on screen and no veil over them, so this line is the only
               sign; a board that gets the veil is already told, at more length. */}
