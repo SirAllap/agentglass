@@ -455,7 +455,7 @@ function killGroup(s: Session, sigNum: number) {
 import { findTmuxBelow } from "./procchildren.ts";
 import { recall, remember, SETTLE_MS } from "./tmuxmemory.ts";
 import { deskAttachArgv } from "./tmuxctl.ts";
-import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
