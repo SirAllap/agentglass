@@ -2005,7 +2005,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               heading that labels the obvious costs the card its first line, and
               this pane starts level with the table's own heading instead. */}
           <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col"
-            style={{ paddingTop: 6 }}>
+            style={{ paddingTop: 0 }}>
             {picked
               ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
                   writable={boards.writeEnabled} repos={repos} here={here}
@@ -2909,8 +2909,13 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * them — which reads as a translucent bar rather than as the gap it is.
         * Same reason the footer carries its own bottom padding.
         */}
-      <div className="sticky top-0 z-20 pt-2.5 pb-1.5" style={{ background: "var(--bg)" }}>
-        <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="sticky top-0 z-20 pb-1.5" style={{ background: "var(--bg)" }}>
+        {/* The identity chips sit in the SAME band as the table's column titles
+            beside them — one height, centred, rather than a top padding chosen
+            to look about right. A padding is a guess that has to be re-guessed
+            every time either side changes its type size; a shared band cannot
+            drift because there is only one number. */}
+        <div className="flex items-center gap-1.5 flex-wrap" style={{ minHeight: HEAD_H }}>
           <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] tabular-nums rounded px-1.5 py-0.5"
             style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
             title={`Copy ${t.customId || t.id} — the id for a branch, a commit or a colleague`}>

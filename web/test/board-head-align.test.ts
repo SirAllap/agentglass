@@ -19,7 +19,20 @@ const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.me
 describe("the rail header and the table header", () => {
   it("both take their height from the same constant", () => {
     // Two uses, not one. One is the miss that got shipped.
-    expect(src.match(/height: HEAD_H/g)?.length).toBe(2);
+    expect(src.match(/(?<!min)[Hh]eight: HEAD_H/g)?.length).toBe(2);
+  });
+
+  it("puts the card's identity chips in that same band", () => {
+    /* Three surfaces start on one line: the filter box, the column titles, and
+       the card's chips. The chips were positioned with a top padding chosen to
+       look about right, which has to be re-guessed every time either side
+       changes its type size. */
+    expect(src).toContain("minHeight: HEAD_H");
+  });
+
+  it("stops the card pane adding a lead-in of its own", () => {
+    // A band plus a padding is the band plus a guess.
+    expect(src).toContain("style={{ paddingTop: 0 }}");
   });
 
   it("declares that constant once", () => {
