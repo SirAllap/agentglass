@@ -1155,10 +1155,105 @@ async function mergedInto(root: string, ref: string): Promise<Set<string>> {
   // a ref moves. Awaited so that miss costs wall clock rather than a terminal.
   const r = await gitAsync(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
   const set = new Set(r.stdout.split("\n").filter(Boolean));
+  for (const name of await mergedAnywhere(root)) set.add(name);
   applyMemo(root, key, set);
   mergedCache.set(key, { at: Date.now(), set });
   sweepProbes(root, ref, key, set);
   return set;
+}
+
+
+/**
+ * Branches whose every commit already exists somewhere on the remote.
+ *
+ * The trunk is the wrong question on any repository where work is integrated
+ * into something else first. Measured on a real one: of fourteen branches whose
+ * upstream was gone, eight were merged into the epic branch their pull requests
+ * targeted and none into master — so all fourteen read "not merged, kept", and
+ * two more turned out to be in a third remote branch nobody would have guessed.
+ *
+ * `rev-list --count <branch> --not --remotes` is that question exactly: how many
+ * commits are on this branch and nowhere on the remote. Zero means deleting it
+ * loses nothing, which is what the label is for.
+ *
+ * The cost is the reason it is done this way rather than with `--contains`.
+ * Measured on that repository, one branch:
+ *
+ *   git branch -r --contains <b>            5.40s
+ *   git rev-list --count <b> --not --remotes 0.016s
+ *
+ * — 340× apart, and the whole fourteen came to 765ms. `--contains` is what names
+ * WHICH branch, and that is why naming it is left to the sweep.
+ */
+async function mergedAnywhere(root: string): Promise<string[]> {
+  const key = `${root}\u0000anywhere`;
+  const hit = anywhereCache.get(key);
+  if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.names;
+  const r = await gitAsync(root, ["for-each-ref", "refs/heads", "--format=%(refname:short)"]);
+  const names = r.stdout.split("\n").filter(Boolean);
+  const out: string[] = [];
+  for (const name of names) {
+    // One spawn per branch, and cheap enough to do inline at 16ms — but bounded
+    // anyway: a repository with hundreds of branches must not turn this
+    // endpoint into a second of git.
+    if (out.length >= ANYWHERE_MAX) break;
+    const c = await gitAsync(root, ["rev-list", "--count", name, "--not", "--remotes"]);
+    if (c.stdout.trim() === "0") out.push(name);
+  }
+  anywhereCache.set(key, { at: Date.now(), names: out });
+  return out;
+}
+
+/** Same clock as the ancestry answer it extends. */
+const anywhereCache = new Map<string, { at: number; names: string[] }>();
+/** Branches examined per pass. Well past any real desk — his busiest repository
+ *  has 52 — and a wall in front of a fork with hundreds. */
+const ANYWHERE_MAX = 200;
+
+
+/**
+ * Which remote branch a merged branch ended up in.
+ *
+ * "Merged" is a better answer when it says where: an epic branch and master are
+ * different news for the same word, and on a repository that integrates through
+ * epics, master is rarely the one.
+ *
+ * Off the request path because naming it is the expensive half — `git branch -r
+ * --contains` measured 5.4s for ONE branch, against 16ms for the boolean. So
+ * this walks candidates instead, newest remote first, and stops at the first
+ * hit: `merge-base --is-ancestor` is 0.09s, and the branch that took it is
+ * almost always among the handful most recently pushed.
+ *
+ * Empty string when no candidate matched, cached like a hit — the alternative
+ * is re-walking every candidate, every sweep, for the branch that will never
+ * name one.
+ */
+const whereCache = new Map<string, { at: number; name: string }>();
+/** Candidates tried before giving up. Fifteen at 0.09s is a second and a half,
+ *  in a sweep that already yields between branches. */
+const WHERE_MAX = 15;
+
+function mergedIntoName(root: string, branch: string, trunk: string | null): string {
+  const key = `${root}\u0000where\u0000${branch}`;
+  const hit = whereCache.get(key);
+  if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.name;
+  const listed = git(root, ["for-each-ref", "--sort=-committerdate", "refs/remotes", "--format=%(refname:short)"]);
+  const remotes = listed.code === 0 ? listed.stdout.split("\n").filter(Boolean) : [];
+  // The trunk first, because that is still the commonest answer and the one
+  // nobody needs spelled out — and its own remote spelling is what the rest of
+  // this list is in.
+  const ordered = trunk ? [trunk, ...remotes.filter((r) => r !== trunk)] : remotes;
+  let found = "";
+  let tried = 0;
+  for (const cand of ordered) {
+    if (cand.endsWith("/HEAD") || cand === branch) continue;
+    if (tried++ >= WHERE_MAX) break;
+    // Exit 0 is "yes, an ancestor"; anything else is no. `--is-ancestor` says
+    // it in the code and prints nothing, which is why this is the cheap probe.
+    if (git(root, ["merge-base", "--is-ancestor", branch, cand]).code === 0) { found = cand; break; }
+  }
+  whereCache.set(key, { at: Date.now(), name: found });
+  return found;
 }
 
 /**
@@ -1227,7 +1322,12 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
       if (!started) { all = [...branchTips(root)]; started = true; }
       while (idx < all.length) {
         const [name, sha] = all[idx++]!;
-        if (set.has(name)) continue;
+        if (set.has(name)) {
+          // Already known merged — the expensive half left is WHERE, and this
+          // is the pass that can afford it: one branch per turn of the loop.
+          if (!whereCache.has(`${root}\u0000where\u0000${name}`) && mergedIntoName(root, name, ref)) proved++;
+          continue;
+        }
         if (probes++ >= PROBE_MAX) { idx = all.length; break; }
         // Cheapest test first: one spawn, and it answers for every branch the
         // trunk took by rebase. The squash probe's five only run when it can't.
@@ -1298,10 +1398,11 @@ export function invalidateMerged(root?: string): void {
   if (!root) {
     mergedCache.clear(); probedAt.clear(); probeMemo.clear();
     defaultBranchCache.clear(); baseCache.clear(); publishedCache.clear();
+    anywhereCache.clear(); whereCache.clear();
     return;
   }
   const mine = `${root}\u0000`;
-  for (const m of [mergedCache, probedAt, probeMemo] as Map<string, unknown>[]) {
+  for (const m of [mergedCache, probedAt, probeMemo, anywhereCache, whereCache] as Map<string, unknown>[]) {
     for (const k of m.keys()) if (k.startsWith(mine)) m.delete(k);
   }
   // `mine` (root + separator) is the prefix of the per-branch base keys too.
@@ -1332,6 +1433,9 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
       // Undefined rather than false when there's no trunk to compare against —
       // "we don't know" and "not merged" must not look the same to the UI.
       ...(merged ? { mergedIntoTrunk: merged.has(name) } : {}),
+      // Only when the sweep has named it — see mergedIntoName. Absent reads as
+      // "merged, and we have not said where yet", which is what the label does.
+      ...(merged?.has(name) ? { mergedInto: whereCache.get(`${root}\u0000where\u0000${name}`)?.name || undefined } : {}),
     });
   }
   // A "still sweeping" flag lived here once and was taken out, because

@@ -1165,13 +1165,35 @@ export interface GitBranch {
   track: string; // raw "[ahead 4, behind 53]" / "[gone]" / ""
   date: string;  // committerdate, relative
   subject: string;
-  /** Contained in the repo's trunk (origin/HEAD, or main/master). Absent when
-   *  there's no trunk to compare against — which is not the same as false.
+  /**
+   * Every commit on this branch already exists somewhere on the remote.
    *
-   *  This, not `git branch -d`, is the real "was it merged?": `-d` compares
-   *  against whatever is checked out, so from a worktree on a ticket branch
-   *  every merged PR looks unmerged. */
+   * Named for the trunk because that is what it used to mean, and the rename
+   * would touch more than it is worth; what it answers now is the question a
+   * person actually has, which is "can I delete this without losing work".
+   *
+   * Trunk alone was the wrong question. Measured on a real repository: eight of
+   * fourteen deleted-upstream branches were merged into the epic branch their
+   * PRs targeted and none into master, so the panel called them all "not
+   * merged" — true, and about a merge nobody had asked for. Two more were in
+   * neither, merged into some third remote branch entirely.
+   *
+   * Absent when it could not be asked, which is not the same as false: the UI
+   * reads absent as "we don't know" and keeps the delete confirmation.
+   *
+   * Still not `git branch -d`: that compares against whatever is checked out,
+   * so from a worktree on a ticket branch every merged PR looks unmerged.
+   */
   mergedIntoTrunk?: boolean;
+  /**
+   * Which remote branch it ended up in, when the sweep has named it.
+   *
+   * "Merged" is a better answer when it says where — an epic branch and master
+   * are different news for the same word. Filled in off the request path
+   * (naming it costs a walk per branch), so it arrives after the boolean and is
+   * absent until then.
+   */
+  mergedInto?: string;
 }
 export interface GitCommit {
   hash: string;
