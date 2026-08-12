@@ -1040,6 +1040,12 @@ const realApi = {
   /** The line comments GitHub is holding in your unsubmitted review, so the
    *  Review tab can show a review you started in the browser instead of
    *  claiming nothing is queued. */
+  /** A note on a ClickUp card's activity. `assignee` is what makes it arrive:
+   *  an `@Name` inside the text is plain text and notifies nobody. */
+  clickupComment: (id: string, text: string, assignee?: number) =>
+    post<{ ok: boolean; error?: string; unauthorised?: boolean }>("/clickup/comment", { id, text, ...(assignee != null ? { assignee } : null) }),
+  /** Whether the agent on this machine can post to Slack — see slackreach.ts. */
+  notifyReach: () => get<{ ok: boolean; slack: boolean }>("/notify/reach"),
   prPendingReview: (root: string, number: number) =>
     post<{ ok: boolean; id: string | null; comments: { path: string; line: number | null; startLine: number | null; body: string }[] }>("/prs/pending-review", { root, number }),
   prReviewPrompt: (root: string, number: number) =>
@@ -1335,6 +1341,8 @@ const demoApi: typeof realApi = {
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prPendingReview: (_r: string, _n: number) => D({ ok: true, id: null, comments: [] }),
+  clickupComment: (_i: string, _t: string, _a?: number) => D({ ok: false, error: "not available in the demo" }),
+  notifyReach: () => D({ ok: true, slack: false }),
   prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
   prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
   // The demo has no machine to report on and no checkout to browse: it is a

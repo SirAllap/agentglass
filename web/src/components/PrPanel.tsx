@@ -73,6 +73,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember } from "../../../shared/providers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { seedChat } from "../lib/chatStore.ts";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { FileRail } from "./FileRail.tsx";
@@ -3721,7 +3722,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         />
                       )}
                     </div>
-                    <PrSidebar d={d} onEditField={fieldPicker.open} />
+                    <PrSidebar d={d} root={root} onEditField={fieldPicker.open} />
                   </div>
                 ) : null}
 
@@ -5505,8 +5506,22 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
  * belongs to a GitHub assignment somebody is already making; a second place to
  * change it is a second place to change it by accident.
  */
-function CardFacts({ d }: { d: PrDetail }) {
+function CardFacts({ d, root }: { d: PrDetail; root: string }) {
   const setup = useClickupSetup();
+  /* Whether the agent here can post to Slack — see server/src/slackreach.ts.
+     Asked once per mount rather than baked in: somebody connects the
+     integration without restarting agentglass, and a button that only appears
+     after the next launch reads as broken. */
+  const [slack, setSlack] = useState(false);
+  const [tell, setTell] = useState<"slack" | "card" | null>(null);
+  const [msg, setMsg] = useState("");
+  const [sending, setSending] = useState(false);
+  const [said, setSaid] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.notifyReach().then((r) => { if (live) setSlack(!!r?.slack); }).catch(() => { /* assume not */ });
+    return () => { live = false; };
+  }, []);
   const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
   const query = ref?.query ?? "";
   /* The store tells everyone when an answer lands; this only has to redraw.
@@ -5559,6 +5574,70 @@ function CardFacts({ d }: { d: PrDetail }) {
                 </div>
               )
               : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No one assigned</span>}
+
+            {/* Telling somebody it is ready.
+                Two routes, and they are not the same kind of thing. The card is
+                ours to write on — agentglass holds a ClickUp token. Slack is
+                not: posting there means holding a workspace token to do what
+                the agent already does with its own, so that button writes the
+                message and hands it to a chat. Which is also why one of them
+                can be missing and the other cannot. */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              {slack && (
+                <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(defaultPing(d, whoToTell(task))); }}
+                  className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
+                  title={`Ask the agent to say this in Slack`}
+                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  Ping Slack
+                </button>
+              )}
+              <button onClick={() => { setSaid(""); setTell(tell === "card" ? null : "card"); setMsg(defaultPing(d, whoToTell(task))); }}
+                className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
+                title="Write a note on this card's activity"
+                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                Note on card
+              </button>
+              {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
+            </div>
+
+            {tell && (
+              <div className="flex flex-col gap-1.5">
+                {/* Prefilled and editable, in that order. The default is the
+                    sentence you were going to type; leaving it as a blank box
+                    makes the common case the slow one. */}
+                <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
+                  className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
+                  style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
+                    {tell === "slack" ? "the agent posts this" : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
+                  </span>
+                  <button disabled={sending || !msg.trim()} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
+                    style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                    onClick={async () => {
+                      const target = whoToTell(task);
+                      if (tell === "slack") {
+                        /* Handed over rather than sent. The chat is where the
+                           Slack connection lives, and it is also where you can
+                           see what was actually said — a fire-and-forget button
+                           into somebody else's workspace is not something to
+                           offer without a transcript. */
+                        seedChat(root, slackPrompt(msg, target?.name), `Ping about #${d.number}`);
+                        setTell(null); setSaid("handed to a chat");
+                        return;
+                      }
+                      if (!task) return;
+                      setSending(true);
+                      const r = await api.clickupComment(task.id, msg.trim(), target?.id ?? undefined).catch(() => null);
+                      setSending(false);
+                      if (r?.ok) { setTell(null); setSaid("written on the card"); }
+                      else setSaid(`!${r?.error || "ClickUp refused it"}`);
+                    }}>
+                    {sending ? "Sending…" : tell === "slack" ? "Hand to a chat" : "Write it"}
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -5566,8 +5645,29 @@ function CardFacts({ d }: { d: PrDetail }) {
   );
 }
 
-function PrSidebar({ d, onEditField }: {
+/** Who the note is for: whoever is on the card. Falls back to nobody rather
+ *  than to the pull request's author — telling somebody their own branch is
+ *  ready is the one message that is never useful. */
+function whoToTell(task: { people?: { id?: number; name: string }[] } | null): { id?: number; name: string } | null {
+  return task?.people?.[0] ?? null;
+}
+
+/** The sentence, ready to send. The mention is always there, because a note
+ *  that does not name anybody is a note nobody reads as theirs. */
+function defaultPing(d: PrDetail, who: { name: string } | null): string {
+  return `${who ? `@${who.name} ` : ""}PR ready to review — #${d.number} ${d.title}\n${d.url}`;
+}
+
+/** What the agent is asked to do. Spelled as an instruction and not as the
+ *  message itself, so a chat that is already mid-conversation cannot mistake it
+ *  for something to answer. */
+function slackPrompt(msg: string, name?: string): string {
+  return `Post this in Slack${name ? ` to ${name}` : ""}, as it is written, and tell me where it landed:\n\n${msg}`;
+}
+
+function PrSidebar({ d, root, onEditField }: {
   d: PrDetail;
+  root: string;
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
@@ -5640,7 +5740,7 @@ function PrSidebar({ d, onEditField }: {
       )}
       {/* Under the GitHub facts, where he asked for it: the pull request first,
           and then the card it came from. */}
-      <CardFacts d={d} />
+      <CardFacts d={d} root={root} />
       {d.autoMerge && (
         <SidebarSection title="Auto-merge">
           <span className="text-[10.5px]" style={{ color: "var(--warning)" }}>

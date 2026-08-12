@@ -3,6 +3,7 @@
 import "./cookieentry.ts";
 import type { ServerWebSocket } from "bun";
 import type { IngestBody, WsFrame, WorkingTree, PanesResponse } from "../../shared/types.ts";
+import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
@@ -76,7 +77,7 @@ import {
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -2198,6 +2199,12 @@ const server = Bun.serve<WsData>({
       const r = await listMembers(url.searchParams.get("list") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
+    /* Whether the agent here can post to Slack. A route rather than a build-time
+       constant: somebody connects the integration without restarting agentglass,
+       and a button that stays hidden until the next launch reads as broken. */
+    if (pathname === "/notify/reach") {
+      return json({ ok: true, slack: slackReachable() });
+    }
     if (pathname === "/clickup/task") {
       const r = await taskDetail(url.searchParams.get("id") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
@@ -2231,6 +2238,11 @@ const server = Bun.serve<WsData>({
           }, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
+        // A note on the card's activity. No `updated` guard: a comment adds to
+        // the history rather than overwriting anybody's field, so a card that
+        // moved underneath is not a reason to refuse this one.
+        : pathname === "/clickup/comment"
+          ? await commentOn(id, String(b.text ?? ""), b.assignee != null ? Number(b.assignee) : undefined)
         : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
