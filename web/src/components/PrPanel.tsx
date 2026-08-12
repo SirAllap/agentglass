@@ -8153,6 +8153,12 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const [newest, setNewest] = useState(false);
   const setWho = onWho;
   const [cursor, setCursor] = useState(-1);
+  /* Which person, inside Humans. Its own state and not part of `who`, because
+     it has to survive nothing and clear itself the moment you leave the lane —
+     a hidden filter is how a conversation reads as empty for no reason. */
+  const [person, setPerson] = useState<string | null>(null);
+  const [pCursor, setPCursor] = useState(-1);
+  useEffect(() => { setPerson(null); setPCursor(-1); }, [who]);
   const tlRef = useRef<HTMLDivElement>(null);
 
   /*
@@ -8243,7 +8249,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   /** `ms` is what the timeline sorts on, and for a thread it is its LAST
    *  comment. It used to be the first, which is the ordering bug this whole
    *  feature was written for. */
-  type Entry = { at: string; ms: number; key: string; lane: Lane; hot?: number; node: React.ReactNode; body: React.ReactNode };
+  /* `author` is whoever's remark this row IS — for a thread, whoever raised it,
+     the same rule the lane uses. Absent on events, which nobody said. */
+  type Entry = { at: string; ms: number; key: string; lane: Lane; author?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
   const ms = (iso: string) => Date.parse(iso) || 0;
   /** How many of the things said since your last visit are inside this one. */
@@ -8254,7 +8262,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     const mine = d.threads.filter((t) => t.comments[0]?.author === r.author && !cameFrom.has(t.id));
     const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
     entries.push({
-      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human",
+      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human", author: r.author,
       hot: hotOf([`r${r.author}-${r.submittedAt}`]) + mine.reduce((n, t) => n + threadHot(t), 0),
       node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
         {r.state === "CHANGES_REQUESTED" ? "✕" : r.state === "APPROVED" ? "✓" : "💬"}</span>,
@@ -8280,7 +8288,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.humanComments) {
     entries.push({
-      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", hot: hotOf([`c${c.id}`]),
+      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", author: c.author, hot: hotOf([`c${c.id}`]),
       node: <span style={{ color: "var(--text3)" }}>💬</span>,
       body: <><span id={anchorId(`c${c.id}`)} />
         <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
@@ -8309,7 +8317,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
       // Its LAST comment, not its first. A thread nobody has touched sorts
       // exactly where it always did; one that has just been answered arrives
       // where the answer belongs.
-      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, hot: threadHot(t),
+      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, author: t.comments[0]?.author, hot: threadHot(t),
       node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? "✓" : "○"}</span>,
       body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy}
         newSet={newSet} cameFrom={cameFrom.get(t.id)} />,
@@ -8362,9 +8370,41 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   // timeline, where the push that invalidated a review is part of the story.
   const humanCount = entries.filter((e) => e.lane === "human").length;
   const botCount = entries.filter((e) => e.lane === "bot").length;
-  const shown = who === "all" ? entries
+  const laned = who === "all" ? entries
     : who === "new" ? entries.filter((e) => !!e.hot)
     : entries.filter((e) => e.lane === who);
+  /* Who has actually spoken in this lane, most talkative first, counted off the
+     rows the timeline draws rather than off the participant list: somebody who
+     was requested and never answered is not a filter worth offering. */
+  const speakers = (() => {
+    const by = new Map<string, number>();
+    for (const e of laned) if (e.author) by.set(e.author, (by.get(e.author) ?? 0) + 1);
+    return [...by.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  })();
+  const shown = person ? laned.filter((e) => e.author === person) : laned;
+  /* Same dead end as the "New" guard above, one level down: a person picked in
+     Humans who then has nothing on screen. Placed HERE and not up with the
+     other effects on purpose — `speakers` is computed below them, and a hook
+     reading it from up there is the temporal-dead-zone crash that takes the
+     whole window black. */
+  /* Walking one person's remarks. Same landing as the New walker — centred and
+     flashed — because a jump that lands silently on a long page is
+     indistinguishable from one that did nothing. */
+  const step = (dir: 1 | -1) => {
+    if (!shown.length) return;
+    const next = ((pCursor + dir) % shown.length + shown.length) % shown.length;
+    setPCursor(next);
+    const el = document.getElementById(anchorId(shown[next]!.key));
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.classList.remove("agx-found");
+    void el.offsetWidth;
+    el.classList.add("agx-found");
+  };
+  const speakerKey = speakers.map(([n]) => n).join("\u0000");
+  useEffect(() => {
+    if (person && !speakerKey.split("\u0000").includes(person)) { setPerson(null); setPCursor(-1); }
+  }, [person, speakerKey]);
 
   /* The events between the comments. GitHub has no timestamp on either of these
      — "opened" is not on the detail payload and a force-push is a boolean —
@@ -8509,6 +8549,50 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
               {label}<span className="tabular-nums opacity-70">{n}</span>
             </button>
           ))}
+        </div>
+      )}
+      {/* Inside Humans, WHO. On a long review the lane is still forty rows and
+          the question is usually about one person — so the people who have
+          actually spoken get a row of their own, with what each of them said
+          counted, and a pair of steps to walk their remarks without scrolling
+          past everybody else's.
+
+          Only in this lane, and only past two speakers: a sub-filter offering
+          "the author" on a pull request nobody else has touched is a control
+          that can only ever do nothing. */}
+      {who === "human" && speakers.length > 1 && (
+        <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+          {speakers.map(([name, n]) => {
+            const on = person === name;
+            return (
+              <button key={name} onClick={() => { setPerson(on ? null : name); setPCursor(-1); }}
+                title={on ? `Show everyone again` : `Only ${name} — ${n} remark${n === 1 ? "" : "s"}`}
+                className="agx-btn text-[10.5px] px-2 py-0.5 rounded-full inline-flex items-center gap-1.5 tabular-nums"
+                style={{
+                  color: on ? "var(--text)" : "var(--text3)",
+                  border: `1px solid color-mix(in srgb, var(--text) ${on ? 30 : 16}%, transparent)`,
+                  background: on ? "color-mix(in srgb, var(--border) 30%, transparent)" : "transparent",
+                }}>
+                {name}<span className="opacity-70">{n}</span>
+              </button>
+            );
+          })}
+          {person && (
+            <span className="inline-flex items-center gap-1 ml-auto">
+              {/* Steps rather than a scrollbar: the rows are scattered through a
+                  conversation that may be hundreds long, and "the next thing
+                  THEY said" is the movement being asked for. */}
+              <button onClick={() => step(-1)} title={`Previous remark by ${person}`}
+                className="agx-btn inline-grid place-items-center rounded"
+                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↑</button>
+              <button onClick={() => step(1)} title={`Next remark by ${person}`}
+                className="agx-btn inline-grid place-items-center rounded"
+                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↓</button>
+              <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
+                {pCursor >= 0 ? `${pCursor + 1}/${shown.length}` : shown.length}
+              </span>
+            </span>
+          )}
         </div>
       )}
       {/* The timeline, with a rail of marks beside it.
