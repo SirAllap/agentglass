@@ -473,7 +473,7 @@ function connect(s: Sess) {
   // Spent here, not on arrival: a reconnect after a drop must open a shell,
   // not start the agent a second time in the same worktree.
   s.agentTicket = null;
-  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true));
+  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true, s.console === true));
   ws.binaryType = "arraybuffer";
   s.ws = ws;
   ws.onmessage = (ev) => {

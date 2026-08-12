@@ -68,6 +68,33 @@ export function engineAttachArgv(root: string): string[] | null {
 }
 
 /**
+ * The docked console's own engine session.
+ *
+ * A SEPARATE session from the terminal view's, and the separation is the whole
+ * function. Sharing one meant two clients attached to the same tmux session,
+ * which tmux answers by mirroring: the console showed whatever the terminal was
+ * showing, keystroke for keystroke, and both fought over the size. That was
+ * reported as "the Docker console is a mirror of the Terminal".
+ *
+ * Attach-or-create like the other one, so the console you had is the console
+ * you get back — and because it lives on the engine, it is still there after
+ * the app is closed and reopened. That is what the console's "keep running"
+ * button used to fake by typing `tmux` into the shell, on the user's own
+ * server, with the user's own config.
+ */
+export function engineConsoleArgv(root: string): string[] | null {
+  const base = engineAttachArgv(root);
+  if (!base) return null;
+  // Same argv with the session renamed. Built from the other one rather than
+  // repeated, so the socket, the config and the flags cannot drift apart.
+  const at = base.lastIndexOf("-s");
+  if (at < 0 || !base[at + 1]) return null;
+  const named = [...base];
+  named[at + 1] = `${named[at + 1]}-console`;
+  return named;
+}
+
+/**
  * Hand the running engine its config again, without restarting anything.
  *
  * tmux reads its config when the SERVER starts, so a saved prefix used to wait

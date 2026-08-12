@@ -25,7 +25,7 @@ import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWind
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal } from "./config.ts";
-import { engineAttachArgv, engineWindowRunning } from "./tmuxpane.ts";
+import { engineAttachArgv, engineConsoleArgv, engineWindowRunning } from "./tmuxpane.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -168,7 +168,16 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    * Opt-out rather than opt-in because the phone connects with a root and no
    * pane and does want the desk — see mobile/src/terminal/TerminalView.tsx.
    */
-  fresh?: boolean };
+  fresh?: boolean;
+  /**
+   * This socket is the docked console.
+   *
+   * It gets the engine whatever the terminal view is set to. The setting is
+   * about YOUR terminal — where you may well want your own tmux, your own
+   * config and your own sessions — and the console is the app's, where a shell
+   * that dies with the window is the thing being fixed.
+   */
+  console?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 /**
@@ -727,7 +736,12 @@ export function ptyOpen(ws: PtyWs) {
    * null with no tmux and with a config the gate has refused.
    */
   const plain = wantsDeskResume(d, { attach: !!attach, agent: agentRun.length > 0, editor: !!editor });
-  const engine = plain && tmuxTerminal() === "engine" ? engineAttachArgv(startIn) : null;
+  /* The console is not offered the choice: it is always the engine. Its own
+     session, too — sharing the terminal's meant two clients on one tmux
+     session, which tmux answers by mirroring both screens. */
+  const engine = d.console
+    ? engineConsoleArgv(startIn)
+    : plain && tmuxTerminal() === "engine" ? engineAttachArgv(startIn) : null;
   const resume = !engine && plain
     ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
     : null;

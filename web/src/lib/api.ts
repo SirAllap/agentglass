@@ -352,7 +352,16 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
    * whichever tab the terminal is on and typing into whatever pane that tab has
    * — an agent's, in the case that was reported.
    */
-  fresh = false) =>
+  fresh = false,
+  /**
+   * This socket is the docked console.
+   *
+   * The server gives it the engine whatever the terminal view is set to, and in
+   * a session of its own. Passed rather than inferred from `fresh`: they are
+   * different questions — `fresh` says "not the session the desk resumed", and
+   * this says "this is the app's shell, and it must outlive the window".
+   */
+  isConsole = false) =>
   withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
     // A single-use ticket for an agent to start in this pane — never the prompt
     // itself, which is kilobytes and has no business in a URL. See
@@ -366,7 +375,8 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
     // a temp copy, a file tree is your checkout. The server refuses this for a
     // temp copy however loudly the client asks.
     + (view && edit ? "&edit=1" : "")
-    + (fresh ? "&fresh=1" : ""));
+    + (fresh ? "&fresh=1" : "")
+    + (isConsole ? "&console=1" : ""));
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(SERVER + path, { headers: authHeaders() });

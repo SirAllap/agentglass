@@ -879,6 +879,7 @@ const server = Bun.serve<WsData>({
         // last in. Sent by the consoles docked inside other views — see
         // PtyWsData.fresh for the three clients this was measured on.
         fresh: url.searchParams.get("fresh") === "1",
+        console: url.searchParams.get("console") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,

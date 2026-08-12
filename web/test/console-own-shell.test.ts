@@ -26,6 +26,9 @@ describe("the flag on the wire", () => {
 
   it("says so plainly when it is", () => {
     expect(ptyWsUrl("/home/me/code", 80, 24, undefined, false, undefined, true)).toContain("&fresh=1");
+    // And the console flag is its own, not implied by fresh.
+    expect(ptyWsUrl("/home/me/code", 80, 24, undefined, false, undefined, true)).not.toContain("console=1");
+    expect(ptyWsUrl("/home/me/code", 80, 24, undefined, false, undefined, true, true)).toContain("&console=1");
   });
 
   it("does not disturb the parameters it sits beside", () => {
@@ -44,7 +47,10 @@ describe("who sends it", () => {
     // be the first to create it: the strip mounting, and `runInConsole` being
     // called by a panel button before the strip is open.
     expect(terminal.match(/s\.console = true;/g)?.length).toBe(2);
-    expect(terminal).toContain("ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true)");
+    /* Two flags now, and they answer different questions: `fresh` says "not the
+       session the desk resumed", and `console` says "this is the app's shell,
+       and it must outlive the window" — which is what puts it on the engine. */
+    expect(terminal).toContain("ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true, s.console === true)");
   });
 
   it("the console that pre-types a command and waits for your Enter", () => {
@@ -52,6 +58,6 @@ describe("who sends it", () => {
        note: it types `apt-get install …` or a branch deletion into the shell
        and leaves the Enter to you. Into the desk's session, that is somebody
        else's pane. */
-    expect(shellConsole).toContain("ptyWsUrl(cwd, term.cols, term.rows, undefined, false, undefined, true)");
+    expect(shellConsole).toContain("ptyWsUrl(cwd, term.cols, term.rows, undefined, false, undefined, true, true)");
   });
 });
