@@ -1646,13 +1646,30 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           of the board, which is long enough that "Do it" followed by nothing
           reads as a button that did not work — and the second press is a
           second write. */}
-      {busy && !confirm && (
-        <div className="px-5 py-1 shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
-          <Spinner label="Telling ClickUp…" className="" />
-        </div>
-      )}
+      <div className="flex flex-1 min-h-0 relative">
+        {/* The wait, laid OVER the panel rather than inserted above it.
+            As a block in the flow it pushed everything down by its own height
+            and pulled it back a moment later, so every board you clicked made
+            the whole page jump — reported as the UI vanishing for a
+            millisecond, and it was the layout moving, not the content.
 
-      <div className="flex flex-1 min-h-0">
+            And it only belongs to a WRITE. Switching board asks ClickUp a
+            question, and the answer is already announced where you are looking:
+            the list you just clicked wears its own `…` in the rail. A banner
+            across the panel for that is a second, louder answer to a question
+            the rail already answered — so reads have none, and `wanted`, which
+            the board load sets and nothing else does, is what tells them apart.
+
+            A write keeps it, because a write has no such home: it is started
+            from a menu that closes behind it, and "Do it" followed by nothing
+            reads as a button that did not work — and the second press is a
+            second write. */}
+        {busy && !confirm && !wanted && (
+          <div className="absolute left-0 right-0 top-0 px-5 py-1 z-10 pointer-events-none"
+            style={{ background: "color-mix(in srgb, var(--primary) 10%, var(--bg))" }}>
+            <Spinner label="Telling ClickUp…" className="" />
+          </div>
+        )}
         {/*
          * The lists, down the side.
          *

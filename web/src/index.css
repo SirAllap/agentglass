@@ -638,6 +638,45 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    until a row has been on screen once, but a guess an order of magnitude out
    makes the scrollbar leap around on the way through — so the two shapes in
    this list guess separately. */
+
+/*
+ * The Task column, held still while the rest of the row scrolls sideways.
+ *
+ * Asked for after the card pane became draggable: pull it wide and the table
+ * loses its right-hand columns, and reading a sprint or a point count is
+ * useless if you cannot see which row it belongs to. ClickUp freezes its Name
+ * column for the same reason.
+ *
+ * The background has to be OPAQUE, and that is the whole difficulty. The row's
+ * own tints are translucent — a hover wash and a selected mix, both over
+ * whatever is behind — and a sticky cell painted with those lets the columns
+ * underneath show through as they pass. So the cell mixes the same tints
+ * against `--bg` instead of against transparent, which lands on the same colour
+ * over the panel and stays solid over a moving column. The row states are
+ * repeated here rather than inherited because there is nothing to inherit: an
+ * inline `background` on the row cannot reach a child.
+ */
+.agx-stick {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+.agx-row:hover .agx-stick {
+  background: color-mix(in srgb, #fff 5%, var(--bg));
+}
+.agx-row[aria-current="true"] .agx-stick {
+  background: color-mix(in srgb, var(--primary) 13%, var(--bg));
+}
+/* The heading sits above the rows AND left of the columns, so it needs to win
+   both ways. */
+.agx-stick-head {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
 .agx-row-tall {
   contain-intrinsic-size: auto 110px;
 }
