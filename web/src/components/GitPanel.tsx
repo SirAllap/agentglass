@@ -2727,13 +2727,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           // count ran together into one unreadable string.
                           // Joining a list cannot produce that.
                           const parts: ReactNode[] = [];
-                          /* "already in the trunk" was a lie on any repository
-                             that integrates through an epic branch: measured on
-                             a real one, eight of fourteen were merged into the
-                             epic their pull requests targeted and NONE into
-                             master. The count is "already on the remote" now,
-                             and where each one went is on its own row. */
-                          if (goneMerged.length) parts.push(<>{goneMerged.length} already on the remote</>);
+                          if (goneMerged.length) parts.push(<>{goneMerged.length} already in {branchData.trunk ?? "the trunk"}</>);
                           // "Not merged" is a verdict, and while the squash /
                           // rebase sweep is still running it is not one we have
                           // yet: those checks are what turn most of these
@@ -2789,22 +2783,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 Safe to delete locally, and the usual reason a branch
                                 list grows to 57 entries. */}
                             {t.gone && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }} title={`${b.upstream} no longer exists on the remote — this branch was probably merged`}>gone</span>}
-                            {/* Where it ended up, when the sweep has named it.
-                                On its own row rather than in the summary above,
-                                because the answer differs per branch: an epic
-                                and the trunk are different news for the same
-                                word, and on a repository that integrates
-                                through epics the trunk is rarely the one.
-                                The remote prefix is dropped — `origin/` on
-                                every chip is a column of the same six
-                                characters. */}
-                            {b.mergedIntoTrunk && b.mergedInto && (
-                              <span className="shrink-0 text-[9.5px] px-1 py-px rounded min-w-0 truncate max-w-[14rem]"
-                                style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}
-                                title={`every commit on this branch is already in ${b.mergedInto}`}>
-                                in {b.mergedInto.replace(/^[^/]+\//, "")}
-                              </span>
-                            )}
                             {/* In sync, and freshly enough fetched to mean it. */}
                             {b.upstream && !t.gone && !t.ahead && !t.behind && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--success)" }} title={`in sync with ${b.upstream}`}>✓</span>}
                           </span>
