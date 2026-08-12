@@ -1695,7 +1695,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
          */}
         <nav aria-label="Lists" className="flex flex-col shrink-0 min-w-0"
           style={{ width: railOpen ? 214 : 34, borderRight: edge(12), transition: "width 120ms ease" }}>
-          <div className="flex items-center gap-1 px-1.5 py-1.5 shrink-0" style={{ borderBottom: edge(10) }}>
+          <div className="flex items-center gap-1 px-1.5 shrink-0"
+            style={{ height: HEAD_H, borderBottom: edge(10) }}>
             <button onClick={() => setRailOpen((o) => !o)}
               aria-expanded={railOpen}
               title={railOpen ? "Fold the list menu" : "Show the lists"}
@@ -1767,31 +1768,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           )}
         </nav>
         <div className="flex flex-col flex-1 min-w-0">
-          <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] shrink-0"
-            style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
-              borderTop: edge(10), borderBottom: edge(10) }}>
-            <span>Task</span>
-            {anyWho && <span className="text-center">Who</span>}
-            {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
-            {anySprint && <span>Sprint</span>}
-            {/* Centred over the columns they label, because those columns hold
-                two-character numbers in a 30px track — a heading hard against
-                the left of it sits above nothing, and the eye stops pairing the
-                two. `Task` and the rest stay left: they label text that starts
-                at the left. */}
-            {/* Hairlines before Cmts and before Pts, and only there. A rule
-                between every column stripes the table and reads as a grid you
-                are meant to study; two of them just say "the numbers start
-                here" and "this one is not that one" — which is the whole
-                complaint, since a count and a point score are the same shape.
-                `edge(6)` is the same weight as the row separators, so it reads
-                as part of the table rather than as decoration. */}
-            <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
-            <span>Due</span>
-            {anyEst && <span className="text-center">Est</span>}
-            <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Pts</span>
-            <span />
-          </div>
           {/*
             * The wait is drawn ON TOP of the old rows, not applied to them.
             *
@@ -1804,7 +1780,38 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             * keeping through a ten-second read.
             */}
           <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
-          <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+          {/* One scroller for the heading AND the rows. They used to be
+              siblings, which is fine while nothing moves sideways and wrong the
+              moment something does: two boxes scrolled independently put the
+              heading over the wrong column. */}
+          <div className="agx-scroll flex-1 min-w-0 overflow-auto">
+            <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] sticky top-0 z-10"
+                style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
+                  minWidth: TABLE_MIN_W, background: "var(--bg)",
+                  borderTop: edge(10), borderBottom: edge(10) }}>
+              <span className="agx-stick-head">Task</span>
+              {anyWho && <span className="text-center">Who</span>}
+              {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
+              {anySprint && <span>Sprint</span>}
+              {/* Centred over the columns they label, because those columns hold
+                  two-character numbers in a 30px track — a heading hard against
+                  the left of it sits above nothing, and the eye stops pairing the
+                  two. `Task` and the rest stay left: they label text that starts
+                  at the left. */}
+              {/* Hairlines before Cmts and before Pts, and only there. A rule
+                  between every column stripes the table and reads as a grid you
+                  are meant to study; two of them just say "the numbers start
+                  here" and "this one is not that one" — which is the whole
+                  complaint, since a count and a point score are the same shape.
+                  `edge(6)` is the same weight as the row separators, so it reads
+                  as part of the table rather than as decoration. */}
+              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
+              <span>Due</span>
+              {anyEst && <span className="text-center">Est</span>}
+              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Pts</span>
+              <span />
+            </div>
+
             {/* Looks like a card number and is not on this board — so offer to
                 go and get it, rather than reporting nothing and leaving you to
                 work out that "not here" is not "does not exist". */}
@@ -2223,6 +2230,34 @@ const CU_POLL_SLOW_MS = 300_000;
  * `Who` and `Sprint` appear only once some card actually has one. A column of
  * blanks costs the title its width and tells you nothing.
  */
+/**
+ * The width below which the table scrolls sideways instead of squeezing.
+ *
+ * The title track is `1fr`, so without a floor the columns just get narrower
+ * and narrower as the card pane is dragged open — sprint names clip, the point
+ * count lands under its own heading, and nothing tells you it happened. Past
+ * this the row keeps its shape and the columns move off the right instead,
+ * with Task held still. Which is what ClickUp does, and for the same reason.
+ *
+ * The number is the fixed tracks plus their gaps plus a title wide enough to
+ * read: it is not a preference, it is the point where the row stops working.
+ */
+const TABLE_MIN_W = 720;
+
+/**
+ * The height both headers share.
+ *
+ * The rail's filter box and the table's column titles start at the same line
+ * and used to end at different ones, so the two rules under them were a few
+ * pixels apart across the whole panel — the kind of thing you cannot unsee once
+ * it is pointed at. One number, used by both, is what keeps them level when
+ * either changes.
+ *
+ * Set by the taller of the two: the rail holds a real input and a button, and
+ * shrinking those to meet a text label would cost a control to save a rule.
+ */
+const HEAD_H = 34;
+
 const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean) =>
   // The comments column is unconditional, unlike Who and Sprint. Those come and
   // go because a board where nobody is assigned has nothing to put in them; a
@@ -2401,10 +2436,15 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
            14 plus the hairlines below is what separates them; the numbers are
            centred in their own track rather than crowded against its edge. */
         display: "grid", gridTemplateColumns: grid, gap: 14, borderBottom: edge(6), position: "relative",
+        /* Matches the heading above it. Without it the row squeezes while the
+           heading scrolls, and the two stop lining up. */
+        minWidth: TABLE_MIN_W,
         background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
-      <div className="min-w-0">
+      {/* Held still while the columns to its right scroll under it — see
+          `.agx-stick` for why its background has to be opaque. */}
+      <div className="min-w-0 agx-stick">
         <div className="flex items-baseline gap-1.5 min-w-0">
           {/* Blocked first, because it changes whether the rest is worth
               reading. 28 of 30 cards on a real board have dependencies and none
