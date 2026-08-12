@@ -47,14 +47,23 @@ set -g escape-time 0
 # tmux counts from 0 and nobody binds a prefix to 0 — every real config on this
 # machine's own tmux included flips this, and a strip whose first tab answers to
 # a key one place away from where it is drawn is a strip you mis-hit all day.
-# Closing a tab does NOT renumber: off is tmux's own default and what the
-# machine's tmux does, and a window that keeps its number is a window whose
-# number you can still trust after somebody closes another one. Reordering by
-# drag renumbers regardless — that path runs its own move-window -r, so the
-# two cases are decided separately on purpose.
+# Closing a tab DOES renumber, and this was the other way round for a day.
+#
+# The argument for off was that a window keeping its number is a number you can
+# still trust after somebody closes another one, and that off is what this
+# machine's own tmux does — it does, by never setting the option. Reported from
+# use: close 6 with a 7 beside it and the strip reads 5, 7, which is a gap the
+# eye reads as a window that failed to close. The number in a tab is a position
+# in a row, not an identity, and a row of tabs with a hole in it is wrong in a
+# way a stale number is not.
+#
+# It also makes the two ways of rearranging agree. Dragging already renumbered —
+# that path runs its own move-window -r — so a strip renumbered when you moved
+# a tab and did not when you closed one, which is the worse kind of
+# inconsistency: it depends on which gesture you happened to use.
 set -g base-index 1
 setw -g pane-base-index 1
-set -g renumber-windows off
+set -g renumber-windows on
 # Claude Code asks for this by name and warns in the pane without it.
 set -g focus-events on
 `;

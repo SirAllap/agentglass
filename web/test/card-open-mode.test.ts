@@ -59,7 +59,15 @@ describe("opening a card", () => {
   });
 
   it("keeps the drag handle out of the way when there is nothing to drag", () => {
-    // A resize handle beside a modal resizes a pane nobody can see.
-    expect(src).toContain('{cardMode === "side" && <div role="separator"');
+    /* A resize handle beside a modal resizes a pane nobody can see — and so
+       does one beside no pane at all, which is what an empty sidebar was. */
+    expect(src).toContain('{cardMode === "side" && picked && <div role="separator"');
+  });
+
+  it("draws no sidebar until a card is picked", () => {
+    // An empty pane saying "Pick a card." spent 380px telling you to do the
+    // thing you were already doing, with the width taken from the table you
+    // were reading in order to choose.
+    expect(src).toContain('{cardMode === "side" && picked && (\n        <aside');
   });
 });

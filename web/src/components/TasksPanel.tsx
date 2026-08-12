@@ -2029,7 +2029,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             copies of it would be two places for a field to be wrong. */}
         {/* The handle lives in the gap, wide enough for a pointer even though
             the line it draws is one pixel. */}
-        {cardMode === "side" && <div role="separator" aria-orientation="vertical" tabIndex={0}
+        {cardMode === "side" && picked && <div role="separator" aria-orientation="vertical" tabIndex={0}
           aria-label="Drag to resize the card pane"
           title="Drag to resize · double-click for the usual width"
           onDoubleClick={() => setCardW(CARD_W_DEFAULT)}
@@ -2057,7 +2057,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           }}
           className="shrink-0 self-stretch"
           style={{ width: 5, marginRight: -5, cursor: "col-resize", zIndex: 5 }} />}
-        {cardMode === "side" && (
+        {/* Only with a card in it. An empty pane saying "Pick a card." spent
+            380px telling you to do the thing you were already doing, and took
+            that width from the table you were reading to choose. */}
+        {cardMode === "side" && picked && (
         <aside className="flex flex-col shrink-0 min-w-0"
           style={{ width: cardW, borderLeft: edge(12) }}>
           {/* No eyebrow over this pane. It said the word "Card" above a card,

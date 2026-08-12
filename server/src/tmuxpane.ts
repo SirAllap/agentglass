@@ -295,6 +295,13 @@ export async function engineWindowRunning(
 ): Promise<{ paneId: string; windowId: string } | null> {
   const session = engineSessionName(root);
   if (!validSessionName(session)) return null;
+  /* The config, before the first tmux call rather than only on the attach path.
+     `tmux()` passes `-f confPath()` whatever the caller is, so a window opened
+     before anybody attached ran against a file that might be stale or not there
+     at all — and tmux reads its config when the SERVER starts, so whichever
+     call happens to be first decides what the engine believes for the rest of
+     its life. */
+  ensureConf();
   /*
    * Asked for, then created — not `new-session -A`.
    *

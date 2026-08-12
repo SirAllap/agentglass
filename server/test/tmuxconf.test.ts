@@ -252,6 +252,10 @@ test("tabs are numbered from 1, where the number keys are", () => {
   /* Off, like tmux's own default and like the machine's tmux. Closing a tab
      leaves its neighbours' numbers alone; the drag path renumbers on its own
      (see tmux-move-window.test.ts), so the two cases are separate decisions. */
-  expect(content).toContain("set -g renumber-windows off");
+  /* On, and it was off for a day. Reported from use: closing 6 with a 7 beside
+     it left the strip reading 5, 7, and a row of tabs with a hole in it reads
+     as a window that failed to close. It also makes closing agree with
+     dragging, which renumbers already. */
+  expect(content).toContain("set -g renumber-windows on");
   expect(conf.validateConf(content).ok).toBe(true);
 });

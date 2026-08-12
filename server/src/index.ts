@@ -3553,6 +3553,19 @@ setInterval(prune, 3_600_000);
 // point of the pane engine and also its whole cost (~380MB and climbing), so an
 // abandoned chat gives its memory back and resumes transparently next time.
 // A no-op when the engine is off, tmux is absent, or eviction is disabled.
+/*
+ * Hand the running engine its config at every boot.
+ *
+ * tmux reads a config when the SERVER starts, and the engine's server outlives
+ * this process by design — so a conf change that ships in a release would
+ * otherwise wait for somebody to kill every pane on it. `source-file` re-runs
+ * the generated file in place: `set -g` and `bind` are idempotent, the sessions
+ * are untouched, and a machine with nothing running answers false, which is not
+ * a failure — the file is on disk and the next start reads it.
+ */
+ensureConf();
+void reloadEngineConf();
+
 startPaneSweeper();
 startTaskSweep();
 startReminderTick();
