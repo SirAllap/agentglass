@@ -852,6 +852,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    * list. The opposite of the folds and the filters, which belong to a board
    * because a board is a place.
    */
+  /* The list menu. Open by default and remembered: with twenty boards it is the
+     way you move, and a navigation that hides itself between sessions makes
+     people learn the search box instead. */
+  const [railOpen, setRailOpen] = useState(() => {
+    try { return localStorage.getItem(RAIL_KEY) !== "0"; } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem(RAIL_KEY, railOpen ? "1" : "0"); } catch { /* private mode */ } }, [railOpen]);
+  const [railQ, setRailQ] = useState("");
+  /* Filtered on both names a board has: what ClickUp calls the list and what it
+     calls the view. The rail draws `listName || name`, so matching only the
+     drawn one would leave a board findable by a word that is not on screen and
+     unfindable by the one that is. */
+  const railViews = useMemo(() => {
+    const needle = railQ.trim().toLowerCase();
+    const all = boards?.views ?? [];
+    if (!needle) return all;
+    return all.filter((v) => `${v.listName ?? ""} ${v.name}`.toLowerCase().includes(needle));
+  }, [boards, railQ]);
   const [cardW, setCardW] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(CARD_W_KEY));
@@ -1355,37 +1373,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           list of 36 rows of which 13 fitted. Boards and controls now share a
           line, and the search shares the next with the filters. */}
       <div className="flex items-center gap-1.5 px-4 pt-2 pb-1.5 flex-wrap shrink-0">
-        {boards.views.map((v) => (
-          <button key={v.id} onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
-            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
-            aria-pressed={!onLooked && lit === v.id}
-            aria-busy={wanted === v.id}
-            className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap max-w-[240px]"
-            style={lit === v.id
-              ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-                  border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)", color: "var(--text)" }
-              : { border: edge(14), color: "var(--text2)" }}
-            title={v.builtin
-              ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
-              : v.listName ? `${v.listName} · ${v.name}` : v.name}>
-            {/* The built-in one is marked, because "Assigned to me" beside four
-                board names reads as a fifth board somebody added — and it is the
-                one that behaves differently: no address, no removing it, and it
-                takes ten seconds rather than one. */}
-            {v.builtin && (
-              <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
-                width: 7, height: 7, borderRadius: 999,
-                border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
-              }} />
-            )}
-            <span className="truncate">{v.listName || v.name}</span>
-            {/* On the chip itself, because that is where the eye is when the
-                click lands — and where it stays for the next twelve seconds. */}
-            {wanted === v.id && (
-              <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>
-            )}
-          </button>
-        ))}
+        {/* The boards themselves moved into the rail on the left — see the
+            note there. What is left on this line is the things that act on the
+            board you are already on. */}
         {/* The same button both ways round. It used to open the address bar and
             then keep saying "＋", so the only way out was Escape — a key nobody
             is told about, on a bar with no other exit. */}
@@ -1396,28 +1386,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title={adding ? "Never mind" : "Add a board by pasting its address"}>
           {adding ? "✕" : "＋"}
         </button>
-        {/* The cards you went and fetched, as their own board.
-            Dashed, and only there while it holds something: this is not a list
-            anybody owns, it is where you have been. Beside the real boards
-            rather than inside one, which is the whole point — a card from
-            another list sitting in someone's sprint reads as being IN it. */}
-        {looked.length > 0 && (
-          <span className="flex items-center rounded-full"
-            style={onLooked
-              ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }
-              : { border: `1px dashed color-mix(in srgb, var(--text) 26%, transparent)` }}>
-            <button onClick={() => { setOnLooked(true); setSel(looked[0]?.id ?? null); }}
-              aria-pressed={onLooked}
-              className="flex items-center gap-1.5 text-[11px] pl-2.5 pr-1.5 py-0.5 whitespace-nowrap"
-              style={{ color: onLooked ? "var(--text)" : "var(--text2)" }}
-              title="Cards you have opened by id. They are not on any of your boards — this is where you have been, and it is forgotten when the app closes.">
-              <span aria-hidden style={{ color: "var(--text3)" }}>⌕</span>
-              Looked up
-              <span className="tabular-nums" style={{ color: "var(--text3)" }}>{looked.length}</span>
-            </button>
-            <CloseButton onClick={() => { setLooked([]); setOnLooked(false); }} title="Forget them" style={{ color: "var(--text4)" }} className="pr-2 pl-0.5" />
-          </span>
-        )}
+
         {/* Where this board sits, beside the chip that chose it — which is where
             ClickUp puts it and where it was first asked for. It shares the
             chips' line rather than taking one of its own: this panel spent 216
@@ -1684,6 +1653,87 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
       )}
 
       <div className="flex flex-1 min-h-0">
+        {/*
+         * The lists, down the side.
+         *
+         * They used to be a row of chips above the table, which works at four
+         * and stops working well before twenty: they wrap onto a second and
+         * third line, push the table down, and there is no way to search them.
+         * Down the side they are a column that scrolls, with a filter box —
+         * and the filter is the part that actually scales, not the shape.
+         *
+         * Deliberately FLAT. ClickUp nests these under spaces and folders and
+         * the mockup showed that, but agentglass only learns a board's folder
+         * when the board is opened: drawing the tree would mean asking ClickUp
+         * once per board every time this opened. Told rather than decided —
+         * grouping can come back the day we hold the places.
+         */}
+        <nav aria-label="Lists" className="flex flex-col shrink-0 min-w-0"
+          style={{ width: railOpen ? 214 : 34, borderRight: edge(12), transition: "width 120ms ease" }}>
+          <div className="flex items-center gap-1 px-1.5 py-1.5 shrink-0" style={{ borderBottom: edge(10) }}>
+            <button onClick={() => setRailOpen((o) => !o)}
+              aria-expanded={railOpen}
+              title={railOpen ? "Fold the list menu" : "Show the lists"}
+              className="shrink-0 grid place-items-center rounded"
+              style={{ width: 22, height: 22, border: edge(14), color: "var(--text3)" }}>
+              {railOpen ? "‹" : "›"}
+            </button>
+            {railOpen && (
+              <input value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
+                aria-label="Filter lists"
+                className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] outline-none"
+                style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: edge(14) }} />
+            )}
+          </div>
+          {railOpen && (
+            <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
+              {railViews.length === 0 && (
+                <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>No list by that name.</div>
+              )}
+              {railViews.map((v) => (
+                <button key={v.id}
+                  onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
+                  aria-current={!onLooked && lit === v.id}
+                  aria-busy={wanted === v.id}
+                  className="w-full text-left flex items-center gap-1.5 px-2.5 py-1 text-[11.5px]"
+                  style={!onLooked && lit === v.id
+                    ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)" }
+                    : { color: "var(--text3)" }}
+                  title={v.builtin
+                    ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
+                    : v.listName ? `${v.listName} · ${v.name}` : v.name}>
+                  {/* The built-in one stays marked: beside four board names it
+                      reads as a fifth board somebody added, and it is the one
+                      that behaves differently. */}
+                  {v.builtin && (
+                    <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
+                      width: 6, height: 6, borderRadius: 999,
+                      border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
+                    }} />
+                  )}
+                  <span className="truncate min-w-0 flex-1">{v.listName || v.name}</span>
+                  {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
+                </button>
+              ))}
+              {/* Where you have been, beside the lists rather than inside one —
+                  a card from another list sitting in somebody's sprint reads as
+                  being IN it. Dashed and only while it holds something. */}
+              {looked.length > 0 && (
+                <button onClick={() => { setOnLooked(true); setSel(looked[0]?.id ?? null); }}
+                  aria-current={onLooked}
+                  className="w-full text-left flex items-center gap-1.5 px-2.5 py-1 mt-1 text-[11.5px]"
+                  style={{ color: onLooked ? "var(--text)" : "var(--text3)",
+                    background: onLooked ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
+                    borderTop: `1px dashed color-mix(in srgb, var(--text) 22%, transparent)` }}
+                  title="Cards you have opened by id. They are not on any of your boards — this is where you have been, and it is forgotten when the app closes.">
+                  <span className="truncate min-w-0 flex-1">Looked up</span>
+                  <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{looked.length}</span>
+                </button>
+              )}
+            </div>
+          )}
+        </nav>
         <div className="flex flex-col flex-1 min-w-0">
           <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] shrink-0"
             style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
@@ -2074,6 +2124,7 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
 const YOLO_KEY = "agentglass.clickup.skipPermissions";
 const WIDE_KEY = "agentglass.clickup.wideCard";
 const CARD_W_KEY = "agentglass.clickup.cardWidth";
+const RAIL_KEY = "agentglass.clickup.listRail";
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */
 const CARD_W_DEFAULT = 380;
