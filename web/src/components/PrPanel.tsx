@@ -7484,16 +7484,66 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
 
 /** Out to GitHub, for the one thing the panel does not show — the full history
  *  of an edit, a reaction, the blame behind a line. */
+/** GitHub's mark, so a link to GitHub says where it goes before you hover it. */
+function GhMark({ size = ICON.sm }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="currentColor" aria-hidden focusable="false">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
+  );
+}
+
+/**
+ * The two things you ever want to do with somebody else's comment: go to it,
+ * and hand somebody its address.
+ *
+ * The arrow alone said "this leaves" and not where to — worth saying, because
+ * the same row can send you to ClickUp. The mark says it without a hover.
+ *
+ * Sized off ICON rather than off the 10px type beside it. An icon-only control
+ * inheriting the scale of the line it sits on ends up a target nobody can hit;
+ * both of these keep a 20px box whatever the row does.
+ */
 function GhLink({ href, title }: { href: string; title: string }) {
   // Nothing rather than a link we cannot vouch for: every one of these comes
   // out of an API response, and a link that does not navigate somewhere plain
   // is not one we should be offering.
   const safe = externalUrl(href);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(id);
+  }, [copied]);
   if (!safe) return null;
+  const box = "shrink-0 inline-grid place-items-center rounded";
+  const style = { width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" };
   return (
-    <a href={safe} target="_blank" rel="noreferrer noopener" title={title}
-      className="shrink-0 text-[10px] px-1 rounded"
-      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↗</a>
+    <span className="shrink-0 inline-flex items-center gap-1">
+      <a href={safe} target="_blank" rel="noreferrer noopener" title={title} className={box} style={style}>
+        <span className="inline-flex items-center" style={{ gap: 2 }}>
+          <GhMark size={ICON.xs} />
+          <span aria-hidden style={{ fontSize: 9, lineHeight: 1, opacity: 0.75 }}>↗</span>
+        </span>
+      </a>
+      <button type="button" className={box} style={{ ...style, color: copied ? "var(--success)" : style.color }}
+        title={copied ? "Link copied" : "Copy a link to this comment"}
+        onClick={(e) => {
+          e.stopPropagation();
+          /* The address, not the text: what you paste into a chat so somebody
+             lands on this exact remark. */
+          navigator.clipboard?.writeText(safe).then(() => setCopied(true)).catch(() => { /* no clipboard permission */ });
+        }}>
+        {copied ? (
+          <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={2} aria-hidden><path d="M3 8.5l3.2 3.2L13 5" /></svg>
+        ) : (
+          <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden>
+            <path d="M6.5 9.5a2.6 2.6 0 0 0 3.9.3l2-2a2.6 2.6 0 0 0-3.7-3.7l-1 1" />
+            <path d="M9.5 6.5a2.6 2.6 0 0 0-3.9-.3l-2 2a2.6 2.6 0 0 0 3.7 3.7l1-1" />
+          </svg>
+        )}
+      </button>
+    </span>
   );
 }
 
