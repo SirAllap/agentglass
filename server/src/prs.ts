@@ -3557,6 +3557,48 @@ export async function addLineComment(rootIn: unknown, numberIn: unknown, c: {
   return { ok: true, detail: `commented on ${path}:${payload.start_line ? `${payload.start_line}-${line}` : line}` };
 }
 
+/** A line comment sitting in a pending review on GitHub, not yet submitted. */
+export interface PendingLineComment {
+  path: string;
+  /** Where it sits in the current diff, or where it was written if that line is
+   *  gone. Null when GitHub reports neither. */
+  line: number | null;
+  startLine: number | null;
+  body: string;
+}
+
+/**
+ * Your own pending review on a pull request, with whatever it already holds.
+ *
+ * GitHub keeps at most one per pull request per person and shows it only to
+ * its author, so what comes back is always ours. It is what exists after
+ * queueing line comments in GitHub's review UI without pressing Submit —
+ * the state agentglass used to delete on sight.
+ *
+ * Fetched through GraphQL rather than REST because `reviews(states:[PENDING])`
+ * returns the comments in the same round trip, and the decision the caller has
+ * to make depends on whether there are any: an empty pending review really is
+ * a leftover, one with comments is somebody's unfinished work.
+ */
+export async function pendingReview(nameWithOwner: string, n: number): Promise<{ id: string; comments: PendingLineComment[] } | null> {
+  const [owner, name] = nameWithOwner.split("/");
+  if (!owner || !name) return null;
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviews(states:[PENDING],first:1){nodes{id comments(first:100){nodes{path line originalLine startLine body}}}}}}}`;
+  const r = await gh(["api", "graphql", "-f", `query=${q}`, "-F", `o=${owner}`, "-F", `r=${name}`, "-F", `n=${n}`]);
+  if (r.code !== 0) return null;
+  try {
+    const node = JSON.parse(r.stdout)?.data?.repository?.pullRequest?.reviews?.nodes?.[0];
+    if (!node?.id) return null;
+    const comments: PendingLineComment[] = (node.comments?.nodes ?? [])
+      .filter((c: any) => c?.path)
+      /* `line` is null on a comment whose line no longer exists in the current
+         diff — an outdated one. `originalLine` is where it was written, which
+         is the only honest thing to show for it. */
+      .map((c: any) => ({ path: String(c.path), line: c.line ?? c.originalLine ?? null, startLine: c.startLine ?? null, body: String(c.body ?? "") }));
+    return { id: String(node.id), comments };
+  } catch { return null; }
+}
+
 export async function submitReviewWith(
   rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,
 ): Promise<PrActionResult> {
@@ -3599,20 +3641,45 @@ export async function submitReviewWith(
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
 
-  // GitHub allows one pending review per pull request, so a leftover one — from
-  // the web UI, or a submit that half-failed — makes every fresh review 422
-  // "Unprocessable Entity", which is the wall this hits. Discard it first.
-  // agentglass keeps its queued comments locally and re-posts them here, so a
-  // pending review on GitHub holds nothing this submit needs; clearing it makes
-  // the submitted review exactly the drafts you queued, nothing invisible riding
-  // along. Only the author is shown their own PENDING review, so the one that
-  // comes back is ours.
-  const pend = await gh(
-    ["api", "--paginate", `repos/${repo.nameWithOwner}/pulls/${n}/reviews`, "-q", '[.[] | select(.state=="PENDING")][0].id // empty'],
-  );
-  const pendingId = pend.code === 0 ? pend.stdout.trim() : "";
-  if (pendingId) {
-    await gh(["api", "--method", "DELETE", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pendingId}`]);
+  /*
+   * GitHub allows one pending review per pull request, so a leftover one makes
+   * every fresh review 422 "Unprocessable Entity" — the wall this used to hit.
+   * It discarded whatever it found, on the reasoning that agentglass keeps its
+   * own drafts locally and therefore a pending review holds nothing this submit
+   * needs.
+   *
+   * That reasoning was wrong in the case that matters. A pending review is
+   * exactly what you have after queueing line comments in GitHub's own review
+   * UI, and this deleted them: three comments written on a real pull request,
+   * gone on a button press, with nothing on screen to say so. The empty ones it
+   * was written for are still discarded, because those really do hold nothing.
+   */
+  const pending = await pendingReview(repo.nameWithOwner, n);
+  if (pending && pending.comments.length) {
+    /* Both sides have drafts. There is no API that folds locally-queued
+       comments into somebody else's pending review, so the honest answer is to
+       do nothing and say which is which — a merge we cannot perform must not
+       become a deletion we can. */
+    if (comments.length) {
+      return { ok: false, error: `GitHub already holds ${pending.comments.length} line comment${pending.comments.length === 1 ? "" : "s"} in a pending review here, and ${comments.length} ${comments.length === 1 ? "is" : "are"} queued in agentglass. Submit or discard one of them first — merging them would lose comments.` };
+    }
+    /* Its own comments and nothing queued here: submit the review GitHub is
+       already holding rather than replacing it. This is what makes a review
+       started in the browser finishable from here. */
+    const ev = await gh(
+      ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.id}/events`, "--input", "-"],
+      undefined, JSON.stringify({ event, ...(text ? { body: text } : {}) }),
+    );
+    invalidate(repo, n);
+    if (ev.code !== 0) {
+      const msg = (ev.stderr || ev.stdout).trim().split("\n").find((l) => l.trim()) || "the review was not accepted";
+      return { ok: false, error: msg };
+    }
+    const k = pending.comments.length;
+    return { ok: true, detail: `review submitted with ${k} line comment${k === 1 ? "" : "s"} drafted on GitHub` };
+  }
+  if (pending) {
+    await gh(["api", "--method", "DELETE", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.id}`]);
   }
 
   const payload = JSON.stringify({ event, ...(text ? { body: text } : {}), ...(comments.length ? { comments } : {}) });
