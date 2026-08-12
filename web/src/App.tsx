@@ -569,6 +569,38 @@ export default function App() {
     if (r.what === "app") setScale(currentScale());
   }, []);
 
+  /*
+   * Ctrl+wheel, the same gesture every browser and editor already has.
+   *
+   * It goes through `zoomAtPointer` like the keys do, so the pointer still
+   * decides whether it is the terminal's font or the window's scale — and the
+   * wheel is the one gesture that always knows where it is, which is why the
+   * keyboard path has to track the pointer separately.
+   *
+   * `passive: false` is what makes preventDefault possible, and preventing it
+   * is the point: without it the browser applies its OWN zoom on top of ours
+   * and the two compound. Capture, so a scroller that stops propagation — a
+   * diff, a long conversation — cannot swallow it.
+   *
+   * A wheel notch is not a keypress: a free-spinning mouse sends several per
+   * flick and a trackpad sends a stream of small deltas, so they are gated to
+   * one rung per 60ms. Without that, one pinch runs the whole ladder.
+   */
+  useEffect(() => {
+    let last = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      if (!e.deltaY) return;
+      const now = Date.now();
+      if (now - last < 60) return;
+      last = now;
+      zoom(e.deltaY < 0 ? 1 : -1);
+    };
+    window.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => window.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
+  }, [zoom]);
+
   // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

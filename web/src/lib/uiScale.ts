@@ -9,17 +9,23 @@
 // smaller CSS viewport, so type, padding, icons and charts grow together and the
 // responsive breakpoints still get to do their job.
 //
-// A fixed ladder rather than a free slider, and a hard ceiling. The cockpit's
-// 12-column grid folds into a stacked layout below 1280 CSS px, so unbounded
-// zoom would quietly turn a 4K dashboard into a phone one — 150% keeps a
-// maximised window on the wide layout, which is the whole point of the screen.
+// A fixed ladder rather than a free slider. The rungs run 70% to 200%, and the
+// top of that range comes with a consequence worth stating rather than
+// preventing: the cockpit's 12-column grid folds into a stacked layout below
+// 1280 CSS px, so on a 2560px screen 200% lays out at 1280 — right at the fold.
+// The old ceiling was 150% to keep a maximised window on the wide layout
+// always; asked for 200% anyway, which is the right call for somebody who
+// wants the text big and does not need twelve columns to do it. The fold is a
+// layout doing its job, not a break.
+//
+// 70% at the bottom for the opposite screen: everything at once, on a laptop.
 
 import { setWindowZoom } from "./desktop.ts";
 
 const KEY = "agentglass.uiScale";
 
-/** The rungs, smallest first. 150% is the ceiling — see the note above. */
-export const SCALES: number[] = [0.9, 1, 1.1, 1.25, 1.4, 1.5];
+/** The rungs, smallest first — see the note above for the two ends. */
+export const SCALES: number[] = [0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.5, 1.75, 2];
 export const DEFAULT_SCALE = 1;
 
 let current = DEFAULT_SCALE;
