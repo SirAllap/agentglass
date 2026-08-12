@@ -3929,7 +3929,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
                 {tab === "review" && canReview && (
                   <ReviewTab
-                    d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
+                    d={d} root={root} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
                     draft={myReview} onDraft={setMyReview}
                     onDrop={dropDraft} onSubmit={submitReview} onGoFiles={() => setTab("files")}
                   />
@@ -8977,8 +8977,8 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
  * review, and it exists so a reviewer leaves one notification rather than a
  * dozen. The comments and the verdict travel in a single request.
  */
-function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
-  d: PrDetail; drafts: DraftComment[]; seen: number; busy: boolean;
+function ReviewTab({ d, root, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
+  d: PrDetail; root: string; drafts: DraftComment[]; seen: number; busy: boolean;
   /** Which request is in flight — see Btn `pending`. */
   busyWhat?: string;
   /** The unsent review, held by the panel and written to storage — not state of
@@ -8997,6 +8997,18 @@ function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, on
    *  is the thing that has to stay a row, and opening every remark at once is
    *  the layout this replaced. */
   const [openDraft, setOpenDraft] = useState<number | null>(null);
+  /* The line comments GitHub is holding in a review you started in its own UI
+     and never submitted. Asked for here rather than carried on PrDetail: only
+     this tab needs them, and the answer is yours alone — GitHub shows a pending
+     review to nobody but its author. */
+  const [held, setHeld] = useState<{ path: string; line: number | null; body: string }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api.prPendingReview(root, d.number)
+      .then((r) => { if (alive && r.ok) setHeld(r.comments); })
+      .catch(() => { /* offline — the tab still works for what is queued here */ });
+    return () => { alive = false; };
+  }, [root, d.number]);
   // Dropping one renumbers the rest, so an index held across that change points
   // at somebody else's remark. Closed whenever the queue changes length.
   useEffect(() => { setOpenDraft(null); }, [drafts.length]);
@@ -9083,8 +9095,32 @@ function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, on
             </div>
           ) : (
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-              No line comments queued. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
+              No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
               use the “+” on a line to attach one.
+            </div>
+          )}
+
+          {/* A review started in GitHub's own UI and left unsubmitted. Shown
+              because the tab used to say nothing was queued while GitHub held
+              three comments — and because submitting from here now finishes
+              THAT review rather than replacing it. Read-only: editing somebody's
+              draft through an API that has no endpoint for it is how they get
+              lost. */}
+          {held.length > 0 && (
+            <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+              <div className="px-2.5 py-1.5 text-[10.5px] flex items-center gap-2"
+                style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
+                <span>{held.length} line comment{held.length === 1 ? "" : "s"} drafted on GitHub</span>
+                <span className="ml-auto" style={{ color: "var(--text3)" }}>submitting here sends them</span>
+              </div>
+              {held.map((c, i) => (
+                <div key={`${c.path}:${c.line}:${i}`} className="px-2.5 py-2"
+                  style={{ borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined }}>
+                  <div className="text-[10px] tabular-nums truncate" style={{ color: "var(--text3)" }}
+                    title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</div>
+                  <div className="mt-1"><Md body={c.body} /></div>
+                </div>
+              ))}
             </div>
           )}
 

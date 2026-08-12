@@ -3599,6 +3599,23 @@ export async function pendingReview(nameWithOwner: string, n: number): Promise<{
   } catch { return null; }
 }
 
+/**
+ * The pending review on a pull request, for the panel to draw.
+ *
+ * Read-only and cheap enough to ask on opening the Review tab: without it the
+ * tab says "no line comments queued" while GitHub is holding three, which is
+ * the same wrong answer the submit path used to act on.
+ */
+export async function pendingReviewFor(rootIn: unknown, numberIn: unknown): Promise<{ ok: true; id: string | null; comments: PendingLineComment[] }> {
+  const root = String(rootIn ?? "");
+  const n = Number(numberIn);
+  if (!root || !Number.isSafeInteger(n) || n <= 0) return { ok: true, id: null, comments: [] };
+  const repo = await repoIdFor(root);
+  if (!repo) return { ok: true, id: null, comments: [] };
+  const p = await pendingReview(repo.nameWithOwner, n);
+  return { ok: true, id: p?.id ?? null, comments: p?.comments ?? [] };
+}
+
 export async function submitReviewWith(
   rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,
 ): Promise<PrActionResult> {

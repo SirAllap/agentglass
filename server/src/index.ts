@@ -93,7 +93,7 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup,
@@ -2664,6 +2664,7 @@ const server = Bun.serve<WsData>({
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
         case "/prs/review-prompt": res = await prepareReviewPrompt(root, n); break;
+        case "/prs/pending-review": res = await pendingReviewFor(root, n); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why

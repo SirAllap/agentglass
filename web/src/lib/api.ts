@@ -1037,6 +1037,11 @@ const realApi = {
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
   /** The prompt to review a PR with Claude, and the directory to run it in.
    *  Reads only: no fetch, no checkout, nothing left behind. */
+  /** The line comments GitHub is holding in your unsubmitted review, so the
+   *  Review tab can show a review you started in the browser instead of
+   *  claiming nothing is queued. */
+  prPendingReview: (root: string, number: number) =>
+    post<{ ok: boolean; id: string | null; comments: { path: string; line: number | null; startLine: number | null; body: string }[] }>("/prs/pending-review", { root, number }),
   prReviewPrompt: (root: string, number: number) =>
     post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
@@ -1329,6 +1334,7 @@ const demoApi: typeof realApi = {
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prPendingReview: (_r: string, _n: number) => D({ ok: true, id: null, comments: [] }),
   prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
   prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
   // The demo has no machine to report on and no checkout to browse: it is a
