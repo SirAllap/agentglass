@@ -1785,10 +1785,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               moment something does: two boxes scrolled independently put the
               heading over the wrong column. */}
           <div className="agx-scroll flex-1 min-w-0 overflow-auto">
-            <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] sticky top-0 z-10"
+            <div className="px-5 text-[8.5px] uppercase tracking-[0.16em] sticky top-0 z-10"
                 style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
+                  alignItems: "center", height: HEAD_H,
                   minWidth: TABLE_MIN_W, background: "var(--bg)",
-                  borderTop: edge(10), borderBottom: edge(10) }}>
+                  borderBottom: edge(10) }}>
               <span className="agx-stick-head">Task</span>
               {anyWho && <span className="text-center">Who</span>}
               {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
@@ -2004,7 +2005,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               heading that labels the obvious costs the card its first line, and
               this pane starts level with the table's own heading instead. */}
           <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col"
-            style={{ paddingTop: 8 }}>
+            style={{ paddingTop: 6 }}>
             {picked
               ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
                   writable={boards.writeEnabled} repos={repos} here={here}
