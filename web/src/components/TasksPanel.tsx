@@ -840,10 +840,33 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   const [listMeta, setListMeta] = useState<Record<string, { statuses: ListStatus[]; fields: ListField[]; place?: ListPlace }>>({});
   /* Some cards are a page of prose with tables in them. Remembered, because
      whoever needs the room needs it for the whole board, not for one card. */
-  const [wide, setWide] = useState(() => {
-    try { return localStorage.getItem(WIDE_KEY) === "1"; } catch { return false; }
+  /*
+   * How wide the card pane is, in pixels, dragged by its edge.
+   *
+   * It used to be a boolean behind a `narrow`/`wider` button — two widths,
+   * 380 and 720, and nothing in between. The button is gone because a drag does
+   * its whole job and more; double-clicking the handle is what is left of its
+   * one useful property, getting back to the usual width in one press.
+   *
+   * Global rather than per board: this is about your screen, not about the
+   * list. The opposite of the folds and the filters, which belong to a board
+   * because a board is a place.
+   */
+  const [cardW, setCardW] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(CARD_W_KEY));
+      if (Number.isFinite(saved) && saved > 0) return clampCardW(saved);
+      // The old two-state setting, read once so nobody who liked it wide
+      // arrives narrow the first time.
+      return localStorage.getItem(WIDE_KEY) === "1" ? 720 : CARD_W_DEFAULT;
+    } catch { return CARD_W_DEFAULT; }
   });
-  useEffect(() => { try { localStorage.setItem(WIDE_KEY, wide ? "1" : "0"); } catch { /* private mode */ } }, [wide]);
+  useEffect(() => { try { localStorage.setItem(CARD_W_KEY, String(cardW)); } catch { /* private mode */ } }, [cardW]);
+  /* The card's own layout still asks one question — "have I got room for two
+     columns" — and it is a question about pixels, so it is answered from them
+     rather than kept as a second source of truth. */
+  const wide = cardW >= 560;
+  const dragging = useRef(false);
   const [finding, setFinding] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const today = todayStr();
@@ -1854,8 +1877,38 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             unbroken URL in a card pushed the whole pane sideways and dragged the
             list with it — which is the horizontal scrollbar that appeared under
             everything. */}
+        {/* The handle lives in the gap, wide enough for a pointer even though
+            the line it draws is one pixel. */}
+        <div role="separator" aria-orientation="vertical" tabIndex={0}
+          aria-label="Drag to resize the card pane"
+          title="Drag to resize · double-click for the usual width"
+          onDoubleClick={() => setCardW(CARD_W_DEFAULT)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") { e.preventDefault(); setCardW((w) => clampCardW(w + (e.shiftKey ? 40 : 12))); }
+            else if (e.key === "ArrowRight") { e.preventDefault(); setCardW((w) => clampCardW(w - (e.shiftKey ? 40 : 12))); }
+            else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCardW(CARD_W_DEFAULT); }
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            dragging.current = true;
+            /* Measured against the window's right edge rather than by adding up
+               deltas: a drag that accumulates drifts away from the pointer the
+               moment one move is dropped. */
+            const right = window.innerWidth;
+            const move = (ev: PointerEvent) => { if (dragging.current) setCardW(clampCardW(right - ev.clientX)); };
+            const up = () => {
+              dragging.current = false;
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+          className="shrink-0 self-stretch"
+          style={{ width: 5, marginRight: -5, cursor: "col-resize", zIndex: 5 }} />
         <aside className="flex flex-col shrink-0 min-w-0"
-          style={{ width: wide ? 720 : 380, borderLeft: edge(12), transition: "width 120ms ease" }}>
+          style={{ width: cardW, borderLeft: edge(12) }}>
           {/* The width control belongs to the PANE, not to whatever is in it.
               Inside the card it was unreachable the moment you deselected: the
               pane stayed at 720px around the words "Pick a card", with the only
@@ -1865,12 +1918,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               {picked ? "Card" : ""}
             </span>
             <span className="flex-1" />
-            <button onClick={() => setWide((w) => !w)}
-              title={wide ? "Narrow this pane" : "Some cards are a page of prose — give it room"}
-              className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-              style={{ border: edge(16), color: "var(--text3)" }}>
-              {wide ? "⇥ narrow" : "⇤ wider"}
-            </button>
           </div>
           <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 pt-0 text-[11.5px] flex flex-col">
             {picked
@@ -2026,6 +2073,13 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
  */
 const YOLO_KEY = "agentglass.clickup.skipPermissions";
 const WIDE_KEY = "agentglass.clickup.wideCard";
+const CARD_W_KEY = "agentglass.clickup.cardWidth";
+/** The width it goes back to. The old narrow setting, kept as the default
+ *  because it is the one most cards are read at. */
+const CARD_W_DEFAULT = 380;
+/** Under 280 the card stops being readable; over 720 the table it sits beside
+ *  stops being one. Both ends are a floor rather than a preference. */
+const clampCardW = (w: number): number => Math.max(280, Math.min(720, Math.round(w)));
 /*
  * Where a hand-off goes, remembered.
  *
