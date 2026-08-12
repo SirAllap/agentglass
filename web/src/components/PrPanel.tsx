@@ -132,6 +132,11 @@ const VIEWS: { id: string; label: string; scope: Filter; query: string; tint?: s
  */
 const DETAIL_CACHE = new Map<string, PrDetail>();
 const DETAIL_CACHE_MAX = 40;
+/** A line comment sitting in YOUR unsubmitted review on GitHub. Not a thread —
+ *  it has no id to reply to and no state to resolve — and not one of our own
+ *  drafts either, which live only in this browser until they are sent. */
+type PendingLine = { path: string; line: number | null; startLine?: number | null; body: string };
+
 const detailKey = (root: string, n: number) => `${root}#${n}`;
 const heldDetail = (root: string, n: number): PrDetail | null => DETAIL_CACHE.get(detailKey(root, n)) ?? null;
 function rememberDetail(root: string, n: number, d: PrDetail): void {
@@ -3128,6 +3133,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   }, [detail]);
 
   const openThreads = useMemo(() => (detail?.threads ?? []).filter((t) => !t.isResolved), [detail]);
+  /* The review you started in GitHub's own UI and never submitted. Read once
+     per pull request here rather than inside a tab: Review lists them and Files
+     draws them on the lines they belong to, and two fetches would be two
+     answers that can disagree. */
+  const [held, setHeld] = useState<PendingLine[]>([]);
+  useEffect(() => {
+    if (!selected) { setHeld([]); return; }
+    let alive = true;
+    api.prPendingReview(root, selected)
+      .then((r) => { if (alive && r.ok) setHeld(r.comments); })
+      .catch(() => { /* offline — both tabs still work for what is queued here */ });
+    return () => { alive = false; };
+  }, [root, selected]);
   const d = detail;
 
   /* Asked once and handed to both readers. The masthead strip and the Overview
@@ -3832,7 +3850,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   <FilesTab
                     d={d} root={root} byPath={byPath} loaded={!!diff} diffErr={diffErr} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} onShowing={setShowingFile}
-                    split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
+                    split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} held={held}
                     drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment} onDropDraft={dropDraftItem}
                     onPeek={async (p) => {
                       // The pull request's copy, not the checkout's. A branch
@@ -3930,7 +3948,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
                 {tab === "review" && canReview && (
                   <ReviewTab
-                    d={d} root={root} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
+                    d={d} root={root} held={held} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
                     draft={myReview} onDraft={setMyReview}
                     onDrop={dropDraft} onSubmit={submitReview} onGoFiles={() => setTab("files")}
                   />
@@ -6595,7 +6613,7 @@ function DetailSkeleton({ number }: { number: number | null }) {
  *  because the component is what goes away when you change tab. */
 const FILES_SCROLL = new Map<string, number>();
 
-function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
+function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, held, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   /** Why the diff is missing, when it is missing for a reason rather than for a
    *  moment. Without it a refusal is drawn as a spinner. */
@@ -6615,7 +6633,10 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
    */
   onShowing?: (p: string | null) => void;
   split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
-  drafts: DraftComment[]; onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT", body?: string) => void;
+  drafts: DraftComment[];
+  /** Your unsubmitted review on GitHub, drawn on the lines it belongs to. */
+  held: PendingLine[];
+  onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT", body?: string) => void;
   /** Post one line comment on its own, now — the other half of what GitHub
    *  offers at the box, beside holding it for a review. */
   onPostOne: (path: string, line: number, startLine: number | undefined, side: "LEFT" | "RIGHT" | undefined, body: string) => Promise<boolean>;
@@ -6650,6 +6671,19 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
   /** This file's pending comments, keyed the way a diff row asks for them:
    *  the side letter and the line, so a row can find its own without scanning
    *  the whole list on every render. */
+  /* The comments GitHub is holding for this file, by line. Read-only: there is
+     no API that edits one, so they are drawn and nothing else. Keyed on the new
+     side, which is where GitHub reports a pending line comment. */
+  const heldBy = (p: string) => {
+    const m = new Map<number, PendingLine[]>();
+    for (const h of held) {
+      if (h.path !== p || h.line == null) continue;
+      const arr = m.get(h.line) ?? [];
+      arr.push(h);
+      m.set(h.line, arr);
+    }
+    return m;
+  };
   const pendingBy = (p: string) => {
     const m = new Map<string, DraftComment[]>();
     for (const dc of drafts) {
@@ -7305,6 +7339,13 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
         const focused = sel === f.path;
         const nd = draftsFor(f.path);
         const pendingHere = pendingBy(f.path);
+        const heldHere = heldBy(f.path);
+        /* One whose line the diff does not reach — outdated, or in a hunk that
+           is not shown — has no row to sit under. It keeps its place under the
+           file rather than disappearing, which is what a comment nobody can
+           find amounts to. */
+        const heldBelow = held.filter((h) => h.path === f.path && (h.line == null || !heldHere.has(h.line)));
+        const heldOnFile = held.filter((h) => h.path === f.path).length;
         const change = byPath.get(f.path);
         // Anchor each thread inline, under the line it is about — GitHub's
         // placement. A thread whose line is not in the diff (outdated, or a
@@ -7359,7 +7400,17 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                 <span className="truncate" style={{ ...CODE_FONT_STYLE, color: done ? "var(--text3)" : "var(--text)" }}>{f.path}</span>
                 {f.status && f.status !== "modified" && <Chip text={f.status} tint="var(--text3)" />}
                 {f.comments > 0 && <Chip text={`${f.comments} open`} tint="var(--warning)" />}
-                {nd > 0 && <Chip text={`${nd} pending`} tint="var(--primary)" title="Queued in your review" />}
+                {/* Both kinds counted, and told apart. They go to the same
+                    place when you submit, so a file that says "2 pending" with
+                    three comments under it is a file whose header disagrees
+                    with itself — but they are not the same thing, and lumping
+                    them into one number would say the two you can still edit
+                    are three. */}
+                {nd > 0 && <Chip text={`${nd} pending`} tint="var(--primary)" title="Queued in your review, in this browser" />}
+                {heldOnFile > 0 && (
+                  <Chip text={`${heldOnFile} on GitHub`} tint="var(--primary)"
+                    title="Drafted in GitHub's review UI and not submitted — sent when you submit from here" />
+                )}
                 <span className="ml-auto shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
                 <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
               </button>
@@ -7421,7 +7472,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                         onPick={(pk) => pickLine(f.path, pk)}
                         sel={selRange?.path === f.path ? selRange.sel : null}
                         permalink={repoName && headSha ? (line) => `https://github.com/${repoName}/blob/${headSha}/${f.path}#L${line}` : undefined}
-                        rowAfter={(inlineThreads.size || pendingHere.size || composing?.path === f.path) ? (newN, oldN) => {
+                        rowAfter={(inlineThreads.size || pendingHere.size || heldHere.size || composing?.path === f.path) ? (newN, oldN) => {
                           const ts = newN != null ? inlineThreads.get(newN) : null;
                           // A queued comment has to be visible where it was
                           // written. It used to exist only as a number on the
@@ -7432,7 +7483,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                           const pend = pendingHere.get(`${newN != null ? "R" : "L"}${newN ?? oldN}`) ?? [];
                           const composeHere = composing?.path === f.path &&
                             ((composing.side === "RIGHT" && composing.line === newN) || (composing.side === "LEFT" && composing.line === oldN));
-                          if (!ts?.length && !pend.length && !composeHere) return null;
+                          const heldOnLine = newN != null ? (heldHere.get(newN) ?? []) : [];
+                          if (!ts?.length && !pend.length && !heldOnLine.length && !composeHere) return null;
                           const pfx = composing?.side === "LEFT" ? "L" : "R";
                           // Bounded and pinned to the left so it reads at a sane
                           // width and stays put while the code scrolls sideways.
@@ -7465,6 +7517,26 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                                       style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={dc.body} /></div>
+                                </div>
+                              ))}
+                              {/* Written in GitHub's own review UI and never
+                                  submitted. A third kind of mark on purpose: it
+                                  is not a published thread — there is nobody to
+                                  reply to and nothing to resolve — and it is not
+                                  one of our drafts either, which live in this
+                                  browser until they are sent. No Drop, because
+                                  no API edits a comment inside somebody's
+                                  pending review; offering one would either lie
+                                  or delete the whole review to reach one line. */}
+                              {heldOnLine.map((h, i) => (
+                                <div key={`held-${h.line}-${i}`} className="rounded-lg overflow-hidden"
+                                  style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+                                  <div className="px-2.5 py-1 text-[10px] flex items-center gap-2"
+                                    style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
+                                    <span>drafted on GitHub</span>
+                                    <span className="ml-auto" style={{ color: "var(--text3)" }}>sent when you submit</span>
+                                  </div>
+                                  <div className="px-2.5 py-2"><Md body={h.body} /></div>
                                 </div>
                               ))}
                               {composeHere && composing && (
@@ -7558,6 +7630,21 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                 header said threads existed but you had to leave for the
                 conversation tab to read them, which is the wrong way round
                 while you are looking at the code they are about. */}
+            {open && heldBelow.length > 0 && (
+              <div className="px-3 pb-2 flex flex-col gap-2">
+                {heldBelow.map((h, i) => (
+                  <div key={`heldb-${i}`} className="rounded-lg overflow-hidden"
+                    style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+                    <div className="px-2.5 py-1 text-[10px] flex items-center gap-2"
+                      style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
+                      <span>drafted on GitHub{h.line == null ? " · outdated" : `:${h.line}`}</span>
+                      <span className="ml-auto" style={{ color: "var(--text3)" }}>the diff does not reach its line</span>
+                    </div>
+                    <div className="px-2.5 py-2"><Md body={h.body} /></div>
+                  </div>
+                ))}
+              </div>
+            )}
             {open && belowThreads.length > 0 && (
               <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
                 {/* Not anchored to a visible line — outdated threads, or ones on
@@ -9217,8 +9304,11 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
  * review, and it exists so a reviewer leaves one notification rather than a
  * dozen. The comments and the verdict travel in a single request.
  */
-function ReviewTab({ d, root, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
+function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
   d: PrDetail; root: string; drafts: DraftComment[]; seen: number; busy: boolean;
+  /** The line comments GitHub is holding in a review you started there and
+   *  never submitted. Read by the panel so Files can draw them too. */
+  held: PendingLine[];
   /** Which request is in flight — see Btn `pending`. */
   busyWhat?: string;
   /** The unsent review, held by the panel and written to storage — not state of
@@ -9241,14 +9331,6 @@ function ReviewTab({ d, root, drafts, seen, busy, busyWhat, draft, onDraft, onDr
      and never submitted. Asked for here rather than carried on PrDetail: only
      this tab needs them, and the answer is yours alone — GitHub shows a pending
      review to nobody but its author. */
-  const [held, setHeld] = useState<{ path: string; line: number | null; body: string }[]>([]);
-  useEffect(() => {
-    let alive = true;
-    api.prPendingReview(root, d.number)
-      .then((r) => { if (alive && r.ok) setHeld(r.comments); })
-      .catch(() => { /* offline — the tab still works for what is queued here */ });
-    return () => { alive = false; };
-  }, [root, d.number]);
   // Dropping one renumbers the rest, so an index held across that change points
   // at somebody else's remark. Closed whenever the queue changes length.
   useEffect(() => { setOpenDraft(null); }, [drafts.length]);
