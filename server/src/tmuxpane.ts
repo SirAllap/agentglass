@@ -295,10 +295,23 @@ export async function engineWindowRunning(
 ): Promise<{ paneId: string; windowId: string } | null> {
   const session = engineSessionName(root);
   if (!validSessionName(session)) return null;
-  // Attach-or-create, detached. `-A` on a session that exists is a no-op, so
-  // this is safe to run before every window rather than tracked separately.
-  const made = await tmux(["new-session", "-A", "-d", "-s", session, "-c", root]);
-  if (!made.ok) return null;
+  /*
+   * Asked for, then created — not `new-session -A`.
+   *
+   * `-A` is attach-or-create and reads as exactly what is wanted here. It is
+   * not: on a session that already exists it tries to ATTACH, and this runs
+   * with no terminal, so tmux answers `open terminal failed: not a terminal`
+   * and exits non-zero. `-d` does not save it.
+   *
+   * Measured, because the first call always worked and every one after it
+   * returned null: the second pull request review of a day would have opened
+   * nothing at all, silently. `has-session` costs one more call and cannot lie.
+   */
+  const there = await tmux(["has-session", "-t", `=${session}`]);
+  if (!there.ok) {
+    const made = await tmux(["new-session", "-d", "-s", session, "-c", root]);
+    if (!made.ok) return null;
+  }
   const clean = engineWindowName(name);
   const out = await tmux([
     "new-window", "-P", "-F", "#{pane_id}\t#{window_id}", "-t", session, "-c", cwd,

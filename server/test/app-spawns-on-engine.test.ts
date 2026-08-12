@@ -58,15 +58,23 @@ describe("where the app opens its windows", () => {
 describe("the engine's own window opener", () => {
   it("talks only to our socket, through the engine's own helper", () => {
     const fn = engine.slice(engine.indexOf("export async function engineWindowRunning"), engine.indexOf("export function engineWindowName"));
-    expect(fn).toContain('await tmux(["new-session", "-A", "-d", "-s", session');
+    expect(fn).toContain('await tmux(["has-session", "-t", `=${session}`])');
+    expect(fn).toContain('await tmux(["new-session", "-d", "-s", session');
     expect(fn).toContain('"new-window", "-P", "-F"');
     // No socket argument anywhere: `tmux()` in this module always adds -L and -f.
     expect(fn).not.toContain("-L");
   });
 
-  it("attaches or creates, so a second window joins the first session", () => {
-    const fn = engine.slice(engine.indexOf("export async function engineWindowRunning"));
-    expect(fn).toContain('"-A", "-d"');
+  it("asks whether the session is there rather than using -A", () => {
+    /* `new-session -A` is attach-or-create and reads as exactly what is wanted.
+       It is not: on an existing session it tries to ATTACH, and from a server
+       process with no terminal tmux answers "open terminal failed: not a
+       terminal" and exits non-zero — so the first window opened and every one
+       after it returned null. Measured, and held here by name so the flag that
+       looks right cannot come back. */
+    const fn = engine.slice(engine.indexOf("export async function engineWindowRunning"), engine.indexOf("export function engineWindowName"));
+    expect(fn).not.toContain('"new-session", "-A"');
+    expect(fn).toContain('"has-session"');
   });
 
   it("returns both ids or neither", () => {
