@@ -35,10 +35,25 @@ const GH_TIMEOUT_MS = 25_000;
 // running gh
 // ---------------------------------------------------------------------------
 
-let ghPath: string | null | undefined;
+/**
+ * Where `gh` is, once it has been found.
+ *
+ * A hit is cached and a MISS is not, which is the whole point of the type. It
+ * used to cache both: one `Bun.which` answering null — a PATH not ready yet, a
+ * lookup that lost a race at boot — pinned "gh not found" on every call this
+ * process made for the rest of its life, with nothing on screen to suggest
+ * looking anywhere but at gh itself. Reported once, from the button that
+ * submits a review, and not reproducible from a shell, because a shell resolves
+ * it afresh every time.
+ *
+ * Retrying costs a PATH walk only in the case that is already broken, and it
+ * turns a permanent failure into a transient one.
+ */
+let ghPath: string | null = null;
 function ghBin(): string | null {
-  if (ghPath === undefined) ghPath = Bun.which("gh");
-  return ghPath ?? null;
+  if (ghPath) return ghPath;
+  ghPath = Bun.which("gh") ?? null;
+  return ghPath;
 }
 
 export interface GhResult { code: number; stdout: string; stderr: string }
