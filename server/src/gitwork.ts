@@ -1026,18 +1026,18 @@ const mergedCache = new Map<string, { at: number; set: Set<string> }>();
  * histories in it, and "no merge base" means there is nothing to compare, not
  * that the work is safe to delete.
  */
-function isSquashMerged(root: string, ref: string, name: string): boolean {
-  const base = git(root, ["merge-base", ref, name]);
+async function isSquashMerged(root: string, ref: string, name: string): Promise<boolean> {
+  const base = await gitAsync(root, ["merge-base", ref, name]);
   const mergeBase = base.stdout.trim();
   if (base.code !== 0 || !mergeBase) return false;
-  const tree = git(root, ["rev-parse", `${name}^{tree}`]).stdout.trim();
+  const tree = (await gitAsync(root, ["rev-parse", `${name}^{tree}`])).stdout.trim();
   if (!tree) return false;
   // A branch holding nothing the base didn't already have has no patch to find,
   // and would otherwise look "merged" on the strength of an empty diff.
-  if (tree === git(root, ["rev-parse", `${mergeBase}^{tree}`]).stdout.trim()) return false;
-  const dangling = git(root, ["commit-tree", tree, "-p", mergeBase, "-m", "_"]);
+  if (tree === (await gitAsync(root, ["rev-parse", `${mergeBase}^{tree}`])).stdout.trim()) return false;
+  const dangling = await gitAsync(root, ["commit-tree", tree, "-p", mergeBase, "-m", "_"]);
   if (dangling.code !== 0) return false;
-  const cherry = git(root, ["cherry", ref, dangling.stdout.trim()]);
+  const cherry = await gitAsync(root, ["cherry", ref, dangling.stdout.trim()]);
   return cherry.code === 0 && cherry.stdout.trim().startsWith("-");
 }
 
@@ -1069,8 +1069,8 @@ function isSquashMerged(root: string, ref: string, name: string): boolean {
  * resolution upstream with it — so the gap is narrow enough to be worth the
  * branches it frees. It is the only gap.
  */
-function isRebaseMerged(root: string, ref: string, name: string): boolean {
-  const r = git(root, ["cherry", ref, name]);
+async function isRebaseMerged(root: string, ref: string, name: string): Promise<boolean> {
+  const r = await gitAsync(root, ["cherry", ref, name]);
   if (r.code !== 0) return false;
   const lines = r.stdout.split("\n").filter(Boolean);
   return lines.length > 0 && lines.every((l) => l.startsWith("-"));
@@ -1155,11 +1155,63 @@ async function mergedInto(root: string, ref: string): Promise<Set<string>> {
   // a ref moves. Awaited so that miss costs wall clock rather than a terminal.
   const r = await gitAsync(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
   const set = new Set(r.stdout.split("\n").filter(Boolean));
+  /*
+   * The cheap half of the same question, and it removes most of the expensive
+   * one. Measured on a 52-branch repository, both read-only:
+   *
+   *   20 `git cherry` probes (one sweep)          10327ms
+   *   1 `rev-list --branches --not --remotes`       194ms
+   *
+   * 53× apart, and the single command answers for EVERY branch rather than the
+   * twenty the sweep budget reaches. A branch is clean exactly when its tip is
+   * absent from that walk — an ancestor cannot be missing from a remote that
+   * has the tip. What is left for the probes is the narrow case this cannot
+   * see: a branch whose commits were squashed and whose local copy was never
+   * pushed anywhere.
+   *
+   * It also fixes the answer, not only the cost: work integrated through an
+   * epic branch was reported "not merged" because only the trunk was asked.
+   */
+  for (const name of await mergedAnywhere(root)) set.add(name);
   applyMemo(root, key, set);
   mergedCache.set(key, { at: Date.now(), set });
   sweepProbes(root, ref, key, set);
   return set;
 }
+
+
+/**
+ * Every branch whose commits already exist somewhere on the remote.
+ *
+ * One walk for all of them — see the numbers where this is called. `gitAsync`
+ * rather than `git`, because `git` is spawnSync and this server has one thread:
+ * a blocking spawn here is the terminal sockets and the docked console stopping
+ * with it, which is exactly what a per-branch version of this did before it was
+ * reverted.
+ *
+ * Cached on the same clock as the ancestry answer it extends.
+ */
+async function mergedAnywhere(root: string): Promise<Set<string>> {
+  const key = `${root}\u0000anywhere`;
+  const hit = anywhereCache.get(key);
+  if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.set;
+  const [tips, loose] = await Promise.all([
+    gitAsync(root, ["for-each-ref", "refs/heads", `--format=%(refname:short)${US}%(objectname)`]),
+    gitAsync(root, ["rev-list", "--branches", "--not", "--remotes"]),
+  ]);
+  const off = new Set(loose.stdout.split("\n").filter(Boolean));
+  const set = new Set<string>();
+  for (const line of tips.stdout.split("\n")) {
+    if (!line) continue;
+    const [name, sha] = line.split(US);
+    if (name && sha && !off.has(sha)) set.add(name);
+  }
+  anywhereCache.set(key, { at: Date.now(), set });
+  return set;
+}
+
+/** Same clock as the ancestry answer it extends. */
+const anywhereCache = new Map<string, { at: number; set: Set<string> }>();
 
 /**
  * Recover the merges ancestry can't see — squashed and rebased — off the
@@ -1222,7 +1274,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
     // identical list, on a five-minute clock, forever.
     if (proved) { try { onMergedVerdicts?.(root); } catch { /* a listener must not break the sweep */ } }
   };
-  const step = () => {
+  const step = async () => {
     try {
       if (!started) { all = [...branchTips(root)]; started = true; }
       while (idx < all.length) {
@@ -1231,7 +1283,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
         if (probes++ >= PROBE_MAX) { idx = all.length; break; }
         // Cheapest test first: one spawn, and it answers for every branch the
         // trunk took by rebase. The squash probe's five only run when it can't.
-        if (isRebaseMerged(root, ref, name) || isSquashMerged(root, ref, name)) {
+        if (await isRebaseMerged(root, ref, name) || await isSquashMerged(root, ref, name)) {
           // Mutates the Set the cache entry already holds, so the next read
           // sees the fuller answer without another sweep — and the memo keeps
           // it once that Set expires.
@@ -1241,7 +1293,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
           if (!memo) probeMemo.set(key, (memo = new Map()));
           memo.set(name, sha);
         }
-        setTimeout(step, 0); // one probe per turn of the loop
+        setTimeout(() => { void step(); }, 0); // one probe per turn of the loop
         return;
       }
       probedAt.set(key, Date.now());
@@ -1251,7 +1303,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
       finish();
     }
   };
-  setTimeout(step, 0);
+  setTimeout(() => { void step(); }, 0);
 }
 
 /**
@@ -1286,22 +1338,33 @@ export function sweepInFlight(root: string, ref: string): boolean {
 /** Drop the cache after anything that can change what's merged, so the panel
  *  reflects your own action immediately rather than up to a TTL later. */
 export function invalidateMerged(root?: string): void {
-  // All three, always. The sweep stamp has a far longer TTL than the ancestry
-  // entry, so clearing only the latter would hand the rebuilt entry a "swept
-  // recently" mark and skip the probe pass for minutes — exactly the window
-  // after a merge, when the answer has just changed. The memo goes with them,
-  // or a verdict recorded before the merge is re-applied to the rebuilt set and
-  // outlives the very event that invalidated it.
+  /*
+   * All four, always — the sweep stamp included, and that is deliberate even
+   * though restarting the sweep is what used to make the fan run.
+   *
+   * The stamp has a far longer TTL than the ancestry entry, so clearing only
+   * the latter would hand the rebuilt entry a "swept recently" mark and skip
+   * the probe pass for minutes — exactly the window after a merge, when the
+   * answer has just changed. There is a test for that, and it is describing a
+   * bug somebody had.
+   *
+   * What made restarting expensive was that the sweep probed every branch:
+   * 10.3s of `git cherry` on a 52-branch repository. It does not any more —
+   * the walk (194ms, one command, every branch) fills the set first, and the
+   * sweep skips everything already in it. What is left to probe is the narrow
+   * case the walk cannot see: a squashed branch whose local copy never reached
+   * a remote. On this machine that is a handful, not fifty.
+   */
   // The trunk and per-branch base go with them: both are keyed off refs, which
   // is exactly what a write or a ref-moving fetch changed, and this is the one
   // path both of those reach.
   if (!root) {
-    mergedCache.clear(); probedAt.clear(); probeMemo.clear();
+    mergedCache.clear(); probedAt.clear(); probeMemo.clear(); anywhereCache.clear();
     defaultBranchCache.clear(); baseCache.clear(); publishedCache.clear();
     return;
   }
   const mine = `${root}\u0000`;
-  for (const m of [mergedCache, probedAt, probeMemo] as Map<string, unknown>[]) {
+  for (const m of [mergedCache, probedAt, probeMemo, anywhereCache] as Map<string, unknown>[]) {
     for (const k of m.keys()) if (k.startsWith(mine)) m.delete(k);
   }
   // `mine` (root + separator) is the prefix of the per-branch base keys too.
