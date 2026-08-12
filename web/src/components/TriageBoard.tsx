@@ -19,6 +19,7 @@ import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
+import { stamp } from "../lib/whenStamp.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
@@ -798,6 +799,15 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         <span title={p.filed.reason}
           style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
           {p.filed.reason}
+        </span>
+        {/* The moment itself, hard right, on the line that says what the card is
+            waiting for — because "waiting since when" is one question and the
+            two halves of it belong together. It sits after the sentence in the
+            source so a sentence that runs to two lines pushes it down with it
+            rather than floating away from what it dates. */}
+        <span className="ml-auto shrink-0 self-end tabular-nums" style={{ color: "var(--text4)" }}
+          title={`Last activity on this pull request — ${new Date(p.updatedAt).toString()}`}>
+          {stamp(p.updatedAt)}
         </span>
       </div>
 
