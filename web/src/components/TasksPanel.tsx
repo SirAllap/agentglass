@@ -1646,30 +1646,27 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           of the board, which is long enough that "Do it" followed by nothing
           reads as a button that did not work — and the second press is a
           second write. */}
+      {/*
+       * A lane for the panel to say it is busy, whose height never changes.
+       *
+       * Reported twice, and the second time is what settled the shape: a status
+       * bar that appears pushes everything below it down by its own height and
+       * pulls it back a moment later, and on a list you click all day that
+       * reads as the whole page flinching. Told to keep the gap and hide the
+       * contents, which is exactly right — a reserved lane cannot move anything
+       * because it is always the same size.
+       *
+       * Reads say nothing in it. The list you clicked already wears its own
+       * spinner in the rail, where you are looking; a second, louder answer
+       * across the panel is not more information. A write has no such home — it
+       * is started from a menu that closes behind it — so it says so here.
+       */}
+      <div className="px-5 shrink-0 flex items-center overflow-hidden" aria-live="polite"
+        style={{ height: 22, background: busy && !confirm && !wanted ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "transparent" }}>
+        {busy && !confirm && !wanted && <Spinner label="Telling ClickUp…" className="" />}
+      </div>
+
       <div className="flex flex-1 min-h-0 relative">
-        {/* The wait, laid OVER the panel rather than inserted above it.
-            As a block in the flow it pushed everything down by its own height
-            and pulled it back a moment later, so every board you clicked made
-            the whole page jump — reported as the UI vanishing for a
-            millisecond, and it was the layout moving, not the content.
-
-            And it only belongs to a WRITE. Switching board asks ClickUp a
-            question, and the answer is already announced where you are looking:
-            the list you just clicked wears its own `…` in the rail. A banner
-            across the panel for that is a second, louder answer to a question
-            the rail already answered — so reads have none, and `wanted`, which
-            the board load sets and nothing else does, is what tells them apart.
-
-            A write keeps it, because a write has no such home: it is started
-            from a menu that closes behind it, and "Do it" followed by nothing
-            reads as a button that did not work — and the second press is a
-            second write. */}
-        {busy && !confirm && !wanted && (
-          <div className="absolute left-0 right-0 top-0 px-5 py-1 z-10 pointer-events-none"
-            style={{ background: "color-mix(in srgb, var(--primary) 10%, var(--bg))" }}>
-            <Spinner label="Telling ClickUp…" className="" />
-          </div>
-        )}
         {/*
          * The lists, down the side.
          *
@@ -1693,7 +1690,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               title={railOpen ? "Fold the list menu" : "Show the lists"}
               className="shrink-0 grid place-items-center rounded"
               style={{ width: 22, height: 22, border: edge(14), color: "var(--text3)" }}>
-              {railOpen ? "‹" : "›"}
+              {/* Drawn rather than typed. `‹` is a text glyph and sits on a text
+                  baseline, so centring the box still left it riding high inside
+                  it — the alignment cannot be fixed by the box because the gap
+                  is inside the glyph. An SVG has no baseline to fight. */}
+              <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor"
+                strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden focusable="false">
+                <path d={railOpen ? "M10 3.5 5.5 8l4.5 4.5" : "M6 3.5 10.5 8 6 12.5"} />
+              </svg>
             </button>
             {railOpen && (
               <input value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
