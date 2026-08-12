@@ -1998,17 +1998,13 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           style={{ width: 5, marginRight: -5, cursor: "col-resize", zIndex: 5 }} />
         <aside className="flex flex-col shrink-0 min-w-0"
           style={{ width: cardW, borderLeft: edge(12) }}>
-          {/* The width control belongs to the PANE, not to whatever is in it.
-              Inside the card it was unreachable the moment you deselected: the
-              pane stayed at 720px around the words "Pick a card", with the only
-              button that could narrow it hidden behind picking one again. */}
-          <div className="flex items-center gap-2 px-4 pt-3 shrink-0">
-            <span className="text-[8.5px] uppercase tracking-[0.16em] truncate" style={{ color: "var(--text4)" }}>
-              {picked ? "Card" : ""}
-            </span>
-            <span className="flex-1" />
-          </div>
-          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 pt-0 text-[11.5px] flex flex-col">
+          {/* No eyebrow over this pane. It said the word "Card" above a card,
+              which was already earning its keep only by carrying the width
+              button beside it — and the width is dragged from the edge now. A
+              heading that labels the obvious costs the card its first line, and
+              this pane starts level with the table's own heading instead. */}
+          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col"
+            style={{ paddingTop: 8 }}>
             {picked
               ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
                   writable={boards.writeEnabled} repos={repos} here={here}
