@@ -2504,13 +2504,23 @@ function fetchDiff(key: string, number: number, nameWithOwner: string) {
   return p;
 }
 
-export async function prDiff(rootIn: unknown, numberIn: unknown): Promise<{ ok: boolean; text?: string; error?: string }> {
+export async function prDiff(rootIn: unknown, numberIn: unknown, force = false): Promise<{ ok: boolean; text?: string; error?: string }> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const key = `${repo.nameWithOwner}#${number}`;
-  const hit = diffCache.get(key);
+  /*
+   * "Force" here means what it means on the detail: skip what is held, ask
+   * GitHub. The caller that uses it knows something this cache cannot — that
+   * the head commit moved — and stale-while-revalidate answers that with the
+   * text from before the push, refreshing in the background for a second
+   * request that nobody makes.
+   *
+   * It still goes through `fetchDiff`, so a forced read joins an in-flight one
+   * rather than starting a second `gh pr diff` beside it.
+   */
+  const hit = force ? undefined : diffCache.get(key);
   if (hit) {
     // Stale-while-revalidate: hand back what we have, and go and check only if
     // it has aged. A diff on screen a moment sooner is worth more than one that

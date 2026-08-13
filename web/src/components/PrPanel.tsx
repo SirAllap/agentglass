@@ -794,6 +794,15 @@ export function Md({ body, className }: { body: string; className?: string }) {
 // diff, through the app's own viewer
 // ---------------------------------------------------------------------------
 
+/** Which commit a pull request currently points at — `headSha` when the list
+ *  filled it in, the last commit otherwise, and "" when neither is loaded yet.
+ *  Used to tell "the same pull request" from "the same pull request, pushed
+ *  to", which is the difference between a cached diff and a wrong one. */
+function headOfDetail(d: PrDetail | null): string {
+  if (!d) return "";
+  return d.headSha || (d.commits.length ? d.commits[d.commits.length - 1].oid : "");
+}
+
 /** A parsed diff in the shape ChangesModal's viewer speaks. The synthetic
  *  fields are inert — that component reads path, counts and hunks. */
 function toFileChange(f: ParsedFile, i: number): FileChange {
@@ -1784,6 +1793,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *  diff of a pull request (or commit) you have since left can take seconds to
    *  arrive, and without this its late reply overwrites the one you switched to. */
   const diffReq = useRef(0);
+  /** The head commit the diff on screen was fetched for, and whether the next
+   *  fetch must go past the server's cache. See the effect that compares them. */
+  const diffHead = useRef("");
+  const diffFresh = useRef(false);
   const commitReq = useRef(0);
 
   const flash = useCallback((ok: boolean, msg: string) => {
@@ -2189,12 +2202,40 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useEffect(() => {
     if ((tab !== "files" && tab !== "review") || !detail || diff || diffErr || !root) return;
     const req = ++diffReq.current; // a later selection's diff must win over a slow earlier one
-    api.prDiff(root, detail.number).then((r) => {
+    const want = diffFresh.current; diffFresh.current = false;
+    const head = headOfDetail(detail);
+    api.prDiff(root, detail.number, want).then((r) => {
       if (req !== diffReq.current) return;
-      if (r.ok) { setDiff(r.text || ""); setDiffErr(r.text ? "" : "GitHub returned an empty diff for this pull request."); }
+      if (r.ok) { diffHead.current = head; setDiff(r.text || ""); setDiffErr(r.text ? "" : "GitHub returned an empty diff for this pull request."); }
       else setDiffErr(r.error || "The diff could not be fetched.");
     }).catch((e) => { if (req === diffReq.current) setDiffErr(String(e)); });
   }, [tab, detail, diff, diffErr, root]);
+
+  /*
+   * A push replaces the diff. Nothing used to notice.
+   *
+   * The text above is fetched once per selected pull request — the effect
+   * refuses to re-ask while `diff` holds anything — and the detail beside it is
+   * re-read constantly: by the list poll, and by Refresh, which forces it. So
+   * after somebody pushes to a pull request you have open, the file LIST is the
+   * new one and the diff TEXT is the old one, and a file the push added has a
+   * row, a `+42 −0`, and no hunks to draw. That renders as "No textual diff —
+   * binary, renamed, or too large to show", which is three wrong answers: the
+   * diff was fetched before that file existed. Measured on a pull request with
+   * eight pushes in an afternoon; GitHub showed the file fine in the browser.
+   *
+   * Keyed on the head commit rather than on a timer: it is the thing that
+   * actually changes when the diff does, and comparing it costs a string
+   * compare per detail load. `diffFresh` then makes the refetch skip the
+   * server's own five-minute cache — otherwise the answer to "the head moved"
+   * is the same stale text that prompted the question.
+   */
+  useEffect(() => {
+    const head = headOfDetail(detail);
+    if (!head || !diffHead.current || head === diffHead.current) return;
+    diffFresh.current = true;
+    setDiff(""); setDiffErr("");
+  }, [detail]);
 
   // Filter the current scope's rows by the search box: PR number (with or
   // without a leading #), title, or author login. Memoized so a 400-row "all"
@@ -3296,6 +3337,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             *
             * Now: both board lists forced, the open pull request forced, and
             * the counts that go stale with them dropped.
+            *
+            * And the diff, which was the last thing here still answering from
+            * memory: it is fetched once per selected pull request and was never
+            * dropped, so pressing this on a pull request somebody had pushed to
+            * re-read everything around a diff that stayed as it was.
             */}
           <Btn onClick={() => {
             forgetBehind();
@@ -3303,7 +3349,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             boardForce.current = true;
             setBoardTick((n) => n + 1);
             loadList(true);
-            if (selected != null) loadDetail(selected, true);
+            if (selected != null) {
+              loadDetail(selected, true);
+              diffFresh.current = true;
+              setDiff(""); setDiffErr("");
+            }
           }} disabled={busy} small>Refresh</Btn>
         </div>
       </div>
@@ -7621,7 +7671,15 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                         }}
                       />
                     )
-                    : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
+                    /* Two different nothings, and saying the wrong one is how a
+                       stale diff looked like a broken file. `change` present
+                       with no hunks is GitHub sending a header and no text:
+                       binary, a pure rename. `change` ABSENT means this file is
+                       not in the diff we hold at all — which, since the file
+                       list comes from the detail and the diff does not, means
+                       the detail is newer than the text beside it. */
+                    : change ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>
+                    : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>This file is not in the diff on screen — it arrived with a newer push. Press Refresh.</div>}
                 </div>
               </LazyMount>
               )

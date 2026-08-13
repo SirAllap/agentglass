@@ -1008,8 +1008,8 @@ const realApi = {
       `/prs/counts?root=${encodeURIComponent(root)}&state=${state}`),
   prDetail: (root: string, number: number, force = false) =>
     get<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
-  prDiff: (root: string, number: number) =>
-    get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}`),
+  prDiff: (root: string, number: number, force = false) =>
+    get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
   /** Images in a PR body go through the server, which attaches the gh token —
    *  GitHub's own attachment URLs 404 without it. This is an `<img src>`, a
    *  navigation the browser can't put an auth header on, so the shared secret
@@ -1326,7 +1326,7 @@ const demoApi: typeof realApi = {
   prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
-  prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
+  prDiff: (_root: string, number: number, _force?: boolean) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
   prFileTemp: (_r: string, _n: number, _p: string) => D({ ok: false as const, error: "not available in the demo" }),
   prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),

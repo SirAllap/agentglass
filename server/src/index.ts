@@ -2628,7 +2628,7 @@ const server = Bun.serve<WsData>({
       ));
     }
     if (pathname === "/prs/diff") {
-      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));
+      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || "", url.searchParams.get("force") === "1"));
     }
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.
