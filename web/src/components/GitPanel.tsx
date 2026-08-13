@@ -42,6 +42,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { GitRowMenu } from "./GitRowMenu.tsx";
 import { GitPalette, type PaletteRow } from "./GitPalette.tsx";
+import { Empty } from "./git/ui.tsx";
 import { List, branchRows, remoteBranchRows, tagRows, stashRows, worktreeRows, submoduleRows, reflogRows, commitRows } from "./git/Lists.tsx";
 import { primaryAction, groupByPrefix, bulkDeletable, type GitKind, type GitRowState } from "../lib/gitActions.ts";
 import { openPrs, openPr } from "../lib/openPrs.ts";
@@ -139,11 +140,20 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
   // Two steps, because they answer different questions: `open` is "explain
   // this to me", `armed` is "now give me the command".
   const [armed, setArmed] = useState<string | null>(null);
-  if (busy && !report) return <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>Looking through the checkout…</div>;
+  if (busy && !report) return <Empty what="clutter" busy />;
   if (!report) return null;
   if (report.error) return <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{report.error}</div>;
   if (!report.findings.length) {
-    return <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing has piled up here — no stale branches, no dangling worktrees, no loose objects worth packing.</div>;
+    return (
+      <div className="grid place-items-center gap-1.5 py-14 px-6 text-center">
+        <div className="grid place-items-center rounded-full mb-1"
+          style={{ width: 34, height: 34, background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success)", fontSize: 15 }}>✓</div>
+        <div className="text-[12.5px]" style={{ color: "var(--text)" }}>Nothing has piled up</div>
+        <div className="text-[10.5px]" style={{ color: "var(--text3)", maxWidth: 340 }}>
+          No stale branches, no dangling worktrees, no loose objects worth packing.
+        </div>
+      </div>
+    );
   }
   return (
     <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5">
@@ -156,7 +166,7 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
           // and both of its buttons were simply cut off, with no scrollbar and
           // nothing to suggest anything was missing. Measured: 343px of
           // content in a 269px box.
-          <div key={f.id} className="rounded-lg overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+          <div key={f.id} className="rounded-[10px] overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--text) 8%, transparent)", background: "color-mix(in srgb, var(--bg3) 34%, transparent)" }}>
             <div className="flex items-start gap-3 px-3 py-2">
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">

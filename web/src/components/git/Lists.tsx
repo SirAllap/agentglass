@@ -62,7 +62,10 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
   const active = rows[Math.min(cursor, rows.length - 1)];
 
   return (
-    <div className="flex-1 min-h-0 flex">
+    // Centred as a pair rather than pinned left: on a 2000px window the list
+    // plus its detail come to ~1300, and letting the remaining 700 sit on one
+    // side is what made the old view feel like a form in the corner of a page.
+    <div className="flex-1 min-h-0 flex w-full mx-auto" style={{ maxWidth: 1480 }}>
       {/* The list keeps a reading measure — a card is a name and a sentence,
           and a 1900px sentence is not read, it is scanned past — and the width
           left over goes to the detail pane rather than to blank card. */}

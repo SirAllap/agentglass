@@ -1464,3 +1464,11 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    child with a definite height — see `flex-1 min-h-0` on it. */
 .agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }
 @media (max-width: 1179px) { .agx-tree3 { width: 200px; } }
+
+/* The git cards. Selection lifts and shifts 2px, which is motion — small, but
+   motion — so it goes off with everything else when the machine asks for less.
+   Transitions rather than animations: nothing loops here, so there is nothing
+   to stop, only something to make instant. */
+@media (prefers-reduced-motion: reduce) {
+  .git-card { transition: none !important; transform: none !important; }
+}

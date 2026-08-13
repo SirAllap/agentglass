@@ -71,10 +71,15 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     padding: "10px 12px 10px 16px",
     marginBottom: 6,
     borderRadius: 10,
-    background: selected ? wash("--primary", 12) : current ? wash("--primary", 6) : wash("--bg3", 34),
-    border: `1px solid ${selected ? wash("--primary", 42) : wash("--text", 8)}`,
+    background: selected ? wash("--primary", 14) : current ? wash("--primary", 6) : wash("--bg3", 34),
+    border: `1px solid ${selected ? wash("--primary", 55) : wash("--text", 8)}`,
+    // The selected card lifts. Depth is the cheapest way to say "this one" in
+    // a list where every card is the same size, and it costs no colour — the
+    // colours are already carrying state on the rail and in the chips.
+    boxShadow: selected ? `0 6px 18px -10px rgba(0,0,0,.75), inset 0 0 0 1px ${wash("--primary", 18)}` : "none",
     cursor: "default",
-    transition: "background .12s, border-color .12s",
+    transition: "background .14s ease, border-color .14s ease, box-shadow .14s ease, transform .14s ease",
+    transform: selected ? "translateX(2px)" : "none",
   };
   return (
     <div className="git-card group" style={style} onClick={onClick} onContextMenu={onContextMenu} title={title2}>
