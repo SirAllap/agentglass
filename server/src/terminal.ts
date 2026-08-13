@@ -455,7 +455,7 @@ function killGroup(s: Session, sigNum: number) {
 import { findTmuxBelow } from "./procchildren.ts";
 import { recall, remember, SETTLE_MS } from "./tmuxmemory.ts";
 import { deskAttachArgv } from "./tmuxctl.ts";
-import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { focusPaneAnywhere, resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
@@ -1564,7 +1564,26 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // prompt and submits it, so the window opens with the review already
         // running rather than with something typed that nobody pressed return
         // on.
-        await engineWindowRunning(plan.cwd, `pr-${number}`, [bin, plan.prompt]);
+        const opened = await engineWindowRunning(plan.cwd, `pr-${number}`, [bin, plan.prompt]);
+        /*
+         * And then go there.
+         *
+         * Without this the button read as broken: the window opened, the agent
+         * started, the panel switched to the terminal — and showed whatever it
+         * was showing before, because the new window belongs to the session of
+         * the pull request's checkout, which is not necessarily the one this
+         * socket is attached to. Reported as "it sends me to the terminal and
+         * then nothing happens", with the review running in a window nobody was
+         * looking at. Verified against the engine: `pr-17598` was there, three
+         * minutes into the answer.
+         *
+         * `focusPaneAnywhere` rather than a `select-window` here: a pane id is
+         * per-SERVER, and it is the one that finds which server holds this one
+         * and switches the client that is on it — including past a phone's
+         * mirror session, which shares the window and has cost a real session
+         * before.
+         */
+        if (opened) focusPaneAnywhere(undefined, "", opened.windowId, opened.paneId);
         s.tmuxSweep?.();
       })();
       return;

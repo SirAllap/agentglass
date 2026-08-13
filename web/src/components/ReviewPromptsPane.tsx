@@ -19,7 +19,7 @@
  * line goes first and the body follows it as context, so the two are not an
  * either/or.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import type { ReviewRecipe, ReviewRecipeGroup, ReviewRecipeWhen, SkillInfo } from "../../../shared/types.ts";
 import { SettingRow } from "./SettingRow.tsx";
@@ -130,7 +130,8 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
               <span className="text-[11px]" style={{ color: "var(--text4)" }}>{g.what}</span>
             </div>
             {rows.map((r) => (
-              <SettingRow key={r.id}
+              <Fragment key={r.id}>
+              <SettingRow
                 label={<span className="flex items-center gap-1.5">
                   {r.skill && <span className="text-[10px] px-1 rounded" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>skill</span>}
                   {r.title}
@@ -153,6 +154,15 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                     style={{ border: edge(20), color: "var(--error)" }}>{r.builtIn ? "Hide" : "Delete"}</button>
                 </span>}
               />
+              {/* Under the row it belongs to, not at the foot of the page.
+                  The editor used to render after the whole list, so pressing
+                  Edit on the first prompt appeared to do nothing at all until
+                  you scrolled past thirteen others to find it. */}
+              {editing?.id === r.id && (
+                <Editor r={editing} skills={skills} presets={[]}
+                  onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
+              )}
+              </Fragment>
             ))}
             {!rows.length && (
               <div className="py-1.5 text-[12px]" style={{ color: "var(--text4)" }}>Nothing here — the built-ins were hidden.</div>
@@ -165,6 +175,10 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                 </button>
               </div>
             )}
+            {editing && !editing.id && editing.group === g.id && (
+              <Editor r={editing} skills={skills} presets={list.filter((x) => x.builtIn)}
+                onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
+            )}
           </div>
         );
       })}
@@ -175,10 +189,6 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
         </div>
       )}
 
-      {editing && (
-        <Editor r={editing} skills={skills} presets={list.filter((x) => x.builtIn)}
-          onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
-      )}
     </Wrap>
   );
 }
@@ -194,6 +204,16 @@ function Editor({ r, skills, presets, onChange, onSave, onCancel }: {
   onChange: (r: ReviewRecipe) => void; onSave: (r: ReviewRecipe) => void; onCancel: () => void;
 }) {
   const set = (patch: Partial<ReviewRecipe>) => onChange({ ...r, ...patch });
+  /* Bring it into view and put the cursor in it. Even directly under its row,
+     an editor that opens below the fold is an editor somebody thinks did not
+     open — which is exactly how this started. `nearest` rather than `center`:
+     if it is already on screen, nothing should move. */
+  const box = useRef<HTMLDivElement>(null);
+  const first = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    first.current?.focus();
+  }, []);
   const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
   const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
 
@@ -207,11 +227,11 @@ function Editor({ r, skills, presets, onChange, onSave, onCancel }: {
   const chosen = ordered.find((s) => r.skill?.slice(1).split(/\s/)[0] === s.name);
 
   return (
-    <div className="rounded-xl p-3 flex flex-col gap-2.5 mt-2" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
+    <div ref={box} className="rounded-xl p-3 flex flex-col gap-2.5 my-2" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
       <div className="flex gap-2 flex-wrap items-end">
         <label className="flex flex-col gap-1 flex-1 min-w-[200px]">
           <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Title — what the menu shows</span>
-          <input value={r.title} onChange={(e) => set({ title: e.target.value })} placeholder="What changed since my review"
+          <input ref={first} value={r.title} onChange={(e) => set({ title: e.target.value })} placeholder="What changed since my review"
             className={inp} style={style} />
         </label>
         <label className="flex flex-col gap-1">

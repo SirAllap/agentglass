@@ -4923,25 +4923,27 @@ const MenuHead = ({ children }: { children: React.ReactNode }) => (
   <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{children}</div>
 );
 
-/** The two destinations, as icons small enough to sit at the end of a row. A
- *  terminal window and a chat pane are not a preference to be remembered — see
- *  the comment on the menu — so both are on every row rather than one being a
- *  default with the other hidden behind a modifier. */
-function Where({ onTerm, onChat }: { onTerm?: () => void; onChat: () => void }) {
-  const btn = "inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0";
+/**
+ * The chat, as an afterthought on a row that is already a button.
+ *
+ * It was two icons — a terminal and a chat — on a row whose TITLE did a third
+ * thing. Reported straight away: pressing the row anywhere but exactly on the
+ * `>_` "sends me to the terminal and then nothing happens". A row with three
+ * targets and no obvious one is a row you have to aim at, and the whole point
+ * of the menu is picking a prompt, not picking a pane.
+ *
+ * So the row runs it in a terminal — see ReviewMenu — and this is the one
+ * exception, kept because the chat pane is genuinely the quicker read
+ * sometimes. `stopPropagation`, or it would fire the row's terminal underneath
+ * it.
+ */
+function ChatInstead({ onChat }: { onChat: () => void }) {
   return (
-    <span className="ml-auto flex items-center gap-0.5 pl-2">
-      {onTerm && (
-        <button onClick={(e) => { e.stopPropagation(); onTerm(); }} title="In a terminal"
-          className={btn} style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In a terminal">
-          <span className="text-[11px] leading-none">&gt;_</span>
-        </button>
-      )}
-      <button onClick={(e) => { e.stopPropagation(); onChat(); }} title="In the chat pane"
-        className={btn} style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In the chat pane">
-        <span className="text-[13px] leading-none">&#8942;</span>
-      </button>
-    </span>
+    <button onClick={(e) => { e.stopPropagation(); onChat(); }} title="In the chat pane instead"
+      className="ml-auto inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
+      style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In the chat pane instead">
+      <span className="text-[13px] leading-none">&#8942;</span>
+    </button>
   );
 }
 
@@ -5022,9 +5024,22 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
               prompt and the two places to run it, one click each. */}
           {top && (
             <>
-              <MenuHead>Suggested · {top.title}</MenuHead>
-              {canTerm && <MenuItem onClick={() => { close(); onPick(top.id, "term"); }}>&gt;_ In a terminal</MenuItem>}
-              <MenuItem onClick={() => { close(); onPick(top.id, "chat"); }}>&#8942; In the chat pane</MenuItem>
+              <MenuHead>Suggested</MenuHead>
+              {/* The same row as every other one, rather than the two
+                  destination lines it used to be: one shape to learn, and the
+                  suggestion is a prompt like the rest — it is just the one this
+                  pull request calls for. */}
+              <div role="button" tabIndex={0}
+                onClick={() => { close(); onPick(top.id, canTerm ? "term" : "chat"); }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(top.id, canTerm ? "term" : "chat"); } }}
+                title={top.skill || top.title}
+                className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text)" }}>
+                <span className="min-w-0 truncate flex-1">
+                  {top.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                  {top.title}
+                </span>
+                <ChatInstead onChat={() => { close(); onPick(top.id, "chat"); }} />
+              </div>
             </>
           )}
           {groups.map((g) => {
@@ -5035,15 +5050,21 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                 <MenuSep />
                 <MenuHead>{GROUP_LABEL[g]}</MenuHead>
                 {rows.map((r) => (
-                  <div key={r.id} className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
-                    {/* The title itself runs the suggestion's destination-less
-                        default — the chat — so a row is still one click when
-                        you do not care where it lands. */}
-                    <button className="min-w-0 truncate text-left flex-1" onClick={() => { close(); onPick(r.id, "chat"); }} title={r.skill ? `${r.skill}` : r.title}>
+                  /* The whole row, not a button inside it: the title used to be
+                     the only live part, so a press on the padding beside it did
+                     nothing at all. And it runs in a terminal, because that is
+                     where a review belongs — a real agent in tmux that survives
+                     this app, which you can attach to and keep working in. */
+                  <div key={r.id} role="button" tabIndex={0}
+                    onClick={() => { close(); onPick(r.id, canTerm ? "term" : "chat"); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(r.id, canTerm ? "term" : "chat"); } }}
+                    title={r.skill || r.title}
+                    className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text2)" }}>
+                    <span className="min-w-0 truncate flex-1">
                       {r.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
                       {r.title}
-                    </button>
-                    <Where onTerm={canTerm ? () => { close(); onPick(r.id, "term"); } : undefined} onChat={() => { close(); onPick(r.id, "chat"); }} />
+                    </span>
+                    <ChatInstead onChat={() => { close(); onPick(r.id, "chat"); }} />
                   </div>
                 ))}
               </Fragment>
