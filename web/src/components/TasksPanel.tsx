@@ -2625,8 +2625,11 @@ function AboutBody({ text }: { text: string }) {
         })}
       </div>
       {blanks >= 2 && (
+        /* No count: the empty rows are a mix of section headings (`Docs:`,
+           `Team:`) and genuinely missing chips, and a number that lumps them
+           together is a number that is wrong. */
         <div className="mt-3 pt-2 text-[10.5px]" style={{ borderTop: edge(10), color: "var(--text4)" }}>
-          {blanks} of these are ClickUp's own cards — a Doc, a Figma file, a Slack channel — which its API does not hand out. Open the list there to follow them.
+          The blanks are ClickUp's own cards — a Doc, a Figma file, a Slack channel. Its API publishes the words and keeps those to itself; open the list there to follow them.
         </div>
       )}
     </>
