@@ -449,3 +449,43 @@ export function commit(root: string, files: string[], title: string, body: strin
   const sha = git(absRoot, ["rev-parse", "HEAD"]).stdout.trim();
   return { ok: true, sha, shortSha: sha.slice(0, 8), summary: summarize(c.stdout) };
 }
+
+/**
+ * Amend the last commit with the selected files, keeping the same shape as
+ * `commit()` above: stage exactly the picked files, then rewrite HEAD with a
+ * pathspec so nothing else leaks in. Refuses when the repo is mid-operation —
+ * rewriting a commit under an in-flight sequencer is how the two collide.
+ */
+export function amend(root: string, files: string[], title: string, body: string): CommitResult {
+  if (!COMMIT_ENABLED) return { ok: false, error: "commit is disabled (AGENTGLASS_COMMIT_DISABLED=1)" };
+  const absRoot = safeAbs(root);
+  if (!absRoot) return { ok: false, error: "invalid repo path" };
+  if (!inScope(absRoot)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
+  if (!title.trim()) return { ok: false, error: "commit title required" };
+  // The mirror of gitwork's own guard: never rewrite HEAD in the middle of a
+  // merge, rebase, cherry-pick or revert.
+  const top = git(absRoot, ["rev-parse", "--show-toplevel"]);
+  if (top.code !== 0 || top.stdout.trim() !== absRoot) return { ok: false, error: "not a git repository root" };
+  const stopped = git(absRoot, ["status", "--porcelain=v2", "-b"]).stdout;
+  if (/^(merge|rebase|cherry-pick|revert) in progress/m.test(stopped)) return { ok: false, error: "this checkout is mid-merge or mid-rebase — finish or abandon it before amending" };
+
+  const rels = (Array.isArray(files) ? files : []).map((f) => String(f)).filter(Boolean);
+  if (!rels.length) return { ok: false, error: "no files selected" };
+  for (const rel of rels) {
+    if (rel.includes("\0")) return { ok: false, error: "invalid file path" };
+    const abs = resolve(absRoot, rel);
+    if (abs !== absRoot && !abs.startsWith(absRoot + sep)) return { ok: false, error: `path escapes repo: ${rel}` };
+  }
+
+  const add = git(absRoot, ["add", "--", ...rels]);
+  if (add.code !== 0) return { ok: false, error: add.stderr.trim() || "git add failed" };
+
+  const args = ["commit", "--amend", "-m", title.trim()];
+  if (body && body.trim()) args.push("-m", body.trim());
+  args.push("--", ...rels);
+  const c = git(absRoot, args);
+  if (c.code !== 0) return { ok: false, error: c.stderr.trim() || c.stdout.trim() || "git commit --amend failed" };
+
+  const sha = git(absRoot, ["rev-parse", "HEAD"]).stdout.trim();
+  return { ok: true, sha, shortSha: sha.slice(0, 8), summary: summarize(c.stdout) };
+}
