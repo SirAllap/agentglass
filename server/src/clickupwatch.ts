@@ -364,3 +364,52 @@ export function stopCardWatch(): void {
   if (timer) clearInterval(timer);
   timer = null;
 }
+
+// ---------------------------------------------------------------------------
+// which card a mirrored notification is about
+// ---------------------------------------------------------------------------
+
+/**
+ * ClickUp's own desktop notification, matched back to a card.
+ *
+ * The desktop app posts "Alejandro set the status to: READY FOR QA" with the
+ * task's TITLE as the summary and nothing else — no id, no url, and a D-Bus
+ * monitor cannot invoke the notification's own action to find out. So the row
+ * behind the bell had nowhere to go but ClickUp's website, which is the one
+ * destination that leaves this app.
+ *
+ * The title, though, is enough: the watcher already keeps every card of yours
+ * it has seen, with its id and its `PROJ-…` label, in the file it uses to tell
+ * a status change from a new assignment. Looking a title up in that costs
+ * nothing and is not a guess.
+ *
+ * Deliberately silent when TWO cards match. Two tickets can share a title —
+ * "Fix the flaky test" — and opening the wrong one is worse than opening
+ * nothing, because the reader has no way to tell it happened.
+ */
+export function cardForTitle(title: unknown): { id: string; label: string } | null {
+  const want = normalizeTitle(title);
+  // Short titles match too many things. "QA" would resolve to whichever card
+  // happened to start with it.
+  if (want.length < 8) return null;
+  const seen = load().seen;
+  const hits: { id: string; label: string }[] = [];
+  for (const [id, v] of Object.entries(seen)) {
+    const have = normalizeTitle(v.title);
+    if (!have) continue;
+    // Either side may be the shorter one: a notification daemon truncates long
+    // summaries, and so does the panel that stores them.
+    if (have === want || have.startsWith(want) || want.startsWith(have)) {
+      hits.push({ id, label: v.customId ?? id });
+      if (hits.length > 1) return null;
+    }
+  }
+  return hits[0] ?? null;
+}
+
+/** Case, spacing and the ellipsis a truncated summary ends with are all noise
+ *  for this comparison. */
+function normalizeTitle(s: unknown): string {
+  if (typeof s !== "string") return "";
+  return s.trim().replace(/(\.{3}|…)\s*$/, "").replace(/\s+/g, " ").toLowerCase();
+}

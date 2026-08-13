@@ -752,6 +752,10 @@ const realApi = {
     get<{ ok: boolean; error?: string; steps?: string[]; confirm?: boolean; missing?: string[] }>(
       `/recipes/render?id=${encodeURIComponent(id)}&values=${encodeURIComponent(JSON.stringify(values))}`),
   clickupViews: () => get<ClickUpBoards>("/clickup/views"),
+  /** Which card a mirrored ClickUp desktop notification is about, by its title.
+   *  Answered from the watcher's own file, so it costs no ClickUp call. */
+  clickupCardForNote: (title: string) =>
+    get<{ card: { id: string; label: string } | null }>(`/clickup/card-for-note?title=${encodeURIComponent(title)}`),
   clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
   clickupView: (id?: string, force = false) =>
     get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
@@ -1436,6 +1440,7 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   clickupViews: () => D({ views: [], connected: false, writeEnabled: false }),
+  clickupCardForNote: () => D({ card: null }),
   clickupSetWrites: (_o: boolean) => D({ ok: false }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),

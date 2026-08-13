@@ -133,7 +133,7 @@ import { privateHost, resolvePeer, originOf } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller, type Origin } from "./auth.ts";
 import { activeDevices, markSeen, revokeDevice, devices, publicDevice, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
-import { startCardWatch } from "./clickupwatch.ts";
+import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
@@ -2125,6 +2125,21 @@ const server = Bun.serve<WsData>({
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : 400);
+    }
+    /*
+     * Which card a mirrored ClickUp notification is about.
+     *
+     * ClickUp's desktop app posts the task's title and the sentence that
+     * happened to it — no id, no url — and a D-Bus monitor cannot invoke the
+     * notification's own action to ask. So the row behind the bell could only
+     * ever offer ClickUp's website, and the board this app already has was one
+     * click further away than the browser.
+     *
+     * Answered from the watcher's own file, so this costs no ClickUp call and
+     * cannot fail with a rate limit.
+     */
+    if (pathname === "/clickup/card-for-note") {
+      return json({ card: cardForTitle(url.searchParams.get("title") || "") });
     }
     if (pathname === "/clickup/views") {
       // `prefix` is what this workspace's ids look like, so a surface that has

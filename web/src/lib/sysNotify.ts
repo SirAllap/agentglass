@@ -1,4 +1,4 @@
-import { SERVER, withToken, authHeaders } from "./api.ts";
+import { SERVER, withToken, authHeaders, api } from "./api.ts";
 
 /**
  * Desktop notifications, mirrored onto the notch.
@@ -668,6 +668,52 @@ function scheduleReopen() {
   retryTimer = setTimeout(() => { retryTimer = null; retune(); }, delay);
 }
 
+/**
+ * A ClickUp notification, pointed at the board in this app.
+ *
+ * ClickUp's desktop app posts the task's title and the sentence that happened to
+ * it — "Alejandro set the status to: READY FOR QA" — and nothing else: no id, no
+ * url, and a D-Bus monitor cannot invoke the notification's own action to ask.
+ * So these rows were the only ones behind the bell that could not be opened, and
+ * clicking the desktop pop-up went to ClickUp's website, which is the one place
+ * that is not this app.
+ *
+ * The title is enough, and the server can match it against the cards the ClickUp
+ * watcher already keeps on disk. Asked only for notes that could plausibly be
+ * one: ClickUp's own daemon posts with an EMPTY app name (which is also why
+ * these rows have no `CLICKUP` cap next to the time), and a note that already
+ * carries a link is about that link.
+ */
+const cardLookups = new Map<string, { id: string; label: string } | null>();
+
+async function attachCard(n: SystemNote): Promise<void> {
+  const app = n.app.trim().toLowerCase();
+  if (app && !app.includes("clickup")) return;
+  if (n.url) return;
+  const title = n.summary?.trim();
+  if (!title || title.length < 8) return;
+
+  // One question per distinct title. A card typically produces several
+  // notifications in a row — assigned, then moved, then commented on — and they
+  // all carry the same summary.
+  let card = cardLookups.get(title);
+  if (card === undefined) {
+    try { card = (await api.clickupCardForNote(title)).card; } catch { return; }
+    if (cardLookups.size > 200) cardLookups.clear();
+    cardLookups.set(title, card);
+  }
+  if (!card) return;
+
+  // Patched in place: the row is already on screen and the reader may have
+  // scrolled past it. Matched by id so a note dismissed in the meantime stays
+  // dismissed rather than coming back with a button on it.
+  const i = history.findIndex((h) => h.id === n.id);
+  if (i < 0 || history[i]!.goto) return;
+  history = [...history];
+  history[i] = { ...history[i]!, goto: { kind: "card", id: card.id, label: card.label } };
+  historyChanged();
+}
+
 function attach() {
   const sock = new WebSocket(withToken(SERVER.replace(/^http/, "ws") + "/notifications"));
   ws = sock;
@@ -691,6 +737,11 @@ function attach() {
     history = [n, ...history].slice(0, HISTORY_MAX);
     unread++;
     historyChanged();
+    // …and the one that has to be asked rather than read. Fires after the row
+    // is already on screen, because a card that resolves in 20ms is not worth
+    // holding the notification for, and one that never resolves must not hold
+    // it forever.
+    if (!n.goto) void attachCard(n);
     // Collected either way; only the interruption is optional. Quiet means the
     // notch does not morph open for someone else's message, not that agentglass
     // stopped listening -- the list behind the notch is still complete.
