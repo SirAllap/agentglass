@@ -945,14 +945,19 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
         }} />
       )}
-      <span className="truncate min-w-0 flex-1">{v.listName || v.name}</span>
-      {/* A saved ClickUp view over a list, rather than the list: same name on
-          the rail, different contents. Beside a folder that holds that list,
-          two identical-looking rows is what made this look duplicated. */}
-      {!v.builtin && v.listName && v.name && v.name !== v.listName && (
-        <span aria-hidden className="shrink-0 text-[9px] px-1 rounded" title={v.name}
-          style={{ color: "var(--text4)", border: edge(16) }}>view</span>
-      )}
+      {/*
+        * A saved ClickUp VIEW draws its own name, not its list's.
+        *
+        * The rail drew `listName || name` for everything, which is right for a
+        * list and wrong for a view: `Eng list by start date view` over
+        * `Orbit v2 – Phases 2 & 3` appeared as a second row called
+        * `Orbit v2 – Phases 2 & 3`, directly under the folder's copy of that
+        * same list. A tag saying "view" was the first attempt and it did not
+        * help — two rows with one name and a badge is still two rows with one
+        * name. The name is what tells them apart, so the name is what changes;
+        * which list it is over is in the tooltip, where it was already.
+        */}
+      <span className="truncate min-w-0 flex-1">{v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name)}</span>
       {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
     </button>
   );
