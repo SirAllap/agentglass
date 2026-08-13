@@ -1979,6 +1979,42 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         )}
       </div>
 
+      {/*
+        * The list's own blurb, folded away.
+        *
+        * Most lists have none — ClickUp leaves the field empty and shows "Add
+        * description…" — so nothing is drawn at all rather than a heading over
+        * nothing. The ones that DO have it use it for the brief: the docs, the
+        * branch, the PR, who is on the team. That is twenty lines of reference
+        * material on top of the cards you came to read, so it opens closed,
+        * shows its first line as a hint, and is remembered per board.
+        */}
+      {!onLooked && !!data?.description?.trim() && (
+        <div className="px-4 pb-1.5 shrink-0">
+          <button onClick={() => setDescOpen((m) => ({ ...m, [lit ?? ""]: !m[lit ?? ""] }))}
+            aria-expanded={!!descOpen[lit ?? ""]}
+            className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10.5px] agx-btn"
+            style={{ border: edge(12), color: "var(--text3)" }}>
+            <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
+              style={{ transform: descOpen[lit ?? ""] ? "rotate(90deg)" : "none", transition: "transform 120ms ease", opacity: 0.7 }}>
+              <path d="M6 3.5 10.5 8 6 12.5Z" />
+            </svg>
+            <span className="shrink-0">About this list</span>
+            {!descOpen[lit ?? ""] && (
+              <span className="truncate min-w-0 flex-1 text-left" style={{ color: "var(--text4)" }}>
+                {data.description.trim().split("\n").find((l) => l.trim()) ?? ""}
+              </span>
+            )}
+          </button>
+          {descOpen[lit ?? ""] && (
+            <div className="agx-scroll mt-1 px-3 py-2 rounded-lg text-[11.5px] overflow-y-auto"
+              style={{ border: edge(12), background: "var(--bg2)", color: "var(--text2)", maxHeight: 260 }}>
+              <Markdown text={data.description} />
+            </div>
+          )}
+        </div>
+      )}
+
       {note && <NoteStrip note={note} onClose={() => setNote(null)} />}
       {data?.error && (
         <div className="px-5 py-1 text-[10.5px] shrink-0 flex items-center gap-2"

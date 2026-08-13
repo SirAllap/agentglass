@@ -102,3 +102,19 @@ describe("the list rail", () => {
 
 
 });
+
+describe("the list's own blurb", () => {
+  it("is drawn only when the list has one", () => {
+    /* Most lists have none, and a heading over nothing is worse than no
+       heading. Asserted because the block went missing once between an edit and
+       an install, and nothing failed — the panel simply had no such section. */
+    expect(src).toContain("About this list");
+    expect(src).toContain("!!data?.description?.trim()");
+  });
+
+  it("opens closed and is remembered per board", () => {
+    // Twenty lines of brief on top of the cards you came to read.
+    expect(src).toContain('const DESC_KEY = "agentglass.clickup.listDescription";');
+    expect(src).toContain("descOpen[lit ?? \"\"]");
+  });
+});
