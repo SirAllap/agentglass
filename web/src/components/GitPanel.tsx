@@ -42,7 +42,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { GitRowMenu } from "./GitRowMenu.tsx";
 import { GitPalette, type PaletteRow } from "./GitPalette.tsx";
-import { primaryAction, type GitKind, type GitRowState } from "../lib/gitActions.ts";
+import { primaryAction, groupByPrefix, bulkDeletable, type GitKind, type GitRowState } from "../lib/gitActions.ts";
 import { openPrs, openPr } from "../lib/openPrs.ts";
 import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
@@ -1013,6 +1013,15 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   /** ⌘K. Off by default and never restored from storage: a palette that was
    *  open when you last closed the view is a palette in your way. */
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** Folded prefix groups, by prefix. Empty string is the no-prefix pile.
+   *  Named for the groups rather than "collapsed" because this file already has
+   *  a `collapsed` — the file tree's — and two of those in one component is how
+   *  the wrong one gets read. */
+  const [groupsClosed, setGroupsClosed] = useState<Set<string>>(new Set());
+  /** Branches ticked for a bulk action, by name. Cleared whenever the list
+   *  underneath changes meaning — a selection that survives a filter is a
+   *  selection you cannot see. */
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [newWtBranch, setNewWtBranch] = useState("");
   const [commitView, setCommitView] = useState<{ changes: FileChange[]; title: string } | null>(null);
   const [blamePath, setBlamePath] = useState<{ path: string } | null>(null);
@@ -2020,6 +2029,63 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (!(await ask({ title: `Delete ${name} on the remote?`, body: "Runs push <remote> :refs/tags/<name>. The local tag stays.", danger: true, confirmLabel: "Delete remotely" }))) return;
     if (await act(() => api.gitTagDeleteRemote(root, name), `Deleted ${name} remotely`)) reloadTags();
   };
+  /**
+   * The ticked branches, deleted in one go.
+   *
+   * Sequential rather than parallel: the server has one thread, and nine
+   * `git branch -d` fired at once is nine spawns queueing behind each other
+   * anyway — with the difference that a failure halfway through a parallel
+   * batch leaves you unable to say which ones went. `force` follows
+   * merged-ness per branch, exactly as the single delete does, so a branch
+   * whose commits are nowhere else still refuses.
+   */
+  const deletePicked = async () => {
+    if (busy) return;
+    const rows = bulk.can;
+    if (!rows.length) return;
+    // The whole batch as one command line, before anything runs. Nine branches
+    // is nine decisions and this is the one screen that can show all nine.
+    const forced = rows.filter((b) => !(b.mergedIntoTrunk === true || trackChip(b.track).gone));
+    if (!(await ask({
+      title: `Delete ${rows.length} branch${rows.length === 1 ? "" : "es"}?`,
+      body: `${rows.map((b) => b.name).join("\n")}\n\n`
+        + `git branch -d ${rows.length - forced.length} · git branch -D ${forced.length}`
+        + (forced.length ? `\n\n${forced.length} ${forced.length === 1 ? "is" : "are"} not in the trunk — those need -D and cannot be recovered from here.` : ""),
+      danger: true,
+      confirmLabel: `Delete ${rows.length}`,
+    }))) return;
+    setBusy(true);
+    let gone = 0;
+    try {
+      for (const b of rows) {
+        setPending(`Delete ${b.name}`);
+        const r = await api.gitBranchDelete(root, b.name, !(b.mergedIntoTrunk === true || trackChip(b.track).gone));
+        if (r.ok) gone++;
+      }
+    } finally {
+      setBusy(false);
+      setPending(null);
+      setPicked(new Set());
+      flash(gone === rows.length, gone === rows.length ? `Deleted ${gone}` : `Deleted ${gone} of ${rows.length}`);
+      reloadBranches();
+    }
+  };
+
+  /** A remote, and a submodule. Both short, because both only offer what there
+   *  is an endpoint for — see the note in the catalogue. */
+  const remoteAction = (id: string, r: GitRemote) => {
+    switch (id) {
+      case "fetch": return void act(() => api.gitFetch(root), `fetched ${r.name}`, "fetch");
+      case "copy-url": return void navigator.clipboard?.writeText(r.fetchUrl).catch(() => { /* no clipboard permission */ });
+    }
+  };
+  const submoduleAction = (id: string, s: GitSubmodule) => {
+    switch (id) {
+      case "update": return void act(() => api.gitSubmoduleUpdate(root, s.path), `Updated ${s.path}`);
+      case "copy-path": return void navigator.clipboard?.writeText(s.path).catch(() => { /* no clipboard permission */ });
+    }
+  };
+
   /** The worktree half. Small on purpose: a checkout is a place, not a thing
    *  with a life cycle, and the two things you do with a place are go to it and
    *  stop keeping it. */
@@ -2074,10 +2140,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     ...tags.map((t) => ({ kind: "tag" as const, name: t.name, run: (id: string) => tagAction(id, t) })),
     ...stashes.map((s) => ({ kind: "stash" as const, name: s.ref, run: (id: string) => stashAction(id, s) })),
     ...worktrees.map((w) => ({ kind: "worktree" as const, name: w.path, state: { current: w.current }, run: (id: string) => worktreeAction(id, w) })),
+    ...remotes.map((r) => ({ kind: "remote" as const, name: r.name, run: (id: string) => remoteAction(id, r) })),
+    ...submodules.map((s) => ({ kind: "submodule" as const, name: s.path, run: (id: string) => submoduleAction(id, s) })),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the dispatchers are
     // recreated every render by design; depending on them would rebuild this list
     // on every keystroke in the panel.
-  ], [branchData.branches, tags, stashes, worktrees, wtByBranch, currentBranchName, root]);
+  ], [branchData.branches, tags, stashes, worktrees, remotes, submodules, wtByBranch, currentBranchName, root]);
 
   /** Capture the tree as a named checkpoint — touches nothing, restore is
    *  always possible, cap is 30. */
@@ -2313,6 +2381,32 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // incremental window keeps the first N rows of the PREVIOUS list, so
   // typing filters a page you are no longer looking at.
   const incBranches = useIncremental(shownBranches, `${root}:${onlyGone}:${q}:${sort}`);
+
+  /*
+   * Group the branches, but only when grouping says something.
+   *
+   * Two conditions, and both are about the repository rather than about taste:
+   * enough branches that the list is a scroll (8), and more than one family in
+   * it. A repository whose branches are all `feat/` gets one heading over
+   * everything, which is a heading that means nothing; one with six branches
+   * does not need furniture. Searching turns it off too — a search result is
+   * already a filtered list and grouping it hides how few hits there were.
+   */
+  const grouping = !q.trim() && !onlyGone && incBranches.rows.length >= 8
+    && new Set(incBranches.rows.map((b) => b.name.split("/")[0])).size > 1;
+  const branchGroups = useMemo(
+    () => (grouping
+      ? groupByPrefix(incBranches.rows, (b) => b.name)
+      : [{ prefix: "", rows: incBranches.rows }]),
+    [grouping, incBranches.rows],
+  );
+  /** The ticked branches that a bulk delete can actually deliver, and the ones
+   *  git would refuse. Both counts are shown, because a button that says 9 and
+   *  deletes 7 is the bug this split exists to avoid. */
+  const bulk = useMemo(() => {
+    const rows = incBranches.rows.filter((b) => picked.has(b.name));
+    return bulkDeletable(rows, (b) => branchState(b, b.name === currentBranchName, !!(wtByBranch.get(b.name) && wtByBranch.get(b.name)!.path !== root)));
+  }, [incBranches.rows, picked, currentBranchName, wtByBranch, root]);
   const incGraph = useIncremental(graph, root);
   const incReflog = useIncremental(reflog, root);
   const incTags = useIncremental(tags, root);
@@ -3160,7 +3254,37 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                     )}
                     {!incBranches.rows.length && <PaneEmpty busy={busyView === "branches"} what="branches" />}
-                    {incBranches.rows.map((b, i) => {
+                    {/*
+                      Grouped by prefix when there is a shape to show — see
+                      groupByPrefix. `i` stays the index into the FLAT paged
+                      list, because that is what the keyboard cursor and
+                      `rowIdx` mean; grouping changes what is drawn between the
+                      rows, not what the rows are.
+                    */}
+                    {branchGroups.map((g) => (
+                      <Fragment key={g.prefix || "(no prefix)"}>
+                        {grouping && (
+                          <button onClick={() => setGroupsClosed((prev) => {
+                            const next = new Set(prev);
+                            next.has(g.prefix) ? next.delete(g.prefix) : next.add(g.prefix);
+                            return next;
+                          })}
+                            className="w-full flex items-center gap-2 px-2.5 py-1 mt-1 text-left"
+                            style={{ color: "var(--text3)" }}>
+                            <span className="text-[9px]">{groupsClosed.has(g.prefix) ? "▸" : "▾"}</span>
+                            <span className="text-[9.5px] uppercase tracking-wider">
+                              {g.prefix ? `${g.prefix}/` : "no prefix"}
+                            </span>
+                            <span className="text-[9.5px] tabular-nums">{g.rows.length}</span>
+                            {(() => {
+                              const dead = g.rows.filter((b) => trackChip(b.track).gone).length;
+                              return dead ? <span className="text-[9.5px]" style={{ color: "var(--error)" }}>{dead} gone</span> : null;
+                            })()}
+                            <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
+                          </button>
+                        )}
+                        {!groupsClosed.has(g.prefix) && g.rows.map((b) => {
+                      const i = incBranches.rows.indexOf(b);
                       const t = trackChip(b.track);
                       const sel = i === rowIdx;
                       // Current from the FRESH working-tree poll, not the branch
@@ -3186,7 +3310,25 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           // needs 9, and the 14rem go back to the branch name
                           // and its subject — the two things the row is for.
                           style={{ ...ROW_GRID, ...(sel ? rowProps(true).style : { background: isCurrent ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }), ["--gitrow-actions" as string]: writeEnabled ? "9rem" : "0px" }}>
-                          <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>{isCurrent ? "⎇" : ""}</span>
+                          {/* The tick replaces the ⎇ column rather than adding
+                              one: a checkbox that is always there is a column
+                              of empty boxes, and this list is read far more
+                              often than it is swept. It appears on hover, or
+                              once anything is ticked — which is when the column
+                              means something. */}
+                          <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>
+                            {isCurrent && !picked.size ? "⎇" : (
+                              <span onClick={(e) => {
+                                e.stopPropagation();
+                                setPicked((prev) => { const next = new Set(prev); next.has(b.name) ? next.delete(b.name) : next.add(b.name); return next; });
+                              }}
+                                className={`cursor-pointer ${picked.size ? "" : "opacity-0 group-hover:opacity-100"} transition-opacity`}
+                                style={{ color: picked.has(b.name) ? "var(--primary)" : "var(--text3)" }}
+                                title={picked.has(b.name) ? "Untick" : "Tick for a bulk action"}>
+                                {picked.has(b.name) ? "☑" : "☐"}
+                              </span>
+                            )}
+                          </span>
                           {/* Name and its badges share one track and truncate
                               together — the badges say what the branch IS, so
                               they must not be pushed out by a long name. */}
@@ -3247,8 +3389,47 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
                         </div>
                       );
-                    })}
+                        })}
+                      </Fragment>
+                    ))}
                     <MoreRows shown={incBranches.rows.length} total={shownBranches.length} onAll={incBranches.showAll} />
+                    {/*
+                      The bulk bar, and the honest count.
+
+                      It reports what it can DELIVER, not what you ticked: the
+                      branch you are standing on and one checked out in another
+                      worktree are both refused by git, so they are named and
+                      subtracted rather than counted and then quietly skipped.
+                      One command line for the lot, shown before it runs, for
+                      the same reason the single delete shows one.
+                    */}
+                    {picked.size > 0 && (
+                      <div className="sticky bottom-0 mt-1 flex items-center gap-2 px-2.5 py-2 rounded-lg flex-wrap"
+                        style={{ background: "color-mix(in srgb, var(--bg2) 96%, black)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                        <span className="text-[10.5px]" style={{ color: "var(--text)" }}>{picked.size} ticked</span>
+                        {bulk.held.length > 0 && (
+                          <span className="text-[9.5px]" style={{ color: "var(--warning)" }}
+                            title={bulk.held.map((b) => b.name).join("\n")}>
+                            {bulk.held.length} cannot be deleted — checked out
+                          </span>
+                        )}
+                        {writeEnabled && bulk.can.length > 0 && (
+                          <button onClick={() => void deletePicked()}
+                            className="text-[10.5px] px-2.5 py-1 rounded-lg font-medium"
+                            style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)" }}
+                            title={bulk.can.map((b) => b.name).join("\n")}>
+                            Delete {bulk.can.length}
+                          </button>
+                        )}
+                        <button onClick={() => void navigator.clipboard?.writeText([...picked].join("\n")).catch(() => { /* no clipboard permission */ })}
+                          className="text-[10.5px] px-2.5 py-1 rounded-lg"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          Copy names
+                        </button>
+                        <button onClick={() => setPicked(new Set())} className="text-[10.5px] px-2.5 py-1 rounded-lg ml-auto"
+                          style={{ color: "var(--text3)" }}>Clear</button>
+                      </div>
+                    )}
                   </div>
                 ) : view === "stashes" ? (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
@@ -3358,6 +3539,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           const on = r.name === remoteSel;
                           return (
                             <button key={r.name} onClick={() => { setRemoteSel(r.name); setRemoteQuery(""); }}
+                              onContextMenu={(e) => { e.preventDefault(); setRowMenu({ kind: "remote", name: r.name, state: {}, x: e.clientX, y: e.clientY, run: (id) => remoteAction(id, r) }); }}
                               className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] max-w-full"
                               style={{ background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent", border: `1px solid color-mix(in srgb, var(--${on ? "primary" : "border"}) ${on ? 35 : 30}%, transparent)`, color: on ? "var(--text)" : "var(--text2)" }}
                               title={`${r.fetchUrl}${r.pushUrl && r.pushUrl !== r.fetchUrl ? `\npushes to ${r.pushUrl}` : ""}`}>
@@ -3504,7 +3686,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     )}
                     {submodules.length === 0 && !busy && <PaneEmpty busy={false} what="submodules" />}
                     {submodules.map((s) => (
-                      <div key={s.path} className="group px-2.5 py-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", marginBottom: 6 }}>
+                      <div key={s.path} className="group px-2.5 py-1.5 rounded-md"
+                        onContextMenu={(e) => { e.preventDefault(); setRowMenu({ kind: "submodule", name: s.path, state: {}, x: e.clientX, y: e.clientY, run: (id) => submoduleAction(id, s) }); }}
+                        style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", marginBottom: 6 }}>
                         <div className="flex items-center gap-2">
                           <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium" style={{ color: "var(--text)" }}>{s.path}</span>
                           <span className="shrink-0 rounded px-1.5 py-px text-[9px] font-medium" style={{

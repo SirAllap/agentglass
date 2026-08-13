@@ -152,16 +152,17 @@ export function actionsFor(kind: GitKind, name: string, s: GitRowState = {}): Gi
   }
 
   if (kind === "remote") {
+    // Only what the server can actually do. Prune and remove belong on this
+    // list the day there is an endpoint behind them, and not one day earlier:
+    // a menu item that does nothing is worse than a missing one, because it
+    // teaches you the app is broken rather than that the feature is absent.
     push({ id: "fetch", label: "Fetch from it", group: "go", shortcut: "↵", command: `git fetch ${q(name)}` });
-    push({ id: "prune", label: "Prune branches that are gone", group: "remote", command: `git remote prune ${q(name)}` });
     push({ id: "copy-url", label: "Copy the URL", group: "copy", shortcut: "⌘C" });
-    push({ id: "remove", label: "Remove this remote", group: "danger", danger: true, command: `git remote remove ${q(name)}` });
     return out;
   }
 
   if (kind === "submodule") {
     push({ id: "update", label: "Update it", group: "go", shortcut: "↵", command: `git submodule update --init ${q(name)}` });
-    push({ id: "open", label: "Open it as a repository", group: "go" });
     push({ id: "copy-path", label: "Copy the path", group: "copy", shortcut: "⌘C" });
     return out;
   }
@@ -254,4 +255,64 @@ export function matchPalette(entries: PaletteEntry[], query: string): PaletteEnt
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return entries;
   return entries.filter((e) => terms.every((t) => e.haystack.includes(t)));
+}
+
+// ---------------------------------------------------------------- grouping --
+
+export interface PrefixGroup<T> {
+  /** `feat` for feat/thing. Empty string is the group of branches with no
+   *  prefix at all, which is where the trunk lives and which always sorts last
+   *  — it is a leftover pile, not a family. */
+  prefix: string;
+  rows: T[];
+}
+
+/**
+ * Eighteen branches are not eighteen things: they are four `feat/`, three
+ * `fix/` and a handful with no prefix.
+ *
+ * Only the FIRST segment counts. `feat/git/super` is one `feat` family, not a
+ * tree — a two-level grouping looks tidier on a whiteboard and produces groups
+ * of one on a real repository, which is a heading per branch and worse than no
+ * grouping at all.
+ *
+ * Order is by size, biggest family first, with the no-prefix pile last however
+ * big it is: the families are the structure, and the pile is what did not fit.
+ * Within a family the caller's order is preserved, because that is already the
+ * sort the list is showing (most out-of-sync first, or by name).
+ */
+export function groupByPrefix<T>(rows: T[], nameOf: (r: T) => string): PrefixGroup<T>[] {
+  const byPrefix = new Map<string, T[]>();
+  for (const r of rows) {
+    const name = nameOf(r);
+    const cut = name.indexOf("/");
+    const prefix = cut > 0 ? name.slice(0, cut) : "";
+    const bucket = byPrefix.get(prefix);
+    if (bucket) bucket.push(r); else byPrefix.set(prefix, [r]);
+  }
+  const groups = [...byPrefix].map(([prefix, rows]) => ({ prefix, rows }));
+  groups.sort((a, b) => {
+    if (!a.prefix) return 1;
+    if (!b.prefix) return -1;
+    return b.rows.length - a.rows.length || a.prefix.localeCompare(b.prefix);
+  });
+  return groups;
+}
+
+/**
+ * What a bulk action can actually do to a selection, and what it must refuse.
+ *
+ * Deleting nine branches is a decision about nine branches, and the honest way
+ * to offer it is to say which of the nine it will not touch: the branch you are
+ * standing on cannot be deleted, and one checked out in another worktree cannot
+ * either — git refuses both, and a bulk button that reports "9 deleted" after
+ * deleting 7 is worse than one that said 7 up front.
+ */
+export function bulkDeletable<T>(rows: T[], stateOf: (r: T) => GitRowState): { can: T[]; held: T[] } {
+  const can: T[] = [], held: T[] = [];
+  for (const r of rows) {
+    const s = stateOf(r);
+    (s.current || s.elsewhere ? held : can).push(r);
+  }
+  return { can, held };
 }

@@ -14,7 +14,7 @@
  *     action in the wrong place.
  */
 import { test, expect } from "bun:test";
-import { actionsFor, primaryAction, grouped, paletteEntries, matchPalette } from "../src/lib/gitActions.ts";
+import { actionsFor, primaryAction, grouped, paletteEntries, matchPalette, groupByPrefix, bulkDeletable } from "../src/lib/gitActions.ts";
 
 test("the branch you are on offers no row action at all", () => {
   expect(primaryAction("branch", "main", { current: true })).toBeNull();
@@ -105,4 +105,43 @@ test("the palette matches action and object together, in any word order", () => 
 test("the palette cannot offer an action the row does not have", () => {
   const entries = paletteEntries([{ kind: "branch", name: "main", state: { current: true } }]);
   expect(matchPalette(entries, "delete")).toHaveLength(0);
+});
+
+test("every kind the view lists reaches the palette, and none of them empty-handed", () => {
+  const kinds = ["branch", "tag", "stash", "worktree", "remote", "submodule", "commit"] as const;
+  const entries = paletteEntries(kinds.map((k) => ({ kind: k, name: `x-${k}` })));
+  for (const k of kinds) {
+    expect(entries.filter((e) => e.kind === k).length).toBeGreaterThan(0);
+  }
+});
+
+test("branches group by their first segment, biggest family first", () => {
+  const names = ["feat/a", "main", "fix/b", "feat/c", "feat/d", "fix/e", "develop"];
+  const g = groupByPrefix(names, (n) => n);
+  expect(g.map((x) => x.prefix)).toEqual(["feat", "fix", ""]);
+  expect(g[0].rows).toEqual(["feat/a", "feat/c", "feat/d"]);
+  // The no-prefix pile is last however big it is — it is what did not fit, not
+  // a family.
+  expect(g[2].rows).toEqual(["main", "develop"]);
+});
+
+test("grouping is one level: feat/git/super is one feat, not a tree", () => {
+  const g = groupByPrefix(["feat/git/super", "feat/git/tool"], (n) => n);
+  expect(g).toHaveLength(1);
+  expect(g[0].prefix).toBe("feat");
+});
+
+test("grouping keeps the order the list was already sorted in", () => {
+  const g = groupByPrefix(["feat/z", "feat/a", "feat/m"], (n) => n);
+  expect(g[0].rows).toEqual(["feat/z", "feat/a", "feat/m"]);
+});
+
+test("a bulk delete says up front what it cannot touch", () => {
+  const rows = ["main", "feat/a", "feat/b", "feat/live"];
+  const { can, held } = bulkDeletable(rows, (n) =>
+    n === "main" ? { current: true } : n === "feat/live" ? { elsewhere: true } : {});
+  // git refuses both of these, so a button that counted them would report a
+  // number it cannot deliver.
+  expect(can).toEqual(["feat/a", "feat/b"]);
+  expect(held).toEqual(["main", "feat/live"]);
 });
