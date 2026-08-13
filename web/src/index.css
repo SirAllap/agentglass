@@ -1318,16 +1318,34 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   outline-offset: 1px;
 }
 
-::highlight(agx-md-find) {
-  background: color-mix(in srgb, var(--warning) 34%, transparent);
-  color: var(--text);
+/*
+ * Loud on purpose, and louder than the first attempt.
+ *
+ * That one tinted the ground 34% and kept the text's own colour, which is what
+ * a highlight looks like in a document you are already reading. On an app
+ * screen it disappeared: reported as "apenas se nota", over a board where the
+ * match was one word among four hundred. `::highlight()` takes a short list of
+ * properties — no border, no outline, no shadow — so the only lever is colour,
+ * and it has to be used at full strength.
+ *
+ * Amber for the matches, ink for the text on top of it: the pair reads at a
+ * glance from across a 27-inch screen, and neither is a colour this UI uses for
+ * anything else.
+ */
+::highlight(agx-find) {
+  background: #ffd23f;
+  color: #16130a;
 }
 /* The one you are standing on, told apart by more than brightness: the same
    hue at double strength reads as "bigger" on a dark ground rather than as
    "this one", so it takes the accent instead. */
-::highlight(agx-md-find-on) {
-  background: var(--primary);
-  color: var(--bg);
+/* The one you are standing on, told apart by HUE rather than by brightness: the
+   same colour at double strength reads as "bigger" on a dark ground rather than
+   as "this one". Magenta against the amber is unmistakable at a glance, which
+   is the whole job of this rule. */
+::highlight(agx-find-on) {
+  background: #ff2bd1;
+  color: #ffffff;
 }
 .agx-prose pre,
 .agx-prose pre * { white-space: pre; }

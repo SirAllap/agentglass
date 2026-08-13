@@ -171,17 +171,42 @@ describe("a view that searches something other than the page", () => {
     expect(findState()).toMatchObject({ total: 7, label: "inner" });
   });
 
-  it("holds the engine it opened with, so stepping cannot change halfway", () => {
+  it("holds the engine while the screen holds still", () => {
     /* Focus moves while you read — clicking a match, scrolling a pane. If the
        engine were resolved per keystroke, Enter could step through a different
        thing from the one being counted. */
     const first = fake(3, "first");
     let live: FindEngine | null = first.engine;
     keep(registerEngine(() => live));
+    keep(pushScope(el("view"), 0));
     openFind("a");
     live = fake(9, "second").engine;
     stepFind(1);
     expect(findState()).toMatchObject({ total: 3, label: "first" });
+  });
+
+  it("follows the screen when the screen changes, and answers about the new one", () => {
+    /*
+     * Reported: open the bar on a pull request, walk to the board with it open,
+     * and it went on counting the pull request — 1/5 over a screen with none of
+     * them, and typing again answered 0/0 because the ranges it held belonged
+     * to a view nobody was looking at. Holding the engine was right; holding it
+     * across a change of scope was not.
+     */
+    const pr = fake(5, "pr");
+    const board = fake(12, "board");
+    let which = pr.engine;
+    keep(registerEngine(() => which));
+    const offPr = pushScope(el("pr view"), 0);
+    openFind("VR");
+    expect(findState()).toMatchObject({ total: 5, label: "pr" });
+
+    which = board.engine;
+    offPr();
+    keep(pushScope(el("board view"), 0));
+    expect(findState()).toMatchObject({ total: 12, label: "board" });
+    // And the one it left is put away rather than left painted on the document.
+    expect(pr.calls).toContain("clear");
   });
 });
 

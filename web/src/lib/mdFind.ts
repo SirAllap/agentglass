@@ -15,8 +15,10 @@
 // never touched and clearing them is one call.
 
 /** The two registries: everything found, and the one you are standing on. */
-export const ALL = "agx-md-find";
-export const CURRENT = "agx-md-find-on";
+/* Named for what they are now rather than for the viewer they were written in:
+   this paints a whole screen, not a markdown document. */
+export const ALL = "agx-find";
+export const CURRENT = "agx-find-on";
 
 type HighlightCtor = new (...ranges: Range[]) => unknown;
 type HighlightRegistry = { set(k: string, v: unknown): void; delete(k: string): void };

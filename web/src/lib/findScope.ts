@@ -113,9 +113,11 @@ function showing(el: HTMLElement | null): boolean {
 export function pushScope(el: HTMLElement, rank = 0): () => void {
   const entry = { el, rank };
   scopes.push(entry);
+  syncEngine();
   return () => {
     const i = scopes.indexOf(entry);
     if (i !== -1) scopes.splice(i, 1);
+    syncEngine();
   };
 }
 
@@ -176,13 +178,39 @@ function engine(): FindEngine {
   return domFinder(topScope());
 }
 
-/* The engine in use for as long as the bar is open. Held rather than looked up
-   per keystroke: stepping through matches must not land in a different engine
-   because focus moved while you were reading. */
+/* The engine in use, and the scope it was built for.
+ *
+ * Held rather than looked up per keystroke — stepping through matches must not
+ * land in a different engine because focus moved while you were reading — but
+ * NOT held across a change of scope, which was the bug: open the bar on a pull
+ * request, walk to the board with it open, and it went on counting matches in
+ * the pull request. It said 1/5 over a screen that had none of them, and typing
+ * again answered 0/0 because the ranges it still held belonged to a view that
+ * was no longer on screen.
+ *
+ * So the rule is: the engine follows the SCREEN, not the focus. `syncEngine`
+ * runs whenever the scope stack moves, which is exactly when a view is switched
+ * or a dialog opens over one. */
 let live: FindEngine | null = null;
+let liveScope: HTMLElement | null = null;
+
+/** Rebuild the engine when the thing being searched has changed, and answer the
+ *  same question about the new screen. */
+function syncEngine(): void {
+  if (!state.open) return;
+  const scope = topScope();
+  if (scope === liveScope && live) return;
+  live?.clear();
+  live = engine();
+  liveScope = scope;
+  const total = state.query ? live.search(state.query) : 0;
+  state = { ...state, total, at: live.at(), label: live.label };
+  emit();
+}
 
 export function openFind(seed = ""): void {
   live = engine();
+  liveScope = topScope();
   state = { open: true, query: seed, total: 0, at: 0, label: live.label };
   if (seed) runQuery(seed);
   else emit();
@@ -191,13 +219,17 @@ export function openFind(seed = ""): void {
 export function closeFind(): void {
   live?.clear();
   live = null;
+  liveScope = null;
   state = { open: false, query: "", total: 0, at: 0 };
   emit();
 }
 
 export function runQuery(q: string): void {
   if (!state.open) return;
-  if (!live) live = engine();
+  // Cheap, and it closes the race where a view finished rendering between the
+  // switch and the keystroke.
+  syncEngine();
+  if (!live) { live = engine(); liveScope = topScope(); }
   const total = q ? live.search(q) : (live.clear(), 0);
   state = { ...state, query: q, total, at: live.at(), label: live.label };
   emit();
