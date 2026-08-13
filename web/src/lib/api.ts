@@ -759,8 +759,12 @@ const realApi = {
   clickupRemoveFolder: (id: string) => post<{ ok: boolean }>("/clickup/folders/remove", { id }),
   /** The other tabs a list has in ClickUp — its saved list views. */
   clickupListViews: (listId: string) =>
-    get<{ ok: boolean; error?: string; views?: { id: string; name: string }[] }>(
-      `/clickup/list-views?list=${encodeURIComponent(listId)}`),
+    get<{
+      ok: boolean; error?: string;
+      views?: { id: string; name: string }[];
+      /** The ones this app cannot draw — Gantt, dashboard — as links out. */
+      links?: { id: string; name: string; type: string }[];
+    }>(`/clickup/list-views?list=${encodeURIComponent(listId)}`),
   /** Point a saved board at a different address. Resolves the new one before it
    *  drops the old — see replaceViewUrl. */
   clickupReplaceView: (id: string, url: string) =>
@@ -1423,7 +1427,7 @@ const demoApi: typeof realApi = {
   clickupFolders: (_s: string) => D({ ok: true, folders: [] as { id: string; name: string; lists: { id: string; name: string }[] }[] }),
   clickupAddFolder: (_i: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveFolder: (_i: string) => D({ ok: true }),
-  clickupListViews: (_l: string) => D({ ok: true, views: [] as { id: string; name: string }[] }),
+  clickupListViews: (_l: string) => D({ ok: true, views: [] as { id: string; name: string }[], links: [] as { id: string; name: string; type: string }[] }),
   clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),

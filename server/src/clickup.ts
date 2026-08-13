@@ -1175,7 +1175,7 @@ export async function defaultViewOf(token: string, listId: string): Promise<stri
  * already opens, and a child that repeats its parent is a row people click by
  * mistake once each.
  */
-export async function listViews(token: string, listId: string): Promise<CallResult<{ views: { id: string; name: string }[] }>> {
+export async function listViews(token: string, listId: string): Promise<CallResult<{ views: { id: string; name: string }[]; links: { id: string; name: string; type: string }[] }>> {
   const id = String(listId || "").trim();
   if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a list id" };
   const r = await call<{
@@ -1184,10 +1184,18 @@ export async function listViews(token: string, listId: string): Promise<CallResu
   }>(`/list/${encodeURIComponent(id)}/view`, token);
   if (!r.ok) return { ...r, data: undefined };
   const home = r.data?.required_views?.list?.id ?? "";
-  const views = (r.data?.views ?? [])
-    .filter((v) => v?.id && v.type === "list" && v.id !== home)
+  const all = (r.data?.views ?? []).filter((v) => v?.id && v.id !== home);
+  const views = all
+    .filter((v) => v.type === "list")
     .map((v) => ({ id: String(v.id), name: String(v.name ?? "View") }));
-  return { ok: true, data: { views } };
+  /* The ones this app cannot draw — a Gantt, a dashboard, a whiteboard — are
+     still worth knowing about: they are one click away in ClickUp, and a team
+     that keeps its plan in a Gantt should not have to go and find it. Handed
+     over with their TYPE, because that is what decides the address. */
+  const links = all
+    .filter((v) => v.type && v.type !== "list")
+    .map((v) => ({ id: String(v.id), name: String(v.name ?? "View"), type: String(v.type) }));
+  return { ok: true, data: { views, links } };
 }
 
 export async function viewTasks(

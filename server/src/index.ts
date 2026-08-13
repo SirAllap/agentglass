@@ -2190,7 +2190,7 @@ const server = Bun.serve<WsData>({
          of these views is a read of a board, and the id has to be one WE
          offered rather than any string a caller sends. */
       if (r.ok) (await import("./providers.ts")).rememberListViews(listId, r.data?.views ?? []);
-      return json(r.ok ? { ok: true, views: r.data?.views ?? [] } : { ok: false, error: r.error });
+      return json(r.ok ? { ok: true, views: r.data?.views ?? [], links: r.data?.links ?? [] } : { ok: false, error: r.error });
     }
     if (pathname === "/clickup/folders") {
       const { clickupFolders } = await import("./clickup.ts");

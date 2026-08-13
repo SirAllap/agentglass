@@ -823,6 +823,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      returns — and a hook cannot live down there. */
   useEffect(() => { setAboutOpen(false); }, [data?.view?.id]);
   const [listViews, setListViews] = useState<Record<string, { id: string; name: string }[]>>({});
+  /** The views this app cannot draw — a Gantt, a dashboard — as shortcuts out
+   *  to ClickUp, hung under the same list. */
+  const [listLinks, setListLinks] = useState<Record<string, { id: string; name: string; type: string }[]>>({});
   const [openLists, setOpenLists] = useState<Record<string, boolean>>({});
   /** Ask once, remember for the session. Safe to call for a list already
    *  known or already in flight. */
@@ -831,7 +834,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     if (!listId || asked.current.has(listId)) return;
     asked.current.add(listId);
     api.clickupListViews(listId)
-      .then((r) => setListViews((m) => ({ ...m, [listId]: r.views ?? [] })))
+      .then((r) => {
+        setListViews((m) => ({ ...m, [listId]: r.views ?? [] }));
+        setListLinks((m) => ({ ...m, [listId]: r.links ?? [] }));
+      })
       .catch(() => setListViews((m) => ({ ...m, [listId]: [] })));
   }, []);
 
@@ -966,6 +972,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    */
   const railList = (v: SavedView) => {
     const kids = v.listId ? listViews[v.listId] : undefined;
+    const links = v.listId ? listLinks[v.listId] ?? [] : [];
     const open = !!openLists[v.id];
     return (
       <Fragment key={v.id}>
@@ -975,9 +982,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               has none" rather than "not looked yet" — and an arrow that opens a
               line saying "no other views" is a control that exists to
               disappoint. */}
-          {kids?.length ? (
+          {kids?.length || links.length ? (
             <button onClick={() => openList(v)} aria-expanded={open}
-              title={open ? "Hide this list's views" : `${kids.length} more view${kids.length === 1 ? "" : "s"} on this list in ClickUp`}
+              title={open ? "Hide this list's views" : `${(kids?.length ?? 0) + links.length} more view${(kids?.length ?? 0) + links.length === 1 ? "" : "s"} on this list in ClickUp`}
               className="shrink-0 grid place-items-center agx-btn"
               style={{ width: 16, color: "var(--text4)" }}>
               <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
@@ -988,15 +995,36 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           ) : <span aria-hidden style={{ width: 16 }} />}
           <div className="min-w-0 flex-1">{railRow(v, 1)}</div>
         </div>
-        {open && !!kids?.length && (
+        {open && (!!kids?.length || !!links.length) && (
           /* Their own guide line, indented past the list's glyph: without it
              they sat at the list's own indent and read as siblings of it rather
              than as what it holds. */
           <div style={{ marginLeft: 24, borderLeft: `1px solid color-mix(in srgb, var(--text) 12%, transparent)` }}>
-            {kids.map((view) => railRow({
+            {kids?.map((view) => railRow({
               id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name,
               url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName,
             }, 1))}
+            {/* And the ones that only exist over there. Marked with the arrow
+                this app uses everywhere for "this leaves", because a row that
+                looks like the others and opens a browser is a small betrayal. */}
+            {links.filter((l) => clickupViewUrl(boards?.folders ?? [], l)).map((l) => (
+              <button key={l.id}
+                onClick={() => { const u = clickupViewUrl(boards?.folders ?? [], l); if (u) openExternal(u); }}
+                title={`${l.name} — opens in ClickUp (${l.type})`}
+                className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px] agx-btn"
+                style={{ paddingLeft: 8, paddingRight: 10, color: "var(--text4)" }}>
+                <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 13 }}>
+                  <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+                    strokeWidth={1.6} strokeLinecap="round" aria-hidden>
+                    {l.type === "gantt"
+                      ? <path d="M2.5 4h6M4.5 8h7M2.5 12h4" />
+                      : <path d="M2.5 12.5V8M6.5 12.5V4M10.5 12.5V6M14 12.5V9.5" />}
+                  </svg>
+                </span>
+                <span className="truncate min-w-0 flex-1">{l.name}</span>
+                <span aria-hidden className="shrink-0 text-[9px]" style={{ opacity: 0.7 }}>↗</span>
+              </button>
+            ))}
           </div>
         )}
       </Fragment>
@@ -2555,6 +2583,28 @@ function ConfirmStrip({ pending, onGo, onCancel }: { pending: Pending; onGo: () 
  * view rather than in a browser, a card id opens the card, and a branch offers
  * to take you to it in Git.
  */
+/**
+ * Where a view lives on the web.
+ *
+ * ClickUp's own addresses are `/{workspace}/v/{kind}/{viewId}`, and the kind is
+ * a two-or-three letter code per view type. Only the two that were asked for
+ * are mapped: a Gantt and a dashboard. Anything else gets no shortcut rather
+ * than a guessed one — the last invented address in this file answered "This
+ * page is unavailable", which reads as a permission problem rather than as our
+ * typo.
+ *
+ * The workspace comes off a saved folder, which is where it was written when
+ * the folder was added; without one there is no address to build and the row
+ * is not drawn.
+ */
+const VIEW_KIND: Record<string, string> = { gantt: "g", dashboard: "dsb" };
+function clickupViewUrl(folders: SavedFolder[], view: { id: string; type: string }): string {
+  const kind = VIEW_KIND[view.type];
+  const workspace = folders.find((f) => f.workspaceId)?.workspaceId;
+  if (!kind || !workspace) return "";
+  return `https://app.clickup.com/${workspace}/v/${kind}/${encodeURIComponent(view.id)}`;
+}
+
 function AboutList({ name, text, url, onClose }: {
   name: string; text: string; url?: string; onClose: () => void;
 }) {
