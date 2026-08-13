@@ -348,17 +348,17 @@ describe("the address you paste", () => {
     // 404s as a view and 200s as a list. That list is what knows the statuses,
     // so pulling it out of the address saves a call and makes the status picker
     // possible at all.
-    const p = parseViewUrl("https://example.clickup.com/9000001/v/l/6-901715483311-1")!;
+    const p = parseViewUrl("https://example.clickup.com/9000001/v/l/6-901700123456-1")!;
     expect(p.kind).toBe("view");
-    expect(p.viewId).toBe("6-901715483311-1");
-    expect(p.listId).toBe("901715483311");
+    expect(p.viewId).toBe("6-901700123456-1");
+    expect(p.listId).toBe("901700123456");
     expect(p.workspaceId).toBe("9000001");
   });
 
   it("reads a bare list address", () => {
-    const p = parseViewUrl("https://example.clickup.com/9000001/v/li/901715483311")!;
+    const p = parseViewUrl("https://example.clickup.com/9000001/v/li/901700123456")!;
     expect(p.kind).toBe("list");
-    expect(p.listId).toBe("901715483311");
+    expect(p.listId).toBe("901700123456");
   });
 
   it("takes the other view kinds, which are views too", () => {
@@ -370,7 +370,7 @@ describe("the address you paste", () => {
   });
 
   it("accepts a pasted id on its own", () => {
-    expect(parseViewUrl("6-901715483311-1")?.viewId).toBe("6-901715483311-1");
+    expect(parseViewUrl("6-901700123456-1")?.viewId).toBe("6-901700123456-1");
   });
 
   it("refuses an address from somewhere else entirely", () => {
@@ -384,11 +384,11 @@ describe("the address you paste", () => {
     // `endsWith("clickup.com")` alone accepts these: they are somebody else's
     // registrable domains, not a ClickUp subdomain.
     for (const host of ["notclickup.com", "evilclickup.com", "clickup.com.example.net"]) {
-      expect(parseViewUrl(`https://${host}/9000001/v/l/6-901715483311-1`), host).toBe(null);
+      expect(parseViewUrl(`https://${host}/9000001/v/l/6-901700123456-1`), host).toBe(null);
     }
     // The apex and a real subdomain still read.
-    expect(parseViewUrl("https://clickup.com/9000001/v/l/6-901715483311-1")?.kind).toBe("view");
-    expect(parseViewUrl("https://app.clickup.com/9000001/v/l/6-901715483311-1")?.kind).toBe("view");
+    expect(parseViewUrl("https://clickup.com/9000001/v/l/6-901700123456-1")?.kind).toBe("view");
+    expect(parseViewUrl("https://app.clickup.com/9000001/v/l/6-901700123456-1")?.kind).toBe("view");
   });
 
   it("refuses nothing, and rubbish", () => {
@@ -857,18 +857,18 @@ describe("an address somebody assembled by hand", () => {
     // stitching an address out of two of ClickUp's own forms. The old parser
     // took `li` as the id and the panel said "ClickUp answered 404" about an
     // address whose real id was one segment further along.
-    const p = parseViewUrl("https://example.clickup.com/9000001/v/l/li/901715834894")!;
+    const p = parseViewUrl("https://example.clickup.com/9000001/v/l/li/901700654321")!;
     expect(p.kind).toBe("list");
-    expect(p.listId).toBe("901715834894");
+    expect(p.listId).toBe("901700654321");
   });
 
   it("lands the same place however the same list is written", () => {
     const forms = [
-      "https://example.clickup.com/9000001/v/li/901715834894",
-      "https://example.clickup.com/9000001/v/l/li/901715834894",
+      "https://example.clickup.com/9000001/v/li/901700654321",
+      "https://example.clickup.com/9000001/v/l/li/901700654321",
     ].map((u) => parseViewUrl(u)?.listId);
     expect(new Set(forms).size).toBe(1);
-    expect(forms[0]).toBe("901715834894");
+    expect(forms[0]).toBe("901700654321");
   });
 
   it("still refuses an address with no id in it at all", () => {
