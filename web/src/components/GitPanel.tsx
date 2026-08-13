@@ -2884,7 +2884,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             squash {pickSet.size}
                           </button>
                         )}
-                        <button onClick={() => setPickSet(new Set())} disabled={busy} className="text-[10px] px-1.5 py-1 rounded t-dim2" title="Clear the selection">✕</button>
+                        <CloseButton onClick={() => setPickSet(new Set())} disabled={busy} title="Clear the selection" className="rounded" style={{ color: "var(--text3)" }} />
                       </div>
                     )}
                   <div onScroll={incGraph.onScroll} className="agx-scroll flex-1 min-h-0 overflow-auto py-1 text-[11.5px]" style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}>
@@ -3271,7 +3271,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button onClick={(e) => { e.stopPropagation(); tagPush(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--info)" }} title="Push to the remote">⇡</button>
                               <button onClick={(e) => { e.stopPropagation(); void tagDeleteRemoteAsk(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--warning)" }} title="Delete on the remote">↷</button>
-                              <button onClick={(e) => { e.stopPropagation(); void tagDeleteAsk(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--error)" }} title="Delete locally">✕</button>
+                              <CloseButton onClick={(e) => { e.stopPropagation(); void tagDeleteAsk(t.name); }} className="rounded" style={{ color: "var(--error)" }} title="Delete locally" />
                             </span>
                           )}
                         </span>
