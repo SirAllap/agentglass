@@ -962,10 +962,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     </button>
   );
 
-  /** What the folded rail says: the board on screen, by the name the rail
-   *  would draw for it. */
+  /**
+   * What the folded rail says: the board on screen, by the name the rail would
+   * draw for it.
+   *
+   * `wanted ?? data?.view?.id` written out rather than reading `lit`, which is
+   * the same expression five hundred lines below this one. Reading it here
+   * threw `Cannot access 'lit' before initialization` the moment this panel
+   * rendered — a blank window, every time, with the whole app gone.
+   *
+   * TypeScript did not catch it and could not: the read sits inside the
+   * callback of a `.find`, and a callback is only a temporal-dead-zone error
+   * when it happens to run immediately, which this one does. The rule that
+   * follows is the cheap one — a value used at the top of a component is
+   * DEFINED at the top of it.
+   */
   const railActive = (() => {
-    const v = (boards?.views ?? []).find((x) => x.id === (data?.view?.id ?? lit));
+    const on = wanted ?? data?.view?.id;
+    const v = (boards?.views ?? []).find((x) => x.id === on);
     if (!v) return "Lists";
     return v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name);
   })();
