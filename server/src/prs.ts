@@ -3616,10 +3616,21 @@ export interface PendingLineComment {
  * to make depends on whether there are any: an empty pending review really is
  * a leftover, one with comments is somebody's unfinished work.
  */
-export async function pendingReview(nameWithOwner: string, n: number): Promise<{ id: string; comments: PendingLineComment[] } | null> {
+export async function pendingReview(nameWithOwner: string, n: number): Promise<{ id: string; restId: number | null; comments: PendingLineComment[] } | null> {
   const [owner, name] = nameWithOwner.split("/");
   if (!owner || !name) return null;
-  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviews(states:[PENDING],first:1){nodes{id comments(first:100){nodes{path line originalLine startLine body}}}}}}}`;
+  /*
+   * `databaseId` alongside `id`, and the difference is not cosmetic.
+   *
+   * GraphQL answers with a node id — `PRR_kwDO…` — and every REST endpoint that
+   * takes a review wants the NUMBER. Submitting a review that GitHub was
+   * holding therefore posted to
+   * `/pulls/{n}/reviews/PRR_kwDO…/events` and got `gh: Not Found (HTTP 404)`,
+   * on the one path that exists to finish a review started in the browser.
+   * Measured on a real pull request: node id `PRR_kwDOAjkAGs8…`, databaseId
+   * 4925096670, same review.
+   */
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviews(states:[PENDING],first:1){nodes{id databaseId comments(first:100){nodes{path line originalLine startLine body}}}}}}}`;
   const r = await gh(["api", "graphql", "-f", `query=${q}`, "-F", `o=${owner}`, "-F", `r=${name}`, "-F", `n=${n}`]);
   if (r.code !== 0) return null;
   try {
@@ -3631,7 +3642,7 @@ export async function pendingReview(nameWithOwner: string, n: number): Promise<{
          diff — an outdated one. `originalLine` is where it was written, which
          is the only honest thing to show for it. */
       .map((c: any) => ({ path: String(c.path), line: c.line ?? c.originalLine ?? null, startLine: c.startLine ?? null, body: String(c.body ?? "") }));
-    return { id: String(node.id), comments };
+    return { id: String(node.id), restId: Number.isSafeInteger(node.databaseId) ? Number(node.databaseId) : null, comments };
   } catch { return null; }
 }
 
@@ -3719,8 +3730,15 @@ export async function submitReviewWith(
     /* Its own comments and nothing queued here: submit the review GitHub is
        already holding rather than replacing it. This is what makes a review
        started in the browser finishable from here. */
+    /* The numeric id, never the node id — see pendingReview. Without one there
+       is nothing safe to do: submitting would need an id we do not have, and
+       falling through to "create a review" would leave GitHub's drafts behind
+       and 422 on top of it. */
+    if (pending.restId == null) {
+      return { ok: false, error: "GitHub is holding a pending review here but did not give it an id we can submit — finish it on GitHub." };
+    }
     const ev = await gh(
-      ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.id}/events`, "--input", "-"],
+      ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.restId}/events`, "--input", "-"],
       undefined, JSON.stringify({ event, ...(text ? { body: text } : {}) }),
     );
     invalidate(repo, n);
@@ -3731,8 +3749,11 @@ export async function submitReviewWith(
     const k = pending.comments.length;
     return { ok: true, detail: `review submitted with ${k} line comment${k === 1 ? "" : "s"} drafted on GitHub` };
   }
-  if (pending) {
-    await gh(["api", "--method", "DELETE", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.id}`]);
+  /* An empty pending review, discarded so the create below is not refused:
+     GitHub allows one per pull request. The numeric id again — the DELETE was
+     404ing on the node id too, silently, since nothing reads its result. */
+  if (pending?.restId != null) {
+    await gh(["api", "--method", "DELETE", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.restId}`]);
   }
 
   const payload = JSON.stringify({ event, ...(text ? { body: text } : {}), ...(comments.length ? { comments } : {}) });
