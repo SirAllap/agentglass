@@ -73,12 +73,34 @@ export function subscribeFind(fn: () => void): () => void {
 }
 export const findState = (): FindState => state;
 
-/** The element the bar searches: the top of the stack. */
+/**
+ * The element the bar searches: the topmost scope that is actually showing
+ * something.
+ *
+ * The "actually showing" half is not defensive — it is the whole correctness of
+ * this. A `Portal` creates its host div when the component MOUNTS, and the
+ * dialogs that use one are mounted for the life of the app with their contents
+ * behind an `open &&`. Measured in the running app: five empty host divs on the
+ * stack at rank 1, all of them beating the view underneath, so every search
+ * answered 0 of 0 over a screen full of the word.
+ *
+ * An element with no children is nobody's screen; one whose box is hidden is
+ * not either. Both are cheap to ask and neither can be got wrong by a caller.
+ */
 export function topScope(): HTMLElement | null {
-  if (!scopes.length) return null;
-  let best = scopes[0]!;
-  for (const s of scopes) if (s.rank >= best.rank) best = s;
-  return best.el;
+  let best: Scope | null = null;
+  for (const s of scopes) {
+    if (!showing(s.el)) continue;
+    if (!best || s.rank >= best.rank) best = s;
+  }
+  return best?.el ?? null;
+}
+
+type MaybeVisible = HTMLElement & { checkVisibility?: () => boolean };
+function showing(el: HTMLElement | null): boolean {
+  if (!el || !el.childElementCount) return false;
+  const e = el as MaybeVisible;
+  return typeof e.checkVisibility === "function" ? e.checkVisibility() : !!el.offsetParent;
 }
 
 /**

@@ -18,7 +18,13 @@ import {
   registerEngine, runQuery, stepFind, topScope, type FindEngine,
 } from "../src/lib/findScope.ts";
 
-const el = (name: string) => ({ name } as unknown as HTMLElement);
+/* A stand-in for an element that is on screen: something in it, and a box.
+   Both matter — see the empty-portal case below. */
+const el = (name: string, showing = true) => ({
+  name,
+  childElementCount: showing ? 1 : 0,
+  checkVisibility: () => showing,
+} as unknown as HTMLElement);
 
 /** An engine that answers with a fixed number of matches and remembers what it
  *  was told to do. */
@@ -66,6 +72,28 @@ describe("which element the bar searches", () => {
 
   it("is nothing at all before anything has mounted", () => {
     expect(topScope()).toBeNull();
+  });
+
+  it("ignores a dialog that is mounted but empty", () => {
+    /*
+     * The bug this rule exists for, found in the running app: `Portal` creates
+     * its host div when the component MOUNTS, and the dialogs that use one live
+     * for the life of the app with their contents behind an `open &&`. Five
+     * empty hosts sat on the stack at rank 1, all of them beating the view, and
+     * every search answered 0 of 0 over a screen full of the word.
+     */
+    const view = el("view");
+    keep(pushScope(view, 0));
+    keep(pushScope(el("closed dialog", false), 1));
+    expect(topScope()).toBe(view);
+  });
+
+  it("ignores a scope whose box is hidden, even if it has children", () => {
+    const view = el("view");
+    keep(pushScope(view, 0));
+    const hidden = { name: "hidden", childElementCount: 3, checkVisibility: () => false } as unknown as HTMLElement;
+    keep(pushScope(hidden, 1));
+    expect(topScope()).toBe(view);
   });
 });
 
