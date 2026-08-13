@@ -3283,7 +3283,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
                       busy={busyView === "log"} what="commits" disabled={!writeEnabled}
                     />
-                    {!graph.length && <PaneEmpty busy={busyView === "log"} what="commits" />}
                     <MoreRows shown={incGraph.rows.length} total={graph.length} onAll={incGraph.showAll} />
                   </div>
                   </div>
@@ -3360,7 +3359,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         })()}
                       </div>
                     )}
-                    {!incBranches.rows.length && <PaneEmpty busy={busyView === "branches"} what="branches" />}
                     {/*
                       Grouped by prefix when there is a shape to show — see
                       groupByPrefix. `i` stays the index into the FLAT paged
@@ -3502,7 +3500,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
                         busy={busyView === "stashes"} what="stashes" disabled={!writeEnabled}
                       />
-                    {!stashes.length && <PaneEmpty busy={busyView === "stashes"} what="stashes" />}
                   </div>
                 ) : view === "remotes" ? (
                   /*
@@ -3607,7 +3604,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {writeEnabled && (
                       <button onClick={submoduleAddAsk} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ add submodule</button>
                     )}
-                    {submodules.length === 0 && !busy && <PaneEmpty busy={false} what="submodules" />}
+                    {/* The empty state lives in <List> now — this one was the
+                        old one, and the two of them drew one under the other. */}
                     <List
                       rows={submoduleRows(submodules, submoduleAction)}
                       cursor={rowIdx} onCursor={setRowIdx}
