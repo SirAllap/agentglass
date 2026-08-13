@@ -33,6 +33,7 @@ import { useSidebarWidth } from "../../lib/sidebarWidth.ts";
 import { SidebarGrip } from "../SidebarGrip.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { CHIP_ICON, Chip, FilterField, IconChip, Segmented } from "../workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
 import { diffSplit, diffWrap, setDiffSplit, setDiffWrap } from "../../lib/diffPrefs.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
@@ -163,9 +164,9 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
           * The one decision that changes what the list IS, in words and at a
           * legible size. It used to be two of eleven identical 9.5px chips.
           */}
-        <ModeSwitch mode={mode} onChange={setMode} />
+        <Segmented value={mode} options={MODES} onChange={setMode} label="What the list shows" />
 
-        <span className="text-[11.5px] tabular-nums truncate" style={{ color: "var(--text3)" }}>
+        <span className="text-[11px] tabular-nums truncate" style={{ color: "var(--text3)" }}>
           {loading && !rows.length ? "reading git…" : (
             <>
               {totals.files} {totals.files === 1 ? "file" : "files"}
@@ -177,9 +178,13 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
         </span>
 
         <div className="ml-auto flex items-center gap-2 relative">
-          <Toggle on={split} onClick={() => { setSplit(!split); setDiffSplit(!split); }} label="Split" title="Side by side" />
-          <Toggle on={wrap} onClick={() => { setWrap(!wrap); setDiffWrap(!wrap); }} label="Wrap" title="Wrap long lines" />
-          <MenuButton open={menu} onToggle={() => setMenu((v) => !v)} />
+          <Chip on={split} onClick={() => { setSplit(!split); setDiffSplit(!split); }} title="Side by side">Split</Chip>
+          <Chip on={wrap} onClick={() => { setWrap(!wrap); setDiffWrap(!wrap); }} title="Wrap long lines">Wrap</Chip>
+          <IconChip on={menu} onClick={() => setMenu((v) => !v)} title="List options" expanded={menu} hasPopup>
+            <svg width={CHIP_ICON} height={CHIP_ICON} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+              <circle cx="8" cy="3.2" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="8" cy="12.8" r="1.3" />
+            </svg>
+          </IconChip>
           {menu && (
             <Menu
               groupBy={groupBy} onGroupBy={(g) => { setGroupBy(g); setMenu(false); }}
@@ -195,18 +200,8 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
       <div className="flex-1 min-h-0 flex">
         <div className="shrink-0 flex flex-col min-h-0" style={{ width: sidebarW }}>
           <div className="px-3 py-2 shrink-0">
-            <input
-              value={q} onChange={(e) => setQ(e.target.value)}
-              placeholder="Filter by file, folder or branch…"
-              aria-label="Filter the list"
-              spellCheck={false}
-              className="w-full px-3 py-1.5 rounded-lg text-[11.5px] outline-none"
-              style={{
-                background: "color-mix(in srgb, var(--bg3) 40%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)",
-                color: "var(--text)",
-              }}
-            />
+            <FilterField value={q} onChange={setQ} className="w-full"
+              placeholder="Filter by file, folder or branch…" label="Filter the list" />
           </div>
 
           <List
@@ -253,60 +248,15 @@ function notices(o: {
 
 /* ── header pieces ────────────────────────────────────────────────────────── */
 
-function ModeSwitch({ mode, onChange }: { mode: DiffMode; onChange: (m: DiffMode) => void }) {
-  const item = (m: DiffMode, label: string, title: string) => (
-    <button
-      key={m}
-      onClick={() => onChange(m)}
-      aria-pressed={mode === m}
-      title={title}
-      className="px-2.5 py-1 rounded-md text-[11.5px] transition-colors whitespace-nowrap"
-      style={{
-        background: mode === m ? "color-mix(in srgb, var(--primary) 22%, transparent)" : "transparent",
-        color: mode === m ? "var(--text)" : "var(--text3)",
-        fontWeight: mode === m ? 600 : 400,
-      }}
-    >{label}</button>
-  );
-  return (
-    <div
-      className="flex items-center gap-0.5 p-0.5 rounded-lg shrink-0"
-      style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
-      role="group" aria-label="What the list shows"
-    >
-      {item("working", "Uncommitted", "What every checkout has changed and not committed")}
-      {item("committed", "Last commit", "The last piece of work committed in each checkout")}
-    </div>
-  );
-}
-
-function Toggle({ on, onClick, label, title }: { on: boolean; onClick: () => void; label: string; title: string }) {
-  return (
-    <button
-      onClick={onClick} title={title} aria-pressed={on}
-      className="px-2 py-1 rounded-md text-[11px] transition-colors"
-      style={{
-        background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
-        color: on ? "var(--text)" : "var(--text3)",
-        border: `1px solid color-mix(in srgb, var(--border) ${on ? 45 : 20}%, transparent)`,
-      }}
-    >{label}</button>
-  );
-}
-
-function MenuButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle} aria-expanded={open} aria-haspopup="menu" title="List options"
-      className="inline-flex items-center justify-center rounded-md transition-colors"
-      style={{ width: 24, height: 24, color: open ? "var(--text)" : "var(--text3)", background: open ? "color-mix(in srgb, var(--bg3) 60%, transparent)" : "transparent" }}
-    >
-      <svg width={ICON.md} height={ICON.md} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-        <circle cx="8" cy="3.2" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="8" cy="12.8" r="1.3" />
-      </svg>
-    </button>
-  );
-}
+/* The header's controls come from `workspace/Chrome.tsx`, which is where the
+   app's one chip shape lives. The first version of this view declared its own —
+   a segmented pill at 11.5px with its own border and inner padding, and a 24px
+   icon button — so switching from Source control to Diff visibly changed the
+   size of the controls in the same corner of the same bar. */
+const MODES = [
+  { id: "working" as const, label: "Uncommitted", title: "What every checkout has changed and not committed" },
+  { id: "committed" as const, label: "Last commit", title: "The last piece of work committed in each checkout" },
+];
 
 const GROUPS: { id: GroupBy; label: string; hint: string }[] = [
   { id: "worktree", label: "By checkout", hint: "One section per worktree, headed by its branch" },

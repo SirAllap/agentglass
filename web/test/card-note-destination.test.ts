@@ -115,3 +115,39 @@ describe("resolving a mirrored ClickUp notification", () => {
     expect(body).toContain("if (i < 0 || history[i]!.goto) return;");
   });
 });
+
+describe("news that replaces itself", () => {
+  it("keeps one row per checkout, not one per poll", async () => {
+    /*
+     * Reported from a screenshot of three rows in a column: "170 commits to
+     * pull on master", "158 commits to pull on master", "156 commits to pull on
+     * master". One fact, polled three times — and the two older rows are not
+     * merely redundant, they are wrong, because the count moved.
+     */
+    const s = await load();
+    for (const n of [156, 158, 170]) {
+      s.recordNote({
+        app: "Git", summary: "orbit", body: `${n} commits to pull on main`,
+        goto: { kind: "git", repo: "orbit", branch: "main" },
+      });
+    }
+    const mine = s.notifyHistory().filter((h) => h.goto?.kind === "git");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.body).toContain("170");
+  });
+
+  it("keeps two checkouts apart", async () => {
+    const s = await load();
+    s.recordNote({ app: "Git", summary: "orbit", body: "3 commits", goto: { kind: "git", repo: "orbit", branch: "main" } });
+    s.recordNote({ app: "Git", summary: "atlas", body: "9 commits", goto: { kind: "git", repo: "atlas", branch: "main" } });
+    expect(s.notifyHistory().filter((h) => h.goto?.kind === "git")).toHaveLength(2);
+  });
+
+  it("does not collapse two different things said about one card", async () => {
+    // A comment and a status change are separate news even on the same card.
+    const s = await load();
+    s.recordNote({ app: "ClickUp", summary: "ORBIT-1 → QA", body: "x", goto: { kind: "card", id: "a", label: "ORBIT-1" } });
+    s.recordNote({ app: "ClickUp", summary: "Ana commented on ORBIT-1", body: "y", goto: { kind: "card", id: "a", label: "ORBIT-1" } });
+    expect(s.notifyHistory()).toHaveLength(2);
+  });
+});

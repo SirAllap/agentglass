@@ -292,9 +292,11 @@ export function FilePalette({
     const h = listRef.current?.querySelector<HTMLElement>('[data-row="0"]')?.offsetHeight;
     if (h) setRowH(h);
   }, [docOpen, rows, tab]);
-  /** The list's own vertical padding (py-1), so three rows are three rows and
-   *  not three rows minus the padding they sit in. */
-  const LIST_PAD = 8;
+  /** The list's own vertical padding (py-2), so three rows are three rows and
+   *  not three rows minus the padding they sit in. It matches the row's own
+   *  py-2: any less and the first row sits tighter to the edge than to its
+   *  neighbour, which reads as the list being cut off. */
+  const LIST_PAD = 16;
   const listCap = docOpen && rowH && rows.length > 3 ? rowH * 3 + LIST_PAD : undefined;
 
   /**
@@ -492,7 +494,7 @@ export function FilePalette({
             </div>
 
             {/* the answers */}
-            <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto py-1.5"
+            <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto py-2"
               /* A cap, not a height: three results stay three rows tall rather
                  than being stretched to a box sized for more. */
               style={listCap ? { maxHeight: listCap } : undefined}>
@@ -685,9 +687,12 @@ function RepoChip({ repo, repos, openState, onPick }: {
             onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } }}>
             {/* Said once, at the top: the pair of chips is only unambiguous
                 if each menu also says which question it answers. */}
-            <div className="px-3 pt-2 pb-1.5 shrink-0" style={{ borderBottom: edge(12) }}>
+            {/* Label and explanation are two different kinds of text, so they
+                get 6px: touching, the caption read as the first line of the
+                sentence under it. */}
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where</div>
-              <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>a copy on disk — each has its own branch and its own uncommitted work</div>
+              <div className="text-[10px]" style={{ color: "var(--text4)" }}>a copy on disk — each has its own branch and its own uncommitted work</div>
             </div>
             {repos.length > 6 && (
               <input autoFocus value={filter} onChange={(e) => setFilter(e.target.value)}
@@ -695,14 +700,16 @@ function RepoChip({ repo, repos, openState, onPick }: {
                 className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                 style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
             )}
-            <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
+            {/* Padded on both ends: bottom-only put the first row against the
+                filter field, where it read as part of it. */}
+            <div className="agx-scroll overflow-y-auto py-1.5" style={{ minHeight: 0 }}>
               {repos.length === 0 && <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No checkouts found.</div>}
               {repos.length > 0 && shown.length === 0 && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No checkout matches “{filter.trim()}”.</div>
               )}
               {shown.map((r) => (
                 <button key={r.root} onClick={() => onPick(r.root)}
-                  className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
+                  className="w-full text-left px-3 py-1.5 flex flex-col gap-1"
                   style={{ background: r.root === repo?.root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                   {/*
                     * The FOLDER leads, not the branch.
@@ -805,9 +812,9 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
               top: box.top, right: box.right, width: "min(560px, calc(100vw - 16px))",
               maxHeight: "min(460px, 66vh)", background: "var(--bg2)", border: edge(30),
             }}>
-            <div className="px-3 pt-2 pb-1.5 shrink-0" style={{ borderBottom: edge(12) }}>
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>What to search</div>
-              <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>
+              <div className="text-[10px]" style={{ color: "var(--text4)" }}>
                 a copy on disk, or any branch — reading a branch checks nothing out
               </div>
             </div>
@@ -825,14 +832,14 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
               }}
               className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
               style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
-            <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
+            <div className="agx-scroll overflow-y-auto py-1.5" style={{ minHeight: 0 }}>
               {copies.length + local.length + remote.length === 0 && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing matches “{filter.trim()}”.</div>
               )}
               {copies.length > 0 && <Group first hint="what is on disk now, your uncommitted work included">Working copies</Group>}
               {copies.map((r) => (
                 <button key={r.root} onClick={() => onPickRoot(r.root)}
-                  className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
+                  className="w-full text-left px-3 py-1.5 flex flex-col gap-1"
                   style={{ background: r.root === repo?.root && !ref_ ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                   <span className="flex items-center gap-2 min-w-0">
                     <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
@@ -933,9 +940,9 @@ function RefChip({ value, refs, openState, onPick }: {
             {/* Only once there are enough to hunt through. Below that the list
                 IS the answer and a field in front of it is one more thing to
                 get past. */}
-            <div className="px-3 pt-2 pb-1.5 shrink-0" style={{ borderBottom: edge(12) }}>
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Which version</div>
-              <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>of the checkout on the left — nothing is checked out to look</div>
+              <div className="text-[10px]" style={{ color: "var(--text4)" }}>of the checkout on the left — nothing is checked out to look</div>
             </div>
             {total > 8 && (
               <input autoFocus value={filter} onChange={(e) => setFilter(e.target.value)}
@@ -949,7 +956,7 @@ function RefChip({ value, refs, openState, onPick }: {
                 className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                 style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
             )}
-            <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
+            <div className="agx-scroll overflow-y-auto py-1.5" style={{ minHeight: 0 }}>
               {/* The working tree stays reachable whatever is typed: it is not
                   a branch, so filtering it out with the branch names would take
                   away the way back. */}
@@ -1006,7 +1013,7 @@ function RefChip({ value, refs, openState, onPick }: {
  * list.
  */
 const Group = ({ children, hint, first }: { children: React.ReactNode; hint: string; first?: boolean }) => (
-  <div className="sticky top-0 z-[1] px-3 pt-2 pb-1.5 flex items-baseline gap-2"
+  <div className="sticky top-0 z-[1] px-3 pt-3 pb-1 flex items-baseline gap-2"
     style={{
       background: "color-mix(in srgb, var(--text) 7%, var(--bg2))",
       borderTop: first ? "none" : "1px solid color-mix(in srgb, var(--text) 22%, transparent)",

@@ -49,7 +49,7 @@ export function ContextMenu({ x, y, onClose, children }: { x: number; y: number;
           rail menu is usually a tab that would switch view on the way out. */}
       <div className="fixed inset-0" style={{ zIndex: 9998 }} onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
       <div ref={ref} role="menu"
-        className="fixed p-1.5 rounded-xl flex flex-col text-[11px]"
+        className="fixed p-1.5 rounded-xl flex flex-col gap-0.5 text-[11px]"
         style={{
           top: pos.y, left: pos.x, minWidth: 184, zIndex: 9999,
           background: "color-mix(in srgb, var(--bg2) 97%, black)",

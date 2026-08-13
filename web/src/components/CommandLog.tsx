@@ -65,13 +65,13 @@ export function CommandLog({ open, onClose }: { open: boolean; onClose: () => vo
         </button>
         <CloseButton onClick={onClose} title="Hide (@)" className="ml-auto" />
       </div>
-      <div ref={bodyRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto px-3 pb-1.5 font-mono text-[10px] leading-[1.5]"
+      <div ref={bodyRef} className="agx-scroll flex-1 min-h-0 overflow-y-auto px-3 pt-1.5 pb-1.5 font-mono text-[10px] leading-[1.5]"
         onScroll={(e) => {
           const el = e.currentTarget;
           stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
         }}>
         {shown.map((e) => (
-          <div key={e.id} className="flex items-baseline gap-2 whitespace-pre-wrap break-all">
+          <div key={e.id} className="flex items-baseline gap-2 py-0.5 whitespace-pre-wrap break-all">
             <span className="shrink-0 t-dim2">{time(e.at)}</span>
             <span className="shrink-0 tabular-nums t-dim2" style={{ minWidth: 44, textAlign: "right" }}>{e.ms < 1 ? "<1ms" : `${Math.round(e.ms)}ms`}</span>
             <span className="min-w-0" style={{ color: e.exitCode === 0 ? (e.write ? "var(--text)" : "var(--text3)") : "var(--error)" }}>

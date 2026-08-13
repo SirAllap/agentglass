@@ -841,7 +841,7 @@ function ActionLine({ a }: { a: ActionRecord }) {
       <span className="min-w-0">
         <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{verb(a.action)}</span>
         {a.target && <span className="text-[11.5px] t-dim"> {a.target}</span>}
-        {!a.ok && a.detail && <span className="block text-[10px] mt-0.5" style={{ color: "var(--error)" }}>{a.detail}</span>}
+        {!a.ok && a.detail && <span className="block text-[10px] mt-1.5" style={{ color: "var(--error)" }}>{a.detail}</span>}
       </span>
       <Who actor={actorLabel({ kind: "action", at: a.at, key: "", row: a })} at={a.at} />
     </div>
@@ -871,11 +871,11 @@ function GateLine({ g }: { g: GateRecord }) {
       <span className="min-w-0">
         <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{did}</span>
         <span className="text-[11.5px] t-dim"> {g.tool_name}{g.summary ? ` · ${g.summary}` : ""}</span>
-        {note && <span className="block text-[10px] mt-0.5" style={{ color: "var(--warning)" }}>{note}</span>}
+        {note && <span className="block text-[10px] mt-1.5" style={{ color: "var(--warning)" }}>{note}</span>}
         {/* The reason a person typed, which lives nowhere else: the agent was
             given it and the action log never carried it. */}
         {g.resolution === "human" && g.reason && (
-          <span className="block text-[10px] mt-0.5 t-dim2">“{g.reason}”</span>
+          <span className="block text-[10px] mt-1.5 t-dim2">“{g.reason}”</span>
         )}
       </span>
       <Who actor={actorLabel({ kind: "gate", at: g.decided_at ?? 0, key: "", row: g })} at={g.decided_at ?? 0} />
@@ -3021,7 +3021,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                          same line the eye runs down, not a separate one. */
                       <div className="pb-3 px-4">
                         <div className="text-[18px] font-medium" style={{ color: "var(--text)" }}>{t.label}</div>
-                        {t.what && <div className="text-[12.5px] mt-0.5" style={{ color: "var(--text3)" }}>{t.what}</div>}
+                        {t.what && <div className="text-[12.5px] mt-1.5" style={{ color: "var(--text3)" }}>{t.what}</div>}
                       </div>
                     ) : null;
                   })()}

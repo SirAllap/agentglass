@@ -762,20 +762,34 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    could dress itself in flat whites. The bar is a themed surface like every
    other toolbar in this app, so they take their colours from the theme now —
    otherwise the panel is a black-on-black artefact hanging off a light theme. */
+/* Even on all four sides. Bottom-only padding is why the first row touched the
+   header's rule while the last one cleared the edge — the same asymmetry, in the
+   same shape, was in four other scroll containers. */
 .agx-inbox-list {
   max-height: 46vh;
   overflow-y: auto;
-  padding: 2px 8px 10px;
+  padding: 8px;
 }
-/* A message needs a margin the way a paragraph does. 8px on every side, with a
-   1px rule as the only thing between one notification and the next, put the last
-   line of one 8px from the first line of the other — close enough that the eye
-   reads a single block of text with a rule through it rather than two messages.
-   12px vertical is the smallest gap at which the boundary stops needing the
-   rule to be legible; the rule stays because a scanned list still wants one. */
+/*
+ * A message is a card, with space around it.
+ *
+ * Padding alone did not do it: with a hairline as the only thing between one
+ * notification and the next, the rows still read as one column of text with
+ * rules through it — reported twice, the second time after the padding had
+ * already been raised ("el espacio entre tarjetas sigue igual"). What was
+ * missing is not padding INSIDE a row, it is space BETWEEN rows and a surface
+ * that makes each one an object: 6px of gap and a fill of its own, and the
+ * hairline goes, because a card that is separated does not also need a rule.
+ */
 .agx-note-row {
   padding: 12px 10px;
   border-radius: 10px;
+  margin-bottom: 6px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+.agx-note-row:last-child {
+  margin-bottom: 0;
 }
 .agx-note-body {
   font-size: 11px;
@@ -815,11 +829,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   overflow-y: auto;
   color: var(--text2);
 }
-.agx-note-row + .agx-note-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
 .agx-note-row:hover {
-  background: color-mix(in srgb, var(--text) 6%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 /* Only the rows that lead somewhere. A row that lights up under the pointer and
    then does nothing is exactly the dead end this class exists to stop being. */
@@ -853,8 +864,10 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-note-icon {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  /* HIT, from iconSize.ts. 22 here was a fourth opinion about the size of a
+     square control in a UI that already has one. */
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 1px solid transparent;
 }

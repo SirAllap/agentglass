@@ -98,14 +98,14 @@ export function UpdateToast() {
         style={{
           right: 16, bottom: 16, width: 320, zIndex: 60,
           background: "var(--bg2)", border: edge(14), boxShadow: "0 12px 34px #000a",
-          padding: "13px 14px",
+          padding: "12px 14px",
         }}
         role="status" aria-live="polite">
         {!running && st ? (
           <>
             <CloseButton onClick={hide} title="Dismiss" hit={22} style={{ top: 8, right: 9, color: "var(--text4)" }} className="absolute rounded" />
             <div className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>A new version is out</div>
-            <div className="text-[11.5px] mt-0.5" style={{ color: "var(--text3)" }}>
+            <div className="text-[11.5px] mt-1.5" style={{ color: "var(--text3)" }}>
               {st.branch}
               {st.behind > 1 ? ` · ${st.behind} releases newer than yours` : ""}
             </div>

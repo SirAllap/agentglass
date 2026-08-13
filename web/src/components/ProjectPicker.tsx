@@ -504,7 +504,7 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                       {/* Says what it does NOT do, in the menu rather than in a
                           tooltip nobody waits for: "remove" next to a folder
                           path is a word people reasonably read as delete. */}
-                      <div className="px-2 pb-1 pt-0.5 text-[9.5px] leading-snug" style={{ color: "var(--text4)" }}>
+                      <div className="px-2 pb-1 pt-0.5 text-[10.5px] leading-snug" style={{ color: "var(--text4)" }}>
                         {wasHidden ? "It will be offered here again" : "Only here — the folder is not touched"}
                       </div>
                     </ContextMenu>

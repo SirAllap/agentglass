@@ -329,7 +329,7 @@ function Dossier({ b, wide, auto }: {
   return (
     <div className="shrink-0 w-[176px] pl-3 flex flex-col gap-2 text-[9.5px] t-dim2 min-w-0"
       style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-      <div className="flex flex-col gap-0.5 min-w-0">
+      <div className="flex flex-col gap-1 min-w-0">
         <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>
           {auto ? "closest to compact" : "targeted"}
         </span>

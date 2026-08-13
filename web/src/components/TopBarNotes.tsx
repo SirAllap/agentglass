@@ -342,6 +342,9 @@ export function useClipped(els: React.RefObject<HTMLElement | null>[], enabled: 
   return cut;
 }
 
+/** Branches that are the base rather than a piece of work. */
+const TRUNK = new Set(["master", "main", "trunk", "develop"]);
+
 function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; onGoto: (g: NonNullable<SystemNote["goto"]>) => void }) {
   const [open, setOpen] = useState(false);
   const bodyEl = useRef<HTMLSpanElement>(null);
@@ -367,10 +370,17 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
    * which is the one thing this does not do. It stays here, in agentglass.
    */
   const card = n.goto?.kind === "card" ? n.goto : null;
-  /* A whole-row click needs ONE destination. A git job has two — the checkout
-     and the pull request for its branch — so that row keeps its ordinary
-     open-the-message click and offers both as named buttons instead. */
-  const go = n.goto && !git ? () => onGoto(n.goto!) : null;
+  /** The destinations that are neither git nor a card: a pane, a chat, a
+   *  settings page, a pull request. Each gets the same named button the other
+   *  two have, because "click the row" is no longer a way to reach anything. */
+  const other = ((): { label: string; title: string } | null => {
+    const g = n.goto;
+    if (!g || g.kind === "git" || g.kind === "card") return null;
+    if (g.kind === "pr") return { label: `${g.repo}#${g.number}`, title: `Open ${g.repo}#${g.number}` };
+    if (g.kind === "pane") return { label: "The terminal", title: "Go to the pane this is about" };
+    if (g.kind === "chat") return { label: "The chat", title: "Open the conversation this is about" };
+    return { label: "Settings", title: `Open Settings · ${g.pane}` };
+  })();
   /*
    * "Its PR" used to drop the branch name into the panel's search box as a
    * filter and leave you there. On a branch whose pull request has been merged
@@ -403,16 +413,25 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
     setTimeout(() => setPrMsg(""), 4000);
   }, [git?.branch, git?.root]);
   const expandable = cut || open;
-  // With nowhere to go, the row itself opens the message — which is what the
-  // desktop's own list does, and what anyone tries first.
-  const act = go ?? (expandable ? () => setOpen((v) => !v) : null);
+  /*
+   * The row opens the message. It never travels.
+   *
+   * It used to do both, depending on whether the note happened to carry a
+   * destination — so the same gesture on two rows that look identical either
+   * read the rest of a sentence or threw you into another view and closed the
+   * panel. Reported as the expand control "not working": it works, and on a row
+   * with a destination the click that reached it had already navigated away.
+   *
+   * Going somewhere is now always a named button, which is the rule the git and
+   * card rows were already following and the reason those were the two nobody
+   * complained about.
+   */
+  const act = expandable ? () => setOpen((v) => !v) : null;
   return (
-    <div className={`agx-note-row${go ? " agx-note-row-go" : act ? " agx-note-row-open" : ""}`}
+    <div className={`agx-note-row${act ? " agx-note-row-open" : ""}`}
       onClick={act ?? undefined}
       role={act ? "button" : undefined}
-      title={go && n.goto?.kind === "pr" ? `Open ${n.goto.repo}#${n.goto.number}`
-        : go && n.goto?.kind === "card" ? `Open ${n.goto.label} in Tasks`
-        : expandable ? (open ? "Show less" : "Show the whole message") : undefined}>
+      title={expandable ? (open ? "Show less" : "Show the whole message") : undefined}>
       <div className="flex items-start gap-2">
         <span className="flex flex-col min-w-0 flex-1 gap-1.5">
           <span className="flex items-center gap-2">
@@ -453,13 +472,25 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
               ↗ Card · {card.label}
             </button>
           )}
+          {/* The other three destinations, which had no button at all: the row
+              carried them and only the row's own click could reach them, which
+              is exactly the gesture that has just been given back to reading. */}
+          {other && (
+            <button className="agx-note-link self-start" title={other.title}
+              onClick={(e) => { e.stopPropagation(); onGoto(n.goto!); }}>
+              ↗ {other.label}
+            </button>
+          )}
           {git && (
             <span className="flex items-center gap-1 self-start flex-wrap">
               <button className="agx-note-link" title={`Source control, scoped to ${git.repo}`}
                 onClick={(e) => { e.stopPropagation(); void onGoto(git); }}>
                 ↗ Git · {git.repo}
               </button>
-              {git.branch && (
+              {/* Not on the trunk. `master` does not have a pull request, so the
+                  button could only ever answer "No PR for this branch" — which
+                  is what it did, on the one row that shows up most often. */}
+              {git.branch && !TRUNK.has(git.branch) && (
                 <button className="agx-note-link" title={prMsg || `Open the pull request for ${git.branch}`}
                   onClick={(e) => { e.stopPropagation(); void goToPr(); }}>
                   ↗ {prMsg || "Its PR"}

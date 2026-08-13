@@ -3463,10 +3463,12 @@ function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
 function CardField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <div className="text-[8.5px] uppercase tracking-[0.16em] mb-1 truncate" style={{ color: "var(--text4)" }} title={label}>
+      {/* A value that wraps to two lines needs normal leading and 6px under the
+       *  label, or the second line reads as the next field's label. */}
+      <div className="text-[8.5px] uppercase tracking-[0.16em] mb-1.5 truncate" style={{ color: "var(--text4)" }} title={label}>
         {label}
       </div>
-      <div className="text-[11.5px] leading-tight break-words">{children}</div>
+      <div className="text-[11.5px] leading-normal break-words">{children}</div>
     </div>
   );
 }
@@ -4089,7 +4091,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             Subtasks {full.subtasks.length}
           </div>
           {full.subtasks.map((s) => (
-            <div key={s.id} className="flex items-center gap-2 py-0.5 text-[11px]">
+            <div key={s.id} className="flex items-center gap-2 py-1 text-[11px]">
               <span style={{ color: s.statusKind === "done" ? "var(--success)" : "var(--text4)" }}>
                 {s.statusKind === "done" ? "✓" : "○"}
               </span>
@@ -4103,7 +4105,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         <div key={i} className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
           <div className="text-[8.5px] uppercase tracking-[0.18em] mb-1.5" style={{ color: "var(--text4)" }}>{cl.name}</div>
           {cl.items.map((it, j) => (
-            <div key={j} className="flex items-center gap-2 py-0.5 text-[11px]">
+            <div key={j} className="flex items-center gap-2 py-1 text-[11px]">
               <span style={{ color: it.done ? "var(--success)" : "var(--text4)" }}>{it.done ? "☑" : "☐"}</span>
               <span style={{ color: it.done ? "var(--text4)" : "var(--text2)", textDecoration: it.done ? "line-through" : undefined }}>{it.name}</span>
             </div>

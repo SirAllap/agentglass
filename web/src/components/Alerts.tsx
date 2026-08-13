@@ -204,7 +204,9 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
                 <span style={{ color: l.color }}>{l.icon}</span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[12px]" style={{ color: "var(--text2)" }}>{a.agent}</div>
-                  <div className="text-[10px]" style={{ color: "var(--text2)" }}>{a.text}</div>
+                  {/* Who it is and what happened are two different things, so
+                      4px: touching, the alert read as the agent's second name. */}
+                  <div className="text-[10px] mt-1" style={{ color: "var(--text2)" }}>{a.text}</div>
                 </div>
                 <span className="text-[10px] t-dim2 shrink-0">{fmtAgo(a.ts)}</span>
               </motion.div>
@@ -236,8 +238,8 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
                     <span className="shrink-0" style={{ color }}>{KIND_ICON[i.kind]}</span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[11.5px] font-medium" style={{ color: "var(--text2)" }}>{i.title}</div>
-                      <div className="text-[10px] truncate" style={{ color: "var(--text2)" }} title={i.detail}>{i.detail}</div>
-                      {i.session && <div className="text-[9.5px] mt-0.5" style={{ color: "var(--text4)" }}>{i.session}</div>}
+                      <div className="text-[10px] truncate mt-1" style={{ color: "var(--text2)" }} title={i.detail}>{i.detail}</div>
+                      {i.session && <div className="text-[9.5px] mt-1" style={{ color: "var(--text4)" }}>{i.session}</div>}
                     </div>
                   </motion.div>
                 );

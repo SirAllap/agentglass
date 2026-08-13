@@ -550,11 +550,37 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
     at: Date.now(),
     ...(n.goto ? { goto: n.goto } : {}),
   };
-  history = [note, ...history].slice(0, HISTORY_MAX);
+  history = [note, ...supersede(history, note)].slice(0, HISTORY_MAX);
   unread++;
   historyChanged();
 }
 let localSeq = 0;
+
+/**
+ * The same news, said again, replaces itself.
+ *
+ * A checkout that is behind gets told about every time the branch is polled, so
+ * one repository produced "170 commits to pull on master", "158 commits to pull
+ * on master" and "156 commits to pull on master" as three separate rows — three
+ * ways of saying one thing, and the two older ones are not merely redundant,
+ * they are WRONG: the count moved.
+ *
+ * Keyed on the destination rather than on the words, because the words are what
+ * changes. Only for the kinds where "again" means "instead": a git checkout and
+ * a chat. A comment on a card and a tool error are separate events even when
+ * they name the same thing, and collapsing those would lose news.
+ */
+function supersede(list: SystemNote[], next: SystemNote): SystemNote[] {
+  const g = next.goto;
+  if (!g) return list;
+  if (g.kind === "git") {
+    return list.filter((n) => !(n.goto?.kind === "git" && n.goto.repo === g.repo && n.goto.branch === g.branch));
+  }
+  if (g.kind === "chat") {
+    return list.filter((n) => !(n.goto?.kind === "chat" && n.goto.id === g.id && n.summary === next.summary));
+  }
+  return list;
+}
 
 /** How the desktop names us. The notification is raised by the Electron shell,
  *  so this is what the freedesktop `app_name` comes back as — matched by prefix
@@ -734,7 +760,7 @@ function attach() {
     if (n.app && n.app.toLowerCase().startsWith(OUR_APP)) return;
     // A mirrored note cannot say where it points. Read it and see.
     if (!n.goto) { const g = gitDestination(n); if (g) n = { ...n, goto: g }; }
-    history = [n, ...history].slice(0, HISTORY_MAX);
+    history = [n, ...supersede(history, n)].slice(0, HISTORY_MAX);
     unread++;
     historyChanged();
     // …and the one that has to be asked rather than read. Fires after the row

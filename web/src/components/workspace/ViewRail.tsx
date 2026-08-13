@@ -284,6 +284,9 @@ export function ViewRail({
   };
 
   const hiddenViews = rail.hidden;
+  /** The drop target is aimed at, so the button can turn red before the drop
+   *  rather than after it. */
+  const aimingHidden = slot?.place === "hidden";
 
   return (
     <nav
@@ -334,25 +337,6 @@ export function ViewRail({
         {dragging && !base.utility.length && !at(slot, "utility", 0) && <div className="h-6" />}
       </div>
 
-      {/* Where a view goes when you are done with it. Only while dragging — a
-          permanent bin is a permanent invitation, and this one is reachable
-          three other ways. */}
-      {dragging && (
-        <div
-          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; aim("hidden", base.hidden.length); }}
-          onDrop={commit}
-          className="mt-1 h-11 w-full grid place-items-center rounded-[10px] transition-colors"
-          style={{
-            border: `1px dashed ${slot?.place === "hidden" ? "var(--error)" : "color-mix(in srgb, var(--text4) 45%, transparent)"}`,
-            background: slot?.place === "hidden" ? "color-mix(in srgb, var(--error) 14%, transparent)" : "transparent",
-            color: slot?.place === "hidden" ? "var(--error)" : "var(--text4)",
-          }}
-          title="Drop to hide"
-        >
-          <EyeOffIcon size={ICON.rail} />
-        </div>
-      )}
-
       <div className="flex flex-col gap-1">
         {/* A second hairline, because everything below is not a view at all:
             these open OVER whatever you are in and hand it straight back. A
@@ -364,8 +348,30 @@ export function ViewRail({
         {/* Exists only while something is hidden, and that is the whole
             contract: nothing you take off the rail is gone, and the way back is
             on the rail rather than buried in preferences. */}
-        {hiddenViews.length > 0 && (
+        {/*
+          * One button, two jobs — because they are the same job seen from each
+          * end: this is where a view goes when you put it away, and where it
+          * comes back from.
+          *
+          * It used to be two. A drag raised a dashed bin of its own directly
+          * ABOVE this button, so the moment you picked something up there were
+          * two dashed squares stacked in the corner of the rail: one to drop it
+          * into and one that opens the drawer it lands in. Reported as "es muy
+          * raro… ese botón debería ser el de agregar" — which it now is, in both
+          * directions.
+          *
+          * Shown while dragging even with nothing hidden yet, or the first view
+          * you ever put away would have nowhere to be dropped.
+          */}
+        {(hiddenViews.length > 0 || dragging) && (
           <button
+            onDragOver={(e) => {
+              if (!dragId) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              aim("hidden", base.hidden.length);
+            }}
+            onDrop={commit}
             onClick={(e) => {
               // Off the far edge of the rail, not of the button: 8px past a
               // button inset by the nav's own padding lands flush on the
@@ -375,15 +381,30 @@ export function ViewRail({
               setMenu(null);
               setRestoreAt((cur) => (cur ? null : { x: nav.right + 8, y: r.top - 6 }));
             }}
-            aria-label="Hidden views"
+            aria-label={dragging ? "Drop here to take it off the rail" : "Hidden views"}
             aria-expanded={!!restoreAt}
-            data-tip={`Hidden views · ${hiddenViews.length} put away`}
+            data-tip={dragging
+              ? "Drop to take it off the rail — it comes back from here"
+              : `Hidden views · ${hiddenViews.length} put away`}
             className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
-            style={{ color: restoreAt ? "var(--primary-hover)" : "var(--text4)" }}
+            style={{
+              color: aimingHidden ? "var(--error)" : restoreAt ? "var(--primary-hover)" : "var(--text4)",
+              // Only while something is in the air. A dashed outline the rest of
+              // the time is a permanent invitation to a destructive-looking
+              // action that is neither permanent nor destructive.
+              border: dragging
+                ? `1px dashed ${aimingHidden ? "var(--error)" : "color-mix(in srgb, var(--text4) 45%, transparent)"}`
+                : "1px solid transparent",
+              background: aimingHidden ? "color-mix(in srgb, var(--error) 14%, transparent)" : "transparent",
+            }}
           >
-            <PlusIcon size={ICON.rail} />
-            <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-1 grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
-              style={{ background: "color-mix(in srgb, var(--primary) 70%, transparent)", color: "var(--bg)" }}>{hiddenViews.length}</span>
+            {/* The icon says which of the two jobs is live: a plus to bring one
+                back, an eye crossed out for the one on its way out. */}
+            {dragging ? <EyeOffIcon size={ICON.rail} /> : <PlusIcon size={ICON.rail} />}
+            {hiddenViews.length > 0 && !dragging && (
+              <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-1 grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
+                style={{ background: "color-mix(in srgb, var(--primary) 70%, transparent)", color: "var(--bg)" }}>{hiddenViews.length}</span>
+            )}
           </button>
         )}
 

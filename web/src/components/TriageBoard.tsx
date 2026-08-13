@@ -291,7 +291,7 @@ export function TriageBoard({
                 same lie the empty lanes used to tell, in bigger type. */}
             <b className="text-[17px] font-semibold" style={{ color: "var(--text4)" }}>…</b>
             <span className="ml-1">Reading the two lists this board is made of</span>
-            <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>
+            <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
               Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing.
             </span>
           </>
@@ -301,7 +301,7 @@ export function TriageBoard({
             <span className="ml-1">
               {totalKnown ? `of ${total} open pull requests` : "open pull requests"} want something from you
             </span>
-            <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>
+            <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
               Yours, and the ones you were asked to look at. The board never shows more than that
               {" — "}
               <button onClick={onShowTable} style={{ color: "var(--primary)" }}>

@@ -595,7 +595,7 @@ export function FileRail({
           )}
           {willTake ? "Merge" : "Merge anyway…"}
         </button>
-        <p className="m-0 mt-1.5 text-[9.5px] leading-snug" style={{ color: "var(--text4)" }}>
+        <p className="m-0 mt-1.5 text-[10.5px] leading-snug" style={{ color: "var(--text4)" }}>
           The whole box lives in Overview — this is the short version, so a verdict never needs a tab.
         </p>
       </Sec>

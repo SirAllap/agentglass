@@ -585,7 +585,9 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
               above, so repeating it here is noise on every single line. */}
           {baseName(c.file_path)}{depth == null && dir && <span className="t-dim2 text-[9.5px] ml-1.5">{dir}</span>}
         </span>
-        {desc && <span className="block truncate text-[9.5px] leading-tight t-dim2" title={desc}>{desc}</span>}
+        {/* Its own line, not the path's: set tight and 9.5px it read as the
+            filename wrapping onto a second line. */}
+        {desc && <span className="block truncate text-[10px] leading-normal t-dim2 mt-0.5" title={desc}>{desc}</span>}
       </span>
       <span className="shrink-0 self-start mt-0.5 text-[9.5px] tabular-nums flex items-center gap-1 opacity-80">
         {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
@@ -2387,7 +2389,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       while it goes, and says so briefly when it lands.
                     */}
                     <button onClick={refreshAll} disabled={refreshing} title="Refresh this view and the working tree"
-                      className="text-[13px] px-2 py-1 rounded-lg disabled:opacity-60" style={{ color: refreshed ? "var(--success)" : "var(--text2)" }}>
+                      className="text-[11px] px-2 py-1 rounded-lg disabled:opacity-60" style={{ color: refreshed ? "var(--success)" : "var(--text2)" }}>
                       <span className={refreshing ? "inline-block animate-spin" : "inline-block"}>{refreshed && !refreshing ? "✓" : "⟳"}</span>
                     </button>
                   </div>
@@ -2493,7 +2495,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               a different changeset than the one on screen is
                               worse than none, because it is the one you trust. */}
                           {!!walk?.withheld?.length && (
-                            <div className="mt-1 text-[9.5px] leading-snug t-dim2">
+                            <div className="mt-1 text-[10.5px] leading-snug t-dim2">
                               Not sent: {walk.withheld.join(", ")} — credential files are kept out of the prompt.
                             </div>
                           )}
