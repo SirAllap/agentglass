@@ -130,13 +130,16 @@ export function actionsFor(kind: GitKind, name: string, s: GitRowState = {}): Gi
     push({ id: "to-branch", label: "Turn it into a branch", group: "go" });
     push({ id: "show", label: "Show what is in it", group: "compare" });
     push({ id: "rename", label: "Rename", group: "copy" });
+    // Overwrite is destructive to the WORKING TREE rather than to the stash,
+    // which is why it sits in red with the drop rather than beside apply: it
+    // replaces paths you may have moved on from since you stashed.
+    push({ id: "overwrite", label: "Apply over the working tree", group: "danger", danger: true });
     push({ id: "drop", label: "Drop it", group: "danger", danger: true, shortcut: "⌫", command: `git stash drop ${q(name)}` });
     return out;
   }
 
   if (kind === "worktree") {
     if (!s.current) push({ id: "open", label: "Open this checkout", group: "go", shortcut: "↵" });
-    push({ id: "terminal", label: "Open a terminal here", group: "go" });
     push({ id: "copy-path", label: "Copy the path", group: "copy", shortcut: "⌘C" });
     if (!s.current) {
       // `busy` is not a warning we invent: it is a process whose cwd is inside.

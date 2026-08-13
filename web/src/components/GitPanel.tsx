@@ -41,7 +41,7 @@ import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { GitRowMenu } from "./GitRowMenu.tsx";
-import { primaryAction, type GitRowState } from "../lib/gitActions.ts";
+import { primaryAction, type GitKind, type GitRowState } from "../lib/gitActions.ts";
 import { openPrs, openPr } from "../lib/openPrs.ts";
 import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
@@ -996,10 +996,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * to come back to a highlighted row you didn't choose.
    */
   const [rowIdx, setRowIdx] = useState(0);
-  /** The row whose right-click menu is open. `branch` rides along so the
-   *  handlers that need the whole object (delete asks about merged-ness) do not
-   *  have to look it up again from a name. */
-  const [rowMenu, setRowMenu] = useState<{ kind: "branch"; name: string; state: GitRowState; x: number; y: number; branch: GitBranch } | null>(null);
+  /**
+   * The row whose right-click menu is open.
+   *
+   * It carries its own `run` rather than a discriminated union of every row
+   * type this panel lists. The alternative — one payload shape per kind and a
+   * switch over them here — puts the knowledge of what a tag is next to the
+   * knowledge of what a stash is, in a component that is already 3,500 lines.
+   * This way each section hands over a closure that already knows its object,
+   * and this state stays one shape.
+   */
+  const [rowMenu, setRowMenu] = useState<
+    { kind: GitKind; name: string; state: GitRowState; x: number; y: number; run: (id: string) => void } | null
+  >(null);
   const [newWtBranch, setNewWtBranch] = useState("");
   const [commitView, setCommitView] = useState<{ changes: FileChange[]; title: string } | null>(null);
   const [blamePath, setBlamePath] = useState<{ path: string } | null>(null);
@@ -1942,6 +1951,20 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (!(await ask({ title: "Apply this stash over your working tree?", body: `Anything you changed at the same paths is replaced by the stash's version of them (${message}).`, danger: true, confirmLabel: "Apply over" }))) return;
     act(() => api.gitStashApplyOverwrite(root, index), "Applied over").then((ok) => { if (ok) reloadStashes(); });
   };
+  /** The stash half of the catalogue. `show` reuses the selection the panel
+   *  already has for a stash rather than opening a second viewer. */
+  const stashAction = (id: string, s: GitStash) => {
+    switch (id) {
+      case "apply": return void stashOp("apply", s.index);
+      case "pop": return void stashOp("pop", s.index);
+      case "drop": return void stashOp("drop", s.index);
+      case "to-branch": return void stashToBranch(s.index);
+      case "overwrite": return void stashOverwrite(s.index, s.message);
+      case "rename": return void stashRename(s.index, s.message.replace(/^[^:]*: /, ""));
+      case "show": return setSelKey(s.ref);
+    }
+  };
+
   const stashPartialNow = async () => {
     const paths = [...partialSel];
     if (!paths.length) return;
@@ -1993,6 +2016,32 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (!(await ask({ title: `Delete ${name} on the remote?`, body: "Runs push <remote> :refs/tags/<name>. The local tag stays.", danger: true, confirmLabel: "Delete remotely" }))) return;
     if (await act(() => api.gitTagDeleteRemote(root, name), `Deleted ${name} remotely`)) reloadTags();
   };
+  /** The worktree half. Small on purpose: a checkout is a place, not a thing
+   *  with a life cycle, and the two things you do with a place are go to it and
+   *  stop keeping it. */
+  const worktreeAction = (id: string, w: GitWorktree) => {
+    switch (id) {
+      case "open": return openWorktree(w);
+      case "copy-path": return void navigator.clipboard?.writeText(w.path).catch(() => { /* no clipboard permission */ });
+      case "remove": return void removeWorktree(w);
+    }
+  };
+
+  /** Same contract as `branchAction`, for a tag: an id from the catalogue in,
+   *  something happening out. Both deletes ask first — the menu shows the git
+   *  and waits — which the three glyph buttons on the row never did. */
+  const tagAction = (id: string, t: GitTag) => {
+    switch (id) {
+      case "checkout": return void checkout(t.name);
+      case "compare": return setCompareTarget(t.name);
+      case "push": return void tagPush(t.name);
+      case "copy-name": return void navigator.clipboard?.writeText(t.name).catch(() => { /* no clipboard permission */ });
+      case "copy-sha": return void navigator.clipboard?.writeText(t.hash).catch(() => { /* no clipboard permission */ });
+      case "delete": return void tagDeleteAsk(t.name);
+      case "delete-remote": return void tagDeleteRemoteAsk(t.name);
+    }
+  };
+
   /** Capture the tree as a named checkpoint — touches nothing, restore is
    *  always possible, cap is 30. */
   const snapshotNow = async () => {
@@ -3016,20 +3065,31 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         view you want when the actual job is deleting them. */}
                     {goneCount > 0 && (
                       <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        {/*
+                          The sweep, said out loud instead of hidden behind a
+                          filter.
+
+                          Deleting the merged-and-tidied branches was already
+                          possible and cost two clicks and a piece of knowledge:
+                          turn on "gone", then find the button that appears
+                          inside that mode. Nobody turns on a filter to discover
+                          an action. It is one click now, it says what it will
+                          do in words rather than in a count, and the filter
+                          stays beside it for when you want to LOOK at them
+                          rather than sweep them.
+                        */}
+                        {writeEnabled && goneMerged.length > 0 && (
+                          <button onClick={deleteGone} disabled={busy} className="text-[10.5px] px-2.5 py-1 rounded-lg font-medium"
+                            style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)", opacity: busy ? 0.55 : 1 }}
+                            title={`${goneMerged.map((b) => b.name).slice(0, 8).join("\n")}${goneMerged.length > 8 ? `\n…and ${goneMerged.length - 8} more` : ""}`}>
+                            {busy ? `${pending ?? "working"}…` : `Delete ${goneMerged.length} branch${goneMerged.length === 1 ? "" : "es"} already in ${branchData.trunk ?? "the trunk"}`}
+                          </button>
+                        )}
                         <button onClick={() => setOnlyGone((v) => !v)} className="text-[10.5px] px-2.5 py-1 rounded-lg transition-colors"
                           style={{ background: onlyGone ? "color-mix(in srgb, var(--error) 16%, transparent)" : "transparent", border: `1px solid color-mix(in srgb, var(--error) ${onlyGone ? 45 : 22}%, transparent)`, color: onlyGone ? "var(--text)" : "var(--text2)" }}
                           title="Branches whose remote branch no longer exists — usually a merged PR that was tidied up">
                           {onlyGone ? "✕ show all branches" : `⌫ ${goneCount} gone`}
                         </button>
-                        {/* Only offers what it can actually deliver: the ones
-                            verified to be in the trunk. "delete all N" that
-                            deletes zero is worse than a smaller honest number. */}
-                        {onlyGone && writeEnabled && goneMerged.length > 0 && (
-                          <button onClick={deleteGone} disabled={busy} className="text-[10.5px] px-2.5 py-1 rounded-lg font-medium"
-                            style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)", opacity: busy ? 0.55 : 1 }}>
-                            {busy ? `${pending ?? "working"}…` : `delete ${goneMerged.length} merged`}
-                          </button>
-                        )}
                         {onlyGone && (() => {
                           // Composed, not concatenated. Each piece used to carry
                           // its own separator and guess whether it needed one,
@@ -3071,7 +3131,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         // to see where the keyboard is, and "this is HEAD" is
                         // already said by the ⎇ glyph.
                         <div key={b.name} onClick={() => setRowIdx(i)} {...rowProps(sel)}
-                          onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "branch", name: b.name, state: rowState, x: e.clientX, y: e.clientY, branch: b }); }}
+                          onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "branch", name: b.name, state: rowState, x: e.clientX, y: e.clientY, run: (id) => branchAction(id, b) }); }}
                           className="group px-2.5 py-1.5 rounded-md"
                           // The action column is reserved whether or not the
                           // buttons are drawn, so hovering cannot resize the
@@ -3211,17 +3271,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
                     {shownStashes.map((s, i) => (
                       <div key={s.ref} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
-                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "18rem" : "0px" }}>
+                        onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "stash", name: s.ref, state: {}, x: e.clientX, y: e.clientY, run: (id) => stashAction(id, s) }); }}
+                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "6rem" : "0px" }}>
                         <span className="text-[10px] tabular-nums t-dim2">{s.ref}</span>
                         <span className="min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={s.message}>{s.message}</span>
+                        {/* Six buttons, of which two could not be undone and one
+                            — overwrite — replaces paths in the working tree.
+                            Apply is the one you want nine times in ten and the
+                            only one that leaves the stash where it was, so it
+                            is the one that stays. */}
                         {writeEnabled ? (
-                          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
-                            <button onClick={() => stashOp("apply", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>apply</button>
-                            <button onClick={() => stashOp("pop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }}>pop</button>
-                            <button onClick={() => stashToBranch(s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Check out a new branch at the stash's base, apply onto it, drop the stash">branch</button>
-                            <button onClick={() => stashOverwrite(s.index, s.message)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }} title="Apply even where the working tree has moved on — replaces those paths">overwrite</button>
-                            <button onClick={() => stashRename(s.index, s.message.replace(/^[^:]*: /, ""))} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>rename</button>
-                            <button onClick={() => stashOp("drop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>drop</button>
+                          <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <button onClick={(e) => { e.stopPropagation(); stashOp("apply", s.index); }}
+                              className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
+                              style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
+                              title="Apply it and keep the stash — right-click the row for everything else">Apply</button>
                           </div>
                         ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
                       </div>
@@ -3360,17 +3424,25 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       count={shownTags.length} total={tags.length} />
                     {incTags.rows.map((t, i) => (
                       <div key={t.name} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
+                        onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "tag", name: t.name, state: {}, x: e.clientX, y: e.clientY, run: (id) => tagAction(id, t) }); }}
                         style={{ ...ROW_GRID, gridTemplateColumns: "minmax(0, 18rem) 5rem minmax(0, 1fr) auto", ...rowProps(i === rowIdx).style }}>
                         <span className="text-[11.5px] font-medium truncate min-w-0" style={{ color: "var(--text)" }} title={t.name}>{t.annotated ? "🏷" : "⚑"} {t.name}</span>
                         <span className="text-[9.5px] tabular-nums t-dim2">{t.hash}</span>
                         <span className="min-w-0 truncate text-[10px] t-dim2" title={t.subject}>{t.subject}</span>
                         <span className="flex items-center gap-1 whitespace-nowrap">
                           <span className="text-[9.5px] t-dim2 text-right">{t.date}</span>
+                          {/* Three glyph buttons — push, delete-there, delete-here
+                              — sat here, two of them destructive and one pixel
+                              apart. The row keeps the one you came for and the
+                              other two moved to the right-click, where they
+                              have names instead of arrows and ask before they
+                              run. */}
                           {writeEnabled && (
-                            <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button onClick={(e) => { e.stopPropagation(); tagPush(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--info)" }} title="Push to the remote">⇡</button>
-                              <button onClick={(e) => { e.stopPropagation(); void tagDeleteRemoteAsk(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--warning)" }} title="Delete on the remote">↷</button>
-                              <CloseButton onClick={(e) => { e.stopPropagation(); void tagDeleteAsk(t.name); }} className="rounded" style={{ color: "var(--error)" }} title="Delete locally" />
+                            <span className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                              <button onClick={(e) => { e.stopPropagation(); tagPush(t.name); }}
+                                className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
+                                style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
+                                title={`Push ${t.name} to the remote — right-click the row for everything else`}>Push</button>
                             </span>
                           )}
                         </span>
@@ -3455,6 +3527,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       // flex row put every branch chip at a different x and the
                       // eye had nothing to run down.
                       <div key={w.path} onClick={() => setRowIdx(i)} {...rowProps(i === rowIdx)}
+                        onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "worktree", name: w.path, state: { current: w.current }, x: e.clientX, y: e.clientY, run: (id) => worktreeAction(id, w) }); }}
                         className="group px-2.5 py-1.5 rounded-md"
                         style={{ ...ROW_GRID, gridTemplateColumns: "14px minmax(0, 14rem) minmax(0, 20rem) 5rem minmax(0, 1fr) auto", ...(i === rowIdx ? rowProps(true).style : { background: w.current ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }) }}>
                         <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>{w.current ? "▸" : ""}</span>
@@ -3573,7 +3646,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           kind={rowMenu.kind} name={rowMenu.name} state={rowMenu.state}
           x={rowMenu.x} y={rowMenu.y}
           onClose={() => setRowMenu(null)}
-          onAction={(id) => branchAction(id, rowMenu.branch)}
+          onAction={rowMenu.run}
         />
       )}
       {/* The commit row's right-click menu. The reset it offers is the old
