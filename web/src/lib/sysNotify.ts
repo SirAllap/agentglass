@@ -100,6 +100,39 @@ export type NotifyCapability = {
 };
 
 import { gitDestination } from "./gitNote.ts";
+import { NOTIFY_VOICES, findVoice, playVoice } from "./sounds.ts";
+
+/* ---------------------------------------------------------------------------
+ * The sound a notification makes.
+ *
+ * One preference for both halves — this app's own alerts and the desktop's
+ * mirrored ones — because from where the user is sitting they are one stream of
+ * things arriving. What separates them is already there and is about
+ * INTERRUPTION rather than sound: `quiet` stops mirrored notes from taking the
+ * notch, and it stops them making a noise too, for the same reason.
+ * ------------------------------------------------------------------------- */
+const VOICE_KEY = "agentglass.notifyVoice";
+
+export const notifyVoiceId = (): string => {
+  try { return localStorage.getItem(VOICE_KEY) ?? NOTIFY_VOICES[0]!.id; } catch { return NOTIFY_VOICES[0]!.id; }
+};
+
+export function setNotifyVoice(id: string): void {
+  try { localStorage.setItem(VOICE_KEY, id); } catch { /* private mode */ }
+}
+
+/** Two notifications landing in the same second is one sound, not two: a burst
+ *  of five is what a chat app does, and five overlapping chimes is a noise
+ *  rather than five pieces of news. */
+let lastDing = 0;
+const DING_GAP_MS = 900;
+
+function ding(): void {
+  const now = Date.now();
+  if (now - lastDing < DING_GAP_MS) return;
+  lastDing = now;
+  playVoice(findVoice(NOTIFY_VOICES, notifyVoiceId()));
+}
 
 const KEY = "agentglass.sysNotify";
 /** The detail level to come back to when the switch is turned on again, so
@@ -553,6 +586,7 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
   history = [note, ...supersede(history, note)].slice(0, HISTORY_MAX);
   unread++;
   historyChanged();
+  ding();
 }
 let localSeq = 0;
 
@@ -771,7 +805,7 @@ function attach() {
     // Collected either way; only the interruption is optional. Quiet means the
     // notch does not morph open for someone else's message, not that agentglass
     // stopped listening -- the list behind the notch is still complete.
-    if (!notifyQuiet()) for (const fn of noteListeners) fn(n);
+    if (!notifyQuiet()) { ding(); for (const fn of noteListeners) fn(n); }
   };
   sock.onopen = () => { retry = 0; };
   sock.onclose = () => {

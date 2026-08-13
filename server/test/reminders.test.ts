@@ -202,9 +202,9 @@ describe("delivery", () => {
     // What is asserted here is that it is *reached* — the transports themselves
     // are alerts.ts's, and already covered.
     const alerts = await import("../src/alerts.ts");
-    const seen: { title: string; body: string; urgency: number }[] = [];
+    const seen: { title: string; body: string; urgency: number; kind?: string; id?: string }[] = [];
     alerts.setAlertSink({
-      broadcast: (a) => { seen.push({ title: a.title, body: a.body, urgency: a.urgency }); },
+      broadcast: (a) => { seen.push({ title: a.title, body: a.body, urgency: a.urgency, kind: a.kind, id: a.id }); },
       // One socket, and it answered its last ping: a client that is there and
       // demonstrably listening. See AlertSink.census.
       census: () => ({ attached: 1, live: 1 }),
@@ -215,10 +215,22 @@ describe("delivery", () => {
       expect(fired.length).toBe(1);
       const mine = seen.filter((a) => a.title.includes("the delivery test"));
       expect(mine.length, "the reminder never reached the alert path").toBe(1);
-      // Urgency 1, never 2: 2 is the level a phone shows at Android's `max`,
-      // over whatever you are doing, and it is for an agent that is stopped
-      // until somebody answers. A reminder is news.
-      expect(mine[0]!.urgency).toBe(1);
+      /*
+       * Urgency 2, and marked as an alarm.
+       *
+       * This assertion used to read 1, with a comment saying a reminder is
+       * news. It is not: everything else on this path is something that
+       * HAPPENED and can be read whenever, while a reminder is a promise the
+       * user made to themselves at a particular minute. Reported exactly so —
+       * "es una alarma que yo he programado, tiene que ser más invasiva" — and
+       * both halves of the change are here: freedesktop keeps a CRITICAL
+       * notification on screen instead of expiring it after a few seconds, and
+       * the mark is what lets the app raise its own alarm rather than adding
+       * another grey row to the list behind the bell.
+       */
+      expect(mine[0]!.urgency).toBe(2);
+      expect(mine[0]!.kind).toBe("reminder");
+      expect(mine[0]!.id).toBeTruthy();
     } finally {
       alerts.setAlertSink(null);
     }

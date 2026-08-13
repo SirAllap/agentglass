@@ -1066,6 +1066,20 @@ export interface AlertNote {
    * instead of being guessed from it afterwards.
    */
   pane?: string;
+  /**
+   * A reminder the user set, as opposed to news about the fleet.
+   *
+   * The difference is not decoration: everything else behind the bell is
+   * something that HAPPENED and can be read whenever — a branch fell behind, a
+   * tool failed, somebody commented. An alarm is a promise the user made to
+   * themselves at a particular minute, and one that arrives as the seventeenth
+   * grey row of the day has failed at the only job it had. So it is marked, and
+   * the surfaces that receive it treat it as an alarm: it takes the screen, it
+   * makes a sound, and it does not go away until it is answered.
+   */
+  kind?: "reminder";
+  /** The reminder's id, so the alarm can acknowledge or snooze the exact one. */
+  id?: string;
 }
 
 /**

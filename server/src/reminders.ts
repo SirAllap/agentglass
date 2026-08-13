@@ -238,6 +238,49 @@ export function drainDue(now = Date.now()): Reminder[] {
  * Boot is just the first tick — there is no separate restore path with its own
  * semantics, which is where a scheduled design usually breaks.
  */
+/**
+ * Ask again, for an alarm nobody answered.
+ *
+ * An alarm you slept through should ask a second time; that is most of what
+ * makes it an alarm rather than a note. Bounded on both ends and for the same
+ * reason the drain has a budget: something that repeats for ever is something
+ * you turn off. Five minutes apart, three times, and then it waits quietly in
+ * the list — which is where it already was.
+ *
+ * The counter is in memory rather than in the row, on purpose: the ledger is
+ * append-only and "how many times did we nag" is a property of this process,
+ * not of the promise. A restart starting the count over is the right answer —
+ * the app has just come back, and the reminder is still unanswered.
+ */
+const NAG_EVERY_MS = 5 * 60_000;
+const NAG_MAX = 3;
+const nags = new Map<string, { at: number; n: number }>();
+
+export function nagUnacked(now = Date.now()): number {
+  const live = db.query<Row, []>(
+    `SELECT * FROM reminders
+      WHERE fired_at IS NOT NULL AND acked_at IS NULL AND cancelled_at IS NULL
+      ORDER BY due ASC LIMIT ${BUDGET}`,
+  ).all().map(toReminder);
+  let sent = 0;
+  for (const r of live) {
+    const seen = nags.get(r.id) ?? { at: r.firedAt ?? now, n: 0 };
+    if (seen.n >= NAG_MAX || now - seen.at < NAG_EVERY_MS) { nags.set(r.id, seen); continue; }
+    const d = new Date(r.due);
+    const p = (n: number) => String(n).padStart(2, "0");
+    try { pushReminder(r.id, r.title, `${p(d.getHours())}:${p(d.getMinutes())} · still waiting`); sent++; }
+    catch { /* delivery is allowed to fail */ }
+    nags.set(r.id, { at: now, n: seen.n + 1 });
+  }
+  // Anything answered or cancelled is no longer anybody's business.
+  const alive = new Set(live.map((r) => r.id));
+  for (const id of [...nags.keys()]) if (!alive.has(id)) nags.delete(id);
+  return sent;
+}
+
+/** Test seam: the count is per-process, so a suite must be able to reset it. */
+export function __resetNags(): void { nags.clear(); }
+
 let ticker: ReturnType<typeof setInterval> | null = null;
 let ticking = false;
 export function startReminderTick(): void {
@@ -246,7 +289,7 @@ export function startReminderTick(): void {
     if (ticking) return;
     ticking = true;
     entered("reminder tick");
-    try { drainDue(); } catch { /* the next tick tries again */ } finally { ticking = false; }
+    try { drainDue(); nagUnacked(); } catch { /* the next tick tries again */ } finally { ticking = false; }
   };
   tick();
   ticker = setInterval(tick, 10_000);

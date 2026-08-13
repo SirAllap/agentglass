@@ -30,6 +30,8 @@ import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
 import { Select } from "./Select.tsx";
+import { ALARM_VOICES, NOTIFY_VOICES, findVoice, playVoice, type Voice } from "../lib/sounds.ts";
+import { alarmVoiceId, setAlarmVoice } from "../lib/alarm.ts";
 import { SEARCH_ENGINE_LABELS, type SearchEngine } from "../lib/browserUrl.ts";
 import { homePageRaw, setHomePage, searchEngine, setSearchEngine, importHistory, setImportHistory, importBookmarks, setImportBookmarks, pickImportRows } from "../lib/browserPrefs.ts";
 import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
@@ -56,6 +58,7 @@ import { externalUrl } from "../lib/externalUrl.ts";
 import type { UpdateStatus, ReleaseNotes, HookSetupStatus, BrowserUseStatus } from "../../../shared/types.ts";
 import {
   sysNotifyMode, setSysNotifyMode, setSysNotifyOn, subscribeSysNotifyMode,
+  notifyVoiceId, setNotifyVoice,
   notifyCapability, notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet,
   appNotify, setAppNotify, subscribeAppNotify,
   type SysNotifyMode, type NotifyCapability,
@@ -2816,6 +2819,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   // Read once into state rather than on every render: it lives in localStorage
   // and the row has to reflect a press immediately.
   const [ciApproved, setCiApproved] = useState(ciOnlyApproved);
+  /* Read once and held in state: both live in localStorage, which is not a
+     store anything can subscribe to, and the row has to redraw the moment it is
+     picked so the Play button previews what is now selected. */
+  const [notifyVoice, setNotifyVoiceState] = useState(notifyVoiceId);
+  const [alarmVoice, setAlarmVoiceState] = useState(alarmVoiceId);
   const [capturingApp, setCapturingApp] = useState<AppChordId | null>(null);
   // Its own error slot. keyError is keyed by ActionId and these are not
   // actions — borrowing a row's id would print "already opens Git" under
@@ -3358,6 +3366,34 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         ? "A suite finishing on something half-written is a status line; on something approved it is the last thing before merging."
                         : "Every verdict, on every pull request of yours — including the ones nobody has looked at yet."} />
 
+                    {/*
+                      * The two sounds, and they are two on purpose: a
+                      * notification is somebody else's news and an alarm is a
+                      * promise you made yourself at a particular minute. One
+                      * should be brief enough to hear thirty times a day; the
+                      * other has to be heard from the next room and repeats
+                      * until it is answered.
+                      *
+                      * Every one of them is synthesised — a few oscillators and
+                      * an envelope — rather than a file: a strict CSP blocks a
+                      * remote asset, a bundled set is a few hundred kilobytes
+                      * for two seconds of audio, and every free pack arrives
+                      * with a licence to carry around.
+                      */}
+                    <Group>Sound</Group>
+                    <SoundRow
+                      label="Notifications"
+                      hint="What a card behind the bell sounds like. Quiet, below, silences the mirrored ones."
+                      voices={NOTIFY_VOICES}
+                      value={notifyVoice}
+                      onPick={(v) => { setNotifyVoice(v); setNotifyVoiceState(v); }} />
+                    <SoundRow
+                      label="Reminder alarm"
+                      hint="A reminder you set does not join the list — it takes the screen and rings until it is answered."
+                      voices={ALARM_VOICES}
+                      value={alarmVoice}
+                      onPick={(v) => { setAlarmVoice(v); setAlarmVoiceState(v); }} />
+
                     <Group>From your desktop</Group>
                     <Toggle
                       on={sysNotify !== "off"}
@@ -3591,5 +3627,50 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
         )}
       </AnimatePresence>
     </Portal>
+  );
+}
+
+
+/**
+ * One sound, chosen and heard.
+ *
+ * The preview button is the whole point of the row: five names in a list —
+ * "Ping", "Drop", "Chime" — say nothing about what they sound like, and a
+ * setting you have to change and then wait for an event to evaluate is a setting
+ * nobody tunes. Pressing it plays the option that is selected, so choosing is
+ * done by ear in the place where the choice is made.
+ */
+function SoundRow({ label, hint, voices, value, onPick }: {
+  label: string;
+  hint: string;
+  voices: Voice[];
+  value: string;
+  onPick: (v: string) => void;
+}) {
+  const voice = findVoice(voices, value);
+  return (
+    <div className="px-3 py-2 flex items-center gap-3">
+      <div className="min-w-0 flex-1 flex flex-col gap-1">
+        <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{hint}</span>
+      </div>
+      <Select
+        value={value}
+        onChange={onPick}
+        title={voice.hint}
+        style={{ minWidth: 132 }}
+        options={voices.map((v) => ({ value: v.id, label: v.label, hint: v.hint }))} />
+      <button
+        onClick={() => playVoice(voice)}
+        disabled={voice.id === "none"}
+        title={voice.id === "none" ? "Nothing to play" : `Play ${voice.label}`}
+        className="text-[11px] px-2 py-1 rounded-lg shrink-0"
+        style={{
+          color: voice.id === "none" ? "var(--text4)" : "var(--text3)",
+          border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+          opacity: voice.id === "none" ? 0.5 : 1,
+        }}
+      >Play</button>
+    </div>
   );
 }

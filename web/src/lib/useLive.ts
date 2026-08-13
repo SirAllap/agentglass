@@ -7,6 +7,8 @@ import { emitControl } from "./controlBus.ts";
 import { emitBrowserAsk } from "./browserBus.ts";
 import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
+import { raiseAlarm } from "./alarm.ts";
+import { nudgeReminders } from "./reminderStore.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -204,6 +206,17 @@ export function useLive(paused = false): LiveData {
         // not data — hand it to App, which runs it through the same setters the
         // keyboard does.
         emitControl(frame.data);
+        return;
+      }
+      if (frame.type === "alert" && frame.data?.kind === "reminder" && frame.data.id) {
+        /* An alarm the user set. It does NOT go through fireDesktopAlert's list:
+           a reminder that arrives as another grey row has failed at the only job
+           it had. The card takes the screen and rings; the OS notification is
+           still sent, at critical urgency, so it survives the window being
+           behind something else. */
+        raiseAlarm({ id: frame.data.id, title: frame.data.title.replace(/^⏰\s*/, ""), when: frame.data.body, at: Date.now() });
+        fireDesktopAlert(frame.data);
+        void nudgeReminders();
         return;
       }
       if (frame.type === "alert") {

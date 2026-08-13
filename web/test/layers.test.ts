@@ -41,7 +41,15 @@ describe("stacking", () => {
     // is appended when it opens. Numbering a sheet ends that: Settings at its
     // own layer with the menu below would bury every dropdown in Settings,
     // which is the reported bug one floor up.
-    for (const z of Object.values(LAYER)) expect(LAYER.menu).toBeGreaterThanOrEqual(z);
+    //
+    // The alarm is the one exception, and it is not a sheet: every other layer
+    // here appears because you opened it and can wait behind whatever you
+    // opened next. An alarm is a promise made at a particular minute, and one
+    // that opens under the menu you happen to have down is a promise quietly
+    // broken.
+    const sheets = Object.entries(LAYER).filter(([k]) => k !== "alarm").map(([, z]) => z);
+    for (const z of sheets) expect(LAYER.menu).toBeGreaterThanOrEqual(z);
+    expect(LAYER.alarm).toBeGreaterThan(LAYER.menu);
   });
 
   it("puts Settings above the catalog it can be opened over", () => {
