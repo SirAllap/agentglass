@@ -99,6 +99,57 @@ describe("spacing goes through the scale", () => {
     expect(strays.join("\n") || null).toBeNull();
   });
 
+  /**
+   * The stylesheet, which was exempt by accident.
+   *
+   * This suite scanned `.ts`/`.tsx` and nothing else, so every odd pixel that
+   * survived in the app had ended up in `index.css` — 5px, 7px, 9px, 11px, 15px,
+   * in six declarations. Not because anybody decided the stylesheet was
+   * different: because nothing looked there, which is the same reason the scale
+   * drifted in the first place.
+   *
+   * Only the spacing properties, and only whole pixels: `border: 1px` is a
+   * hairline rather than a measurement, and `13.5px` is type, which has its own
+   * ladder.
+   */
+  test("the stylesheet is on the same grid as everything else", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    const strays: string[] = [];
+    for (const m of css.matchAll(/\b(padding|margin|gap|inset)(?:-(?:top|bottom|left|right|block|inline))?:\s*([^;{}]+);/g)) {
+      for (const px of m[2]!.matchAll(/(\d+)px/g)) {
+        const v = Number(px[1]);
+        // 0 is a reset and 1 is a HAIRLINE — a rule drawn as a gap, which is
+        // what `gap: 1px` between two cards on a tinted ground is. Neither is a
+        // measurement, and demanding 2 would double every divider in the app.
+        if (v === 0 || v === 1 || v % 2 === 0) continue;
+        strays.push(`index.css: ${m[0]!.trim()} — ${v}px is off the 2px grid`);
+      }
+    }
+    expect(strays.join("\n") || null).toBeNull();
+  });
+
+  /**
+   * And a value hidden inside a string, which is the other blind spot.
+   *
+   * `style={{ padding: "13px 14px" }}` is a quoted CSS shorthand: the numeric
+   * scan above never sees it, and no class applies. The update toast sat 1px
+   * higher than every other card in the app for exactly this reason.
+   */
+  test("a quoted CSS value is on the grid too", () => {
+    const strays: string[] = [];
+    for (const { f, s } of FILES) {
+      for (const m of s.matchAll(/(padding|margin|gap|inset):\s*"([^"]+)"/g)) {
+        for (const px of m[2]!.matchAll(/(\d+)px/g)) {
+          const v = Number(px[1]);
+          // See above: 1px is a hairline.
+          if (v === 0 || v === 1 || v % 2 === 0) continue;
+          strays.push(`${f.replace(SRC, "web/src")}: ${m[0]} — ${v}px is off the 2px grid`);
+        }
+      }
+    }
+    expect(strays.join("\n") || null).toBeNull();
+  });
+
   test("the scale is written down where the other design decisions are", () => {
     // Colours, type and shadows are all declared in the Tailwind config with a
     // reason. Spacing was the one that was not, which is how it drifted.

@@ -4919,7 +4919,7 @@ function MenuItem({ children, onClick, danger, kbd }: {
   );
 }
 
-const MenuSep = () => <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "3px 0" }} />;
+const MenuSep = () => <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "4px 0" }} />;
 
 const MenuHead = ({ children }: { children: React.ReactNode }) => (
   <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{children}</div>

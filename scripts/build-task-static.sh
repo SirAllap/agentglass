@@ -52,7 +52,20 @@ esac
 
 WORK="$(mktemp -d /tmp/task-build.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/src" "$WORK/prefix"
+mkdir -p "$WORK/src" "$WORK/prefix" "$WORK/bin"
+
+# zig is a compiler DRIVER, not a compiler: `zig cc` is the C one and `zig c++`
+# the C++ one, and both need the target on every invocation. autotools and cmake
+# both want a single executable in CC/CXX, so the two words become two one-line
+# wrappers. (Writing `CC=zig` — which is what this script said before it was
+# ever run — makes configure probe a binary that only prints its own usage.)
+if [ "$CC" = "zig" ]; then
+  printf '#!/bin/sh\nexec zig cc -target %s "$@"\n' "$TRIPLE" > "$WORK/bin/zcc"
+  printf '#!/bin/sh\nexec zig c++ -target %s "$@"\n' "$TRIPLE" > "$WORK/bin/zxx"
+  chmod +x "$WORK/bin/zcc" "$WORK/bin/zxx"
+  CC="$WORK/bin/zcc"
+  CXX="$WORK/bin/zxx"
+fi
 
 fetch() { # name url
   # Split, not one `local`: with `set -u`, bash expands every word of a `local`
@@ -96,7 +109,7 @@ build_uuid() {
   verify "$t" "util-linux-${UUID_VERSION}.tar.gz"
   tar -xzf "$t" -C "$WORK/src"
   ( cd "$WORK/src/util-linux-${UUID_VERSION}"
-    ./configure ${TRIPLE:+--host="$TRIPLE"} --prefix="$WORK/prefix" \
+    CC="$CC" ./configure ${TRIPLE:+--host="$TRIPLE"} --prefix="$WORK/prefix" \
       --disable-all-programs --enable-libuuid --disable-shared --enable-static \
       --without-python --without-systemd --without-udev >/dev/null
     make -s -j"$(nproc)" && make -s install )
@@ -107,6 +120,10 @@ build_task() {
   verify "$t" "task-${TASK_VERSION}.tar.gz"
   tar -xzf "$t" -C "$WORK/src"
   ( cd "$WORK/src/task-${TASK_VERSION}"
+    # `-s` strips at link time. Measured: the musl build is 34MB with debug
+    # info and 5MB without, and this binary ships inside the app's download —
+    # 29MB of DWARF nobody will ever open is not a rounding error.
+    #
     # ENABLE_SYNC=OFF drops the gnutls dependency outright. The sync server is
     # not something agentglass drives, and a TLS stack is the single largest
     # thing that would have to be built and kept patched to ship this.
@@ -117,7 +134,7 @@ build_task() {
       -DCMAKE_CXX_COMPILER="$CXX" \
       -DCMAKE_INCLUDE_PATH="$WORK/prefix/include" \
       -DCMAKE_LIBRARY_PATH="$WORK/prefix/lib" \
-      -DCMAKE_EXE_LINKER_FLAGS="-static -L$WORK/prefix/lib" \
+      -DCMAKE_EXE_LINKER_FLAGS="-static -s -L$WORK/prefix/lib" \
       >/dev/null
     # No `--target task`: 2.6.2 names its executable target differently from
     # the binary, and asking for one that does not exist ends with cmake
@@ -135,6 +152,23 @@ chmod +x "out/task-$TARGET"
 
 # Proof rather than hope: a binary that cannot answer `--version` is not one to
 # ship, and "it linked" is not the same claim.
-"out/task-$TARGET" --version
+#
+# Only where it CAN run, though: a cross-built arm64 binary on an x64 host is not
+# a failure, it is the point of cross-building — and `Exec format error` killing
+# the script here threw away a twenty-minute build that had succeeded. Where it
+# cannot be run, `file` is the check: the architecture and "statically linked"
+# are exactly what a bundled binary has to get right, and both are readable
+# without executing anything.
+HOST_ARCH="$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')"
+HOST_OS="$(uname -s | tr 'A-Z' 'a-z')"
+if [ "$TARGET" = host ] || [ "$TARGET" = "bun-$HOST_OS-$HOST_ARCH" ]; then
+  "out/task-$TARGET" --version
+else
+  echo "  cross-built for $TARGET — not run here"
+fi
 file "out/task-$TARGET" | sed 's/^/  /'
+case "$(file -b "out/task-$TARGET")" in
+  *"statically linked"*) ;;
+  *) echo "NOT STATIC — this would depend on the host's libc" >&2; exit 1 ;;
+esac
 echo "built out/task-$TARGET"

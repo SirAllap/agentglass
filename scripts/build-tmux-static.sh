@@ -44,11 +44,33 @@ case "$TARGET" in
 esac
 
 WORK="$(mktemp -d /tmp/tmux-build.XXXXXX)"
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/src" "$WORK/prefix"
+# KEEP_WORK=1 leaves the tree behind. A failing `configure` says "C compiler
+# cannot create executables" and puts the actual reason in config.log, which the
+# trap was deleting a millisecond later — two builds were guessed at before
+# anybody could read one.
+[ "${KEEP_WORK:-0}" = "1" ] || trap 'rm -rf "$WORK"' EXIT
+echo "work dir: $WORK"
+mkdir -p "$WORK/src" "$WORK/prefix" "$WORK/bin"
+
+# zig is a compiler DRIVER: `zig cc` is the C compiler and the target has to be
+# on every invocation. configure wants one executable in CC, so the two words
+# become a one-line wrapper. `CC=zig` — what this said before it was ever run —
+# hands configure a binary that only prints its own usage.
+if [ "$CC" = "zig" ]; then
+  printf '#!/bin/sh\nexec zig cc -target %s "$@"\n' "$TRIPLE" > "$WORK/bin/zcc"
+  chmod +x "$WORK/bin/zcc"
+  CC="$WORK/bin/zcc"
+fi
 
 fetch() { # name url
-  local name="$1" url="$2" file="$WORK/src/$name"
+  # Split, not one `local`: with `set -u`, bash expands every word of a `local`
+  # before it assigns any of them, so `file="$WORK/src/$name"` on the same line
+  # reads a `name` that does not exist yet and the script dies on its first
+  # call. Found by running the sibling script for Taskwarrior, which had been
+  # copied from this one — this file had never been run.
+  local name="$1"
+  local url="$2"
+  local file="$WORK/src/$name"
   [ -f "$file" ] || curl -fsSL -o "$file" "$url"
   echo "$file"
 }
@@ -59,7 +81,9 @@ fetch() { # name url
 # we ship into the app is a supply-chain decision, not a convenience.
 CHECKSUMS="${TMUX_BUILD_CHECKSUMS:-scripts/tmux-build-checksums.txt}"
 verify() { # file name
-  local file="$1" name="$2" want
+  local file="$1"
+  local name="$2"
+  local want
   want="$(awk -v n="$name" '$2==n {print $1; exit}' "$CHECKSUMS")"
   if [ -z "$want" ]; then
     echo "no pinned checksum for $name in $CHECKSUMS — refusing to build unverified" >&2
@@ -88,7 +112,12 @@ build_ncurses() {
   ( cd "$WORK/src/ncurses-${NCURSES_VERSION}"
     # --without-progs/--without-tests keep the build tiny; the library is all
     # the pane engine needs.
-    CC="$CC" CFLAGS="-O2" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --without-shared --without-progs --without-tests --without-manpages --without-ada --disable-db-install --enable-widec >/dev/null
+    # `--with-termlib=tinfo` splits terminfo into its own archive under the
+    # NARROW name, which is the one tmux's configure puts on the link line
+    # (`-ltinfo`) even in a widec build. Without it everything compiles and the
+    # final link is the only thing that fails, looking for a file ncurses was
+    # never asked to make.
+    CC="$CC" CFLAGS="-O2" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --without-shared --without-progs --without-tests --without-manpages --without-ada --disable-db-install --enable-widec --with-termlib=tinfo >/dev/null
     make -s -j"$(nproc)" && make -s install )
 }
 
@@ -97,12 +126,35 @@ build_tmux() {
   verify "$t" "tmux-${TMUX_VERSION}.tar.gz"
   tar -xzf "$t" -C "$WORK/src"
   ( cd "$WORK/src/tmux-${TMUX_VERSION}"
-    # -static on the linker line (not -static-libgcc): everything in, no
-    # dependency on the host's libc either. LDFLAGS and CFLAGS both carry the
-    # prefix because tmux's configure probes with both.
+    # Every line below is one continuation of a single command. A COMMENT
+    # between two of them ENDS it, and the whole environment prefix is silently
+    # dropped: configure then runs with the host gcc, none of these paths, and
+    # reports "C compiler cannot create executables". That happened twice while
+    # this was being written, the second time to the very comment explaining the
+    # first. So the reasons live here, above the command, and the command has
+    # nothing in it but continuations.
+    #
+    #   ac_cv_search_forkpty — musl HAS forkpty, in libc, with no separate
+    #     `-lutil` for AC_SEARCH_LIBS to find. It gives up, `HAVE_FORKPTY` stays
+    #     undefined, and compat.h declares its own prototype beside the real
+    #     one: "conflicting types for 'forkpty'", forty files in.
+    #   CPPFLAGS as well as CFLAGS — configure tests a header with the
+    #     PREPROCESSOR, which reads CPPFLAGS. With only CFLAGS it says
+    #     "accepted by the compiler, rejected by the preprocessor" and then
+    #     decides libevent is missing.
+    #   include/ncursesw — ncurses built `--enable-widec` puts its headers
+    #     there, so `#include <ncurses.h>` finds nothing with only the prefix
+    #     root on the path.
+    #   -ltinfo — ncurses is built `--with-termlib=tinfo` above precisely so
+    #     this archive exists under the name tmux's own configure uses.
+    #   -static on the linker line (not -static-libgcc): everything in, no
+    #     dependency on the host's libc either. `-s` strips at link time — the
+    #     unstripped binary carries megabytes of DWARF into the app's download.
+    ac_cv_search_forkpty="none required" \
     CC="$CC" \
-    CFLAGS="-O2 -I$WORK/prefix/include -DHAVE_PROC_PID" \
-    LDFLAGS="-L$WORK/prefix/lib -static" \
+    CFLAGS="-O2 -I$WORK/prefix/include -I$WORK/prefix/include/ncursesw -DHAVE_PROC_PID" \
+    CPPFLAGS="-I$WORK/prefix/include -I$WORK/prefix/include/ncursesw" \
+    LDFLAGS="-L$WORK/prefix/lib -static -s" \
     LIBS="-levent_core -levent -lncursesw -ltinfo -lm" \
     ./configure --host="$TRIPLE" --prefix="$WORK/prefix" >/dev/null
     make -s -j"$(nproc)" )
@@ -116,4 +168,21 @@ build_tmux
 mkdir -p out
 cp "$WORK/src/tmux-${TMUX_VERSION}/tmux" "out/tmux-$TARGET"
 chmod +x "out/tmux-$TARGET"
+
+# Proof rather than hope — and only where it can run: a cross-built arm64 binary
+# on an x64 host is the point of cross-building, not a failure. Where it cannot
+# be run, `file` is the check, and "statically linked" is the property that
+# decides whether this works on a machine that is not this one.
+HOST_ARCH="$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')"
+HOST_OS="$(uname -s | tr 'A-Z' 'a-z')"
+if [ "$TARGET" = "bun-$HOST_OS-$HOST_ARCH" ]; then
+  "out/tmux-$TARGET" -V
+else
+  echo "  cross-built for $TARGET — not run here"
+fi
+file "out/tmux-$TARGET" | sed 's/^/  /'
+case "$(file -b "out/tmux-$TARGET")" in
+  *"statically linked"*) ;;
+  *) echo "NOT STATIC — this would depend on the host's libc" >&2; exit 1 ;;
+esac
 echo "built out/tmux-$TARGET"

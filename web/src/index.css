@@ -884,7 +884,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   margin-top: 6px;
   font-size: 10.5px;
   line-height: 1;
-  padding: 5px 8px;
+  padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
   color: var(--primary);
@@ -982,7 +982,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   /* 16px is the threshold below which iOS Safari zooms the viewport on focus,
      which on this screen scrolls the code you are copying out of view. */
   font-size: 16px;
-  padding: 11px 12px;
+  padding: 12px 12px;
   border-radius: 10px;
   color: var(--text);
   background: color-mix(in srgb, var(--bg) 70%, transparent);
@@ -1071,14 +1071,14 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
  */
 .agx-cu-body :is(h1, h2, h3, h4) { color: var(--text); font-weight: 650; }
 .agx-cu-body :is(h1, h2) {
-  font-size: 13.5px; margin: 20px 0 7px; padding-bottom: 4px;
+  font-size: 13.5px; margin: 20px 0 8px; padding-bottom: 4px;
   border-bottom: 1px solid color-mix(in srgb, var(--text) 11%, transparent);
 }
-.agx-cu-body :is(h3, h4) { font-size: 12.5px; margin: 15px 0 5px; }
+.agx-cu-body :is(h3, h4) { font-size: 12.5px; margin: 16px 0 6px; }
 .agx-cu-body :is(h1, h2, h3, h4):first-child { margin-top: 0; }
 /* Paragraphs apart, not stacked. ClickUp renders a full blank line between
    them and it is most of why the same words read as separated there. */
-.agx-cu-body p { margin: 9px 0; }
+.agx-cu-body p { margin: 10px 0; }
 .agx-cu-body p:first-child { margin-top: 0; }
 .agx-cu-body p:last-child { margin-bottom: 0; }
 .agx-cu-body li { font-size: 12px; line-height: 1.62; }
@@ -1094,7 +1094,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-cu-note { font-size: 11.5px; }
 .agx-cu-note p, .agx-cu-note li { font-size: 11.5px; }
 .agx-cu-note p { margin: 6px 0; }
-.agx-cu-note :is(h1, h2) { font-size: 12px; margin: 12px 0 5px; padding-bottom: 0; border-bottom: 0; }
+.agx-cu-note :is(h1, h2) { font-size: 12px; margin: 12px 0 6px; padding-bottom: 0; border-bottom: 0; }
 .agx-cu-note :is(h3, h4) { font-size: 11.5px; margin: 10px 0 4px; }
 
 /*

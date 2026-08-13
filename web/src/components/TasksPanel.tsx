@@ -3793,7 +3793,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       {/* Two columns of label-above-value rather than one of label|value. In a
           380px pane the second shape leaves the value about ninety pixels, which
           is where "ready for engineering" became "to…". */}
-      <div className="mb-3" style={{ display: "grid", gridTemplateColumns: wide ? "repeat(3, minmax(0,1fr))" : "1fr 1fr", gap: "11px 12px" }}>
+      <div className="mb-3" style={{ display: "grid", gridTemplateColumns: wide ? "repeat(3, minmax(0,1fr))" : "1fr 1fr", gap: "12px 12px" }}>
         <CardField label="Status">
           <div className="relative">
             {/* Full width, and the caret at the edge.

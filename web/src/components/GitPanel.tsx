@@ -2112,7 +2112,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         aria-keyshortcuts={String(num)}
         className="text-[10.5px] leading-none rounded-[5px] transition-colors flex items-baseline gap-1.5 whitespace-nowrap shrink-0"
         style={{
-          padding: "7px 7px 4px",
+          padding: "8px 8px 4px",
           background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
           color: on ? "var(--text)" : "var(--text3)",
           opacity: on ? 1 : 0.72,

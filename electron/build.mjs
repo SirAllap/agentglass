@@ -239,6 +239,28 @@ if (provenanceOnly) {
 }
 
 /*
+ * The bundled tmux, when one has been built.
+ *
+ * The pane engine already looks for one beside the sidecar (`tmuxbin.ts`); this
+ * is what puts it there, so "no tmux on this machine" stops being a thing the
+ * terminal has to explain. Same rules as the Taskwarrior block below: optional,
+ * so a build machine without one still makes a working app, and matched on the
+ * exact target so it can never be the wrong architecture.
+ */
+const tmuxBuilt = resolve(REPO, "out", `tmux-${
+  process.env.TASK_TARGET
+  ?? `bun-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "x64"}`
+}`);
+if (existsSync(tmuxBuilt)) {
+  const dest = resolve(HERE, "staging/tmux");
+  copyFileSync(tmuxBuilt, dest);
+  chmodSync(dest, 0o755);
+  console.log("==> bundling tmux");
+} else {
+  console.log("==> no bundled tmux — the pane engine will use the system one");
+}
+
+/*
  * The bundled Taskwarrior, when one has been built.
  *
  * Local tasks are an agentglass feature, so a packaged app should carry its own
