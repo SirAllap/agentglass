@@ -41,6 +41,7 @@ import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { GitRowMenu } from "./GitRowMenu.tsx";
+import { GitPalette, type PaletteRow } from "./GitPalette.tsx";
 import { primaryAction, type GitKind, type GitRowState } from "../lib/gitActions.ts";
 import { openPrs, openPr } from "../lib/openPrs.ts";
 import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
@@ -1009,6 +1010,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [rowMenu, setRowMenu] = useState<
     { kind: GitKind; name: string; state: GitRowState; x: number; y: number; run: (id: string) => void } | null
   >(null);
+  /** ⌘K. Off by default and never restored from storage: a palette that was
+   *  open when you last closed the view is a palette in your way. */
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [newWtBranch, setNewWtBranch] = useState("");
   const [commitView, setCommitView] = useState<{ changes: FileChange[]; title: string } | null>(null);
   const [blamePath, setBlamePath] = useState<{ path: string } | null>(null);
@@ -2042,6 +2046,39 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     }
   };
 
+  /**
+   * Everything the palette can offer, from every section at once.
+   *
+   * Declared AFTER the four dispatchers on purpose: they are `const`, so
+   * reading them above their declaration is a temporal-dead-zone crash at
+   * render — the kind that shows up as a black window rather than as an error
+   * anyone can read. The typecheck catches it; the ordering is what keeps it
+   * caught.
+   *
+   * Branches come from the FULL list rather than the filtered one: the palette
+   * is how you reach a branch without first finding the view it lives in, and
+   * filtering it by the search box above would make it a slower copy of that
+   * search. Each row carries the same closure its own menu uses, so an action
+   * run from here and from the row are one code path.
+   */
+  const paletteRows = useMemo<PaletteRow[]>(() => [
+    ...branchData.branches.map((b) => {
+      const wt = wtByBranch.get(b.name);
+      return {
+        kind: "branch" as const,
+        name: b.name,
+        state: branchState(b, b.name === currentBranchName, !!(wt && wt.path !== root)),
+        run: (id: string) => branchAction(id, b),
+      };
+    }),
+    ...tags.map((t) => ({ kind: "tag" as const, name: t.name, run: (id: string) => tagAction(id, t) })),
+    ...stashes.map((s) => ({ kind: "stash" as const, name: s.ref, run: (id: string) => stashAction(id, s) })),
+    ...worktrees.map((w) => ({ kind: "worktree" as const, name: w.path, state: { current: w.current }, run: (id: string) => worktreeAction(id, w) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the dispatchers are
+    // recreated every render by design; depending on them would rebuild this list
+    // on every keystroke in the panel.
+  ], [branchData.branches, tags, stashes, worktrees, wtByBranch, currentBranchName, root]);
+
   /** Capture the tree as a named checkpoint — touches nothing, restore is
    *  always possible, cap is 30. */
   const snapshotNow = async () => {
@@ -2108,6 +2145,15 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    */
   const onKey = (e: React.KeyboardEvent) => {
     const el = e.target as HTMLElement | null;
+    // ⌘K first, and before the input guard: the palette is the one key that
+    // should work while the cursor sits in the search box, because that is
+    // exactly where you are when you realise you want to DO something to what
+    // you were looking for rather than keep looking.
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      setPaletteOpen(true);
+      return;
+    }
     if (/input|textarea|select/i.test(el?.tagName ?? "") || el?.isContentEditable) return;
     if (commitView) return;
     // Conflict mode owns the keyboard while it is up: its own 1..4/e/n/p would
@@ -3641,6 +3687,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       {/* The branch row's menu: everything the seven buttons used to be, plus
           what there was never room for, grouped and with the irreversible ones
           asking once and showing the git they run. */}
+      {/* Every action in the repository, by name, without the pointer. Built
+          from the same catalogue the rows use, so it cannot offer something a
+          row would refuse. */}
+      {paletteOpen && (
+        <GitPalette rows={paletteRows} onClose={() => setPaletteOpen(false)} />
+      )}
       {rowMenu && (
         <GitRowMenu
           kind={rowMenu.kind} name={rowMenu.name} state={rowMenu.state}
