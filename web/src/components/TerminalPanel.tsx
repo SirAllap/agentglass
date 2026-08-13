@@ -1979,7 +1979,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const review = useSyncExternalStore(subscribeTermReview, termReview, termReview);
   useEffect(() => {
     if (!review || !socketLive) return;
-    tmuxCmd({ cmd: "review", root: review.root, number: review.number });
+    tmuxCmd({ cmd: "review", root: review.root, number: review.number, recipe: review.recipe, card: review.card });
     clearTermReview();
   }, [review, socketLive, tmuxCmd]);
 

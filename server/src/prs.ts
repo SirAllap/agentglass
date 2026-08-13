@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { inScope } from "./config.ts";
+import { recipePromptText } from "./reviewPrompts.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
@@ -1802,6 +1803,7 @@ async function fillPages(p: any, repo: PrRepoId, number: number): Promise<void> 
  */
 const SEL_REVIEWS = `nodes{
       id author{login} state body submittedAt url lastEditedAt authorAssociation viewerDidAuthor
+      commit{oid}
       reactionGroups{content viewerHasReacted users{totalCount}}
     }`;
 const SEL_COMMENTS = `nodes{
@@ -2139,6 +2141,10 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     submittedAt: r.submittedAt || "",
     url: r.url || "",
     nodeId: r.id || "",
+    /* Which commit this review was written against. Free — it rides the same
+       query — and it is the only honest answer to "what has changed since I
+       last looked", which a timestamp can only approximate. */
+    commit: r.commit?.oid || "",
     ...authoredOf(r),
   }));
 
@@ -3352,14 +3358,13 @@ export type ReviewPromptPlan =
  * That last one is also what makes a fork work without a remote for it.
  */
 /**
- * The chat's opening line for a pull request. Two shapes, chosen by who owns the
- * PR and what its review said — pulled out of prepareReviewPrompt so this wording
- * (a contract with the agent) can be tested without a `gh` round-trip.
+ * The chat's opening line for a pull request, kept as a function of the
+ * situation alone.
  *
- *  - Your PR, review asked for changes → address them: get on the branch, work
- *    through the threads, keep tests green, commit. Not read-only.
- *  - A PR whose review is waiting on YOU → understand it, then review the diff.
- *  - Anything else → understand it, read-only.
+ * It is now a thin read of the catalogue — `recipePromptText` with no id, which
+ * is "give me the one this pull request calls for". Left here, and left
+ * exported, because the wording is a contract with the agent and this is where
+ * the suite asserts it without a `gh` round trip.
  */
 export function reviewPromptText(pr: {
   number: number;
@@ -3368,57 +3373,31 @@ export function reviewPromptText(pr: {
   viewerDidAuthor: boolean;
   reviewDecision: string | null;
   viewerRequested: boolean;
+  branch?: string;
+  title?: string;
+  author?: string;
+  url?: string;
+  since?: string;
+  card?: string;
 }): string {
-  // When it is YOURS and the review asked for changes, describing the PR is the
-  // wrong job — the job is to address the review — so it says so and gets onto
-  // the branch. Every other case is the read-only understand/review chat.
-  const mustAddress = pr.viewerDidAuthor && pr.reviewDecision === "CHANGES_REQUESTED";
-  const asked = pr.viewerRequested && !pr.viewerDidAuthor;
-
-  if (mustAddress) {
-    return [
-      `Pull request #${pr.number} of ${pr.repo}.`,
-      ``,
-      `This is your pull request and its review asked for changes — address them, don't just describe them.`,
-      ``,
-      `  gh pr checkout ${pr.number}`,
-      `  gh pr view ${pr.number}`,
-      `  gh pr diff ${pr.number}`,
-      ``,
-      // `gh pr checkout` moves this working tree onto the PR branch, so the "not
-      // this pull request" note is dropped on purpose: for the address flow you
-      // *want* to be on it. The worktree caveat is because this checkout may be
-      // holding other work.
-      `\`gh pr checkout\` puts you on the branch — make a worktree for the branch first if this checkout is holding work you don't want moved. \`gh pr view\` carries the reviewers' comments and every open thread. Work through each requested change: edit on the branch, keep the tests green (add one where a fix needs it), and commit. Don't push or post anything to GitHub unless I ask. Pinned at ${pr.head}.`,
-    ].join("\n");
-  }
-
-  const lines = [
-    `Pull request #${pr.number} of ${pr.repo}.`,
-    ``,
-    `Read-only: change nothing, commit nothing, push nothing, and post nothing to GitHub. Answer here.`,
-    ``,
-    `  gh pr view ${pr.number}`,
-    `  gh pr diff ${pr.number}`,
-    ``,
-    // Worth its line: without it the obvious move is to read the working tree,
-    // which is the same project on a different commit — the surroundings, not
-    // the change.
-    `This checkout is the same project but not this pull request (it is at whatever you have checked out). Read the change from the commands above; use the working tree only for the surroundings.`,
-    ``,
-    `What is this pull request about?`,
-  ];
-  // Only when it is actually your review that is being waited on. Asking for a
-  // verdict on a pull request nobody asked you to review is how a chat you
-  // opened to understand something turns into one arguing with it. Pushed
-  // conditionally and joined bare — a `.filter(l => l !== "")` would have taken
-  // the blank separators above out with the empty trailing line, leaving the
-  // whole read-only prompt cramped.
-  if (asked) lines.push(`\nMy review has been requested on it, so go through the diff as well: what the changes do, and anything that looks wrong. Pinned at ${pr.head}.`);
-  return lines.join("\n");
+  return recipePromptText({
+    id: "",
+    pr: {
+      number: pr.number, repo: pr.repo, head: pr.head,
+      branch: pr.branch ?? "", title: pr.title ?? "", author: pr.author ?? "",
+      url: pr.url ?? "", since: pr.since ?? "", card: pr.card ?? "",
+    },
+    situation: {
+      viewerDidAuthor: pr.viewerDidAuthor,
+      reviewDecision: pr.reviewDecision,
+      viewerRequested: pr.viewerRequested,
+      movedSinceMyReview: !!pr.since && pr.since !== pr.head,
+      card: pr.card ?? "",
+    },
+  });
 }
 
-export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown): Promise<ReviewPromptPlan> {
+export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown, recipeId?: unknown, cardIn?: unknown): Promise<ReviewPromptPlan> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const abs = safeAbs(rootIn);
@@ -3455,13 +3434,45 @@ export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown): P
    * that this is read-only, and that the checkout it is sitting in is not this
    * pull request.
    */
-  const prompt = reviewPromptText({
-    number: pr.number,
-    repo: repo.nameWithOwner,
-    head,
-    viewerDidAuthor: pr.viewerDidAuthor,
-    reviewDecision: pr.reviewDecision,
-    viewerRequested: pr.viewerRequested,
+  /*
+   * Which prompt, and what it is allowed to know.
+   *
+   * The menu asks for one by id; without one, the situation picks the opener it
+   * always picked. `since` is the commit MY last review was written against —
+   * the difference between "read this pull request" and "read what happened
+   * since I read it", and the only field here GitHub does not put in front of
+   * you. It is deliberately the last review of mine, not the last review: what
+   * somebody else has already seen is their problem.
+   */
+  const mine = [...pr.reviews].reverse().find((r) => r.viewerDidAuthor && r.state !== "PENDING");
+  /* The base branch when you have never reviewed it. Measured on a real pull
+     request: an empty `since` rendered as `compare/...abc123` and a sentence
+     asking what changed "since ", which is a prompt that has to be read twice
+     to be ignored. The base is the honest answer to "where does the part I
+     have not seen start" for somebody arriving new — it is the whole change. */
+  const since = mine?.commit || pr.baseRefName;
+  const prompt = recipePromptText({
+    id: typeof recipeId === "string" ? recipeId : "",
+    pr: {
+      number: pr.number,
+      repo: repo.nameWithOwner,
+      head,
+      branch: pr.headRefName,
+      title: pr.title,
+      author: pr.author,
+      url: pr.url,
+      since,
+      card: typeof cardIn === "string" ? cardIn : "",
+    },
+    situation: {
+      viewerDidAuthor: pr.viewerDidAuthor,
+      reviewDecision: pr.reviewDecision,
+      viewerRequested: pr.viewerRequested,
+      movedSinceMyReview: !!since && since !== head,
+      reviewsSoFar: pr.reviews.filter((r) => r.state !== "PENDING").length,
+      blocked: pr.mergeable === "CONFLICTING" || pr.checks.failure > 0,
+      card: typeof cardIn === "string" ? cardIn : "",
+    },
   });
 
   return { ok: true, cwd: root, prompt, branch: pr.headRefName };

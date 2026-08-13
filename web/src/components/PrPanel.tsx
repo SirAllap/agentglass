@@ -19,7 +19,7 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { handoffTo } from "../lib/handoffTo.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
@@ -30,6 +30,7 @@ import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
+  ReviewRecipe, ReviewRecipeGroup,
 } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import {
@@ -65,6 +66,8 @@ import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } f
 import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
+import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
+import { openSettings } from "../lib/openSettings.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
@@ -1361,7 +1364,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   jumpTo?: import("../lib/openPrs.ts").PrJump | null;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** Hand the review to the user's own tmux instead of to the chat. */
-  onReviewInTerminal?: (root: string, number: number) => void;
+  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string) => void;
 }) {
   const { ask, askText, dialog } = useDialogs();
   const { askMerge, dialog: mergeDialog } = useMergeDialog();
@@ -3011,12 +3014,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * making the row load a whole detail page just to reach this would be a
    * round trip spent on nothing.
    */
-  const doLocalReview = async (n?: number) => {
+  const doLocalReview = async (n?: number, recipe = "") => {
     const num = n ?? detail?.number;
     if (num == null) return;
     setBusy(true);
     try {
-      const r = await api.prReviewPrompt(root, num);
+      /* The card id is worked out here and sent, rather than looked up there:
+         `cardRef` reads a branch name and a title with rules this app owns, and
+         the server has no reader for the tracker at all. Empty is fine — the
+         prompt that wants it is the only one that uses it. */
+      const card = detail ? cardRef(detail)?.label ?? "" : "";
+      const r = await api.prReviewPrompt(root, num, recipe, card);
       if (!r.ok || !r.cwd || !r.prompt) { flash(false, r.error || "Could not prepare the review"); return; }
       if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt, `Review #${num}`); flash(true, `#${num} is waiting in chat`); }
       else flash(false, "The chat is not available here");
@@ -3625,8 +3633,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <Masthead
                 d={d} busy={busy}
                 onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
-                onClose={doClose} onLocalReview={() => doLocalReview()}
-                onReviewInTerminal={onReviewInTerminal && d ? () => onReviewInTerminal(root, d.number) : undefined}
+                onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
+                onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
                 onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
                 onEditField={fieldPicker.open}
@@ -3753,8 +3761,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           behind={behind} behindAsking={behindAsking} localHead={localHead} busyWhat={busyWhat}
                           conflictFiles={conflictFiles}
                           onEditRequest={() => setEditingBody(true)}
-                          onLocalReview={() => doLocalReview()}
-                          onReviewInTerminal={onReviewInTerminal && d ? () => onReviewInTerminal(root, d.number) : undefined}
+                          onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
+                          onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                           onMerge={doMerge} onClose={doClose}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={(syncLocal: boolean) => {
@@ -4132,10 +4140,10 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
   /** How this repository merges. Owned by the panel, not by this component, so
    *  it survives the Files tab and is remembered for next time. */
   method: MergeMethod; onMethod: (m: MergeMethod) => void;
-  onLocalReview: () => void;
+  onLocalReview: (recipe?: string) => void;
   /** The terminal half of the same choice. Absent where there is no terminal —
    *  the phone — and the button then behaves as it always did. */
-  onReviewInTerminal?: () => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
+  onReviewInTerminal?: (recipe?: string) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
   /** Still asking how far behind the branch is. The row keeps its place and
    *  says it is working, rather than growing a button a second later. */
@@ -4603,23 +4611,13 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
             same name and the same icon behaving differently depending on which
             one you press is worse than neither of them asking: you learn that
             this control lets you choose, and then one of them does not. */}
-        {onReviewInTerminal ? (
-          <Menu label="✦ Review with Claude ▾" title="Review this pull request" primary>
-            {(close) => (
-              <>
-                {/* Same order and same glyphs as the masthead's copy. Two
-                    menus with the same name offering the same two things in a
-                    different order, in different alphabets, is the defect the
-                    comment above this block already warns about — and it was
-                    true again the moment only one of them was fixed. */}
-                <MenuItem onClick={() => { close(); onReviewInTerminal(); }}>&gt;_ In a terminal</MenuItem>
-                <MenuItem onClick={() => { close(); onLocalReview(); }}>&#8942; In the chat pane</MenuItem>
-              </>
-            )}
-          </Menu>
-        ) : (
-          <Btn onClick={onLocalReview} disabled={busy} primary title="Open a chat with the review prompt ready. Reads only: no checkout, nothing written to this repository">Review with Claude</Btn>
-        )}
+        {/* One component for both copies of this button. They used to be two
+            hand-written menus with the same name, which is how they came to
+            offer the same two things in a different order and in different
+            alphabets — twice, because the first fix only reached one of
+            them. */}
+        <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
+          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
         {/* `small`, like the Menu it stands beside. Without it this was the
@@ -4920,6 +4918,144 @@ function MenuItem({ children, onClick, danger, kbd }: {
 }
 
 const MenuSep = () => <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "3px 0" }} />;
+
+const MenuHead = ({ children }: { children: React.ReactNode }) => (
+  <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{children}</div>
+);
+
+/** The two destinations, as icons small enough to sit at the end of a row. A
+ *  terminal window and a chat pane are not a preference to be remembered — see
+ *  the comment on the menu — so both are on every row rather than one being a
+ *  default with the other hidden behind a modifier. */
+function Where({ onTerm, onChat }: { onTerm?: () => void; onChat: () => void }) {
+  const btn = "inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0";
+  return (
+    <span className="ml-auto flex items-center gap-0.5 pl-2">
+      {onTerm && (
+        <button onClick={(e) => { e.stopPropagation(); onTerm(); }} title="In a terminal"
+          className={btn} style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In a terminal">
+          <span className="text-[11px] leading-none">&gt;_</span>
+        </button>
+      )}
+      <button onClick={(e) => { e.stopPropagation(); onChat(); }} title="In the chat pane"
+        className={btn} style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In the chat pane">
+        <span className="text-[13px] leading-none">&#8942;</span>
+      </button>
+    </span>
+  );
+}
+
+/**
+ * The prompts, once, for every menu that offers them.
+ *
+ * A module-level cache rather than a fetch per open: the list is a dozen short
+ * strings that only change when somebody edits them in Settings, and re-reading
+ * it on every click of the button would put a round trip between the press and
+ * the menu appearing. `bumpReviewRecipes` is what Settings calls after a save,
+ * which is the only event that can invalidate this.
+ */
+let recipeCache: ReviewRecipe[] | null = null;
+const recipeSubs = new Set<() => void>();
+export function bumpReviewRecipes(): void { recipeCache = null; recipeSubs.forEach((f) => f()); }
+function useReviewRecipes(): ReviewRecipe[] {
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    recipeSubs.add(redraw);
+    if (!recipeCache) void api.prPrompts().then((r) => { if (r.ok && r.recipes) { recipeCache = r.recipes; redraw(); } }).catch(() => {});
+    return () => { recipeSubs.delete(redraw); };
+  }, []);
+  return recipeCache ?? [];
+}
+
+const GROUP_LABEL: Record<ReviewRecipeGroup, string> = {
+  reviewing: "Reviewing",
+  focused: "One thing only",
+  mine: "Your pull request",
+};
+
+/**
+ * "Review with Claude", with the whole catalogue behind it.
+ *
+ * Every prompt is always here, and the situation only decides which one is
+ * printed at the top under "Suggested". That is the whole design decision: the
+ * pull request that forced this feature had been reviewed twice and handed back
+ * a third time without the reviewer being re-requested, so a menu that hid
+ * prompts GitHub's fields did not ask for would have hidden the one that was
+ * wanted.
+ *
+ * Both destinations on every row, rather than a remembered default: a terminal
+ * window and a chat pane are not the same thing badly — the terminal is a real
+ * agent in tmux you can attach to and keep working in, the chat is the quicker
+ * read — and which one you want depends on the prompt you just picked.
+ */
+function ReviewMenu({ d, onPick, canTerm, primary = true }: {
+  d: PrDetail;
+  onPick: (recipe: string, where: "term" | "chat") => void;
+  /** False in a window with no terminal to send it to — the row then offers
+   *  the chat alone rather than a button that quietly does nothing. */
+  canTerm: boolean;
+  primary?: boolean;
+}) {
+  const recipes = useReviewRecipes();
+  const suggested = useMemo(() => {
+    const mine = [...d.reviews].reverse().find((r) => r.viewerDidAuthor && r.state !== "PENDING");
+    const head = d.commits.length ? d.commits[d.commits.length - 1]!.oid : "";
+    return suggestRecipeId({
+      viewerDidAuthor: d.viewerDidAuthor,
+      reviewDecision: d.reviewDecision,
+      viewerRequested: d.viewerRequested,
+      movedSinceMyReview: !!mine?.commit && !!head && mine.commit !== head,
+      reviewsSoFar: d.reviews.filter((r) => r.state !== "PENDING").length,
+      blocked: d.mergeable === "CONFLICTING" || d.checks.failure > 0,
+      card: cardRef(d)?.label ?? "",
+    });
+  }, [d]);
+
+  const top = recipes.find((r) => r.id === suggested) ?? recipes[0];
+  const groups: ReviewRecipeGroup[] = ["reviewing", "focused", "mine"];
+
+  return (
+    <Menu label="✦ Review with Claude ▾" title="Review this pull request" primary={primary}>
+      {(close) => (
+        <div style={{ maxHeight: "min(62vh, 520px)", overflowY: "auto" }}>
+          {/* The suggestion keeps the shape the button had before: a named
+              prompt and the two places to run it, one click each. */}
+          {top && (
+            <>
+              <MenuHead>Suggested · {top.title}</MenuHead>
+              {canTerm && <MenuItem onClick={() => { close(); onPick(top.id, "term"); }}>&gt;_ In a terminal</MenuItem>}
+              <MenuItem onClick={() => { close(); onPick(top.id, "chat"); }}>&#8942; In the chat pane</MenuItem>
+            </>
+          )}
+          {groups.map((g) => {
+            const rows = recipes.filter((r) => r.group === g && r.id !== top?.id);
+            if (!rows.length) return null;
+            return (
+              <Fragment key={g}>
+                <MenuSep />
+                <MenuHead>{GROUP_LABEL[g]}</MenuHead>
+                {rows.map((r) => (
+                  <div key={r.id} className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
+                    {/* The title itself runs the suggestion's destination-less
+                        default — the chat — so a row is still one click when
+                        you do not care where it lands. */}
+                    <button className="min-w-0 truncate text-left flex-1" onClick={() => { close(); onPick(r.id, "chat"); }} title={r.skill ? `${r.skill}` : r.title}>
+                      {r.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                      {r.title}
+                    </button>
+                    <Where onTerm={canTerm ? () => { close(); onPick(r.id, "term"); } : undefined} onChat={() => { close(); onPick(r.id, "chat"); }} />
+                  </div>
+                ))}
+              </Fragment>
+            );
+          })}
+          <MenuSep />
+          <MenuItem onClick={() => { close(); openSettings("review-prompts"); }}>Edit these prompts…</MenuItem>
+        </div>
+      )}
+    </Menu>
+  );
+}
 
 /**
  * One cell of the masthead's field strip: a key, and its value under it.
@@ -5837,9 +5973,9 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
 
 function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink, onEditField, condensed, viewed, threads, queued, awaitingChecks }: {
   d: PrDetail; busy: boolean;
-  onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: () => void;
+  onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: (recipe?: string) => void;
   /** Absent when the workspace has no terminal to send it to. */
-  onReviewInTerminal?: () => void;
+  onReviewInTerminal?: (recipe?: string) => void;
   /** Scrolled past the top: the metadata folds away and the title stays. */
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
@@ -5969,23 +6105,14 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
             sight, the terminal gives you the session itself, attached, in a tab
             beside your shells. Which one you want depends on whether you intend
             to watch or to join in. */}
-        <Menu label="✦ Review with Claude ▾" title="Review this pull request" primary>
-          {(close) => (
-            <>
-              {/* A terminal first, and the chat last.
-                  The chat pane is a second home for a conversation that already
-                  has one: a real agent in a real tmux window, which survives a
-                  restart of this app, can be attached to from anywhere, and is
-                  where the work continues after the review. The chat is kept
-                  because it is occasionally the quicker read, not because it is
-                  the better place to send somebody by default. */}
-              {onReviewInTerminal && (
-                <MenuItem onClick={() => { close(); onReviewInTerminal(); }}>&gt;_ In a terminal</MenuItem>
-              )}
-              <MenuItem onClick={() => { close(); onLocalReview(); }}>&#8942; In the chat pane</MenuItem>
-            </>
-          )}
-        </Menu>
+        {/* A terminal first, and the chat last, in both copies — see
+            ReviewMenu. The chat pane is a second home for a conversation that
+            already has one: a real agent in a real tmux window, which survives
+            a restart of this app and is where the work continues after the
+            review. The chat is kept because it is occasionally the quicker
+            read, not because it is the better place to send somebody. */}
+        <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
+          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not
             do the thing — and burying the escape hatch two clicks deep is the

@@ -578,8 +578,12 @@ export type PtyClientFrame =
    */
   | { t: "tmux"; cmd: "scroll"; lines: number }
   /** Open a review of pull request `number` in a window of the user's tmux.
-   *  A NUMBER and a directory: the prompt and the binary are the server's. */
-  | { t: "tmux"; cmd: "review"; number: number; root: string }
+   *  A NUMBER and a directory: the prompt and the binary are the server's.
+   *  `recipe` names which entry of the Review menu — an ID the server looks up
+   *  in its own catalogue, never the prompt itself, so this socket still cannot
+   *  choose the text that reaches the agent. `card` is the tracker id the panel
+   *  read off the branch, which the server has no way to work out. */
+  | { t: "tmux"; cmd: "review"; number: number; root: string; recipe?: string; card?: string }
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
@@ -1965,6 +1969,9 @@ export interface PrReview extends PrAuthored {
   url?: string;
   /** GraphQL node id, for reacting to the review body. */
   nodeId?: string;
+  /** The commit this review was written against — what "since my last review"
+   *  actually means, where a timestamp is only a guess at it. */
+  commit?: string;
 }
 
 export interface PrComment extends PrAuthored {
@@ -3008,3 +3015,80 @@ export interface Recipe {
 }
 
 export interface RecipesResponse { recipes: Recipe[] }
+
+/**
+ * One entry in the "Review with Claude" menu: a title, the prompt behind it,
+ * and optionally the skill it runs instead.
+ *
+ * Kept as data because a review is not one job — reviewing a colleague's change
+ * for the first time, going back over one you have already reviewed, replying
+ * to comments on your own — and because the wording is the whole product here.
+ * The defaults live in the server's catalogue; anything the user edits is
+ * stored by the same id and wins over the default, so a built-in can be
+ * reworded without becoming a copy that never gets the next improvement.
+ */
+export interface ReviewRecipe {
+  /** Stable. A built-in keeps its id when edited, which is how an edit stays
+   *  an edit rather than a duplicate. */
+  id: string;
+  /** What the menu shows. */
+  title: string;
+  /** The prompt, with `{number}`, `{repo}`, `{head}`, `{branch}`, `{title}`,
+   *  `{author}`, `{url}`, `{since}` and `{card}` filled in when it is used. */
+  body: string;
+  /**
+   * A skill to run instead of — or before — the prose, written the way you
+   * would type it: `/pr-resolve-reviews {number} interactive`. Placeholders
+   * work here too. When set, this is the first line of what Claude receives and
+   * `body` follows it, so a skill can still carry a sentence of context.
+   */
+  skill?: string;
+  /** Which heading it sits under in the menu. */
+  group: ReviewRecipeGroup;
+  /** The situation it is FOR. Only ever decides what goes first — every recipe
+   *  is always in the menu, because GitHub's fields describe what somebody
+   *  remembered to set. */
+  when: ReviewRecipeWhen;
+  /** It came from the catalogue rather than from this user. */
+  builtIn?: boolean;
+  /** A built-in the user deleted. Kept as a tombstone, or the catalogue would
+   *  hand it straight back on the next start. */
+  hidden?: boolean;
+  /** Sort order inside a group, ascending. Absent means "where the catalogue
+   *  put it". */
+  rank?: number;
+}
+
+export type ReviewRecipeGroup = "reviewing" | "focused" | "mine";
+
+/**
+ * Which day a recipe is written for:
+ *   any           — always sensible, never the top suggestion on its own
+ *   asked         — your review has been requested
+ *   reviewed      — you have reviewed it before and it has moved since
+ *   card          — it carries a tracker id
+ *   mine          — you opened it
+ *   mine-changes  — you opened it and the review asked for changes
+ */
+export type ReviewRecipeWhen = "any" | "asked" | "reviewed" | "card" | "mine" | "mine-changes";
+
+/** What a prompt's placeholders are filled in from. */
+export interface ReviewRecipeContext {
+  number: number;
+  repo: string;
+  head: string;
+  branch: string;
+  title: string;
+  author: string;
+  url: string;
+  /** The commit your last review was written against, when you have one. */
+  since?: string | null;
+  /** The tracker id in the branch or title, when there is one. */
+  card?: string | null;
+}
+
+export interface ReviewRecipesResponse {
+  ok: boolean;
+  recipes?: ReviewRecipe[];
+  error?: string;
+}

@@ -123,6 +123,12 @@ describe("the promises SECURITY.md makes about retention", () => {
     // agentglass is removed; the events database is not opened. The check
     // below holds it to that.
     "/browser/places/forget",
+    // Puts one entry of the Review menu back to the wording it ships with, by
+    // dropping the user's override out of review-prompts.json — a config file
+    // of their own edits, next to commands.json. Nothing recorded is removed:
+    // it is the same class of write as saving a prompt, and the events
+    // database is never opened. The check below holds it to that.
+    "/pr-prompts/reset",
     // Kills OUR tmux server and rewrites the generated tmux.conf after a
     // rejected override — the settings panel's self-recovery button. It
     // touches no database and deletes no state: restore captures stay until

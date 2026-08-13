@@ -96,8 +96,8 @@ export function Workspace({
    *  their shell was not inside one — see terminal.ts's `review` handler.
    *  Left as a request rather than called directly: the terminal view owns the
    *  socket, and may not be mounted when the button is pressed. */
-  const reviewInTerminal = useCallback((root: string, number: number) => {
-    requestTermReview(root, number);
+  const reviewInTerminal = useCallback((root: string, number: number, recipe = "", card = "") => {
+    requestTermReview(root, number, recipe, card);
     onView("term");
   }, [onView]);
 
@@ -183,7 +183,7 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
   id: ViewId; active: boolean;
   openChat: () => void;
   openChatWith: (cwd: string, prompt: string, title: string) => void;
-  reviewInTerminal: (root: string, number: number) => void;
+  reviewInTerminal: (root: string, number: number, recipe?: string, card?: string) => void;
   chatFocusId?: string | null;
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
   cardJump?: import("../../lib/openCard.ts").CardJump | null;

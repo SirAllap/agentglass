@@ -1,5 +1,5 @@
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -1058,8 +1058,20 @@ const realApi = {
   notifyReach: () => get<{ ok: boolean; slack: boolean }>("/notify/reach"),
   prPendingReview: (root: string, number: number) =>
     post<{ ok: boolean; id: string | null; comments: { path: string; line: number | null; startLine: number | null; body: string }[] }>("/prs/pending-review", { root, number }),
-  prReviewPrompt: (root: string, number: number) =>
-    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number }),
+  /** `recipe` is which entry of the Review menu; empty means "the one this pull
+   *  request calls for". `card` is the tracker id the panel already worked out
+   *  from the branch — the server has no ClickUp reader, and the prompt that
+   *  checks a card against its diff needs the id. */
+  prReviewPrompt: (root: string, number: number, recipe = "", card = "") =>
+    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number, recipe, card }),
+  /** The Review menu itself: built-ins with the user's edits already laid over
+   *  them, in menu order. */
+  prPrompts: () => get<ReviewRecipesResponse>("/pr-prompts"),
+  prPromptSave: (r: ReviewRecipe) =>
+    post<{ ok: boolean; recipe?: ReviewRecipe; error?: string }>("/pr-prompts/save", r as unknown as Record<string, unknown>),
+  prPromptRemove: (id: string) => post<{ ok: boolean }>("/pr-prompts/remove", { id }),
+  /** Put a built-in back the way it shipped, deleted or merely reworded. */
+  prPromptReset: (id: string) => post<{ ok: boolean; recipe?: ReviewRecipe }>("/pr-prompts/reset", { id }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
    *  with no network at all; a gone one resolves to the PR it came from. */
   prCommitDiff: (root: string, sha: string) =>
@@ -1349,7 +1361,11 @@ const demoApi: typeof realApi = {
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
-  prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),
+  prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
+  prPromptSave: (_r: ReviewRecipe) => D({ ok: false, error: "not available in the demo" }),
+  prPromptRemove: (_id: string) => D({ ok: false }),
+  prPromptReset: (_id: string) => D({ ok: false }),
   prPendingReview: (_r: string, _n: number) => D({ ok: true, id: null, comments: [] }),
   clickupComment: (_i: string, _t: string, _a?: number) => D({ ok: false, error: "not available in the demo" }),
   notifyReach: () => D({ ok: true, slack: false }),

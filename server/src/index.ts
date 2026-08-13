@@ -2133,6 +2133,25 @@ const server = Bun.serve<WsData>({
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : 400);
     }
+    /* The "Review with Claude" menu. Read is open — it is a list of titles and
+       prose. Writes go through `saveReviewRecipe`, which is where a title, a
+       body and a skill line are checked; nothing here runs anything, the same
+       way /recipes does not run a recipe. */
+    if (pathname === "/pr-prompts") {
+      const { reviewRecipes } = await import("./reviewPrompts.ts");
+      return json({ ok: true, recipes: reviewRecipes() });
+    }
+    if (pathname.startsWith("/pr-prompts/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const { saveReviewRecipe, removeReviewRecipe, resetReviewRecipe } = await import("./reviewPrompts.ts");
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = pathname === "/pr-prompts/save" ? saveReviewRecipe(b as never)
+        : pathname === "/pr-prompts/remove" ? removeReviewRecipe(String(b.id ?? ""))
+        : pathname === "/pr-prompts/reset" ? resetReviewRecipe(String(b.id ?? ""))
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : 400);
+    }
     if (pathname === "/clickup/views") {
       // `prefix` is what this workspace's ids look like, so a surface that has
       // only a string — the pull-request masthead reading a branch name — can
@@ -2676,7 +2695,7 @@ const server = Bun.serve<WsData>({
         case "/prs/apply-suggestion": res = await applySuggestion(root, n, b); break;
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
-        case "/prs/review-prompt": res = await prepareReviewPrompt(root, n); break;
+        case "/prs/review-prompt": res = await prepareReviewPrompt(root, n, b.recipe, b.card); break;
         case "/prs/pending-review": res = await pendingReviewFor(root, n); break;
         default: res = null;
       }

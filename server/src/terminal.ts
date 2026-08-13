@@ -1552,7 +1552,11 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       // this socket, and making the hot path return a promise to serve one
       // message would be a poor trade.
       void (async () => {
-        const plan = await prepareReviewPrompt(root, number);
+        /* An id and a card label, both looked up rather than obeyed: the id
+           picks a prompt out of the server's own catalogue, and an id that does
+           not exist falls back to the one this pull request calls for. The text
+           never travels on this socket. */
+        const plan = await prepareReviewPrompt(root, number, typeof msg.recipe === "string" ? msg.recipe : "", typeof msg.card === "string" ? msg.card : "");
         if (!plan.ok) return;
         const bin = claudeCode.bin();
         if (!bin) return;

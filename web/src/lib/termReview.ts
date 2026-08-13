@@ -6,7 +6,13 @@
 // here, the workspace switches views, and the terminal picks it up when it has a
 // socket to send it on.
 
-export type TermReview = { root: string; number: number; n: number };
+export type TermReview = { root: string; number: number; n: number;
+  /** Which entry of the Review menu — an id from the server's catalogue, never
+   *  a prompt. Empty means "the one this pull request calls for". */
+  recipe?: string;
+  /** The tracker id the panel read off the branch, for the prompt that checks
+   *  a pull request against its card. */
+  card?: string };
 
 let pending: TermReview | null = null;
 const subs = new Set<() => void>();
@@ -21,8 +27,8 @@ export function termReview(): TermReview | null { return pending; }
 /** `n` increments so that asking for the same pull request twice is two
  *  requests. Without it, reviewing #17219, closing the window and asking again
  *  would be indistinguishable from the request already served. */
-export function requestTermReview(root: string, number: number): void {
-  pending = { root, number, n: (pending?.n ?? 0) + 1 };
+export function requestTermReview(root: string, number: number, recipe = "", card = ""): void {
+  pending = { root, number, n: (pending?.n ?? 0) + 1, recipe, card };
   subs.forEach((f) => f());
 }
 
