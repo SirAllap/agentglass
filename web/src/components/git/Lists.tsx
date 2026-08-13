@@ -1,57 +1,54 @@
 /*
- * The git view's lists, rewritten.
+ * The git view's lists.
  *
- * Eight sections — branches, remotes, tags, stashes, worktrees, submodules,
- * reflog, log — used to be eight layouts. Each had grown its own grid, its own
- * type sizes, its own chip colours and its own row of buttons, tuned in place
- * until they no longer agreed with each other; in Remotes the tracks added up
- * to more than the pane and the buttons landed on the branch name.
+ * Every section used to draw its own table: its own grid, its own type sizes,
+ * its own chips, its own row of buttons. They stopped agreeing with each other,
+ * and in Remotes they stopped agreeing with the pane — seven tracks plus three
+ * buttons added up to more than the width and the actions landed on the name.
  *
- * This file is the answer to that: one list, parameterised. A section says what
- * its columns are, what each row's chips say, and which catalogue kind it is —
- * and gets the same grid, the same density, the same hover, the same right-
- * click and the same reserved action column as the other seven. Adding a
- * section is describing it, not drawing it.
+ * Now a section says what a row IS — its name, what state it is in, and the
+ * handful of facts worth knowing about it — and `ui.tsx` decides how that
+ * looks. The rows are cards with a status rail and two lines, not table rows;
+ * the point of that is a thirty-branch list you can read without reading, by
+ * colour down the left and by one 13px name per card.
  *
- * The data still comes from the endpoints the panel already used. What is gone
- * is the drawing, not the plumbing.
+ * The data still comes from the endpoints the panel always used. This file
+ * replaced the drawing, not the plumbing.
  */
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import type {
   GitBranch, GitTag, GitStash, GitWorktree, GitRemote, GitRemoteBranch,
   GitSubmodule, GitReflogEntry,
 } from "../../../../shared/types.ts";
-import { Row, Subject, Meta, Chip, RowAction, GroupHead, Empty, type Tone } from "./ui.tsx";
-import { primaryAction, groupByPrefix, type GitKind, type GitRowState } from "../../lib/gitActions.ts";
+import { Row, Chip, RowAction, GroupHead, Empty, wash, type Tone } from "./ui.tsx";
+import { primaryAction, actionsFor, grouped, groupByPrefix, type GitKind, type GitRowState } from "../../lib/gitActions.ts";
 
-/** What every row hands the list: how to draw it and what it can do. */
 export interface ListRow {
   key: string;
-  /** The catalogue kind, which decides the menu and the primary action. */
   kind: GitKind;
-  /** The name the catalogue and the menu use. */
   name: string;
   state: GitRowState;
-  /** What is drawn, left to right, before the reserved action column. */
-  cells: ReactNode[];
-  /** Dispatcher for this row's actions — the same one the palette uses. */
+  /** The colour of the rail: what this row's state IS, at a glance. */
+  rail?: Tone;
+  /** Status words. Coloured; everything else on the card is not. */
+  chips?: ReactNode;
+  /** The second line, joined with dots. Order matters: most-asked first. */
+  facts?: ReactNode[];
+  /** The branch you are on, the checkout you are in. */
+  current?: boolean;
   run: (id: string) => void;
-  /** Rows that are the current branch / checkout read differently. */
-  tone?: "current" | "muted";
+  /** Drawn instead of the name when a row wants more than a string. */
+  title?: ReactNode;
 }
 
-export function List({ rows, cols, cursor, onCursor, onMenu, busy, what, group, disabled }: {
+export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabled }: {
   rows: ListRow[];
-  /** Grid tracks WITHOUT the action column — the list appends that itself. */
-  cols: string;
   cursor: number;
   onCursor: (i: number) => void;
   onMenu: (row: ListRow, x: number, y: number) => void;
   busy?: boolean;
   what: string;
-  /** Fold rows into prefix families. Only branches ask for this. */
   group?: boolean;
-  /** Read-only repository: the primary action is not drawn at all. */
   disabled?: boolean;
 }) {
   const [folded, setFolded] = useState<Set<string>>(new Set());
@@ -62,8 +59,14 @@ export function List({ rows, cols, cursor, onCursor, onMenu, busy, what, group, 
 
   if (!rows.length) return <Empty what={what} busy={busy} />;
 
+  const active = rows[Math.min(cursor, rows.length - 1)];
+
   return (
-    <div className="px-2 pb-3">
+    <div className="flex-1 min-h-0 flex">
+      {/* The list keeps a reading measure — a card is a name and a sentence,
+          and a 1900px sentence is not read, it is scanned past — and the width
+          left over goes to the detail pane rather than to blank card. */}
+      <div className="agx-scroll flex-1 min-w-0 overflow-y-auto px-3 pb-4" style={{ maxWidth: 860 }}>
       {groups.map((g) => (
         <Fragment key={g.prefix || "(no prefix)"}>
           {group && groups.length > 1 && (
@@ -82,31 +85,82 @@ export function List({ rows, cols, cursor, onCursor, onMenu, busy, what, group, 
             const i = rows.indexOf(r);
             const primary = disabled ? null : primaryAction(r.kind, r.name, r.state);
             return (
-              <Row key={r.key} cols={cols} selected={i === cursor} tone={r.tone}
+              <Row key={r.key} rail={r.rail} title={r.title ?? r.name} chips={r.chips} facts={r.facts}
+                selected={i === cursor} current={r.current} title2={r.name}
                 onClick={() => onCursor(i)}
-                onContextMenu={(e) => { e.preventDefault(); onCursor(i); onMenu(r, e.clientX, e.clientY); }}>
-                {r.cells}
-                {primary
+                onContextMenu={(e) => { e.preventDefault(); onCursor(i); onMenu(r, e.clientX, e.clientY); }}
+                action={primary
                   ? <RowAction label={primary.label} danger={primary.danger}
                       onClick={() => r.run(primary.id)}
                       title={`${primary.label} — right-click for everything else`} />
-                  : <span />}
-              </Row>
+                  : undefined}
+              />
             );
           })}
         </Fragment>
       ))}
+      </div>
+      {/*
+        The right half, which is where all that empty space was going.
+
+        A list of thirty branches was drawn at 1900px for content that fits in
+        700, so every card was a mostly-blank strip and its action sat a screen
+        away from its name. The list is capped now, and what the width buys is a
+        detail pane: the selected row's facts as a readable stack, and its FULL
+        action set as named buttons — the same catalogue the right-click shows,
+        because there is finally room to show it without hiding it.
+      */}
+      {active && <Detail row={active} disabled={disabled} />}
     </div>
   );
 }
 
-// ------------------------------------------------------------- the sections --
-//
-// Each of these turns one payload into ListRows. They are the only place that
-// knows what a tag is as opposed to a stash, and none of them decides anything
-// about spacing, colour or size.
+function Detail({ row, disabled }: { row: ListRow; disabled?: boolean }) {
+  const groups = grouped(actionsFor(row.kind, row.name, row.state));
+  return (
+    <aside className="agx-scroll hidden lg:flex flex-col gap-4 flex-1 min-w-0 max-w-[28rem] overflow-y-auto px-5 py-4"
+      style={{ borderLeft: `1px solid ${wash("--text", 8)}` }}>
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.11em] mb-1" style={{ color: "var(--text3)" }}>{row.kind}</div>
+        <div className="text-[15px] font-medium break-all"
+          style={{ color: "var(--text)", fontFamily: "var(--font-mono, ui-monospace, monospace)", letterSpacing: "-0.01em" }}>
+          {row.name}
+        </div>
+        {!!row.chips && <div className="flex flex-wrap items-center gap-1.5 mt-2">{row.chips}</div>}
+      </div>
 
-export const BRANCH_COLS = "16px minmax(0, 22rem) auto minmax(0, 1fr) 5.5rem";
+      {!!row.facts?.length && (
+        <div className="flex flex-col gap-1.5">
+          {row.facts.filter(Boolean).map((f, i) => (
+            <div key={i} className="text-[10.5px] leading-relaxed break-words" style={{ color: "var(--text2)" }}>{f}</div>
+          ))}
+        </div>
+      )}
+
+      {!disabled && groups.map((g) => (
+        <div key={g[0].group} className="flex flex-col gap-1">
+          <div className="text-[9.5px] uppercase tracking-[0.11em]" style={{ color: "var(--text3)" }}>
+            {g[0].group === "go" ? "do" : g[0].group}
+          </div>
+          {g.map((a) => (
+            <button key={a.id} onClick={() => row.run(a.id)}
+              className="text-left text-[11px] px-2.5 py-1.5 rounded-lg flex items-center gap-2 transition-colors"
+              style={{
+                color: a.danger ? "var(--error)" : "var(--text2)",
+                background: a.danger ? wash("--error", 7) : wash("--text", 4),
+                border: `1px solid ${a.danger ? wash("--error", 22) : wash("--text", 7)}`,
+              }}>
+              <span className="flex-1 truncate">{a.label}</span>
+              {a.shortcut && <span className="text-[9px]" style={{ color: "var(--text3)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{a.shortcut}</span>}
+            </button>
+          ))}
+        </div>
+      ))}
+    </aside>
+  );
+}
+
+// ------------------------------------------------------------- the sections --
 
 export function branchRows(
   branches: GitBranch[],
@@ -129,88 +183,77 @@ export function branchRows(
       current: isCurrent, gone: t.gone, ahead: t.ahead, behind: t.behind,
       upstream: !!b.upstream, elsewhere, merged: b.mergedIntoTrunk === true,
     };
+    // The rail answers "what is up with this one" before you read anything:
+    // red is gone, amber is behind, green is ahead, blue is where you are.
+    const rail: Tone = t.gone ? "bad" : isCurrent ? "accent" : t.behind > 0 ? "warn" : t.ahead > 0 ? "good" : "neutral";
     return {
-      key: b.name, kind: "branch", name: b.name, state,
-      tone: isCurrent ? "current" : undefined,
+      key: b.name, kind: "branch", name: b.name, state, rail, current: isCurrent,
       run: (id) => ctx.run(id, b),
-      cells: [
-        <span key="tick" className="text-center text-[11px]" style={{ color: "var(--primary)" }}>
-          {isCurrent && !ctx.picked.size ? "⎇" : (
-            <span onClick={(e) => { e.stopPropagation(); ctx.onPick(b.name); }}
-              className={`cursor-pointer ${ctx.picked.size ? "" : "opacity-0 group-hover:opacity-100"} transition-opacity`}
-              style={{ color: ctx.picked.has(b.name) ? "var(--primary)" : "var(--text3)" }}>
-              {ctx.picked.has(b.name) ? "☑" : "☐"}
-            </span>
-          )}
-        </span>,
-        <Subject key="name" title={b.name}>{b.name}</Subject>,
-        <span key="chips" className="flex items-center gap-1 shrink-0">
+      title: (
+        <span className="flex items-center gap-2 min-w-0">
+          <span onClick={(e) => { e.stopPropagation(); ctx.onPick(b.name); }}
+            className={`shrink-0 cursor-pointer text-[11px] ${ctx.picked.size ? "" : "opacity-0 group-hover:opacity-100"} transition-opacity`}
+            style={{ color: ctx.picked.has(b.name) ? "var(--primary)" : "var(--text3)" }}
+            title={ctx.picked.has(b.name) ? "Untick" : "Tick for a bulk action"}>
+            {ctx.picked.has(b.name) ? "☑" : "☐"}
+          </span>
+          <span className="truncate">{b.name}</span>
+        </span>
+      ),
+      chips: (
+        <>
+          {isCurrent && <Chip tone="accent">on this</Chip>}
           {t.gone && <Chip tone="bad" title="its remote branch no longer exists">gone</Chip>}
-          {b.mergedIntoTrunk === true && !t.gone && <Chip>merged</Chip>}
           {t.ahead > 0 && <Chip tone="good">↑{t.ahead}</Chip>}
           {t.behind > 0 && <Chip tone="warn">↓{t.behind}</Chip>}
-          {elsewhere && <Chip tone="accent" title={wt!.path}>worktree</Chip>}
-        </span>,
-        <Meta key="subject" title={b.subject}>{b.subject}</Meta>,
-        <Meta key="date" align="right">{b.date}</Meta>,
-      ],
+          {b.mergedIntoTrunk === true && !t.gone && <Chip>merged</Chip>}
+          {elsewhere && <Chip tone="accent" title={wt!.path}>in {wt!.path.split("/").pop()}</Chip>}
+        </>
+      ),
+      facts: [b.date, b.subject, b.upstream ?? "no upstream"],
     };
   });
 }
 
-export const TAG_COLS = "minmax(0, 20rem) 5rem minmax(0, 1fr) 5.5rem";
-
 export function tagRows(tags: GitTag[], run: (id: string, t: GitTag) => void): ListRow[] {
   return tags.map((t) => ({
-    key: t.name, kind: "tag", name: t.name, state: {},
+    key: t.name, kind: "tag", name: t.name, state: {}, rail: "neutral",
     run: (id) => run(id, t),
-    cells: [
-      <Subject key="n" title={t.name}>{t.annotated ? "⚑ " : "· "}{t.name}</Subject>,
-      <Meta key="h" mono>{t.hash}</Meta>,
-      <Meta key="s" title={t.subject}>{t.subject}</Meta>,
-      <Meta key="d" align="right">{t.date}</Meta>,
-    ],
+    chips: t.annotated ? <Chip tone="accent">annotated</Chip> : undefined,
+    facts: [t.date, t.hash, t.subject],
   }));
 }
-
-export const STASH_COLS = "5.5rem minmax(0, 1fr)";
 
 export function stashRows(stashes: GitStash[], run: (id: string, s: GitStash) => void): ListRow[] {
   return stashes.map((s) => ({
-    key: s.ref, kind: "stash", name: s.ref, state: {},
+    key: s.ref, kind: "stash", name: s.ref, state: {}, rail: "warn",
     run: (id) => run(id, s),
-    cells: [
-      <Meta key="r" mono>{s.ref}</Meta>,
-      <Subject key="m" mono={false} title={s.message}>{s.message}</Subject>,
-    ],
+    title: s.message,
+    facts: [s.ref],
   }));
 }
-
-export const WORKTREE_COLS = "16px minmax(0, 18rem) minmax(0, 16rem) 5rem minmax(0, 1fr)";
 
 export function worktreeRows(
   worktrees: GitWorktree[],
-  ctx: { busyPaths?: Set<string>; run: (id: string, w: GitWorktree) => void },
+  ctx: { run: (id: string, w: GitWorktree) => void },
 ): ListRow[] {
   return worktrees.map((w) => ({
     key: w.path, kind: "worktree", name: w.path,
-    state: { current: w.current, busy: ctx.busyPaths?.has(w.path) },
-    tone: w.current ? "current" : undefined,
+    state: { current: w.current },
+    rail: w.current ? "accent" : w.locked ? "warn" : "neutral",
+    current: w.current,
     run: (id) => ctx.run(id, w),
-    cells: [
-      <span key="i" className="text-center text-[11px]" style={{ color: "var(--primary)" }}>{w.current ? "▸" : ""}</span>,
-      <Subject key="p" title={w.path}>{w.path.split("/").pop()}</Subject>,
-      <span key="b" className="flex items-center gap-1 min-w-0">
+    title: w.path.split("/").pop(),
+    chips: (
+      <>
         <Chip tone="accent" title={w.branch}>⎇ {w.branch}</Chip>
+        {w.current && <Chip>you are here</Chip>}
         {w.locked && <Chip tone="warn">locked</Chip>}
-      </span>,
-      <Meta key="h" mono>{w.head}</Meta>,
-      <Meta key="d" title={w.path}>{w.path}</Meta>,
-    ],
+      </>
+    ),
+    facts: [w.head, w.path],
   }));
 }
-
-export const REMOTE_BRANCH_COLS = "minmax(0, 24rem) auto minmax(0, 1fr) 5.5rem";
 
 export function remoteBranchRows(
   rows: GitRemoteBranch[],
@@ -218,64 +261,69 @@ export function remoteBranchRows(
 ): ListRow[] {
   return rows.map((b) => ({
     key: b.ref, kind: "remote-branch", name: b.name,
-    // `merged` here means "you already have it locally" — see the catalogue.
     state: { merged: !!b.local, elsewhere: !!b.worktree && b.worktree !== ctx.root },
+    rail: b.worktree ? "accent" : b.local ? "good" : "neutral",
     run: (id) => ctx.run(id, b),
-    cells: [
-      <Subject key="n" title={b.ref} tint={b.local ? "var(--text)" : "var(--text2)"}>{b.name}</Subject>,
-      <span key="c" className="flex items-center gap-1 shrink-0">
-        {b.worktree ? <Chip tone="accent" title={b.worktree}>worktree</Chip>
-          : b.local ? <Chip tone="good">local</Chip> : null}
-      </span>,
-      <Meta key="s" title={b.subject}>{b.subject}</Meta>,
-      <Meta key="d" align="right">{b.date}</Meta>,
-    ],
+    chips: (
+      <>
+        {b.worktree ? <Chip tone="accent" title={b.worktree}>in {b.worktree.split("/").pop()}</Chip>
+          : b.local ? <Chip tone="good">you have it</Chip> : null}
+      </>
+    ),
+    facts: [b.date, b.hash, b.subject, b.author],
   }));
 }
-
-export const REMOTE_COLS = "minmax(0, 12rem) minmax(0, 1fr)";
 
 export function remoteRows(remotes: GitRemote[], run: (id: string, r: GitRemote) => void): ListRow[] {
   return remotes.map((r) => ({
-    key: r.name, kind: "remote", name: r.name, state: {},
+    key: r.name, kind: "remote", name: r.name, state: {}, rail: "neutral",
     run: (id) => run(id, r),
-    cells: [
-      <Subject key="n">{r.name}</Subject>,
-      <Meta key="u" title={r.fetchUrl}>{r.fetchUrl}</Meta>,
-    ],
+    facts: [r.fetchUrl],
   }));
 }
-
-export const SUBMODULE_COLS = "minmax(0, 20rem) auto 5rem minmax(0, 1fr)";
 
 export function submoduleRows(subs: GitSubmodule[], run: (id: string, s: GitSubmodule) => void): ListRow[] {
   const tone = (status: string): Tone =>
     status === "clean" ? "good" : status === "uninitialized" ? "warn" : "bad";
   return subs.map((s) => ({
-    key: s.path, kind: "submodule", name: s.path, state: {},
+    key: s.path, kind: "submodule", name: s.path, state: {}, rail: tone(s.status),
     run: (id) => run(id, s),
-    cells: [
-      <Subject key="p" title={s.path}>{s.path}</Subject>,
-      <span key="s" className="shrink-0"><Chip tone={tone(s.status)}>{s.status}</Chip></span>,
-      <Meta key="h" mono>{s.sha.slice(0, 7)}</Meta>,
-      <Meta key="u" title={s.url}>{s.url}</Meta>,
-    ],
+    chips: <Chip tone={tone(s.status)}>{s.status}</Chip>,
+    facts: [s.sha.slice(0, 7), s.branch || "no branch", s.url],
   }));
 }
 
-export const REFLOG_COLS = "5rem 8rem minmax(0, 1fr) 5.5rem";
-
 export function reflogRows(entries: GitReflogEntry[], run: (id: string, e: GitReflogEntry) => void): ListRow[] {
   return entries.map((e, i) => ({
-    key: `${e.shortHash}-${i}`, kind: "commit", name: e.shortHash, state: {},
+    key: `${e.shortHash}-${i}`, kind: "commit", name: e.shortHash, state: {}, rail: "neutral",
     run: (id) => run(id, e),
-    cells: [
-      <Meta key="h" mono>{e.shortHash}</Meta>,
-      <Meta key="s" mono title={e.ref}>{e.ref}</Meta>,
-      <Subject key="m" mono={false} title={`${e.action} — ${e.subject}`}>
-        <span style={{ color: "var(--text2)" }}>{e.action}</span>{e.subject ? ` · ${e.subject}` : ""}
-      </Subject>,
-      <Meta key="d" align="right">{e.date}</Meta>,
-    ],
+    title: e.subject || e.action,
+    chips: <Chip>{e.action}</Chip>,
+    facts: [e.date, e.shortHash, e.ref],
+  }));
+}
+
+/**
+ * The log, which is the one list that is not a list of things — it is a list of
+ * moments, and the graph column is the shape of how they connect. It keeps its
+ * monospaced rail because that is what draws the lines, and gets the same card
+ * treatment around it.
+ */
+export function commitRows(
+  lines: { hash?: string; graph: string; subject?: string; refs?: string; author?: string; date?: string }[],
+  ctx: { picked: ReadonlySet<string>; run: (id: string, hash: string, subject: string) => void },
+): ListRow[] {
+  return lines.filter((l) => !!l.hash).map((l, i) => ({
+    key: `${l.hash}-${i}`, kind: "commit", name: l.hash!, state: {},
+    rail: ctx.picked.has(l.hash!) ? "accent" : "neutral",
+    run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
+    title: (
+      <span className="flex items-center gap-2 min-w-0">
+        <span className="shrink-0" style={{ color: "var(--primary)", opacity: 0.75 }}>{l.graph.trim() || "●"}</span>
+        <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>
+      </span>
+    ),
+    chips: l.refs ? <Chip tone="good">{l.refs}</Chip> : undefined,
+    facts: [l.date, l.hash, l.author],
   }));
 }

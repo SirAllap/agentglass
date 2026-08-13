@@ -1,152 +1,136 @@
 /*
  * The git view's visual system.
  *
- * The panel grew one section at a time and looks it: an audit of its rows found
- * type at 9.5, 10, 10.5, 11, 11.5 and 12px with no rule saying which belonged
- * where, seven different chip treatments, four ways of drawing "this row is
- * selected", and grid tracks whose widths were tuned per section until the
- * columns of one list stopped agreeing with the next. In Remotes they stopped
- * agreeing with the pane: seven tracks plus three buttons added up to more than
- * the width, and the actions landed on top of the subject.
+ * The first pass at this unified the plumbing — one grid, one set of type
+ * sizes, one chip — and the verdict on it was that it still looked like the
+ * same list, which was fair: a tidy table of 10px text is still a table of 10px
+ * text. The row was the problem, not its tracks.
  *
- * So the sections stop making these decisions. Everything below is the whole
- * vocabulary they get:
+ * So the row is not a table line any more. It is an object with a hierarchy:
  *
- *   TYPE — three sizes, and they mean things. `subject` (11.5px) is the name of
- *   the object, one per row. `meta` (10px) is everything about it. `label`
- *   (9.5px, uppercase, tracked) is furniture: headings, counts, keys.
+ *     ┃  feat/consolidate-work            gone  ↑166        [ Delete ]
+ *     ┃  5 min ago · c76e387 · worktree -consolidate
  *
- *   ROWS — one grid, one height, one hover, one selected state. The action
- *   column is a FIXED track that exists whether or not a button is drawn, which
- *   is what makes overlap impossible rather than unlikely.
+ *   * a 3px STATUS RAIL down the left, coloured by what the row's state is —
+ *     the thing you scan a list of thirty branches for, findable without
+ *     reading a word;
+ *   * the NAME at 13px, the size the eye lands on first, and the only string
+ *     on the row at that size;
+ *   * everything else demoted to a 10px SECOND LINE of dot-separated facts,
+ *     where dates and shas and paths stop competing with the name;
+ *   * air: 12px of vertical padding and 6px between rows, against the 26px
+ *     table rows this replaces;
+ *   * one action, which appears on hover in a lane reserved for it, so it can
+ *     never sit on top of anything.
  *
- *   STATE — colour carries one meaning each: success is "in sync / you have
- *   it", warning is "needs a decision", error is "gone / destructive". A chip
- *   never invents a colour outside those three plus neutral.
- *
- *   SPACE — 4px rhythm. Rows breathe at 7px vertical, sections at 14px.
- *
- * None of this is a new palette: every colour is a token the app already
- * defines, and the sizes come off `iconSize.ts`'s reasoning — icons at 1.4-1.6x
- * their neighbouring text, text at the two sizes this UI already sets most.
+ * Nothing here invents a colour: every value is a token the app already
+ * defines. What changed is how much of each one there is.
  */
 import type { CSSProperties, ReactNode } from "react";
-
-export const TYPE = {
-  /** 11.5 — the name of the thing. One per row. */
-  subject: "text-[11.5px]",
-  /** 10 — everything about it: shas, dates, authors, subjects. */
-  meta: "text-[10px]",
-  /** 9.5 uppercase — furniture. Headings, counts, key hints. */
-  label: "text-[9.5px] uppercase tracking-wider",
-} as const;
-
-/** One rhythm for the whole view, so a section cannot invent its own gaps. */
-export const SPACE = { row: 7, section: 14, gap: 8 } as const;
 
 export const edge = (pct: number): string => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 export const wash = (token: string, pct: number): string => `color-mix(in srgb, var(${token}) ${pct}%, transparent)`;
 
+export type Tone = "neutral" | "good" | "warn" | "bad" | "accent";
+
+const TONE: Record<Tone, string> = {
+  neutral: "var(--text3)",
+  good: "var(--success)",
+  warn: "var(--warning)",
+  bad: "var(--error)",
+  accent: "var(--primary)",
+};
+
 /**
- * A list row.
+ * One row, as a card.
  *
- * `cols` is the grid WITHOUT its action track — the track is appended here, at
- * a fixed width, always. A section that wants no actions passes `actions={0}`
- * and gets no track at all; anything else gets a reserved column that the
- * subject can never grow into.
+ * `rail` is the status colour — the whole reason a thirty-branch list can be
+ * read at a glance. `title` is the name. `facts` is everything else, joined
+ * with dots on its own line, and deliberately not aligned into columns: the
+ * facts about a branch are not a table, they are a sentence.
  */
-export function Row({ cols, actions = 9, selected, tone, onClick, onContextMenu, children, title }: {
-  cols: string;
-  /** Width of the reserved action column, in rem. 0 removes it. */
-  actions?: number;
+export function Row({ rail, title, chips, facts, action, selected, current, onClick, onContextMenu, title2 }: {
+  rail?: Tone;
+  title: ReactNode;
+  chips?: ReactNode;
+  facts?: ReactNode[];
+  action?: ReactNode;
   selected?: boolean;
-  /** A row that is the current branch / checkout reads differently from one the
-   *  cursor happens to be on, and both differ from an ordinary row. */
-  tone?: "current" | "muted";
+  /** The branch you are on / the checkout you are in. */
+  current?: boolean;
   onClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
-  children: ReactNode;
-  title?: string;
+  title2?: string;
 }) {
   const style: CSSProperties = {
+    position: "relative",
     display: "grid",
-    gridTemplateColumns: actions ? `${cols} ${actions}rem` : cols,
+    gridTemplateColumns: "minmax(0, 1fr) 10rem",
     alignItems: "center",
-    columnGap: SPACE.gap,
-    padding: `${SPACE.row}px 10px`,
-    borderRadius: 8,
-    // The cursor wins over the current-branch tint: you need to see where the
-    // keyboard is, and "this is HEAD" is already said by the glyph in column 1.
-    background: selected ? wash("--primary", 13) : tone === "current" ? wash("--primary", 8) : "transparent",
-    boxShadow: selected ? "inset 2px 0 0 var(--primary)" : undefined,
-    opacity: tone === "muted" ? 0.72 : 1,
+    gap: 12,
+    padding: "10px 12px 10px 16px",
+    marginBottom: 6,
+    borderRadius: 10,
+    background: selected ? wash("--primary", 12) : current ? wash("--primary", 6) : wash("--bg3", 34),
+    border: `1px solid ${selected ? wash("--primary", 42) : wash("--text", 8)}`,
+    cursor: "default",
+    transition: "background .12s, border-color .12s",
   };
   return (
-    <div className="group git-row" style={style} onClick={onClick} onContextMenu={onContextMenu} title={title}>
-      {children}
+    <div className="git-card group" style={style} onClick={onClick} onContextMenu={onContextMenu} title={title2}>
+      {/* The rail. Sits inside the border radius rather than beside it, so a
+          list of them reads as one column of colour down the left. */}
+      <span aria-hidden style={{
+        position: "absolute", left: 0, top: 8, bottom: 8, width: 3, borderRadius: 3,
+        background: rail ? TONE[rail] : "transparent",
+        opacity: rail === "neutral" ? 0.5 : 0.9,
+      }} />
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="truncate text-[13px] font-medium"
+            style={{ color: "var(--text)", fontFamily: "var(--font-mono, ui-monospace, monospace)", letterSpacing: "-0.01em" }}>
+            {title}
+          </span>
+          {chips}
+        </div>
+        {!!facts?.length && (
+          <div className="flex items-center gap-1.5 mt-1 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
+            {facts.filter(Boolean).map((f, i) => (
+              <span key={i} className="flex items-center gap-1.5 min-w-0">
+                {i > 0 && <span style={{ opacity: 0.45 }}>·</span>}
+                <span className="truncate">{f}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="justify-self-end">{action}</div>
     </div>
   );
 }
 
-/** The name of the thing, and the only cell allowed to be 11.5px. */
-export function Subject({ children, mono = true, tint, title }: {
-  children: ReactNode; mono?: boolean; tint?: string; title?: string;
-}) {
-  return (
-    <span className={`${TYPE.subject} truncate min-w-0`} title={title}
-      style={{ color: tint ?? "var(--text)", fontFamily: mono ? "var(--font-mono, ui-monospace, monospace)" : undefined }}>
-      {children}
-    </span>
-  );
-}
-
-/** Anything about the thing: sha, date, author, subject line. */
-export function Meta({ children, mono, align = "left", title }: {
-  children: ReactNode; mono?: boolean; align?: "left" | "right"; title?: string;
-}) {
-  return (
-    <span className={`${TYPE.meta} truncate min-w-0`} title={title}
-      style={{
-        color: "var(--text3)", textAlign: align,
-        fontFamily: mono ? "var(--font-mono, ui-monospace, monospace)" : undefined,
-        fontVariantNumeric: mono ? "tabular-nums" : undefined,
-      }}>
-      {children}
-    </span>
-  );
-}
-
-export type Tone = "neutral" | "good" | "warn" | "bad" | "accent";
-
-const TONE: Record<Tone, { fg: string; bg: string }> = {
-  neutral: { fg: "var(--text3)", bg: wash("--text", 9) },
-  good: { fg: "var(--success)", bg: wash("--success", 12) },
-  warn: { fg: "var(--warning)", bg: wash("--warning", 13) },
-  bad: { fg: "var(--error)", bg: wash("--error", 12) },
-  accent: { fg: "var(--primary)", bg: wash("--primary", 13) },
-};
-
-/** One chip, four tones, no exceptions. Colour means what it means: good is "in
- *  sync / you have it", warn is "needs a decision", bad is "gone / destructive". */
+/** A chip. Small, round, and the only place a status word is allowed to be
+ *  coloured — everything else on the card is text or grey. */
 export function Chip({ tone = "neutral", children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
-  const t = TONE[tone];
   return (
-    <span className="shrink-0 text-[9px] px-1.5 py-px rounded-md whitespace-nowrap"
-      style={{ color: t.fg, background: t.bg }} title={title}>{children}</span>
+    <span className="shrink-0 text-[9.5px] px-2 py-0.5 rounded-full whitespace-nowrap font-medium"
+      style={{ color: TONE[tone], background: wash(tone === "neutral" ? "--text" : `--${tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "primary"}`, tone === "neutral" ? 10 : 14) }}
+      title={title}>
+      {children}
+    </span>
   );
 }
 
-/** The one action a row is allowed to draw. Hidden until the row is hovered or
- *  is the cursor, because a list is read far more often than it is acted on. */
+/** The one action a card draws. Hidden until hover or cursor, in its own lane. */
 export function RowAction({ label, danger, disabled, onClick, title }: {
   label: string; danger?: boolean; disabled?: boolean; onClick: (e: React.MouseEvent) => void; title?: string;
 }) {
   return (
-    <span className="justify-self-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+    <span className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
       <button onClick={(e) => { e.stopPropagation(); onClick(e); }} disabled={disabled} title={title}
-        className="text-[10px] px-2 py-0.5 rounded-md whitespace-nowrap font-medium"
+        className="text-[10.5px] px-3 py-1 rounded-lg whitespace-nowrap font-medium"
         style={danger
-          ? { color: "var(--error)", border: `1px solid ${wash("--error", 45)}`, background: "transparent" }
+          ? { color: "var(--error)", border: `1px solid ${wash("--error", 45)}`, background: wash("--error", 8) }
           : { color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
         {label}
       </button>
@@ -154,62 +138,63 @@ export function RowAction({ label, danger, disabled, onClick, title }: {
   );
 }
 
-/** A heading over a group of rows: prefix families, staged/unstaged, a remote's
- *  name. Foldable when `onToggle` is given. */
+/** A heading over a group of cards. */
 export function GroupHead({ label, count, note, folded, onToggle }: {
   label: string; count?: number; note?: ReactNode; folded?: boolean; onToggle?: () => void;
 }) {
   const inner = (
     <>
-      {onToggle && <span className="text-[9px]" style={{ color: "var(--text3)" }}>{folded ? "▸" : "▾"}</span>}
-      <span className={TYPE.label} style={{ color: "var(--text3)" }}>{label}</span>
-      {count != null && <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text3)" }}>{count}</span>}
+      {onToggle && <span className="text-[9px] w-2" style={{ color: "var(--text3)" }}>{folded ? "▸" : "▾"}</span>}
+      <span className="text-[10px] uppercase tracking-[0.11em] font-medium" style={{ color: "var(--text2)" }}>{label}</span>
+      {count != null && (
+        <span className="text-[9.5px] tabular-nums px-1.5 py-px rounded-full"
+          style={{ color: "var(--text3)", background: wash("--text", 9) }}>{count}</span>
+      )}
       {note}
-      <span className="flex-1 h-px" style={{ background: wash("--text", 9) }} />
+      <span className="flex-1 h-px" style={{ background: wash("--text", 8) }} />
     </>
   );
   const cls = "w-full flex items-center gap-2 text-left";
-  const style: CSSProperties = { padding: `${SPACE.section}px 10px 5px` };
+  const style: CSSProperties = { padding: "16px 4px 8px" };
   return onToggle
     ? <button className={cls} style={style} onClick={onToggle}>{inner}</button>
     : <div className={cls} style={style}>{inner}</div>;
 }
 
-/** The bar over a list: search, counts, and whatever that section adds. One
- *  shape for all ten, so moving between them does not move the furniture. */
+/** The bar over a list. */
 export function Toolbar({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-center gap-2 flex-wrap px-3 py-2"
-      style={{ borderBottom: edge(9) }}>
+    <div className="flex items-center gap-2 flex-wrap px-3 py-2.5" style={{ borderBottom: edge(8) }}>
       {children}
     </div>
   );
 }
 
-/** A quiet pill used for filters and counts in the toolbar. */
+/** A quiet pill for filters and counts. */
 export function Pill({ on, tone = "neutral", onClick, children, title }: {
   on?: boolean; tone?: Tone; onClick?: () => void; children: ReactNode; title?: string;
 }) {
-  const t = TONE[tone];
   return (
     <button onClick={onClick} title={title}
-      className="text-[10px] px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
+      className="text-[10px] px-3 py-1 rounded-full whitespace-nowrap transition-colors font-medium"
       style={{
-        color: on ? "var(--text)" : t.fg,
-        background: on ? t.bg : "transparent",
-        border: `1px solid ${on ? t.fg : wash("--border", 40)}`,
+        color: on ? "var(--text)" : TONE[tone],
+        background: on ? wash("--primary", 14) : "transparent",
+        border: `1px solid ${on ? wash("--primary", 40) : wash("--text", 12)}`,
       }}>
       {children}
     </button>
   );
 }
 
-/** Empty state. Says what is missing in the section's own words rather than
- *  "no data", and never occupies more than the room it needs. */
+/** Empty state, with room around it. */
 export function Empty({ what, busy }: { what: string; busy?: boolean }) {
   return (
-    <div className="grid place-items-center py-10 text-[11.5px]" style={{ color: "var(--text3)" }}>
-      {busy ? `Reading ${what}…` : `No ${what} here`}
+    <div className="grid place-items-center gap-1 py-16">
+      <span className="text-[13px]" style={{ color: "var(--text2)" }}>
+        {busy ? `Reading ${what}…` : `Nothing here`}
+      </span>
+      {!busy && <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>no {what} in this repository</span>}
     </div>
   );
 }

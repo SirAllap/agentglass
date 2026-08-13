@@ -42,7 +42,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { GitRowMenu } from "./GitRowMenu.tsx";
 import { GitPalette, type PaletteRow } from "./GitPalette.tsx";
-import { List, branchRows, BRANCH_COLS, remoteBranchRows, REMOTE_BRANCH_COLS, tagRows, TAG_COLS, stashRows, STASH_COLS, worktreeRows, WORKTREE_COLS, submoduleRows, SUBMODULE_COLS, reflogRows, REFLOG_COLS } from "./git/Lists.tsx";
+import { List, branchRows, remoteBranchRows, tagRows, stashRows, worktreeRows, submoduleRows, reflogRows, commitRows } from "./git/Lists.tsx";
 import { primaryAction, groupByPrefix, bulkDeletable, type GitKind, type GitRowState } from "../lib/gitActions.ts";
 import { openPrs, openPr } from "../lib/openPrs.ts";
 import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
@@ -601,18 +601,22 @@ function DirRow({ name, depth, count, collapsed, onToggle }: {
   );
 }
 
-function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onAction, onDiscard, onBlame, depth }: {
+function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onAction, onDiscard, onBlame, onMenu, depth }: {
   c: GitFileChange; root: string; active: boolean; writeEnabled: boolean; desc?: string; onSelect: () => void;
   action: "stage" | "unstage"; onAction: () => void; onDiscard?: () => void;
   /** Right-click a row for its file's blame — who wrote each line. */
   onBlame?: () => void;
+  /** The row menu, when there is one. Supersedes `onBlame` on right-click:
+   *  blame is one item inside it now, next to discard and the file's history. */
+  onMenu?: (x: number, y: number) => void;
   /** Set in tree mode; the directory rows above carry the path, so the row
    *  indents instead of repeating it. Undefined means the old flat list. */
   depth?: number;
 }) {
   const dir = dirName(c.file_path, root);
   return (
-    <div onClick={onSelect} data-file={active ? "active" : undefined} onContextMenu={onBlame ? (e) => { e.preventDefault(); onBlame(); } : undefined}
+    <div onClick={onSelect} data-file={active ? "active" : undefined}
+      onContextMenu={onMenu ? (e) => { e.preventDefault(); onSelect(); onMenu(e.clientX, e.clientY); } : onBlame ? (e) => { e.preventDefault(); onBlame(); } : undefined}
       className="group flex items-center gap-2 pr-1.5 py-1 rounded-md cursor-pointer"
       style={{ background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", paddingLeft: depth == null ? 8 : 8 + depth * 12 }}>
       <span className="w-3.5 text-center text-[10px] font-bold shrink-0 self-start mt-0.5" style={{ color: STATUS_TINT[c.status] }} title={c.status}>{STATUS_LETTER[c.status]}</span>
@@ -630,10 +634,23 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
         {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
         {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
       </span>
+      {/*
+        One named button, not two glyphs.
+
+        Discard was a 5px ↺ sitting one pixel from the ＋, in the only view
+        where one of the two cannot be undone. It is in the right-click now,
+        named, in red, under a rule, and it asks before it runs — the same
+        treatment every other irreversible action in this panel gets. What
+        stays on the row is the one you press all day.
+      */}
       {writeEnabled && (
-        <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          {onDiscard && <button onClick={(e) => { e.stopPropagation(); onDiscard(); }} title="Discard changes (irreversible)" className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--error)" }}>↺</button>}
-          <button onClick={(e) => { e.stopPropagation(); onAction(); }} title={action === "stage" ? "Stage" : "Unstage"} className="w-5 h-5 grid place-items-center rounded text-[13px] font-bold" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 60%, transparent)" }}>{action === "stage" ? "＋" : "－"}</button>
+        <div className="shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <button onClick={(e) => { e.stopPropagation(); onAction(); }}
+            title={action === "stage" ? "Stage this file — right-click for the rest" : "Unstage this file — right-click for the rest"}
+            className="text-[10px] px-2 py-0.5 rounded-md font-medium whitespace-nowrap"
+            style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
+            {action === "stage" ? "Stage" : "Unstage"}
+          </button>
         </div>
       )}
     </div>
@@ -2072,6 +2089,18 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     }
   };
 
+  /** A changed file. `staged` decides the whole menu, so it is passed in rather
+   *  than re-derived: the same path can be in both lists at once when part of
+   *  it is staged, and the row knows which list it is in. */
+  const fileAction = (id: string, c: GitFileChange, action: "stage" | "unstage") => {
+    switch (id) {
+      case "stage": case "unstage": return void (action === "stage" ? stage(c) : unstage(c));
+      case "blame": return setBlamePath({ path: c.file_path });
+      case "copy-path": return void navigator.clipboard?.writeText(relOf(c)).catch(() => { /* no clipboard permission */ });
+      case "discard": return void discard(c);
+    }
+  };
+
   /** A branch that lives on the remote. The three ways to take it differ in one
    *  thing — what happens to the checkout you are standing in — which is what
    *  their labels say and what decides which one is the row's button. */
@@ -2382,6 +2411,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)}
         onSelect={() => setSelKey(keyOf(c))} action={action} onAction={() => onAction(c)}
         onBlame={writeEnabled ? () => setBlamePath({ path: c.file_path }) : undefined}
+        onMenu={(x, y) => setRowMenu({
+          kind: "file", name: relOf(c), state: { merged: action === "unstage" },
+          x, y,
+          run: (id) => fileAction(id, c, action),
+        })}
         onDiscard={action === "stage" && writeEnabled ? () => discard(c) : undefined} />
     );
     if (!treeMode) return changes.map((c) => row(c));
@@ -2562,41 +2596,33 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const n = COUNTS[id];
     const num = ALL_VIEWS.indexOf(id) + 1;
     const on = view === id;
+    /*
+     * A segmented control, not a row of words.
+     *
+     * These were 10.5px labels with a superscript count and a leading digit,
+     * all in three greys — nine of them in a line, and picking one meant
+     * reading all nine. Now the selected one is a filled pill and the count is
+     * a real badge, so which section you are in is answered by shape and the
+     * counts are readable at arm's length. The digit shortcut moved into the
+     * tooltip: it is a thing you learn once, not a thing you read every time.
+     */
     return (
       <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
-        aria-keyshortcuts={String(num)}
-        className="text-[10.5px] leading-none rounded-[5px] transition-colors flex items-baseline gap-1.5 whitespace-nowrap shrink-0"
+        aria-keyshortcuts={String(num)} aria-selected={on} role="tab"
+        className="text-[11px] leading-none rounded-full transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 font-medium px-3 py-1.5"
         style={{
-          padding: "8px 8px 4px",
-          background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
+          background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+          border: `1px solid ${on ? "color-mix(in srgb, var(--primary) 42%, transparent)" : "transparent"}`,
           color: on ? "var(--text)" : "var(--text3)",
-          opacity: on ? 1 : 0.72,
         }}>
-        {/* The key that gets you here. lazygit does the same in its panel titles
-            (gui.showPanelJumps) — a shortcut nothing advertises is a shortcut
-            nobody uses. A bare digit was ambiguous with the count while both
-            sat on the same line at the same size; raising the count settles it
-            without needing an outline around this one. */}
-        <span className="tabular-nums" style={{ fontSize: 10, opacity: on ? 0.9 : 0.5, color: on ? "var(--primary-hover)" : undefined }}>{num}</span>
-        <span className="relative">
-          {VIEW_LABEL[id]}
-          {/* Zero is left off rather than drawn: these counts start at zero and
-              are only true once that tab has been visited, so a fresh panel
-              printing "0" on Tags would be stating something it never checked.
-              Every offset is explicit because the CSS reset gives `sup` its own
-              `top`, and inheriting that would put the digits somewhere other
-              than where this was designed and measured. */}
-          {!!n && (
-            <sup
-              className="tabular-nums"
-              style={{
-                fontSize: 7.5, lineHeight: 1, verticalAlign: "super",
-                position: "relative", top: -4.5, left: 1.5,
-                opacity: on ? 1 : 0.68, color: on ? "var(--primary-hover)" : undefined,
-              }}
-            >{n}</sup>
-          )}
-        </span>
+        <span>{VIEW_LABEL[id]}</span>
+        {!!n && (
+          <span className="tabular-nums text-[9px] px-1.5 py-px rounded-full"
+            style={{
+              color: on ? "var(--primary-hover)" : "var(--text3)",
+              background: on ? "color-mix(in srgb, var(--primary) 22%, transparent)" : "color-mix(in srgb, var(--text) 10%, transparent)",
+            }}>{n}</span>
+        )}
       </button>
     );
   };
@@ -2983,7 +3009,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         </div>
                       )}
                       <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
-                        {tree?.clean && <div className="px-3 py-6 text-center t-dim2 text-[11px]">✓ nothing to commit, working tree clean</div>}
+                        {/* A clean tree is good news and used to be a grey line of
+                        8px text. It is the state this panel is in most of the
+                        day; it can look like something. */}
+                    {tree?.clean && (
+                      <div className="grid place-items-center gap-1.5 py-10 px-4 text-center">
+                        <div className="grid place-items-center rounded-full mb-1"
+                          style={{ width: 34, height: 34, background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success)", fontSize: 15 }}>✓</div>
+                        <div className="text-[12.5px]" style={{ color: "var(--text)" }}>Working tree clean</div>
+                        <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+                          {branch?.ahead ? `${branch.ahead} commit${branch.ahead === 1 ? "" : "s"} waiting to push` : "nothing to commit here"}
+                        </div>
+                      </div>
+                    )}
                         {/*
                           * Mid-merge, the list is about the conflict.
                           *
@@ -3101,7 +3139,37 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               : <HiliteCtx.Provider value={selected.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000 ? { ...hilite, theme: null } : hilite}>{split ? <SplitDiff c={selected} wrap={wrap} /> : <UnifiedDiff c={selected} wrap={wrap} hunkAction={hunkActionFn} />}</HiliteCtx.Provider>}
                           </div>
                         </>
-                      ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">{tree ? "select a file to view its diff" : "loading…"}</div>}
+                      ) : (
+                        /* The other half of the Changes view, which for most of
+                           the day is the biggest empty rectangle in the app. It
+                           used to hold one grey sentence in the dead centre.
+                           Now it either tells you where you stand or tells you
+                           what to press — and it is the one place with room to
+                           put the keys somewhere they can be read. */
+                        <div className="flex-1 grid place-items-center px-6">
+                          <div className="flex flex-col items-center gap-2 text-center" style={{ maxWidth: 380 }}>
+                            <div className="text-[13px]" style={{ color: "var(--text2)" }}>
+                              {!tree ? "Reading the working tree…" : tree.clean ? "Nothing to review" : "Select a file to see its diff"}
+                            </div>
+                            {tree?.clean && (
+                              <div className="text-[11px] leading-relaxed" style={{ color: "var(--text3)" }}>
+                                This checkout matches {branch?.name ?? "its branch"}. The other tabs are where the
+                                repository is — branches, the log, what is stashed.
+                              </div>
+                            )}
+                            {!!tree && !tree.clean && (
+                              <div className="flex flex-wrap items-center justify-center gap-1.5 mt-1">
+                                {[["j / k", "move"], ["space", "stage"], ["x", "discard"], ["`", "tree or flat"]].map(([k, what]) => (
+                                  <span key={k} className="flex items-center gap-1.5 text-[9.5px] px-2 py-1 rounded-lg"
+                                    style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
+                                    <b style={{ color: "var(--text2)", fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 500 }}>{k}</b>{what}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : view === "log" ? (
@@ -3169,31 +3237,23 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                     )}
                   <div onScroll={incGraph.onScroll} className="agx-scroll flex-1 min-h-0 overflow-auto py-1 text-[11.5px]" style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}>
-                    {incGraph.rows.map((l, i) => {
-                      const isCommit = !!l.hash;
-                      const picked = isCommit && pickSet.has(l.hash!);
-                      return (
-                        <div key={i} onClick={isCommit ? () => {
-                          if (pickSet.size > 0 || picked) { setPickSet((prev) => { const next = new Set(prev); next.has(l.hash!) ? next.delete(l.hash!) : next.add(l.hash!); return next; }); return; }
-                          setRowIdx(i); openCommit(l.hash!, l.subject || "");
-                        } : undefined}
-                          {...rowProps(i === rowIdx)}
-                          className={`flex items-center gap-2 px-3 whitespace-pre ${isCommit ? "cursor-pointer hover:brightness-125" : ""}`}
-                          style={{ lineHeight: "1.55", ...(i === rowIdx ? rowProps(true).style : {}), ...(picked ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : {}) }}
-                          title={isCommit ? (pickSet.size > 0 ? "Toggle this commit in the cherry-pick series" : "View this commit's diff") : undefined}
-                          onContextMenu={isCommit ? (e) => { e.preventDefault(); setRowIdx(i); setCommitMenu({ hash: l.hash!, subject: l.subject || "", x: e.clientX, y: e.clientY }); } : undefined}>
-                          <span style={{ color: "color-mix(in srgb, var(--primary) 75%, var(--text3))" }}>{l.graph}</span>
-                          {isCommit && <>
-                            <span className="shrink-0 tabular-nums" style={{ color: picked ? "var(--primary-hover)" : "var(--text3)" }}>{picked ? "●" : ""}</span>
-                            <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)" }}>{l.hash}</span>
-                            {l.refs && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{l.refs}</span>}
-                            <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{l.subject}</span>
-                            <span className="shrink-0 text-[9.5px] t-dim2">{l.author}</span>
-                            <span className="shrink-0 text-[9.5px] t-dim2 w-24 text-right">{l.date}</span>
-                          </>}
-                        </div>
-                      );
-                    })}
+                    {/* The log, as cards: the graph glyph keeps its monospaced
+                        lane because that is what draws the lines, and the
+                        subject gets the 13px the eye lands on. */}
+                    <List
+                      rows={commitRows(incGraph.rows, {
+                        picked: pickSet,
+                        run: (id, hash, subject) => {
+                          if (id === "show" || id === "compare") openCommit(hash, subject);
+                          else if (id === "copy-sha") void navigator.clipboard?.writeText(hash).catch(() => {});
+                          else if (id === "cherry-pick") void cherryPickOne(hash);
+                          else if (id === "revert") void revertOne(hash);
+                        },
+                      })}
+                      cursor={rowIdx} onCursor={setRowIdx}
+                      onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                      busy={busyView === "log"} what="commits" disabled={!writeEnabled}
+                    />
                     {!graph.length && <PaneEmpty busy={busyView === "log"} what="commits" />}
                     <MoreRows shown={incGraph.rows.length} total={graph.length} onAll={incGraph.showAll} />
                   </div>
@@ -3293,7 +3353,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         run: branchAction,
                         track: trackChip,
                       })}
-                      cols={BRANCH_COLS}
                       group={grouping}
                       cursor={rowIdx} onCursor={setRowIdx}
                       onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
@@ -3405,7 +3464,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
                       <List
                         rows={stashRows(shownStashes, stashAction)}
-                        cols={STASH_COLS}
                         cursor={rowIdx} onCursor={setRowIdx}
                         onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
                         busy={busyView === "stashes"} what="stashes" disabled={!writeEnabled}
@@ -3483,7 +3541,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           density and menu with the other seven. */}
                       <List
                         rows={remoteBranchRows(incRemoteBranches.rows, { root, run: remoteBranchAction })}
-                        cols={REMOTE_BRANCH_COLS}
                         cursor={rowIdx}
                         onCursor={setRowIdx}
                         onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
@@ -3505,7 +3562,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       count={shownTags.length} total={tags.length} />
                       <List
                         rows={tagRows(incTags.rows, tagAction)}
-                        cols={TAG_COLS}
                         cursor={rowIdx} onCursor={setRowIdx}
                         onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
                         busy={busyView === "tags"} what="tags" disabled={!writeEnabled}
@@ -3520,7 +3576,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {submodules.length === 0 && !busy && <PaneEmpty busy={false} what="submodules" />}
                     <List
                       rows={submoduleRows(submodules, submoduleAction)}
-                      cols={SUBMODULE_COLS}
                       cursor={rowIdx} onCursor={setRowIdx}
                       onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
                       busy={busyView === "submodules"} what="submodules" disabled={!writeEnabled}
@@ -3533,7 +3588,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         of its own rather than living inside the log. */}
                       <List
                         rows={reflogRows(incReflog.rows, (id, e) => { if (id === "show" || id === "compare") openCommit(e.shortHash, e.subject); else if (id === "copy-sha") void navigator.clipboard?.writeText(e.shortHash).catch(() => {}); })}
-                        cols={REFLOG_COLS}
                         cursor={rowIdx} onCursor={setRowIdx}
                         onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
                         busy={busyView === "reflog"} what="reflog entries" disabled={!writeEnabled}
@@ -3551,7 +3605,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search worktrees by branch or directory…" count={shownWorktrees.length} total={worktrees.length} />
                     <List
                       rows={worktreeRows(shownWorktrees, { run: worktreeAction })}
-                      cols={WORKTREE_COLS}
                       cursor={rowIdx} onCursor={setRowIdx}
                       onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
                       busy={busyView === "worktrees"} what="worktrees" disabled={!writeEnabled}

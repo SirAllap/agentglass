@@ -26,7 +26,7 @@
 
 /** The things the git view lists. One kind per section, plus `commit`, which
  *  appears in the log and in the reflog. */
-export type GitKind = "branch" | "tag" | "stash" | "worktree" | "remote" | "remote-branch" | "submodule" | "commit";
+export type GitKind = "branch" | "tag" | "stash" | "worktree" | "remote" | "remote-branch" | "submodule" | "commit" | "file";
 
 /** What a row knows about itself. Every field optional: a tag has no upstream,
  *  a worktree has no ahead count, and the rules below ask only what they need. */
@@ -151,6 +151,19 @@ export function actionsFor(kind: GitKind, name: string, s: GitRowState = {}): Gi
     return out;
   }
 
+  if (kind === "file") {
+    // `merged` carries "already staged" for a file — the one bit of state that
+    // changes every answer here. The discard is the only irreversible thing in
+    // the Changes view and it used to be a 5px glyph one pixel from the stage
+    // button; here it is a named item, in red, under a rule, that asks first.
+    if (s.merged) push({ id: "unstage", label: "Unstage", group: "go", shortcut: "␣", command: `git restore --staged ${q(name)}` });
+    else push({ id: "stage", label: "Stage", group: "go", shortcut: "␣", command: `git add ${q(name)}` });
+    push({ id: "blame", label: "Who wrote each line", group: "compare" });
+    push({ id: "copy-path", label: "Copy the path", group: "copy", shortcut: "⌘C" });
+    if (!s.merged) push({ id: "discard", label: "Discard the changes", group: "danger", danger: true, shortcut: "x", command: `git restore ${q(name)}` });
+    return out;
+  }
+
   if (kind === "remote-branch") {
     // A branch on the remote you do not have yet. The three things you can do
     // with it differ in ONE way that matters — what happens to the checkout you
@@ -226,6 +239,7 @@ export function primaryAction(kind: GitKind, name: string, s: GitRowState = {}):
     if (s.gone && s.merged) return by("delete");
     return by("checkout");
   }
+  if (kind === "file") return by(s.merged ? "unstage" : "stage");
   if (kind === "remote-branch") {
     // `merged` is reused here to mean "you already have a local copy", which is
     // the only state that changes the answer: there is nothing to bring.
