@@ -1,5 +1,5 @@
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -589,6 +589,20 @@ const realApi = {
    *  "working" = the working tree (uncommitted); "committed" = each checkout's
    *  last commit — so a change is still there after it is committed. */
   gitChangesAll: (mode: "working" | "committed" = "working") => get<{ changes: FileChange[] }>(`/git/changes-all?mode=${mode}`),
+  /**
+   * The same question, in two requests instead of one.
+   *
+   * `gitChangesAll` above answers with every file's full diff inside the list —
+   * 1.1 MB on this machine, re-fetched every four seconds, to render the diff of
+   * the single file the reader had open. These two split it: the list carries no
+   * diff text, and the body is fetched for the row that is selected.
+   */
+  gitChangeRows: (mode: "working" | "committed" = "working") =>
+    get<ChangeRowsResult>(`/git/changes-v2?mode=${mode}`),
+  /** One file's diff. Answered with an ETag over the content, so re-opening a
+   *  file that has not changed costs a 304 and no parsing. */
+  gitFileDiff: (root: string, path: string, mode: "working" | "committed" = "working") =>
+    get<FileDiff>(`/git/file-diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&mode=${mode}`),
   gitStage: (root: string, paths: string[]) => post<GitActionResult>("/git/stage", { root, paths }),
   gitUnstage: (root: string, paths: string[]) => post<GitActionResult>("/git/unstage", { root, paths }),
   gitStageAll: (root: string) => post<GitActionResult>("/git/stage-all", { root }),
@@ -1221,6 +1235,11 @@ const demoApi: typeof realApi = {
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
   gitChangesAll: () => D({ changes: [] as FileChange[] }),
+  // There is no git behind a demo build, so the Diff view lands on its own
+  // "nothing uncommitted anywhere" rather than on an error.
+  gitChangeRows: () => D({ rows: [] as ChangeRow[], truncated: 0 }),
+  gitFileDiff: (root: string, path: string) =>
+    D({ key: `${root}\0${path}`, sig: "", hunks: [], truncated: false, binary: false }),
   gitStage: (_root: string, _paths: string[]) => D(demo.gitActionUnavailable()),
   gitUnstage: (_root: string, _paths: string[]) => D(demo.gitActionUnavailable()),
   gitStageAll: (_root: string) => D(demo.gitActionUnavailable()),
