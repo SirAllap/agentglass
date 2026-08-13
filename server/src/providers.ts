@@ -496,7 +496,12 @@ export async function readView(viewId: string, force = false): Promise<ViewTasks
 
   const held = cachedFor(viewId);
   const age = held ? Date.now() - held.at : Number.POSITIVE_INFINITY;
-  if (!force && age < ttlFor(view)) return shown();
+  /* A cache from before the blurb existed is not fresh, however young it is:
+     otherwise the field only appears for whoever happens to have an empty cache
+     and reads as broken for everyone else. `""` is a known answer — see
+     `listMeta` — so this fires once per board and never again. */
+  const missingBlurb = !!view.listId && held?.description === undefined;
+  if (!force && age < ttlFor(view) && !missingBlurb) return shown();
 
   const rest = cooling.get(view.id);
   const resting = !force && !!rest && Date.now() < rest.until;
@@ -626,13 +631,17 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   let fields = held?.fields ?? [];
   let place = held?.place;
   let description = held?.description;
-  if (view.listId && (!statuses.length || !place || force)) {
+  /* `description === undefined` is in here for a reason: it was added after
+     these caches were written, so every board held one of them and the blurb
+     never appeared until something else forced a re-read. A field that only
+     shows up for people with an empty cache is a field that looks broken. */
+  if (view.listId && (!statuses.length || !place || description === undefined || force)) {
     const l = await listMeta(token, view.listId);
     if (l.ok && l.data) {
       statuses = l.data.statuses; fields = l.data.fields; place = l.data.place;
       // Assigned rather than merged: a blurb that was deleted in ClickUp has to
       // be able to disappear here too.
-      description = l.data.description;
+      description = l.data.description ?? "";
     }
   }
 

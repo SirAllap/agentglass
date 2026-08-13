@@ -1105,7 +1105,10 @@ export async function listMeta(
     ok: true,
     data: {
       name: l.data?.name ?? "",
-      ...(String(l.data?.content ?? "").trim() ? { description: String(l.data!.content) } : {}),
+      /* Always set, even to "": `undefined` has to keep meaning "never asked",
+         which is what lets a cache written before this field existed be told
+         apart from a list that genuinely has no blurb. */
+      description: String(l.data?.content ?? "").trim() ? String(l.data!.content) : "",
       place: {
         space: l.data?.space?.name || undefined,
         // A folderless list gets a hidden placeholder — see ListPlace.

@@ -823,15 +823,22 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   useEffect(() => { try { localStorage.setItem(DESC_KEY, JSON.stringify(descOpen)); } catch { /* private mode */ } }, [descOpen]);
   const [listViews, setListViews] = useState<Record<string, { id: string; name: string }[]>>({});
   const [openLists, setOpenLists] = useState<Record<string, boolean>>({});
+  /** Ask once, remember for the session. Safe to call for a list already
+   *  known or already in flight. */
+  const asked = useRef(new Set<string>());
+  const ensureListViews = useCallback((listId: string) => {
+    if (!listId || asked.current.has(listId)) return;
+    asked.current.add(listId);
+    api.clickupListViews(listId)
+      .then((r) => setListViews((m) => ({ ...m, [listId]: r.views ?? [] })))
+      .catch(() => setListViews((m) => ({ ...m, [listId]: [] })));
+  }, []);
+
   const openList = useCallback((v: SavedView) => {
-    const id = v.listId;
-    if (!id) return;
+    if (!v.listId) return;
     setOpenLists((m) => ({ ...m, [v.id]: !m[v.id] }));
-    if (listViews[id]) return;
-    api.clickupListViews(id)
-      .then((r) => setListViews((m) => ({ ...m, [id]: r.views ?? [] })))
-      .catch(() => setListViews((m) => ({ ...m, [id]: [] })));
-  }, [listViews]);
+    ensureListViews(v.listId);
+  }, [ensureListViews]);
   const [editing, setEditing] = useState<SavedView | null>(null);
   /** Put the address bar away, whatever it was in the middle of. */
   const closeAddBar = useCallback(() => { setAdding(false); setEditing(null); setUrlText(""); }, []);
@@ -962,25 +969,34 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     return (
       <Fragment key={v.id}>
         <div className="flex items-stretch">
-          {v.listId ? (
+          {/* Only when there is something behind it. The views are read for
+              every list in an open folder, so "no arrow" means "asked, and it
+              has none" rather than "not looked yet" — and an arrow that opens a
+              line saying "no other views" is a control that exists to
+              disappoint. */}
+          {kids?.length ? (
             <button onClick={() => openList(v)} aria-expanded={open}
-              title={open ? "Hide this list's views" : "Show this list's views in ClickUp"}
+              title={open ? "Hide this list's views" : `${kids.length} more view${kids.length === 1 ? "" : "s"} on this list in ClickUp`}
               className="shrink-0 grid place-items-center agx-btn"
               style={{ width: 16, color: "var(--text4)" }}>
               <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
-                style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease", opacity: kids && !kids.length ? 0.25 : 1 }}>
+                style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
                 <path d="M6 3.5 10.5 8 6 12.5Z" />
               </svg>
             </button>
           ) : <span aria-hidden style={{ width: 16 }} />}
           <div className="min-w-0 flex-1">{railRow(v, 1)}</div>
         </div>
-        {open && kids?.map((view) => railRow({
-          id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name,
-          url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName,
-        }, 2))}
-        {open && kids && !kids.length && (
-          <div className="text-[10.5px] py-0.5" style={{ paddingLeft: 40, color: "var(--text4)" }}>No other views on this list.</div>
+        {open && !!kids?.length && (
+          /* Their own guide line, indented past the list's glyph: without it
+             they sat at the list's own indent and read as siblings of it rather
+             than as what it holds. */
+          <div style={{ marginLeft: 24, borderLeft: `1px solid color-mix(in srgb, var(--text) 12%, transparent)` }}>
+            {kids.map((view) => railRow({
+              id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name,
+              url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName,
+            }, 1))}
+          </div>
         )}
       </Fragment>
     );
@@ -1071,6 +1087,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     try { return JSON.parse(localStorage.getItem(RAIL_SHUT_KEY) || "{}") as Record<string, boolean>; } catch { return {}; }
   });
   useEffect(() => { try { localStorage.setItem(RAIL_SHUT_KEY, JSON.stringify(railShut)); } catch { /* private mode */ } }, [railShut]);
+
+  /*
+   * Ask every visible list what views it has, once.
+   *
+   * The alternative is asking when somebody clicks the arrow — but then the
+   * arrow has to be drawn before the answer is known, on every list, and half
+   * of them open a line saying "no other views". Knowing costs one small call
+   * per list in an OPEN folder, cached for the session, and it is what lets the
+   * rail draw an arrow only where there is something behind it.
+   */
+  useEffect(() => {
+    if (!railOpen) return;
+    for (const g of railGroups.groups) {
+      if (railShut[g.key]) continue;
+      for (const v of g.views) if (v.listId) ensureListViews(v.listId);
+    }
+  }, [railOpen, railGroups, railShut, ensureListViews]);
+
   /* Sidebar or modal. Global for the same reason the width is: how you like to
      read a card is about you, not about which list you are on. Full screen was
      offered and turned down — it covers the table entirely, and in an app that
