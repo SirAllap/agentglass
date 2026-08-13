@@ -815,6 +815,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    * than up front: one call per list somebody opens, cached for the session,
    * instead of one per list on every board load.
    */
+  /** Which boards' blurbs you have opened. Per board and kept, because whether
+   *  a brief is worth having on screen is a property of that board. */
+  const [descOpen, setDescOpen] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem(DESC_KEY) || "{}") as Record<string, boolean>; } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem(DESC_KEY, JSON.stringify(descOpen)); } catch { /* private mode */ } }, [descOpen]);
   const [listViews, setListViews] = useState<Record<string, { id: string; name: string }[]>>({});
   const [openLists, setOpenLists] = useState<Record<string, boolean>>({});
   const openList = useCallback((v: SavedView) => {
@@ -2702,6 +2708,8 @@ const CARD_W_KEY = "agentglass.clickup.cardWidth";
 const RAIL_KEY = "agentglass.clickup.listRail";
 /** Which folders in that rail are folded shut, by folder key. */
 const RAIL_SHUT_KEY = "agentglass.clickup.listRail.shut";
+/** Which boards have their description unfolded. */
+const DESC_KEY = "agentglass.clickup.listDescription";
 const CARD_MODE_KEY = "agentglass.clickup.cardMode";
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */

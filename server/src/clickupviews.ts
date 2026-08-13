@@ -43,6 +43,9 @@ export interface CachedView {
   /** Space / Folder / List, kept with the rest of what the list told us so a
    *  restart opens with the breadcrumb already drawn. */
   place?: ListPlace;
+  /** The list's own blurb, when it has one. Kept beside the breadcrumb for the
+   *  same reason: it changes about never and a restart should not lose it. */
+  description?: string;
   /** When that read happened. Shown as "read N ago" rather than implied. */
   at: number;
   /** The view had more pages than we were willing to follow. */

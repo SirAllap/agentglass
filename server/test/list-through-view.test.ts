@@ -68,3 +68,30 @@ describe("when the view answers nothing", () => {
     expect(fn).toContain("const raw = await rawListTasks(token, listId, me);");
   });
 });
+
+describe("a list's own views, opened from the sidebar", () => {
+  const src = require("node:fs").readFileSync(new URL("../src/providers.ts", import.meta.url), "utf8") as string;
+
+  it("can be read without being saved", () => {
+    /* They hang under a list in the rail and come and go with it. Refusing them
+       is a row that opens nothing; saving them on first click would fill
+       somebody's sidebar with every tab they ever glanced at. */
+    expect(src).toContain("export function rememberListViews");
+    const at = src.indexOf("export async function readView");
+    expect(src.slice(at, at + 1600)).toContain("ephemeralViews.get(viewId)");
+  });
+
+  it("only for ids the server itself offered", () => {
+    // The id reaches a board read. It has to be one we handed out, not any
+    // string a caller sends.
+    const idx = require("node:fs").readFileSync(new URL("../src/index.ts", import.meta.url), "utf8") as string;
+    const at = idx.indexOf('pathname === "/clickup/list-views"');
+    expect(idx.slice(at, at + 700)).toContain("rememberListViews(listId,");
+  });
+
+  it("keeps them out of the file", () => {
+    // Memory only: the file holds what somebody chose to keep.
+    expect(src).toContain("const ephemeralViews = new Map<string, string>();");
+    expect(src).not.toContain("addView({ id: viewId");
+  });
+});

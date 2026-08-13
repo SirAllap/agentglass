@@ -507,6 +507,15 @@ export interface ViewTasksResponse {
   /** Where the board's own list sits — Space / Folder / List. Absent for the
    *  built-in board, whose rows come from many lists; those carry their own. */
   place?: ListPlace;
+  /**
+   * The blurb the list carries in ClickUp — the brief, the docs, the team.
+   *
+   * Absent on most lists, which is the whole reason it is optional rather than
+   * a section that is sometimes empty: a heading over nothing is worse than no
+   * heading. Plain text; ClickUp's API hands out the words and keeps the chips
+   * to itself.
+   */
+  description?: string;
   view?: SavedView;
   error?: string;
   unauthorised?: boolean;

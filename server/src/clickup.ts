@@ -1081,9 +1081,14 @@ function tableMarkdown(t: { rows?: unknown[]; columns?: unknown[]; cells?: Recor
  *  us, and the two a picker needs in order not to guess. */
 export async function listMeta(
   token: string, listId: string,
-): Promise<CallResult<{ name: string; statuses: ListStatus[]; fields: ListField[]; place: ListPlace }>> {
+): Promise<CallResult<{ name: string; statuses: ListStatus[]; fields: ListField[]; place: ListPlace; description?: string }>> {
   const l = await call<{
     name?: string;
+    /** The blurb at the top of a list in ClickUp: the brief, the docs, who is
+     *  on it. Plain text through the API — the chips and links it draws in the
+     *  browser are rich blocks v2 does not hand out — and empty on most lists,
+     *  which is why nothing is drawn for it unless there is something. */
+    content?: string;
     statuses?: { status: string; type: string; orderindex: number; color?: string }[];
     // Verified against a real list: `/list/{id}` carries its own space and
     // folder. The breadcrumb therefore costs no call of its own.
@@ -1100,6 +1105,7 @@ export async function listMeta(
     ok: true,
     data: {
       name: l.data?.name ?? "",
+      ...(String(l.data?.content ?? "").trim() ? { description: String(l.data!.content) } : {}),
       place: {
         space: l.data?.space?.name || undefined,
         // A folderless list gets a hidden placeholder — see ListPlace.

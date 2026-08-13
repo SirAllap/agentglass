@@ -444,17 +444,50 @@ export function __resetViewCache(): void { inFlight.clear(); cooling.clear(); }
  * A failure NEVER empties a board. What was last seen stays, with the reason
  * named above it.
  */
+/*
+ * The views the sidebar has offered, by id.
+ *
+ * Filled when the panel asks a list for its views and read when one of them is
+ * opened. Memory only and deliberately: it is a lookup table for this session's
+ * clicks, not a thing to remember — the file holds what somebody chose to keep.
+ */
+const ephemeralViews = new Map<string, string>();
+const ephemeralNames = new Map<string, string>();
+export function rememberListViews(listId: string, views: { id: string; name: string }[]): void {
+  for (const v of views) { ephemeralViews.set(v.id, listId); ephemeralNames.set(v.id, v.name); }
+}
+
 export async function readView(viewId: string, force = false): Promise<ViewTasksResponse> {
   const { secretFor } = await import("./credentials.ts");
-  const view = savedViews().find((v) => v.id === viewId);
-  if (!view) return { tasks: [], statuses: [], fields: [], at: 0, error: "That board is not saved any more" };
+  /*
+   * A saved board, or one of a saved list's own views.
+   *
+   * The second kind is not in the file and should not be: the sidebar hangs a
+   * list's ClickUp views under it — `Blue Eng list view`, `Frontend` — and
+   * those come and go with the list. Refusing them ("that board is not saved
+   * any more") is what a row that opens nothing looks like, and saving them on
+   * first click would quietly fill somebody's sidebar with every tab they ever
+   * glanced at.
+   *
+   * So they are read as themselves: the id is enough for the API, the name
+   * comes back with it, and everything downstream — the cache, the statuses,
+   * the breadcrumb — works on a `SavedView` shape it never has to know is
+   * borrowed.
+   */
+  let view = savedViews().find((v) => v.id === viewId);
+  if (!view) {
+    const owner = savedViews().find((v) => v.listId && ephemeralViews.get(viewId) === v.listId);
+    const listId = owner?.listId ?? ephemeralViews.get(viewId);
+    if (!listId) return { tasks: [], statuses: [], fields: [], at: 0, error: "That board is not saved any more" };
+    view = { id: viewId, name: ephemeralNames.get(viewId) ?? "View", listId, listName: owner?.listName, url: "", addedAt: 0 };
+  }
 
   /** Whatever we hold, dressed as an answer. */
   const shown = (extra: Partial<ViewTasksResponse> = {}): ViewTasksResponse => {
     const c = cachedFor(viewId);
     return {
       tasks: c?.tasks ?? [], statuses: c?.statuses ?? [], fields: c?.fields ?? [],
-      place: c?.place, view: c?.view ?? view, at: c?.at ?? 0, truncated: c?.truncated, ...extra,
+      place: c?.place, description: c?.description, view: c?.view ?? view, at: c?.at ?? 0, truncated: c?.truncated, ...extra,
     };
   };
 
@@ -592,9 +625,15 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   let statuses = held?.statuses ?? [];
   let fields = held?.fields ?? [];
   let place = held?.place;
+  let description = held?.description;
   if (view.listId && (!statuses.length || !place || force)) {
     const l = await listMeta(token, view.listId);
-    if (l.ok && l.data) { statuses = l.data.statuses; fields = l.data.fields; place = l.data.place; }
+    if (l.ok && l.data) {
+      statuses = l.data.statuses; fields = l.data.fields; place = l.data.place;
+      // Assigned rather than merged: a blurb that was deleted in ClickUp has to
+      // be able to disappear here too.
+      description = l.data.description;
+    }
   }
 
   const r = view.id.startsWith("list:")
@@ -620,7 +659,7 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   void refreshCommentCounts(r.data.tasks, token)
     .then(() => recount(view.id))
     .catch(() => { /* a count is not worth a log line */ });
-  putCache({ view, tasks, statuses, fields, place, at: Date.now(), truncated: r.data.truncated });
+  putCache({ view, tasks, statuses, fields, place, description, at: Date.now(), truncated: r.data.truncated });
   return { ok: true };
 }
 
