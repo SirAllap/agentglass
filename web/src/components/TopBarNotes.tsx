@@ -414,7 +414,7 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
         : go && n.goto?.kind === "card" ? `Open ${n.goto.label} in Tasks`
         : expandable ? (open ? "Show less" : "Show the whole message") : undefined}>
       <div className="flex items-start gap-2">
-        <span className="flex flex-col min-w-0 flex-1 gap-1">
+        <span className="flex flex-col min-w-0 flex-1 gap-1.5">
           <span className="flex items-center gap-2">
             <Cap>{n.app}</Cap>
             <Cap dim>{ago(n.at)}</Cap>
@@ -596,7 +596,7 @@ export function NotifyBell({ noDrag, onGoto }: {
               boxShadow: "0 22px 48px -20px var(--shadow)",
             }}
           >
-            <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ borderBottom: "1px solid var(--border)" }}>
+            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
               <Cap>notifications</Cap>
               <Cap dim>{hist.length}</Cap>
               {/* Silencing without saying so is how you end up asking why you

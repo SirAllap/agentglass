@@ -765,15 +765,21 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-inbox-list {
   max-height: 46vh;
   overflow-y: auto;
-  padding: 0 6px 8px;
+  padding: 2px 8px 10px;
 }
+/* A message needs a margin the way a paragraph does. 8px on every side, with a
+   1px rule as the only thing between one notification and the next, put the last
+   line of one 8px from the first line of the other — close enough that the eye
+   reads a single block of text with a rule through it rather than two messages.
+   12px vertical is the smallest gap at which the boundary stops needing the
+   rule to be legible; the rule stays because a scanned list still wants one. */
 .agx-note-row {
-  padding: 8px 8px;
+  padding: 12px 10px;
   border-radius: 10px;
 }
 .agx-note-body {
-  font-size: 10.5px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--text3);
   white-space: pre-wrap;
   /* Long URLs are one unbreakable word; without this they set the container's
@@ -832,9 +838,9 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* Really a control, so here a pointer and a hover fill are honest rather than
    misleading. */
 .agx-note-btn {
-  font-size: 10px;
+  font-size: 10.5px;
   line-height: 1;
-  padding: 4px 6px;
+  padding: 4px 8px;
   border-radius: 6px;
   cursor: pointer;
   color: var(--text3);
@@ -862,10 +868,10 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 /* The link button says where it goes, so it is wider than an icon and belongs
    under the message rather than in the corner with the row's controls. */
 .agx-note-link {
-  margin-top: 3px;
-  font-size: 10px;
+  margin-top: 6px;
+  font-size: 10.5px;
   line-height: 1;
-  padding: 4px 7px;
+  padding: 5px 8px;
   border-radius: 6px;
   cursor: pointer;
   color: var(--primary);

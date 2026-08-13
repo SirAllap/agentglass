@@ -438,18 +438,18 @@ export function FilePalette({
             role="dialog" aria-modal="true" aria-label="Find a file">
 
             {/* the three questions */}
-            <div className="flex items-center gap-1 px-2 pt-2 shrink-0"
+            <div className="flex items-center gap-1 px-3 pt-2.5 shrink-0"
               style={{ background: "color-mix(in srgb, var(--text) 4%, var(--bg2))" }}>
               {TABS.map((t) => (
                 <button key={t.id} onClick={() => { setTab(t.id); inputRef.current?.focus(); }}
-                  className="text-[11px] px-3 py-1 rounded-t-md"
+                  className="text-[11px] px-3 py-1.5 rounded-t-md"
                   style={t.id === tab
                     ? { background: "var(--bg2)", border: edge(18), borderBottom: "none", color: "var(--primary)" }
                     : { border: "1px solid transparent", color: "var(--text3)" }}>
                   {t.label}
                 </button>
               ))}
-              <span className="ml-auto text-[9.5px] px-2 py-1 rounded" style={{ color: "var(--text4)" }}>⇥ switches</span>
+              <span className="ml-auto text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--text4)" }}>⇥ switches</span>
               {/* The mouse's way out. Only with a document open, where clicking
                   away no longer closes this — without one the scrim is still
                   the obvious target and a second control would be clutter. */}
@@ -461,7 +461,7 @@ export function FilePalette({
             </div>
 
             {/* the field, and which checkout it is asking */}
-            <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderTop: edge(18), borderBottom: edge(18) }}>
+            <div className="flex items-center gap-2.5 px-3 py-2.5 shrink-0" style={{ borderTop: edge(18), borderBottom: edge(18) }}>
               <span style={{ color: "var(--primary)" }}>⌕</span>
               <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
                 spellCheck={false} autoComplete="off" placeholder={active.placeholder}
@@ -492,7 +492,7 @@ export function FilePalette({
             </div>
 
             {/* the answers */}
-            <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto py-1"
+            <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto py-1.5"
               /* A cap, not a height: three results stay three rows tall rather
                  than being stretched to a box sized for more. */
               style={listCap ? { maxHeight: listCap } : undefined}>
@@ -500,7 +500,7 @@ export function FilePalette({
                 status={status} onHover={setCursor} onPick={openRow} />
             </div>
 
-            <div className="flex items-center gap-3 px-3 py-1.5 shrink-0 text-[9.5px]"
+            <div className="flex items-center gap-4 px-3 py-2 shrink-0 text-[10.5px]"
               style={{ borderTop: edge(18), color: "var(--text4)" }}>
               <span>↑↓ move</span>
               <span>⏎ open</span>
@@ -540,7 +540,7 @@ function Answers({ tab, q, root, rows, cursor, status, onHover, onPick }: {
   return (
     <>
       {status?.data?.via && (
-        <div className="px-3 py-1 text-[9.5px]" style={{ color: "var(--text4)" }}>
+        <div className="px-3 py-1.5 text-[10.5px]" style={{ color: "var(--text4)" }}>
           {rows.length} result{rows.length === 1 ? "" : "s"} · via {status.data.via}{status.data.truncated ? " · truncated" : ""}
         </div>
       )}
@@ -560,7 +560,7 @@ function RowView({ row, i, on, onHover, onPick }: {
   const icon = iconFor(name, row.kind === "dir");
   return (
     <button data-row={i} onMouseEnter={() => onHover(i)} onClick={() => onPick(row)}
-      className="w-full text-left px-3 py-1.5" title={row.rel}
+      className="w-full text-left px-3 py-2" title={row.rel}
       style={{
         ...(on ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : null),
         ...(row.kind === "recent" && row.gone ? { opacity: 0.55 } : null),
