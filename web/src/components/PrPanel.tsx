@@ -77,7 +77,6 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember } from "../../../shared/providers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { seedChat } from "../lib/chatStore.ts";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { FileRail } from "./FileRail.tsx";
@@ -5804,10 +5803,10 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
             {/* Telling somebody it is ready.
                 Two routes, and they are not the same kind of thing. The card is
                 ours to write on — agentglass holds a ClickUp token. Slack is
-                not: posting there means holding a workspace token to do what
-                the agent already does with its own, so that button writes the
-                message and hands it to a chat. Which is also why one of them
-                can be missing and the other cannot. */}
+                not: posting there means holding a workspace token to do what an
+                agent already does with its own, so that button gathers the
+                facts and opens a tmux tab with an agent on it. Which is also
+                why one of them can be missing and the other cannot. */}
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
               {slack && (
                 <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(defaultPing(d, whoToTell(task))); }}
@@ -5836,20 +5835,22 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                   style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
-                    {tell === "slack" ? "the agent posts this" : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
+                    {tell === "slack" ? "an agent says this, in the channel's own words" : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
                   </span>
                   <button disabled={sending || !msg.trim()} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
                     style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                     onClick={async () => {
                       const target = whoToTell(task);
                       if (tell === "slack") {
-                        /* Handed over rather than sent. The chat is where the
-                           Slack connection lives, and it is also where you can
-                           see what was actually said — a fire-and-forget button
-                           into somebody else's workspace is not something to
-                           offer without a transcript. */
-                        seedChat(root, slackPrompt(msg, target?.name), `Ping about #${d.number}`);
-                        setTell(null); setSaid("handed to a chat");
+                        /* Handed over rather than sent, and handed to a tmux
+                           window rather than to the chat. Slack is not ours to
+                           post into — that takes an agent with its own
+                           connection — and a message into somebody else's
+                           workspace is not a fire-and-forget button: it is
+                           worth watching, attached, where you can take the
+                           keyboard off it before it says the wrong thing. */
+                        requestTermIssue(root, `slack-${d.number}`, slackPrompt(msg, target?.name), true, false, `Ping about #${d.number}`);
+                        setTell(null); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
                         return;
                       }
                       if (!task) return;
@@ -5859,7 +5860,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                       if (r?.ok) { setTell(null); setSaid("written on the card"); }
                       else setSaid(`!${r?.error || "ClickUp refused it"}`);
                     }}>
-                    {sending ? "Sending…" : tell === "slack" ? "Hand to a chat" : "Write it"}
+                    {sending ? "Sending…" : tell === "slack" ? "Hand to a tmux tab" : "Write it"}
                   </button>
                 </div>
               </div>
@@ -5884,11 +5885,30 @@ function defaultPing(d: PrDetail, who: { name: string } | null): string {
   return `${who ? `@${who.name} ` : ""}PR ready to review — #${d.number} ${d.title}\n${d.url}`;
 }
 
-/** What the agent is asked to do. Spelled as an instruction and not as the
- *  message itself, so a chat that is already mid-conversation cannot mistake it
- *  for something to answer. */
+/**
+ * What the agent is asked to do. Spelled as an instruction and not as the
+ * message itself, so a session that is already mid-conversation cannot mistake
+ * it for something to answer.
+ *
+ * And explicitly NOT as words to copy. The box above holds the facts — which
+ * pull request, its number, its link, who it is for — written in this app's
+ * English because that is what the app can write. What lands in Slack has to
+ * read like the channel it lands in: same language, same length, same shape as
+ * the messages already there. A correct announcement that reads like it came
+ * from a different room is worse than one written by hand.
+ */
 function slackPrompt(msg: string, name?: string): string {
-  return `Post this in Slack${name ? ` to ${name}` : ""}, as it is written, and tell me where it landed:\n\n${msg}`;
+  return [
+    `Say this in Slack${name ? ` to ${name}` : ""}.`,
+    "",
+    "Not in these words. What follows is the FACTS, not the wording: the pull request, its number, its link, who it is for.",
+    "",
+    "Before you write anything, read back through the recent messages in the channel you are about to post in, and write it the way the people there write it — their language, their length, their shape, their punctuation. Do not translate this text and do not paste it. Match what is already there so this one does not stand out as written by something else.",
+    "",
+    "Then post it, and tell me where it landed.",
+    "",
+    msg,
+  ].join("\n");
 }
 
 function PrSidebar({ d, root, onEditField }: {
