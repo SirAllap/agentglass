@@ -4,7 +4,7 @@
 // tab-completion, colors, vim/htop/lazygit. Shell sessions are kept alive in a
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
-import { Fragment, useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -29,6 +29,9 @@ import { openExternal } from "../lib/externalUrl.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
+import { openCard } from "../lib/openCard.ts";
+import { cardRef, chipAction } from "../lib/cardRef.ts";
+import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
@@ -1290,6 +1293,40 @@ function detectPaneWorktree(term: Terminal | undefined, worktrees: GitRepoRef[])
 }
 
 /**
+ * The card this branch came from, beside the pull request it became.
+ *
+ * The same id the pull request panel reads, off the same branch name — a
+ * worktree is cut per card here, so the branch says which one far more reliably
+ * than anything else on screen. It earns its place in the terminal's chrome for
+ * the same reason the PR chip does: this bar is the answer to "what am I in",
+ * and until now it could name the branch and its pull request but not the thing
+ * both of them are about.
+ *
+ * Its own component so the ClickUp lookup is a hook in a component that always
+ * renders it, never a hook inside the conditional block that draws the bar.
+ *
+ * Silent when there is no id in the branch, and when there is one from a tracker
+ * this machine cannot resolve — see `chipAction`. A dead pill in permanent
+ * residence would be worse than no pill.
+ */
+function WtCardChip({ branch, onDown }: { branch: string; onDown?: (e: React.MouseEvent) => void }) {
+  const setup = useClickupSetup();
+  const ref = useMemo(() => cardRef({ headRefName: branch }), [branch]);
+  const go = chipAction(ref, setup);
+  if (!ref || !go) return null;
+  const inApp = go.in === "tasks";
+  return (
+    <button
+      onMouseDown={onDown}
+      onClick={() => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); }}
+      title={inApp ? `Open ${ref.label} in Tasks — the card this branch came from` : `Open ${ref.label} in ClickUp`}
+      className="agx-btn shrink-0 flex items-center gap-1 px-2 py-px rounded leading-none tabular-nums"
+      style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)" }}
+    >{ref.label} <span className="t-dim2 text-[10px]">↗</span></button>
+  );
+}
+
+/**
  * The pull request out of a branch, remembered for a minute.
  *
  * The chip re-asks whenever the focused pane changes worktree, and switching
@@ -2239,6 +2276,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                           >PR #{chipPr.pr.number} <span className="t-dim2 text-[10px]">↗</span></button>
                         )}
+                        <WtCardChip branch={at.branch} onDown={keepTermFocus} />
                       </span>
                     );
                   })()}

@@ -194,3 +194,39 @@ describe("what the chip should do, given what this machine has", () => {
     expect(chipAction(null, { connected: true })).toBe(null);
   });
 });
+
+/*
+ * The same id, in the terminal's worktree bar.
+ *
+ * That bar could name the branch and the pull request it became, but not the
+ * card both are about — which is the one name people say out loud. It reads the
+ * id off the branch with `cardRef`, exactly as the pull request panel does, so
+ * the two can never disagree about what a branch is called.
+ *
+ * Pinned as source because the bar is built inside an IIFE in the terminal's
+ * chrome: the lookup is a HOOK, and a hook called in there is a hook that stops
+ * running the day the bar takes an early return. Its own component is what makes
+ * that impossible, and that is the part worth guarding.
+ */
+const termSrc = await Bun.file(new URL("../src/components/TerminalPanel.tsx", import.meta.url)).text();
+
+describe("the card chip in the terminal's worktree bar", () => {
+  it("is a component of its own, so its ClickUp lookup is never a conditional hook", () => {
+    expect(termSrc).toContain("function WtCardChip(");
+    const body = termSrc.slice(termSrc.indexOf("function WtCardChip("), termSrc.indexOf("\n}", termSrc.indexOf("function WtCardChip(")));
+    expect(body).toContain("useClickupSetup()");
+    expect(body).toContain("cardRef({ headRefName: branch })");
+  });
+
+  it("is drawn from the branch of the worktree the bar is describing", () => {
+    expect(termSrc).toContain("<WtCardChip branch={at.branch}");
+  });
+
+  it("says nothing when the branch carries no id it can resolve", () => {
+    // `chipAction` is the rule — null ref or a tracker this machine cannot
+    // reach means no pill at all, rather than a dead one in permanent residence.
+    const body = termSrc.slice(termSrc.indexOf("function WtCardChip("), termSrc.indexOf("\n}", termSrc.indexOf("function WtCardChip(")));
+    expect(body).toContain("chipAction(ref, setup)");
+    expect(body).toContain("if (!ref || !go) return null;");
+  });
+});
