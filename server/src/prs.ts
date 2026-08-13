@@ -96,6 +96,32 @@ async function ghJson<T>(args: string[], cwd?: string): Promise<T | null> {
   try { return JSON.parse(r.stdout) as T; } catch { return null; }
 }
 
+/**
+ * Every page of a list endpoint, not the first hundred.
+ *
+ * `?per_page=100` reads as "all of them" and is not: this repository has 153
+ * labels, `review:caveman` is the 106th alphabetically, and it was simply
+ * missing from the label picker — a label somebody could see on GitHub and not
+ * apply here. Measured, not guessed.
+ *
+ * `--slurp` is what makes this parseable. A bare `--paginate` concatenates the
+ * pages' bodies, so two pages of an array arrive as `[…][…]`, which is not
+ * JSON; `--slurp` wraps them in one array of arrays, and this flattens it.
+ *
+ * `pages` is a real cap rather than a formality — 894 branches is nine round
+ * trips for a dropdown nobody scrolls to the end of. Callers say how far they
+ * are willing to go.
+ */
+async function ghJsonAll<T>(path: string, pages = 4, cwd?: string): Promise<T[] | null> {
+  const r = await gh(["api", path, "--paginate", "--slurp"], cwd);
+  if (r.code !== 0) return null;
+  try {
+    const all = JSON.parse(r.stdout) as T[][];
+    if (!Array.isArray(all)) return null;
+    return all.slice(0, pages).flat();
+  } catch { return null; }
+}
+
 // ---------------------------------------------------------------------------
 // capability
 // ---------------------------------------------------------------------------
@@ -1501,8 +1527,11 @@ export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data
   const [contribs, assignees, labels, milestones, branches] = await Promise.all([
     ghJson<any[]>(["api", `repos/${r}/contributors?per_page=100`]),
     ghJson<any[]>(["api", `repos/${r}/assignees?per_page=100`]),
-    ghJson<any[]>(["api", `repos/${r}/labels?per_page=100`]),
-    ghJson<any[]>(["api", `repos/${r}/milestones?state=all&per_page=100`]),
+    /* Every label, however many there are: this is a picker of the whole set,
+       and the one that was missing sat at number 106. Capped at four pages —
+       four hundred labels is already a repository with a problem of its own. */
+    ghJsonAll<any>(`repos/${r}/labels?per_page=100`, 4),
+    ghJsonAll<any>(`repos/${r}/milestones?state=all&per_page=100`, 2),
     ghJson<any[]>(["api", `repos/${r}/branches?per_page=100`]),
   ]);
   const data: PrFacetOptions = {
