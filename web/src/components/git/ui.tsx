@@ -68,8 +68,11 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     gridTemplateColumns: "minmax(0, 1fr) 10rem",
     alignItems: "center",
     gap: 12,
-    padding: "10px 12px 10px 16px",
-    marginBottom: 6,
+    // Compact, but not a table again: 9px of vertical padding and 5px between
+    // cards fits ~4 more rows on a laptop screen than the first pass did, and
+    // the two-line hierarchy is what keeps it readable at that density.
+    padding: "9px 12px 9px 16px",
+    marginBottom: 5,
     borderRadius: 10,
     background: selected ? wash("--primary", 14) : current ? wash("--primary", 6) : wash("--bg3", 34),
     border: `1px solid ${selected ? wash("--primary", 55) : wash("--text", 8)}`,

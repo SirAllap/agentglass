@@ -156,7 +156,10 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
     );
   }
   return (
-    <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5">
+    // A reading measure. These cards are prose — a finding, what it means, and
+    // what it would cost — and prose set to 2000px is not read, it is skimmed
+    // past. Centred, so the pane does not read as content pinned to one edge.
+    <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5 w-full mx-auto" style={{ maxWidth: 1100 }}>
       {report.findings.map((f) => {
         const total = f.items.length + f.extra;
         return (
@@ -3409,17 +3412,22 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : view === "stashes" ? (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
-                    {writeEnabled && <button onClick={stashPush} disabled={busy || tree?.clean} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }}>⇩ stash all changes</button>}
+                    {/* One row, not four stacked. Stash-all, the snapshot field
+                        and "some files" are three ways to put work aside; they
+                        belong beside each other. */}
+                    <div className="flex items-center gap-2 flex-wrap mb-3">
+                    {writeEnabled && <button onClick={stashPush} disabled={busy || tree?.clean} className="text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }}>⇩ stash all changes</button>}
                     {/* Snapshots: named checkpoints that never touch the tree.
                         stash push MOVES work off the tree; a snapshot copies it
                         and leaves the tree alone — so "before I try this" can
                         restore even after the experiment goes sideways. */}
                     {writeEnabled && (
-                      <div className="flex items-center gap-2 mb-2 max-w-lg">
+                      <div className="flex items-center gap-2 max-w-lg">
                         <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="flex-1 px-3 py-1.5 rounded-full text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
                         <button onClick={snapshotNow} disabled={busy || tree?.clean} className="text-[11px] px-3.5 py-1.5 rounded-full font-medium whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime">⟳ snapshot now</button>
                       </div>
                     )}
+                    </div>
                     {snapshots.length > 0 && (
                       <div className="mb-3">
                         <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">snapshots</div>
