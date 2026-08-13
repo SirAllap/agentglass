@@ -744,6 +744,84 @@ export interface DiffHunk {
   newLines: number;
   lines: string[]; // each begins with " ", "+" or "-"
 }
+/**
+ * One changed file, as the Diff view lists it. No diff text.
+ *
+ * This exists because the view used to list `FileChange`, which describes
+ * something else entirely: one agent's Edit call, with a database id, a session,
+ * a tool name and the timestamp of the hook that recorded it. A file that git
+ * says has changed has none of those, so every field was invented — the stamp
+ * became "when the server was asked", the session became the literal string
+ * "staged", and the id became a hash of the two. Every one of those inventions
+ * turned into a bug the reader could see: times that were all the current clock,
+ * groups called `git:unstaged`, and an id that changed when you ran `git add`,
+ * which threw away the selection and the review tick with it.
+ *
+ * So: a row says what changed, where, how much and WHEN, and nothing about who
+ * observed it. The diff text is a second request (`FileDiff`), because the list
+ * is 400 rows and the reader is looking at one — carrying the hunks in the row
+ * was 89% of a megabyte re-fetched every four seconds.
+ */
+export interface ChangeRow {
+  /** `${repoRoot}\0${path}`. Stable across staging, across polls, across edits,
+   *  and unique between two worktrees holding the same relative path — which is
+   *  the whole reason a hash of anything else was wrong. */
+  key: string;
+  repoRoot: string;
+  /** The branch the checkout is on, so the list can head a section with the
+   *  thing the work is called rather than a folder name. */
+  branch: string;
+  /** Relative to `repoRoot`. Absolute paths are a rendering decision, not a
+   *  storage one, and every consumer wants the short form. */
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "untracked" | "typechange";
+  /** In ONE row. `git status` reports a partially staged file as two states of
+   *  one file; the old list emitted two rows with nothing to tell them apart. */
+  staged: "none" | "partial" | "full";
+  /** Where a rename came from. Computed before and never rendered, which made a
+   *  rename look like a brand-new file with an empty diff. */
+  oldPath?: string;
+  additions: number;
+  deletions: number;
+  /** Both mean "there is no text to show", and both are things the panel has to
+   *  SAY rather than answer with a blank pane and "0 hunks". */
+  binary: boolean;
+  tooBig: boolean;
+  /** When the file changed. Working: the file's mtime. Committed: the commit's
+   *  own date. Never the time of the request. */
+  changedAt: number;
+  ignored: boolean;
+  outside: boolean;
+  /** Committed mode only: which commit this row came from. */
+  commit?: { hash: string; subject: string; author: string; at: number };
+}
+
+/** The other half: the text of one file's diff, fetched when a row is opened. */
+export interface FileDiff {
+  key: string;
+  /** Changes whenever the content does — mtime+size while uncommitted, the
+   *  commit hash once committed. The client keys its cache on this, so a row
+   *  that has not changed is never re-fetched, and one that has cannot be
+   *  served stale. */
+  sig: string;
+  hunks: DiffHunk[];
+  /** The diff was cut off — a generated file with 40k changed lines is not
+   *  something to render, and pretending it rendered is worse. */
+  truncated: boolean;
+  binary: boolean;
+  error?: string;
+}
+
+/** What `/git/changes-v2` answers. `truncated` counts rows NOT sent, so the
+ *  view can say so instead of silently ending a worktree short. */
+export interface ChangeRowsResult {
+  rows: ChangeRow[];
+  truncated: number;
+  /** Repos that failed to read, by root — one broken checkout must not empty
+   *  the list for the other eighteen. */
+  failed?: string[];
+}
+
 /** One thing that happened in a session, in order — a message or a tool run.
  *
  *  The conversation used to be prompts and assistant replies only, which left

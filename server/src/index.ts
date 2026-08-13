@@ -58,6 +58,7 @@ import {
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
   prepareConflictMerge,
 } from "./gitwork.ts";
+import { changeRows, fileDiff } from "./changerows.ts";
 import { saveShot } from "./shots.ts";
 import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
@@ -463,7 +464,19 @@ const commitCache = new Map<string, { at: number; data: Awaited<ReturnType<typeo
 // worktree (a giant last commit that slipped the no-merge filter, thousands of
 // uncommitted files) must never be able to freeze the view again.
 const CHANGES_ALL_MAX = 400;
-setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); changesAllCache.clear(); commitCache.clear(); broadcast({ type: "git" }); });
+// The rebuilt list (/git/changes-v2). Same shape of cache, one crucial
+// difference in what it holds: rows without diff text, so a hit is a few
+// kilobytes rather than the megabyte the old one served every four seconds.
+const rowsCache = new Map<string, { at: number; body: string }>();
+// Shorter than CHANGES_ALL_TTL_MS and NOT stretched by backoff. The old TTL
+// reached 24s under load, which is a review panel silently showing the state of
+// the repo before your last commit; this list is cheap enough to hold for two.
+const ROWS_TTL_MS = 2_000;
+// Only a ceiling against a runaway checkout — and, unlike the old one, the
+// answer says how many rows it left out instead of ending a worktree short in
+// silence.
+const ROWS_MAX = 2_000;
+setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); changesAllCache.clear(); commitCache.clear(); rowsCache.clear(); broadcast({ type: "git" }); });
 
 /**
  * The one thing the merged-branch sweep cannot do for itself.
@@ -1788,6 +1801,56 @@ const server = Bun.serve<WsData>({
         changesAllCache.set(mode, { at: Date.now(), body: out });
         return out;
       }));
+    }
+    /*
+     * The rebuilt Diff view, in two halves.
+     *
+     * `/git/changes-v2` is the LIST: one row per changed file, with no diff text
+     * in it. That is the whole design — measured on this machine, the endpoint it
+     * replaces sent 1.1 MB every four seconds and 89% of it was the diff of files
+     * nobody had opened. Rows carry a stable key, the real time the file changed,
+     * and computed `ignored`/`outside` flags rather than asserted ones.
+     *
+     * `/git/file-diff` is the BODY: the diff of the one file the reader opened.
+     */
+    if (pathname === "/git/changes-v2") {
+      const mode = url.searchParams.get("mode") === "committed" ? "committed" : "working";
+      return body(await singleFlight(`rows:${mode}`, async () => {
+        const cached = rowsCache.get(mode);
+        if (cached && Date.now() - cached.at < ROWS_TTL_MS) return cached.body;
+        const paths = getChanges(300).map((c) => c.file_path);
+        /* Every in-scope checkout, INCLUDING one on main or master. The old
+           endpoint dropped those on the grounds that trunk is the base you cut
+           from — true of a branch-vs-base diff, false of "what have I changed
+           and not committed", and it left anyone whose project has a single
+           trunk checkout looking at a permanently empty view. */
+        const repos = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
+        const scope = workspaceRoot();
+        const out = JSON.stringify(await changeRows(repos, mode, scope, ROWS_MAX));
+        rowsCache.set(mode, { at: Date.now(), body: out });
+        return out;
+      }));
+    }
+    if (pathname === "/git/file-diff") {
+      const root = url.searchParams.get("root") || "";
+      const path = url.searchParams.get("path") || "";
+      const mode = url.searchParams.get("mode") === "committed" ? "committed" : "working";
+      if (!root || !path) return json({ error: "root and path are required" }, 400);
+      // The same scope gate every other git route uses: a root off the wire is
+      // not a licence to read any repo on the disk.
+      if (!inScope(root)) return json({ error: "out of scope" }, 403);
+      const d = await fileDiff(root, path, mode);
+      /* Keyed on content, so re-selecting a file the reader has already opened
+         costs a 304 rather than another diff. `sig` is mtime+size while
+         uncommitted and the commit hash once committed — never a timestamp of
+         the request, which is what made the old view's caching a coin toss. */
+      const tag = `"${d.sig}"`;
+      if (d.sig && req.headers.get("if-none-match") === tag) {
+        return new Response(null, { status: 304, headers: { ETag: tag, ...cors } });
+      }
+      return new Response(JSON.stringify(d), {
+        headers: { "content-type": "application/json", ...cors, ...(d.sig ? { ETag: tag, "Cache-Control": "no-cache" } : {}) },
+      });
     }
     if (pathname === "/git/branches") {
       const root = url.searchParams.get("root") || "";
