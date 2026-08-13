@@ -891,13 +891,19 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    */
   const railGroups = useMemo(() => {
     const saved = new Map((boards?.folders ?? []).map((f) => [f.id, f]));
+    /* A saved folder, found by NAME — for the rows that only know their
+       breadcrumb. A pasted view carries the folder's name and not its id, and
+       keying those separately drew the same folder twice: once with the five
+       lists it holds, once with the one view somebody had saved over it. */
+    const byName = new Map((boards?.folders ?? []).map((f) => [f.name, f.id]));
     const loose: SavedView[] = [];
     const groups = new Map<string, { key: string; folderId?: string; folder: string; space?: string; views: SavedView[] }>();
     for (const v of railViews) {
       const folder = v.folderName || "";
       if (v.builtin || !folder) { loose.push(v); continue; }
-      const key = v.folderId ? `f:${v.folderId}` : `n:${v.spaceName ?? ""}/${folder}`;
-      const g = groups.get(key) ?? { key, folderId: v.folderId, folder, space: v.spaceName, views: [] };
+      const id = v.folderId ?? byName.get(folder);
+      const key = id ? `f:${id}` : `n:${v.spaceName ?? ""}/${folder}`;
+      const g = groups.get(key) ?? { key, folderId: id, folder, space: v.spaceName, views: [] };
       g.views.push(v);
       groups.set(key, g);
     }
@@ -940,6 +946,13 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         }} />
       )}
       <span className="truncate min-w-0 flex-1">{v.listName || v.name}</span>
+      {/* A saved ClickUp view over a list, rather than the list: same name on
+          the rail, different contents. Beside a folder that holds that list,
+          two identical-looking rows is what made this look duplicated. */}
+      {!v.builtin && v.listName && v.name && v.name !== v.listName && (
+        <span aria-hidden className="shrink-0 text-[9px] px-1 rounded" title={v.name}
+          style={{ color: "var(--text4)", border: edge(16) }}>view</span>
+      )}
       {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
     </button>
   );

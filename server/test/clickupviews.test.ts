@@ -114,6 +114,27 @@ describe("a folder on the sidebar", () => {
     expect(rows[0]!.folderId).toBe("f1");
   });
 
+  it("drops a pasted LIST the folder already holds, whatever its row id", () => {
+    /* Reported: the folder went on and the list somebody had pasted stayed
+       beside it — same name, twice, under two headings reading the same
+       folder. The folder's copy wins; it is the one that keeps up. */
+    V.addView({ id: "v-9", name: "List 10", listId: "10", listName: "List 10", url: "https://x/y", addedAt: 1 });
+    V.addFolder(folder("f1", ["10"]));
+    const rows = V.savedViews().filter((v) => v.listId === "10");
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.folderId).toBe("f1");
+  });
+
+  it("keeps a saved VIEW over a list the folder holds", () => {
+    /* The other half, and the reason the rule is not "same list, drop it": a
+       ClickUp view is a filter and an order somebody set up. Its name is not
+       the list's name, and that is exactly what tells the two apart. */
+    V.addView({ id: "6-10-1", name: "Eng list by start date", listId: "10", listName: "List 10", url: "https://x/y", addedAt: 1 });
+    V.addFolder(folder("f1", ["10"]));
+    const rows = V.savedViews().filter((v) => v.listId === "10");
+    expect(rows.map((r) => r.id).sort()).toEqual(["6-10-1", "list:10"]);
+  });
+
   it("takes its lists with it when it goes, and leaves the pasted ones", () => {
     V.addView(board("list:99"));
     V.addFolder(folder("f1", ["10"]));

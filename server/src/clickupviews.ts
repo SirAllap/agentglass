@@ -133,12 +133,31 @@ export function savedViews(): SavedView[] {
     spaceName: f.spaceName,
   })));
   const taken = new Set(fromFolders.map((v) => v.id));
+  /*
+   * The same list, added twice, and only one of the two is worth keeping.
+   *
+   * Somebody who pastes a list's address and later adds the folder it lives in
+   * gets it twice — once as their own row, once as the folder's — and it looks
+   * exactly like a bug because it is one. The folder's copy wins: it is the one
+   * that keeps up with ClickUp.
+   *
+   * A saved ClickUp VIEW over that list is not the same thing, though, and this
+   * is where a blunter rule would delete somebody's work: `Eng list by start
+   * date view` is a filter and an order somebody set up, over a list a folder
+   * happens to hold. So the test is whether the pasted row is the LIST itself,
+   * which is exactly the case where its name is the list's name.
+   */
+  const covered = new Set(fromFolders.map((v) => v.listId).filter(Boolean) as string[]);
   /* A pasted list knows where it lives too — the breadcrumb was read the first
      time it was opened and kept with its cached page. Filling it in here is
      what lets the sidebar file "Orbit v2 – Phase 1" under the folder it is
      actually in without anybody adding that folder. Absent until the board has
      been read once, which is honest: we do not know yet. */
-  const pasted = s.views.filter((v) => !taken.has(v.id)).map((v) => {
+  const pasted = s.views.filter((v) => {
+    if (taken.has(v.id)) return false;
+    if (!v.listId || !covered.has(v.listId)) return true;
+    return (v.name || "").trim() !== (v.listName || "").trim();
+  }).map((v) => {
     const place = s.cache[v.id]?.place;
     return place && (place.folder || place.space)
       ? { ...v, folderName: v.folderName ?? place.folder, spaceName: v.spaceName ?? place.space }
