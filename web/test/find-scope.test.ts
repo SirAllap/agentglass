@@ -13,6 +13,7 @@
  * and the DOM walk is tested by the suite next to it.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   closeFind, findChordIsOursToTake, findState, openFind, pushScope,
   registerEngine, runQuery, stepFind, topScope, type FindEngine,
@@ -122,6 +123,16 @@ describe("the bar's state machine", () => {
     expect(findState()).toMatchObject({ total: 0, at: 0 });
     stepFind(1);
     expect(calls.filter((c) => c.startsWith("step"))).toEqual([]);
+  });
+
+  it("asks the registry itself, not only the engine, to drop the marks", () => {
+    /* The registry is global; the engine holding it is a local that gets
+       replaced every time the screen changes. Reported with the bar gone and
+       forty amber marks still on the board, because the engine that closed was
+       not the one that had painted them. */
+    const text = readFileSync(new URL("../src/lib/findScope.ts", import.meta.url), "utf8");
+    const at = text.indexOf("export function closeFind");
+    expect(text.slice(at, at + 900)).toContain("clearHighlights()");
   });
 
   it("takes its highlights down on close", () => {

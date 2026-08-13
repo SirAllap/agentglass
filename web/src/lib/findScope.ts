@@ -28,6 +28,7 @@
 
 import { useEffect } from "react";
 import { domFinder } from "./domFind.ts";
+import { clear as clearHighlights } from "./mdFind.ts";
 
 /** What the bar drives. A view with its own way of searching implements this
  *  and registers it; everything else gets the DOM one. */
@@ -201,6 +202,9 @@ function syncEngine(): void {
   const scope = topScope();
   if (scope === liveScope && live) return;
   live?.clear();
+  // …and the registry itself, not only through whoever happens to be holding
+  // it. See `closeFind` for the marks this is here to prevent.
+  clearHighlights();
   live = engine();
   liveScope = scope;
   const total = state.query ? live.search(state.query) : 0;
@@ -218,6 +222,17 @@ export function openFind(seed = ""): void {
 
 export function closeFind(): void {
   live?.clear();
+  /*
+   * And unconditionally, whatever the engine did or is.
+   *
+   * The highlight registry is GLOBAL — one map, keyed by name, for the whole
+   * document — while the engine that filled it is a local that gets replaced
+   * every time the screen changes. Reported after a search on the board: the
+   * bar was gone and forty amber marks were still on the rows, because the
+   * engine holding them was not the one that closed. Asking the registry
+   * directly cannot miss, and costs two map deletes.
+   */
+  clearHighlights();
   live = null;
   liveScope = null;
   state = { open: false, query: "", total: 0, at: 0 };

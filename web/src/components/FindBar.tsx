@@ -14,6 +14,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { closeFind, findState, runQuery, stepFind, subscribeFind } from "../lib/findScope.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { clear as clearHighlights } from "../lib/mdFind.ts";
 
 export function FindBar() {
   const st = useSyncExternalStore(subscribeFind, findState, findState);
@@ -26,6 +27,12 @@ export function FindBar() {
     const el = box.current;
     requestAnimationFrame(() => { el?.focus(); el?.select(); });
   }, [st.open]);
+
+  /* Whatever takes this component away — a close, a reload of the shell, a
+     view that unmounts it — takes the marks with it. The registry is global and
+     outlives any one search, which is exactly how forty of them were left
+     painted on a board with no bar in sight. */
+  useEffect(() => () => clearHighlights(), []);
 
   if (!st.open) return null;
 
