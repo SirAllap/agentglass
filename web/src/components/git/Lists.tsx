@@ -121,8 +121,11 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
 function Detail({ row, disabled }: { row: ListRow; disabled?: boolean }) {
   const groups = grouped(actionsFor(row.kind, row.name, row.state));
   return (
+    // A different ground, not just a hairline: the detail is a second surface,
+    // and saying so with depth means the eye stops treating the whole pane as
+    // one very wide list.
     <aside className="agx-scroll hidden lg:flex flex-col gap-4 flex-1 min-w-0 max-w-[28rem] overflow-y-auto px-5 py-4"
-      style={{ borderLeft: `1px solid ${wash("--text", 8)}` }}>
+      style={{ borderLeft: `1px solid ${wash("--text", 8)}`, background: wash("--bg2", 40) }}>
       <div>
         <div className="text-[10px] uppercase tracking-[0.11em] mb-1" style={{ color: "var(--text3)" }}>{row.kind}</div>
         <div className="text-[15px] font-medium break-all"

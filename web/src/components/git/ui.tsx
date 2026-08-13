@@ -86,6 +86,10 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     transform: selected ? "translateX(2px)" : "none",
   };
   return (
+    // `git-card` is what the stylesheet hangs hover and reduced-motion off:
+    // hovering lifts the border and the ground a step, which is the feedback a
+    // list of identical cards needs to feel like it is under your hand rather
+    // than printed on the page.
     <div className="git-card group" style={style} onClick={onClick} onContextMenu={onContextMenu} title={title2}>
       {/* The rail. Sits inside the border radius rather than beside it, so a
           list of them reads as one column of colour down the left. */}

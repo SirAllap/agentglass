@@ -1465,10 +1465,18 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }
 @media (max-width: 1179px) { .agx-tree3 { width: 200px; } }
 
-/* The git cards. Selection lifts and shifts 2px, which is motion — small, but
-   motion — so it goes off with everything else when the machine asks for less.
-   Transitions rather than animations: nothing loops here, so there is nothing
-   to stop, only something to make instant. */
+/* The git cards.
+   Hover raises the ground and the border one step — feedback that a list of
+   identical cards is under your hand rather than printed on the page — and the
+   selected one keeps its own, stronger treatment from the component. Selection
+   also shifts 2px, which is motion, small but motion, so it goes off with
+   everything else when the machine asks for less. Transitions rather than
+   animations: nothing loops here, so there is nothing to stop, only something
+   to make instant. */
+.git-card:hover {
+  background: color-mix(in srgb, var(--bg3) 52%, transparent);
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+}
 @media (prefers-reduced-motion: reduce) {
   .git-card { transition: none !important; transform: none !important; }
 }
