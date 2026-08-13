@@ -62,11 +62,60 @@ export function matchOffsets(haystack: string, needle: string): number[] {
  * Case-insensitive, because nobody types the capitalisation of a heading they
  * are trying to find.
  */
+/**
+ * Whether text under this element is on screen at all.
+ *
+ * A viewer of prose did not need this — everything in it is visible by
+ * construction. A find that walks a whole view does: an app screen is full of
+ * text nobody can see, and a match in a closed menu is a match the user is sent
+ * to and cannot find. Measured on this app's own markup, the four sources are a
+ * `display:none` block, a `hidden` attribute, a screen-reader-only span, and
+ * xterm's accessibility layer — a full copy of the terminal's buffer, in the
+ * DOM, invisible.
+ *
+ * `checkVisibility` when the engine has it (Chromium 125+, so every Electron
+ * this ships in) because it is the one call that answers the whole question;
+ * `offsetParent` as the fallback, which catches `display:none` and nothing
+ * else. Deliberately NOT `getBoundingClientRect`: an element scrolled out of
+ * view is still findable — that is what scrolling to a match is for — and a
+ * rect test would rule it out.
+ */
+type Visible = Element & { checkVisibility?: (o?: { visibilityProperty?: boolean; contentVisibilityAuto?: boolean }) => boolean };
+function shows(el: Element | null): boolean {
+  if (!el) return false;
+  const e = el as Visible;
+  if (typeof e.checkVisibility === "function") {
+    return e.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true });
+  }
+  return !!(el as HTMLElement).offsetParent || el === document.body;
+}
+
+/** xterm keeps a copy of the buffer in the DOM for screen readers, and it is
+ *  the one place where "invisible text" is a whole terminal's worth. Its own
+ *  search addon owns finding in there. */
+const SKIP = ".xterm, [aria-hidden='true'], [hidden]";
+
 export function findRanges(root: Node | null, needle: string): Range[] {
   const want = needle.toLowerCase();
   if (!root || !want) return [];
 
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const seen = new Map<Element, boolean>();
+  const visible = (el: Element | null): boolean => {
+    if (!el) return false;
+    const had = seen.get(el);
+    if (had !== undefined) return had;
+    // Walk up to the root, remembering the answer for every element on the way:
+    // a paragraph of forty text nodes asks about the same three ancestors.
+    const ok = !el.closest(SKIP) && shows(el);
+    seen.set(el, ok);
+    return ok;
+  };
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && visible(n.parentElement)
+      ? NodeFilter.FILTER_ACCEPT
+      : NodeFilter.FILTER_REJECT),
+  });
   const nodes: Text[] = [];
   const starts: number[] = [];
   let all = "";

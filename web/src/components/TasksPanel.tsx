@@ -23,6 +23,7 @@ import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { useFindScope } from "../lib/findScope.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
@@ -803,6 +804,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   /** The same idea one level up: right-click a folder heading to take the whole
    *  folder off the sidebar. */
   const [folderMenu, setFolderMenu] = useState<{ f: SavedFolder; x: number; y: number } | null>(null);
+  /** The card dialog, when it is open over the table: what a find searches. */
+  const cardBox = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState<SavedView | null>(null);
   /** Put the address bar away, whatever it was in the middle of. */
   const closeAddBar = useCallback(() => { setAdding(false); setEditing(null); setUrlText(""); }, []);
@@ -984,6 +987,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     try { return localStorage.getItem(CARD_MODE_KEY) === "modal" ? "modal" : "side"; } catch { return "side"; }
   });
   useEffect(() => { try { localStorage.setItem(CARD_MODE_KEY, cardMode); } catch { /* private mode */ } }, [cardMode]);
+  /* While the card is a dialog over the table, it IS the screen — a find that
+     also walked the hundred rows behind it would be answering a question
+     nobody asked. In the sidebar it is part of the same screen, so it is not
+     scoped. */
+  useFindScope(cardBox, cardMode === "modal" && sel !== null);
   /* Escape closes the modal, and only the modal: in the sidebar the card is
      part of the layout rather than something laid over it, and a key that
      empties a pane you did not open is a key that loses your place. */
@@ -2273,7 +2281,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <div className="absolute inset-0 z-30 flex items-start justify-center p-6"
             style={{ background: "color-mix(in srgb, var(--bg) 62%, transparent)" }}
             onClick={() => setSel(null)}>
+            {/* The card is what "this screen" means while it is open — see
+                findScope.ts. Without this, a search over the board would walk
+                the hundred rows behind it as well. */}
             <div role="dialog" aria-modal="true" aria-label={picked.title}
+              ref={cardBox}
               onClick={(e) => e.stopPropagation()}
               className="flex flex-col min-h-0 rounded-xl overflow-hidden"
               style={{ width: "min(760px, 100%)", maxHeight: "100%",

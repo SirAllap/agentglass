@@ -7232,18 +7232,37 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
    * folded files or unmounted rows, so leaving it in place would answer "no
    * results" for a word that is in four files.
    */
+  /*
+   * …and only while this tab is the thing on screen.
+   *
+   * The workspace keeps every visited view mounted (see Workspace.tsx), so
+   * this effect used to run wherever you were: leave the Files tab open, walk
+   * over to the board, press Ctrl+F, and the diff's find opened on a view you
+   * could not see. `checkVisibility` on this tab's own box is the honest test —
+   * it answers no for a `visibility: hidden` ancestor, which is exactly how a
+   * background view is hidden.
+   *
+   * `capture: true`, and it matters: the shell's own find bar listens on the
+   * same window. Capture runs first, so this one gets to decide, and stopping
+   * the event there is what keeps the two from both opening. When it declines,
+   * it touches nothing and the shell's bar takes it.
+   */
   useEffect(() => {
     const onWinKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "f" || !(e.ctrlKey || e.metaKey) || e.altKey) return;
       // A terminal owns its own keys — a peeked file is being read in nvim, and
       // Ctrl+F there is page-down.
       if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
+      const box = frameRef.current as (HTMLElement & { checkVisibility?: () => boolean }) | null;
+      if (!box) return;
+      if (typeof box.checkVisibility === "function" ? !box.checkVisibility() : !box.offsetParent) return;
       e.preventDefault();
+      e.stopPropagation();
       setFind((cur) => cur ?? "");
       requestAnimationFrame(() => { findRef.current?.focus(); findRef.current?.select(); });
     };
-    window.addEventListener("keydown", onWinKey);
-    return () => window.removeEventListener("keydown", onWinKey);
+    window.addEventListener("keydown", onWinKey, true);
+    return () => window.removeEventListener("keydown", onWinKey, true);
   }, []);
 
   const shownFiles = useMemo(() => {

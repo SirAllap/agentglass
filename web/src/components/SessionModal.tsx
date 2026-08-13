@@ -137,7 +137,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
     useStuckBottom(open ? sessionId : null);
 
   return (
-    <Portal>
+    <Portal find>
       <AnimatePresence>
         {open && (
           <>

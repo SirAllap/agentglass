@@ -2892,7 +2892,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   }, [open, onClose]);
 
   return (
-    <Portal z={LAYER.settings}>
+    <Portal z={LAYER.settings} find>
       <AnimatePresence>
         {open && (
           <>

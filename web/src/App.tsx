@@ -14,6 +14,8 @@ import { subscribeControl } from "./lib/controlBus.ts";
 import { latchChatIntent } from "./lib/chatIntent.ts";
 import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
+import { claimFind, findChordIsOursToTake, openFind } from "./lib/findScope.ts";
+import { FindBar } from "./components/FindBar.tsx";
 import { currentScale } from "./lib/uiScale.ts";
 import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
@@ -611,6 +613,37 @@ export default function App() {
         return;
       }
 
+      /*
+       * Find on this screen. Above everything below it, because the two things
+       * that could shadow it are exactly the two it must not take: a terminal's
+       * keys belong to the program inside it (readline reads Ctrl+F as
+       * forward-char, which is why the terminal's own find is Ctrl+Shift+F) and
+       * a <webview> has Chromium's find in it. `findChordIsOursToTake` is that
+       * test, and it lives beside the scope stack rather than here so both
+       * halves of the rule stay in one file.
+       *
+       * `preventDefault` when we do take it: in a browser tab the page's own
+       * find would open on top of this one, over an app whose views are all
+       * still mounted behind the one you are looking at — which is the search
+       * this exists to replace.
+       */
+      /* `defaultPrevented` first: a panel that handles this key on its own
+         element — the browser's tabs, the diff's own bar — has already run by
+         the time a window listener sees the bubble, and opening ours on top
+         would be two find bars for one keypress. */
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f" && !e.defaultPrevented && findChordIsOursToTake(e.target)) {
+        e.preventDefault();
+        /* A view with a find of its own — the terminal, the browser — takes it
+           from here and opens theirs. One key, several engines; see
+           `registerClaim`. */
+        if (claimFind()) return;
+        const sel = window.getSelection?.()?.toString().trim() ?? "";
+        // Seeded with the selection, the way every find bar does it — and only
+        // when it is short enough to be a word rather than a paragraph.
+        openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "");
+        return;
+      }
+
       // Zoom, on the usual browser keys — and like ⌘K, live everywhere: you
       // want to size the window up while reading a diff, not only from an empty
       // dashboard. Has to sit above the modifier bailout below, which would
@@ -977,6 +1010,12 @@ export default function App() {
           onOpenBrowser={() => { setMachine(null); goView("browser"); }} />
       )}
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
+
+      {/* Find, mounted at the shell for the same reason the palette is: the
+          chord has to work from a board, a pull request or a settings page,
+          and what it searches is decided by the scope stack, not by where the
+          bar happens to live. */}
+      <FindBar />
 
       {/* Find a file from anywhere. Mounted at the shell rather than in a view
           so the chord reaches it from the dashboard, a terminal or a diff — and

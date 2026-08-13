@@ -16,7 +16,7 @@ function Row({ k, v }: { k: string; v: React.ReactNode }) {
 
 export function EventModal({ event, onClose }: { event: WatchEvent | null; onClose: () => void }) {
   return (
-    <Portal>
+    <Portal find>
       <AnimatePresence>
         {event && (
           <>

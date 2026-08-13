@@ -35,6 +35,7 @@ import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
 import { isFindChord, isAppChord } from "../lib/termKeys.ts";
+import { registerClaim } from "../lib/findScope.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
 import { THEMES } from "../lib/themes.ts";
 import { deriveAnsi } from "../lib/termPalette.ts";
@@ -1655,6 +1656,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // Claim the find chord only while this view is on screen and has a pane to
     // search — see `panelFind`.
     panelFind = () => { setFindOpen(true); return true; };
+    /* And the shell's Ctrl+F, when the focus is anywhere but inside the pane
+       itself — the tab strip, a toolbar. Inside the pane the key still belongs
+       to the program running there (readline reads it as forward-char), which
+       is why the panel's own chord is Ctrl+Shift+F and why the shell's bar
+       never offers to search a canvas. */
+    const unclaim = registerClaim(() => { setFindOpen(true); return true; });
     const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void; stopFit: () => void }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
@@ -1689,6 +1696,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     return () => {
       panelClose = () => {};
       panelFind = () => false;
+      unclaim();
       for (const { s, el, ro, unTheme, stopFit } of mounted) {
         ro.disconnect();
         stopFit();

@@ -77,7 +77,10 @@ describe("the components that carry the numbers", () => {
       ["../src/components/SkillsModal.tsx", "LAYER.catalog"],
       ["../src/components/Select.tsx", "LAYER.menu"],
     ] as const) {
-      expect(read(file), `${file} must say which layer it is on`).toContain(`<Portal z={${layer}}>`);
+      /* The prop, not the exact tag: a portal may carry others — `find`, which
+         says this surface is what "find on this screen" means while it is open
+         — and pinning the whole tag made adding one look like a layering bug. */
+      expect(read(file), `${file} must say which layer it is on`).toMatch(new RegExp(`<Portal[^>]*\\bz=\\{${layer.replace(".", "\\.")}\\}`));
     }
   });
 
