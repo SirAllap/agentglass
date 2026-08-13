@@ -126,7 +126,13 @@ export function savedViews(): SavedView[] {
     name: l.name,
     listId: l.id,
     listName: l.name,
-    url: `https://app.clickup.com/${l.id}/v/l/li/${l.id}`,
+    /* The workspace, not the list, is the first segment. It used to be the
+       list id in both places, which is a well-formed address for a workspace
+       that does not exist — ClickUp answers "This page is unavailable", which
+       reads as a permission problem rather than as a typo of ours. No
+       workspace, no link: a button that goes nowhere is worse than no button,
+       and the panel already hides it when the address is empty. */
+    url: f.workspaceId ? `https://app.clickup.com/${f.workspaceId}/v/l/li/${l.id}` : "",
     addedAt: f.addedAt,
     folderId: f.id,
     folderName: f.name,

@@ -3622,7 +3622,27 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </CardField>
         )}
         {t.start && <CardField label="Starts"><span style={{ color: "var(--text2)" }}>{dueLabel(t.start, today)}</span></CardField>}
-        {t.list && <CardField label="List"><span style={{ color: "var(--text2)" }}>{t.list}</span></CardField>}
+        {t.list && (
+          /*
+             Every list this card is in, not only the one it was filed under.
+             ClickUp lets a card live in several, and on a team that uses it the
+             home list is routinely not the one you are looking at — the card
+             said "Bugs" while you were reading it on a squad's board, which is
+             true and useless. The home first, in the brighter colour, and the
+             others after it.
+           */
+          <CardField label={t.alsoIn?.length ? "Lists" : "List"}>
+            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              <span style={{ color: "var(--text2)" }}>{t.list}</span>
+              {(t.alsoIn ?? []).map((l) => (
+                <span key={l.id} className="flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
+                  <span aria-hidden style={{ color: "var(--text4)" }}>·</span>
+                  {l.name}
+                </span>
+              ))}
+            </span>
+          </CardField>
+        )}
         {t.updated ? (
           <CardField label="Last moved">
             <span style={{ color: "var(--text3)" }} title={new Date(t.updated).toLocaleString()}>{fmtAgo(t.updated)}</span>

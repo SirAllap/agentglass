@@ -184,9 +184,19 @@ export interface ProviderTask {
   due: string | null;
   updated: number;
   tags: string[];
-  /** The list, board or project it sits in. */
+  /** The list, board or project it sits in — its HOME, in ClickUp's words. */
   list: string | null;
   listId?: string;
+  /**
+   * The other lists it also appears in.
+   *
+   * ClickUp lets one card live in several ("Tasks in Multiple Lists"), and on a
+   * team that uses it the home list is often not the one you were looking at:
+   * a bug filed in `Defects` and pulled into a squad's list is worked from the
+   * squad's list and belongs to both. The card had no way to say so — it named
+   * one list, which read as "this is where it is" and was half the answer.
+   */
+  alsoIn?: { id: string; name: string }[];
   assignees: string[];
   /**
    * Who is on it, with what a row needs to draw them.
@@ -343,6 +353,15 @@ export interface SavedView {
 export interface SavedFolder {
   /** ClickUp's own folder id. */
   id: string;
+  /**
+   * The workspace it belongs to.
+   *
+   * Kept because a list's address needs it — `app.clickup.com/{workspace}/v/l/li/{list}`
+   * — and the lists under a folder are synthesised rather than pasted, so
+   * nobody supplies one. Written when the folder is added; a folder saved
+   * before this simply has no link until it is re-added.
+   */
+  workspaceId?: string;
   /** With its emoji, as ClickUp stores it. */
   name: string;
   spaceId: string;

@@ -322,9 +322,11 @@ export async function addClickupFolder(folderId: string, spaceName = ""): Promis
 
   const r = await clickupFolderLists(id);
   if (!r.ok || !r.data) return { ok: false, error: r.error || "ClickUp did not answer for that folder" };
+  const me = (await import("./credentials.ts")).redacted("clickup");
   const folder: SavedFolder = {
     id,
     name: r.data.name || `Folder ${id}`,
+    ...(me?.workspaceId ? { workspaceId: String(me.workspaceId) } : {}),
     // The space is what the picker knew; ClickUp's folder endpoint does not
     // repeat it, and a second call to learn a heading is not worth a request.
     spaceId: "",

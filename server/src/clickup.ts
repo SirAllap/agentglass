@@ -318,6 +318,12 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     tags: (raw.tags ?? []).map((t) => t.name ?? "").filter(Boolean),
     list: raw.list?.name ?? null,
     listId: raw.list?.id ? String(raw.list.id) : undefined,
+    /* Free — it rides on the same response, on every endpoint that returns a
+       task — and it is the difference between "this card is in Defects" and
+       "this card is in Defects and in the two lists you actually work from". */
+    ...(Array.isArray(raw.locations) && raw.locations.length
+      ? { alsoIn: raw.locations.map((l) => ({ id: String(l?.id ?? ""), name: String(l?.name ?? "") })).filter((l) => l.id && l.name) }
+      : {}),
     assignees: assignees.map((a) => a.username ?? "").filter(Boolean),
     people: assignees.map((a) => ({
       id: a.id != null ? Number(a.id) : undefined,
