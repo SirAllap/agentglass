@@ -588,14 +588,13 @@ const realApi = {
   /** What every in-scope worktree changed at once, behind File changes.
    *  "working" = the working tree (uncommitted); "committed" = each checkout's
    *  last commit — so a change is still there after it is committed. */
-  gitChangesAll: (mode: "working" | "committed" = "working") => get<{ changes: FileChange[] }>(`/git/changes-all?mode=${mode}`),
   /**
-   * The same question, in two requests instead of one.
+   * What every in-scope checkout has changed, in two requests instead of one.
    *
-   * `gitChangesAll` above answers with every file's full diff inside the list —
-   * 1.1 MB on this machine, re-fetched every four seconds, to render the diff of
-   * the single file the reader had open. These two split it: the list carries no
-   * diff text, and the body is fetched for the row that is selected.
+   * The endpoint these replace answered with every file's full diff inside the
+   * list — 1.1 MB on this machine, re-fetched every four seconds, to render the
+   * diff of the single file the reader had open. So: the list carries no diff
+   * text, and the body is fetched for the row that is selected.
    */
   gitChangeRows: (mode: "working" | "committed" = "working") =>
     get<ChangeRowsResult>(`/git/changes-v2?mode=${mode}`),
@@ -1234,7 +1233,6 @@ const demoApi: typeof realApi = {
   browserResult: (_r: { id: string; ok: boolean; value?: unknown; error?: string }) => D({ ok: true, known: false }),
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
-  gitChangesAll: () => D({ changes: [] as FileChange[] }),
   // There is no git behind a demo build, so the Diff view lands on its own
   // "nothing uncommitted anywhere" rather than on an error.
   gitChangeRows: () => D({ rows: [] as ChangeRow[], truncated: 0 }),

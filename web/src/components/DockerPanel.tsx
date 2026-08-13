@@ -7,7 +7,7 @@ import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } fr
 import { depSpec } from "../../../shared/deps.ts";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
-import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
+import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { ConsoleStrip, consoleRoot, runInConsole } from "./TerminalPanel.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";

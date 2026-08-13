@@ -50,7 +50,7 @@ const AXIS = String.raw`(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap
  * and not a rhythm. Rounding them to the scale would misalign the very column
  * they exist to line up with.
  */
-const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[22px]", "pl-[30px]", "pl-[50px]", "ml-[60px]"]);
+const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[30px]", "pl-[50px]", "ml-[60px]"]);
 
 describe("spacing goes through the scale", () => {
   test("no arbitrary pixel spacing except the indents that align to a glyph", () => {

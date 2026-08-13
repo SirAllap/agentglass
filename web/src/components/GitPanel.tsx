@@ -27,7 +27,10 @@ import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts
 import { buildFileTree, visibleRows, allDirPaths } from "../lib/fileTree.ts";
 import { useIncremental } from "../lib/useIncremental.ts";
 import { CommandLog } from "./CommandLog.tsx";
-import { UnifiedDiff, SplitDiff, ThemePicker, Toggle, SCROLLBAR_CSS, ChangesModal, changesetSig, readWalkCache, writeWalkCache } from "./ChangesModal.tsx";
+import { UnifiedDiff, SplitDiff, SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
+import { ThemePicker, Toggle } from "./diff/DiffControls.tsx";
+import { changesetSig, readWalkCache, writeWalkCache } from "../lib/walkCache.ts";
+import { PresetDiff } from "./diff/PresetDiff.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
@@ -3104,7 +3107,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       {/* A commit's diff, reusing the full file-changes viewer. Still a modal:
           it's a drill-down from a row you clicked, not a place you navigate
           to — the rail's views are the destinations, this is a detour. */}
-      <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
+      <PresetDiff open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" changes={commitView?.changes ?? []} title={commitView?.title} />
       {rescue && <RescueModal reports={rescue.reports} progress={rescue.progress} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
       {dialog}
     </div>

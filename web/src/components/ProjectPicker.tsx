@@ -21,7 +21,7 @@ import { Portal } from "./Portal.tsx";
 import { api, IS_DEMO } from "../lib/api.ts";
 import { CAN_BROWSE_FOLDER, chooseFolder } from "../lib/desktop.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
-import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
+import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 
 /** Set once the user has answered the startup question (either way), so an

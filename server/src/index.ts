@@ -443,27 +443,6 @@ const treeCache = new Map<string, { at: number; data: WorkingTree }>();
 // through the same git-change hook the tree cache uses.
 const WORKTREES_TTL_MS = 2_500;
 const worktreesCache = new Map<string, { at: number; body: string }>();
-// The all-worktrees change list behind File changes, so it shows what each
-// checkout has actually changed (git), not only what an agent recorded. Keyed by
-// mode — "working" (the working tree) vs "committed" (each checkout's last
-// commit) — with a short TTL, cleared the instant git changes.
-const changesAllCache = new Map<string, { at: number; body: string }>();
-// Held a touch longer than the 4s File-changes poll so a poll reuses the last
-// answer instead of re-fanning git across every in-scope worktree each time —
-// which, at the old 2.5s, missed on every single poll. Safe to hold longer: the
-// git-change hook below clears it the instant anything is staged/committed/
-// discarded through the app, so this TTL only bounds how fast a change made
-// *outside* the app (an editor save, a raw `git` in the terminal) surfaces, and
-// a few seconds in a review panel is fine. backoff() stretches it while hot.
-const CHANGES_ALL_TTL_MS = 6_000;
-// Per-worktree cache of each checkout's last-commit diff — the committed-mode
-// analogue of treeCache. Without it, every committed-mode miss re-ran rev-list +
-// diff for every repo. Same short TTL, same hook clears it.
-const commitCache = new Map<string, { at: number; data: Awaited<ReturnType<typeof lastCommitChanges>> }>();
-// A hard ceiling on how many git rows File changes will take at once: a runaway
-// worktree (a giant last commit that slipped the no-merge filter, thousands of
-// uncommitted files) must never be able to freeze the view again.
-const CHANGES_ALL_MAX = 400;
 // The rebuilt list (/git/changes-v2). Same shape of cache, one crucial
 // difference in what it holds: rows without diff text, so a hit is a few
 // kilobytes rather than the megabyte the old one served every four seconds.
@@ -476,7 +455,7 @@ const ROWS_TTL_MS = 2_000;
 // answer says how many rows it left out instead of ending a worktree short in
 // silence.
 const ROWS_MAX = 2_000;
-setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); changesAllCache.clear(); commitCache.clear(); rowsCache.clear(); broadcast({ type: "git" }); });
+setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); rowsCache.clear(); broadcast({ type: "git" }); });
 
 /**
  * The one thing the merged-branch sweep cannot do for itself.
@@ -1732,74 +1711,6 @@ const server = Bun.serve<WsData>({
         if (treeCache.size > 40) treeCache.clear();
         treeCache.set(root, { at: Date.now(), data });
         return JSON.stringify(data);
-      }));
-    }
-    if (pathname === "/git/changes-all") {
-      // What each in-scope worktree has changed, in one list for File changes.
-      // Two modes: "working" — the working tree (staged + unstaged + untracked),
-      // what is uncommitted right now; and "committed" — each checkout's LAST
-      // commit, so a change survives being committed instead of vanishing with
-      // the working tree. Deliberately not the branch-vs-base diff either way: on
-      // a branch that merged master that drags in every file the merge brought,
-      // work that is not yours. Cached per mode, single-flighted.
-      const mode = url.searchParams.get("mode") === "committed" ? "committed" : "working";
-      return body(await singleFlight(`changes-all:${mode}`, async () => {
-        const cached = changesAllCache.get(mode);
-        if (cached && Date.now() - cached.at < CHANGES_ALL_TTL_MS * backoff()) return cached.body;
-        const paths = getChanges(300).map((c) => c.file_path);
-        // Only your branches: the trunk checkout (master/main) is the base you
-        // cut from, not something you are working on, so it stays out of File
-        // changes entirely — and out of the cap below.
-        const repos = (await discoverRepos(paths, knownProjects().map((p) => p.path), {}))
-          .filter((r) => r.branch !== "master" && r.branch !== "main");
-        // A stable NEGATIVE id per (file, key): the recorded-edit list keys
-        // selection, review and dedup off the positive DB event id, so a git row
-        // must never collide with one — and must keep the same id across polls,
-        // or the selected file jumps and a review tick is lost every few seconds.
-        const sid = (s: string): number => {
-          let h = 5381;
-          for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-          return -Math.abs(h) - 1;
-        };
-        let changes: unknown[];
-        if (mode === "committed") {
-          // Same read-through-cache shape as working mode's treeCache below.
-          const commitOf = async (root: string) => {
-            const hit = commitCache.get(root);
-            if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.data;
-            const data = await lastCommitChanges(root);
-            if (commitCache.size > 40) commitCache.clear();
-            commitCache.set(root, { at: Date.now(), data });
-            return data;
-          };
-          const perRepo = await Promise.all(repos.map(async (r) => {
-            try {
-              const { subject, changes: cs } = await commitOf(r.root);
-              // session_id carries the commit subject so a Session grouping heads
-              // each worktree's rows with what the commit was.
-              return cs.map((c) => ({ ...c, session_id: subject || "last commit" }));
-            } catch { return []; }
-          }));
-          changes = perRepo.flat().map((c) => ({ ...c, id: sid(`${c.session_id}\0${c.file_path}`), ignored: false, outside: false }));
-        } else {
-          const trees = await Promise.all(repos.map(async (r) => {
-            const hit = treeCache.get(r.root);
-            if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.data;
-            try {
-              const data = await workingTree(r.root);
-              if (treeCache.size > 40) treeCache.clear();
-              treeCache.set(r.root, { at: Date.now(), data });
-              return data;
-            } catch { return null; }
-          }));
-          changes = trees.flatMap((t) =>
-            t && !t.error
-              ? [...t.staged, ...t.unstaged].map((c) => ({ ...c, id: sid(`${c.session_id}\0${c.file_path}`), ignored: false, outside: false }))
-              : []);
-        }
-        const out = JSON.stringify({ changes: changes.slice(0, CHANGES_ALL_MAX) });
-        changesAllCache.set(mode, { at: Date.now(), body: out });
-        return out;
       }));
     }
     /*

@@ -35,7 +35,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
-import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
+import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
 import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
 import { isFindChord, isAppChord } from "../lib/termKeys.ts";
 import { registerClaim } from "../lib/findScope.ts";
