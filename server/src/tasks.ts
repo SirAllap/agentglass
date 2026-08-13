@@ -12,7 +12,7 @@
  * against this store need a lock and a compare-and-swap, and none of that is
  * needed to put the list on screen.
  */
-import { statSync, mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
+import { statSync, mkdirSync, openSync, closeSync, writeFileSync, accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { withSpawnSlot } from "./spawnpool.ts";
@@ -23,17 +23,62 @@ import type { TaskCapability, LocalTask } from "../../shared/types.ts";
 export type TaskResult = { code: number; stdout: string; stderr: string; killed?: boolean };
 
 /**
- * Is `task` even here?
+ * Which `task` to run.
+ *
+ * Three places, most explicit first, and the order is the one `tmuxbin.ts`
+ * already uses for the pane engine's tmux:
+ *
+ *   1. `AGENTGLASS_TASK_PATH`, which beats everything — the escape hatch for a
+ *      machine with a build somewhere unusual;
+ *   2. a BUNDLED binary shipped beside the sidecar (a packaged desktop app) or
+ *      under the app's state directory (a headless install). This is the point
+ *      of the exercise: local tasks should work on a machine that has never
+ *      heard of Taskwarrior, exactly as the terminal works on a machine with no
+ *      tmux. Nothing here builds that binary — see `scripts/build-task-static.sh`
+ *      — but the runtime half must exist first, or a bundled binary has nowhere
+ *      to be found;
+ *   3. the system one on PATH, which is what everybody with Taskwarrior already
+ *      installed keeps using.
  *
  * `Bun.spawn` throws on a missing binary rather than returning 127, so without
- * this the panel would invent a cause for a machine that simply has no
- * Taskwarrior. Same first-class-state treatment `gitBin`/`ghCapability` give
- * their tools. PATH passed explicitly, for the reason `git.ts:97` gives.
+ * this the panel would invent a cause for a machine that simply has none. Same
+ * first-class-state treatment `gitBin`/`ghCapability` give their tools. PATH is
+ * passed explicitly, for the reason `git.ts:97` gives.
  */
+const TASK_PATH_ENV = "AGENTGLASS_TASK_PATH";
+const TASK_DIR_ENV = "AGENTGLASS_TASK_DIR";
+
+/** Is `p` a regular file this user can execute? */
+function runnable(p: string): boolean {
+  if (!p || p.includes("\0")) return false;
+  try { accessSync(p, constants.X_OK); return statSync(p).isFile(); } catch { return false; }
+}
+
+/** Where a packaged app or a headless install would keep a bundled `task`. */
+function bundledTaskDirs(): string[] {
+  const dirs: string[] = [];
+  const asked = process.env[TASK_DIR_ENV];
+  if (asked) dirs.push(asked);
+  // Under test, only an env-provided dir answers: the developer's own execPath
+  // and state dir must never decide a suite's outcome.
+  if (process.env.NODE_ENV !== "test") {
+    try { dirs.push(dirname(process.execPath)); } catch { /* no execPath */ }
+    const state = process.env.AGENTGLASS_STATE_DIR;
+    if (state) dirs.push(join(state, "task"));
+  }
+  return dirs;
+}
+
 let binCache: string | null | undefined;
 export function taskBin(): string | null {
-  if (binCache === undefined) binCache = Bun.which("task", { PATH: process.env.PATH ?? "" });
-  return binCache;
+  if (binCache !== undefined) return binCache;
+  const override = process.env[TASK_PATH_ENV];
+  if (override && runnable(override)) return (binCache = override);
+  for (const dir of bundledTaskDirs()) {
+    const p = join(dir, process.platform === "win32" ? "task.exe" : "task");
+    if (runnable(p)) return (binCache = p);
+  }
+  return (binCache = Bun.which("task", { PATH: process.env.PATH ?? "" }));
 }
 /** Test seam — a binary does not appear mid-session, but a test's PATH does. */
 export function __resetTaskBin(): void { binCache = undefined; }
