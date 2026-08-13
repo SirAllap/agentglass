@@ -27,12 +27,13 @@ import { useFindScope } from "../lib/findScope.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
-import type { CardJump } from "../lib/openCard.ts";
+import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
+import { LAYER } from "../lib/layers.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { cardSkills, skillCommand, windowName, skillModes, namedForIt, shortName } from "../lib/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
@@ -815,12 +816,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    * than up front: one call per list somebody opens, cached for the session,
    * instead of one per list on every board load.
    */
-  /** Which boards' blurbs you have opened. Per board and kept, because whether
-   *  a brief is worth having on screen is a property of that board. */
-  const [descOpen, setDescOpen] = useState<Record<string, boolean>>(() => {
-    try { return JSON.parse(localStorage.getItem(DESC_KEY) || "{}") as Record<string, boolean>; } catch { return {}; }
-  });
-  useEffect(() => { try { localStorage.setItem(DESC_KEY, JSON.stringify(descOpen)); } catch { /* private mode */ } }, [descOpen]);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  /* A brief belongs to the board it describes: switching boards with it open
+     would leave the last one's on screen over the new one's rows. Keyed on the
+     loaded board rather than on `lit`, which is defined below the panel's early
+     returns — and a hook cannot live down there. */
+  useEffect(() => { setAboutOpen(false); }, [data?.view?.id]);
   const [listViews, setListViews] = useState<Record<string, { id: string; name: string }[]>>({});
   const [openLists, setOpenLists] = useState<Record<string, boolean>>({});
   /** Ask once, remember for the session. Safe to call for a list already
@@ -1712,6 +1713,19 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             A breadcrumb is a claim about where you are; keeping the previous
             one through a switch makes it a wrong one. */}
         <Breadcrumb place={stale ? undefined : data?.place} className="min-w-0 max-w-[420px] pl-1" />
+        {/* The brief, as a chip on a row that already exists.
+            It was a fold above the table, and opening it pushed the rows down
+            by two hundred pixels — the reference material shoving aside the
+            thing you came to read. A dialog costs the table nothing, which is
+            also what ClickUp does with it. */}
+        {!onLooked && !!data?.description?.trim() && (
+          <button onClick={() => setAboutOpen(true)}
+            title="What this list is for — the brief, the docs, the team"
+            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full agx-btn"
+            style={{ border: edge(14), color: "var(--text3)" }}>
+            About
+          </button>
+        )}
         <span className="flex-1" />
         <button onClick={async () => {
             const on = !boards.writeEnabled;
@@ -1979,40 +1993,13 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         )}
       </div>
 
-      {/*
-        * The list's own blurb, folded away.
-        *
-        * Most lists have none — ClickUp leaves the field empty and shows "Add
-        * description…" — so nothing is drawn at all rather than a heading over
-        * nothing. The ones that DO have it use it for the brief: the docs, the
-        * branch, the PR, who is on the team. That is twenty lines of reference
-        * material on top of the cards you came to read, so it opens closed,
-        * shows its first line as a hint, and is remembered per board.
-        */}
-      {!onLooked && !!data?.description?.trim() && (
-        <div className="px-4 pb-1.5 shrink-0">
-          <button onClick={() => setDescOpen((m) => ({ ...m, [lit ?? ""]: !m[lit ?? ""] }))}
-            aria-expanded={!!descOpen[lit ?? ""]}
-            className="w-full flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10.5px] agx-btn"
-            style={{ border: edge(12), color: "var(--text3)" }}>
-            <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
-              style={{ transform: descOpen[lit ?? ""] ? "rotate(90deg)" : "none", transition: "transform 120ms ease", opacity: 0.7 }}>
-              <path d="M6 3.5 10.5 8 6 12.5Z" />
-            </svg>
-            <span className="shrink-0">About this list</span>
-            {!descOpen[lit ?? ""] && (
-              <span className="truncate min-w-0 flex-1 text-left" style={{ color: "var(--text4)" }}>
-                {data.description.trim().split("\n").find((l) => l.trim()) ?? ""}
-              </span>
-            )}
-          </button>
-          {descOpen[lit ?? ""] && (
-            <div className="agx-scroll mt-1 px-3 py-2 rounded-lg text-[11.5px] overflow-y-auto"
-              style={{ border: edge(12), background: "var(--bg2)", color: "var(--text2)", maxHeight: 260 }}>
-              <Markdown text={data.description} />
-            </div>
-          )}
-        </div>
+      {/* Over the board, not above it — see AboutList. */}
+      {aboutOpen && !!data?.description?.trim() && (
+        <AboutList
+          name={data.view?.listName || data.view?.name || "This list"}
+          text={data.description}
+          url={data.view?.url}
+          onClose={() => setAboutOpen(false)} />
       )}
 
       {note && <NoteStrip note={note} onClose={() => setNote(null)} />}
@@ -2556,6 +2543,94 @@ function ConfirmStrip({ pending, onGo, onCancel }: { pending: Pending; onGo: () 
  * app has never verified, and a breadcrumb of dead links is worse than one that
  * never promised to be clickable.
  */
+/**
+ * What a list is for, as ClickUp's own dialog is: over the board, not above it.
+ *
+ * The text is all the API gives — measured twice, including with
+ * `include_markdown_description`: ClickUp's rich chips (a Google Doc, a Figma
+ * file, a Slack channel) are blocks it renders in the browser and does not
+ * publish, so they arrive as their labels with nothing behind them. What DOES
+ * arrive is every plain URL, the branch name and the card ids, and those are
+ * the ones worth wiring: a pull request opens in this app's own pull-request
+ * view rather than in a browser, a card id opens the card, and a branch offers
+ * to take you to it in Git.
+ */
+function AboutList({ name, text, url, onClose }: {
+  name: string; text: string; url?: string; onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useDismiss(true, box, onClose);
+  return (
+    <Portal find z={LAYER.viewer}>
+      <div className="fixed inset-0" style={{ background: "color-mix(in srgb, var(--bg) 62%, transparent)" }} onClick={onClose} />
+      <div ref={box} role="dialog" aria-modal="true" aria-label={`About ${name}`}
+        onClick={(e) => e.stopPropagation()}
+        className="fixed left-1/2 top-1/2 flex flex-col min-h-0 rounded-xl overflow-hidden"
+        style={{
+          transform: "translate(-50%, -50%)", width: "min(760px, 92vw)", maxHeight: "82vh",
+          background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+        }}>
+        <div className="flex items-center gap-2 px-4 py-2.5 shrink-0" style={{ borderBottom: edge(12) }}>
+          <span className="text-[12.5px]" style={{ color: "var(--text)" }}>{name}</span>
+          <span className="text-[10px]" style={{ color: "var(--text4)" }}>what this list is for</span>
+          <span className="flex-1" />
+          {externalUrl(url ?? "") && (
+            <button onClick={() => openExternal(url!)} className="text-[10.5px] px-2 py-0.5 rounded-lg"
+              style={{ border: edge(16), color: "var(--text3)" }}>Open in ClickUp ↗</button>
+          )}
+          <CloseButton onClick={onClose} title="Close (Esc)" />
+        </div>
+        <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-4 py-3 text-[12px]" style={{ color: "var(--text2)" }}>
+          {text.split("\n").map((line, i) => <AboutLine key={i} line={line} />)}
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+/** One line of it, with the parts this app can act on turned into buttons. */
+function AboutLine({ line }: { line: string }) {
+  const t = line.trim();
+  if (!t) return <div style={{ height: 8 }} />;
+  /* Split on anything addressable. The card pattern is the workspace's own
+     prefix — see `cardRef` — and a branch is recognised by carrying one. */
+  const parts = t.split(/(https?:\/\/[^\s)]+|\b[A-Z][A-Z0-9]+-\d{3,}[\w-]*)/g).filter(Boolean);
+  const heading = /^[A-Za-z][\w ]{0,28}:$/.test(t);
+  return (
+    <div className={heading ? "mt-2 mb-0.5" : "leading-[1.5]"}
+      style={heading ? { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.1em" } : undefined}>
+      {parts.map((p, i) => {
+        const pr = prRefFromUrl(p);
+        if (pr) {
+          return (
+            <button key={i} onClick={() => openPr(pr.repo, pr.number)} title={`Open #${pr.number} here`}
+              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>
+              #{pr.number} <span style={{ color: "var(--text4)" }}>{pr.repo}</span>
+            </button>
+          );
+        }
+        if (/^https?:\/\//.test(p)) {
+          return (
+            <button key={i} onClick={() => openExternal(p)} title={p}
+              className="underline underline-offset-2 break-all" style={{ color: "var(--primary)" }}>{p}</button>
+          );
+        }
+        /* A card id, or a branch that carries one. Both open the card: the
+           branch name is how a team says which card a branch is for, and there
+           is nothing else in this app a bare branch name can open. */
+        if (/^[A-Z][A-Z0-9]+-\d{3,}/.test(p)) {
+          const id = p.match(/^[A-Z][A-Z0-9]+-\d+/)?.[0] ?? p;
+          return (
+            <button key={i} onClick={() => openCard(id, id)} title={p.length > id.length ? `${p} — open ${id}` : `Open ${id}`}
+              className="underline underline-offset-2 tabular-nums" style={{ color: "var(--primary)" }}>{p}</button>
+          );
+        }
+        return <span key={i}>{p}</span>;
+      })}
+    </div>
+  );
+}
+
 function Breadcrumb({ place, className }: { place?: ListPlace; className?: string }) {
   if (!place) return null;
   const parts = [place.space, place.folder, place.list].filter(Boolean) as string[];
@@ -2778,8 +2853,6 @@ const CARD_W_KEY = "agentglass.clickup.cardWidth";
 const RAIL_KEY = "agentglass.clickup.listRail";
 /** Which folders in that rail are folded shut, by folder key. */
 const RAIL_SHUT_KEY = "agentglass.clickup.listRail.shut";
-/** Which boards have their description unfolded. */
-const DESC_KEY = "agentglass.clickup.listDescription";
 const CARD_MODE_KEY = "agentglass.clickup.cardMode";
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */

@@ -104,17 +104,24 @@ describe("the list rail", () => {
 });
 
 describe("the list's own blurb", () => {
-  it("is drawn only when the list has one", () => {
-    /* Most lists have none, and a heading over nothing is worse than no
-       heading. Asserted because the block went missing once between an edit and
-       an install, and nothing failed — the panel simply had no such section. */
-    expect(src).toContain("About this list");
+  it("is offered only when the list has one", () => {
+    /* Most lists have none, and a control over nothing is worse than no
+       control. Asserted because this went missing once between an edit and an
+       install and nothing failed — the panel simply had no such section. */
     expect(src).toContain("!!data?.description?.trim()");
+    expect(src).toContain("function AboutList(");
   });
 
-  it("opens closed and is remembered per board", () => {
-    // Twenty lines of brief on top of the cards you came to read.
-    expect(src).toContain('const DESC_KEY = "agentglass.clickup.listDescription";');
-    expect(src).toContain("descOpen[lit ?? \"\"]");
+  it("opens over the board rather than above it", () => {
+    /* As a fold it pushed the rows down by two hundred pixels: the reference
+       material shoving aside the thing you came to read. */
+    expect(src).toContain("<Portal find z={LAYER.viewer}>");
+    expect(src).not.toContain('const DESC_KEY = "agentglass.clickup.listDescription";');
+  });
+
+  it("turns what it can into somewhere to go", () => {
+    // A pull request opens in this app's own view, a card id opens the card.
+    expect(src).toContain("openPr(pr.repo, pr.number)");
+    expect(src).toContain("openCard(id, id)");
   });
 });
