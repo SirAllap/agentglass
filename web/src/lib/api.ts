@@ -1,6 +1,6 @@
 import type { ImportedPlace } from "./desktop.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -745,6 +745,18 @@ const realApi = {
   clickupAddView: (url: string) =>
     post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/add", { url }),
   clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
+  /** The folder picker: the workspace's spaces, then one space's folders — the
+   *  second answer already carries the lists inside each folder. */
+  clickupSpaces: () => get<{ ok: boolean; error?: string; spaces?: { id: string; name: string }[] }>("/clickup/spaces"),
+  clickupFolders: (spaceId: string) =>
+    get<{ ok: boolean; error?: string; folders?: { id: string; name: string; lists: { id: string; name: string }[] }[] }>(
+      `/clickup/folders?space=${encodeURIComponent(spaceId)}`),
+  /** Add a folder whole. `spaceName` is only the heading to file it under —
+   *  ClickUp's folder endpoint does not repeat it and a call to learn it would
+   *  buy nothing. */
+  clickupAddFolder: (id: string, spaceName: string) =>
+    post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/clickup/folders/add", { id, spaceName }),
+  clickupRemoveFolder: (id: string) => post<{ ok: boolean }>("/clickup/folders/remove", { id }),
   /** Point a saved board at a different address. Resolves the new one before it
    *  drops the old — see replaceViewUrl. */
   clickupReplaceView: (id: string, url: string) =>
@@ -1403,6 +1415,10 @@ const demoApi: typeof realApi = {
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
+  clickupSpaces: () => D({ ok: true, spaces: [] as { id: string; name: string }[] }),
+  clickupFolders: (_s: string) => D({ ok: true, folders: [] as { id: string; name: string; lists: { id: string; name: string }[] }[] }),
+  clickupAddFolder: (_i: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupRemoveFolder: (_i: string) => D({ ok: true }),
   clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),

@@ -11,8 +11,8 @@
  * The one genuinely new probe is the credential one, because until now no
  * provider had a secret we hold.
  */
-import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type ProviderState, type SavedView, type ViewTasksResponse } from "../../shared/providers.ts";
-import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView } from "./clickupviews.ts";
+import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type ProviderState, type SavedView, type SavedFolder, type ViewTasksResponse } from "../../shared/providers.ts";
+import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders } from "./clickupviews.ts";
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
 import { hasCredential, redacted, setCredential, clearCredential } from "./credentials.ts";
@@ -304,6 +304,77 @@ export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: 
  * agreed the new one exists. A failed change leaves you exactly where you were
  * rather than with nothing.
  */
+/**
+ * Add a whole folder to the sidebar.
+ *
+ * Resolved before it is stored, like every other add here: the id has to come
+ * back from ClickUp with a name and its lists, or nothing is written. What IS
+ * written is the folder — the lists ride along as a cache so the sidebar has a
+ * tree to draw on the next cold start, and are replaced by whatever ClickUp
+ * says the next time it is read.
+ */
+export async function addClickupFolder(folderId: string, spaceName = ""): Promise<{ ok: boolean; error?: string; folder?: SavedFolder }> {
+  const { clickupFolderLists } = await import("./clickup.ts");
+  const { secretFor } = await import("./credentials.ts");
+  if (!secretFor("clickup")) return { ok: false, error: "Connect ClickUp first" };
+  const id = String(folderId || "").trim();
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "That is not a folder id" };
+
+  const r = await clickupFolderLists(id);
+  if (!r.ok || !r.data) return { ok: false, error: r.error || "ClickUp did not answer for that folder" };
+  const folder: SavedFolder = {
+    id,
+    name: r.data.name || `Folder ${id}`,
+    // The space is what the picker knew; ClickUp's folder endpoint does not
+    // repeat it, and a second call to learn a heading is not worth a request.
+    spaceId: "",
+    spaceName,
+    addedAt: Date.now(),
+    lists: r.data.lists,
+    listsAt: Date.now(),
+  };
+  addFolder(folder);
+  return { ok: true, folder };
+}
+
+/**
+ * Read a saved folder's lists again.
+ *
+ * The point of storing a folder rather than its contents: this is what notices
+ * the list somebody created this morning. Failure is not an error worth showing
+ * — the sidebar keeps the tree it has, which is the last thing ClickUp agreed
+ * to, and tries again next time.
+ */
+export async function refreshClickupFolders(): Promise<void> {
+  const { clickupFolderLists } = await import("./clickup.ts");
+  const { secretFor } = await import("./credentials.ts");
+  if (!secretFor("clickup")) return;
+  for (const f of savedFolders()) {
+    const r = await clickupFolderLists(f.id);
+    if (!r.ok || !r.data) continue;
+    addFolder({ ...f, name: r.data.name || f.name, lists: r.data.lists, listsAt: Date.now() });
+  }
+}
+
+/**
+ * The fuse on that refresh, and why it is here rather than on a timer.
+ *
+ * Ten minutes, and only when somebody is looking: the sidebar asks for its
+ * boards whenever the Tasks view is open, so this rides that. A folder costs
+ * one request; three folders on a ten-minute floor is at most eighteen an hour
+ * against a ten-thousand budget, and a machine with the app open on another
+ * view spends nothing at all.
+ */
+const FOLDER_TTL_MS = 10 * 60_000;
+let foldersRunning = false;
+export async function refreshFoldersIfStale(): Promise<void> {
+  if (foldersRunning) return;
+  const stale = savedFolders().some((f) => !f.listsAt || Date.now() - f.listsAt > FOLDER_TTL_MS);
+  if (!stale) return;
+  foldersRunning = true;
+  try { await refreshClickupFolders(); } finally { foldersRunning = false; }
+}
+
 export async function replaceViewUrl(oldId: string, url: string): Promise<{ ok: boolean; error?: string; view?: SavedView }> {
   const before = savedViews().find((v) => v.id === oldId);
   if (!before) return { ok: false, error: "That board is not saved any more" };

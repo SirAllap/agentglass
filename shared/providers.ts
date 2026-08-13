@@ -312,6 +312,45 @@ export interface SavedView {
   /** This one ships with the app rather than being pasted — see
    *  `ASSIGNED_VIEW_ID`. It cannot be removed and has no address. */
   builtin?: boolean;
+  /**
+   * Where it sits in the workspace, so the sidebar can draw ClickUp's own
+   * hierarchy instead of a flat list of names.
+   *
+   * `folderId` is set on the ones that CAME from a saved folder: those are not
+   * stored at all — they are whatever that folder holds today — and this is
+   * what tells them apart from a list somebody pasted the address of.
+   */
+  folderId?: string;
+  folderName?: string;
+  spaceName?: string;
+}
+
+/**
+ * A folder somebody added, and the reason the app stores a folder rather than
+ * the lists inside it.
+ *
+ * A team's folder is a living thing: `Projects Purple` gains a list when the
+ * next project starts, and a copy of its contents taken on the day it was added
+ * is wrong by the end of the sprint. So the id is what is kept, and the lists
+ * are read back from ClickUp — one call per space, which is the same call the
+ * picker already makes because `/space/{id}/folder` answers with the lists
+ * inside each folder.
+ *
+ * `lists` here is a CACHE of that answer, not the truth: it exists so the
+ * sidebar draws its tree the moment the app opens, before any request has come
+ * back.
+ */
+export interface SavedFolder {
+  /** ClickUp's own folder id. */
+  id: string;
+  /** With its emoji, as ClickUp stores it. */
+  name: string;
+  spaceId: string;
+  spaceName: string;
+  addedAt: number;
+  /** Last known contents. Refreshed whenever the folder is read. */
+  lists?: { id: string; name: string }[];
+  listsAt?: number;
 }
 
 /**
@@ -371,6 +410,9 @@ export interface ListPlace {
  */
 export interface ClickUpBoards {
   views: SavedView[];
+  /** The folders on the sidebar, in the order they were added. Their lists are
+   *  already in `views`, carrying `folderId`. */
+  folders?: SavedFolder[];
   /**
    * Whether there is a ClickUp token on this machine at all.
    *

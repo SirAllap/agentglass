@@ -75,8 +75,8 @@ import { procDetail, revealEnv } from "./procdetail.ts";
 import {
   listIssues, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
-import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
-import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
+import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
+import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
 import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
@@ -2161,7 +2161,26 @@ const server = Bun.serve<WsData>({
       // `connected` is said out loud because `views` cannot say it: the
       // built-in board is always in that list, so its length answers "yes" on a
       // machine with no ClickUp at all. See ClickUpBoards.
-      return json({ views: savedViews(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+      /* A folder is stored, its contents are not — so this is where they get
+         re-read. In the background and on a long fuse: the answer on screen is
+         the last one ClickUp agreed to, a list appearing a few minutes late is
+         nobody's problem, and the sidebar must not wait on a request to draw
+         the tree it already has. */
+      void refreshFoldersIfStale();
+      return json({ views: savedViews(), folders: savedFolders(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+    }
+    /* The folder picker's two reads. Spaces first, then one call per space that
+       answers with its folders AND the lists inside each of them — which is why
+       adding a folder costs nothing beyond what the picker already spent. */
+    if (pathname === "/clickup/spaces") {
+      const { clickupSpaces } = await import("./clickup.ts");
+      const r = await clickupSpaces();
+      return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error });
+    }
+    if (pathname === "/clickup/folders") {
+      const { clickupFolders } = await import("./clickup.ts");
+      const r = await clickupFolders(url.searchParams.get("space") || "");
+      return json(r.ok ? { ok: true, folders: r.data?.folders ?? [] } : { ok: false, error: r.error });
     }
     if (pathname === "/clickup/view") {
       // Falls back to the first board rather than to nothing, and the first
@@ -2238,7 +2257,9 @@ const server = Bun.serve<WsData>({
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const id = String(b.id ?? "");
       const seen = typeof b.updated === "number" ? b.updated : undefined;
-      const r = pathname === "/clickup/views/add" ? await addViewByUrl(String(b.url ?? ""))
+      const r = pathname === "/clickup/folders/add" ? await addClickupFolder(String(b.id ?? ""), String(b.spaceName ?? ""))
+        : pathname === "/clickup/folders/remove" ? (removeFolder(String(b.id ?? "")), { ok: true })
+        : pathname === "/clickup/views/add" ? await addViewByUrl(String(b.url ?? ""))
         : pathname === "/clickup/views/replace" ? await replaceViewUrl(id, String(b.url ?? ""))
         : pathname === "/clickup/views/remove" ? (removeView(id), { ok: true })
         // `user` names somebody other than you; without it this stays what it

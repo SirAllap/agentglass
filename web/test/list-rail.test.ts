@@ -22,7 +22,10 @@ describe("the list rail", () => {
     // Two navigations for one choice is two places to disagree about which
     // board you are on.
     expect(src).not.toContain("{boards.views.map((v) => (");
-    expect(src).toContain("{railViews.map((v) => (");
+    // The rows come off `railViews` — through the grouping, which is the only
+    // thing between the filter and the column.
+    expect(src).toContain("const railGroups = useMemo(");
+    expect(src).toContain("for (const v of railViews)");
   });
 
   it("filters on both names a board has", () => {
@@ -55,11 +58,37 @@ describe("the list rail", () => {
   });
 
   it("keeps the built-in board marked", () => {
-    // Beside four board names it reads as a fifth board somebody added, and it
-    // is the one that behaves differently — no address, ten seconds not one.
+    /* Beside four board names it reads as a fifth board somebody added, and it
+       is the one that behaves differently — no address, ten seconds not one.
+       Asserted on `railRow` rather than on the rail's markup since the rows
+       moved into it: one renderer for the grouped and ungrouped halves, so
+       they cannot drift. */
+    const from = src.indexOf("const railRow = (v: SavedView, depth: number)");
+    const row = src.slice(from, src.indexOf("\n  );", from));
+    expect(from).toBeGreaterThan(-1);
+    expect(row).toContain("v.builtin && (");
+    expect(row).toContain("wanted === v.id && <span");
+  });
+
+  it("draws ClickUp's own shape: folder, then the lists in it", () => {
+    /* The rail was flat, and said in a comment that it had to be — a board's
+       folder was only known once it had been opened. A folder can be added
+       whole now, so its lists arrive knowing where they live. */
+    expect(src).not.toContain("Deliberately FLAT.");
     const rail = railSource();
-    expect(rail).toContain("v.builtin && (");
-    expect(rail).toContain("wanted === v.id && <span");
+    expect(rail).toContain("railGroups.loose.map");
+    expect(rail).toContain("railGroups.groups.map");
+    // Folded shut is remembered, or a sidebar of twelve open folders is the
+    // flat list again.
+    expect(src).toContain('const RAIL_SHUT_KEY = "agentglass.clickup.listRail.shut";');
+  });
+
+  it("only offers to remove the folders somebody actually added", () => {
+    /* A heading inferred from a pasted list's breadcrumb is not a saved folder:
+       there is nothing to take off, and offering it would be a menu item that
+       cannot work. */
+    const rail = railSource();
+    expect(rail).toContain("if (!savedFolder) return;");
   });
 
   it("keeps Looked up beside the lists, not inside one", () => {
@@ -71,11 +100,5 @@ describe("the list rail", () => {
     expect(rail).toContain("1px dashed");
   });
 
-  it("is flat, and says why in the source rather than pretending", () => {
-    /* ClickUp nests these under spaces and folders and the approved mockup drew
-       that. agentglass only learns a board's folder when the board is opened,
-       so the tree would cost one call per board every time the rail opened.
-       The deviation was told, not decided. */
-    expect(src).toContain("Deliberately FLAT.");
-  });
+
 });

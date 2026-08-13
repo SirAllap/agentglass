@@ -1821,3 +1821,80 @@ export async function cardPullRequests(
     prs: [...out.values()].sort((a, b) => Number(!!b.stated) - Number(!!a.stated) || b.number - a.number),
   };
 }
+
+// ---------------------------------------------------------------------------
+// the shape of the workspace: spaces, folders, and the lists inside them
+// ---------------------------------------------------------------------------
+
+/**
+ * The picker's data, and it is one call per level rather than the three the
+ * hierarchy suggests.
+ *
+ * Measured against a real workspace: `/space/{id}/folder` answers with each
+ * folder AND the lists inside it — fifteen folders and their lists in a single
+ * request. So "add the Purple folder" needs no walk of its lists, and neither
+ * does re-reading it later to notice a list somebody added this morning.
+ *
+ * That is what makes a saved folder worth storing as a FOLDER: the app keeps
+ * an id, and the contents are whatever ClickUp says they are today.
+ */
+export async function clickupSpaces(): Promise<CallResult<{ spaces: { id: string; name: string }[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const me = redacted("clickup");
+  if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
+  const r = await call<{ spaces?: { id: string; name?: string }[] }>(
+    `/team/${encodeURIComponent(me.workspaceId)}/space?archived=false`, token,
+  );
+  if (!r.ok) return { ...r, data: undefined };
+  return { ok: true, data: { spaces: (r.data?.spaces ?? []).map((s) => ({ id: String(s.id), name: s.name ?? "" })).filter((s) => s.id) } };
+}
+
+export interface ClickUpFolder {
+  id: string;
+  name: string;
+  lists: { id: string; name: string }[];
+}
+
+export async function clickupFolders(spaceId: string): Promise<CallResult<{ folders: ClickUpFolder[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const id = String(spaceId || "").trim();
+  // An id, and only an id: this reaches a URL, and a space id from the UI must
+  // not be able to become a path of its own.
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a space id" };
+  const r = await call<{ folders?: { id: string; name?: string; archived?: boolean; lists?: { id: string; name?: string; archived?: boolean }[] }[] }>(
+    `/space/${encodeURIComponent(id)}/folder?archived=false`, token,
+  );
+  if (!r.ok) return { ...r, data: undefined };
+  const folders = (r.data?.folders ?? [])
+    .filter((f) => f && !f.archived)
+    .map((f) => ({
+      id: String(f.id),
+      name: f.name ?? "",
+      lists: (f.lists ?? []).filter((l) => l && !l.archived).map((l) => ({ id: String(l.id), name: l.name ?? "" })),
+    }))
+    .filter((f) => f.id);
+  return { ok: true, data: { folders } };
+}
+
+/** One folder's lists, for a folder already saved — the same call as above,
+ *  narrowed. Kept separate so a refresh of one board does not read a whole
+ *  space's worth of folders. */
+export async function clickupFolderLists(folderId: string): Promise<CallResult<{ name: string; lists: { id: string; name: string }[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const id = String(folderId || "").trim();
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a folder id" };
+  const r = await call<{ name?: string; lists?: { id: string; name?: string; archived?: boolean }[] }>(
+    `/folder/${encodeURIComponent(id)}`, token,
+  );
+  if (!r.ok) return { ...r, data: undefined };
+  return {
+    ok: true,
+    data: {
+      name: r.data?.name ?? "",
+      lists: (r.data?.lists ?? []).filter((l) => l && !l.archived).map((l) => ({ id: String(l.id), name: l.name ?? "" })),
+    },
+  };
+}
