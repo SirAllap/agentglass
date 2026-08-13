@@ -2581,24 +2581,66 @@ function AboutList({ name, text, url, onClose }: {
           <CloseButton onClick={onClose} title="Close (Esc)" />
         </div>
         <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-4 py-3 text-[12px]" style={{ color: "var(--text2)" }}>
-          {text.split("\n").map((line, i) => <AboutLine key={i} line={line} />)}
-        </div>
-      </div>
+          <AboutBody text={text} />
+        </div>      </div>
     </Portal>
   );
 }
 
-/** One line of it, with the parts this app can act on turned into buttons. */
-function AboutLine({ line }: { line: string }) {
-  const t = line.trim();
-  if (!t) return <div style={{ height: 8 }} />;
-  /* Split on anything addressable. The card pattern is the workspace's own
-     prefix — see `cardRef` — and a branch is recognised by carrying one. */
-  const parts = t.split(/(https?:\/\/[^\s)]+|\b[A-Z][A-Z0-9]+-\d{3,}[\w-]*)/g).filter(Boolean);
-  const heading = /^[A-Za-z][\w ]{0,28}:$/.test(t);
+/**
+ * The brief, laid out as the label/value pairs it actually is.
+ *
+ * The first attempt printed it line by line and shouted every heading in
+ * capitals, which turned `Project requirements document:` into a banner and the
+ * whole thing into a wall. It is a form: a label, and what is on the other side
+ * of the colon. Two columns read it in a glance.
+ *
+ * The empty halves are the ones ClickUp keeps to itself — a Doc, a Figma file,
+ * a Slack channel are rich blocks its API does not publish — so they are shown
+ * greyed rather than dropped (a missing row reads as a brief that never had
+ * one) and counted once at the foot, where the way to see them is offered.
+ */
+function AboutBody({ text }: { text: string }) {
+  const rows = text.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l.trim() || (i > 0 && all[i - 1]!.trim()));
+  const blanks = rows.filter((l) => /^[^:]{1,40}:\s*$/.test(l.trim())).length;
   return (
-    <div className={heading ? "mt-2 mb-0.5" : "leading-[1.5]"}
-      style={heading ? { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.1em" } : undefined}>
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 12rem) 1fr", columnGap: 12, rowGap: 3 }}>
+        {rows.map((line, i) => {
+          const t = line.trim();
+          if (!t) return <div key={i} style={{ gridColumn: "1 / -1", height: 6 }} />;
+          const m = /^([^:]{1,40}):\s*(.*)$/.exec(t);
+          if (!m) return <div key={i} style={{ gridColumn: "1 / -1" }}><AboutValue text={t} /></div>;
+          const [, label, value] = m;
+          return (
+            <Fragment key={i}>
+              <div className="truncate" style={{ color: value!.trim() ? "var(--text3)" : "var(--text4)" }}>{label}</div>
+              <div className="min-w-0">
+                {value!.trim()
+                  ? <AboutValue text={value!} />
+                  : <span style={{ color: "var(--text4)" }}>—</span>}
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+      {blanks >= 2 && (
+        <div className="mt-3 pt-2 text-[10.5px]" style={{ borderTop: edge(10), color: "var(--text4)" }}>
+          {blanks} of these are ClickUp's own cards — a Doc, a Figma file, a Slack channel — which its API does not hand out. Open the list there to follow them.
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A value, with the parts this app can act on turned into buttons. */
+function AboutValue({ text }: { text: string }) {
+  /* Split on anything addressable. The card pattern is a workspace prefix and a
+     number — the shape `cardRef` looks for — and a branch is recognised by
+     carrying one. */
+  const parts = text.split(/(https?:\/\/[^\s)]+|\b[A-Z][A-Z0-9]+-\d{3,}[\w-]*)/g).filter(Boolean);
+  return (
+    <span className="break-words">
       {parts.map((p, i) => {
         const pr = prRefFromUrl(p);
         if (pr) {
@@ -2615,19 +2657,19 @@ function AboutLine({ line }: { line: string }) {
               className="underline underline-offset-2 break-all" style={{ color: "var(--primary)" }}>{p}</button>
           );
         }
-        /* A card id, or a branch that carries one. Both open the card: the
-           branch name is how a team says which card a branch is for, and there
-           is nothing else in this app a bare branch name can open. */
+        /* A card id, or a branch that carries one. Both open the card: a branch
+           name is how a team says which card a branch is for, and there is
+           nothing else here a bare branch name can open. */
         if (/^[A-Z][A-Z0-9]+-\d{3,}/.test(p)) {
           const id = p.match(/^[A-Z][A-Z0-9]+-\d+/)?.[0] ?? p;
           return (
             <button key={i} onClick={() => openCard(id, id)} title={p.length > id.length ? `${p} — open ${id}` : `Open ${id}`}
-              className="underline underline-offset-2 tabular-nums" style={{ color: "var(--primary)" }}>{p}</button>
+              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>{p}</button>
           );
         }
         return <span key={i}>{p}</span>;
       })}
-    </div>
+    </span>
   );
 }
 
