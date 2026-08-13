@@ -2864,7 +2864,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   const [askOpen, setAskOpen] = useState(false);
   /** Where a hand-off goes. Read once and kept, so the pills reflect it. */
   const [to, setTo] = useState<HandoffTo>(handoffTo);
-  const [copied, setCopied] = useState<"human" | "raw" | "url" | null>(null);
+  const [copied, setCopied] = useState<"human" | "raw" | "url" | "title" | null>(null);
   /*
    * Which half of the card you are reading.
    *
@@ -2945,7 +2945,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * of the time. Both are offered, and both are SHOWN — the internal id was
    * invisible before, so there was no way to read it off the screen at all.
    */
-  const copyIt = async (v: string, which: "human" | "raw" | "url") => {
+  const copyIt = async (v: string, which: "human" | "raw" | "url" | "title") => {
     try { await navigator.clipboard.writeText(v); setCopied(which); setTimeout(() => setCopied(null), 1200); } catch { /* no clipboard */ }
   };
 
@@ -3014,6 +3014,39 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         </div>
         <h2 className="text-[13px] font-semibold leading-snug mt-1.5" style={{ color: "var(--text)", textWrap: "balance" }}>
           {t.title}
+          {/* The title is the other half of what you paste beside the id — a
+              branch name, a commit subject, the line you send a colleague. The
+              ids had a button each and the title had none, so the only way to
+              take it was to select 60 characters of a balanced, wrapping
+              heading by hand.
+
+              Inside the <h2> and after the last word rather than in the chip
+              row above: it belongs to this string, and an icon parked at the
+              far right of a two-line heading points at whitespace. Being
+              inline also means it follows the wrap instead of fighting it.
+
+              20x20 around a 14px glyph. The glyph alone would be a target the
+              height of a 13px line box, which is the mistake the icon ladder
+              was written for; 20 is what fits inside a heading that sets its
+              own line height. */}
+          <button onClick={() => void copyIt(t.title, "title")}
+            className="inline-flex items-center justify-center align-middle ml-1.5 rounded hover:bg-white/10"
+            style={{ width: 20, height: 20, color: copied === "title" ? "var(--success)" : "var(--text4)" }}
+            title="Copy the title"
+            aria-label={copied === "title" ? "Title copied" : "Copy the title"}>
+            {copied === "title" ? (
+              <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M4 12.5l5.2 5.2L20 6.9" />
+              </svg>
+            ) : (
+              <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+          </button>
         </h2>
         {/* Only when there is a second thing to switch to. One tab is not a tab,
             it is a label — and a card with no conversation should look exactly
