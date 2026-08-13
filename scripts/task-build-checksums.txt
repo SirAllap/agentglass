@@ -1,0 +1,11 @@
+# Pinned sha256 sums for scripts/build-task-static.sh.
+#
+# The build refuses to run without an entry for every tarball, and refuses to
+# finish when one does not match — a binary the app ships is a supply-chain
+# decision, not a convenience. To add or bump a version, compute the real sums
+# on a networked machine, update the pins here, and let CI be the proof.
+#
+# Format: "<sha256>  <name>"
+
+b1d3a7f000cd0fd60640670064e0e001613c9e1cb2242b9b3a9066c78862cfec  task-2.6.2.tar.gz
+40ea07584d56c310455471afa92c119ec259776a561af7159cc802344c2c370d  util-linux-2.39.3.tar.gz

@@ -151,6 +151,9 @@ desktop-dist: ## Package installable binaries for the host platform (electron-bu
 desktop-dist-linux: ## Package Linux binaries (AppImage + deb)
 	cd electron && bun run dist:linux
 
+task-static: ## Build the static Taskwarrior this app bundles (TARGET=bun-linux-x64 for a shipping one)
+	./scripts/build-task-static.sh
+
 desktop-install: ## Install the built app for this user (no root)
 	electron/install-local.sh
 

@@ -36,3 +36,7 @@ __pycache__/
 /TASKS.md
 /DECISIONS.md
 /THEME_AUDIT.md
+
+# Built vendor binaries (scripts/build-*-static.sh). Megabytes, and
+# reproducible from the pinned sources.
+out/
