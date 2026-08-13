@@ -10,6 +10,42 @@ export function stepFileIndex(len: number, cur: number, dir: 1 | -1): number {
   return (cur + dir + len) % len;
 }
 
+/** What marking a file viewed does to where you are: open another file, scroll
+ *  to one, or leave the page alone. */
+export type ViewedMove =
+  | { kind: "open"; path: string }
+  | { kind: "scroll"; path: string }
+  | { kind: "stay" };
+
+/**
+ * Where you end up after ticking "Viewed".
+ *
+ * Two layouts, two meanings of "move on". In the stack every file is on the
+ * page, so the one just marked collapses and the next is scrolled to. In one-
+ * file mode the column holds a single file: collapsing it leaves an empty
+ * screen and a scroll goes nowhere, so the only way on is to OPEN the next one
+ * — which is what the tick already means when you take it literally.
+ *
+ * Un-marking never moves anything: that is you going back to look at something,
+ * and moving the page out from under that takes the click away from you. Nor
+ * does the last file, whose "next" would be a jump to the bottom of a list that
+ * just got shorter.
+ */
+export function afterViewed(
+  paths: string[],
+  path: string,
+  opts: { oneFile: boolean; wasViewed: boolean },
+): ViewedMove {
+  if (opts.wasViewed) return { kind: "stay" };
+  const i = paths.indexOf(path);
+  if (i < 0) return { kind: "stay" };
+  const next = paths[i + 1];
+  if (opts.oneFile) return next ? { kind: "open", path: next } : { kind: "stay" };
+  // Nothing after it — hold the one just folded rather than throwing the page
+  // to the bottom.
+  return { kind: "scroll", path: next ?? path };
+}
+
 /** The bit of an element every jump here needs to know, so the rule below can
  *  be tested without a browser: how much it holds, how much it shows, whether
  *  it is allowed to scroll the difference, and what is above it. */

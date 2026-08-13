@@ -47,7 +47,7 @@ import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, To
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
-import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
+import { afterViewed, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
@@ -7304,20 +7304,22 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
       if (wasViewed) next.delete(path); else next.add(path);
       return next;
     });
-    // Marking a file viewed collapses it, and everything under it jumps up by
-    // however tall it was — so the file you move on to arrives already scrolled
-    // to wherever the last one happened to end. Put the next one at the top,
-    // which is the only place a file you have not read yet should start.
-    //
-    // Only on the way in: unfolding is you going back to look at something, and
-    // moving the page under that would be taking the click away from you.
-    if (wasViewed) return;
-    const i = shownFiles.findIndex((f) => f.path === path);
-    // The last file has no next — hold the one just folded, rather than
-    // throwing the page to the bottom of a list that has just got shorter.
-    const target = shownFiles[i + 1]?.path ?? path;
+    // Where the tick leaves you — see `afterViewed`. In the stack: marking a
+    // file viewed collapses it, everything under it jumps up by however tall it
+    // was, and the file you move on to would arrive already scrolled to wherever
+    // the last one happened to end, so the next one is put at the top. In one-
+    // file mode there is nothing under it to scroll to, so the next file is
+    // opened instead.
+    const move = afterViewed(shownFiles.map((f) => f.path), path, { oneFile, wasViewed });
+    if (move.kind === "stay") return;
+    if (move.kind === "open") {
+      onSel(move.path);
+      const frame = frameRef.current;
+      if (frame) vScrollerOf(frame)?.scrollTo({ top: 0 });
+      return;
+    }
     requestAnimationFrame(() => {
-      scrollToFileStable(() => document.querySelector(`[data-path="${target}"]`));
+      scrollToFileStable(() => document.querySelector(`[data-path="${move.path}"]`));
     });
   };
   const allFolded = shownFiles.length > 0 && shownFiles.every((f) => folded.has(f.path));
