@@ -26,7 +26,7 @@
 
 /** The things the git view lists. One kind per section, plus `commit`, which
  *  appears in the log and in the reflog. */
-export type GitKind = "branch" | "tag" | "stash" | "worktree" | "remote" | "submodule" | "commit";
+export type GitKind = "branch" | "tag" | "stash" | "worktree" | "remote" | "remote-branch" | "submodule" | "commit";
 
 /** What a row knows about itself. Every field optional: a tag has no upstream,
  *  a worktree has no ahead count, and the rules below ask only what they need. */
@@ -151,6 +151,24 @@ export function actionsFor(kind: GitKind, name: string, s: GitRowState = {}): Gi
     return out;
   }
 
+  if (kind === "remote-branch") {
+    // A branch on the remote you do not have yet. The three things you can do
+    // with it differ in ONE way that matters — what happens to the checkout you
+    // are standing in — so they are worded around that rather than around git's
+    // verbs: bring it (nothing moves), switch to it (this checkout moves), or
+    // put it in its own folder (nothing moves, and you get a second place).
+    if (s.elsewhere) push({ id: "open-worktree", label: "Open its worktree", group: "go", shortcut: "↵" });
+    else if (s.merged) push({ id: "checkout-local", label: "Switch to the local copy", group: "go", shortcut: "↵" });
+    else {
+      push({ id: "bring-local", label: "Bring it local, stay here", group: "go", shortcut: "↵" });
+      push({ id: "checkout", label: "Bring it and switch this checkout", group: "go", shortcut: "⇧↵" });
+      push({ id: "worktree", label: "Check it out in its own folder", group: "go" });
+    }
+    push({ id: "compare", label: "Compare with the current branch", group: "compare" });
+    push({ id: "copy-name", label: "Copy the name", group: "copy", shortcut: "⌘C" });
+    return out;
+  }
+
   if (kind === "remote") {
     // Only what the server can actually do. Prune and remove belong on this
     // list the day there is an endpoint behind them, and not one day earlier:
@@ -207,6 +225,13 @@ export function primaryAction(kind: GitKind, name: string, s: GitRowState = {}):
     // in the trunk, so "delete" is not a risk, it is the leftover chore.
     if (s.gone && s.merged) return by("delete");
     return by("checkout");
+  }
+  if (kind === "remote-branch") {
+    // `merged` is reused here to mean "you already have a local copy", which is
+    // the only state that changes the answer: there is nothing to bring.
+    if (s.elsewhere) return by("open-worktree");
+    if (s.merged) return by("checkout-local");
+    return by("bring-local");
   }
   if (kind === "worktree") return s.current ? null : by("open");
   if (kind === "stash") return by("apply");

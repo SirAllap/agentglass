@@ -42,6 +42,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { GitRowMenu } from "./GitRowMenu.tsx";
 import { GitPalette, type PaletteRow } from "./GitPalette.tsx";
+import { List, branchRows, BRANCH_COLS, remoteBranchRows, REMOTE_BRANCH_COLS, tagRows, TAG_COLS, stashRows, STASH_COLS, worktreeRows, WORKTREE_COLS, submoduleRows, SUBMODULE_COLS, reflogRows, REFLOG_COLS } from "./git/Lists.tsx";
 import { primaryAction, groupByPrefix, bulkDeletable, type GitKind, type GitRowState } from "../lib/gitActions.ts";
 import { openPrs, openPr } from "../lib/openPrs.ts";
 import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
@@ -2071,6 +2072,23 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     }
   };
 
+  /** A branch that lives on the remote. The three ways to take it differ in one
+   *  thing — what happens to the checkout you are standing in — which is what
+   *  their labels say and what decides which one is the row's button. */
+  const remoteBranchAction = (id: string, b: GitRemoteBranch) => {
+    switch (id) {
+      case "bring-local": return void takeRemote(b, "local");
+      case "checkout": return void takeRemote(b, "checkout");
+      case "worktree": return void takeRemote(b, "worktree");
+      case "checkout-local": return void checkout(b.name);
+      case "open-worktree": return b.worktree
+        ? openWorktree({ path: b.worktree, branch: b.name, head: b.hash, current: false, bare: false, locked: false })
+        : undefined;
+      case "compare": return setCompareTarget(b.name);
+      case "copy-name": return void navigator.clipboard?.writeText(b.name).catch(() => { /* no clipboard permission */ });
+    }
+  };
+
   /** A remote, and a submodule. Both short, because both only offer what there
    *  is an endpoint for — see the note in the catalogue. */
   const remoteAction = (id: string, r: GitRemote) => {
@@ -3261,137 +3279,26 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       `rowIdx` mean; grouping changes what is drawn between the
                       rows, not what the rows are.
                     */}
-                    {branchGroups.map((g) => (
-                      <Fragment key={g.prefix || "(no prefix)"}>
-                        {grouping && (
-                          <button onClick={() => setGroupsClosed((prev) => {
-                            const next = new Set(prev);
-                            next.has(g.prefix) ? next.delete(g.prefix) : next.add(g.prefix);
-                            return next;
-                          })}
-                            className="w-full flex items-center gap-2 px-2.5 py-1 mt-1 text-left"
-                            style={{ color: "var(--text3)" }}>
-                            <span className="text-[9px]">{groupsClosed.has(g.prefix) ? "▸" : "▾"}</span>
-                            <span className="text-[9.5px] uppercase tracking-wider">
-                              {g.prefix ? `${g.prefix}/` : "no prefix"}
-                            </span>
-                            <span className="text-[9.5px] tabular-nums">{g.rows.length}</span>
-                            {(() => {
-                              const dead = g.rows.filter((b) => trackChip(b.track).gone).length;
-                              return dead ? <span className="text-[9.5px]" style={{ color: "var(--error)" }}>{dead} gone</span> : null;
-                            })()}
-                            <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
-                          </button>
-                        )}
-                        {!groupsClosed.has(g.prefix) && g.rows.map((b) => {
-                      const i = incBranches.rows.indexOf(b);
-                      const t = trackChip(b.track);
-                      const sel = i === rowIdx;
-                      // Current from the FRESH working-tree poll, not the branch
-                      // list — so the ⎇ moves the instant you switch.
-                      const isCurrent = b.name === currentBranchName;
-                      // Checked out in a worktree? Then "switch" means open that
-                      // worktree, and the row says so — lazygit's one-list model.
-                      const wt = wtByBranch.get(b.name);
-                      const wtElsewhere = wt && wt.path !== root;
-                      const rowState = branchState(b, isCurrent, !!wtElsewhere);
-                      const primary = primaryAction("branch", b.name, rowState);
-                      return (
-                        // The cursor wins over the current-branch tint: you need
-                        // to see where the keyboard is, and "this is HEAD" is
-                        // already said by the ⎇ glyph.
-                        <div key={b.name} onClick={() => setRowIdx(i)} {...rowProps(sel)}
-                          onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "branch", name: b.name, state: rowState, x: e.clientX, y: e.clientY, run: (id) => branchAction(id, b) }); }}
-                          className="group px-2.5 py-1.5 rounded-md"
-                          // The action column is reserved whether or not the
-                          // buttons are drawn, so hovering cannot resize the
-                          // subject beside it. See ROW_GRID.
-                          // 23rem before, because seven buttons needed it. One
-                          // needs 9, and the 14rem go back to the branch name
-                          // and its subject — the two things the row is for.
-                          style={{ ...ROW_GRID, ...(sel ? rowProps(true).style : { background: isCurrent ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }), ["--gitrow-actions" as string]: writeEnabled ? "9rem" : "0px" }}>
-                          {/* The tick replaces the ⎇ column rather than adding
-                              one: a checkbox that is always there is a column
-                              of empty boxes, and this list is read far more
-                              often than it is swept. It appears on hover, or
-                              once anything is ticked — which is when the column
-                              means something. */}
-                          <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>
-                            {isCurrent && !picked.size ? "⎇" : (
-                              <span onClick={(e) => {
-                                e.stopPropagation();
-                                setPicked((prev) => { const next = new Set(prev); next.has(b.name) ? next.delete(b.name) : next.add(b.name); return next; });
-                              }}
-                                className={`cursor-pointer ${picked.size ? "" : "opacity-0 group-hover:opacity-100"} transition-opacity`}
-                                style={{ color: picked.has(b.name) ? "var(--primary)" : "var(--text3)" }}
-                                title={picked.has(b.name) ? "Untick" : "Tick for a bulk action"}>
-                                {picked.has(b.name) ? "☑" : "☐"}
-                              </span>
-                            )}
-                          </span>
-                          {/* Name and its badges share one track and truncate
-                              together — the badges say what the branch IS, so
-                              they must not be pushed out by a long name. */}
-                          <span className="flex items-center gap-1.5 min-w-0">
-                            <button disabled={isCurrent || !writeEnabled || busy} onClick={(e) => { e.stopPropagation(); switchTo(b); }} className="text-[12px] font-medium text-left truncate min-w-0" style={{ color: isCurrent ? "var(--text)" : "var(--text2)", cursor: isCurrent ? "default" : "pointer" }} title={isCurrent ? `${b.name} — you are here` : wtElsewhere ? `${b.name} — open its worktree` : `Switch to ${b.name}`}>{b.name}</button>
-                            {/* Checked out in a worktree — switching opens it. */}
-                            {wt && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${wt.path}`}>▸ {wtName(wt.path)}</span>}
-                            {/* Behind before ahead — "pull this many, push that many". */}
-                            {(t.ahead > 0 || t.behind > 0) && (
-                              <span className="shrink-0 text-[9.5px] tabular-nums">
-                                {t.behind > 0 && <span style={{ color: "var(--warning)" }}>↓{t.behind}</span>}
-                                {t.ahead > 0 && <span className="ml-1" style={{ color: "var(--success)" }}>↑{t.ahead}</span>}
-                              </span>
-                            )}
-                            {/* Its remote branch is gone — a merged, tidied-up PR.
-                                Safe to delete locally, and the usual reason a branch
-                                list grows to 57 entries. */}
-                            {t.gone && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }} title={`${b.upstream} no longer exists on the remote — this branch was probably merged`}>gone</span>}
-                            {/* Cut to read a pull request, not to build anything —
-                                see lib/scratchBranch.ts for why the rule is this
-                                narrow. Drawn in the quiet neutral rather than a
-                                warning colour: this is a classification, not a
-                                problem, and the row beside it uses red for a
-                                branch whose remote is gone. */}
-                            {isScratchBranch(b.name) && (
-                              <span className="shrink-0 text-[10px] px-1 py-px rounded"
-                                style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
-                                title={scratchNote(b.name)}>scratch</span>
-                            )}
-                            {/* In sync, and freshly enough fetched to mean it. */}
-                            {b.upstream && !t.gone && !t.ahead && !t.behind && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--success)" }} title={`in sync with ${b.upstream}`}>✓</span>}
-                          </span>
-                          <span className="min-w-0 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
-                          <span className="text-[9.5px] t-dim2 whitespace-nowrap text-right">{b.date}</span>
-                          {/*
-                            ONE button, chosen from this row's own state, and
-                            everything else on the right-click.
-
-                            There were seven here. They were on hover, which
-                            kept them out of the eye's way but not the
-                            pointer's: the row you wanted to read was the row
-                            that grew a toolbar, and the button you wanted sat
-                            in a different place on every row because which
-                            ones appeared depended on the branch. The rule that
-                            picks the one is in lib/gitActions.ts, tested there,
-                            and shared with the menu — so the button can never
-                            offer something the menu does not.
-                          */}
-                          {writeEnabled && primary ? (
-                            <div className={`flex items-center justify-end transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"}`}>
-                              <button onClick={(e) => { e.stopPropagation(); branchAction(primary.id, b); }} disabled={busy}
-                                className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
-                                style={primary.danger
-                                  ? { color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }
-                                  : { color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
-                                title={`${primary.label} — right-click the row for everything else`}>{primary.label}</button>
-                            </div>
-                          ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
-                        </div>
-                      );
-                        })}
-                      </Fragment>
-                    ))}
+                    {/* Rewritten with the rest: same grid, same density and
+                        same chips as the other seven sections, plus the two
+                        things only this list needs — families, and a tick
+                        column for sweeping several at once. */}
+                    <List
+                      rows={branchRows(incBranches.rows, {
+                        current: currentBranchName,
+                        worktreeOf: (n) => wtByBranch.get(n),
+                        root,
+                        picked,
+                        onPick: (n) => setPicked((prev) => { const next = new Set(prev); next.has(n) ? next.delete(n) : next.add(n); return next; }),
+                        run: branchAction,
+                        track: trackChip,
+                      })}
+                      cols={BRANCH_COLS}
+                      group={grouping}
+                      cursor={rowIdx} onCursor={setRowIdx}
+                      onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                      busy={busyView === "branches"} what="branches" disabled={!writeEnabled}
+                    />
                     <MoreRows shown={incBranches.rows.length} total={shownBranches.length} onAll={incBranches.showAll} />
                     {/*
                       The bulk bar, and the honest count.
@@ -3496,27 +3403,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                     )}
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
-                    {shownStashes.map((s, i) => (
-                      <div key={s.ref} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
-                        onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "stash", name: s.ref, state: {}, x: e.clientX, y: e.clientY, run: (id) => stashAction(id, s) }); }}
-                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "6rem" : "0px" }}>
-                        <span className="text-[10px] tabular-nums t-dim2">{s.ref}</span>
-                        <span className="min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={s.message}>{s.message}</span>
-                        {/* Six buttons, of which two could not be undone and one
-                            — overwrite — replaces paths in the working tree.
-                            Apply is the one you want nine times in ten and the
-                            only one that leaves the stash where it was, so it
-                            is the one that stays. */}
-                        {writeEnabled ? (
-                          <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                            <button onClick={(e) => { e.stopPropagation(); stashOp("apply", s.index); }}
-                              className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
-                              style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
-                              title="Apply it and keep the stash — right-click the row for everything else">Apply</button>
-                          </div>
-                        ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
-                      </div>
-                    ))}
+                      <List
+                        rows={stashRows(shownStashes, stashAction)}
+                        cols={STASH_COLS}
+                        cursor={rowIdx} onCursor={setRowIdx}
+                        onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                        busy={busyView === "stashes"} what="stashes" disabled={!writeEnabled}
+                      />
                     {!stashes.length && <PaneEmpty busy={busyView === "stashes"} what="stashes" />}
                   </div>
                 ) : view === "remotes" ? (
@@ -3583,61 +3476,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           ? <div className="grid place-items-center py-10 t-dim2 text-[12px]">nothing on {remoteSel} matches “{remoteQuery.trim()}”</div>
                           : <PaneEmpty busy={busyView === "remotes"} what={remotes.length ? "remote branches" : "remotes"} />
                       )}
-                      {incRemoteBranches.rows.map((b, i) => {
-                        const sel = i === rowIdx;
-                        return (
-                          <div key={b.ref} onClick={() => setRowIdx(i)} {...rowProps(sel)}
-                            className="group px-2.5 py-1.5 rounded-md"
-                            style={{ ...ROW_GRID, gridTemplateColumns: "minmax(0, 1fr) auto 5rem minmax(0, 22rem) 11rem 5.5rem var(--gitrow-actions, 0px)", ...rowProps(sel).style, ["--gitrow-actions" as string]: writeEnabled ? "17rem" : "0px" }}>
-                            <span className="text-[11.5px] font-medium truncate min-w-0" style={{ color: b.local ? "var(--text)" : "var(--text2)" }} title={b.ref}>{b.name}</span>
-                            {/* Whether you already have it is the whole reason
-                                this list is worth reading. A checkout that has
-                                it out is stronger still — that is where the
-                                work would go. */}
-                            {b.worktree
-                              ? <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${b.worktree}`}>▸ {wtName(b.worktree)}</span>
-                              : b.local
-                                ? <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }} title={b.tracking ? "you have this branch, tracking this remote one" : "you have a local branch of this name — it tracks something else"}>{b.tracking ? "local" : "local ≠"}</span>
-                                : null}
-                            <span className="text-[9.5px] tabular-nums t-dim2">{b.hash}</span>
-                            <span className="min-w-0 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
-                            <span className="text-[9.5px] t-dim2 truncate min-w-0 text-right" title={b.author}>{b.author}</span>
-                            <span className="text-[9.5px] t-dim2 text-right whitespace-nowrap">{b.date}</span>
-                            <span className="flex items-center justify-end gap-1.5">
-                            {writeEnabled && !b.local && (
-                              // Three real buttons, ordered by how much they move,
-                              // shown on the row you are on (not hover-only) so it
-                              // is obvious the actions are there and what each does.
-                              // "Checkout" is filled because it is the one that
-                              // moves this checkout; the other two are quieter
-                              // because they leave it where it is.
-                              <div className={`shrink-0 flex items-center gap-1.5 transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-                                <button onClick={(e) => { e.stopPropagation(); takeRemote(b, "local"); }} disabled={busy}
-                                  className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap"
-                                  style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 42%, transparent)" }}
-                                  title={`Bring “${b.name}” to local: create a local branch tracking ${b.ref}. Your current checkout stays put — nothing is switched.`}>↓ Bring local</button>
-                                <button onClick={(e) => { e.stopPropagation(); takeRemote(b, "checkout"); }} disabled={busy}
-                                  className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
-                                  style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
-                                  title={`Create the local branch and switch THIS checkout onto ${b.name}.`}>⎇ Checkout</button>
-                                <button onClick={(e) => { e.stopPropagation(); takeRemote(b, "worktree"); }} disabled={busy}
-                                  className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap"
-                                  style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
-                                  title={`Check ${b.name} out in its own folder beside this one — this checkout is untouched.`}>+ Worktree</button>
-                              </div>
-                            )}
-                            {/* Already here: the useful action is going there,
-                                not making a second copy. */}
-                            {b.local && b.worktree && b.worktree !== root && (
-                              <button onClick={(e) => { e.stopPropagation(); openWorktree({ path: b.worktree!, branch: b.name, head: b.hash, current: false, bare: false, locked: false }); }}
-                                className={`agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded whitespace-nowrap transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-                                style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
-                                title={`Open its worktree — ${b.worktree}`}>▸ Open worktree</button>
-                            )}
-                            </span>
-                          </div>
-                        );
-                      })}
+                      {/* Rewritten: one list, described rather than drawn.
+                          See components/git/Lists.tsx — the seven hand-tuned
+                          tracks and the three buttons that overlapped the name
+                          are gone, and this section now shares its grid,
+                          density and menu with the other seven. */}
+                      <List
+                        rows={remoteBranchRows(incRemoteBranches.rows, { root, run: remoteBranchAction })}
+                        cols={REMOTE_BRANCH_COLS}
+                        cursor={rowIdx}
+                        onCursor={setRowIdx}
+                        onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                        busy={busyView === "remotes"}
+                        what={remotes.length ? "remote branches" : "remotes"}
+                        disabled={!writeEnabled}
+                      />
                       <MoreRows shown={incRemoteBranches.rows.length} total={shownRemoteBranches.length} onAll={incRemoteBranches.showAll} />
                     </div>
                   </div>
@@ -3650,33 +3503,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       sort={sort} onSort={(x) => { setSort(x); setRowIdx(0); }}
                       sorts={[{ key: "recent", label: "recent", title: "Newest tag first" }, { key: "name", label: "name", title: "Alphabetical" }]}
                       count={shownTags.length} total={tags.length} />
-                    {incTags.rows.map((t, i) => (
-                      <div key={t.name} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
-                        onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "tag", name: t.name, state: {}, x: e.clientX, y: e.clientY, run: (id) => tagAction(id, t) }); }}
-                        style={{ ...ROW_GRID, gridTemplateColumns: "minmax(0, 18rem) 5rem minmax(0, 1fr) auto", ...rowProps(i === rowIdx).style }}>
-                        <span className="text-[11.5px] font-medium truncate min-w-0" style={{ color: "var(--text)" }} title={t.name}>{t.annotated ? "🏷" : "⚑"} {t.name}</span>
-                        <span className="text-[9.5px] tabular-nums t-dim2">{t.hash}</span>
-                        <span className="min-w-0 truncate text-[10px] t-dim2" title={t.subject}>{t.subject}</span>
-                        <span className="flex items-center gap-1 whitespace-nowrap">
-                          <span className="text-[9.5px] t-dim2 text-right">{t.date}</span>
-                          {/* Three glyph buttons — push, delete-there, delete-here
-                              — sat here, two of them destructive and one pixel
-                              apart. The row keeps the one you came for and the
-                              other two moved to the right-click, where they
-                              have names instead of arrows and ask before they
-                              run. */}
-                          {writeEnabled && (
-                            <span className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                              <button onClick={(e) => { e.stopPropagation(); tagPush(t.name); }}
-                                className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
-                                style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
-                                title={`Push ${t.name} to the remote — right-click the row for everything else`}>Push</button>
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                    ))}
-                    {!shownTags.length && <PaneEmpty busy={busyView === "tags"} what="tags" />}
+                      <List
+                        rows={tagRows(incTags.rows, tagAction)}
+                        cols={TAG_COLS}
+                        cursor={rowIdx} onCursor={setRowIdx}
+                        onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                        busy={busyView === "tags"} what="tags" disabled={!writeEnabled}
+                      />
                     <MoreRows shown={incTags.rows.length} total={shownTags.length} onAll={incTags.showAll} />
                   </div>
                 ) : view === "submodules" ? (
@@ -3685,60 +3518,26 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       <button onClick={submoduleAddAsk} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ add submodule</button>
                     )}
                     {submodules.length === 0 && !busy && <PaneEmpty busy={false} what="submodules" />}
-                    {submodules.map((s) => (
-                      <div key={s.path} className="group px-2.5 py-1.5 rounded-md"
-                        onContextMenu={(e) => { e.preventDefault(); setRowMenu({ kind: "submodule", name: s.path, state: {}, x: e.clientX, y: e.clientY, run: (id) => submoduleAction(id, s) }); }}
-                        style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", marginBottom: 6 }}>
-                        <div className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium" style={{ color: "var(--text)" }}>{s.path}</span>
-                          <span className="shrink-0 rounded px-1.5 py-px text-[9px] font-medium" style={{
-                            background: s.status === "clean" ? "color-mix(in srgb, var(--success) 16%, transparent)" : s.status === "modified" ? "color-mix(in srgb, var(--warning) 16%, transparent)" : s.status === "conflict" ? "color-mix(in srgb, var(--error) 16%, transparent)" : "color-mix(in srgb, var(--text3) 16%, transparent)",
-                            color: s.status === "clean" ? "var(--success)" : s.status === "modified" ? "var(--warning)" : s.status === "conflict" ? "var(--error)" : "var(--text2)",
-                            border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)",
-                          }}>
-                            {s.status === "clean" ? "clean" : s.status === "modified" ? "modified" : s.status === "conflict" ? "conflict" : "uninitialized"}
-                          </span>
-                          <span className="shrink-0 font-mono text-[9.5px] t-dim2">{s.sha.slice(0, 7)}</span>
-                          {writeEnabled && (
-                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                              <button onClick={() => submoduleOp("update", s.path, `Updated ${s.path}`)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="git submodule update --init --recursive">update</button>
-                              <button onClick={() => submoduleOp("sync", s.path, `Synced ${s.path}`)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Re-write URLs from .gitmodules into the checkout">sync</button>
-                              <button onClick={() => submoduleDeinitAsk(s.path)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>deinit</button>
-                              <button onClick={() => submoduleRemoveAsk(s.path)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>remove</button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-[9.5px] t-dim2">
-                          <span className="truncate">{s.url || "no url in .gitmodules"}</span>
-                          {s.branch && <span className="shrink-0">· {s.branch}</span>}
-                        </div>
-                      </div>
-                    ))}
+                    <List
+                      rows={submoduleRows(submodules, submoduleAction)}
+                      cols={SUBMODULE_COLS}
+                      cursor={rowIdx} onCursor={setRowIdx}
+                      onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                      busy={busyView === "submodules"} what="submodules" disabled={!writeEnabled}
+                    />
                   </div>
                 ) : view === "reflog" ? (
                   <div onScroll={incReflog.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
                     {/* Where HEAD has been. This is the trail that makes a bad
                         reset or rebase recoverable, which is why it earns a tab
                         of its own rather than living inside the log. */}
-                    {incReflog.rows.map((e, i) => (
-                      <div key={e.ref} {...rowProps(i === rowIdx)} className="group flex items-center gap-3 px-2.5 py-1 rounded-md" onClick={() => setRowIdx(i)}>
-                        <span className="shrink-0 text-[9.5px] tabular-nums t-dim2" style={{ minWidth: 68 }}>{e.ref}</span>
-                        <span className="shrink-0 text-[9.5px] tabular-nums" style={{ color: "var(--primary-hover)" }}>{e.shortHash}</span>
-                        <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ minWidth: 92, color: "var(--text2)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>{e.action}</span>
-                        <span className="min-w-0 flex-1 truncate text-[11px]" style={{ color: "var(--text)" }}>{e.subject}</span>
-                        <span className="shrink-0 text-[9.5px] t-dim2">{e.date}</span>
-                        <div className={`shrink-0 flex items-center gap-1 transition-opacity ${i === rowIdx ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-                          <button onClick={(ev) => { ev.stopPropagation(); navigator.clipboard?.writeText(e.shortHash).catch(() => {}); }} className="agx-btn text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Copy the sha">copy</button>
-                          {/* The point of the reflog: whatever you did, the
-                              entry before it is where HEAD was. Reset here is
-                              the recovery move, and it is hard by default — the
-                              whole reason this list exists. The confirm below
-                              is the guard. */}
-                          <button onClick={(ev) => { ev.stopPropagation(); resetTo(e.shortHash, "hard"); }} className="agx-btn text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }} title={`Reset the current branch to this entry (${e.subject}) — hard, discarding working-tree changes`}>reset here</button>
-                        </div>
-                      </div>
-                    ))}
-                    {!reflog.length && <PaneEmpty busy={busyView === "reflog"} what="reflog entries" />}
+                      <List
+                        rows={reflogRows(incReflog.rows, (id, e) => { if (id === "show" || id === "compare") openCommit(e.shortHash, e.subject); else if (id === "copy-sha") void navigator.clipboard?.writeText(e.shortHash).catch(() => {}); })}
+                        cols={REFLOG_COLS}
+                        cursor={rowIdx} onCursor={setRowIdx}
+                        onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                        busy={busyView === "reflog"} what="reflog entries" disabled={!writeEnabled}
+                      />
                     <MoreRows shown={incReflog.rows.length} total={reflog.length} onAll={incReflog.showAll} />
                   </div>
                 ) : (
@@ -3750,90 +3549,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                     )}
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search worktrees by branch or directory…" count={shownWorktrees.length} total={worktrees.length} />
-                    {shownWorktrees.map((w, i) => (
-                      // Fixed tracks for the directory and the branch so they
-                      // line up down the list. With seventeen ticket worktrees
-                      // whose names differ in length by thirty characters, a
-                      // flex row put every branch chip at a different x and the
-                      // eye had nothing to run down.
-                      <div key={w.path} onClick={() => setRowIdx(i)} {...rowProps(i === rowIdx)}
-                        onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "worktree", name: w.path, state: { current: w.current }, x: e.clientX, y: e.clientY, run: (id) => worktreeAction(id, w) }); }}
-                        className="group px-2.5 py-1.5 rounded-md"
-                        style={{ ...ROW_GRID, gridTemplateColumns: "14px minmax(0, 14rem) minmax(0, 20rem) 5rem minmax(0, 1fr) auto", ...(i === rowIdx ? rowProps(true).style : { background: w.current ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }) }}>
-                        <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>{w.current ? "▸" : ""}</span>
-                        <button onClick={() => openWorktree(w)} className="text-[12px] font-medium text-left truncate min-w-0" style={{ color: "var(--text)" }} title={`Open ${w.path}`}>{wtName(w.path)}</button>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded truncate min-w-0" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }} title={w.branch}>⎇ {w.branch}</span>
-                        <span className="text-[9.5px] tabular-nums t-dim2 flex items-center gap-1">
-                          {w.head}
-                          {w.locked && <span className="text-[10px]" style={{ color: "var(--warning)" }}>locked</span>}</span>
-                        {/* Same reading as the repo picker's. It is also the
-                            reason the sync button below may be disabled, so it
-                            has to be visible on the row that carries it. */}
-                        <span className="min-w-0 truncate text-[9.5px] t-dim2 flex items-center gap-1.5" title={w.path}>
-                          {!!w.dirty && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${w.dirty} uncommitted change${w.dirty === 1 ? "" : "s"} in this checkout`}>●{w.dirty}</span>}
-                          <span className="truncate min-w-0">{w.path}</span>
-                        </span>
-                        <span className="flex items-center justify-end gap-2 whitespace-nowrap">
-                        {/* How far this checkout has drifted from what it was
-                            branched off, and the one-click way to close the
-                            gap. Shown only when there is a gap: a checkout
-                            level with its base needs no button, and the trunk
-                            has no base at all. */}
-                        {!!w.base && (w.behindBase ?? 0) > 0 && (
-                          <>
-                            <span className="shrink-0 text-[9.5px] tabular-nums" style={{ color: "var(--warning)" }}
-                              title={`${w.behindBase} commit${w.behindBase === 1 ? "" : "s"} on ${w.base} that this branch does not have`}>
-                              ↓{w.behindBase} behind {w.base}
-                            </span>
-                            {/* Disabled on a dirty checkout, exactly like the
-                                header's sync button — syncFromBase refuses to
-                                merge over uncommitted work, so an enabled
-                                button here could only ever produce an error
-                                toast. The header got this right and this row
-                                did not, which is worse than either: the same
-                                action looked possible in one place and not the
-                                other. */}
-                            {writeEnabled && (() => {
-                              const blocked = !!w.dirty;
-                              return (
-                                <button
-                                  onClick={() => act(() => api.gitSyncBase(w.path, w.base ?? undefined), `merged ${w.base}`, `sync:${w.path}`)}
-                                  disabled={busy || blocked}
-                                  className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-                                  style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: busy || blocked ? 0.45 : 1 }}
-                                  title={blocked
-                                    ? `Commit or stash the ${w.dirty} change${w.dirty === 1 ? "" : "s"} in ${wtName(w.path)} first — merging over uncommitted work is how you lose it`
-                                    : `Merge ${w.base} into ${w.branch}, in that worktree. A merge, not a rebase — nothing already pushed gets rewritten.`}>
-                                  {pending === `sync:${w.path}` ? "syncing…" : "sync"}
-                                </button>
-                              );
-                            })()}
-                          </>
-                        )}
-                        {/* Correcting the base has to be reachable when there
-                            is NO gap, which is why this sits outside the chip
-                            above. A wrong base almost always reports zero — it
-                            named something this branch already contains — so
-                            hiding the picker behind "there is a gap" hid it in
-                            precisely the case it exists for. Quiet until the
-                            row is hovered, because on the rows where the base
-                            is right it is one more thing to read. */}
-                        {writeEnabled && w.branch !== "(detached)" && (
-                          <BasePicker
-                            branch={w.branch} base={w.base ?? null} refs={baseRefs}
-                            onOpen={loadBaseRefs}
-                            onPick={(name) => setBaseFor(w.branch, name)}
-                            disabled={busy}
-                            label={(w.behindBase ?? 0) > 0 ? "▾" : "base ▾"}
-                            title={w.base ? `Measured against ${w.base} — pick a different base` : "No base known for this branch — pick one"}
-                            className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${(w.behindBase ?? 0) > 0 ? "" : "opacity-0 group-hover:opacity-100"}`}
-                            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
-                        )}
-                        {writeEnabled && !w.current && <button onClick={() => removeWorktree(w)} className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Remove worktree">remove</button>}
-                        </span>
-                      </div>
-                    ))}
-                    {!shownWorktrees.length && <PaneEmpty busy={busyView === "worktrees"} what="worktrees" />}
+                    <List
+                      rows={worktreeRows(shownWorktrees, { run: worktreeAction })}
+                      cols={WORKTREE_COLS}
+                      cursor={rowIdx} onCursor={setRowIdx}
+                      onMenu={(r, x, y) => setRowMenu({ kind: r.kind, name: r.name, state: r.state, x, y, run: r.run })}
+                      busy={busyView === "worktrees"} what="worktrees" disabled={!writeEnabled}
+                    />
                   </div>
                 )}
 
