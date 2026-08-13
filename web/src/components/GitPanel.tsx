@@ -503,12 +503,12 @@ function RemoteButton({ label, runningLabel, running, disabled, primary, onClick
     // making the whole header taller. The branch chip is the one thing here
     // that may shrink; the controls are not negotiable.
     <button onClick={onClick} disabled={disabled}
-      className="text-[11px] px-2.5 py-1 rounded-lg transition-opacity active:scale-[0.97] whitespace-nowrap shrink-0"
+      className="text-[11px] px-3 py-1 rounded-full transition-all active:scale-[0.97] whitespace-nowrap shrink-0"
       style={{
         color: primary ? "var(--text)" : "var(--text2)",
-        fontWeight: primary ? 500 : undefined,
-        background: primary ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined,
-        border: `1px solid color-mix(in srgb, var(--${primary ? "primary" : "border"}) ${primary ? 30 : 35}%, transparent)`,
+        fontWeight: 500,
+        background: primary ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "color-mix(in srgb, var(--text) 4%, transparent)",
+        border: `1px solid color-mix(in srgb, var(--${primary ? "primary" : "text"}) ${primary ? 42 : 9}%, transparent)`,
         // Dim only while *this* one runs, or when writes are off entirely.
         opacity: disabled && !running ? 0.45 : 1,
       }}>
@@ -2718,8 +2718,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <button
                       onClick={() => setInsightsOpen(true)}
                       disabled={busy}
-                      className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
-                      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
+                      className="text-[11px] px-3 py-1 rounded-full whitespace-nowrap shrink-0 font-medium"
+                      style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", opacity: busy ? 0.5 : 1 }}
                       title="Repo insights — commit pace, contributors, churn, changelog"
                     >☰ insights</button>
                     {branch?.state === "bisecting" && (
