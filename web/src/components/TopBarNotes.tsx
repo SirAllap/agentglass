@@ -44,6 +44,7 @@ import {
 import { openPr, openPrs } from "../lib/openPrs.ts";
 import { Portal } from "./Portal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { appLinkFor } from "../lib/appLink.ts";
 
 export type NoteKind = "done" | "blocked" | "pull";
 export type Note = {
@@ -373,6 +374,8 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
   /** The destinations that are neither git nor a card: a pane, a chat, a
    *  settings page, a pull request. Each gets the same named button the other
    *  two have, because "click the row" is no longer a way to reach anything. */
+  /** The app this came from, when it is one we can open. */
+  const appLink = appLinkFor(n.app);
   const other = ((): { label: string; title: string } | null => {
     const g = n.goto;
     if (!g || g.kind === "git" || g.kind === "card") return null;
@@ -459,6 +462,21 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
           {n.url && (
             <button className="agx-note-link self-start" onClick={(e) => { e.stopPropagation(); void openNote(n.id); }} title={n.url}>
               ↗ Open {hostOf(n.url)}
+            </button>
+          )}
+          {/* No link in the message, but the app it came from can be opened.
+              Clicking a mirrored Slack message did nothing at all, while the
+              desktop pop-up it was copied from opens Slack — because a
+              notification's own action belongs to the app that posted it and a
+              bus monitor cannot invoke one. The scheme is what is left, and it
+              opens the app rather than the message, so the button says the app.
+              Slack lands you where you were, which is usually the conversation
+              that just pinged you. */}
+          {!n.url && appLink && (
+            <button className="agx-note-link self-start"
+              onClick={(e) => { e.stopPropagation(); void openNote(n.id); }}
+              title={`Open ${appLink} — this app, not the message: a mirrored notification carries no link to it`}>
+              ↗ Open {appLink}
             </button>
           )}
           {/* The two things a "commits to pull" row is actually asking you to
