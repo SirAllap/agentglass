@@ -8,12 +8,17 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const ENV = {
+// Keyed by the REAL variable names: the restore below writes `process.env[k]`,
+// so a nickname here would put back a variable nobody reads and leave the one
+// the test changed set for every file after it in the same `bun test` process.
+const ENV: Record<string, string | undefined> = {
   PATH: process.env.PATH,
-  TMP: process.env.AGENTGLASS_TMUX_PATH,
-  DIR: process.env.AGENTGLASS_TMUX_DIR,
-  STATE: process.env.AGENTGLASS_STATE_DIR,
-  XDG: process.env.XDG_CONFIG_HOME,
+  AGENTGLASS_TMUX_PATH: process.env.AGENTGLASS_TMUX_PATH,
+  AGENTGLASS_TMUX_DIR: process.env.AGENTGLASS_TMUX_DIR,
+  AGENTGLASS_STATE_DIR: process.env.AGENTGLASS_STATE_DIR,
+  AGENTGLASS_TMUX_SOCKET: process.env.AGENTGLASS_TMUX_SOCKET,
+  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  TMUX_TMPDIR: process.env.TMUX_TMPDIR,
 };
 
 beforeEach(() => {
@@ -88,6 +93,69 @@ test("the real state dir never answers a test", () => {
   delete process.env.AGENTGLASS_TMUX_DIR;
   process.env.PATH = "/nonexistent";
   expect(mod.resolveTmuxBin()).toBeNull();
+});
+
+// A server already running on the engine's socket vetoes the priority list: a
+// client tmux refuses to speak to is a dead terminal, not a lesser option.
+// These run no tmux — `pickCompatible` takes the probe, and the integration
+// test below fakes both binaries with shell scripts.
+
+test("a bundled binary the running server refuses loses to the system one", () => {
+  const speaks = (bin: string) => bin !== "/bundled/tmux";
+  expect(mod.pickCompatible(["/bundled/tmux", "/usr/bin/tmux"], speaks)).toBe("/usr/bin/tmux");
+});
+
+test("the bundled binary still wins when it can speak to the server", () => {
+  expect(mod.pickCompatible(["/bundled/tmux", "/usr/bin/tmux"], () => true)).toBe("/bundled/tmux");
+});
+
+test("nothing is picked when no candidate can speak to the server", () => {
+  expect(mod.pickCompatible(["/bundled/tmux", "/usr/bin/tmux"], () => false)).toBeNull();
+});
+
+/** A fake tmux that answers `has-session` the way a mismatched client does. */
+function mismatchedTmux(dir: string): string {
+  const p = join(dir, "tmux");
+  writeFileSync(p, "#!/bin/sh\necho 'server exited unexpectedly' >&2\nexit 1\n");
+  chmodSync(p, 0o755);
+  return p;
+}
+
+/** Socket file for a server that is "up", under a redirected TMUX_TMPDIR so no
+ *  probe can ever reach the developer's real engine server. */
+function fakeSocket(base: string, name: string): void {
+  const dir = join(base, `tmux-${process.getuid!()}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), "");
+}
+
+test("with a server up, a bundled tmux that cannot talk to it hands over to PATH", () => {
+  const bundledDir = mkdtempSync(join(tmpdir(), "agx-tb-b-"));
+  const pathDir = mkdtempSync(join(tmpdir(), "agx-tb-p-"));
+  const sockBase = mkdtempSync(join(tmpdir(), "agx-tb-s-"));
+  mismatchedTmux(bundledDir);
+  const system = fakeTmux(pathDir, "tmux"); // exits 0: it speaks
+  process.env.AGENTGLASS_TMUX_DIR = bundledDir;
+  process.env.PATH = pathDir;
+  process.env.TMUX_TMPDIR = sockBase;
+  process.env.AGENTGLASS_TMUX_SOCKET = "agx-test-sock";
+  delete process.env.AGENTGLASS_TMUX_PATH;
+  fakeSocket(sockBase, "agx-test-sock");
+  expect(mod.resolveTmuxBin()).toBe(system);
+});
+
+test("with no server up, the bundled tmux is used without being probed", () => {
+  const bundledDir = mkdtempSync(join(tmpdir(), "agx-tb-b-"));
+  const pathDir = mkdtempSync(join(tmpdir(), "agx-tb-p-"));
+  const sockBase = mkdtempSync(join(tmpdir(), "agx-tb-s-"));
+  const bundled = mismatchedTmux(bundledDir); // would fail a probe; none is run
+  fakeTmux(pathDir, "tmux");
+  process.env.AGENTGLASS_TMUX_DIR = bundledDir;
+  process.env.PATH = pathDir;
+  process.env.TMUX_TMPDIR = sockBase; // no socket file inside it
+  process.env.AGENTGLASS_TMUX_SOCKET = "agx-test-sock";
+  delete process.env.AGENTGLASS_TMUX_PATH;
+  expect(mod.resolveTmuxBin()).toBe(bundled);
 });
 
 test("status reports why the engine is off", () => {

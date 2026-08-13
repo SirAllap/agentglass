@@ -11,11 +11,22 @@
 //      headless install fetched into its state dir;
 //   4. whatever is on PATH.
 //
+// With one veto over 3 and 4, and it is the reason this file grew a probe: when
+// a server is ALREADY running on the engine's socket, the binary must be one
+// that can speak to it. tmux refuses a client whose protocol version differs
+// from the server's, so the first packaged build to ship a bundled 3.5a onto a
+// machine whose engine server had been started by a system 3.6a took the whole
+// terminal down — every engine call answered "server exited unexpectedly", and
+// killing the server to fix it would have taken the user's live sessions with
+// it. So under "auto" a running server picks the binary, not the priority list.
+//
 // "System" is chosen from the settings panel by setting `tmuxSource` to
 // "system"; it is also the automatic fallback when nothing bundled exists,
-// which is the whole dev-machine story. The mirror path in tmuxctl.ts — where
-// the app follows a tmux the USER started — is deliberately NOT resolved here:
-// that path must always use the user's own tmux, because it is their server.
+// which is the whole dev-machine story. "bundled" is an explicit answer and
+// skips the probe: somebody who names the bundle means it. The mirror path in
+// tmuxctl.ts — where the app follows a tmux the USER started — is deliberately
+// NOT resolved here: that path must always use the user's own tmux, because it
+// is their server.
 //
 // The user's own ~/.tmux.conf is never involved in any of this: the conf the
 // engine runs is agentglass's own (see tmuxconf.ts), whatever binary wins.
@@ -64,6 +75,74 @@ function usable(p: string): boolean {
   }
 }
 
+/** The socket the pane engine's own tmux server listens on.
+ *
+ *  It lives here rather than in tmuxpane.ts (which re-exports it) because the
+ *  resolver below has to ask that server a question before it can choose a
+ *  binary, and tmuxpane imports this file — the other direction would be a
+ *  cycle.
+ *
+ *  Read per call rather than pinned at import, for the same reason
+ *  `projectsDirs()` in transcripts.ts is: `bun test` runs every file in one
+ *  process, so a module-level constant would be decided by whichever test file
+ *  imported this module first — and here that means a test's redirected socket
+ *  silently reverting to the real one the running app is using. */
+export const tmuxSocket = (): string => process.env.AGENTGLASS_TMUX_SOCKET || "agentglass";
+
+/** The socket file tmux would create for it: `$TMUX_TMPDIR/tmux-<uid>/<name>`,
+ *  with /tmp as the default base — tmux's own rule. */
+function socketFile(): string {
+  const base = process.env.TMUX_TMPDIR || "/tmp";
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  return join(base, `tmux-${uid}`, tmuxSocket());
+}
+
+/** Is there a server to be compatible WITH? Just the socket's existence: a
+ *  stale file only costs the probe below one refused connection.
+ *
+ *  Under `bun test` this answers false unless the suite redirected TMUX_TMPDIR,
+ *  which is the same isolation the state dir gets: the developer's real engine
+ *  server sits at /tmp/tmux-<uid>/agentglass, and a suite must never so much as
+ *  connect to it. */
+function serverRunning(): boolean {
+  if (IS_TEST && !process.env.TMUX_TMPDIR) return false;
+  return existsSync(socketFile());
+}
+
+/** A name no engine session ever has, so the probe cannot match a real one. */
+const PROBE_SESSION = "__agentglass_probe__";
+
+/** Can `bin` talk to the server already listening on the engine's socket?
+ *
+ *  Measured, both directions of the mismatch:
+ *
+ *      $ resources/tmux -L agentglass ls     # 3.5a client, 3.6a server
+ *      server exited unexpectedly
+ *      $ tmux -L agentglass ls               # newer client, older server
+ *      protocol version mismatch (client 8, server 9)
+ *
+ *  `has-session` is the cheapest question that does NOT start a server, so a
+ *  probe never creates one, and a session name no engine writes means the
+ *  honest answer is a harmless "can't find session". Any answer other than the
+ *  two above means the two speak. */
+function speaksToServer(bin: string): boolean {
+  try {
+    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "has-session", "-t", PROBE_SESSION], { stdout: "pipe", stderr: "pipe" });
+    return !/protocol version mismatch|server exited unexpectedly/i.test(r.stderr.toString());
+  } catch {
+    return false; // unaskable binary: wrong arch, missing loader, not a tmux
+  }
+}
+
+/** First candidate that `speaks`, or null when none of them do.
+ *
+ *  Split out and pure so the suite can test the rule with a fake probe — the
+ *  real one shells out to tmux, and tests here run no tmux at all. */
+export function pickCompatible(candidates: string[], speaks: (bin: string) => boolean): string | null {
+  for (const c of candidates) if (speaks(c)) return c;
+  return null;
+}
+
 let cached: { key: string; bin: string | null } | null = null;
 /** The pane engine's tmux binary, or null when nothing usable exists.
  *
@@ -79,7 +158,7 @@ let cached: { key: string; bin: string | null } | null = null;
 export function resolveTmuxBin(): string | null {
   const source = tmuxSource();
   const pathSetting = source === "custom" ? tmuxPathSetting() : "";
-  const key = [process.env[ENV_OVERRIDE] ?? "", source, pathSetting, bundledDirs().join(","), process.env.PATH ?? ""].join("|");
+  const key = [process.env[ENV_OVERRIDE] ?? "", source, pathSetting, bundledDirs().join(","), process.env.PATH ?? "", tmuxSocket(), serverRunning() ? "up" : "down"].join("|");
   if (cached && cached.key === key) return cached.bin;
 
   let bin: string | null = null;
@@ -91,10 +170,20 @@ export function resolveTmuxBin(): string | null {
   } else if (source !== "system") {
     // Bundled first, then system PATH — the fallback that makes dev machines
     // and old installs work without shipping anything.
+    const bundled: string[] = [];
     for (const dir of bundledDirs()) {
       const candidate = join(dir, "tmux");
-      if (usable(candidate)) { bin = candidate; break; }
+      if (usable(candidate)) bundled.push(candidate);
     }
+    // ...unless a server is already up on the engine's socket and there is a
+    // real choice to make. Then compatibility decides, because a client that
+    // cannot speak to it is not a lesser option, it is a dead terminal — and
+    // the sessions on that server are the user's work, not ours to restart.
+    const system = source === "bundled" ? null : Bun.which("tmux", { PATH: process.env.PATH ?? "" }) ?? null;
+    if (bundled.length && system && serverRunning()) {
+      bin = pickCompatible([...bundled, system], speaksToServer);
+    }
+    if (!bin) bin = bundled[0] ?? null;
   }
   if (!bin) bin = Bun.which("tmux", { PATH: process.env.PATH ?? "" }) ?? null;
   cached = { key, bin };
