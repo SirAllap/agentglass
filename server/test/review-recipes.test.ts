@@ -44,6 +44,68 @@ describe("the placeholders", () => {
   it("become empty, not the word undefined, when there is nothing to say", () => {
     expect(C.expandRecipe("since {since}", { ...ctx, since: null })).toBe("since ");
   });
+
+  /* The three the "telling somebody" prompt is made of. A message asking for a
+     review names a person, links the card rather than only naming it, and
+     carries whatever was typed in the box beside the button. */
+  it("fill in who it is for, the card's address and the note", () => {
+    const out = C.expandRecipe("{who} — {cardUrl} — {note}", {
+      ...ctx, who: "Alex Doe", cardUrl: "https://cards.example/t/ORBIT-1042", note: "the migration is the risky half",
+    });
+    expect(out).toBe("Alex Doe — https://cards.example/t/ORBIT-1042 — the migration is the risky half");
+  });
+
+  it("leave nothing behind when there is no card link, nobody named and no note", () => {
+    expect(C.expandRecipe("[{who}][{cardUrl}][{note}]", ctx)).toBe("[][][]");
+  });
+});
+
+/*
+ * The prompt behind the Ping button.
+ *
+ * It ships as a FRAME and not as a message: what you say to a colleague is
+ * personal, so the wording that actually goes out lives in the user's own file.
+ * What is pinned here is the frame's two halves, because losing either is how
+ * the feature failed the first time it was used — style copied from the channel
+ * with no floor under the content produced a one-line "cuando puedas <link>",
+ * and content with no style rule reads like an app wrote it.
+ */
+describe("the prompt that asks somebody for a review", () => {
+  const ping = () => C.BUILT_IN_RECIPES.find((r) => r.id === "ready-for-review")!;
+
+  it("is in the catalogue, in its own group", () => {
+    expect(ping()).toBeTruthy();
+    expect(ping().group).toBe("telling");
+  });
+
+  it("takes its style from the conversation it lands in", () => {
+    const b = ping().body;
+    expect(b).toContain("read back through the recent messages");
+    expect(b.toLowerCase()).toContain("do not send the text below");
+  });
+
+  it("puts a floor under the content, whatever the style", () => {
+    const b = ping().body;
+    expect(b).toContain("link to the pull request");
+    expect(b).toContain("link to its card");
+    // "a title and a URL" is the failure it names, in as many words.
+    expect(b).toContain("Not a title and a URL");
+  });
+
+  it("waits to be told to send", () => {
+    // A message into somebody else's workspace is not a fire-and-forget.
+    expect(ping().body).toContain("Show me the draft");
+  });
+
+  it("carries the person, the card link and the note it was given", () => {
+    const out = C.expandRecipe(ping().body, {
+      ...ctx, who: "Alex Doe", cardUrl: "https://cards.example/t/ORBIT-1042", note: "no rush",
+    });
+    expect(out).toContain("Alex Doe");
+    expect(out).toContain("https://cards.example/t/ORBIT-1042");
+    expect(out).toContain("no rush");
+    expect(out).not.toContain("{");
+  });
 });
 
 describe("which prompt is suggested", () => {
@@ -77,8 +139,12 @@ describe("the menu", () => {
     expect(list.length).toBe(C.BUILT_IN_RECIPES.length);
     expect(list.every((r) => r.builtIn)).toBe(true);
     // Grouped, and in the catalogue's order inside each group.
+    // `telling` last, and in the list on purpose: an unknown group sorts to -1,
+    // which would put it first and make this pass while the menu drew it in the
+    // wrong place.
+    const ORDER = ["reviewing", "focused", "mine", "telling"];
     expect(list.map((r) => r.group)).toEqual([...list.map((r) => r.group)].sort((a, b) =>
-      ["reviewing", "focused", "mine"].indexOf(a) - ["reviewing", "focused", "mine"].indexOf(b)));
+      ORDER.indexOf(a) - ORDER.indexOf(b)));
   });
 
   it("keeps an edited built-in a built-in, under the same id", () => {

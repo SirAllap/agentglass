@@ -31,6 +31,12 @@ const GROUPS: { id: ReviewRecipeGroup; label: string; what: string }[] = [
   { id: "reviewing", label: "Reviewing", what: "Somebody else's pull request." },
   { id: "focused", label: "One thing only", what: "A single question, asked well — risk, tests, data, security." },
   { id: "mine", label: "Your pull request", what: "The ones where the work is yours." },
+  /* Not a review, and here anyway: what you say to a colleague is as personal
+     as how you ask for one, it must survive an update of this app, and it must
+     not live in its repository. Same file, same editor, same Reset. It is not
+     offered in the "Review with Claude" menu — that menu lists the three groups
+     above by name — it is what the Ping button sends. */
+  { id: "telling", label: "Telling somebody", what: "Asking for a review in chat, rather than reading one." },
 ];
 
 /** What each situation means, in the words the menu would use. Shown beside the
@@ -56,6 +62,9 @@ const TOKENS: [string, string][] = [
   ["{author}", "who opened it"],
   ["{url}", "its page"],
   ["{card}", "the card id in the branch"],
+  ["{cardUrl}", "that card's page"],
+  ["{who}", "who the message is for"],
+  ["{note}", "what you typed in the box"],
 ];
 
 const blank = (group: ReviewRecipeGroup): ReviewRecipe => ({

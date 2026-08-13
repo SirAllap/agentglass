@@ -28,41 +28,11 @@
 import type { ReviewRecipe, ReviewRecipeContext, ReviewRecipeWhen } from "../../shared/types.ts";
 export { suggestRecipeId, type ReviewSituation } from "../../shared/reviewSuggest.ts";
 
-/**
- * What every prompt can say, and what each one means:
- *
- *   {number}  17598              the pull request
- *   {repo}    acme/shop          owner/name, as gh takes it
- *   {head}    a1b2c3d            the commit it is pinned to — a push mid-review
- *                                must not swap the code underneath the answer
- *   {branch}  fix/checkout-total the head branch
- *   {title}   …                  the pull request title
- *   {author}  someone            the login that opened it
- *   {url}     https://…          its page
- *   {since}   9f8e7d6            the commit YOUR last review was written
- *                                against, or empty when you have not reviewed it
- *   {card}    ORBIT-1042         the tracker id in the branch or title, if any
- *
- * An unknown placeholder is left exactly as typed: a prompt that says `{foo}`
- * meant to say it, and silently deleting a brace from somebody's careful
- * wording is worse than showing it.
- */
-export function expandRecipe(body: string, ctx: ReviewRecipeContext): string {
-  return body.replace(/\{(number|repo|head|branch|title|author|url|since|card)\}/g, (whole, key: string) => {
-    const v = {
-      number: String(ctx.number),
-      repo: ctx.repo,
-      head: ctx.head,
-      branch: ctx.branch,
-      title: ctx.title,
-      author: ctx.author,
-      url: ctx.url,
-      since: ctx.since ?? "",
-      card: ctx.card ?? "",
-    }[key];
-    return v === undefined ? whole : v;
-  });
-}
+/* The placeholders and the substitution live in `shared/recipeText.ts`: the
+   panel expands the same prompts for the messages it hands to a tmux window,
+   and one table cannot be in two files. Re-exported here so every caller
+   that already asks this module for it keeps working. */
+export { expandRecipe } from "../../shared/recipeText.ts";
 
 /** The line every read-only recipe opens with — one wording, so a change to it
  *  cannot reach nine prompts and miss the tenth. */
@@ -378,6 +348,45 @@ export const BUILT_IN_RECIPES: ReviewRecipe[] = [
       "Tell me what is actually in the way, in the order I have to deal with it: failing checks (which test, which line of the log — read it, do not guess from the name), conflicts with the base, reviews still owed and by whom, anything else GitHub is holding it on.",
       "",
       "For each one, the next command I run. If it is only waiting on people, say that and name them.",
+    ),
+  },
+
+  // ------------------------------------------------- telling somebody it is up
+  //
+  // The one prompt here that is not about reading a pull request, and the one
+  // most likely to be rewritten the day it is first used: what to say to a
+  // colleague is personal — the language, the greeting, whether there is a
+  // greeting at all. So what ships is deliberately a FRAME, not a message, and
+  // the wording that ends up being sent lives in the user's own file.
+  //
+  // The two halves it separates are the whole point. Style comes from the
+  // conversation it lands in, because a message that reads like it came from a
+  // different room is worse than one written by hand. Content does not: a link
+  // and a title is not a review request, however well it matches the channel.
+  {
+    id: "ready-for-review",
+    title: "Ask somebody for a review, in chat",
+    group: "telling",
+    when: "mine",
+    body: prompt(
+      "Ask {who} for a review of pull request #{number}, in the chat we use for this.",
+      "",
+      "Do NOT send the text below. It is the facts; the message is yours to write.",
+      "",
+      "Style — from them, not from here. Before you write anything, read back through the recent messages in the conversation you are about to post in, and match how they are written: the language they are in, their length, their shape, their punctuation, whether they open with a greeting. Look for the times I have asked for a review there before and follow those; they are the format, and this one should be indistinguishable from them.",
+      "",
+      "Content — from here, whatever the style. It carries a link to the pull request, a link to its card when there is one, and enough about the change that the person can decide when to pick it up: what it does, and the part worth their eyes. Not a title and a URL.",
+      "",
+      "The facts:",
+      "  pull request  #{number} — {title}",
+      "  {url}",
+      "  card          {card} {cardUrl}",
+      "  branch        {branch}",
+      "  for           {who}",
+      "",
+      "{note}",
+      "",
+      "Read the diff first if you need it (`gh pr diff {number}`) — write about the change, not about its title. Show me the draft and where it will land, and wait: I will tell you to send it.",
     ),
   },
 ];

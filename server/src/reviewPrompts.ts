@@ -37,7 +37,7 @@ const path = (): string => override ?? FILE;
 interface Store { prompts: ReviewRecipe[] }
 let cache: Store | undefined;
 
-const GROUPS: ReviewRecipeGroup[] = ["reviewing", "focused", "mine"];
+const GROUPS: ReviewRecipeGroup[] = ["reviewing", "focused", "mine", "telling"];
 const WHENS: ReviewRecipeWhen[] = ["any", "asked", "reviewed", "card", "mine", "mine-changes"];
 
 function load(): Store {

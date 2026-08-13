@@ -30,7 +30,7 @@ import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
-  ReviewRecipe, ReviewRecipeGroup,
+  ReviewRecipe, ReviewRecipeGroup, ReviewRecipeContext,
 } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import {
@@ -67,6 +67,7 @@ import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } f
 import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
+import { expandRecipe } from "../../../shared/recipeText.ts";
 import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
@@ -4973,7 +4974,17 @@ const GROUP_LABEL: Record<ReviewRecipeGroup, string> = {
   reviewing: "Reviewing",
   focused: "One thing only",
   mine: "Your pull request",
+  // Never printed by the review menu, which lists its groups by name — it is
+  // here because the record is total, and because the day this group does get
+  // shown somewhere it must not appear as the word `telling`.
+  telling: "Telling somebody",
 };
+
+/** The prompt behind the Ping button, by id. In the same catalogue as the
+ *  review prompts, and for the same reason: the wording is personal, it is
+ *  edited in Settings, and it is stored in the user's own file rather than in
+ *  this repository. */
+const PING_RECIPE = "ready-for-review";
 
 /**
  * "Review with Claude", with the whole catalogue behind it.
@@ -5742,6 +5753,11 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
   const [msg, setMsg] = useState("");
   const [sending, setSending] = useState(false);
   const [said, setSaid] = useState("");
+  /* The wording the ping is sent with. The same catalogue the review menu
+     reads, because it is the same kind of thing: personal, edited in Settings,
+     stored in the user's own file and not in this repository. */
+  const recipes = useReviewRecipes();
+  const repoName = useContext(RepoCtx);
   useEffect(() => {
     let live = true;
     api.notifyReach().then((r) => { if (live) setSlack(!!r?.slack); }).catch(() => { /* assume not */ });
@@ -5809,9 +5825,9 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                 why one of them can be missing and the other cannot. */}
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
               {slack && (
-                <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(defaultPing(d, whoToTell(task))); }}
+                <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(""); }}
                   className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
-                  title={`Ask the agent to say this in Slack`}
+                  title="Ask an agent to say it in Slack — it writes the message"
                   style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
                   Ping Slack
                 </button>
@@ -5827,17 +5843,21 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
 
             {tell && (
               <div className="flex flex-col gap-1.5">
-                {/* Prefilled and editable, in that order. The default is the
-                    sentence you were going to type; leaving it as a blank box
-                    makes the common case the slow one. */}
+                {/* Two different boxes wearing one control. On the card it is
+                    the note itself, prefilled with the sentence you were going
+                    to type, and posted as it stands. In Slack the message is
+                    the agent's to write, so this is only what you would have
+                    added by hand — empty is the common case, and prefilling it
+                    would put this app's English into somebody's DM. */}
                 <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
+                  placeholder={tell === "slack" ? "Anything to add — what to look at first, whether it is urgent. Optional." : ""}
                   className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
                   style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
-                    {tell === "slack" ? "an agent says this, in the channel's own words" : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
+                    {tell === "slack" ? `an agent writes it${whoToTell(task) ? ` to ${whoToTell(task)!.name}` : ""}, in the words that chat is written in` : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
                   </span>
-                  <button disabled={sending || !msg.trim()} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
+                  <button disabled={sending || (tell === "card" && !msg.trim())} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
                     style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                     onClick={async () => {
                       const target = whoToTell(task);
@@ -5849,7 +5869,25 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                            workspace is not a fire-and-forget button: it is
                            worth watching, attached, where you can take the
                            keyboard off it before it says the wrong thing. */
-                        requestTermIssue(root, `slack-${d.number}`, slackPrompt(msg, target?.name), true, false, `Ping about #${d.number}`);
+                        const text = pingPrompt(recipes, {
+                          number: d.number,
+                          repo: repoName ?? "",
+                          head: d.commits.length ? d.commits[d.commits.length - 1]!.oid : "",
+                          branch: d.headRefName,
+                          title: d.title,
+                          author: d.author,
+                          url: d.url,
+                          card: ref.label,
+                          // The address of the card actually resolved, not one
+                          // built from the id: a message carrying `ORBIT-1042`
+                          // and no link is the half that makes somebody search.
+                          // Empty until ClickUp answers, which is also when the
+                          // rest of this section is still a spinner.
+                          cardUrl: task?.url || "",
+                          who: target?.name ?? "",
+                          note: msg.trim(),
+                        });
+                        requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`);
                         setTell(null); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
                         return;
                       }
@@ -5886,29 +5924,42 @@ function defaultPing(d: PrDetail, who: { name: string } | null): string {
 }
 
 /**
- * What the agent is asked to do. Spelled as an instruction and not as the
- * message itself, so a session that is already mid-conversation cannot mistake
- * it for something to answer.
+ * The wording used when the catalogue has none — deleted, or not fetched yet.
  *
- * And explicitly NOT as words to copy. The box above holds the facts — which
- * pull request, its number, its link, who it is for — written in this app's
- * English because that is what the app can write. What lands in Slack has to
- * read like the channel it lands in: same language, same length, same shape as
- * the messages already there. A correct announcement that reads like it came
- * from a different room is worse than one written by hand.
+ * Short on purpose. It is not a second copy of the shipped prompt to keep in
+ * step with it; it is the least that still makes a message rather than a paste,
+ * for the seconds before the catalogue arrives and for somebody who deleted the
+ * entry and pressed the button anyway.
  */
-function slackPrompt(msg: string, name?: string): string {
-  return [
-    `Say this in Slack${name ? ` to ${name}` : ""}.`,
-    "",
-    "Not in these words. What follows is the FACTS, not the wording: the pull request, its number, its link, who it is for.",
-    "",
-    "Before you write anything, read back through the recent messages in the channel you are about to post in, and write it the way the people there write it — their language, their length, their shape, their punctuation. Do not translate this text and do not paste it. Match what is already there so this one does not stand out as written by something else.",
-    "",
-    "Then post it, and tell me where it landed.",
-    "",
-    msg,
-  ].join("\n");
+const FALLBACK_PING = [
+  "Ask {who} for a review of pull request #{number} — {title} — in the chat we use for this.",
+  "",
+  "Not in these words: read the recent messages in the conversation you are posting in and write it the way they are written. Carry the link ({url}), the card ({card} {cardUrl}) and enough about the change to decide when to pick it up.",
+  "",
+  "{note}",
+  "",
+  "Show me the draft and where it will land, and wait.",
+].join("\n");
+
+/**
+ * What the agent is asked to do, in the user's own words.
+ *
+ * The wording is NOT here. It is `ready-for-review` in the prompt catalogue,
+ * which ships a neutral frame and is edited in Settings into whatever somebody
+ * actually says to a colleague — their language, their greeting, their sign-off
+ * — and stored in their own file. Wording that belongs to a person does not
+ * belong in a repository, and this is the one prompt in the app that is read by
+ * another human rather than by an agent.
+ *
+ * Expanded here rather than on the server because this prompt goes straight to
+ * a tmux window from the panel; `expandRecipe` is shared so the two cannot
+ * disagree about what `{card}` means.
+ */
+function pingPrompt(recipes: ReviewRecipe[], ctx: ReviewRecipeContext): string {
+  const r = recipes.find((x) => x.id === PING_RECIPE);
+  const body = (r?.body || "").trim() || FALLBACK_PING;
+  const skill = r?.skill ? expandRecipe(r.skill, ctx).trim() : "";
+  return [skill, expandRecipe(body, ctx).trim()].filter(Boolean).join("\n\n");
 }
 
 function PrSidebar({ d, root, onEditField }: {

@@ -3059,7 +3059,15 @@ export interface ReviewRecipe {
   rank?: number;
 }
 
-export type ReviewRecipeGroup = "reviewing" | "focused" | "mine";
+/**
+ * `telling` is the odd one and deliberately in the same catalogue: it is not a
+ * prompt for reading a pull request but for saying it is ready, and it is there
+ * because the thing that matters about both is identical — the wording is
+ * PERSONAL, it must be editable, and it must not live in this repository. The
+ * "Review with Claude" menu lists its three groups by name, so this one does
+ * not appear in it; Settings lists them all, which is where it is edited.
+ */
+export type ReviewRecipeGroup = "reviewing" | "focused" | "mine" | "telling";
 
 /**
  * Which day a recipe is written for:
@@ -3085,6 +3093,17 @@ export interface ReviewRecipeContext {
   since?: string | null;
   /** The tracker id in the branch or title, when there is one. */
   card?: string | null;
+  /** That card's address, when the tracker is one we can link to. `{card}` is
+   *  the name people say; this is the thing you click, and a message asking for
+   *  a review carries both. */
+  cardUrl?: string | null;
+  /** Who the message is for, by name — the person on the card, not a login.
+   *  Empty when nobody is on it, which is a message addressed to a channel
+   *  rather than to somebody. */
+  who?: string | null;
+  /** Anything typed into the box beside the button, verbatim: what to look at
+   *  first, why it is urgent, a caveat. Empty most of the time. */
+  note?: string | null;
 }
 
 export interface ReviewRecipesResponse {
