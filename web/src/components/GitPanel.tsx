@@ -40,6 +40,8 @@ import { PresetDiff } from "./diff/PresetDiff.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { GitRowMenu } from "./GitRowMenu.tsx";
+import { primaryAction, type GitRowState } from "../lib/gitActions.ts";
 import { openPrs, openPr } from "../lib/openPrs.ts";
 import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
@@ -251,6 +253,30 @@ const ALL_VIEWS: View[] = VIEW_GROUPS.flatMap((g) => g.views);
 function trackChip(track: string): { ahead: number; behind: number; gone: boolean } {
   const a = track.match(/ahead (\d+)/), b = track.match(/behind (\d+)/);
   return { ahead: a ? +a[1] : 0, behind: b ? +b[1] : 0, gone: track.includes("gone") };
+}
+
+/**
+ * A branch row, in the terms the action rules speak.
+ *
+ * The translation is here rather than in gitActions.ts on purpose: that file
+ * knows what you may do to a branch and must not have to learn how this app
+ * spells "gone" inside a raw `[ahead 4, behind 53]` string. `mergedIntoTrunk`
+ * is deliberately read as "true only if true" — absent means there was no trunk
+ * to compare against, which is not the same as not merged, and treating it as
+ * false is what would offer Delete as the one-click action on a branch nobody
+ * has merged anywhere.
+ */
+function branchState(b: GitBranch, isCurrent: boolean, elsewhere: boolean): GitRowState {
+  const t = trackChip(b.track);
+  return {
+    current: isCurrent,
+    gone: t.gone,
+    ahead: t.ahead,
+    behind: t.behind,
+    upstream: !!b.upstream,
+    elsewhere,
+    merged: b.mergedIntoTrunk === true,
+  };
 }
 const wtName = (p: string) => p.split("/").pop() || p;
 
@@ -970,6 +996,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * to come back to a highlighted row you didn't choose.
    */
   const [rowIdx, setRowIdx] = useState(0);
+  /** The row whose right-click menu is open. `branch` rides along so the
+   *  handlers that need the whole object (delete asks about merged-ness) do not
+   *  have to look it up again from a name. */
+  const [rowMenu, setRowMenu] = useState<{ kind: "branch"; name: string; state: GitRowState; x: number; y: number; branch: GitBranch } | null>(null);
   const [newWtBranch, setNewWtBranch] = useState("");
   const [commitView, setCommitView] = useState<{ changes: FileChange[]; title: string } | null>(null);
   const [blamePath, setBlamePath] = useState<{ path: string } | null>(null);
@@ -1854,6 +1884,40 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   };
 
   const openWorktree = (w: GitWorktree) => { setRoot(w.path); setSelKey(null); setView("changes"); };
+
+  /**
+   * One place where an action id becomes something happening.
+   *
+   * The hover button, the right-click menu and the palette all call this with
+   * an id from lib/gitActions.ts, which is what stops the three from drifting:
+   * a new action is one entry in the catalogue and one case here, and it shows
+   * up in all three surfaces at once. The ids that are not here cannot be
+   * produced for a branch — the catalogue only offers `push` on the branch you
+   * are standing on, and the row for that branch has no button at all.
+   */
+  const branchAction = (id: string, b: GitBranch) => {
+    const wt = wtByBranch.get(b.name);
+    switch (id) {
+      case "checkout": return void checkout(b.name);
+      case "open-worktree": return void (wt && openWorktree(wt));
+      case "worktree-new": {
+        // Sibling directory named repo-branch, the same shape the Worktrees tab
+        // makes, so the two do not produce different layouts on disk.
+        const path = `${root}-${b.name.replace(/[\/\s]+/g, "-")}`;
+        return void act(() => api.gitWorktreeAdd(root, path, b.name, false), `Worktree ${wtName(path)}`);
+      }
+      case "compare": return setCompareTarget(b.name);
+      case "merge": return void mergeBranch(b.name);
+      case "rebase": return void rebaseBranch(b.name);
+      case "push": return void act(() => api.gitPush(root), "pushed", "push");
+      case "publish": return void act(() => api.gitPush(root), "published", "push");
+      case "pull": return void act(() => api.gitPull(root), "pulled", "pull");
+      case "open-web": return openBranchOnWeb(b);
+      case "copy-name": return void navigator.clipboard?.writeText(b.name).catch(() => { /* no clipboard permission */ });
+      case "rename": return void renameBranch(b.name);
+      case "delete": return void deleteBranch(b);
+    }
+  };
   // The lazygit move: a branch already checked out in a worktree can't be
   // `git checkout`ed here (git refuses a branch that is out elsewhere), so
   // switching to it OPENS that worktree; otherwise it is a plain checkout.
@@ -3000,16 +3064,22 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       // worktree, and the row says so — lazygit's one-list model.
                       const wt = wtByBranch.get(b.name);
                       const wtElsewhere = wt && wt.path !== root;
+                      const rowState = branchState(b, isCurrent, !!wtElsewhere);
+                      const primary = primaryAction("branch", b.name, rowState);
                       return (
                         // The cursor wins over the current-branch tint: you need
                         // to see where the keyboard is, and "this is HEAD" is
                         // already said by the ⎇ glyph.
                         <div key={b.name} onClick={() => setRowIdx(i)} {...rowProps(sel)}
+                          onContextMenu={(e) => { e.preventDefault(); setRowIdx(i); setRowMenu({ kind: "branch", name: b.name, state: rowState, x: e.clientX, y: e.clientY, branch: b }); }}
                           className="group px-2.5 py-1.5 rounded-md"
                           // The action column is reserved whether or not the
                           // buttons are drawn, so hovering cannot resize the
                           // subject beside it. See ROW_GRID.
-                          style={{ ...ROW_GRID, ...(sel ? rowProps(true).style : { background: isCurrent ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }), ["--gitrow-actions" as string]: writeEnabled ? "23rem" : "0px" }}>
+                          // 23rem before, because seven buttons needed it. One
+                          // needs 9, and the 14rem go back to the branch name
+                          // and its subject — the two things the row is for.
+                          style={{ ...ROW_GRID, ...(sel ? rowProps(true).style : { background: isCurrent ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }), ["--gitrow-actions" as string]: writeEnabled ? "9rem" : "0px" }}>
                           <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>{isCurrent ? "⎇" : ""}</span>
                           {/* Name and its badges share one track and truncate
                               together — the badges say what the branch IS, so
@@ -3045,20 +3115,28 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           </span>
                           <span className="min-w-0 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
                           <span className="text-[9.5px] t-dim2 whitespace-nowrap text-right">{b.date}</span>
-                          {writeEnabled && !isCurrent ? (
-                            <div className={`flex items-center justify-end gap-1.5 transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-                              {/* The switch, first and filled — the action you came
-                                  for. "Open worktree" when it lives in one, else a
-                                  plain checkout. */}
-                              {wtElsewhere
-                                ? <button onClick={(e) => { e.stopPropagation(); openWorktree(wt!); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Open ${b.name}'s worktree — ${wt!.path}`}>▸ Open worktree</button>
-                                : <button onClick={(e) => { e.stopPropagation(); checkout(b.name); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Switch this checkout to ${b.name}`}>⎇ Checkout</button>}
-                              <button onClick={(e) => { e.stopPropagation(); openBranchOnWeb(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
-                              <button onClick={(e) => { e.stopPropagation(); mergeBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
-                              <button onClick={(e) => { e.stopPropagation(); setCompareTarget(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Compare ${b.name} with another ref — how far apart they are`}>compare</button>
-                              <button onClick={(e) => { e.stopPropagation(); rebaseBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
-                              <button onClick={(e) => { e.stopPropagation(); renameBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
-                              <button onClick={(e) => { e.stopPropagation(); deleteBranch(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
+                          {/*
+                            ONE button, chosen from this row's own state, and
+                            everything else on the right-click.
+
+                            There were seven here. They were on hover, which
+                            kept them out of the eye's way but not the
+                            pointer's: the row you wanted to read was the row
+                            that grew a toolbar, and the button you wanted sat
+                            in a different place on every row because which
+                            ones appeared depended on the branch. The rule that
+                            picks the one is in lib/gitActions.ts, tested there,
+                            and shared with the menu — so the button can never
+                            offer something the menu does not.
+                          */}
+                          {writeEnabled && primary ? (
+                            <div className={`flex items-center justify-end transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"}`}>
+                              <button onClick={(e) => { e.stopPropagation(); branchAction(primary.id, b); }} disabled={busy}
+                                className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
+                                style={primary.danger
+                                  ? { color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }
+                                  : { color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
+                                title={`${primary.label} — right-click the row for everything else`}>{primary.label}</button>
                             </div>
                           ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
                         </div>
@@ -3486,6 +3564,17 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           onReset={() => setBisectOpen(false)}
           onOpenCommit={(hash, subject) => { setBisectOpen(false); void openCommit(hash, subject); }}
           onChanged={() => { loadTree(root); void loadView(); }} />
+      )}
+      {/* The branch row's menu: everything the seven buttons used to be, plus
+          what there was never room for, grouped and with the irreversible ones
+          asking once and showing the git they run. */}
+      {rowMenu && (
+        <GitRowMenu
+          kind={rowMenu.kind} name={rowMenu.name} state={rowMenu.state}
+          x={rowMenu.x} y={rowMenu.y}
+          onClose={() => setRowMenu(null)}
+          onAction={(id) => branchAction(id, rowMenu.branch)}
+        />
       )}
       {/* The commit row's right-click menu. The reset it offers is the old
           right-click, kept under its own heading so the cherry-pick actions
