@@ -9,14 +9,14 @@ import { scrub, redactText, type SafeReport } from "../../shared/scrub.ts";
 // Everything here is a thing a real agentglass error could carry and that must
 // never leave the machine.
 const FORBIDDEN = [
-  "serallap", // the OS username, leaked by every /home/<user>/ path
+  "ada", // the OS username, leaked by every /home/<user>/ path
   "orbit", // a private project name, leaked by a repo path
   "ghp_" + "AbCdEf0123456789AbCdEf", // a GitHub token
   "sk-" + "abcdef0123456789abcdef", // an API key
   "eyJ" + "hbGciOiJIUzI1NiIsInR5cCI6", // a JWT prefix
   "write me a function that", // a prompt fragment
   "/home/ada", // a home path
-  "/Users/serallap", // a mac home path
+  "/Users/ada", // a mac home path
 ];
 
 function assertClean(report: SafeReport) {
@@ -70,7 +70,7 @@ describe("scrub — no user data survives", () => {
   });
 
   test("windows home paths are redacted too", () => {
-    const r = scrub({ error: "ENOENT: C:\\Users\\serallap\\code\\orbit\\app.log not found" });
+    const r = scrub({ error: "ENOENT: C:\\Users\\ada\\code\\orbit\\app.log not found" });
     assertClean(r);
   });
 });
