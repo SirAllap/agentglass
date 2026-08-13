@@ -1818,11 +1818,15 @@ const SEL_COMMITS = `nodes{commit{
       statusCheckRollup{state}
     }}`;
 const SEL_FILES = `nodes{path additions deletions changeType viewerViewedState}`;
+/* `state` is PENDING or SUBMITTED, and it is the only thing that tells a
+   comment somebody posted from one you have written and not sent: GitHub hands
+   your own unsubmitted comments back inside their threads, exactly like the
+   rest. See `threadsFrom` for what that costs when it is not asked for. */
 const SEL_THREADS = `nodes{
       id isResolved isOutdated path line startLine
       comments(first:50){nodes{
         id databaseId author{login} body createdAt url diffHunk originalLine
-        lastEditedAt authorAssociation viewerDidAuthor
+        state lastEditedAt authorAssociation viewerDidAuthor
         reactionGroups{content viewerHasReacted users{totalCount}}
       }}
     }`;
@@ -2080,6 +2084,54 @@ function mergeStateOf(s: string | undefined, isDraft: boolean): PrMergeState {
   return (known as string[]).includes(v) ? (v as PrMergeState) : "UNKNOWN";
 }
 
+/**
+ * The review threads, made of only what has actually been said.
+ *
+ * A line comment you drafted into a pending review comes back inside its
+ * thread, indistinguishable from a posted one except for `state`. Kept, it
+ * draws as a thread that exists: an OPEN marker, a Reply box and a Resolve
+ * button over a comment nobody else can see and GitHub holds no conversation
+ * for — and counted twice besides, because the panel already draws what is
+ * unsent from the pending-review endpoint, under "drafted on GitHub". So the
+ * unsent ones leave here, and a thread that was nothing but unsent comments
+ * leaves with them.
+ *
+ * Its own function so that rule can be tested: everything around it needs a
+ * pull request and the network to reach.
+ */
+export function threadsFrom(nodes: unknown): PrThread[] {
+  return (Array.isArray(nodes) ? nodes : []).flatMap((t: any) => {
+    const said = (t?.comments?.nodes || []).filter((c: any) => c?.state !== "PENDING");
+    if (!said.length) return [];
+    return [{
+      id: t.id,
+      path: t.path || "",
+      line: t.line ?? null,
+      startLine: t.startLine ?? null,
+      isResolved: !!t.isResolved,
+      isOutdated: !!t.isOutdated,
+      // The hunk GitHub stored with the comment, not one reconstructed from the
+      // pull request's diff. It arrives with the thread, so the code a comment is
+      // about is on screen without the diff having been fetched at all — and it
+      // is the same few lines GitHub shows, including on an outdated thread whose
+      // hunk no longer exists in the current diff.
+      diffHunk: said[0]?.diffHunk || "",
+      originalLine: said[0]?.originalLine ?? null,
+      url: said[0]?.url || "",
+      comments: said.map((c: any) => ({
+        id: c.id,
+        databaseId: c.databaseId ?? null,
+        author: c.author?.login || "",
+        isBot: isBotLogin(c.author?.login || ""),
+        body: c.body || "",
+        createdAt: c.createdAt || "",
+        url: c.url || "",
+        ...authoredOf(c),
+      })),
+    }] as PrThread[];
+  });
+}
+
 export async function prDetail(rootIn: unknown, numberIn: unknown, force = false): Promise<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
@@ -2164,32 +2216,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     };
   });
 
-  const threads: PrThread[] = (p.reviewThreads?.nodes || []).map((t: any) => ({
-    id: t.id,
-    path: t.path || "",
-    line: t.line ?? null,
-    startLine: t.startLine ?? null,
-    isResolved: !!t.isResolved,
-    isOutdated: !!t.isOutdated,
-    // The hunk GitHub stored with the comment, not one reconstructed from the
-    // pull request's diff. It arrives with the thread, so the code a comment is
-    // about is on screen without the diff having been fetched at all — and it
-    // is the same few lines GitHub shows, including on an outdated thread whose
-    // hunk no longer exists in the current diff.
-    diffHunk: t.comments?.nodes?.[0]?.diffHunk || "",
-    originalLine: t.comments?.nodes?.[0]?.originalLine ?? null,
-    url: t.comments?.nodes?.[0]?.url || "",
-    comments: (t.comments?.nodes || []).map((c: any) => ({
-      id: c.id,
-      databaseId: c.databaseId ?? null,
-      author: c.author?.login || "",
-      isBot: isBotLogin(c.author?.login || ""),
-      body: c.body || "",
-      createdAt: c.createdAt || "",
-      url: c.url || "",
-      ...authoredOf(c),
-    })),
-  }));
+  const threads = threadsFrom(p.reviewThreads?.nodes);
 
   const commits: PrCommit[] = (p.commits?.nodes || []).map((n: any) => {
     const c = n.commit || {};
@@ -2340,7 +2367,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
       files: Math.max(0, (p.changedFiles ?? 0) - files.length) || undefined,
       commits: p.commits?.pageInfo?.capped ? (p.commits?.nodes || []).length : undefined,
       comments: p.comments?.pageInfo?.capped ? comments.length : undefined,
-      threads: p.reviewThreads?.pageInfo?.capped ? (p.reviewThreads?.nodes || []).length : undefined,
+      threads: p.reviewThreads?.pageInfo?.capped ? threads.length : undefined,
       checks: p.statusCheckRollup?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage
         ? rawChecks.length : undefined,
     },
