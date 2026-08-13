@@ -2061,6 +2061,20 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
                 {data?.error ? "Nothing to show — the last read did not get through."
                   : q || tag || mineOnly || statusPick.length ? "Nothing matches that."
+                  /*
+                   * "Nothing open" on a board that holds twelve finished cards
+                   * reads as a board that failed to load — asked about exactly
+                   * that, against a ClickUp list whose every card sits in
+                   * "won't fix / obsolete". The count is already on a chip at
+                   * the top of the panel, which is the one place somebody
+                   * looking at an empty table is not looking.
+                   */
+                  : !showDone && counts.done > 0 ? (
+                    <>
+                      Nothing open here — {counts.done} card{counts.done === 1 ? " is" : "s are"} done or dropped.{" "}
+                      <button onClick={() => setShowDone(true)} style={{ color: "var(--primary)" }}>Show them</button>
+                    </>
+                  )
                   : "This board has nothing open."}
               </div>
             )}
