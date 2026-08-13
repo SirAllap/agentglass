@@ -48,6 +48,7 @@ import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
 import { afterViewed, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
+import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
@@ -6436,8 +6437,6 @@ function LazyMount({ minHeight, children }: { minHeight: number; children: React
  *  not something anybody reads, and it should not be what the tab opens on. */
 const BIG_FILE_LINES = 600;
 
-/** A directory node in the changed-files tree. */
-type TreeNode = { name: string; path: string; dirs: Map<string, TreeNode>; files: PrFile[] };
 
 /** Generated files GitHub holds behind a "Load diff" button — lockfiles,
  *  minified bundles, source maps. Nobody reads these line by line, and a
@@ -6471,31 +6470,6 @@ function statusGlyph(status: string): { ch: string; tint: string; title: string 
   }
 }
 
-/** Group changed paths into directories, then collapse the runs of single-child
- *  directories the way GitHub does (`web/src/lib` on one row, not three). */
-function buildFileTree(files: PrFile[]): TreeNode {
-  const root: TreeNode = { name: "", path: "", dirs: new Map(), files: [] };
-  for (const f of files) {
-    const parts = f.path.split("/");
-    let node = root;
-    for (const dir of parts.slice(0, -1)) {
-      let next = node.dirs.get(dir);
-      if (!next) { next = { name: dir, path: node.path ? `${node.path}/${dir}` : dir, dirs: new Map(), files: [] }; node.dirs.set(dir, next); }
-      node = next;
-    }
-    node.files.push(f);
-  }
-  const squash = (n: TreeNode): TreeNode => {
-    let cur = n;
-    while (cur.files.length === 0 && cur.dirs.size === 1) {
-      const only = [...cur.dirs.values()][0]!;
-      cur = { ...only, name: `${cur.name}/${only.name}`.replace(/^\//, "") };
-    }
-    return { ...cur, dirs: new Map([...cur.dirs].map(([k, v]) => [k, squash(v)])) };
-  };
-  return { ...root, dirs: new Map([...root.dirs].map(([k, v]) => [k, squash(v)])) };
-}
-
 /**
  * "Open the whole file", and the second and a half it takes to say anything.
  *
@@ -6523,7 +6497,7 @@ function PeekButton({ path, onPeek }: { path: string; onPeek: (p: string) => voi
 }
 
 function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
-  node: TreeNode; sel: string | null; onPick: (p: string) => void;
+  node: TreeNode<PrFile>; sel: string | null; onPick: (p: string) => void;
   /** Open the whole file in an editor, over the panel. The diff shows what
    *  changed; this is for the times the answer is in the part that did not. */
   onPeek?: (p: string) => void | Promise<void>;
@@ -7274,12 +7248,17 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
 
   const shownFiles = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return d.files.filter((f) => {
+    const kept = d.files.filter((f) => {
       if (needle && !f.path.toLowerCase().includes(needle)) return false;
       if (hiddenExts.length && hiddenExts.includes(fileExt(f.path))) return false;
       if (!showViewed && seenFiles.includes(f.path)) return false;
       return true;
     });
+    /* In the order the rail paints them, not the order GitHub sends them — see
+       `treeOrder`. Everything downstream calls this list "the files": the tree,
+       the stack of diffs, j/k, and what "the next one" means to the Viewed tick.
+       They agree only if the list is already in the order you read. */
+    return treeOrder(kept);
   }, [d.files, q, hiddenExts, showViewed, seenFiles]);
 
   /* The same expression the render uses below, so the rail can never name a
