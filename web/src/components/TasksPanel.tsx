@@ -962,6 +962,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     </button>
   );
 
+  /** What the folded rail says: the board on screen, by the name the rail
+   *  would draw for it. */
+  const railActive = (() => {
+    const v = (boards?.views ?? []).find((x) => x.id === (data?.view?.id ?? lit));
+    if (!v) return "Lists";
+    return v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name);
+  })();
+
   /** Which folders are folded shut. By folder key and kept across restarts: a
    *  sidebar that reopens with twelve folders expanded is the flat list again. */
   const [railShut, setRailShut] = useState<Record<string, boolean>>(() => {
@@ -1911,6 +1919,29 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: edge(14) }} />
             )}
           </div>
+          {/*
+            * Folded, it was 34 pixels of nothing but the button that unfolds
+            * it — asked about as "is it normal that nothing shows". A column
+            * that is empty when closed teaches people it holds nothing, and
+            * the one thing worth knowing at a glance is which list you are on:
+            * the breadcrumb says it too, above a table that scrolls away from
+            * it.
+            *
+            * Vertical rather than truncated to four characters: `Orbit v2 –
+            * Phases 2 & 3` and `Orbit v2 – Phase 1` share their first
+            * twenty. Bottom-to-top is the direction editors put a folded
+            * sidebar's label in, and it reads without turning your head.
+            */}
+          {!railOpen && (
+            <button onClick={() => setRailOpen(true)} title={`${railActive} — show the lists`}
+              className="flex-1 min-h-0 w-full flex justify-center pt-2 pb-3 overflow-hidden"
+              style={{ color: "var(--text4)" }}>
+              <span className="truncate" style={{
+                writingMode: "vertical-rl", transform: "rotate(180deg)",
+                fontSize: 10.5, letterSpacing: "0.06em", maxHeight: "100%",
+              }}>{railActive}</span>
+            </button>
+          )}
           {railOpen && (
             <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
               {railViews.length === 0 && (
