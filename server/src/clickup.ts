@@ -1155,6 +1155,32 @@ export async function defaultViewOf(token: string, listId: string): Promise<stri
   return id;
 }
 
+/**
+ * The views a list offers — the tabs along the top of it in ClickUp.
+ *
+ * Only the ones that are a list of tasks. A Gantt and a dashboard are real
+ * views and this app has nothing to draw them with, and offering a row that
+ * opens a board of nothing is worse than not offering it.
+ *
+ * The list's own default view is left out on purpose: it is what the list row
+ * already opens, and a child that repeats its parent is a row people click by
+ * mistake once each.
+ */
+export async function listViews(token: string, listId: string): Promise<CallResult<{ views: { id: string; name: string }[] }>> {
+  const id = String(listId || "").trim();
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a list id" };
+  const r = await call<{
+    views?: { id?: string; name?: string; type?: string }[];
+    required_views?: { list?: { id?: string } };
+  }>(`/list/${encodeURIComponent(id)}/view`, token);
+  if (!r.ok) return { ...r, data: undefined };
+  const home = r.data?.required_views?.list?.id ?? "";
+  const views = (r.data?.views ?? [])
+    .filter((v) => v?.id && v.type === "list" && v.id !== home)
+    .map((v) => ({ id: String(v.id), name: String(v.name ?? "View") }));
+  return { ok: true, data: { views } };
+}
+
 export async function viewTasks(
   token: string, viewId: string, myId?: string,
 ): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {

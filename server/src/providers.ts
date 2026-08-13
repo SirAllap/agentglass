@@ -667,9 +667,25 @@ async function listTasksOf(token: string, listId: string, me?: string) {
   const viewId = await defaultViewOf(token, listId);
   if (viewId) {
     const r = await viewTasks(token, viewId, me);
-    // An empty answer from the view is a real answer — a list can be empty —
-    // but an ERROR is not, and falling back keeps a board on screen.
+    /*
+     * An EMPTY view is not the same as an empty list, and this is measured
+     * rather than guessed: on one list the default view answers 105 tasks, and
+     * on another — a list with a hundred cards, twelve of them on screen in the
+     * browser — the same endpoint answers zero while the list's other views
+     * answer thirty each. Whatever ClickUp is doing there (a filter its API
+     * evaluates differently, a view the web client fills in another way), a
+     * board that draws "nothing here" over a hundred cards is the worst of the
+     * available answers.
+     *
+     * So an empty view is checked against the list before it is believed. It
+     * costs one extra call in exactly two cases: a list that really is empty,
+     * and this one.
+     */
+    if (r.ok && (r.data?.tasks.length ?? 0) > 0) return r;
+    const raw = await rawListTasks(token, listId, me);
+    if (raw.ok && (raw.data?.tasks.length ?? 0) > 0) return raw;
     if (r.ok) return r;
+    return raw;
   }
   return rawListTasks(token, listId, me);
 }

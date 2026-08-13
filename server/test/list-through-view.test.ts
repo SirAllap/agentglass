@@ -50,3 +50,21 @@ describe("reading a saved list", () => {
     expect(clickup.slice(at, at + 900)).toContain("if (r.ok) listViewCache.set");
   });
 });
+
+describe("when the view answers nothing", () => {
+  it("checks the list before believing it", () => {
+    /*
+     * Measured on two real lists: one answers 105 tasks through its default
+     * view, and another — a hundred cards, twelve of them on screen in the
+     * browser — answers ZERO through its own while its other views answer
+     * thirty each. A board that draws "nothing here" over a hundred cards is
+     * the worst answer available, so an empty view is checked rather than
+     * trusted.
+     */
+    const src = require("node:fs").readFileSync(new URL("../src/providers.ts", import.meta.url), "utf8") as string;
+    const at = src.indexOf("async function listTasksOf");
+    const fn = src.slice(at, src.indexOf("\n}", at));
+    expect(fn).toContain("(r.data?.tasks.length ?? 0) > 0");
+    expect(fn).toContain("const raw = await rawListTasks(token, listId, me);");
+  });
+});

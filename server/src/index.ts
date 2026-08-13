@@ -2177,6 +2177,16 @@ const server = Bun.serve<WsData>({
       const r = await clickupSpaces();
       return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error });
     }
+    /* The tabs a list has in ClickUp, for the sidebar to hang under it. Read on
+       demand — one call, and only for a list somebody actually opened. */
+    if (pathname === "/clickup/list-views") {
+      const { listViews } = await import("./clickup.ts");
+      const { secretFor } = await import("./credentials.ts");
+      const token = secretFor("clickup");
+      if (!token) return json({ ok: false, error: "ClickUp is not connected" });
+      const r = await listViews(token, url.searchParams.get("list") || "");
+      return json(r.ok ? { ok: true, views: r.data?.views ?? [] } : { ok: false, error: r.error });
+    }
     if (pathname === "/clickup/folders") {
       const { clickupFolders } = await import("./clickup.ts");
       const r = await clickupFolders(url.searchParams.get("space") || "");

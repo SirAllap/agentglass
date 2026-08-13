@@ -10,7 +10,7 @@
 // Finishing removes the worktree, deletes the branch and kills the window. The
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
 import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail } from "../../../shared/providers.ts";
@@ -806,6 +806,26 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   const [folderMenu, setFolderMenu] = useState<{ f: SavedFolder; x: number; y: number } | null>(null);
   /** The card dialog, when it is open over the table: what a find searches. */
   const cardBox = useRef<HTMLDivElement>(null);
+  /*
+   * A list's own tabs, hung under it in the rail.
+   *
+   * ClickUp calls them views and a list can have several — `Eng list view`,
+   * `Blue Eng list view`, `Frontend` — each a different filter over the same
+   * cards, and they are what a team actually works from. Read on demand rather
+   * than up front: one call per list somebody opens, cached for the session,
+   * instead of one per list on every board load.
+   */
+  const [listViews, setListViews] = useState<Record<string, { id: string; name: string }[]>>({});
+  const [openLists, setOpenLists] = useState<Record<string, boolean>>({});
+  const openList = useCallback((v: SavedView) => {
+    const id = v.listId;
+    if (!id) return;
+    setOpenLists((m) => ({ ...m, [v.id]: !m[v.id] }));
+    if (listViews[id]) return;
+    api.clickupListViews(id)
+      .then((r) => setListViews((m) => ({ ...m, [id]: r.views ?? [] })))
+      .catch(() => setListViews((m) => ({ ...m, [id]: [] })));
+  }, [listViews]);
   const [editing, setEditing] = useState<SavedView | null>(null);
   /** Put the address bar away, whatever it was in the middle of. */
   const closeAddBar = useCallback(() => { setAdding(false); setEditing(null); setUrlText(""); }, []);
@@ -923,6 +943,43 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    * cannot drift: they were one `.map` and everything about a row — the
    * right-click menu, the busy dots, which one is lit — belongs to both.
    */
+  /**
+   * A list, with its own views folded underneath it.
+   *
+   * The twisty is separate from the row on purpose: opening a list's tabs and
+   * opening the list are different intentions, and one target that did both
+   * would mean every glance at the tabs also spent a board read.
+   */
+  const railList = (v: SavedView) => {
+    const kids = v.listId ? listViews[v.listId] : undefined;
+    const open = !!openLists[v.id];
+    return (
+      <Fragment key={v.id}>
+        <div className="flex items-stretch">
+          {v.listId ? (
+            <button onClick={() => openList(v)} aria-expanded={open}
+              title={open ? "Hide this list's views" : "Show this list's views in ClickUp"}
+              className="shrink-0 grid place-items-center agx-btn"
+              style={{ width: 16, color: "var(--text4)" }}>
+              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
+                style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease", opacity: kids && !kids.length ? 0.25 : 1 }}>
+                <path d="M6 3.5 10.5 8 6 12.5Z" />
+              </svg>
+            </button>
+          ) : <span aria-hidden style={{ width: 16 }} />}
+          <div className="min-w-0 flex-1">{railRow(v, 1)}</div>
+        </div>
+        {open && kids?.map((view) => railRow({
+          id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name,
+          url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName,
+        }, 2))}
+        {open && kids && !kids.length && (
+          <div className="text-[10.5px] py-0.5" style={{ paddingLeft: 40, color: "var(--text4)" }}>No other views on this list.</div>
+        )}
+      </Fragment>
+    );
+  };
+
   const railRow = (v: SavedView, depth: number) => (
     <button key={v.id}
       onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
@@ -2055,7 +2112,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                       /* The guide line sits on the children, not on the folder:
                          it has to stop where the folder's contents stop. */
                       <div style={{ marginLeft: 14, borderLeft: `1px solid color-mix(in srgb, var(--text) 14%, transparent)` }}>
-                        {g.views.map((v) => railRow(v, 1))}
+                        {g.views.map((v) => railList(v))}
                       </div>
                     )}
                   </div>
