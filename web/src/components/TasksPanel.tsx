@@ -931,7 +931,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
       aria-busy={wanted === v.id}
       className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px]"
       style={{
-        paddingLeft: 10 + depth * 11, paddingRight: 10,
+        // Inside a folder the guide line already carries the indent, so the row
+        // only owes it a small step. Outside one it starts where the folder
+        // glyph does, so the two columns line up rather than nearly line up.
+        paddingLeft: depth ? 8 : 10, paddingRight: 10,
         ...(!onLooked && lit === v.id
           ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)" }
           : { color: "var(--text3)" }),
@@ -960,6 +963,18 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         * name. The name is what tells them apart, so the name is what changes;
         * which list it is over is in the tooltip, where it was already.
         */}
+      {/* A list glyph beside every row that is one, so a list and the folder
+          above it are told apart by shape and not only by indent. The built-in
+          board keeps its own ring — it is not a list and does not behave like
+          one. */}
+      {!v.builtin && depth > 0 && (
+        <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
+          <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+            strokeWidth={1.6} strokeLinecap="round" aria-hidden>
+            <path d="M2.5 4.5h2M2.5 8h2M2.5 11.5h2M6.75 4.5h6.75M6.75 8h6.75M6.75 11.5h6.75" />
+          </svg>
+        </span>
+      )}
       <span className="truncate min-w-0 flex-1">{v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name)}</span>
       {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
     </button>
@@ -1497,10 +1512,25 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
       const k = t.status || "—";
       (by.get(k) ?? by.set(k, []).get(k)!).push(t);
     }
+    /*
+     * Inside a status group, ClickUp's own order: priority first.
+     *
+     * Read off the list's default view rather than guessed — its `sorting` is
+     * `{ field: "priority" }`, which is what makes `URGENT` sit at the top of a
+     * column in ClickUp and looked arbitrary here. Cards with no priority keep
+     * the order the workspace sent them in, which is its own ranking, so this
+     * only ever LIFTS the flagged ones.
+     */
+    const RANK: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+    const byPriority = (list: ProviderTask[]) => [...list]
+      .map((t, i) => ({ t, i }))
+      .sort((a, b) => (RANK[a.t.priority ?? ""] ?? 2.5) - (RANK[b.t.priority ?? ""] ?? 2.5) || a.i - b.i)
+      .map((x) => x.t);
+
     return [...by.entries()]
       .map(([status, list]) => ({
         status,
-        rows: list,
+        rows: byPriority(list),
         color: order.get(status)?.color ?? list[0]?.statusColor,
         done: (order.get(status)?.type ?? "") === "done" || (order.get(status)?.type ?? "") === "closed",
         points: list.reduce((n, t) => n + (t.points ?? 0), 0),
@@ -1977,7 +2007,20 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 const shut = railShut[g.key] === true;
                 const savedFolder = (boards?.folders ?? []).find((f) => f.id === g.folderId);
                 return (
-                  <div key={g.key} className="mt-1">
+                  /*
+                   * A folder has to look like a folder, and its lists have to
+                   * look like they are inside it.
+                   *
+                   * The first version was a dim caption over rows at the same
+                   * indent, and it read as one flat column with the odd label
+                   * in it — "no da margen de error de andar siempre click donde
+                   * no deberia". ClickUp's own sidebar answers this with three
+                   * things and they are all here: a folder glyph, brighter type
+                   * for the folder than for its lists, and a guide line down
+                   * the left of the children so the eye can follow the nesting
+                   * without counting pixels.
+                   */
+                  <div key={g.key} className="mt-1.5">
                     <button
                       onClick={() => setRailShut((m) => ({ ...m, [g.key]: !shut }))}
                       onContextMenu={(e) => {
@@ -1985,16 +2028,36 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                         e.preventDefault(); e.stopPropagation();
                         setFolderMenu({ f: savedFolder, x: e.clientX, y: e.clientY });
                       }}
-                      className="w-full text-left flex items-center gap-1 px-2 py-1 text-[10.5px]"
-                      style={{ color: "var(--text4)" }}
+                      className="w-full text-left flex items-center gap-1.5 pl-1.5 pr-2 py-1 text-[11px] agx-btn rounded"
+                      style={{ color: "var(--text2)" }}
                       title={savedFolder
                         ? `${g.space ? `${g.space} · ` : ""}${g.folder} — added whole, so a list created in it turns up here on its own. Right-click to take it off.`
                         : `${g.space ? `${g.space} · ` : ""}${g.folder}`}>
-                      <span aria-hidden className="shrink-0" style={{ width: 9, opacity: 0.8 }}>{shut ? "▸" : "▾"}</span>
-                      <span className="truncate min-w-0 flex-1" style={{ letterSpacing: "0.02em" }}>{g.folder}</span>
-                      <span className="tabular-nums shrink-0" style={{ opacity: 0.7 }}>{g.views.length}</span>
+                      {/* The twisty and the folder are one target: 20px of it,
+                          which is the smallest square this rail has room for
+                          and still wider than the 9px caret it replaced. */}
+                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
+                        <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
+                          style={{ transform: shut ? "none" : "rotate(90deg)", transition: "transform 120ms ease" }}>
+                          <path d="M6 3.5 10.5 8 6 12.5Z" />
+                        </svg>
+                      </span>
+                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--primary)" }}>
+                        <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="currentColor"
+                          strokeWidth={1.5} strokeLinejoin="round" aria-hidden>
+                          <path d="M1.75 4.25A1.5 1.5 0 0 1 3.25 2.75h2.4l1.3 1.5h5.8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.25a1.5 1.5 0 0 1-1.5-1.5Z" />
+                        </svg>
+                      </span>
+                      <span className="truncate min-w-0 flex-1" style={{ letterSpacing: "0.01em" }}>{g.folder}</span>
+                      <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text4)" }}>{g.views.length}</span>
                     </button>
-                    {!shut && g.views.map((v) => railRow(v, 1))}
+                    {!shut && (
+                      /* The guide line sits on the children, not on the folder:
+                         it has to stop where the folder's contents stop. */
+                      <div style={{ marginLeft: 14, borderLeft: `1px solid color-mix(in srgb, var(--text) 14%, transparent)` }}>
+                        {g.views.map((v) => railRow(v, 1))}
+                      </div>
+                    )}
                   </div>
                 );
               })}

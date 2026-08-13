@@ -1126,6 +1126,29 @@ export async function listMeta(
  */
 const MAX_PAGES = 10;
 
+/**
+ * The view a list opens on in ClickUp — the thing somebody is actually looking
+ * at when they say "that list".
+ *
+ * Cached because it is a property of the list rather than of its contents: one
+ * call, then never again this session.
+ */
+const listViewCache = new Map<string, { at: number; id: string | null }>();
+const LIST_VIEW_TTL_MS = 30 * 60_000;
+
+export async function defaultViewOf(token: string, listId: string): Promise<string | null> {
+  const hit = listViewCache.get(listId);
+  if (hit && Date.now() - hit.at < LIST_VIEW_TTL_MS) return hit.id;
+  const r = await call<{ required_views?: { list?: { id?: string } } }>(
+    `/list/${encodeURIComponent(listId)}/view`, token,
+  );
+  const id = r.ok ? (r.data?.required_views?.list?.id ?? null) : null;
+  // A failure is not cached as "no view": the next read should try again rather
+  // than fall back to the raw list for the rest of the session.
+  if (r.ok) listViewCache.set(listId, { at: Date.now(), id });
+  return id;
+}
+
 export async function viewTasks(
   token: string, viewId: string, myId?: string,
 ): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {

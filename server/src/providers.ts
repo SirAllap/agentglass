@@ -640,8 +640,34 @@ function myWorkUrl(tasks: { url?: string }[], workspaceId: string): string {
   return "";
 }
 
-/** A bare list, for an address that named one directly. */
+/**
+ * A list, read the way ClickUp itself shows one.
+ *
+ * `/list/{id}/task` is the obvious endpoint and it answers a different question
+ * from the one on screen. Measured on a real list of a couple of hundred cards:
+ *
+ *   - it returns only the tasks whose HOME list is this one. A card added to
+ *     the list through "Tasks in Multiple Lists" — which is most of them there
+ *     — is simply absent: its home is some other list, this one is a location
+ *     it appears in, and the list endpoint has never heard of it. Neither had
+ *     this app.
+ *   - it ignores the view's filter and its sort. What the list opens on is a
+ *     VIEW, with a filter on a custom field and `sorting: priority`.
+ *
+ * The view endpoint answers the question on screen: of its 105 tasks, 63 have
+ * another list as their home. So: resolve the list's default view once, read
+ * that, and only fall back to the raw list when the workspace will not name one
+ * (a permission, an older workspace) — where the old behaviour is still better
+ * than nothing.
+ */
 async function listTasksOf(token: string, listId: string, me?: string) {
-  const { rawListTasks } = await import("./clickup.ts");
+  const { rawListTasks, defaultViewOf, viewTasks } = await import("./clickup.ts");
+  const viewId = await defaultViewOf(token, listId);
+  if (viewId) {
+    const r = await viewTasks(token, viewId, me);
+    // An empty answer from the view is a real answer — a list can be empty —
+    // but an ERROR is not, and falling back keeps a board on screen.
+    if (r.ok) return r;
+  }
   return rawListTasks(token, listId, me);
 }
