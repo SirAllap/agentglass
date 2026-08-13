@@ -630,9 +630,22 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
   return (
     <div onClick={onSelect} data-file={active ? "active" : undefined}
       onContextMenu={onMenu ? (e) => { e.preventDefault(); onSelect(); onMenu(e.clientX, e.clientY); } : onBlame ? (e) => { e.preventDefault(); onBlame(); } : undefined}
-      className="group flex items-center gap-2 pr-1.5 py-1 rounded-md cursor-pointer"
-      style={{ background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", paddingLeft: depth == null ? 8 : 8 + depth * 12 }}>
-      <span className="w-3.5 text-center text-[10px] font-bold shrink-0 self-start mt-0.5" style={{ color: STATUS_TINT[c.status] }} title={c.status}>{STATUS_LETTER[c.status]}</span>
+      // A card, like every other row in this view: a status rail in the file's
+      // own colour, the name at the size the eye lands on, and the counts and
+      // the action in a lane that cannot be grown into. The status LETTER stays
+      // — in a file list it is the fastest read there is — but it sits on the
+      // rail rather than floating in a column of its own.
+      className="group flex items-center gap-2 pr-2 py-1.5 rounded-lg cursor-pointer transition-colors"
+      style={{
+        background: active ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "color-mix(in srgb, var(--bg3) 26%, transparent)",
+        border: `1px solid ${active ? "color-mix(in srgb, var(--primary) 40%, transparent)" : "color-mix(in srgb, var(--text) 6%, transparent)"}`,
+        marginBottom: 4,
+        boxShadow: active ? "0 6px 16px -12px rgba(0,0,0,.8)" : "none",
+        paddingLeft: depth == null ? 8 : 8 + depth * 12,
+      }}>
+      <span className="w-4 text-center text-[10px] font-bold shrink-0 self-start mt-0.5 rounded"
+        style={{ color: STATUS_TINT[c.status], background: `color-mix(in srgb, ${STATUS_TINT[c.status]} 14%, transparent)` }}
+        title={c.status}>{STATUS_LETTER[c.status]}</span>
       <span className="min-w-0 flex-1 truncate">
         <span className="block truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>
           {/* In tree mode the directory is already spelled out by the rows
@@ -3082,9 +3095,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           </Section>
                         )}
                       </div>
-                      <div className="shrink-0 border-t p-2.5 space-y-2" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                        <input value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Commit message (summary)…" disabled={!writeEnabled} className="w-full px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
-                        <textarea value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Extended description (optional)…" rows={2} disabled={!writeEnabled} className="agx-scroll w-full px-2.5 py-1.5 rounded-lg text-[11px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                      {/* The commit box. It is the one place in this view where you WRITE
+                          rather than pick, so it gets a surface of its own rather
+                          than a hairline and the panel's ground. */}
+                      <div className="shrink-0 border-t p-3 space-y-2" style={{ borderColor: "color-mix(in srgb, var(--text) 8%, transparent)", background: "color-mix(in srgb, var(--bg3) 22%, transparent)" }}>
+                        <input value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Summary of what changed…" disabled={!writeEnabled} className="w-full px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                        <textarea value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Why, if it needs saying (optional)…" rows={2} disabled={!writeEnabled} className="agx-scroll w-full px-2.5 py-1.5 rounded-lg text-[11px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
                         <button onClick={doCommit} disabled={!writeEnabled || busy || !tree?.staged.length || !title.trim()} className="w-full py-1.5 rounded-lg text-[11.5px] font-semibold" style={{ background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)", opacity: (!writeEnabled || !tree?.staged.length || !title.trim()) ? 0.45 : 1 }}>⎇ Commit {tree?.staged.length ? `${tree.staged.length} staged` : ""}</button>
                         {!writeEnabled && <div className="text-[9.5px] t-dim2 text-center">read-only (AGENTGLASS_GIT_WRITE_DISABLED)</div>}
                       </div>
