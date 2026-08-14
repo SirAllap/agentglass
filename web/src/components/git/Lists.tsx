@@ -371,17 +371,23 @@ function GraphCell({ row, width }: { row?: GraphRow; width: number }) {
   const cap = Math.floor(width / LANE_W) - 1;
   return (
     /*
-     * Absolute, full height, and stretched.
+     * A box that RESERVES its width, holding a drawing that fills its height.
      *
-     * `preserveAspectRatio="none"` is the trick that makes this work outside the
-     * card: the row's height is decided by its own content (and changes with the
-     * app's UI scale), so a drawing with a fixed pixel height would either leave
-     * a gap between one row's lines and the next's or overshoot into them. Scaled
-     * vertically, the lanes meet exactly, and a bezier stretched is still a
-     * bezier — the bend gets slightly steeper and nothing else.
+     * Both halves matter and the first was missing: the SVG is positioned
+     * absolutely (so it can be as tall as whatever the row turns out to be), and
+     * an absolutely positioned child gives its parent no width at all — so the
+     * column collapsed to nothing and the graph was drawn straight across the
+     * commit subjects. Reported in three words: "encima del texto no".
+     *
+     * `preserveAspectRatio="none"` is the other half: a row's height comes from
+     * its own content and from the app's UI scale, so a drawing with a fixed
+     * pixel height would leave a gap between one row's lines and the next's, or
+     * overshoot into them. Stretched, the lanes meet exactly — and a bezier
+     * stretched is still a bezier; the bend gets slightly steeper, nothing else.
      */
-    <svg width={width} viewBox={`0 0 ${width} ${GRAPH_H}`} preserveAspectRatio="none" aria-hidden
-      className="absolute inset-y-0 left-0" style={{ height: "100%" }}>
+    <span className="relative block shrink-0 h-full" style={{ width }}>
+      <svg width={width} viewBox={`0 0 ${width} ${GRAPH_H}`} preserveAspectRatio="none" aria-hidden
+        className="absolute inset-0" style={{ width, height: "100%" }}>
       {row.links.map((l, i) => {
         // Lanes past the cap are clipped at the edge on purpose: it says "there
         // is more going on here" without letting forty branches eat the message.
@@ -400,8 +406,9 @@ function GraphCell({ row, width }: { row?: GraphRow; width: number }) {
             fill={row.merge ? "var(--bg2)" : laneColour(row.dot)}
             stroke={laneColour(row.dot)} strokeWidth={1.6}
             style={{ transformBox: "fill-box", transformOrigin: "center" }} />
-        </g>
-      )}
-    </svg>
+          </g>
+        )}
+      </svg>
+    </span>
   );
 }
