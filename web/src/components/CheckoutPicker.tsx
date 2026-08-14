@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CHIP } from "./workspace/Chrome.tsx";
 import type { GitRepoRef, GitBranch } from "../../../shared/types.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 
@@ -175,12 +176,15 @@ export function CheckoutPicker({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-full shrink-0 whitespace-nowrap disabled:opacity-50 transition-colors"
+        /* `CHIP`, the app's one control shape, rather than a pill of its own.
+           It is the FIRST control in the view, so its shape is the expectation
+           every header sets — and this one was a `rounded-full px-3` where the
+           Terminal's and the pull-request panel's were a rounded-lg and a
+           rounded-md at three different heights. Reported as "son todos
+           diferentes". */
+        className={`${CHIP} flex items-center gap-1.5 shrink-0 disabled:opacity-50`}
         style={{
           maxWidth: triggerMaxWidth,
-          // The pill the rest of this header speaks in. It is also the first
-          // control in the view, so it sets the expectation for everything
-          // under it.
           background: "color-mix(in srgb, var(--text) 5%, transparent)",
           border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
           color: "var(--text)",

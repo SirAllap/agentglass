@@ -30,6 +30,7 @@ import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
+import { CHIP } from "./workspace/Chrome.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -194,7 +195,7 @@ export function TasksView({ active, onOpenChatWith, cardJump, issueJump }: {
             // following a link, not moving house. See taskLanding.ts.
             <button key={s.id} onClick={() => { setForced(null); setSource(s.id); rememberTaskSource(s.id); }}
               aria-current={s.id === source ? "true" : undefined}
-              className="text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+              className={CHIP}
               style={s.id === source
                 ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)",
                     boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" }

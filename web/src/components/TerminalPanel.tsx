@@ -16,6 +16,7 @@ import { keepTermFocus } from "../lib/keepFocus.ts";
 import { focusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover } from "../lib/termFocusPref.ts";
 import { cellAt, paneAt } from "../lib/tmuxHover.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
+import { CHIP } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -2223,7 +2224,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           title="Reading which worktree this pane is working in"
                           style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text3)" }}
                         >
-                          <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>WT</span>
+                          <span className="shrink-0 text-[9.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>WT</span>
                           <span className="animate-pulse">Reading this pane…</span>
                         </span>
                       ) : null;
@@ -2232,7 +2233,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     const label = at.worktreeOf ? at.branch : at.name;
                     return (
                       <span
-                        className="flex items-center gap-1 text-[11px] pl-2.5 pr-1.5 py-1 rounded-lg min-w-0 shrink"
+                        className={`${CHIP} flex items-center gap-1.5 min-w-0 shrink`}
                         style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
                       >
                         <span

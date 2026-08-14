@@ -16,6 +16,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
+import { LAYER } from "../lib/layers.ts";
 import { matchPalette, paletteEntries, type GitKind, type GitRowState } from "../lib/gitActions.ts";
 
 export interface PaletteRow {
@@ -41,9 +42,28 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
+  /*
+   * A destructive action asks twice, here as well as in the menu.
+   *
+   * The right-click menu already required a confirm before anything
+   * irreversible; the palette ran the same action on one Enter. That gap is
+   * worse than it sounds, because the list REORDERS as you type — `setCursor(0)`
+   * on every keystroke, and the pointer moving across the list sets the cursor
+   * too — so "del" followed by Enter fires whatever landed in row 0, which may
+   * be a delete on a branch you were not looking at.
+   *
+   * The second Enter is on the same row: the item turns into "Press again to
+   * <label>", and any other key or a change to the query takes it back. Not a
+   * dialog, because a palette is a keyboard surface and a modal over a modal is
+   * how people learn to hit Enter twice without reading.
+   */
+  const [arming, setArming] = useState<string | null>(null);
+
   const runAt = (i: number) => {
     const hit = hits[i];
     if (!hit) return;
+    const key = `${hit.kind}-${hit.name}-${hit.action.id}`;
+    if (hit.action.danger && arming !== key) { setArming(key); return; }
     onClose();
     const row = rows.find((r) => r.kind === hit.kind && r.name === hit.name);
     row?.run(hit.action.id);
@@ -51,22 +71,28 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
 
   return (
     <Portal>
-      <div className="fixed inset-0" style={{ zIndex: 9998, background: "rgba(0,0,0,.45)" }} onMouseDown={onClose} />
+      {/* LAYER, not a number: 9999 is BELOW every numbered surface in this app
+          (the file viewer is 10020, Settings 10120, a menu 10200), so the
+          palette opened underneath anything the user raised next. */}
+      <div className="fixed inset-0" style={{ zIndex: LAYER.palette - 1, background: "rgba(0,0,0,.45)" }} onMouseDown={onClose} />
       <div role="dialog" aria-label="Git actions"
         className="fixed left-1/2 rounded-xl overflow-hidden flex flex-col"
         style={{
-          top: "14vh", transform: "translateX(-50%)", width: "min(560px, 92vw)", maxHeight: "62vh", zIndex: 9999,
+          top: "14vh", transform: "translateX(-50%)", width: "min(560px, 92vw)", maxHeight: "62vh", zIndex: LAYER.palette,
           background: "color-mix(in srgb, var(--bg2) 97%, black)",
           border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
           boxShadow: "0 30px 70px -20px rgba(0,0,0,.8)",
         }}
         onKeyDown={(e) => {
+          // Anything that is not the confirming Enter disarms: an armed row must
+          // not survive a change of mind.
+          if (e.key !== "Enter") setArming(null);
           if (e.key === "Escape") { e.stopPropagation(); onClose(); }
           else if (e.key === "ArrowDown") { e.preventDefault(); setCursor(Math.min(at + 1, hits.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setCursor(Math.max(at - 1, 0)); }
           else if (e.key === "Enter") { e.preventDefault(); runAt(at); }
         }}>
-        <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setCursor(0); }}
+        <input ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setCursor(0); setArming(null); }}
           placeholder="branch, tag, stash, worktree — or what you want to do to one"
           className="px-3 py-2.5 text-[12px] outline-none"
           style={{
@@ -82,11 +108,13 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
           )}
           {hits.map((h, i) => (
             <button key={`${h.kind}-${h.name}-${h.action.id}`}
-              onMouseEnter={() => setCursor(i)} onClick={() => runAt(i)}
+              onMouseEnter={() => { setCursor(i); setArming(null); }} onClick={() => runAt(i)}
               className="w-full text-left px-3 py-1.5 flex items-center gap-2"
               style={{ background: i === at ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent" }}>
               <span className="text-[9px] uppercase tracking-wider shrink-0 w-16" style={{ color: "var(--text3)" }}>{h.kind}</span>
-              <span className="text-[11.5px] shrink-0" style={{ color: h.action.danger ? "var(--error)" : "var(--text)" }}>{h.action.label}</span>
+              <span className="text-[11.5px] shrink-0" style={{ color: h.action.danger ? "var(--error)" : "var(--text)" }}>
+                {arming === `${h.kind}-${h.name}-${h.action.id}` ? `Press again to ${h.action.label.toLowerCase()}` : h.action.label}
+              </span>
               <span className="text-[11px] min-w-0 truncate" style={{ color: "var(--text2)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{h.name}</span>
               {h.action.command && i === at && (
                 <span className="ml-auto text-[9.5px] shrink-0 truncate max-w-[45%]"

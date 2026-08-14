@@ -27,6 +27,7 @@ import { Portal } from "./Portal.tsx";
 import { subscribePrJump, prJump, clearPrJump } from "../lib/prJump.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
+import { ScopeChip } from "./workspace/Chrome.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
@@ -3272,17 +3273,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 border and the hover are what say "this is a control", and they
                 are the same pill the rest of the app uses for one. Both carry
                 the arrow, because either one leaves the app. */}
+            {/* `ScopeChip`, like the other four views: this was 10px in a
+                rounded-md at half the padding, which made the pull-request
+                header's first control visibly smaller than the Terminal's and
+                the Git panel's doing the same job one keystroke away. */}
             {([
               { to: "", label: repo.nameWithOwner, hint: `Open ${repo.nameWithOwner} on GitHub`, grow: true },
               { to: "/pulls", label: "PRs", hint: "Open this repository's pull requests on GitHub", grow: false },
             ] as const).map((b) => (
-              <button key={b.to} type="button"
-                onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}${b.to}`)}
-                title={b.hint}
-                className={`agx-btn agx-ghchip inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] ${b.grow ? "min-w-0" : "shrink-0"}`}>
-                <span className={b.grow ? "truncate" : ""}>{b.label}</span>
-                <span aria-hidden className="shrink-0 opacity-70">↗</span>
-              </button>
+              <ScopeChip key={b.to} label={b.label} trailing="external" title={b.hint}
+                className={b.grow ? "min-w-0" : "shrink-0"}
+                onClick={() => openExternal(`https://github.com/${repo.nameWithOwner}${b.to}`)} />
             ))}
           </span>
         )}

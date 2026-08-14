@@ -95,6 +95,67 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
 }
 
 /**
+ * What a view is POINTED AT, in the top-left corner: a repository, a checkout, a
+ * branch, a remote.
+ *
+ * Five views had one and no two were the same object. Measured, left to right in
+ * each header:
+ *
+ *     Terminal   text-[11px] pl-2.5 pr-1.5 py-1 rounded-lg  + an 8.5px badge
+ *     Pull reqs  text-[10px] px-1.5 py-0.5  rounded-md
+ *     Git        text-[11px] px-3   py-1    rounded-full
+ *     Tasks      text-[11px] px-2.5 py-1    rounded-lg
+ *     Diff       the segmented chips
+ *
+ * Four shapes, three heights and three radii for one job — reported as "son
+ * todos diferentes", which they were. This is that control, once. It is the chip
+ * shape with two optional parts, because the differences between those five were
+ * never about the control and always about what it happened to carry:
+ *
+ *   · a KIND badge (`REPO`, `WT`) for the header that has to tell a checkout
+ *     from the repository it was cut from;
+ *   · a trailing mark — a caret when pressing it opens a picker, an arrow when
+ *     it leaves the app for a browser. Those are different promises and the
+ *     control should not make them look alike.
+ */
+export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, href, className = "" }: {
+  /** The thing itself: `orbit`, `orbit · main`, `acme/orbit`. */
+  label: ReactNode;
+  /** Two to four letters, when the view needs to say what KIND of thing this is. */
+  kind?: string;
+  /** `menu` draws a caret (this opens a picker), `external` an arrow (this
+   *  leaves the app), `none` neither. */
+  trailing?: "none" | "menu" | "external";
+  on?: boolean;
+  onClick?: () => void;
+  title?: string;
+  /** When it is a link rather than a button — the repository on GitHub. */
+  href?: string;
+  className?: string;
+}) {
+  const inner = (
+    <>
+      {kind && (
+        <span className="shrink-0 text-[9.5px] leading-none px-1 py-0.5 rounded"
+          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{kind}</span>
+      )}
+      <span className="truncate min-w-0">{label}</span>
+      {trailing === "menu" && (
+        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0" style={{ opacity: 0.7 }}>
+          <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      {trailing === "external" && <span aria-hidden className="shrink-0" style={{ opacity: 0.7 }}>↗</span>}
+    </>
+  );
+  const cls = `${CHIP} inline-flex items-center gap-1.5 min-w-0 ${className}`.trim();
+  const style = { ...chipTone(!!on), ...(on ? null : { color: "var(--text2)" }) };
+  return href
+    ? <a href={href} target="_blank" rel="noreferrer" title={title} className={cls} style={style}>{inner}</a>
+    : <button onClick={onClick} title={title} className={cls} style={style}>{inner}</button>;
+}
+
+/**
  * An icon-only control in a header.
  *
  * `HIT` is 26 because a glyph with `px-2` around it is a thin target — the

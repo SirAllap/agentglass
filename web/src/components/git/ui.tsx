@@ -1,6 +1,13 @@
 /*
  * The git view's visual system.
  *
+ * The CONTROLS in it are not its own: `CHIP` comes from `workspace/Chrome.tsx`,
+ * which is where the app's one button shape lives. This file used to declare two
+ * more of them — a 10.5px rounded-lg and a 10px rounded-full — so the git view's
+ * buttons were a different size from the identical buttons one view away. What
+ * stays local is what is genuinely this view's: the row with its status rail,
+ * the group heading, the empty state.
+ *
  * The first pass at this unified the plumbing — one grid, one set of type
  * sizes, one chip — and the verdict on it was that it still looked like the
  * same list, which was fair: a tidy table of 10px text is still a table of 10px
@@ -27,6 +34,8 @@
  * defines. What changed is how much of each one there is.
  */
 import type { CSSProperties, ReactNode } from "react";
+import { ICON } from "../../lib/iconSize.ts";
+import { CHIP } from "../workspace/Chrome.tsx";
 
 export const edge = (pct: number): string => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 export const wash = (token: string, pct: number): string => `color-mix(in srgb, var(${token}) ${pct}%, transparent)`;
@@ -141,7 +150,7 @@ export function RowAction({ label, danger, disabled, onClick, title }: {
   return (
     <span className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
       <button onClick={(e) => { e.stopPropagation(); onClick(e); }} disabled={disabled} title={title}
-        className="text-[10.5px] px-3 py-1 rounded-lg whitespace-nowrap font-medium"
+        className={`${CHIP} font-medium`}
         style={danger
           ? { color: "var(--error)", border: `1px solid ${wash("--error", 45)}`, background: wash("--error", 8) }
           : { color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
@@ -157,7 +166,16 @@ export function GroupHead({ label, count, note, folded, onToggle }: {
 }) {
   const inner = (
     <>
-      {onToggle && <span className="text-[9px] w-2" style={{ color: "var(--text3)" }}>{folded ? "▸" : "▾"}</span>}
+      {/* Drawn and rotated, not two typed glyphs. A 9px ▸ is an affordance
+          nobody finds — the same finding that took the ▾ out of the
+          notification rows — and one control that MOVES reads as the same
+          thing in two states, where two characters read as two things. */}
+      {onToggle && (
+        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
+          style={{ color: "var(--text3)", transform: folded ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
+          <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
       <span className="text-[10px] uppercase tracking-[0.11em] font-medium" style={{ color: "var(--text2)" }}>{label}</span>
       {count != null && (
         <span className="text-[9.5px] tabular-nums px-1.5 py-px rounded-full"
@@ -189,7 +207,7 @@ export function Pill({ on, tone = "neutral", onClick, children, title }: {
 }) {
   return (
     <button onClick={onClick} title={title}
-      className="text-[10px] px-3 py-1 rounded-full whitespace-nowrap transition-colors font-medium"
+      className={`${CHIP} font-medium`}
       style={{
         color: on ? "var(--text)" : TONE[tone],
         background: on ? wash("--primary", 14) : "transparent",
