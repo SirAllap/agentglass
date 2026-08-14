@@ -139,14 +139,18 @@ describe("the drawing, which now lives outside the card", () => {
     expect(straight).toBe(`M${laneX(0)} 0 V${GRAPH_H}`);
 
     const bend = linkPath({ from: 0, to: 2, lane: 0 }, 8);
-    expect(bend.startsWith(`M${laneX(0)} 0 C`)).toBe(true);
-    expect(bend.endsWith(`${laneX(2)} ${GRAPH_H}`)).toBe(true);
+    expect(bend.startsWith(`M${laneX(0)} 0 V`)).toBe(true);
+    expect(bend.endsWith(`V${GRAPH_H}`)).toBe(true);
   });
 
-  it("bends rather than turning a corner", () => {
-    // A right angle is what the ASCII already looked like. A branch should look
-    // like it leaves and comes back.
-    expect(linkPath({ from: 1, to: 3, lane: 1 }, 8)).toContain("C");
+  it("runs vertically and STEPS across, rather than leaning corner to corner", () => {
+    /* A row is thirty pixels tall and eleven wide per lane, so a bezier drawn
+       corner to corner is nine degrees off vertical — with ten of them on screen
+       you cannot tell which lane a line left and which it arrived in. Straight,
+       step, straight reads as one line changing column. */
+    const d = linkPath({ from: 1, to: 3, lane: 1 }, 8);
+    expect(d).toContain("C");                       // the step itself
+    expect((d.match(/V/g) ?? []).length).toBe(2);   // a straight run at each end
   });
 
   it("pins a lane past the cap to the edge instead of drawing off the page", () => {

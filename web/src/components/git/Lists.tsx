@@ -16,7 +16,7 @@
  * replaced the drawing, not the plumbing.
  */
 import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { GRAPH_H, LANE_W, graphWidth, laneColour, laneX, layoutGraph, linkPath, type GraphRow } from "../../lib/gitGraph.ts";
+import { GRAPH_H, GRAPH_PAD, LANE_W, graphWidth, laneColour, laneX, layoutGraph, linkPath, type GraphRow } from "../../lib/gitGraph.ts";
 import type {
   GitBranch, GitTag, GitStash, GitWorktree, GitRemote, GitRemoteBranch,
   GitSubmodule, GitReflogEntry,
@@ -345,7 +345,7 @@ export function commitRows(
   return commits.map((l, i) => ({
     key: `${l.hash}-${i}`, kind: "commit", name: l.hash!, state: {},
     variant: "line" as const,
-    gutter: <GraphCell row={graph[i]} width={width} />,
+    gutter: <GraphCell row={graph[i]} width={width} selected={ctx.picked.has(l.hash!)} />,
     run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
     title: <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
     chips: l.refs ? <Chip tone="good">{l.refs}</Chip> : undefined,
@@ -366,49 +366,72 @@ export function commitRows(
  * whole point of drawing this is that a branch should look like it leaves and
  * comes back.
  */
-function GraphCell({ row, width }: { row?: GraphRow; width: number }) {
+function GraphCell({ row, width, selected }: { row?: GraphRow; width: number; selected?: boolean }) {
   if (!row) return <span className="shrink-0" style={{ width }} />;
-  const cap = Math.floor(width / LANE_W) - 1;
+  const cap = Math.max(0, Math.floor((width - GRAPH_PAD) / LANE_W) - 1);
+  const dotLane = Math.min(row.dot, cap);
+  const dotX = laneX(dotLane);
+  const colour = laneColour(row.dot);
   return (
     /*
      * A box that RESERVES its width, holding a drawing that fills its height.
      *
-     * Both halves matter and the first was missing: the SVG is positioned
+     * Both halves matter, and the first was missing once: the SVG is positioned
      * absolutely (so it can be as tall as whatever the row turns out to be), and
      * an absolutely positioned child gives its parent no width at all — so the
-     * column collapsed to nothing and the graph was drawn straight across the
-     * commit subjects. Reported in three words: "encima del texto no".
+     * column collapsed and the graph was drawn across the commit subjects.
      *
      * `preserveAspectRatio="none"` is the other half: a row's height comes from
      * its own content and from the app's UI scale, so a drawing with a fixed
-     * pixel height would leave a gap between one row's lines and the next's, or
-     * overshoot into them. Stretched, the lanes meet exactly — and a bezier
-     * stretched is still a bezier; the bend gets slightly steeper, nothing else.
+     * pixel height would leave a gap between one row's lines and the next's.
+     * Stretched, the lanes meet exactly — a bezier stretched is still a bezier.
      */
     <span className="relative block shrink-0 h-full" style={{ width }}>
       <svg width={width} viewBox={`0 0 ${width} ${GRAPH_H}`} preserveAspectRatio="none" aria-hidden
         className="absolute inset-0" style={{ width, height: "100%" }}>
-      {row.links.map((l, i) => {
-        // Lanes past the cap are clipped at the edge on purpose: it says "there
-        // is more going on here" without letting forty branches eat the message.
-        if (l.from > cap && l.to > cap) return null;
-        const d = linkPath(l, cap);
-        // `non-scaling-stroke` so the vertical stretch does not thin the lines.
-        return <path key={i} d={d} fill="none" stroke={laneColour(l.lane)} strokeWidth={1.5}
-          vectorEffect="non-scaling-stroke" strokeLinecap="round" opacity={0.6} />;
-      })}
-      {row.dot <= cap && (
-        /* The dot is drawn in the un-scaled space and placed with a transform,
-           so the vertical stretch above cannot squash it into an ellipse.
-           Hollow for a merge: the one commit whose content is not its own. */
-        <g transform={`translate(${laneX(Math.min(row.dot, cap))} ${GRAPH_H / 2})`}>
-          <circle r={3.2} vectorEffect="non-scaling-stroke"
-            fill={row.merge ? "var(--bg2)" : laneColour(row.dot)}
-            stroke={laneColour(row.dot)} strokeWidth={1.6}
-            style={{ transformBox: "fill-box", transformOrigin: "center" }} />
-          </g>
-        )}
+        {row.links.map((l, i) => {
+          // Lanes past the cap are clipped at the edge on purpose: it says
+          // "there is more going on here" without letting forty branches eat
+          // the message.
+          if (l.from > cap && l.to > cap) return null;
+          /* THIS row's own line is drawn full strength and a touch thicker;
+             every other branch passing through is dimmed to less than half.
+             That is the answer to "es difícil la triangulación": on a screen
+             with ten lanes, all of them the same weight, there is nothing
+             joining a line to the commit it belongs to. */
+          const mine = l.from === dotLane || l.to === dotLane;
+          return <path key={i} d={linkPath(l, cap)} fill="none" stroke={laneColour(l.lane)}
+            strokeWidth={mine ? 2 : 1.25} vectorEffect="non-scaling-stroke" strokeLinecap="round"
+            opacity={mine ? 0.95 : 0.34} />;
+        })}
       </svg>
+
+      {/*
+        * The dot, and the run from the dot to the text — both in HTML rather
+        * than in the SVG above.
+        *
+        * The SVG's user space is stretched vertically to fill the row, so a
+        * circle drawn in it comes out an ellipse: that is what the dot had
+        * become, a flat pink smear a third the height it should be. Nothing
+        * inside a non-uniformly scaled viewport escapes that, `transform-box`
+        * included. An HTML element sits outside the scaling entirely, so it is
+        * round, and `top: 50%` puts it exactly on the row's centre line — which
+        * is where the subject's own text sits.
+        */}
+      <span aria-hidden className="absolute" style={{
+        left: dotX + 7, right: 0, top: "50%", height: 1, transform: "translateY(-50%)",
+        background: `linear-gradient(to right, color-mix(in srgb, ${colour} 55%, transparent), transparent)`,
+      }} />
+      <span aria-hidden className="absolute rounded-full" style={{
+        left: dotX, top: "50%", transform: "translate(-50%, -50%)",
+        width: row.merge ? 9 : 8, height: row.merge ? 9 : 8,
+        // Hollow for a merge: the one commit whose content is not its own.
+        background: row.merge ? "var(--bg2)" : colour,
+        border: `2px solid ${colour}`,
+        // The selected row's dot gets a halo rather than a bigger size, so the
+        // lane it sits in does not appear to move when you walk the list.
+        boxShadow: selected ? `0 0 0 3px color-mix(in srgb, ${colour} 30%, transparent)` : "none",
+      }} />
     </span>
   );
 }

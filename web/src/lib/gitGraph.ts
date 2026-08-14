@@ -134,18 +134,24 @@ export function layoutGraph(commits: { hash: string; parents: string[] }[]): Gra
 /**
  * The colours a lane can take.
  *
- * Six, from the app's own tokens rather than a rainbow: the graph is a diagram
- * beside text, not the subject of the screen, and eight saturated hues next to a
- * commit message is a Christmas tree. They repeat past six, which is honest —
- * the colour tells two ADJACENT lines apart, and nothing more.
+ * A ramp of its own (`--graph-1..8` in index.css) rather than the app's state
+ * colours. The first version used `--success`, `--warning` and `--error`, which
+ * mean good, careful and broken everywhere else in this app — a log drawn in
+ * them reads as a list of failures, and there is nothing wrong with a branch.
+ *
+ * Eight, which is exactly the number of lanes the column draws: with fewer, two
+ * lanes visible at the same moment could land on the same hue, and telling two
+ * lines apart is the whole job the colour has.
  */
+/* Each with its own literal fallback. A theme sets its variables one by one on
+   the root element, so a theme written before this ramp existed simply does not
+   carry `--graph-*` — and a `var()` with nothing behind it resolves to nothing,
+   which is a graph drawn in no colour at all. Seen exactly that way in a
+   screenshot of this component against a stale stylesheet: the lines vanished
+   and the dots went grey. */
 export const LANE_COLOURS = [
-  "var(--primary)",
-  "var(--info)",
-  "var(--success)",
-  "var(--warning)",
-  "var(--error)",
-  "var(--text3)",
+  "var(--graph-1, #6ea8fe)", "var(--graph-2, #f78fb3)", "var(--graph-3, #5fd4a4)", "var(--graph-4, #e8b463)",
+  "var(--graph-5, #b39ddb)", "var(--graph-6, #4fc3d9)", "var(--graph-7, #f2937a)", "var(--graph-8, #a3c76d)",
 ] as const;
 
 export const laneColour = (lane: number): string => LANE_COLOURS[lane % LANE_COLOURS.length]!;
@@ -159,12 +165,25 @@ export const laneColour = (lane: number): string => LANE_COLOURS[lane % LANE_COL
  * clipped at the edge, which says "there is more going on here" without letting
  * it eat the commit message.
  */
-export const LANE_W = 11;
+export const LANE_W = 12;
 export const MAX_LANES = 8;
+
+/**
+ * Room at the left edge for half a dot.
+ *
+ * Lane 0 sits at half a lane in, and a dot is 8px across — so without this the
+ * leftmost dot, which is the trunk's and therefore most of them, was sliced in
+ * half by the edge of its own column. Visible only once the thing was drawn to
+ * pixels and looked at.
+ */
+export const GRAPH_PAD = 6;
 
 export function graphWidth(rows: GraphRow[]): number {
   const lanes = Math.min(MAX_LANES, rows.reduce((n, r) => Math.max(n, r.width), 1));
-  return lanes * LANE_W + LANE_W;
+  // A lane's worth of slack on the right as well: the last lane's line needs
+  // clearance from the commit subject, and the run from the dot to the text
+  // needs somewhere to fade out.
+  return GRAPH_PAD + lanes * LANE_W + LANE_W;
 }
 
 
@@ -181,7 +200,7 @@ export function graphWidth(rows: GraphRow[]): number {
 export const GRAPH_H = 100;
 
 /** Where a lane sits, horizontally. */
-export const laneX = (lane: number): number => lane * LANE_W + LANE_W / 2;
+export const laneX = (lane: number): number => GRAPH_PAD + lane * LANE_W + LANE_W / 2;
 
 /**
  * One link, as an SVG path.
@@ -197,7 +216,18 @@ export const laneX = (lane: number): number => lane * LANE_W + LANE_W / 2;
 export function linkPath(link: GraphLink, cap: number): string {
   const x1 = laneX(Math.min(link.from, cap));
   const x2 = laneX(Math.min(link.to, cap));
-  return x1 === x2
-    ? `M${x1} 0 V${GRAPH_H}`
-    : `M${x1} 0 C${x1} ${GRAPH_H * 0.45} ${x2} ${GRAPH_H * 0.55} ${x2} ${GRAPH_H}`;
+  if (x1 === x2) return `M${x1} 0 V${GRAPH_H}`;
+  /*
+   * Straight, then a step, then straight — not one long diagonal.
+   *
+   * A row is thirty pixels tall and eleven wide per lane, so a bezier drawn
+   * corner to corner is a line at nine degrees off vertical: on a screen with
+   * ten of them it is impossible to say which lane a line left and which it
+   * arrived in, which is the "difícil la triangulación" this is answering. A
+   * lane that runs vertically and STEPS across in the middle third reads as one
+   * line changing column, which is what it is — and it is how every graph that
+   * is pleasant to read draws it.
+   */
+  const a = GRAPH_H * 0.3, b = GRAPH_H * 0.7, mid = GRAPH_H * 0.5;
+  return `M${x1} 0 V${a} C${x1} ${mid} ${x2} ${mid} ${x2} ${b} V${GRAPH_H}`;
 }

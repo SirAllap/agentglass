@@ -56,7 +56,11 @@ describe("the graph column", () => {
   test("draws a line for every commit and a dot for each", () => {
     const html = draw();
     expect((html.match(/<path /g) ?? []).length).toBeGreaterThanOrEqual(2);
-    expect((html.match(/<circle /g) ?? []).length).toBe(LINES.length);
+    /* The dot is HTML, not `<circle>`, and deliberately: the SVG's user space is
+       stretched vertically to fill the row, so anything drawn inside it comes
+       out squashed — the dot had become a flat smear a third of its height.
+       An element outside that viewport is round. */
+    expect((html.match(/rounded-full/g) ?? []).length).toBe(LINES.length);
   });
 
   test("keeps the subject in the row, not in the drawing", () => {

@@ -131,12 +131,19 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     transition: "background .14s ease, border-color .14s ease, box-shadow .14s ease, transform .14s ease",
     transform: selected ? "translateX(2px)" : "none",
   };
+  /* Inside a gutter the wrapper above owns the ground, so the body must not
+     paint a second one — two tints of the same colour do not cancel out, they
+     stack, and the row came out a shade brighter than the highlight it was
+     supposed to match. */
+  if (gutter && line) { style.background = "transparent"; }
+
   const body = (
     // `git-card` is what the stylesheet hangs hover and reduced-motion off:
     // hovering lifts the border and the ground a step, which is the feedback a
     // list of identical cards needs to feel like it is under your hand rather
     // than printed on the page.
-    <div className={line ? "git-line group min-w-0" : "git-card group"} style={style} onClick={onClick} onContextMenu={onContextMenu} title={title2}>
+    <div className={line ? `${gutter ? "" : "git-line "}group min-w-0` : "git-card group"} style={style}
+      onClick={gutter ? undefined : onClick} onContextMenu={gutter ? undefined : onContextMenu} title={gutter ? undefined : title2}>
       {/* The rail. Sits inside the border radius rather than beside it, so a
           list of them reads as one column of colour down the left. */}
       {!line && (
@@ -185,11 +192,24 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
   );
 
   if (!gutter) return body;
-  /* The gutter is a flex sibling with `items-stretch`, so it is exactly as tall
-     as the row whatever the row decides to be — which is what keeps five hundred
-     little drawings joined into one. */
+  /*
+   * The gutter is a flex sibling with `items-stretch`, so it is exactly as tall
+   * as the row whatever the row decides to be — which is what keeps five hundred
+   * little drawings joined into one.
+   *
+   * The selection moves OUT here with it. A tint that stopped where the graph
+   * began drew a line down the middle of the row it was meant to pick out, and
+   * left the one dot the reader is looking for outside the highlight — on the
+   * very screen where the complaint was that finding it is hard.
+   */
   return (
-    <div className="flex items-stretch min-w-0" onContextMenu={onContextMenu}>
+    <div className={`${line ? "git-line" : ""} flex items-stretch min-w-0`}
+      style={{
+        borderRadius: 6,
+        background: selected ? wash("--primary", 16) : "transparent",
+        transition: "background .12s ease",
+      }}
+      onClick={onClick} onContextMenu={onContextMenu} title={title2}>
       <span className="shrink-0 relative self-stretch" aria-hidden>{gutter}</span>
       <div className="min-w-0 flex-1">{body}</div>
     </div>
