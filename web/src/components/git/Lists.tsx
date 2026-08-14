@@ -420,7 +420,7 @@ function GraphCell({ row, width, selected }: { row?: GraphRow; width: number; se
         */}
       <span aria-hidden className="absolute" style={{
         left: dotX + 7, right: 0, top: "50%", height: 1, transform: "translateY(-50%)",
-        background: `linear-gradient(to right, color-mix(in srgb, ${colour} 55%, transparent), transparent)`,
+        background: `linear-gradient(to right, color-mix(in srgb, ${colour} 75%, transparent), transparent 92%)`,
       }} />
       <span aria-hidden className="absolute rounded-full" style={{
         left: dotX, top: "50%", transform: "translate(-50%, -50%)",
