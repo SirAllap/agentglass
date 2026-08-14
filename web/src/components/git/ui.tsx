@@ -220,7 +220,10 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
  *  coloured — everything else on the card is text or grey. */
 export function Chip({ tone = "neutral", children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
   return (
-    <span className="shrink-0 text-[9.5px] px-2 py-0.5 rounded-full whitespace-nowrap font-medium"
+    /* `rounded-md`, which is what `.chip` is everywhere else in this app (6px).
+       A status word is a label, not a control and not a badge — the stadium
+       shape here was a third radius on a screen that already had two. */
+    <span className="shrink-0 text-[9.5px] px-2 py-0.5 rounded-md whitespace-nowrap font-medium"
       style={{ color: TONE[tone], background: wash(tone === "neutral" ? "--text" : `--${tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "primary"}`, tone === "neutral" ? 10 : 14) }}
       title={title}>
       {children}

@@ -432,25 +432,36 @@ const ROW_GRID = {
  *
  *  The search is `autoFocus`-free on purpose: these tabs are reached by number
  *  keys and j/k, and stealing focus on every tab change would break that. */
-function ListToolbar({ q, onQ, placeholder, sort, onSort, sorts, count, total, children }: {
+function ListToolbar({ q, onQ, placeholder, sort, onSort, sorts, count, total, children, lead }: {
   q: string; onQ: (v: string) => void; placeholder: string;
   sort?: SortKey; onSort?: (s: SortKey) => void; sorts?: { key: SortKey; label: string; title: string }[];
   count: number; total: number; children?: ReactNode;
+  /**
+   * What this tab creates — the new-branch field and its button, the snapshot
+   * label, "+ new tag".
+   *
+   * It sits IN this strip rather than in one of its own above it. Every tab had
+   * two rows of controls doing one job, which cost a row of height on each of
+   * six tabs and made the panel read as two toolbars stacked. Reported as
+   * "puede ser todo en una misma línea", and it can.
+   */
+  lead?: ReactNode;
 }) {
   return (
     <div className="flex items-center gap-2 mb-2 flex-wrap">
+      {lead}
       <input
         value={q}
         onChange={(e) => onQ(e.target.value)}
         placeholder={placeholder}
-        className="px-3 py-1.5 rounded-full text-[11.5px] outline-none min-w-0 flex-1 max-w-md transition-colors"
+        className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 flex-1 max-w-md transition-colors"
         style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }}
       />
       {sorts && sort && onSort && (
         <div className="flex items-center gap-1 shrink-0">
           {sorts.map((s) => (
             <button key={s.key} onClick={() => onSort(s.key)} title={s.title}
-              className="text-[10px] px-3 py-1 rounded-full transition-colors whitespace-nowrap font-medium"
+              className="text-[10px] px-2 py-1 rounded-lg transition-colors whitespace-nowrap font-medium"
               style={sort === s.key
                 ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)", color: "var(--text)" }
                 : { background: "transparent", border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)", color: "var(--text3)" }}>
@@ -2640,7 +2651,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     return (
       <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
         aria-keyshortcuts={String(num)} aria-selected={on} role="tab"
-        className="text-[11px] leading-none rounded-full transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 font-medium px-3 py-1.5"
+        className="text-[11px] leading-none rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 font-medium px-3 py-1.5"
         style={{
           background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
           border: `1px solid ${on ? "color-mix(in srgb, var(--primary) 42%, transparent)" : "transparent"}`,
@@ -2736,7 +2747,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <button
                       onClick={() => setInsightsOpen(true)}
                       disabled={busy}
-                      className="text-[11px] px-3 py-1 rounded-full whitespace-nowrap shrink-0 font-medium"
+                      className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0 font-medium"
                       style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", opacity: busy ? 0.5 : 1 }}
                       title="Repo insights — commit pace, contributors, churn, changelog"
                     >☰ insights</button>
@@ -3306,13 +3317,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : view === "branches" ? (
                   <div onScroll={incBranches.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
-                    {writeEnabled && (
-                      <div className="flex items-center gap-2 mb-3 max-w-lg">
-                        <input value={newBranch} onChange={(e) => setNewBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createBranch(); }} placeholder="new-branch-name" className="flex-1 px-3 py-1.5 rounded-full text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
-                        <button onClick={createBranch} disabled={busy || !newBranch.trim()} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: newBranch.trim() ? 1 : 0.5 }}>+ create & switch</button>
-                      </div>
-                    )}
                     <ListToolbar
+                      lead={writeEnabled ? (
+                        <>
+                          <input value={newBranch} onChange={(e) => setNewBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createBranch(); }} placeholder="new-branch-name" className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                          <button onClick={createBranch} disabled={busy || !newBranch.trim()} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: newBranch.trim() ? 1 : 0.5 }}>+ create & switch</button>
+                        </>
+                      ) : null}
                       q={q} onQ={(v) => { setQ(v); setRowIdx(0); }}
                       placeholder="Search branches by name or last commit…"
                       sort={sort} onSort={(s) => { setSort(s); setRowIdx(0); }}
@@ -3454,10 +3465,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         and leaves the tree alone — so "before I try this" can
                         restore even after the experiment goes sideways. */}
                     {writeEnabled && (
-                      <div className="flex items-center gap-2 max-w-lg">
-                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="flex-1 px-3 py-1.5 rounded-full text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                      <>
+                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
                         <button onClick={snapshotNow} disabled={busy || tree?.clean} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime">⟳ snapshot now</button>
-                      </div>
+                      </>
                     )}
                     </div>
                     {snapshots.length > 0 && (
@@ -3483,7 +3494,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                     )}
                     {writeEnabled && (
-                      <div className="mb-2">
+                      <div>
                         <button onClick={() => { setPartialOpen(!partialOpen); }} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", color: "var(--text)" }}>▣ stash some files…</button>
                         {partialOpen && (
                           <div className="mt-2 rounded-lg p-2.5 max-w-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
@@ -3511,7 +3522,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         )}
                       </div>
                     )}
-                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
+                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…"
+                      count={shownStashes.length} total={stashes.length} />
                       <List
                         rows={stashRows(shownStashes, stashAction)}
                         cursor={rowIdx} onCursor={setRowIdx}
@@ -3602,10 +3614,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : view === "tags" ? (
                   <div onScroll={incTags.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
-                    {writeEnabled && (
-                      <button onClick={() => void createTagAsk()} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ new tag</button>
-                    )}
-                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search tags by name, commit or subject…"
+                    <ListToolbar
+                      lead={writeEnabled ? (
+                      <button onClick={() => void createTagAsk()} className="text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ new tag</button>
+                      ) : null}
+                      q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search tags by name, commit or subject…"
                       sort={sort} onSort={(x) => { setSort(x); setRowIdx(0); }}
                       sorts={[{ key: "recent", label: "recent", title: "Newest tag first" }, { key: "name", label: "name", title: "Alphabetical" }]}
                       count={shownTags.length} total={tags.length} />
@@ -3619,9 +3632,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : view === "submodules" ? (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
-                    {writeEnabled && (
-                      <button onClick={submoduleAddAsk} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ add submodule</button>
-                    )}
                     {/* The empty state lives in <List> now — this one was the
                         old one, and the two of them drew one under the other. */}
                     <List
@@ -3646,13 +3656,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
-                    {writeEnabled && (
-                      <div className="flex items-center gap-2 mb-3 max-w-lg">
-                        <input value={newWtBranch} onChange={(e) => setNewWtBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWorktree(); }} placeholder="new-branch → new worktree (sibling dir)" className="flex-1 px-3 py-1.5 rounded-full text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                    <ListToolbar
+                      lead={writeEnabled ? (<>
+                        <input value={newWtBranch} onChange={(e) => setNewWtBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWorktree(); }} placeholder="new-branch → new worktree (sibling dir)" className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
                         <button onClick={addWorktree} disabled={busy || !newWtBranch.trim()} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: newWtBranch.trim() ? 1 : 0.5 }}>+ add worktree</button>
-                      </div>
-                    )}
-                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search worktrees by branch or directory…" count={shownWorktrees.length} total={worktrees.length} />
+                      </>) : null}
+                      q={q} onQ={(v) => { setQ(v); setRowIdx(0); }}
+                      placeholder="Search worktrees by branch or directory…"
+                      count={shownWorktrees.length} total={worktrees.length} />
                     <List
                       rows={worktreeRows(shownWorktrees, { run: worktreeAction })}
                       cursor={rowIdx} onCursor={setRowIdx}
