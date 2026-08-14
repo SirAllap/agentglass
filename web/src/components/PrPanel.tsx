@@ -65,7 +65,7 @@ import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict } from "../lib/mergeReason.ts";
-import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
+import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
 import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
@@ -1254,8 +1254,12 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
   );
 }
 
-function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin }: {
+function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q }: {
   p: PrSummary; active: boolean; onSelect: () => void; onReview: () => void;
+  /** What is in the filter box, so a row that is here because of a PERSON can
+   *  say which one. Without it a search for "javi" returns rows whose author
+   *  column says somebody else, and the list looks like it ignored you. */
+  q?: string;
   /** On the bar at the top. Undefined where there is no repository to pin it
    *  against, and the control then does not appear at all. */
   pinned?: boolean; onTogglePin?: () => void;
@@ -1310,6 +1314,18 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin }: {
         </div>
         <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
           <span className="truncate shrink-0" style={{ maxWidth: 140 }}>{p.author}</span>
+          {/* Why this row is in the answer. Assignees and requested reviewers
+              both — on a board they are one question, "where is this person",
+              and which hat they wear on a given pull request is not what was
+              being asked. */}
+          {peopleMatched(p, q ?? "").slice(0, 3).map((login) => (
+            <span key={login} className="shrink-0 flex items-center gap-1 rounded px-1"
+              title={`${login} is on this pull request`}
+              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)" }}>
+              <Avatar login={login} size={ICON.xs} />
+              <span className="truncate" style={{ maxWidth: 110 }}>{login}</span>
+            </span>
+          ))}
           {/*
             * Where it lands.
             *
@@ -3554,7 +3570,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <div style={{ opacity: listState.loading ? 0.45 : 1, transition: "opacity .15s" }}>
                 <PrTableHead />
                 {visiblePrs.map((p) => (
-                  <PrRow key={p.number} p={p} active={p.number === rowCursor}
+                  <PrRow key={p.number} p={p} active={p.number === rowCursor} q={filters.text}
                     onSelect={() => openPr(p.number)} onReview={() => doLocalReview(p.number)}
                     pinned={!!repo && isPinned(repo.nameWithOwner, p.number)}
                     onTogglePin={repo ? () => togglePin(repo.nameWithOwner, p.number, p.title) : undefined} />
