@@ -7,7 +7,7 @@
  * reads as the app being broken rather than as an off-by-one.
  */
 import { describe, expect, it } from "bun:test";
-import { graphWidth, layoutGraph, laneColour, LANE_COLOURS } from "../src/lib/gitGraph.ts";
+import { GRAPH_H, graphWidth, laneColour, laneX, layoutGraph, linkPath, LANE_COLOURS } from "../src/lib/gitGraph.ts";
 
 /** A linear history, newest first, as git hands it over. */
 const chain = (...hashes: string[]) =>
@@ -123,5 +123,34 @@ describe("colour", () => {
     // Six is enough to tell two ADJACENT lines apart, which is the only job.
     expect(laneColour(0)).toBe(LANE_COLOURS[0]!);
     expect(laneColour(LANE_COLOURS.length)).toBe(LANE_COLOURS[0]!);
+  });
+});
+
+describe("the drawing, which now lives outside the card", () => {
+  it("spans the full row height, so one row's lines meet the next row's", () => {
+    /*
+     * The whole promise of moving the graph into a gutter. Inside the card it
+     * was cut by a border and 4px of gap, five hundred times; outside, the only
+     * thing keeping the lanes joined is that every path starts at the top edge
+     * and ends at the bottom one. A path that stopped short would leave a comb
+     * of dashes down the page, which is worse than the ASCII it replaced.
+     */
+    const straight = linkPath({ from: 0, to: 0, lane: 0 }, 8);
+    expect(straight).toBe(`M${laneX(0)} 0 V${GRAPH_H}`);
+
+    const bend = linkPath({ from: 0, to: 2, lane: 0 }, 8);
+    expect(bend.startsWith(`M${laneX(0)} 0 C`)).toBe(true);
+    expect(bend.endsWith(`${laneX(2)} ${GRAPH_H}`)).toBe(true);
+  });
+
+  it("bends rather than turning a corner", () => {
+    // A right angle is what the ASCII already looked like. A branch should look
+    // like it leaves and comes back.
+    expect(linkPath({ from: 1, to: 3, lane: 1 }, 8)).toContain("C");
+  });
+
+  it("pins a lane past the cap to the edge instead of drawing off the page", () => {
+    const far = linkPath({ from: 30, to: 30, lane: 0 }, 8);
+    expect(far).toBe(`M${laneX(8)} 0 V${GRAPH_H}`);
   });
 });

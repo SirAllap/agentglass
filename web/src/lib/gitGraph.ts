@@ -166,3 +166,38 @@ export function graphWidth(rows: GraphRow[]): number {
   const lanes = Math.min(MAX_LANES, rows.reduce((n, r) => Math.max(n, r.width), 1));
   return lanes * LANE_W + LANE_W;
 }
+
+
+/* ── drawing ──────────────────────────────────────────────────────────────── */
+
+/**
+ * The height the graph is drawn in, before it is stretched.
+ *
+ * Arbitrary on purpose: the row's real height is decided by its own content and
+ * by the app's UI scale, so the SVG is scaled to fill it (`preserveAspectRatio`
+ * of `none`). What matters is not the number — it is that every path starts at 0
+ * and ends at it, so one row's lines meet the next row's exactly.
+ */
+export const GRAPH_H = 100;
+
+/** Where a lane sits, horizontally. */
+export const laneX = (lane: number): number => lane * LANE_W + LANE_W / 2;
+
+/**
+ * One link, as an SVG path.
+ *
+ * A straight line is a `V`, and a bend is a cubic whose control points sit just
+ * either side of the middle — a right angle is what the ASCII already looked
+ * like, and a branch should look like it leaves and comes back.
+ *
+ * `cap` clamps a lane to the last drawn column: past it the line is pinned to
+ * the edge, which says "there is more going on here" without letting forty
+ * branches eat the commit message.
+ */
+export function linkPath(link: GraphLink, cap: number): string {
+  const x1 = laneX(Math.min(link.from, cap));
+  const x2 = laneX(Math.min(link.to, cap));
+  return x1 === x2
+    ? `M${x1} 0 V${GRAPH_H}`
+    : `M${x1} 0 C${x1} ${GRAPH_H * 0.45} ${x2} ${GRAPH_H * 0.55} ${x2} ${GRAPH_H}`;
+}

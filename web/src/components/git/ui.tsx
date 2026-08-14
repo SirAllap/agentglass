@@ -58,7 +58,7 @@ const TONE: Record<Tone, string> = {
  * with dots on its own line, and deliberately not aligned into columns: the
  * facts about a branch are not a table, they are a sentence.
  */
-export function Row({ rail, title, chips, facts, action, selected, current, onClick, onContextMenu, title2 }: {
+export function Row({ rail, title, chips, facts, action, selected, current, onClick, onContextMenu, title2, gutter, variant = "card" }: {
   rail?: Tone;
   title: ReactNode;
   chips?: ReactNode;
@@ -70,8 +70,45 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
   onClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   title2?: string;
+  /**
+   * Drawn OUTSIDE the card, in a column of its own that runs the full height of
+   * the row — the commit graph.
+   *
+   * Outside because the graph is one continuous drawing down the page, and a
+   * card is a boundary: inside it, every lane line was cut by a border and 4px
+   * of gap, five hundred times. Reported as "¿puede ser fuera de la card?
+   * tenemos ancho suficiente" — both halves of which were right.
+   */
+  gutter?: ReactNode;
+  /**
+   * `card` for a list of THINGS — a branch, a worktree, a stash. Each is a
+   * discrete object with its own state, and a bounded card is what says so.
+   *
+   * `line` for a list of MOMENTS, which is what the log is. A commit's meaning
+   * comes from what sits above and below it, so the container that separates it
+   * from its neighbours is working against the content: the border, the radius,
+   * the lift and the 4px gap all say "these are apart" about the one list where
+   * they are not. It also cost 40% of the vertical space — seventeen commits on
+   * a 1000px screen where a line list shows thirty.
+   */
+  variant?: "card" | "line";
 }) {
-  const style: CSSProperties = {
+  const line = variant === "line";
+  const style: CSSProperties = line ? {
+    position: "relative",
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    alignItems: "center",
+    gap: 12,
+    // No border, no gap, no lift: the row is separated from its neighbours by
+    // the fact that it is a different row, which is all a sequence needs.
+    padding: "4px 12px 4px 10px",
+    borderRadius: 6,
+    background: selected ? wash("--primary", 16) : "transparent",
+    border: "1px solid transparent",
+    cursor: "default",
+    transition: "background .12s ease",
+  } : {
     position: "relative",
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) 10rem",
@@ -94,19 +131,21 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     transition: "background .14s ease, border-color .14s ease, box-shadow .14s ease, transform .14s ease",
     transform: selected ? "translateX(2px)" : "none",
   };
-  return (
+  const body = (
     // `git-card` is what the stylesheet hangs hover and reduced-motion off:
     // hovering lifts the border and the ground a step, which is the feedback a
     // list of identical cards needs to feel like it is under your hand rather
     // than printed on the page.
-    <div className="git-card group" style={style} onClick={onClick} onContextMenu={onContextMenu} title={title2}>
+    <div className={line ? "git-line group min-w-0" : "git-card group"} style={style} onClick={onClick} onContextMenu={onContextMenu} title={title2}>
       {/* The rail. Sits inside the border radius rather than beside it, so a
           list of them reads as one column of colour down the left. */}
-      <span aria-hidden style={{
-        position: "absolute", left: 0, top: 8, bottom: 8, width: 3, borderRadius: 3,
-        background: rail ? TONE[rail] : "transparent",
-        opacity: rail === "neutral" ? 0.5 : 0.9,
-      }} />
+      {!line && (
+        <span aria-hidden style={{
+          position: "absolute", left: 0, top: 8, bottom: 8, width: 3, borderRadius: 3,
+          background: rail ? TONE[rail] : "transparent",
+          opacity: rail === "neutral" ? 0.5 : 0.9,
+        }} />
+      )}
       <div className="min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <span className="truncate text-[13px] font-medium"
@@ -115,7 +154,10 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
           </span>
           {chips}
         </div>
-        {!!facts?.length && (
+        {/* On a line, the facts sit BESIDE the subject rather than under it:
+            two lines per commit is what made seventeen of them fill a screen,
+            and "21 hours ago · abc6072 · Manuel" is a caption, not a paragraph. */}
+        {!!facts?.length && !line && (
           <div className="flex items-center gap-1.5 mt-1 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
             {facts.filter(Boolean).map((f, i) => (
               <span key={i} className="flex items-center gap-1.5 min-w-0">
@@ -126,7 +168,30 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
           </div>
         )}
       </div>
-      <div className="justify-self-end">{action}</div>
+      <div className="justify-self-end flex items-center gap-2 shrink-0">
+        {line && !!facts?.length && (
+          <span className="flex items-center gap-1.5 text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>
+            {facts.filter(Boolean).map((f, i) => (
+              <span key={i} className="flex items-center gap-1.5">
+                {i > 0 && <span style={{ opacity: 0.45 }}>·</span>}
+                {f}
+              </span>
+            ))}
+          </span>
+        )}
+        {action}
+      </div>
+    </div>
+  );
+
+  if (!gutter) return body;
+  /* The gutter is a flex sibling with `items-stretch`, so it is exactly as tall
+     as the row whatever the row decides to be — which is what keeps five hundred
+     little drawings joined into one. */
+  return (
+    <div className="flex items-stretch min-w-0" onContextMenu={onContextMenu}>
+      <span className="shrink-0 relative self-stretch" aria-hidden>{gutter}</span>
+      <div className="min-w-0 flex-1">{body}</div>
     </div>
   );
 }

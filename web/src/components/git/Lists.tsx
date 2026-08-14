@@ -16,7 +16,7 @@
  * replaced the drawing, not the plumbing.
  */
 import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { LANE_W, graphWidth, laneColour, layoutGraph, type GraphRow } from "../../lib/gitGraph.ts";
+import { GRAPH_H, LANE_W, graphWidth, laneColour, laneX, layoutGraph, linkPath, type GraphRow } from "../../lib/gitGraph.ts";
 import type {
   GitBranch, GitTag, GitStash, GitWorktree, GitRemote, GitRemoteBranch,
   GitSubmodule, GitReflogEntry,
@@ -40,9 +40,13 @@ export interface ListRow {
   run: (id: string) => void;
   /** Drawn instead of the name when a row wants more than a string. */
   title?: ReactNode;
+  /** Drawn outside the card, full height — the commit graph. */
+  gutter?: ReactNode;
+  /** `line` for the log: see `Row`. */
+  variant?: "card" | "line";
 }
 
-export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabled }: {
+export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabled, measure }: {
   rows: ListRow[];
   cursor: number;
   onCursor: (i: number) => void;
@@ -51,6 +55,15 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
   what: string;
   group?: boolean;
   disabled?: boolean;
+  /**
+   * How wide the list is allowed to be.
+   *
+   * 860 is a reading measure for a card, which is a name and a sentence. The log
+   * is neither: it is one line per commit whose whole content is a subject, and
+   * at 860 a merge commit's subject was cut mid-branch-name — "from
+   * acme/ORBIT-1042-cove…" — with 700px of window sitting empty beside it.
+   */
+  measure?: number;
 }) {
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const groups = useMemo(
@@ -70,7 +83,7 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
       {/* The list keeps a reading measure — a card is a name and a sentence,
           and a 1900px sentence is not read, it is scanned past — and the width
           left over goes to the detail pane rather than to blank card. */}
-      <div className="agx-scroll flex-1 min-w-0 overflow-y-auto px-3 pb-4" style={{ maxWidth: 860 }}>
+      <div className="agx-scroll flex-1 min-w-0 overflow-y-auto px-3 pb-4" style={{ maxWidth: measure ?? 860 }}>
       {groups.map((g) => (
         <Fragment key={g.prefix || "(no prefix)"}>
           {group && groups.length > 1 && (
@@ -90,6 +103,7 @@ export function List({ rows, cursor, onCursor, onMenu, busy, what, group, disabl
             const primary = disabled ? null : primaryAction(r.kind, r.name, r.state);
             return (
               <Row key={r.key} rail={r.rail} title={r.title ?? r.name} chips={r.chips} facts={r.facts}
+                gutter={r.gutter} variant={r.variant}
                 selected={i === cursor} current={r.current} title2={r.name}
                 onClick={() => onCursor(i)}
                 onContextMenu={(e) => { e.preventDefault(); onCursor(i); onMenu(r, e.clientX, e.clientY); }}
@@ -302,7 +316,7 @@ export function submoduleRows(subs: GitSubmodule[], run: (id: string, s: GitSubm
 
 export function reflogRows(entries: GitReflogEntry[], run: (id: string, e: GitReflogEntry) => void): ListRow[] {
   return entries.map((e, i) => ({
-    key: `${e.shortHash}-${i}`, kind: "commit", name: e.shortHash, state: {}, rail: "neutral",
+    key: `${e.shortHash}-${i}`, kind: "commit", name: e.shortHash, state: {}, variant: "line" as const,
     run: (id) => run(id, e),
     title: e.subject || e.action,
     chips: <Chip>{e.action}</Chip>,
@@ -330,14 +344,10 @@ export function commitRows(
   const width = graphWidth(graph);
   return commits.map((l, i) => ({
     key: `${l.hash}-${i}`, kind: "commit", name: l.hash!, state: {},
-    rail: ctx.picked.has(l.hash!) ? "accent" : "neutral",
+    variant: "line" as const,
+    gutter: <GraphCell row={graph[i]} width={width} />,
     run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
-    title: (
-      <span className="flex items-center gap-2 min-w-0">
-        <GraphCell row={graph[i]} width={width} />
-        <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>
-      </span>
-    ),
+    title: <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
     chips: l.refs ? <Chip tone="good">{l.refs}</Chip> : undefined,
     facts: [l.date, l.hash, l.author],
   }));
@@ -356,30 +366,41 @@ export function commitRows(
  * whole point of drawing this is that a branch should look like it leaves and
  * comes back.
  */
-const ROW_H = 26;
-
 function GraphCell({ row, width }: { row?: GraphRow; width: number }) {
   if (!row) return <span className="shrink-0" style={{ width }} />;
-  const x = (lane: number) => lane * LANE_W + LANE_W / 2;
   const cap = Math.floor(width / LANE_W) - 1;
   return (
-    <svg width={width} height={ROW_H} viewBox={`0 0 ${width} ${ROW_H}`} className="shrink-0" aria-hidden
-      style={{ overflow: "visible" }}>
+    /*
+     * Absolute, full height, and stretched.
+     *
+     * `preserveAspectRatio="none"` is the trick that makes this work outside the
+     * card: the row's height is decided by its own content (and changes with the
+     * app's UI scale), so a drawing with a fixed pixel height would either leave
+     * a gap between one row's lines and the next's or overshoot into them. Scaled
+     * vertically, the lanes meet exactly, and a bezier stretched is still a
+     * bezier — the bend gets slightly steeper and nothing else.
+     */
+    <svg width={width} viewBox={`0 0 ${width} ${GRAPH_H}`} preserveAspectRatio="none" aria-hidden
+      className="absolute inset-y-0 left-0" style={{ height: "100%" }}>
       {row.links.map((l, i) => {
         // Lanes past the cap are clipped at the edge on purpose: it says "there
         // is more going on here" without letting forty branches eat the message.
         if (l.from > cap && l.to > cap) return null;
-        const x1 = x(Math.min(l.from, cap)), x2 = x(Math.min(l.to, cap));
-        const d = x1 === x2
-          ? `M${x1} 0 V${ROW_H}`
-          : `M${x1} 0 C${x1} ${ROW_H * 0.45} ${x2} ${ROW_H * 0.55} ${x2} ${ROW_H}`;
-        return <path key={i} d={d} fill="none" stroke={laneColour(l.lane)} strokeWidth={1.5} strokeLinecap="round" opacity={0.55} />;
+        const d = linkPath(l, cap);
+        // `non-scaling-stroke` so the vertical stretch does not thin the lines.
+        return <path key={i} d={d} fill="none" stroke={laneColour(l.lane)} strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke" strokeLinecap="round" opacity={0.6} />;
       })}
       {row.dot <= cap && (
-        // Hollow for a merge: the one commit whose content is not its own.
-        <circle cx={x(row.dot)} cy={ROW_H / 2} r={3.2}
-          fill={row.merge ? "var(--bg2)" : laneColour(row.dot)}
-          stroke={laneColour(row.dot)} strokeWidth={1.6} />
+        /* The dot is drawn in the un-scaled space and placed with a transform,
+           so the vertical stretch above cannot squash it into an ellipse.
+           Hollow for a merge: the one commit whose content is not its own. */
+        <g transform={`translate(${laneX(Math.min(row.dot, cap))} ${GRAPH_H / 2})`}>
+          <circle r={3.2} vectorEffect="non-scaling-stroke"
+            fill={row.merge ? "var(--bg2)" : laneColour(row.dot)}
+            stroke={laneColour(row.dot)} strokeWidth={1.6}
+            style={{ transformBox: "fill-box", transformOrigin: "center" }} />
+        </g>
       )}
     </svg>
   );

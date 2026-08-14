@@ -1473,6 +1473,18 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    everything else when the machine asks for less. Transitions rather than
    animations: nothing loops here, so there is nothing to stop, only something
    to make instant. */
+/*
+ * A row in a sequence, not a card.
+ *
+ * The log's rows carry no border and no gap — a commit is separated from its
+ * neighbour by being a different row — so hover is the only thing that says the
+ * list is under your hand. A ground change and nothing else: a lift or a border
+ * appearing would put back the boundary the line variant exists to remove.
+ */
+.git-line:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent) !important;
+}
+
 .git-card:hover {
   background: color-mix(in srgb, var(--bg3) 52%, transparent);
   border-color: color-mix(in srgb, var(--text) 14%, transparent);

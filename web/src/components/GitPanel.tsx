@@ -3271,10 +3271,23 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                     )}
                   <div onScroll={incGraph.onScroll} className="agx-scroll flex-1 min-h-0 overflow-auto py-1 text-[11.5px]" style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}>
-                    {/* The log, as cards: the graph glyph keeps its monospaced
-                        lane because that is what draws the lines, and the
-                        subject gets the 13px the eye lands on. */}
+                    {/*
+                      * The log, as LINES rather than cards, with the graph in a
+                      * gutter of its own outside them.
+                      *
+                      * Cards are right for a list of things — a branch, a
+                      * worktree, a stash — each of which is a discrete object
+                      * with its own state. A commit is not one of those: it is a
+                      * moment in a sequence, and its meaning is what sits above
+                      * and below it. The card's border, radius, lift and 4px gap
+                      * all said "these are apart" about the one list where they
+                      * are not — and they cut the graph five hundred times, once
+                      * per row. Wider, too: the log's content is a subject, and
+                      * 860px cut merge subjects mid-branch-name with 700px of
+                      * window sitting empty beside them.
+                      */}
                     <List
+                      measure={1180}
                       rows={commitRows(incGraph.rows, {
                         picked: pickSet,
                         run: (id, hash, subject) => {
