@@ -505,7 +505,17 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
   const order = file.blocks.map((b) => b.index);
 
   return (
-    <div className="py-2">
+    /*
+     * One width for the whole file, and it is the longest line in it.
+     *
+     * The lines are `white-space: pre`, so a long one scrolls this pane
+     * sideways — and everything painted here (an ours/theirs tint, the taken
+     * side's green bar, the cursor rail) is a plain block, which is as wide as
+     * the pane and not as wide as what the pane can scroll to. Scroll right and
+     * the tint ends mid-air over code that is still conflicted. Same shape of
+     * bug as the diff panes; same fix.
+     */
+    <div className="py-2" style={{ width: "max-content", minWidth: "100%" }}>
       {file.segments.map((seg, i) => {
         if (seg.kind === "text") {
           const prevIsConflict = i > 0;

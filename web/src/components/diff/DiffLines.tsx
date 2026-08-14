@@ -335,6 +335,21 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
   const built = useMemo(() => source.map((h) => ({ h, rows: unifiedRows(h) })), [source]);
   return (
     <div className="agx-scroll flex-1 min-w-0 overflow-auto text-[12px] leading-[1.6]" data-vscroll style={CODE_FONT_STYLE}>
+      {/*
+       * One width for the whole file, and it is the widest line in it.
+       *
+       * Every hunk used to size itself, so scrolling right ran off the end of
+       * the short ones: their rows stopped where their own longest line did and
+       * the tint, the hunk bar and the row you were reading all gave way to bare
+       * background, while a hunk further down still had text out there. Nothing
+       * was missing — the paint simply ended at a different x per hunk.
+       *
+       * `max-content` here is the widest line in the FILE (the widest child),
+       * and `min-width:100%` keeps a short file filling the pane. The children
+       * are plain blocks, so they take this width rather than each measuring
+       * their own.
+       */}
+      <div style={{ width: "max-content", minWidth: "100%" }}>
       {built.map(({ h, rows }, hi) => (
         <div key={hi}>
           <div data-hunk className="z-10 py-0.5 t-dim2" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
@@ -343,7 +358,11 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
               {hunkAction && hunkAction(hi)}
             </span>
           </div>
-          <div className="grid" style={{ gridTemplateColumns: wrap ? "4ch 4ch minmax(0,1fr)" : "4ch 4ch max-content" }}>
+          {/* `minmax(max-content,1fr)`, not `max-content`: the column has to be
+              at least as wide as the longest line in this hunk AND absorb
+              whatever the file's width leaves over, or the row's background
+              stops at the end of its own text. */}
+          <div className="grid" style={{ gridTemplateColumns: wrap ? "4ch 4ch minmax(0,1fr)" : "4ch 4ch minmax(max-content,1fr)" }}>
             {rows.map((r, ri) => {
               // A review comment thread anchored to this line, rendered right
               // under it as a row spanning every column — GitHub's placement, so
@@ -373,6 +392,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
           </div>
         </div>
       ))}
+      </div>
     </div>
   );
 }
@@ -409,9 +429,13 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
     // left has no vertical scrollbar — forward vertical wheel to the right side
     if (rightRef.current && e.deltaY) { rightRef.current.scrollTop += e.deltaY; e.preventDefault(); }
   };
-  const side = (which: "l" | "r") =>
-    built.map(({ h, rows }, hi) => (
-      <div key={hi} style={{ minWidth: "max-content" }}>
+  const side = (which: "l" | "r") => (
+    /* Same rule as the unified pane: one width for the column, taken from the
+       widest line in it, so a short hunk does not stop painting halfway across
+       a scroll the file's longest line paid for. */
+    <div style={{ width: "max-content", minWidth: "100%" }}>
+    {built.map(({ h, rows }, hi) => (
+      <div key={hi}>
         <div data-hunk className="z-10 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
           <span className="sticky left-0 inline-block px-3">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
         </div>
@@ -426,7 +450,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
           return (
             <Fragment key={ri}>
               <div data-ln={cell ? `${which === "l" ? "L" : "R"}${cell.num}` : undefined}
-                className="flex" style={{ minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
+                className="flex" style={{ width: "max-content", minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
                 <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: "3.6ch", background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
                   <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} />
                   <span className="opacity-40">{cell?.num ?? ""}</span>
@@ -438,7 +462,9 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
           );
         })}
       </div>
-    ));
+    ))}
+    </div>
+  );
 
   // WRAP: one aligned grid, no horizontal scroll — lines wrap in place and both
   // sides keep matching row heights (grid rows take the taller of the two).
