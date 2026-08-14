@@ -141,7 +141,7 @@ const DETAIL_CACHE_MAX = 40;
 /** A line comment sitting in YOUR unsubmitted review on GitHub. Not a thread —
  *  it has no id to reply to and no state to resolve — and not one of our own
  *  drafts either, which live only in this browser until they are sent. */
-type PendingLine = { path: string; line: number | null; startLine?: number | null; body: string };
+type PendingLine = { path: string; line: number | null; startLine?: number | null; body: string; url?: string };
 
 const detailKey = (root: string, n: number) => `${root}#${n}`;
 const heldDetail = (root: string, n: number): PrDetail | null => DETAIL_CACHE.get(detailKey(root, n)) ?? null;
@@ -3928,7 +3928,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   />
                   </div>
                   <FileRail d={d} path={showingFile ?? selFile}
-                    drafts={myDrafts}
+                    drafts={myDrafts} held={held}
                     /* The window where the held copy is on screen and the
                        refresh has not landed — exactly when an empty answer is
                        a wait rather than a fact. */
@@ -6572,12 +6572,17 @@ function PeekButton({ path, onPeek }: { path: string; onPeek: (p: string) => voi
   );
 }
 
-function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
+function FileTree({ node, sel, onPick, onPeek, seen, drafts, pending, depth = 0 }: {
   node: TreeNode<PrFile>; sel: string | null; onPick: (p: string) => void;
   /** Open the whole file in an editor, over the panel. The diff shows what
    *  changed; this is for the times the answer is in the part that did not. */
   onPeek?: (p: string) => void | Promise<void>;
-  seen: (p: string) => boolean; drafts: (p: string) => number; depth?: number;
+  seen: (p: string) => boolean; drafts: (p: string) => number;
+  /** How many comments GitHub is holding in an unsubmitted review on this file.
+   *  A different thing from `drafts`, which never left this browser, and the
+   *  reason the tree needs its own mark: a review you started on the website is
+   *  invisible here otherwise, and you find out you had one by submitting. */
+  pending: (p: string) => number; depth?: number;
 }) {
   return (
     <>
@@ -6586,13 +6591,14 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
           <div className="truncate text-[10px] px-1 py-0.5" style={{ paddingLeft: 6 + depth * 10, color: "var(--text3)" }} title={dir.path}>
             {dir.name}
           </div>
-          <FileTree node={dir} sel={sel} onPick={onPick} onPeek={onPeek} seen={seen} drafts={drafts} depth={depth + 1} />
+          <FileTree node={dir} sel={sel} onPick={onPick} onPeek={onPeek} seen={seen} drafts={drafts} pending={pending} depth={depth + 1} />
         </div>
       ))}
       {node.files.map((f) => {
         const base = f.path.split("/").pop() ?? f.path;
         const on = sel === f.path;
         const n = drafts(f.path);
+        const pend = pending(f.path);
         return (
           <button key={f.path} onClick={() => onPick(f.path)}
             // Alt-click opens it whole, which is the gesture that costs nothing
@@ -6611,6 +6617,18 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
                 opening it. */}
             {(() => { const g = statusGlyph(f.status); return <span className="shrink-0 text-center leading-none" style={{ width: 12, fontSize: 10, color: g.tint }} title={g.title}>{g.ch}</span>; })()}
             <span className="truncate text-[10.5px]">{base}</span>
+            {/* Something is drafted here, on GitHub. A count would read as the
+                thread count two marks along; a speech bubble with a pen says
+                what it is, and the title says the rest. */}
+            {pend > 0 && (
+              <span className="shrink-0 ml-1" title={`${pend} comment${pend === 1 ? "" : "s"} drafted on GitHub in your unsubmitted review`}>
+                <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" aria-hidden="true"
+                  stroke="var(--primary)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 4.2a1.7 1.7 0 0 1 1.7-1.7h7.6a1.7 1.7 0 0 1 1.7 1.7v4.6a1.7 1.7 0 0 1-1.7 1.7H6.4L3.2 13v-2.5h-.7z" />
+                  <path d="M6 6.6h4" />
+                </svg>
+              </span>
+            )}
             {n > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--warning)" }}>{n}</span>}
             {f.comments > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--primary)" }}>{f.comments}</span>}
             {seen(f.path) && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--success)" }}>✓</span>}
@@ -6916,6 +6934,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
   };
 
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
+  const heldFor = (p: string) => held.filter((x) => x.path === p).length;
   /** This file's pending comments, keyed the way a diff row asks for them:
    *  the side letter and the line, so a row can find its own without scanning
    *  the whole list on every render. */
@@ -7588,7 +7607,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
               node={buildFileTree(shownFiles)} sel={showing}
               onPick={(path) => { onSel(path); setFolded((cur) => { const n = new Set(cur); n.delete(path); return n; }); scrollToFileStable(() => frameRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)); }}
               seen={(path) => seenFiles.includes(path)}
-              drafts={draftsFor} onPeek={onPeek}
+              drafts={draftsFor} pending={heldFor} onPeek={onPeek}
             />
           </aside>
         )}
@@ -7818,6 +7837,18 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                                     style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
                                     <span>drafted on GitHub</span>
                                     <span className="ml-auto" style={{ color: "var(--text3)" }}>sent when you submit</span>
+                                    {/* The way OUT to the only place it can be
+                                        edited. No API changes a comment inside
+                                        a pending review without submitting the
+                                        review, so the honest affordance is the
+                                        page where it can be changed rather than
+                                        a button here that would have to lie. */}
+                                    {h.url && (
+                                      <button onClick={() => openExternal(h.url!)}
+                                        title="Edit this pending comment on GitHub"
+                                        className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                                    )}
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={h.body} /></div>
                                 </div>
@@ -7930,6 +7961,15 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                       style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
                       <span>drafted on GitHub{h.line == null ? " · outdated" : `:${h.line}`}</span>
                       <span className="ml-auto" style={{ color: "var(--text3)" }}>the diff does not reach its line</span>
+                      {/* And here more than anywhere: this one has no row to sit
+                          under, so the page where it lives is the only place it
+                          can be seen in context. */}
+                      {h.url && (
+                        <button onClick={() => openExternal(h.url!)}
+                          title="Edit this pending comment on GitHub"
+                          className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                          style={{ color: "var(--primary)" }}>Edit ↗</button>
+                      )}
                     </div>
                     <div className="px-2.5 py-2"><Md body={h.body} /></div>
                   </div>
@@ -9708,8 +9748,14 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
             </div>
           ) : (
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-              No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
-              use the “+” on a line to attach one.
+              {/* "Nothing queued" was a lie whenever GitHub was holding a review
+                  started on the website: nothing is queued HERE, and something
+                  is going out. The box below says how many; this line stops
+                  contradicting it. */}
+              {held.length > 0
+                ? <>Nothing queued from here — {held.length} comment{held.length === 1 ? " is" : "s are"} already drafted on GitHub, below.</>
+                : <>No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
+                  use the “+” on a line to attach one.</>}
             </div>
           )}
 
@@ -9729,8 +9775,18 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               {held.map((c, i) => (
                 <div key={`${c.path}:${c.line}:${i}`} className="px-2.5 py-2"
                   style={{ borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined }}>
-                  <div className="text-[10px] tabular-nums truncate" style={{ color: "var(--text3)" }}
-                    title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</div>
+                  <div className="text-[10px] tabular-nums flex items-center gap-2">
+                    <span className="truncate" title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</span>
+                    {/* The way to change it. Nothing in this app can: the API
+                        has no endpoint for a comment inside a pending review,
+                        so the button that would edit it here would have to
+                        submit the review to do it. */}
+                    {c.url && (
+                      <button onClick={() => openExternal(c.url!)} title="Edit this comment on GitHub"
+                        className="agx-btn shrink-0 ml-auto px-1.5 py-0.5 rounded"
+                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                    )}
+                  </div>
                   <div className="mt-1"><Md body={c.body} /></div>
                 </div>
               ))}

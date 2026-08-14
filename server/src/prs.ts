@@ -3657,6 +3657,15 @@ export interface PendingLineComment {
   line: number | null;
   startLine: number | null;
   body: string;
+  /**
+   * The comment's own page on GitHub.
+   *
+   * A pending comment cannot be edited from here — it belongs to a review
+   * GitHub is holding, and there is no endpoint that changes one without
+   * submitting. So the honest affordance is to hand the reader the place where
+   * it CAN be edited, which is one click and no round trip.
+   */
+  url: string;
 }
 
 /**
@@ -3686,7 +3695,7 @@ export async function pendingReview(nameWithOwner: string, n: number): Promise<{
    * Measured on a real pull request: node id `PRR_kwDOAjkAGs8…`, databaseId
    * 4925096670, same review.
    */
-  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviews(states:[PENDING],first:1){nodes{id databaseId comments(first:100){nodes{path line originalLine startLine body}}}}}}}`;
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviews(states:[PENDING],first:1){nodes{id databaseId comments(first:100){nodes{url path line originalLine startLine body}}}}}}}`;
   const r = await gh(["api", "graphql", "-f", `query=${q}`, "-F", `o=${owner}`, "-F", `r=${name}`, "-F", `n=${n}`]);
   if (r.code !== 0) return null;
   try {
@@ -3697,7 +3706,11 @@ export async function pendingReview(nameWithOwner: string, n: number): Promise<{
       /* `line` is null on a comment whose line no longer exists in the current
          diff — an outdated one. `originalLine` is where it was written, which
          is the only honest thing to show for it. */
-      .map((c: any) => ({ path: String(c.path), line: c.line ?? c.originalLine ?? null, startLine: c.startLine ?? null, body: String(c.body ?? "") }));
+      .map((c: any) => ({
+        path: String(c.path), line: c.line ?? c.originalLine ?? null,
+        startLine: c.startLine ?? null, body: String(c.body ?? ""),
+        url: typeof c.url === "string" ? c.url : "",
+      }));
     return { id: String(node.id), restId: Number.isSafeInteger(node.databaseId) ? Number(node.databaseId) : null, comments };
   } catch { return null; }
 }

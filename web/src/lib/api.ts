@@ -1151,7 +1151,7 @@ const realApi = {
   /** Whether the agent on this machine can post to Slack — see slackreach.ts. */
   notifyReach: () => get<{ ok: boolean; slack: boolean }>("/notify/reach"),
   prPendingReview: (root: string, number: number) =>
-    post<{ ok: boolean; id: string | null; comments: { path: string; line: number | null; startLine: number | null; body: string }[] }>("/prs/pending-review", { root, number }),
+    post<{ ok: boolean; id: string | null; comments: { path: string; line: number | null; startLine: number | null; body: string; url: string }[] }>("/prs/pending-review", { root, number }),
   /** `recipe` is which entry of the Review menu; empty means "the one this pull
    *  request calls for". `card` is the tracker id the panel already worked out
    *  from the branch — the server has no ClickUp reader, and the prompt that
