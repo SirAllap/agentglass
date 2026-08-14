@@ -7576,8 +7576,16 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
         {(oneFile || shownFiles.length > 4) && (
           <aside className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
             style={{ borderRight: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            {/* `showing`, not `sel`.
+                
+                In one-file mode the first file is on screen before anybody has
+                clicked anything, and `sel` is still null — so the pane showed a
+                diff while the tree beside it marked nothing, and the row you
+                were reading looked no different from the eleven you were not.
+                `showing` is the same expression the diff itself renders from,
+                which is what makes them agree. */}
             <FileTree
-              node={buildFileTree(shownFiles)} sel={sel}
+              node={buildFileTree(shownFiles)} sel={showing}
               onPick={(path) => { onSel(path); setFolded((cur) => { const n = new Set(cur); n.delete(path); return n; }); scrollToFileStable(() => frameRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)); }}
               seen={(path) => seenFiles.includes(path)}
               drafts={draftsFor} onPeek={onPeek}
@@ -7610,7 +7618,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
       {(oneFile ? shownFiles.filter((f) => f.path === showing) : shownFiles).map((f) => {
         const done = seenFiles.includes(f.path);
         const open = !folded.has(f.path);
-        const focused = sel === f.path;
+        // Same reason as the tree above: what is on screen is what is marked.
+        const focused = showing === f.path;
         const nd = draftsFor(f.path);
         const pendingHere = pendingBy(f.path);
         const heldHere = heldBy(f.path);

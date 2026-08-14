@@ -1102,6 +1102,16 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
   const all = useMemo(() => [...(tree?.staged ?? []), ...(tree?.unstaged ?? [])], [tree]);
   const selected = useMemo(() => all.find((c) => keyOf(c) === selKey) ?? all[0] ?? null, [all, selKey]);
+  /*
+   * What the LIST marks, which is not the same as what was clicked.
+   *
+   * With nothing clicked yet the pane already shows the first file — that is
+   * the `?? all[0]` above — but the rows compared against `selKey`, which is
+   * still null, so a diff was on screen while every row beside it looked
+   * equally unselected. Reported for this list and for the pull-request one,
+   * which had the same split between "what is displayed" and "what is marked".
+   */
+  const activeKey = selected ? keyOf(selected) : null;
 
   /**
    * Mid-merge, open the conflict — in the resolver, not in the file list.
@@ -2457,7 +2467,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const renderFiles = (changes: GitFileChange[], action: "stage" | "unstage", onAction: (c: GitFileChange) => void, prefix: string) => {
     const row = (c: GitFileChange, depth?: number) => (
       <FileRow key={prefix + c.file_path} c={c} root={root} writeEnabled={writeEnabled} depth={depth}
-        desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)}
+        desc={descMap.get(c.file_path)?.description} active={activeKey === keyOf(c)}
         onSelect={() => setSelKey(keyOf(c))} action={action} onAction={() => onAction(c)}
         onBlame={writeEnabled ? () => setBlamePath({ path: c.file_path }) : undefined}
         onMenu={(x, y) => setRowMenu({
