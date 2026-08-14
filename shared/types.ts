@@ -2035,7 +2035,11 @@ export interface AgentSessionRow {
   /** Where it is running right now, when it is. A session already open is not
    *  one to resume — it is one to go to. */
   openIn?: {
+    /** The tmux session's NAME, for saying where; and its id, for going there.
+     *  Both, because a name is what a person reads and an id is what addresses
+     *  the same session on a server where names repeat. */
     session: string;
+    sessionId: string;
     windowId: string;
     windowIndex: string;
     windowName: string;

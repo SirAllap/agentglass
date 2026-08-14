@@ -2297,7 +2297,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     root={root}
                     disabled={disabled || !sess?.tmux}
                     onOpen={(sn, how) => { tmuxCmd({ cmd: "resume", id: sn.id, cwd: sn.cwd, split: how.split, yolo: how.yolo }); focusTerm(); }}
-                    onGo={(at) => { void api.focusPane({ sessionId: at.session, windowId: at.windowId, paneId: at.paneId }); }}
+                    onGo={(at) => { void api.focusPane({ sessionId: at.sessionId, windowId: at.windowId, paneId: at.paneId }); }}
                   />
 
                   {/* keepTermFocus so none of these buttons — split, restart,

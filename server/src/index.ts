@@ -1820,15 +1820,33 @@ const server = Bun.serve<WsData>({
        * out with the list rather than becoming a button that goes nowhere.
        */
       const live = listPanes(lastTmuxTarget()?.socket).map(({ socket: _s, ...p }) => p);
+      /*
+       * A note is only believed while the agent it was written for is STILL the
+       * one in that pane — `paneDirs` has applied this rule for a while and this
+       * route skipped it, at a cost: tmux reuses pane ids, so a note from a
+       * session that ended yesterday named a pane holding somebody's shell
+       * today. Pressed, it took the desk to a `fish` prompt in another session
+       * and the tab strip came back showing that session's windows, which reads
+       * exactly like the two tabs you had open having vanished.
+       *
+       * The test is the directory: the pane has to have an agent running in the
+       * one the note recorded.
+       */
+      const agentsAt = new Map(live.map((p) => [p.paneId, p.agentCwds ?? []]));
       const where = new Map<string, (typeof live)[number] & { agentSession: string | null }>();
       for (const p of withAgentSessions(live, (id) => {
         const n = paneAgentNote(id);
-        return n ? { sessionId: n.session_id, at: n.at } : null;
+        if (!n || !(agentsAt.get(id) ?? []).includes(n.cwd)) return null;
+        return { sessionId: n.session_id, at: n.at };
       })) if (p.agentSession) where.set(p.agentSession, p);
       const sessions: AgentSessionRow[] = rows.map((r) => {
         const p = where.get(r.id);
-        return p
-          ? { ...r, openIn: { session: p.session, windowId: p.windowId, windowIndex: p.windowIndex, windowName: p.windowName, paneId: p.paneId } }
+        // And the pane and the session have to agree about where they are. Two
+        // cheap facts pointing the same way is what makes this a place to send
+        // somebody rather than a guess.
+        const sure = p && (agentsAt.get(p.paneId) ?? []).includes(r.cwd);
+        return sure && p
+          ? { ...r, openIn: { session: p.session, sessionId: p.sessionId, windowId: p.windowId, windowIndex: p.windowIndex, windowName: p.windowName, paneId: p.paneId } }
           : r;
       });
       return json({ ok: true, sessions });

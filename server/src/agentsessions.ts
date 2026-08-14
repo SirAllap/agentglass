@@ -96,6 +96,30 @@ function readable(t: string): boolean {
   return !!t && !t.startsWith("<") && !t.startsWith("/") && !t.startsWith("Caveat:");
 }
 
+/**
+ * The name somebody gave this session, if they gave it one.
+ *
+ * `/rename` appends `{"type":"custom-title","customTitle":…}` to the transcript
+ * — it does not rewrite the head — so this is read from the TAIL, and the last
+ * one wins. Measured on a real 5.8MB transcript: the first title line sits at
+ * 18% of the file and the last one at the very end, which is why the head read
+ * that finds a summary never found a name, and a card showed the first user
+ * message under a session the CLI lists as "handover-notes".
+ */
+function nameFrom(tail: string): string {
+  let name = "";
+  for (const line of tail.split("\n")) {
+    if (!line.includes('"custom-title"')) continue;
+    try {
+      const o = JSON.parse(line) as Record<string, unknown>;
+      if (o.type === "custom-title" && typeof o.customTitle === "string" && o.customTitle.trim()) {
+        name = o.customTitle.trim().slice(0, 200);
+      }
+    } catch { /* half a line at the start of a tail read */ }
+  }
+  return name;
+}
+
 /** The last thing said, from the tail of a transcript. */
 function lastFrom(tail: string): string {
   const lines = tail.split("\n");
@@ -181,15 +205,17 @@ export async function sessionsForProject(root: string, limit = LIMIT): Promise<A
     try {
       const f = Bun.file(join(projects, projectSlug(s.cwd), `${s.id}.jsonl`));
       const head = await f.slice(0, Math.min(HEAD_BYTES, s.size)).text();
-      s.title = titleFrom(head);
+      const tail = s.size > TAIL_BYTES ? await f.slice(Math.max(0, s.size - TAIL_BYTES), s.size).text() : head;
+      // A name somebody typed beats a summary the CLI guessed, which beats the
+      // first thing they said. That is also the order `/resume` shows them in,
+      // and the picker agreeing with the CLI is the point.
+      s.title = nameFrom(tail) || titleFrom(head);
       const opening = openingFrom(head);
       // Only when it says something the title does not. A card that repeats its
       // own heading in smaller type is two lines of nothing.
       s.opening = opening && opening !== s.title ? opening : "";
-      // The tail, for "where did this get to". Skipped on a small file, where
-      // the head already covers the whole conversation.
-      if (s.size > TAIL_BYTES) s.last = lastFrom(await f.slice(Math.max(0, s.size - TAIL_BYTES), s.size).text());
-      else s.last = lastFrom(head);
+      // Where it got to, out of the same tail.
+      s.last = lastFrom(tail);
       if (s.last === s.title || s.last === s.opening) s.last = "";
     } catch { /* unreadable: the row still resumes, it just arrives unnamed */ }
   }));

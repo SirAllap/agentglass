@@ -99,6 +99,26 @@ describe("sessions for a project", () => {
     expect(rows.find((r) => r.cwd === wt)!.last).toBe("moved the last three sections");
   });
 
+  it("uses the name somebody gave it, over any guess", async () => {
+    /*
+     * `/rename` APPENDS `{"type":"custom-title",…}` — it does not rewrite the
+     * head — so a name has to be read from the tail, and the last one wins.
+     * Measured on a real 5.8MB transcript: the first title line sat at 18% of
+     * the file and the last at the very end, which is why a head-only read
+     * showed the first user message under a session the CLI lists by name.
+     */
+    const projects = join(home, "projects");
+    transcript(join(projects, slug(repo)), "33333333-3333-3333-3333-333333333333", [
+      { type: "summary", summary: "a guess nobody chose" },
+      user("start on the exit survey"),
+      assistant("done"),
+      { type: "custom-title", customTitle: "first name", sessionId: "33333333" },
+      { type: "custom-title", customTitle: "handover", sessionId: "33333333" },
+    ]);
+    const rows = await mod.sessionsForProject(repo);
+    expect(rows.find((r) => r.id.startsWith("33333333"))!.title).toBe("handover");
+  });
+
   it("hands back an id `--resume` can take", async () => {
     const rows = await mod.sessionsForProject(repo);
     expect(rows.every((r) => /^[0-9a-f-]{36}$/.test(r.id))).toBe(true);
