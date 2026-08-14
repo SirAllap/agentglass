@@ -175,11 +175,14 @@ export function CheckoutPicker({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg shrink-0 whitespace-nowrap disabled:opacity-50"
+        className="flex items-center gap-1.5 text-[11px] px-3 py-1 rounded-full shrink-0 whitespace-nowrap disabled:opacity-50 transition-colors"
         style={{
           maxWidth: triggerMaxWidth,
-          background: "color-mix(in srgb, var(--bg3) 50%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
+          // The pill the rest of this header speaks in. It is also the first
+          // control in the view, so it sets the expectation for everything
+          // under it.
+          background: "color-mix(in srgb, var(--text) 5%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
           color: "var(--text)",
         }}
         title={title ?? (here ? `${here.name}\n${here.root}` : unlisted ? `${unlisted}\nnot in the current list` : undefined)}
