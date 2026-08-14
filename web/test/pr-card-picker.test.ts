@@ -147,7 +147,21 @@ describe("the confirmation that came half true", () => {
   });
 
   it("claims a GitHub write only when there is one", () => {
-    expect(PICKER).toContain("{ghChanged > 0 && <div>· {title} on GitHub</div>}");
+    expect(PICKER).toContain("{ghChanged > 0 && (() => {");
+    expect(PICKER).toContain("<div>· {title} on GitHub</div>");
+  });
+
+  it("names who goes on and who comes off, with their face", () => {
+    /* The line was the picker's own title — "Request reviewers on GitHub" —
+       printed for a step that was taking a reviewer OFF. The ClickUp lines
+       under it named the person in both directions, so the one row that could
+       not be checked was the row about the write that is hardest to undo.
+       Reported as: it should say remove that user, with the avatar adding one
+       already has. */
+    expect(PICKER).toContain("const add = sel.filter((x) => !selected.includes(x));");
+    expect(PICKER).toContain("const gone = selected.filter((x) => !sel.includes(x));");
+    expect(PICKER).toContain("<Avatar login={o.avatar} size={14} />");
+    expect(PICKER).toContain('{on ? "+" : "−"}');
   });
 });
 

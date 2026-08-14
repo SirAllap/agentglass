@@ -50,7 +50,8 @@ export function Select({
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0, right: 0, minWidth: 0 });
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; right: number; minWidth: number; maxHeight: number }>(
+    { top: 0, left: 0, right: 0, minWidth: 0, maxHeight: 420 });
   // Replacing a native <select> means re-implementing everything it gave for
   // free. `cursor` is the roving highlight; `typed` backs type-ahead, which is
   // how anyone picks from a long list without reaching for the mouse.
@@ -58,10 +59,22 @@ export function Select({
   const typed = useRef({ buf: "", at: 0 });
 
   useLayoutEffect(() => {
-    if (open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 6, left: r.left, right: window.innerWidth - r.right, minWidth: r.width });
-    }
+    if (!open || !btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom - 12;
+    const above = r.top - 12;
+    /* Up when down does not fit and up is roomier — the same rule `BasePicker`
+       uses, and for the same reason: a control near the bottom of the window
+       opened a list that ran off the screen, so the options nobody could reach
+       were the ones at the end. Not flipped for a few pixels' gain, which only
+       moves the list somewhere the eye is not. */
+    const up = below < 220 && above > below;
+    setPos({
+      top: up ? undefined : r.bottom + 6,
+      bottom: up ? window.innerHeight - r.top + 6 : undefined,
+      left: r.left, right: window.innerWidth - r.right, minWidth: r.width,
+      maxHeight: Math.max(180, Math.min(420, up ? above : below)),
+    });
   }, [open]);
 
   // Open on the current value, so ↑/↓ start from where the user already is.
@@ -154,10 +167,10 @@ export function Select({
                 aria-label={title ?? "Options"}
                 className="fixed p-1.5 rounded-xl flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar"
                 style={{
-                  top: pos.top,
+                  ...(pos.bottom == null ? { top: pos.top } : { bottom: pos.bottom }),
                   ...(align === "right" ? { right: pos.right } : { left: pos.left }),
                   minWidth: Math.max(pos.minWidth, 140),
-                  maxHeight: "min(60vh, 420px)",
+                  maxHeight: pos.maxHeight,
                   zIndex: 9999,
                   background: "color-mix(in srgb, var(--bg2) 97%, black)",
                   border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",

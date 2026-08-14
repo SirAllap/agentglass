@@ -5316,7 +5316,34 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
                  than two buttons pressed hopefully. */
               <div className="px-1 text-[10.5px]" style={{ color: "var(--text2)" }}>
                 <div className="mb-1" style={{ color: "var(--text4)" }}>This will:</div>
-                {ghChanged > 0 && <div>· {title} on GitHub</div>}
+                {/* WHO, not just "something will change here".
+                    It said "Request reviewers on GitHub" for a step that was
+                    taking a reviewer OFF — the same sentence for both
+                    directions, while the ClickUp lines under it named the
+                    person either way. Reported as: it should say remove that
+                    user, with their avatar like adding one has. */}
+                {ghChanged > 0 && (() => {
+                  const add = sel.filter((x) => !selected.includes(x));
+                  const gone = selected.filter((x) => !sel.includes(x));
+                  const line = (v: string, on: boolean) => {
+                    const o = options.find((x) => x.value === v);
+                    return (
+                      <div key={`${on ? "+" : "-"}${v}`} className="flex items-center gap-1.5 pl-3">
+                        <span className="shrink-0" style={{ color: on ? "var(--success)" : "var(--error)" }}>{on ? "+" : "−"}</span>
+                        {o?.avatar != null && <Avatar login={o.avatar} size={14} />}
+                        {o?.color != null && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: `#${o.color}` }} />}
+                        <span className="truncate">{o?.label ?? v}</span>
+                      </div>
+                    );
+                  };
+                  return (
+                    <>
+                      <div>· {title} on GitHub</div>
+                      {add.map((v) => line(v, true))}
+                      {gone.map((v) => line(v, false))}
+                    </>
+                  );
+                })()}
                 {/* Nothing that is not a change: with an empty plan there is
                     nothing to confirm and this step does not happen at all. */}
                 {plan.lines.map((l) => <div key={l}>· {l}</div>)}
@@ -5430,7 +5457,6 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   const [was, setWas] = useState<Set<number>>(new Set());
   const [pick, setPick] = useState<string>("");
   const [q, setQ] = useState("");
-  const [stOpen, setStOpen] = useState(false);
   /* Folded away, and it comes back.
      This is the optional half of the errand and most presses of this menu are
      only about the reviewer — so it can be put away to a strip, which leaves
@@ -5586,28 +5612,38 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
                 colour its board gave it, and a row of bordered words throws
                 that away — which is the one thing that makes this list
                 readable at a glance. */}
-            <button onClick={() => setStOpen((o) => !o)}
-              className="agx-btn w-full text-left rounded px-1 py-1 hover:bg-white/5 flex items-center gap-2">
-              <span className="min-w-0 truncate">
-                <StatusPill status={pick || card.status} color={statusColor(statuses, pick || card.status)} />
-              </span>
-              {!pick && <span className="text-[9.5px]" style={{ color: "var(--text4)" }}>unchanged</span>}
-              <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>▾</span>
-            </button>
-            {stOpen && (
-              <div className="agx-scroll mt-1 rounded-lg flex flex-col overflow-y-auto"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", maxHeight: 220 }}>
-                <button className="text-left px-2 py-1.5 hover:bg-white/5 text-[10.5px]"
-                  style={{ color: "var(--text3)" }}
-                  onClick={() => { setPick(""); setStOpen(false); }}>
-                  leave it where it is
-                </button>
-                {statuses.filter((x) => x.status !== card.status).map((x) => (
-                  <button key={x.status} className="text-left px-2 py-1.5 hover:bg-white/5"
-                    onClick={() => { setPick(x.status); setStOpen(false); }}>
-                    <StatusPill status={x.status} color={x.color} dim={x.type === "done" || x.type === "closed"} />
-                  </button>
-                ))}
+            {/*
+              * The app's own Select, not a list drawn in the flow.
+              *
+              * This was an absolutely-placed panel under the button, inside a
+              * column that clips and scrolls and has a "Done" button under it:
+              * the list opened INSIDE the container, most of the statuses were
+              * unreachable, and near the bottom of the screen there was nowhere
+              * for it to go. Reported exactly that way. `Select` portals out of
+              * the clipping and flips above the trigger when down does not fit,
+              * which is what every other menu in this app does.
+              *
+              * "leave it where it is" is an option rather than a button above
+              * the list, because it is one of the choices — and being the empty
+              * value it is also what the control already holds.
+              */}
+            <Select
+              value={pick}
+              onChange={setPick}
+              title="Status"
+              options={[
+                { value: "", label: "leave it where it is" },
+                ...statuses.filter((x) => x.status !== card.status).map((x) => ({
+                  value: x.status, label: x.status, tint: x.color, pill: true,
+                  dim: x.type === "done" || x.type === "closed",
+                })),
+              ]}
+            />
+            {!pick && (
+              <div className="mt-1 text-[9.5px] flex items-center gap-2" style={{ color: "var(--text4)" }}>
+                <span>now</span>
+                <StatusPill status={card.status} color={statusColor(statuses, card.status)} />
+                <span>· unchanged</span>
               </div>
             )}
           </div>
@@ -7750,7 +7786,16 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                     how a click in the tree lands on a file you then cannot
                     scroll, and it is not what GitHub does. Long files are
                     folded by default instead, which is the honest cap. */}
-                <div className="flex" style={{ overflowX: "auto" }}>
+                {/* No overflow here, deliberately. `overflow-x: auto` alone is
+                    not one axis: the other computes to `auto` too, so this was
+                    a second scroll container wrapped around the diff's own —
+                    two vertical scrollbars side by side at the edge of the
+                    column, one of them themed and one of them not, and the
+                    inner one behaving like it was dead because the outer had
+                    the wheel. Measured in Chrome: `overflow-x:auto` reports
+                    `overflowY: auto`. The diff pane inside scrolls itself, and
+                    the files column is the one that scrolls vertically. */}
+                <div className="flex min-w-0">
                   {/* An image first, and a file with no hunks second.
                       `gh pr diff` still emits a header for a binary file — just
                       "Binary files … differ" and nothing else — so the parser
