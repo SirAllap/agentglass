@@ -3470,6 +3470,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <button onClick={snapshotNow} disabled={busy || tree?.clean} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime">⟳ snapshot now</button>
                       </>
                     )}
+                    {writeEnabled && (
+                      <button onClick={() => { setPartialOpen(!partialOpen); }} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", color: "var(--text)" }}>▣ stash some files…</button>
+                    )}
+                    {/* The search belongs in the same strip as the controls
+                        above it: they are all "what do I do with work set
+                        aside", and it was the fourth row of chrome before the
+                        first stash. */}
+                    {!!stashes.length && (
+                      <input value={q} onChange={(e) => { setQ(e.target.value); setRowIdx(0); }}
+                        placeholder="Search stashes…"
+                        className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 flex-1 max-w-xs"
+                        style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                    )}
                     </div>
                     {snapshots.length > 0 && (
                       <div className="mb-3">
@@ -3495,7 +3508,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     )}
                     {writeEnabled && (
                       <div>
-                        <button onClick={() => { setPartialOpen(!partialOpen); }} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", color: "var(--text)" }}>▣ stash some files…</button>
                         {partialOpen && (
                           <div className="mt-2 rounded-lg p-2.5 max-w-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
                             <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">pick from the working tree</div>
@@ -3522,8 +3534,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         )}
                       </div>
                     )}
-                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…"
-                      count={shownStashes.length} total={stashes.length} />
                       <List
                         rows={stashRows(shownStashes, stashAction)}
                         cursor={rowIdx} onCursor={setRowIdx}
@@ -3546,7 +3556,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                    */
                   <div className="flex-1 min-h-0 flex flex-col">
                     <div className="px-3 pt-3 pb-2 shrink-0 flex flex-col gap-2">
-                      <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* One strip: which remote, and the search across it. They
+                          were two rows for the same question — "what is on the
+                          remote" — and the panel opened with three lines of
+                          chrome before the first branch. */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
                         {remotes.map((r) => {
                           const on = r.name === remoteSel;
                           return (
@@ -3567,7 +3582,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         })}
                       </div>
                       {!!remotes.length && (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-1 min-w-[16rem]">
                           <input value={remoteQuery} onChange={(e) => { setRemoteQuery(e.target.value); setRowIdx(0); }}
                             placeholder={`search ${remoteSel || "remote"} branches…`}
                             className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none"
@@ -3583,6 +3598,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           )}
                         </div>
                       )}
+                      </div>
                       {/* These refs are the last fetch's answer, and every other
                           number in this panel is measured against them. Saying
                           so is cheaper than someone wondering why a branch

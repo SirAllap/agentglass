@@ -111,25 +111,41 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
   } : {
     position: "relative",
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) 10rem",
+    /* The action lane only exists when there IS one. A fixed 10rem meant every
+       row on a list with no primary action — most of the log, every remote —
+       reserved 160px of empty card on the right, so the content sat hugging the
+       left third of a very wide box. `auto` cannot jitter on hover either: the
+       label does not change, only its opacity. */
+    gridTemplateColumns: action ? "minmax(0, 1fr) auto" : "minmax(0, 1fr)",
     alignItems: "center",
     gap: 12,
     // Compact, but not a table again: 8px of vertical padding and 4px between
     // cards fits several more rows on a laptop than the first pass did, and the
     // two-line hierarchy is what keeps it readable at that density. Both land
     // on the 2px grid the suite enforces — 9 and 5 were caught by it.
-    padding: "8px 12px 8px 16px",
+    /*
+     * ONE signal for the selection, not four.
+     *
+     * A selected card used to carry a heavy violet fill, a violet border, an
+     * inset ring, a drop shadow AND a 2px sideways nudge — five ways of saying
+     * the same thing, which is why it read as a lit-up slab rather than as a
+     * row you are on. The fill is halved and the rail (which is already the
+     * card's own colour) does the rest; the border stays the quiet hairline it
+     * is on every other card, so a list of thirty does not look like thirty
+     * outlines.
+     *
+     * Tighter, too: the padding was 8/12/8/16 and two short lines of text sat
+     * in 46px of card. 6px of vertical padding puts a third more rows on the
+     * same screen without touching the type. The 4px between cards stays — it
+     * is on the grid, and 3px is not.
+     */
+    padding: "6px 12px 6px 14px",
     marginBottom: 4,
-    borderRadius: 10,
-    background: selected ? wash("--primary", 14) : current ? wash("--primary", 6) : wash("--bg3", 34),
-    border: `1px solid ${selected ? wash("--primary", 55) : wash("--text", 8)}`,
-    // The selected card lifts. Depth is the cheapest way to say "this one" in
-    // a list where every card is the same size, and it costs no colour — the
-    // colours are already carrying state on the rail and in the chips.
-    boxShadow: selected ? `0 6px 18px -10px rgba(0,0,0,.75), inset 0 0 0 1px ${wash("--primary", 18)}` : "none",
+    borderRadius: 8,
+    background: selected ? wash("--primary", 9) : current ? wash("--primary", 5) : wash("--bg3", 30),
+    border: `1px solid ${selected ? wash("--primary", 30) : wash("--text", 7)}`,
     cursor: "default",
-    transition: "background .14s ease, border-color .14s ease, box-shadow .14s ease, transform .14s ease",
-    transform: selected ? "translateX(2px)" : "none",
+    transition: "background .14s ease, border-color .14s ease",
   };
   /* Inside a gutter the wrapper above owns the ground, so the body must not
      paint a second one — two tints of the same colour do not cancel out, they
@@ -148,14 +164,17 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
           list of them reads as one column of colour down the left. */}
       {!line && (
         <span aria-hidden style={{
-          position: "absolute", left: 0, top: 8, bottom: 8, width: 3, borderRadius: 3,
+          position: "absolute", left: 0, top: 0, bottom: 0, width: 3,
+          borderTopLeftRadius: 8, borderBottomLeftRadius: 8,
           background: rail ? TONE[rail] : "transparent",
-          opacity: rail === "neutral" ? 0.5 : 0.9,
+          // Full height and flush with the corner: inset by 8px it read as a
+          // separate mark inside the card instead of as the card's own edge.
+          opacity: rail === "neutral" ? 0.45 : 0.95,
         }} />
       )}
       <div className="min-w-0">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="truncate text-[13px] font-medium"
+          <span className="truncate text-[12.5px] font-medium"
             style={{ color: "var(--text)", fontFamily: "var(--font-mono, ui-monospace, monospace)", letterSpacing: "-0.01em" }}>
             {title}
           </span>
@@ -165,7 +184,7 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
             two lines per commit is what made seventeen of them fill a screen,
             and "21 hours ago · abc6072 · Manuel" is a caption, not a paragraph. */}
         {!!facts?.length && !line && (
-          <div className="flex items-center gap-1.5 mt-1 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
+          <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[10px]" style={{ color: "var(--text4)" }}>
             {facts.filter(Boolean).map((f, i) => (
               <span key={i} className="flex items-center gap-1.5 min-w-0">
                 {i > 0 && <span style={{ opacity: 0.45 }}>·</span>}
@@ -220,10 +239,15 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
  *  coloured — everything else on the card is text or grey. */
 export function Chip({ tone = "neutral", children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
   return (
-    /* `rounded-md`, which is what `.chip` is everywhere else in this app (6px).
-       A status word is a label, not a control and not a badge — the stadium
-       shape here was a third radius on a screen that already had two. */
-    <span className="shrink-0 text-[9.5px] px-2 py-0.5 rounded-md whitespace-nowrap font-medium"
+    /*
+     * `.chip`'s own geometry: 6px radius, 1px/6px padding, no bold.
+     *
+     * A status word is a LABEL — not a control and not a badge. It was a
+     * stadium at 2px/8px in semibold, which made `⎇ master` and `you are here`
+     * as loud as the branch name they were describing, and put a third radius
+     * on a screen that already had two.
+     */
+    <span className="shrink-0 text-[9.5px] px-1.5 py-px rounded-md whitespace-nowrap"
       style={{ color: TONE[tone], background: wash(tone === "neutral" ? "--text" : `--${tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "primary"}`, tone === "neutral" ? 10 : 14) }}
       title={title}>
       {children}
