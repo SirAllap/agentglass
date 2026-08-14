@@ -129,3 +129,36 @@ describe("the same rule where lines are painted next to code", () => {
     expect(s).toContain('<div className="py-2" style={{ width: "max-content", minWidth: "100%" }}>');
   });
 });
+
+/*
+ * And exactly one thing scrolls vertically in a column.
+ *
+ * Reported twice — "no entiendo este doble scroll", then "sigue estando… es
+ * como que el scroll de dentro no funciona, es inútil". Measured in the real
+ * app this time (headless Chrome over the demo build, Files tab, window shrunk
+ * until things overflow): before, the split panes reported `overflowY: auto`
+ * and were scroll containers nobody had asked for; after, `overflowY: hidden`
+ * and the only vertical scroller left in that column is the column itself.
+ *
+ * The rule underneath: CSS has no one-axis overflow. `overflow-x: auto` alone
+ * computes `overflow-y: auto` too, so anything that scrolls sideways is also a
+ * vertical scroll container unless the other axis is spelled out. Every diff
+ * pane scrolls sideways.
+ */
+describe("the diff pane scrolls sideways and nothing else", () => {
+  test("both axes are spelled out, because setting one sets the other", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "src", "components", "diff", "DiffLines.tsx"), "utf8");
+    /* Four panes: unified, split-wrapped, and the split pair. The split's LEFT
+       column was written this way from the start — its vertical scroll was
+       always the right column's job — which is the shape the other three have
+       now adopted. */
+    expect((src.match(/overflowX: "auto", overflowY: "hidden"/g) ?? []).length).toBe(4);
+    // `overflow-auto` on a pane is the shape this replaced: it is both axes.
+    expect(src).not.toContain("min-w-0 overflow-auto text-[12px]");
+  });
+
+  test("the pull request's file card wraps it in no scroller of its own", () => {
+    const pr = readFileSync(join(import.meta.dir, "..", "src", "components", "PrPanel.tsx"), "utf8");
+    expect(pr).not.toContain('<div className="flex" style={{ overflowX: "auto" }}>');
+  });
+});

@@ -351,13 +351,29 @@ type DiffProps = {
 
 // --- unified diff, with old|new gutters, uncapped -----------------------------
 
+/*
+ * Horizontal only, and this is the whole of the reason.
+ *
+ * A box that scrolls sideways is a scroll container on BOTH axes — there is no
+ * such thing as one-axis overflow in CSS: `overflow-x: auto` computes
+ * `overflow-y: auto` unless the other axis is set. So every diff pane was also
+ * a vertical scroller sitting inside a column that is already one, which is the
+ * "doble scroll" report: two vertical bars at the edge of the same column, and
+ * the inner one never moving because the diff is never given a height of its
+ * own to overflow.
+ *
+ * `hidden` clips nothing here: the pane's height IS its content's, in every
+ * caller — the pull request's file column, the Diff view and the preset viewer
+ * all scroll vertically themselves, and this pane grows inside them.
+ */
 export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel }: DiffProps & { hunkAction?: (hunkIndex: number) => ReactNode }) {
   const wrapCls = wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre";
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: unifiedRows(h) })), [source]);
   const gw = useMemo(() => gutterWidth(source.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0)), [source]);
   return (
-    <div className="agx-scroll flex-1 min-w-0 overflow-auto text-[12px] leading-[1.6]" data-vscroll style={CODE_FONT_STYLE}>
+    <div className="agx-scroll flex-1 min-w-0 text-[12px] leading-[1.6]" data-vscroll
+      style={{ ...CODE_FONT_STYLE, overflowX: "auto", overflowY: "hidden" }}>
       {/*
        * One width for the whole file, and it is the widest line in it.
        *
@@ -511,7 +527,8 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
   // sides keep matching row heights (grid rows take the taller of the two).
   if (wrap) {
     return (
-      <div className="agx-split agx-scroll flex-1 min-w-0 overflow-auto text-[12px] leading-[1.6]" data-vscroll style={CODE_FONT_STYLE} onMouseDown={onDown}>
+      <div className="agx-split agx-scroll flex-1 min-w-0 text-[12px] leading-[1.6]" data-vscroll
+        style={{ ...CODE_FONT_STYLE, overflowX: "auto", overflowY: "hidden" }} onMouseDown={onDown}>
         <style>{SPLIT_SEL_CSS}</style>
         {built.map(({ h, rows }, hi) => (
           <div key={hi}>
@@ -544,7 +561,10 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
       <div ref={leftRef} data-side="l" className="agx-scroll flex-1 min-w-0" style={{ overflowX: "auto", overflowY: "hidden" }} onWheel={onLeftWheel}>
         {side("l")}
       </div>
-      <div ref={rightRef} data-side="r" data-vscroll className="agx-scroll flex-1 min-w-0 border-l" style={{ overflow: "auto", borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }} onScroll={syncTop}>
+      {/* Both sides horizontal-only now, so neither is a vertical scroller and
+          the sync below has nothing left to fight over: they grow to the same
+          height inside whatever scrolls the page. */}
+      <div ref={rightRef} data-side="r" data-vscroll className="agx-scroll flex-1 min-w-0 border-l" style={{ overflowX: "auto", overflowY: "hidden", borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }} onScroll={syncTop}>
         {side("r")}
       </div>
     </div>
