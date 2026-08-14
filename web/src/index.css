@@ -192,6 +192,27 @@
     border-radius: 6px;
     border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   }
+  /* The one chip whose text is not a word: a commit's refs, which on a busy
+     commit is three branch names and longer than the subject beside it.
+     Capped in a row, because the row also holds the subject, the date and the
+     author, and an uncapped chip does not get clipped by the row — it overflows
+     and paints over them. */
+  .chip-ref {
+    display: flex;
+    min-width: 0;
+    max-width: 45%;
+  }
+  /* And uncapped in the detail column, where there is room for the whole thing
+     and a name cut at the edge of a 28rem aside is text nobody can read. The
+     chip's own `truncate` is undone here for the same reason. */
+  .chips-stack .chip-ref {
+    max-width: 100%;
+  }
+  .chips-stack .chip-ref > * {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+  }
   .t-dim {
     color: var(--text3);
   }

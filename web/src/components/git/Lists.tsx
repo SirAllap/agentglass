@@ -147,7 +147,10 @@ function Detail({ row, disabled }: { row: ListRow; disabled?: boolean }) {
           style={{ color: "var(--text)", fontFamily: "var(--font-mono, ui-monospace, monospace)", letterSpacing: "-0.01em" }}>
           {row.name}
         </div>
-        {!!row.chips && <div className="flex flex-wrap items-center gap-1.5 mt-2">{row.chips}</div>}
+        {/* `chips-stack`: down here there is room for the whole thing, so the
+            chip wraps rather than running off the column — the row's ellipsis
+            is a row's compromise and this is not a row. */}
+        {!!row.chips && <div className="chips-stack flex flex-wrap items-start gap-1.5 mt-2 min-w-0">{row.chips}</div>}
       </div>
 
       {!!row.facts?.length && (
@@ -346,7 +349,13 @@ export function commitRows(
     gutter: <GraphCell row={graph[i]} width={width} selected={ctx.picked.has(l.hash!)} />,
     run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
     title: <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
-    chips: l.refs ? <Chip tone="good">{l.refs}</Chip> : undefined,
+    /* `clip`, and capped: this is the one chip in the app whose text is not a
+       word but a list of branch names, and on a busy commit it is longer than
+       the subject it sits beside. Uncapped it ate the row and drew itself over
+       the date and author — reported as "se ve por encima del texto". */
+    chips: l.refs
+      ? <span className="chip-ref"><Chip tone="good" clip title={l.refs}>{l.refs}</Chip></span>
+      : undefined,
     facts: [l.date, l.hash, l.author],
   }));
 }

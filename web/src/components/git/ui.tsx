@@ -237,7 +237,15 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
 
 /** A chip. Small, round, and the only place a status word is allowed to be
  *  coloured — everything else on the card is text or grey. */
-export function Chip({ tone = "neutral", children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
+export function Chip({ tone = "neutral", children, title, clip }: {
+  tone?: Tone; children: ReactNode; title?: string;
+  /** This chip carries arbitrary text — a commit's refs, not a status word.
+   *  It gives up its `shrink-0` and ellipsizes instead, because a chip that
+   *  refuses to shrink in a flex row does not get clipped by the row: it
+   *  OVERFLOWS it and paints over whatever is beside it. Which is what a
+   *  branch name of sixty characters did to the date and author next to it. */
+  clip?: boolean;
+}) {
   return (
     /*
      * `.chip`'s own geometry: 6px radius, 1px/6px padding, no bold.
@@ -247,7 +255,7 @@ export function Chip({ tone = "neutral", children, title }: { tone?: Tone; child
      * as loud as the branch name they were describing, and put a third radius
      * on a screen that already had two.
      */
-    <span className="shrink-0 text-[9.5px] px-1.5 py-px rounded-md whitespace-nowrap"
+    <span className={`text-[9.5px] px-1.5 py-px rounded-md whitespace-nowrap ${clip ? "min-w-0 truncate" : "shrink-0"}`}
       style={{ color: TONE[tone], background: wash(tone === "neutral" ? "--text" : `--${tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "primary"}`, tone === "neutral" ? 10 : 14) }}
       title={title}>
       {children}
