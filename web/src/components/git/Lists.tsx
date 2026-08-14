@@ -16,6 +16,7 @@
  * replaced the drawing, not the plumbing.
  */
 import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { LANE_W, graphWidth, laneColour, layoutGraph, type GraphRow } from "../../lib/gitGraph.ts";
 import type {
   GitBranch, GitTag, GitStash, GitWorktree, GitRemote, GitRemoteBranch,
   GitSubmodule, GitReflogEntry,
@@ -310,26 +311,76 @@ export function reflogRows(entries: GitReflogEntry[], run: (id: string, e: GitRe
 }
 
 /**
- * The log, which is the one list that is not a list of things — it is a list of
- * moments, and the graph column is the shape of how they connect. It keeps its
- * monospaced rail because that is what draws the lines, and gets the same card
- * treatment around it.
+ * The log: not a list of things but a list of moments, and the graph is the
+ * shape of how they connect.
+ *
+ * That graph used to be `git log --graph`'s own ASCII, printed as text. On this
+ * repository — twenty-seven live branches — that is forty characters of
+ * `| | * | \ \ |` before the subject starts, so every message was cut to
+ * `fix(pr-revi…` and the tab looked broken on the way down, which is exactly how
+ * it was reported. It is drawn now, from the parents, one lane per branch and a
+ * dot per commit; see lib/gitGraph.ts for the bookkeeping.
  */
 export function commitRows(
-  lines: { hash?: string; graph: string; subject?: string; refs?: string; author?: string; date?: string }[],
+  lines: { hash?: string; graph: string; parents?: string[]; subject?: string; refs?: string; author?: string; date?: string }[],
   ctx: { picked: ReadonlySet<string>; run: (id: string, hash: string, subject: string) => void },
 ): ListRow[] {
-  return lines.filter((l) => !!l.hash).map((l, i) => ({
+  const commits = lines.filter((l) => !!l.hash);
+  const graph = layoutGraph(commits.map((l) => ({ hash: l.hash!, parents: l.parents ?? [] })));
+  const width = graphWidth(graph);
+  return commits.map((l, i) => ({
     key: `${l.hash}-${i}`, kind: "commit", name: l.hash!, state: {},
     rail: ctx.picked.has(l.hash!) ? "accent" : "neutral",
     run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
     title: (
       <span className="flex items-center gap-2 min-w-0">
-        <span className="shrink-0" style={{ color: "var(--primary)", opacity: 0.75 }}>{l.graph.trim() || "●"}</span>
+        <GraphCell row={graph[i]} width={width} />
         <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>
       </span>
     ),
     chips: l.refs ? <Chip tone="good">{l.refs}</Chip> : undefined,
     facts: [l.date, l.hash, l.author],
   }));
+}
+
+/**
+ * One row of the graph, drawn.
+ *
+ * A fixed-height SVG per row rather than one tall canvas beside the list: the
+ * rows are a virtualised, foldable list whose heights are decided by their own
+ * content, and a single drawing beside them would have to be told about every
+ * one of those decisions to stay aligned. Per row it cannot drift.
+ *
+ * The curve is deliberate. A merge drawn as two straight segments meeting at a
+ * corner reads as a right-angle pipe — which is what the ASCII was — and the
+ * whole point of drawing this is that a branch should look like it leaves and
+ * comes back.
+ */
+const ROW_H = 26;
+
+function GraphCell({ row, width }: { row?: GraphRow; width: number }) {
+  if (!row) return <span className="shrink-0" style={{ width }} />;
+  const x = (lane: number) => lane * LANE_W + LANE_W / 2;
+  const cap = Math.floor(width / LANE_W) - 1;
+  return (
+    <svg width={width} height={ROW_H} viewBox={`0 0 ${width} ${ROW_H}`} className="shrink-0" aria-hidden
+      style={{ overflow: "visible" }}>
+      {row.links.map((l, i) => {
+        // Lanes past the cap are clipped at the edge on purpose: it says "there
+        // is more going on here" without letting forty branches eat the message.
+        if (l.from > cap && l.to > cap) return null;
+        const x1 = x(Math.min(l.from, cap)), x2 = x(Math.min(l.to, cap));
+        const d = x1 === x2
+          ? `M${x1} 0 V${ROW_H}`
+          : `M${x1} 0 C${x1} ${ROW_H * 0.45} ${x2} ${ROW_H * 0.55} ${x2} ${ROW_H}`;
+        return <path key={i} d={d} fill="none" stroke={laneColour(l.lane)} strokeWidth={1.5} strokeLinecap="round" opacity={0.55} />;
+      })}
+      {row.dot <= cap && (
+        // Hollow for a merge: the one commit whose content is not its own.
+        <circle cx={x(row.dot)} cy={ROW_H / 2} r={3.2}
+          fill={row.merge ? "var(--bg2)" : laneColour(row.dot)}
+          stroke={laneColour(row.dot)} strokeWidth={1.6} />
+      )}
+    </svg>
+  );
 }

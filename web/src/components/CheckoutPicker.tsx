@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CHIP } from "./workspace/Chrome.tsx";
+import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS } from "./workspace/Chrome.tsx";
 import type { GitRepoRef, GitBranch } from "../../../shared/types.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 
@@ -182,13 +182,8 @@ export function CheckoutPicker({
            Terminal's and the pull-request panel's were a rounded-lg and a
            rounded-md at three different heights. Reported as "son todos
            diferentes". */
-        className={`${CHIP} flex items-center gap-1.5 shrink-0 disabled:opacity-50`}
-        style={{
-          maxWidth: triggerMaxWidth,
-          background: "color-mix(in srgb, var(--text) 5%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
-          color: "var(--text)",
-        }}
+        className={`${CHIP} ${CHIP_SURFACE_CLS} flex items-center gap-1.5 shrink-0 disabled:opacity-50`}
+        style={{ maxWidth: triggerMaxWidth, ...CHIP_SURFACE }}
         title={title ?? (here ? `${here.name}\n${here.root}` : unlisted ? `${unlisted}\nnot in the current list` : undefined)}
       >
         <span className="font-medium truncate min-w-0" style={unlisted ? { color: "var(--warning)" } : undefined}>

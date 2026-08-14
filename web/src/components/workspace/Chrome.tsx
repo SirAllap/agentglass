@@ -28,6 +28,24 @@ import { HIT, ICON } from "../../lib/iconSize.ts";
 export const CHIP = "text-[11px] px-2 py-1 rounded-lg whitespace-nowrap transition-colors";
 
 /**
+ * The fill and hairline a control carries when it is not a toggle.
+ *
+ * A toolbar toggle is transparent until it is on — the tint IS the state. A
+ * control that is always available (the repo picker, the link to GitHub) has no
+ * on-state to show, and transparent turns it into grey text: "no parece otra
+ * cosa" was the report, about a header where two of them had become captions
+ * with arrows after them.
+ */
+export const CHIP_SURFACE = {
+  background: "color-mix(in srgb, var(--text) 5%, transparent)",
+  border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+  color: "var(--text)",
+} as const;
+
+/** The hover half of the same, which cannot be an inline style. */
+export const CHIP_SURFACE_CLS = "hover:brightness-125";
+
+/**
  * What a pressed control looks like.
  *
  * One tint, one weight. The variants that existed — a filled violet block, a
@@ -148,8 +166,21 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
       {trailing === "external" && <span aria-hidden className="shrink-0" style={{ opacity: 0.7 }}>↗</span>}
     </>
   );
-  const cls = `${CHIP} inline-flex items-center gap-1.5 min-w-0 ${className}`.trim();
-  const style = { ...chipTone(!!on), ...(on ? null : { color: "var(--text2)" }) };
+  const cls = `${CHIP} ${CHIP_SURFACE_CLS} inline-flex items-center gap-1.5 min-w-0 ${className}`.trim();
+  /*
+   * A SURFACE, not bare text.
+   *
+   * The first version of this took `chipTone(false)`, which is transparent —
+   * correct for a toolbar toggle, wrong here: the pull-request header turned
+   * into two grey words with arrows after them, and grey text with punctuation
+   * reads as a caption that happens to have an arrow, not as something you can
+   * press. Reported the moment it shipped: "usa ese chip que usas en los demás,
+   * así está en armonía y no parece otra cosa."
+   *
+   * The fill and the hairline are the Git panel's, which is the header that had
+   * this right — they are what say "this is a control".
+   */
+  const style = on ? chipTone(true) : CHIP_SURFACE;
   return href
     ? <a href={href} target="_blank" rel="noreferrer" title={title} className={cls} style={style}>{inner}</a>
     : <button onClick={onClick} title={title} className={cls} style={style}>{inner}</button>;
