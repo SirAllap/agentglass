@@ -1965,7 +1965,8 @@ export function setPrBaseHook(fn: PrBaseLookup | null): void { prBaseFor = fn; }
 /**
  * What this branch is measured against, in order of how much the answer is
  * actually *known*: an override somebody wrote down, then the base its pull
- * request declares, then the shape of history, then the trunk.
+ * request declares, then what the branch tracks, then the shape of history,
+ * then the trunk.
  *
  * Whatever wins, what comes back is the freshest copy of that branch (see
  * `freshest`). That is not a detail — it is the difference between a number and
@@ -1995,13 +1996,39 @@ export async function baseOf(root: string, branch: string): Promise<string | nul
       // very problem this is measuring.
       base = `origin/${declared}`;
     } else {
-      const trunk = await defaultBranch(root);
-      // No base recorded anywhere: infer the branch this one was stacked on (its
-      // base is THAT, not the trunk). Falls back to the trunk when there is
-      // nothing between HEAD and it. A branch is not its own base; the trunk
-      // checkout simply has none.
-      const inferred = await inferBase(root, branch, trunk);
-      base = inferred ?? (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk);
+      /*
+       * What the branch says it tracks, before anything is inferred from the
+       * shape of history.
+       *
+       * `git worktree add -b card --track origin/other` and `git checkout -b
+       * card origin/other` both write `branch.card.merge`, so this is not a
+       * guess: somebody said what this was cut from and git wrote it down. The
+       * inference below cannot see it — `--merged <branch>` only matches a base
+       * this branch still contains, and the moment the base picks up a commit
+       * of its own it stops being an ancestor and drops out of the candidates,
+       * leaving the trunk. Which is the report: a branch stacked on another
+       * feature branch showed "origin/master" as its base while the header
+       * beside it correctly read "tracking origin/<that branch>".
+       *
+       * Skipped when the upstream is this branch's own remote copy, which is
+       * what tracking means for every branch that has simply been pushed —
+       * `sameBranch` because `origin/card` and `card` are one branch under two
+       * names.
+       */
+      const up = (await gitAsync(root, ["rev-parse", "--symbolic-full-name", `${branch}@{upstream}`])).stdout
+        .trim().replace(/^refs\/remotes\//, "").replace(/^refs\/heads\//, "");
+      const tracked = up && validRef(up) && !(await sameBranch(root, up, branch)) ? up : "";
+      if (tracked) {
+        base = tracked;
+      } else {
+        const trunk = await defaultBranch(root);
+        // No base recorded anywhere: infer the branch this one was stacked on (its
+        // base is THAT, not the trunk). Falls back to the trunk when there is
+        // nothing between HEAD and it. A branch is not its own base; the trunk
+        // checkout simply has none.
+        const inferred = await inferBase(root, branch, trunk);
+        base = inferred ?? (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk);
+      }
     }
   }
   if (base) base = await freshest(root, base);
