@@ -11,6 +11,7 @@
  * modal closes on start; the conflict screen owns the rest.
  */
 import { useEffect, useState } from "react";
+import { CaretIcon } from "../lib/glyphIcons.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
@@ -114,8 +115,8 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
                           has no drag util, and for a list that is at most a few
                           dozen rows, two 14px buttons are faster and forgiving. */}
                       <span className="shrink-0 flex flex-col">
-                        <button disabled={i === 0} onClick={() => move(i, -1)} className="text-[8px] leading-none px-0.5 t-dim2 disabled:opacity-25" title="Move up">▲</button>
-                        <button disabled={i === steps.length - 1} onClick={() => move(i, 1)} className="text-[8px] leading-none px-0.5 t-dim2 disabled:opacity-25" title="Move down">▼</button>
+                        <button disabled={i === 0} onClick={() => move(i, -1)} className="inline-flex items-center justify-center rounded t-dim2 disabled:opacity-25" title="Move up"><CaretIcon className="rotate-180" /></button>
+                        <button disabled={i === steps.length - 1} onClick={() => move(i, 1)} className="inline-flex items-center justify-center rounded t-dim2 disabled:opacity-25" title="Move down"><CaretIcon /></button>
                       </span>
                       <select value={s.action} onChange={(e) => setAction(i, e.target.value as RebaseStep["action"])} title={ACTION_HINT[s.action]}
                         className="shrink-0 text-[10px] px-1.5 py-0.5 rounded outline-none"

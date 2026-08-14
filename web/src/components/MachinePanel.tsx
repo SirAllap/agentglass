@@ -11,6 +11,7 @@
 // One surface, reachable from the dashboard and from inside the workspace,
 // because "is 5173 still up?" is a question you have while looking at anything.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RefreshIcon } from "../lib/glyphIcons.tsx";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import type { GitLock, GitLocksReport, GitRepoRef, ProcDetail, MachineTotals, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
@@ -557,7 +558,7 @@ function Resources() {
           </span>
           <button onClick={load} title="Sample again now"
             className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[11px]"
-            style={{ color: "var(--text2)", border: edge(18) }}>⟳</button>
+            style={{ color: "var(--text2)", border: edge(18) }}><RefreshIcon /></button>
         </div>
 
         {/* The whole machine, above our share of it.

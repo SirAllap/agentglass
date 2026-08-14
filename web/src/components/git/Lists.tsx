@@ -21,7 +21,7 @@ import type {
   GitBranch, GitTag, GitStash, GitWorktree, GitRemote, GitRemoteBranch,
   GitSubmodule, GitReflogEntry,
 } from "../../../../shared/types.ts";
-import { Row, Chip, RowAction, GroupHead, Empty, wash, type Tone } from "./ui.tsx";
+import { Row, Chip, RowAction, GroupHead, Empty, TickBox, wash, type Tone } from "./ui.tsx";
 import { primaryAction, actionsFor, grouped, groupByPrefix, type GitKind, type GitRowState } from "../../lib/gitActions.ts";
 
 export interface ListRow {
@@ -212,11 +212,9 @@ export function branchRows(
       run: (id) => ctx.run(id, b),
       title: (
         <span className="flex items-center gap-2 min-w-0">
-          <span onClick={(e) => { e.stopPropagation(); ctx.onPick(b.name); }}
-            className={`shrink-0 cursor-pointer text-[11px] ${ctx.picked.size ? "" : "opacity-0 group-hover:opacity-100"} transition-opacity`}
-            style={{ color: ctx.picked.has(b.name) ? "var(--primary)" : "var(--text3)" }}
-            title={ctx.picked.has(b.name) ? "Untick" : "Tick for a bulk action"}>
-            {ctx.picked.has(b.name) ? "☑" : "☐"}
+          <span className={`shrink-0 ${ctx.picked.size ? "" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"} transition-opacity`}>
+            <TickBox on={ctx.picked.has(b.name)} onClick={() => ctx.onPick(b.name)}
+              title={ctx.picked.has(b.name) ? "Untick" : "Tick for a bulk action"} />
           </span>
           <span className="truncate">{b.name}</span>
         </span>

@@ -119,3 +119,47 @@ describe("close controls", () => {
     expect(bad, "use <CloseButton/> from components/CloseButton.tsx").toEqual([]);
   });
 });
+
+describe("a glyph is not a control", () => {
+  /**
+   * The gap this closes, found the hard way.
+   *
+   * Every rule above is about `<svg width={ICON.x}>`, so a control drawn with a
+   * CHARACTER walked straight past all of them. The branch list's tick box was
+   * `☐` at 11px inside a `<span onClick>`: seven pixels of outline, no tick you
+   * could see when it was on, no role, no keyboard, and a target the size of
+   * the glyph. Reported as "el checkbox es ENANO, ni se ve", on the one list
+   * where knowing what you have selected is the entire feature.
+   *
+   * So: a box, a tick, a caret or a spinner that IS the control gets drawn.
+   * A glyph sitting next to a word ("⌫ 3 gone", "▣ stash some files…") is
+   * decoration on a labelled button and stays — the label is the control.
+   */
+  const GLYPHS = "☐☑☒▶▼▸▾▴◀⟳↻⌕";
+
+  test("no clickable element is a bare glyph", () => {
+    const bad: string[] = [];
+    for (const { rel, text } of FILES) {
+      for (let i = 0; i < text.length; i++) {
+        if (!GLYPHS.includes(text[i]!)) continue;
+        /* Walk BACK to the element this glyph sits in rather than matching the
+           tag with a regex: an attribute holding an arrow function contains a
+           `>`, so `<span([^>]*)>` stops at `=>` and every handler in the app
+           slips through. That is exactly how the first version of this guard
+           passed over the very control it was written for. */
+        const before = text.slice(Math.max(0, i - 400), i);
+        const open = Math.max(before.lastIndexOf("<span"), before.lastIndexOf("<button"), before.lastIndexOf("<div"), before.lastIndexOf("<a "));
+        if (open === -1) continue;
+        const head = before.slice(open);
+        if (!/\bonClick=/.test(head) && !head.startsWith("<button")) continue;
+        // A glyph beside a word is decoration on a labelled control: "⌫ 3 gone",
+        // "▣ stash some files…". The label is the control, and it stays.
+        const after = text.slice(i + 1, i + 60);
+        if (/[A-Za-z0-9]/.test(after.split("<")[0] ?? "")) continue;
+        if (/[A-Za-z0-9]/.test(head.slice(head.lastIndexOf(">") + 1))) continue;
+        bad.push(`${rel}:${text.slice(0, i).split("\n").length} ${text[i]}`);
+      }
+    }
+    expect(bad, "draw it: an <svg> at ICON.xs or more, in a target of HIT").toEqual([]);
+  });
+});

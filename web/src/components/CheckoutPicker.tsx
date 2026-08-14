@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS } from "./workspace/Chrome.tsx";
+import { ICON } from "../lib/iconSize.ts";
 import type { GitRepoRef, GitBranch } from "../../../shared/types.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 
@@ -193,7 +194,12 @@ export function CheckoutPicker({
           const b = branchLabel === undefined ? here?.branch : branchLabel;
           return b ? <span className="t-dim2 shrink-0 truncate" style={{ maxWidth: "9rem" }} title={`on ${b}`}>· {b}</span> : null;
         })()}
-        <span className="t-dim2 shrink-0">▼</span>
+        {/* The same caret `ScopeChip` draws, so the picker in this header and the
+            one in every other header are the same object down to the arrow. */}
+        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden
+          className="shrink-0" style={{ opacity: 0.7 }}>
+          <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </button>
 
       {open && (
