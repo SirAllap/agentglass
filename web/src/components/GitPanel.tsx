@@ -639,6 +639,10 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
       style={{
         background: active ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "color-mix(in srgb, var(--bg3) 26%, transparent)",
         border: `1px solid ${active ? "color-mix(in srgb, var(--primary) 40%, transparent)" : "color-mix(in srgb, var(--text) 6%, transparent)"}`,
+        // The same rail every other card in this view has, in the file's own
+        // status colour: added, modified, deleted, conflicted read down the
+        // left edge without touching the letter beside them.
+        borderLeft: `3px solid ${STATUS_TINT[c.status]}`,
         marginBottom: 4,
         boxShadow: active ? "0 6px 16px -12px rgba(0,0,0,.8)" : "none",
         paddingLeft: depth == null ? 8 : 8 + depth * 12,
