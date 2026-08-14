@@ -51,22 +51,72 @@ describe("one width for the whole file", () => {
     expect((split(false).match(/width:max-content;min-width:100%/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
-  test("the text column absorbs the slack rather than stopping at its own text", () => {
-    /* `max-content` alone was the bug in the unified pane: the column is as wide
-       as the longest line in THAT hunk, and the row's background ends there. */
+  test("every unified row carries the file's width", () => {
+    /* The grid this replaced sized one column per HUNK, so a short hunk stopped
+       painting where its own longest line ended. Now the row is the box: as wide
+       as its content, never narrower than the pane. */
     const html = uni(false);
-    expect(html).toContain("minmax(max-content,1fr)");
-    expect(html).not.toMatch(/grid-template-columns:4ch 4ch max-content/);
+    expect(html).not.toContain("grid-template-columns");
+    expect((html.match(/class="flex" style="width:max-content;min-width:100%"/g) ?? []).length).toBe(6);
   });
 
   test("a split row is at least as wide as the column it sits in", () => {
     expect(split(false)).toContain("width:max-content;min-width:100%");
   });
 
-  test("wrapped mode does not scroll sideways, so it keeps its fr columns", () => {
-    // Nothing to fix here, and pinned so the fix above does not spread into it:
-    // wrapping means there is no overflow to paint into.
-    expect(uni(true)).toContain("4ch 4ch minmax(0,1fr)");
+  test("the text cell grows into the slack rather than stopping at its text", () => {
+    /* `max-content` on a grid column was the first shape of this bug; the rows
+       are flex now, so the equivalent is the text cell being the one that
+       flexes. Without it a short line's tint ends where the line does. */
+    const html = uni(false);
+    expect(html).toMatch(/class="[^"]*flex-1[^"]*"[^>]*style="[^"]*background:/);
+  });
+});
+
+/*
+ * And the numbers stay while it scrolls.
+ *
+ * Reported straight after the paint fix: "los números de las líneas se deben
+ * quedar, ¿no?". They were already written as sticky and had never once stuck,
+ * because `.agx-gutter{position:relative}` — the rule that places the hover "+"
+ * — sits on the same element and wins the cascade. Measured, not read: a probe
+ * in headless Chrome reported `position: relative` and the gutter at x=-170
+ * after scrolling right; now it reports `sticky` and x=0.
+ *
+ * The second half is that sticky only works at all if the row is the element
+ * that is as wide as the file — a sticky GRID ITEM is stuck to its own grid
+ * area, which is 4ch wide and goes nowhere. That is why the unified pane draws
+ * flex rows instead of a grid.
+ */
+describe("the line numbers stay put", () => {
+  test("the gutter rule does not fight the sticky it sits on", () => {
+    const css = readFileSync(join(import.meta.dir, "..", "src", "components", "diff", "DiffLines.tsx"), "utf8");
+    expect(css).toContain(".agx-gutter{position:sticky}");
+    expect(css).not.toContain(".agx-gutter{position:relative}");
+  });
+
+  test("both unified gutters are sticky and opaque", () => {
+    const html = uni(false);
+    // Two per row: the old-side number pinned at 0 and the new-side one pinned
+    // a gutter's width along, each with a background mixed into --bg so the
+    // code passes behind them instead of through them.
+    expect(html).toMatch(/class="[^"]*sticky left-0[^"]*"[^>]*style="[^"]*background:color-mix\(in srgb, var\(--\w+\) 13%, var\(--bg\)\)|background:var\(--bg\)/);
+    expect((html.match(/sticky/g) ?? []).length).toBeGreaterThanOrEqual(6);
+  });
+
+  test("the rows are flex, because a sticky grid item sticks to nothing", () => {
+    expect(uni(false)).not.toContain('class="contents"');
+  });
+
+  test("the gutter is as wide as the biggest line number in the file", () => {
+    /* A flat 4ch fits three digits. Once the gutters went opaque, a four-digit
+       file drew "18511851" — the old number ran under the new one. */
+    const deep = renderToStaticMarkup(React.createElement(UnifiedDiff, {
+      hunks: [{ oldStart: 1851, oldLines: 1, newStart: 1851, newLines: 1, lines: [" a()"] }], wrap: false,
+    } as never));
+    expect(deep).toContain("width:5ch");
+    // And a short file still looks like every other short file.
+    expect(uni(false)).toContain("width:4ch");
   });
 });
 

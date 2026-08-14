@@ -48,7 +48,13 @@ export const SPLIT_SEL_CSS = '.agx-split[data-sel="l"] [data-side="r"]{user-sele
  *  20x20 rather than the 19 it used to be: it is an icon-only control, and the
  *  house floor for a hit area is 20x20 — an odd box also cannot sit on the 2px
  *  grid, which is how it ended up nudged by a stray -13px. */
-export const LINEBTN_CSS = '.agx-gutter{position:relative}.agx-linebtn{position:absolute;right:-14px;top:50%;transform:translateY(-50%);width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--primary);color:#fff;font-size:16px;font-weight:600;line-height:1;opacity:0;transition:opacity .12s,transform .12s;cursor:pointer;z-index:3;box-shadow:0 1px 3px rgba(0,0,0,.35)}.agx-gutter:hover .agx-linebtn,.agx-linebtn:focus-visible,.agx-linebtn[data-open="1"]{opacity:1}.agx-linebtn:hover{transform:translateY(-50%) scale(1.08)}';
+/* `sticky`, not `relative`, and it took a probe to find out why it mattered:
+   this rule is on the same element as the `sticky left-4ch` utility, wins the
+   cascade, and quietly pinned the line numbers to the code instead of to the
+   pane. They scrolled off the left with everything else and a diff scrolled
+   sideways had nothing left saying which line you were on. Sticky establishes a
+   containing block just as well, so the absolutely placed "+" is unaffected. */
+export const LINEBTN_CSS = '.agx-gutter{position:sticky}.agx-linebtn{position:absolute;right:-14px;top:50%;transform:translateY(-50%);width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--primary);color:#fff;font-size:16px;font-weight:600;line-height:1;opacity:0;transition:opacity .12s,transform .12s;cursor:pointer;z-index:3;box-shadow:0 1px 3px rgba(0,0,0,.35)}.agx-gutter:hover .agx-linebtn,.agx-linebtn:focus-visible,.agx-linebtn[data-open="1"]{opacity:1}.agx-linebtn:hover{transform:translateY(-50%) scale(1.08)}';
 
 /** Themed, slim scrollbars for the diff's scrollers (primary-tinted thumb). */
 export const SCROLLBAR_CSS = '.agx-scroll{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--primary) 45%,transparent) transparent}.agx-scroll::-webkit-scrollbar{width:11px;height:11px}.agx-scroll::-webkit-scrollbar-track{background:transparent}.agx-scroll::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--primary) 38%,transparent);border-radius:999px;border:3px solid transparent;background-clip:padding-box}.agx-scroll::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--primary) 62%,transparent);background-clip:padding-box}.agx-scroll::-webkit-scrollbar-corner{background:transparent}';
@@ -226,6 +232,22 @@ const cellFg = (k?: DiffKind) => (k === "del" ? "var(--error)" : k === "add" ? "
 const numBg = (k?: DiffKind) => (k === "del" ? "color-mix(in srgb, var(--error) 13%, var(--bg))" : k === "add" ? "color-mix(in srgb, var(--success) 13%, var(--bg))" : "var(--bg)");
 const SEL_BG = "color-mix(in srgb, var(--primary) 20%, transparent)";
 
+/**
+ * How wide a line-number gutter has to be for THIS file.
+ *
+ * It was a flat 4ch, which is three digits and a breath. A file whose hunks are
+ * down at line 1851 needs four, and the numbers simply ran out of their box —
+ * harmless while the box was transparent and the neighbour was empty, and very
+ * much not once the gutters became opaque and pinned: the old number ran under
+ * the new one and read as "18511851".
+ *
+ * `+1` is the gap to the code, `Math.max` keeps a short file looking like every
+ * other short file rather than shrinking to two characters.
+ */
+function gutterWidth(maxLine: number): string {
+  return `${Math.max(4, String(Math.max(1, maxLine)).length + 1)}ch`;
+}
+
 function Marked({ segs, kind }: { segs: Seg[]; kind: "del" | "add" }) {
   const bg = kind === "del" ? "color-mix(in srgb, var(--error) 22%, transparent)" : "color-mix(in srgb, var(--success) 22%, transparent)";
   return <>{segs.map((s, i) => (s.hi ? <span key={i} style={{ background: bg, borderRadius: "2px" }}>{s.text}</span> : <span key={i}>{s.text}</span>))}</>;
@@ -333,6 +355,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
   const wrapCls = wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre";
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: unifiedRows(h) })), [source]);
+  const gw = useMemo(() => gutterWidth(source.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0)), [source]);
   return (
     <div className="agx-scroll flex-1 min-w-0 overflow-auto text-[12px] leading-[1.6]" data-vscroll style={CODE_FONT_STYLE}>
       {/*
@@ -358,35 +381,52 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
               {hunkAction && hunkAction(hi)}
             </span>
           </div>
-          {/* `minmax(max-content,1fr)`, not `max-content`: the column has to be
-              at least as wide as the longest line in this hunk AND absorb
-              whatever the file's width leaves over, or the row's background
-              stops at the end of its own text. */}
-          <div className="grid" style={{ gridTemplateColumns: wrap ? "4ch 4ch minmax(0,1fr)" : "4ch 4ch minmax(max-content,1fr)" }}>
+          {/*
+            * Rows, not a grid, and this is the reason: `position: sticky` on a
+            * grid ITEM is measured against its grid area, so a sticky line
+            * number can only stick inside its own 4ch column — which is to say
+            * it cannot move at all. The numbers scrolled away with the code and
+            * a diff scrolled sideways had nothing left to say which line you
+            * were on. In a flex row the gutter's containing block is the row,
+            * which is as wide as the file, so it pins to the left edge.
+            *
+            * The columns still line up: both gutters are a fixed 4ch, exactly
+            * as the grid tracks were.
+            */}
+          <div>
             {rows.map((r, ri) => {
               // A review comment thread anchored to this line, rendered right
-              // under it as a row spanning every column — GitHub's placement, so
-              // the note sits with the code it is about instead of at the far
-              // bottom of the file.
+              // under it, full width — GitHub's placement, so the note sits with
+              // the code it is about instead of at the far bottom of the file.
               const after = rowAfter?.(r.newN, r.oldN);
+              const tint = inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? SEL_BG : cellBg(r.kind);
               return (
-                <div key={ri} className="contents">
-                  <div className="text-right pr-1.5 tabular-nums select-none sticky z-[1]" style={{ left: 0, background: numBg(r.kind) }}><span className="opacity-40">{r.oldN ?? ""}</span></div>
-                  <div className="text-right pr-1.5 tabular-nums select-none sticky z-[1] agx-gutter" style={{ left: "4ch", background: numBg(r.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
-                    <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} />
-                    <span className="opacity-40">{r.newN ?? ""}</span>
+                <Fragment key={ri}>
+                  <div className="flex" style={{ width: "max-content", minWidth: "100%" }}>
+                    {/* Opaque, not tinted-transparent: the code passes BEHIND
+                        these two and a translucent gutter shows the line you
+                        are trying to read through the number telling you which
+                        one it is. `numBg` mixes the row's tint into `--bg`. */}
+                    <div className="shrink-0 text-right pr-1.5 tabular-nums select-none sticky left-0 z-[2]"
+                      style={{ width: gw, background: numBg(r.kind) }}><span className="opacity-40">{r.oldN ?? ""}</span></div>
+                    <div className="shrink-0 text-right pr-1.5 tabular-nums select-none sticky z-[2] agx-gutter"
+                      style={{ width: gw, left: gw, background: numBg(r.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
+                      <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} />
+                      <span className="opacity-40">{r.newN ?? ""}</span>
+                    </div>
+                    {/* `data-ln` names the row the way a search result does —
+                        "R412", "L88" — so a hit found across every file has
+                        somewhere to scroll to. Side follows the same rule the
+                        matcher uses: a removal exists on the left, everything
+                        else is reported where the reader will look for it. */}
+                    <div data-ln={r.newN != null ? `R${r.newN}` : r.oldN != null ? `L${r.oldN}` : undefined}
+                      className={`${wrapCls} px-1.5 flex-1 ${wrap ? "min-w-0" : ""}`}
+                      style={{ background: tint, color: cellFg(r.kind) }}>
+                      <span className="select-none opacity-60">{r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "} </span><Code text={r.text} segs={r.segs} kind={r.kind} />
+                    </div>
                   </div>
-                  {/* `data-ln` names the row the way a search result does —
-                      "R412", "L88" — so a hit found across every file has
-                      somewhere to scroll to. Side follows the same rule the
-                      matcher uses: a removal exists on the left, everything
-                      else is reported where the reader will look for it. */}
-                  <div data-ln={r.newN != null ? `R${r.newN}` : r.oldN != null ? `L${r.oldN}` : undefined}
-                    className={`${wrapCls} px-1.5`} style={{ background: inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? SEL_BG : cellBg(r.kind), color: cellFg(r.kind) }}>
-                    <span className="select-none opacity-60">{r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "} </span><Code text={r.text} segs={r.segs} kind={r.kind} />
-                  </div>
-                  {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
-                </div>
+                  {after}
+                </Fragment>
               );
             })}
           </div>
@@ -408,6 +448,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, sel 
 export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) {
   const source = hunks ?? c?.hunks ?? NO_HUNKS;
   const built = useMemo(() => source.map((h) => ({ h, rows: splitRows(h) })), [source]);
+  const gw = useMemo(() => gutterWidth(source.reduce((n, h) => Math.max(n, h.oldStart + h.oldLines, h.newStart + h.newLines), 0)), [source]);
   const wrapCls = wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre";
   const leftRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
@@ -451,7 +492,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
             <Fragment key={ri}>
               <div data-ln={cell ? `${which === "l" ? "L" : "R"}${cell.num}` : undefined}
                 className="flex" style={{ width: "max-content", minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
-                <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: "3.6ch", background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
+                <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: gw, background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
                   <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} />
                   <span className="opacity-40">{cell?.num ?? ""}</span>
                 </div>
@@ -477,7 +518,7 @@ export function SplitDiff({ c, hunks, wrap, rowAfter, onPick, sel }: DiffProps) 
             <div data-hunk className="z-10 px-3 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
               @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
             </div>
-            <div className="grid" style={{ gridTemplateColumns: "3.6ch minmax(0,1fr) 3.6ch minmax(0,1fr)" }}>
+            <div className="grid" style={{ gridTemplateColumns: `${gw} minmax(0,1fr) ${gw} minmax(0,1fr)` }}>
               {rows.map((row, ri) => {
                 const after = rowAfter?.(row.r?.num, row.l?.num);
                 return (
