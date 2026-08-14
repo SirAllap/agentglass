@@ -2,7 +2,7 @@
 // here, before the imports below open the database and start their timers.
 import "./cookieentry.ts";
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame, WorkingTree, PanesResponse } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { db } from "./db.ts";
@@ -45,7 +45,7 @@ import { askBrowser, browserReadyCount, noteBrowserReady, parseAsk, setBrowserSi
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, safeAbs as gitSafeAbs } from "./git.ts";
+import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
   workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
@@ -68,6 +68,7 @@ import {
   createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
 } from "./gitwork.ts";
+import { sessionsForProject } from "./agentsessions.ts";
 import { changeRows, fileDiff } from "./changerows.ts";
 import { repoStats, generateChangelog } from "./gitinsights.ts";
 import { saveShot } from "./shots.ts";
@@ -1793,6 +1794,44 @@ const server = Bun.serve<WsData>({
       const scope = url.searchParams.get("scope") === "all" ? "all" : "head";
       const key = `graph:${root}:${limit}:${scope}`;
       return body(await singleFlight(key, () => whileRefsHoldAsync(key, root, () => logGraph(root, limit, scope))));
+    }
+    /*
+     * The agent sessions this project has, whichever checkout they ran in.
+     *
+     * What the terminal's resume picker draws. Read from disk — the same files
+     * `/resume` reads — so the two lists cannot disagree; see agentsessions.ts
+     * for why that matters more than reading this app's own database.
+     */
+    if (pathname === "/agent/sessions") {
+      // Folded to the repository the path belongs to, so asking from a worktree
+      // returns the whole family rather than that one checkout — which is the
+      // point of the picker.
+      const asked = url.searchParams.get("root") || "";
+      const root = repoRootOf(asked) ?? asked;
+      const rows = await sessionsForProject(root);
+      /*
+       * And which of them are already running, and where.
+       *
+       * A session open in a pane is not one to resume — resuming it twice is
+       * two agents appending to one transcript. The picker needs to say so and
+       * offer the trip instead, so the same join the phone's pane list uses is
+       * applied here: the live pane list, plus the note a hook wrote when the
+       * agent last ran. A note pointing at a pane that has since closed drops
+       * out with the list rather than becoming a button that goes nowhere.
+       */
+      const live = listPanes(lastTmuxTarget()?.socket).map(({ socket: _s, ...p }) => p);
+      const where = new Map<string, (typeof live)[number] & { agentSession: string | null }>();
+      for (const p of withAgentSessions(live, (id) => {
+        const n = paneAgentNote(id);
+        return n ? { sessionId: n.session_id, at: n.at } : null;
+      })) if (p.agentSession) where.set(p.agentSession, p);
+      const sessions: AgentSessionRow[] = rows.map((r) => {
+        const p = where.get(r.id);
+        return p
+          ? { ...r, openIn: { session: p.session, windowId: p.windowId, windowIndex: p.windowIndex, windowName: p.windowName, paneId: p.paneId } }
+          : r;
+      });
+      return json({ ok: true, sessions });
     }
     if (pathname === "/git/worktrees") {
       const root = url.searchParams.get("root") || "";

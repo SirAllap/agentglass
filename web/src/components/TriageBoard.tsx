@@ -490,7 +490,12 @@ export function TriageBoard({
                     </h3>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">
+                  {/* `pb-2`: the last thing in a lane sat flush against the
+                      bottom edge of the column, and a bordered button there
+                      reads as clipped — "el botón Show fewer está como
+                      comido". Cards had `mb-2` between them and nothing after
+                      the final one. */}
+                  <div className="flex-1 min-h-0 overflow-y-auto agx-scroll pb-2">
                     {waiting ? (
                       /* The shape of the thing being waited for, and no text:
                          a lane cannot honestly say how many it will hold. */
@@ -516,7 +521,7 @@ export function TriageBoard({
                         {more > 0 && (
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: true }))}
                             title={`Show the other ${more} in this lane`}
-                            className="w-full rounded-md py-1 text-[10px]"
+                            className="w-full rounded-md py-1 mb-2 text-[10px]"
                             style={{ color: "var(--text3)", border: edge(16) }}>
                             +{more} more in this lane
                           </button>
@@ -524,7 +529,7 @@ export function TriageBoard({
                         {opened && all.length > LANE_CAP && (
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: false }))}
                             title={`Back to the first ${LANE_CAP}`}
-                            className="w-full rounded-md py-1 text-[10px]"
+                            className="w-full rounded-md py-1 mb-2 text-[10px]"
                             style={{ color: "var(--text4)", border: edge(12) }}>
                             Show fewer
                           </button>
