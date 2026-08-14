@@ -570,6 +570,9 @@ export function runAction(
   /** `move` only: land AFTER the named window rather than before it. The one
    *  way to make a window the last in its strip — see that case. */
   after?: boolean,
+  /** `new` only: where the window starts. Already validated by the caller —
+   *  see the `new` case for why the absence of one is not a fallback. */
+  cwd?: string,
 ): boolean {
   // Windows are addressed by tmux's id, never by the index the tab is showing.
   // The strip is up to a poll out of date, and an index is not a name: kill
@@ -600,7 +603,17 @@ export function runAction(
       // tmux's default is the first free index, which is the end unless killing
       // a middle window left a gap. That is the same rule the unbound `c` uses,
       // so a strip that fills a gap is at least a rule the user already has.
-      return tmux(t.socket, ["new-window", "-t", t.id]) !== null;
+      //
+      // And `-c`, which is the whole of the second report: without it tmux
+      // starts the window in the SESSION's directory — where the server was
+      // launched from, which on a desktop build is agentglass's own install
+      // checkout. Every new tab opened there while the panel said `orbit`.
+      // "SIEMPRE SIEMPRE SIEMPRE debe abrirse desde la raíz del proyecto
+      // seleccionado", and the panel is the only thing that knows which that
+      // is. No path means tmux's old behaviour rather than a guess: a shell in
+      // the wrong tree is the failure this is fixing, and a home directory
+      // would be a different one.
+      return tmux(t.socket, ["new-window", "-t", t.id, ...(cwd ? ["-c", cwd] : [])]) !== null;
     case "kill":
       return id === null ? false : tmux(t.socket, ["kill-window", "-t", id]) !== null;
     case "rename": {

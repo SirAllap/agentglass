@@ -1771,7 +1771,23 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     // The panel's own grid goes with it, for `fit`: only the client knows how
     // big the thing you are looking at is. Range-checked in runAction, because
     // it ends up as an argument to `resize-window`.
-    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows, msg.after === true)) return;
+    /*
+     * Where a new tab starts.
+     *
+     * The panel sends the project it is showing; this checks it rather than
+     * trusting it, because it ends up as `-c` on a command line. Three
+     * questions, in order: is it a string, does it exist, and is it inside the
+     * workspace — the same envelope `cmd:"issue"` and `cmd:"agent"` pass
+     * through, and for the same reason.
+     *
+     * Nothing usable means no `-c` at all, which is tmux's own behaviour and
+     * not a guessed home directory. See the `new` case in tmuxctl.ts.
+     */
+    const wanted = typeof msg.root === "string" ? msg.root : "";
+    const startIn = wanted && existsSync(wanted) && inScope(repoRootOf(wanted) ?? wanted)
+      ? (repoRootOf(wanted) ?? wanted)
+      : undefined;
+    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows, msg.after === true, startIn)) return;
     if (action === "takeover") tellPhonesTheWindowMoved(s.tmux, msg.window!);
     // Answer now rather than at the next tick. The command has already been
     // applied by the time it returns, so the strip can be correct within a

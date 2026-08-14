@@ -619,7 +619,14 @@ export type PtyClientFrame =
       /** `move` only: land AFTER the named window instead of before it. What
        *  the trailing drop zone at the end of the tab strip sends — it is the
        *  only way to make a window the last one. */
-      after?: boolean };
+      after?: boolean;
+      /** `new` only: the project the panel is showing, so the tab opens in it.
+       *  Without it tmux starts the window in the SESSION's directory, which is
+       *  wherever the server happened to be launched from — for a desktop build
+       *  that is the install checkout, so every new tab landed in agentglass's
+       *  own tree instead of the repository on screen. Checked on the server
+       *  against the workspace before it reaches a command line. */
+      root?: string };
 
 /**
  * Every key any member of a union carries, and what that key can hold.

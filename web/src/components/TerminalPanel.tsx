@@ -2684,7 +2684,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         boxShadow: dropOn === "__end__" ? "inset -2px 0 0 0 var(--primary)" : undefined,
                       }}
                       aria-hidden />
-                    <button onClick={() => tmuxCmd({ cmd: "new" })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
+                    <button onClick={() => tmuxCmd({ cmd: "new", root })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
                     {/* Not on the engine. That server keeps its status line off
                         by design — the config gate refuses any config that turns
                         it on — so the button would be offering a bar that cannot
