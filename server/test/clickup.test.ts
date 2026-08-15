@@ -528,6 +528,35 @@ describe("what the status TYPE decides", () => {
     expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Blue" }]);
   });
 
+  it("carries the option's own colour, so the board can be read by colour", () => {
+    // The colour is the point of a field like a squad — ClickUp paints those
+    // cells — and it lives on the OPTION, next to the name.
+    const t = CU.toTask({
+      id: "x", name: "n",
+      custom_fields: [{
+        id: "f1", name: "Squad", type: "drop_down", value: 1,
+        type_config: { options: [
+          { id: "a", name: "Purple", orderindex: 0, color: "#c034eb" },
+          { id: "b", name: "Blue", orderindex: 1, color: "#2ea1e5" },
+        ] },
+      }],
+    });
+    expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Blue", color: "#2ea1e5" }]);
+  });
+
+  it("says nothing about colour for an option nobody coloured", () => {
+    // Not `color: undefined` — a grey dot in a colour column reads as a value
+    // pretending to be a category, so the key is absent and the caller can tell.
+    const t = CU.toTask({
+      id: "x", name: "n",
+      custom_fields: [{
+        id: "f1", name: "Squad", type: "drop_down", value: 0,
+        type_config: { options: [{ id: "a", name: "Blue", orderindex: 0 }] },
+      }],
+    });
+    expect(t.custom?.[0]).not.toHaveProperty("color");
+  });
+
   it("leaves an unset custom field out entirely", () => {
     const t = CU.toTask({ id: "x", name: "n", custom_fields: [{ id: "f", name: "Squad", type: "drop_down" }] });
     expect(t.custom).toEqual([]);
@@ -547,6 +576,7 @@ describe("writing to somebody's company board", () => {
     for (const [what, go] of [
       ["assign", () => CU.assignSelf("abc", true)],
       ["assign somebody else", () => CU.setAssignee("abc", 9, true)],
+      ["a whole card", () => CU.setCard("abc", { add: [9], status: "code review" })],
       ["status", () => CU.setStatus("abc", "in development")],
       ["field", () => CU.setField("abc", "f1", "opt")],
     ] as const) {
@@ -594,6 +624,73 @@ describe("putting somebody else on a card", () => {
     const r = await CU.setAssignee("abc", 9, true, 1754300000000);
     expect(r.ok).toBe(false);
     expect(r.conflict).toBe(true);
+  });
+});
+
+/*
+ * The bug this exists to make impossible.
+ *
+ * The reviewer picker sent three writes — add each person, remove each person,
+ * then the status — and gave every one of them the same `updated`, the stamp
+ * read when the menu opened. The first write moves that stamp, so ClickUp
+ * refused the second and third as "somebody changed this card while you had it
+ * open". On a real card: the new assignee went on, the old one never came off,
+ * the status never moved, and the app reported success.
+ */
+describe("several changes to one card", () => {
+  const allow = () => { C.setCredential("clickup", { token: "pk_1_X", accountId: "7" }); CV.setWritesAllowed(true); };
+
+  it("sends them as one PUT, so there is one precondition and no half-moved card", async () => {
+    allow();
+    const bodies: any[] = [];
+    reply = async (req) => {
+      if (req.method === "PUT") bodies.push(await req.json());
+      return json(TASK);
+    };
+    const r = await CU.setCard("abc", { add: [9], rem: [7], status: "code review" }, 1754300000000);
+    expect(r.ok).toBe(true);
+    // One GET for the precondition, one PUT for everything.
+    expect(seen.map((s) => s.path)).toEqual(["/task/abc", "/task/abc"]);
+    expect(bodies).toEqual([{ assignees: { add: [9], rem: [7] }, status: "code review" }]);
+  });
+
+  it("leaves out the halves that did not change", async () => {
+    // A card already in Code Review being "moved" to Code Review is not a
+    // change, and sending it dates somebody else's card for nothing. The caller
+    // decides that; this makes sure an empty half is not sent as an empty
+    // object either.
+    allow();
+    let body: any = null;
+    reply = async (req) => { if (req.method === "PUT") body = await req.json(); return json(TASK); };
+    await CU.setCard("abc", { add: [9] });
+    expect(body).toEqual({ assignees: { add: [9] } });
+    await CU.setCard("abc", { status: "code review" });
+    expect(body).toEqual({ status: "code review" });
+  });
+
+  it("sends nothing at all when nothing changed", async () => {
+    allow();
+    const r = await CU.setCard("abc", { add: [], rem: [], status: "  " });
+    expect(r.ok).toBe(false);
+    expect(seen.length).toBe(0);
+  });
+
+  it("still refuses a card somebody else moved first", async () => {
+    allow();
+    reply = () => json({ ...TASK, date_updated: "1754399999999" });
+    const r = await CU.setCard("abc", { status: "code review" }, 1754300000000);
+    expect(r.ok).toBe(false);
+    expect(r.conflict).toBe(true);
+    // The precondition was read and nothing was written.
+    expect(seen.length).toBe(1);
+  });
+
+  it("drops an id that is not a person rather than sending null", async () => {
+    allow();
+    let body: any = null;
+    reply = async (req) => { if (req.method === "PUT") body = await req.json(); return json(TASK); };
+    await CU.setCard("abc", { add: [Number("nobody"), 9] });
+    expect(body).toEqual({ assignees: { add: [9] } });
   });
 });
 

@@ -87,7 +87,7 @@ import {
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setAssignee, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -107,7 +107,7 @@ import {
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind,
+  branchBehind, localHead, prRollup,
   prBranches, prsForBranch } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
@@ -2278,6 +2278,15 @@ const server = Bun.serve<WsData>({
           ? (b.user != null
             ? await setAssignee(id, Number(b.user), b.on !== false, seen)
             : await assignSelf(id, b.on !== false, seen))
+        // Several changes to one card, as one write. Three writes each carrying
+        // the stamp read when the menu opened meant only the first could land:
+        // the first one moves the stamp the other two are checked against.
+        : pathname === "/clickup/card"
+          ? await setCard(id, {
+            add: Array.isArray(b.add) ? (b.add as unknown[]).map(Number) : undefined,
+            rem: Array.isArray(b.rem) ? (b.rem as unknown[]).map(Number) : undefined,
+            status: b.status != null ? String(b.status) : undefined,
+          }, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
         : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
@@ -2579,6 +2588,32 @@ const server = Bun.serve<WsData>({
       const asked = url.searchParams.get("root") ?? "";
       const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
       return json(await prsForBranch(root, url.searchParams.get("branch") ?? ""));
+    }
+    /*
+     * The LOCAL half on its own, because it changes on a different clock.
+     *
+     * How far behind the base a branch is takes a comparison over the network
+     * and is stable for minutes. Whether your checkout is dirty, or has a
+     * commit GitHub does not, changes the moment you type — and the panel was
+     * reading both together and holding the answer for as long as the slow one
+     * was worth holding. Reported both ways round: it offered to fast-forward a
+     * checkout that had just gone dirty, and went on refusing one that had just
+     * been committed.
+     *
+     * This is git only, no network — a few milliseconds — so it can be asked
+     * again while a pull request is open.
+     */
+    /* The truth about one pull request's checks — see prRollup. The list's own
+       rollup counts a re-run's old attempt beside the new one, and a card
+       cannot tell without asking. */
+    if (pathname === "/prs/rollup") {
+      return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0));
+    }
+    if (pathname === "/prs/local-head") {
+      return json({ ok: true, local: await localHead(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("branch") || "",
+      ) });
     }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";

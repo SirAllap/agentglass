@@ -298,3 +298,31 @@ describe("when a task is due", () => {
     expect(dueLabel(null, today)).toBe("");
   });
 });
+
+/*
+ * Two boards, one panel, and answers that arrive out of order.
+ *
+ * Reported: open a board, step to another and come back quickly, and a few
+ * seconds later the panel moves you to the one you left. `PrPanel` and this one
+ * both read from `gh`-shaped latency, and only one of them was guarding.
+ */
+const panelSrc = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+
+describe("a board answer that arrives late", () => {
+
+  it("is dropped when a different board has since been asked for", () => {
+    expect(panelSrc).toContain("const ticket = ++asking.current;");
+    expect(panelSrc).toContain("if (ticket !== asking.current) return; // a later board already won");
+  });
+
+  it("also stands down the settle loop of the board being left", () => {
+    // It re-reads for up to 45 seconds and paints what it finds, which is the
+    // half of this that arrives long after you have moved on.
+    expect(panelSrc).toContain("settling.current++;");
+    expect(panelSrc).toContain("if (settling.current !== run) return;");
+  });
+
+  it("does not clear the busy flag for a request that already lost", () => {
+    expect(panelSrc).toContain("if (ticket === asking.current) { setBusy(false); setWanted(null); }");
+  });
+});

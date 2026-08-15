@@ -875,3 +875,55 @@ describe("what the rail stops saying", () => {
     expect(render({ d, awaitingChecks: true } as never)).toContain("Waiting for the checks");
   });
 });
+
+/*
+ * Reported from a pull request he had approved two hours earlier: the rail drew
+ * "Approve / Request changes / Comment" as if he had never looked, and the only
+ * way to send anything but an approval was to leave for another tab, because
+ * the column had no field to type in.
+ */
+describe("your review, when you have already given one", () => {
+  const approved = {
+    reviews: [{ author: "you", state: "APPROVED", submittedAt: new Date(Date.now() - 7_200_000).toISOString(),
+      body: "", isBot: false, viewerDidAuthor: true }],
+  } as unknown as Partial<PrDetail>;
+
+  test("says what you said, and when", () => {
+    const html = render({ d: detail(approved), onApprove: noop, onSubmit: noop });
+    expect(html).toContain("You approved this");
+  });
+
+  test("a re-request reads as a re-request once you have answered", () => {
+    // GitHub only keeps `viewerRequested` while your review is outstanding, so
+    // seeing it after your own verdict means they asked again.
+    const html = render({ d: detail({ ...approved, viewerRequested: true }), onApprove: noop });
+    expect(html).toContain("They have asked you to look again.");
+    expect(html).not.toContain("You were asked to look at this.");
+  });
+
+  test("still says it plainly the first time", () => {
+    const html = render({ d: detail({ viewerRequested: true }), onApprove: noop });
+    expect(html).toContain("You were asked to look at this.");
+  });
+
+  test("a pending review of your own is not a verdict", () => {
+    // A queued-but-unsent review is exactly the state this box is for.
+    const html = render({
+      d: detail({ reviews: [{ author: "you", state: "PENDING", submittedAt: "", body: "", isBot: false, viewerDidAuthor: true }] } as unknown as Partial<PrDetail>),
+      onApprove: noop,
+    });
+    expect(html).not.toContain("You approved this");
+  });
+});
+
+describe("writing the note from the rail", () => {
+  test("there is a field, and it holds the draft the Review tab holds", () => {
+    const html = render({ onApprove: noop, onSubmit: noop, body: "half a sentence", onBody: noop });
+    expect(html).toContain("<textarea");
+    expect(html).toContain("half a sentence");
+  });
+
+  test("no field where the caller wires none, rather than a dead box", () => {
+    expect(render({ onApprove: noop, onSubmit: noop })).not.toContain("<textarea");
+  });
+});

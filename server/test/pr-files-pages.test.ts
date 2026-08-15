@@ -1,0 +1,159 @@
+/*
+ * Every list on a pull request is a page, and the panel used to take the first
+ * one as the whole answer.
+ *
+ * Reported twice, an hour apart, on real branches: 275 files listed as 100, and
+ * "Showing the most recent 100 commits" on one with more. Threads, comments,
+ * the timeline and the check contexts all had the same cap and nobody had hit
+ * them yet.
+ *
+ * The walk itself is `gh`, a subprocess and a network, so what is pinned here
+ * is the contract around it: that the first page asks for a cursor, that later
+ * pages ask for exactly the same fields as the first, that the walk is bounded,
+ * and that what is still missing is still counted.
+ */
+import { describe, expect, it } from "bun:test";
+import { DETAIL_QUERY } from "../src/prs.ts";
+
+const src = await Bun.file(new URL("../src/prs.ts", import.meta.url)).text();
+
+/** Every connection the detail query pages through. */
+const CONNS = ["reviews", "comments", "commits", "files", "reviewThreads", "timelineItems"];
+
+describe("the lists a pull request is made of", () => {
+  it("asks every one of them for a cursor, or there is nothing to page with", () => {
+    for (const key of CONNS) {
+      expect(src).toContain(`{ key: "${key}"`);
+    }
+    // pageInfo on the first page of each, in the query itself.
+    // From the query onwards — another query earlier in the file ends with the
+    // same three braces, so `indexOf` alone slices backwards and finds nothing.
+    const from = src.indexOf("const DETAIL_QUERY");
+    const q = src.slice(from, src.indexOf("} } }`;", from));
+    for (const key of CONNS) {
+      const i = q.indexOf(`\n    ${key}(`);
+      expect(i, `no ${key} line in the detail query`).toBeGreaterThan(-1);
+      expect(q.slice(i, q.indexOf("\n", i + 1))).toContain("pageInfo{hasNextPage endCursor hasPreviousPage startCursor}");
+    }
+  });
+
+  it("asks later pages for the same fields, by construction", () => {
+    /* The whole reason the selections are constants: a second copy of a field
+       list is a second field list that drifts, and a row from page two missing
+       a field renders and is quietly wrong. The follow-up query interpolates
+       `conn.sel`, which IS the constant the first page used. */
+    for (const name of ["SEL_REVIEWS", "SEL_COMMENTS", "SEL_COMMITS", "SEL_FILES", "SEL_THREADS", "SEL_TIMELINE"]) {
+      expect(src).toContain(`const ${name} = \``);
+    }
+    expect(src).toContain("${conn.key}(${conn.arg}, ${cursorArg}:$cursor){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${conn.sel}}");
+  });
+
+  it("walks the `last:` ones backwards, so a cap keeps the recent end", () => {
+    // Commits and the timeline are asked for newest-first. Paging forward from
+    // there would spend the budget on the oldest hundred, which is the half
+    // nobody opened the pull request to read.
+    expect(src).toContain('{ key: "commits", arg: "last:100", dir: "back"');
+    expect(src).toContain('const cursorArg = conn.dir === "back" ? "before" : "after";');
+    // …and puts those pages in front, because everything downstream assumes one
+    // list in the order it happened.
+    expect(src).toContain('if (conn.dir === "back") out.unshift(...got.nodes);');
+  });
+
+  it("is bounded, because the round trips are sequential", () => {
+    expect(src).toContain("page < conn.pages && cursor");
+    for (const key of CONNS) {
+      const i = src.indexOf(`{ key: "${key}"`);
+      expect(i, `no CONNECTIONS entry for ${key}`).toBeGreaterThan(-1);
+      // The entry ends at the line's end — `timelineItems` carries a template
+      // literal with braces in it, so brace-matching is the wrong tool here.
+      expect(src.slice(i, src.indexOf("\n", i))).toMatch(/pages: \d+/);
+    }
+  });
+
+  it("treats a failed page as the end of the list rather than an error", () => {
+    // What is already in hand beats none, and the counts below say the rest is
+    // missing either way.
+    expect(src).toContain("if (!got?.nodes?.length) break;");
+  });
+
+  it("pages across connections at once and within one in order", () => {
+    // A cursor is only known once the page before it has answered; two
+    // different lists have nothing to say to each other.
+    expect(src).toContain("await Promise.all([fillChecks(p, repo, number), ...CONNECTIONS.map(");
+  });
+
+  it("still says what it never got, and means the cap rather than a page size", () => {
+    expect(src).toContain("files: Math.max(0, (p.changedFiles ?? 0) - files.length) || undefined");
+    expect(src).toContain("commits: p.commits?.pageInfo?.capped ? (p.commits?.nodes || []).length : undefined");
+  });
+});
+
+/*
+ * The query has to be a query.
+ *
+ * The selections were lifted out of the query text into constants so the
+ * follow-up pages could reuse them — and they came out carrying their own outer
+ * braces, so every connection was rebuilt as `{pageInfo{…} {nodes{…}}`. GitHub
+ * rejected the whole document, `p` came back undefined, and every pull request
+ * in the app read "pull request not found, or gh could not reach the host".
+ *
+ * Every source assertion above passed while that was true. These do not: the
+ * query is built at import time, so its shape can be read here without a
+ * network.
+ */
+describe("the detail query itself", () => {
+  it("is balanced", () => {
+    const q = DETAIL_QUERY;
+    let depth = 0;
+    for (const ch of q) {
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
+  it("has no selection set standing on its own", () => {
+    // `} {` is what the doubled braces looked like, and it is never valid here:
+    // a selection set follows a NAME, not another set.
+    expect(DETAIL_QUERY).not.toMatch(/\}\s*\{/);
+  });
+
+  it("interpolated every constant it names", () => {
+    expect(DETAIL_QUERY).not.toContain("${");
+  });
+
+  it("puts the nodes right after the pageInfo on every paged connection", () => {
+    for (const key of CONNS) {
+      /* Not "the line": `timelineItems` carries its item-type list across
+         several of them. From the connection to its pageInfo is enough, and it
+         is the join that broke. */
+      const i = DETAIL_QUERY.indexOf(`\n    ${key}(`);
+      expect(i, key).toBeGreaterThan(-1);
+      const after = DETAIL_QUERY.slice(i, i + 2000);
+      expect(after, key).toContain("hasPreviousPage startCursor} nodes{");
+    }
+  });
+});
+
+/*
+ * A re-run does not replace the run it repeats.
+ *
+ * Measured on a real pull request whose failing check had just been re-run:
+ * GitHub's aggregate answered `FAILURE: 1, IN_PROGRESS: 2`, while github.com's
+ * own page said "Some checks haven't completed yet" and listed no failures —
+ * their UI keeps the latest run per name and the aggregate does not. Counting
+ * both parked the card in Blocked over a suite that was busy and green, and no
+ * amount of refreshing could move it.
+ */
+describe("two runs of the same check", () => {
+  it("keeps one per name, and a running one wins", () => {
+    expect(src).toContain("export function latestPerName(raw: RawCheck[]): RawCheck[] {");
+    expect(src).toContain("if (isRunning || !hadRunning) by.set(name, c);");
+    expect(src).toContain("for (const c of latestPerName(raw || [])) {");
+  });
+
+  it("keys by workflow as well as name, because two workflows may share one", () => {
+    expect(src).toContain('const name = `${c.workflowName || ""}');
+  });
+});

@@ -204,7 +204,7 @@ interface RawField {
   name: string;
   type: string;
   value?: unknown;
-  type_config?: { options?: { id: string; name?: string; label?: string; orderindex?: number }[] };
+  type_config?: { options?: { id: string; name?: string; label?: string; orderindex?: number; color?: string | null }[] };
 }
 
 /** ClickUp's epoch-milliseconds-as-a-string, as the local calendar date the
@@ -349,30 +349,38 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     waitsOn: (raw.dependencies ?? []).filter((d) => d.type === 1 && d.task_id === String(raw.id)).map((d) => d.depends_on).filter(Boolean) as string[],
     blocks: (raw.dependencies ?? []).filter((d) => d.type === 1 && d.depends_on === String(raw.id)).map((d) => d.task_id).filter(Boolean) as string[],
     custom: (raw.custom_fields ?? [])
-      .map((f) => ({ id: f.id, name: f.name, value: fieldText(f) }))
+      .map((f) => ({ id: f.id, name: f.name, ...fieldValue(f) }))
       .filter((f) => f.value),
   };
 }
 
 /**
- * A custom field's value as something readable.
+ * A custom field's value as something readable, and its colour when it has one.
  *
  * ClickUp answers with the raw storage: a drop-down is the INDEX of the chosen
  * option, not its name, so printing `value` gives you "3" where the board says
  * "Purple". Resolved against `type_config.options` here so nothing downstream
  * has to know that.
+ *
+ * The option carries the colour the workspace gave it, and that colour is the
+ * whole point of a field like a squad: ClickUp paints those cells, and a second
+ * window onto the same board that renders them as grey text is asking its
+ * reader to translate a word back into the colour they already know. The key is
+ * left off rather than set to undefined when there is none, so a field nobody
+ * coloured stays exactly the shape it was.
  */
-function fieldText(f: RawField): string {
+function fieldValue(f: RawField): { value: string; color?: string } {
   const v = f.value;
-  if (v === undefined || v === null || v === "") return "";
+  if (v === undefined || v === null || v === "") return { value: "" };
   if (f.type === "drop_down") {
     const opts = f.type_config?.options ?? [];
     const hit = opts.find((o) => o.orderindex === Number(v) || o.id === String(v));
-    return hit?.name ?? hit?.label ?? "";
+    const value = hit?.name ?? hit?.label ?? "";
+    return hit?.color ? { value, color: hit.color } : { value };
   }
-  if (Array.isArray(v)) return v.map((x) => (typeof x === "object" && x ? String((x as { name?: string }).name ?? "") : String(x))).filter(Boolean).join(", ");
-  if (typeof v === "object") return String((v as { username?: string }).username ?? "");
-  return String(v);
+  if (Array.isArray(v)) return { value: v.map((x) => (typeof x === "object" && x ? String((x as { name?: string }).name ?? "") : String(x))).filter(Boolean).join(", ") };
+  if (typeof v === "object") return { value: String((v as { username?: string }).username ?? "") };
+  return { value: String(v) };
 }
 
 export interface TaskPage {
@@ -1079,7 +1087,7 @@ export async function listMeta(
     `/list/${encodeURIComponent(listId)}`, token,
   );
   if (!l.ok) return { ...l, data: undefined };
-  const f = await call<{ fields?: { id: string; name: string; type: string; type_config?: { options?: { id: string; name?: string; label?: string }[] } }[] }>(
+  const f = await call<{ fields?: { id: string; name: string; type: string; type_config?: { options?: { id: string; name?: string; label?: string; color?: string | null }[] } }[] }>(
     `/list/${encodeURIComponent(listId)}/field`, token,
   );
   return {
@@ -1097,7 +1105,7 @@ export async function listMeta(
       })).sort((a, b) => a.orderindex - b.orderindex),
       fields: (f.data?.fields ?? []).map((x) => ({
         id: x.id, name: x.name, type: x.type,
-        options: (x.type_config?.options ?? []).map((o) => ({ id: o.id, name: o.name ?? o.label ?? "" })).filter((o) => o.name),
+        options: (x.type_config?.options ?? []).map((o) => ({ id: o.id, name: o.name ?? o.label ?? "", ...(o.color ? { color: o.color } : {}) })).filter((o) => o.name),
         // Somebody wrote the warning into the field's own name because the API
         // has nowhere else to put it. Reading it is the least we can do.
         readOnly: /do not edit/i.test(x.name),
@@ -1333,8 +1341,34 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   const me = redacted("clickup")?.accountId;
-  const r = await call<{ members?: NonNullable<RawTask["assignees"]>[number][] }>(`/list/${encodeURIComponent(listId)}/member`, token);
-  if (!r.ok) return { ok: false, error: r.error };
+  /*
+   * The list AND the workspace, because the list alone is wrong here.
+   *
+   * The comment above was the theory. Measured against a real board: both of
+   * his lists answered with the same twenty people — Alex Koh, Brett Carpenter,
+   * Canny, Chuck Williams — and not one of the six ClickUp'"'"'s own picker offers
+   * for those very cards. Whatever `/list/{id}/member` is reporting, it is not
+   * the team that works the board, and it was leaving the people he actually
+   * assigns out of the picker entirely.
+   *
+   * So both sources, de-duplicated: nobody who can be assigned is missing, and
+   * the client puts the ones already on this board'"'"'s cards at the top — which
+   * is what ClickUp does with its own "Assignees" group.
+   */
+  const me2 = me ? redacted("clickup") : null;
+  const [fromList, fromTeam] = await Promise.all([
+    call<{ members?: NonNullable<RawTask["assignees"]>[number][] }>(`/list/${encodeURIComponent(listId)}/member`, token),
+    me2?.workspaceId
+      ? call<{ teams?: { members?: { user?: NonNullable<RawTask["assignees"]>[number] }[] }[] }>(`/team`, token)
+      : Promise.resolve({ ok: false } as CallResult<{ teams?: never[] }>),
+  ]);
+  if (!fromList.ok && !fromTeam.ok) return { ok: false, error: fromList.error };
+  const workspace = (fromTeam.ok ? fromTeam.data?.teams ?? [] : [])
+    .filter((t: any) => !me2?.workspaceId || String(t.id) === me2.workspaceId)
+    .flatMap((t: any) => (t.members ?? []).map((m: any) => m.user).filter(Boolean));
+  const seenIds = new Set<string>();
+  const r = { ok: true as const, data: { members: [...(fromList.data?.members ?? []), ...workspace]
+    .filter((m: any) => m?.id != null && !seenIds.has(String(m.id)) && seenIds.add(String(m.id))) } };
   const members: ListMember[] = (r.data?.members ?? [])
     .filter((m) => m.id != null)
     .map((m) => ({
@@ -1384,6 +1418,51 @@ export async function setAssignee(taskId: string, userId: number, on: boolean, e
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
     assignees: on ? { add: [userId] } : { rem: [userId] },
   });
+  __reset();
+  const me = redacted("clickup")?.accountId;
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error, unauthorised: r.unauthorised };
+}
+
+/**
+ * Everything one visit to a card changed, in one write.
+ *
+ * The reviewer picker used to send three: add each person, remove each person,
+ * then the status — and every one of them carried the same `expectUpdated`, the
+ * stamp read when the menu opened. The FIRST write moves that stamp, so
+ * ClickUp's honest answer to the second and third was "somebody changed this
+ * card while you had it open", and nothing on the screen said so.
+ *
+ * Measured on a real card: the person went on, the person who asked never came
+ * off, the status never moved, and the app reported success.
+ *
+ * A card is one resource, so this is one PUT. `assignees.add`, `assignees.rem`
+ * and `status` travel together: one precondition to satisfy, and no window in
+ * which the card is half-moved. Add and remove rather than replace, because a
+ * card holds several assignees and replacing would take off whoever else was
+ * on it.
+ */
+export async function setCard(
+  taskId: string,
+  changes: { add?: number[]; rem?: number[]; status?: string },
+  expectUpdated?: number,
+): Promise<WriteOutcome> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
+  const add = (changes.add ?? []).filter((n) => Number.isFinite(n));
+  const rem = (changes.rem ?? []).filter((n) => Number.isFinite(n));
+  const status = (changes.status ?? "").trim();
+  // A no-op is a mistake upstream, not a write: sending one dates somebody
+  // else's card for nothing.
+  if (!add.length && !rem.length && !status) return { ok: false, error: "nothing to change" };
+  const stale = await guardUnchanged(token, taskId, expectUpdated);
+  if (stale) return { ok: false, conflict: true, error: stale };
+  const body: Record<string, unknown> = {};
+  if (add.length || rem.length) {
+    body.assignees = { ...(add.length ? { add } : null), ...(rem.length ? { rem } : null) };
+  }
+  if (status) body.status = status;
+  const r = await put(`/task/${encodeURIComponent(taskId)}`, token, body);
   __reset();
   const me = redacted("clickup")?.accountId;
   return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error, unauthorised: r.unauthorised };

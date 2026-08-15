@@ -39,16 +39,26 @@ import { updateBranchMove } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote } from "../lib/cardMove.ts";
+import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
+import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
+import { cardOf, askingCard, onCard, forgetCard } from "../lib/prCardStore.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
+import { keepLoadedChecks } from "../lib/prMerge.ts";
+import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
+import { forgetRollups } from "../lib/prRollupStore.ts";
+import {
+  anchorId, bootstrapSince, clearSeen, foldedIdx, newKeys, newSince, readSeen, reviewSpeaks,
+  threadLastAt, threadMovedOn, writeSeen, type NewAtom,
+} from "../lib/prNew.ts";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict } from "../lib/mergeReason.ts";
 import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
@@ -60,6 +70,7 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
+import type { ListStatus as CuStatus, ListMember as CuMember } from "../../../shared/providers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
@@ -130,6 +141,11 @@ function rememberDetail(root: string, n: number, d: PrDetail): void {
 }
 
 const SEEN_KEY = "agentglass.pr.seen";
+
+/** Which voices the conversation is showing. `new` is not a voice — it is
+ *  "only what arrived since I last looked", which cuts across all of them and
+ *  is the one filter that answers "where is the reply I came back for". */
+type ConvWho = "all" | "human" | "bot" | "new";
 const DRAFT_KEY = "agentglass.pr.drafts";
 /** The unsent review itself — the verdict you picked and the note you typed,
  *  which used to live only in the Review tab's own state. Switching to Files to
@@ -306,9 +322,23 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
 }
 
 
-function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small }: {
+function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
   danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
+  /**
+   * This button's own request is in flight.
+   *
+   * Every action in this panel is a round trip through `gh`, which is a second
+   * or two on a good day, and the only feedback was the button going grey — the
+   * same grey it wears when it is disabled for a reason that has nothing to do
+   * with you. Reported as the worst thing about the app: "tenemos que dar
+   * feedback en las peticiones async, SIEMPRE".
+   *
+   * The spinner goes IN the button, before the label, and the label stays: a
+   * control that swaps its words for "Working…" moves everything beside it, and
+   * you can no longer tell which of three buttons you pressed.
+   */
+  pending?: boolean;
 }) {
   // `warn` is the amber "this mutates the branch" accent, matching the Source
   // Control bar's sync/behind colour (--warning). Used for update-branch, which
@@ -316,7 +346,8 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
   // read the same as its plain neighbours.
   const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
   return (
-    <button onClick={onClick} disabled={disabled} title={title}
+    <button onClick={onClick} disabled={disabled || pending} title={pending ? "Working…" : title}
+      aria-busy={pending || undefined}
       /*
        * `leading-none`, and it is not a nicety.
        *
@@ -363,7 +394,15 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
         // grey, so fill alone does not separate the two — the label has to say
         // which is which as well.
         fontWeight: primary ? 600 : warn ? 500 : 500,
-      }}>{children}</button>
+      }}>
+      {pending && (
+        <span className="agx-spin mr-1.5 shrink-0" aria-hidden
+          style={{ width: 9, height: 9, borderWidth: 1.5,
+            borderColor: primary ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
+            borderTopColor: "transparent" }} />
+      )}
+      {children}
+    </button>
   );
 }
 
@@ -954,6 +993,17 @@ const PR_GRID = "78px minmax(0,1fr) 118px 112px 84px 84px";
  * the one row in the table that did not respond to the pointer.
  */
 const PR_ROW_CSS = `
+/* Where the jump landed you.
+   A scroll that ends in silence is indistinguishable from a scroll that did
+   nothing, so the reader carries on scrolling to check — which is exactly the
+   behaviour the jump exists to stop. A ring that fades over a second says "this
+   one" without leaving a mark that has to be cleared. Honoured for reduced
+   motion by holding the ring instead of animating it: the message is the point,
+   the animation is only how it is delivered. */
+@keyframes agx-found{from{box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 65%, transparent)}
+to{box-shadow:0 0 0 14px transparent}}
+.agx-found{animation:agx-found 1100ms ease-out}
+@media (prefers-reduced-motion: reduce){.agx-found{animation:none;outline:2px solid var(--warning);outline-offset:2px}}
 /* The two links out to GitHub in the header. A border and a hover, because
    grey text with an arrow after it reads as a caption rather than as a
    control — which is what the first attempt at this shipped and what it was
@@ -1428,11 +1478,30 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // rows without opening (and fetching) every one it passes over. Named apart
   // from the pagination `cursor` above, which is a GitHub page token.
   const [selected, setSelected] = useState<number | null>(null);
+  /* Read from callbacks that must not re-create themselves every time the
+     selection changes — and declared HERE, above every one of them, because a
+     `const` referenced before its line is a temporal dead zone waiting for the
+     day somebody calls one of those during render. */
+  const selectedRef = useRef<number | null>(null);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [rowCursor, setRowCursor] = useState<number | null>(null);
   /** Whether the pull request's masthead has given its metadata back to the
    *  page. Reset whenever another pull request is opened, or the second one
    *  would open already collapsed with its scroll at the top. */
-  const [condensed, setCondensed] = useState(false);
+  /*
+   * The facts strip does not fold away any more.
+   *
+   * It used to collapse once you scrolled — author, branch, reviewers, checks —
+   * to buy back a fifth of the window while reading a diff. Two things were
+   * wrong with it. Files never did it (that tab does not scroll the page), so
+   * one tab kept the strip and the rest lost it, which he reported as an
+   * inconsistency. And it changed the HEIGHT of the scroller while you were
+   * scrolling it, which is what made "put me back where I was" a race nobody
+   * could win — three attempts at remembering a scroll position lost to this.
+   *
+   * The strip stays. It costs a row; a panel that moves under you costs more.
+   */
+  const condensed = false;
   /** A file being read whole, over the panel. Null when nothing is open. */
   const [peek, setPeek] = useState<Peek | null>(null);
   const [detail, setDetail] = useState<PrDetail | null>(null);
@@ -1449,6 +1518,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * about one branch at one moment.
    */
   const [behind, setBehind] = useState<number | null>(null);
+  /** The answer is not in yet, which is a different thing from "not behind".
+   *  Without it the Update-branch button simply appears a second late, which is
+   *  the jump he reported — see the placeholder in Overview. */
+  const [behindAsking, setBehindAsking] = useState(false);
   /** And what that branch looks like on THIS machine, which is the half the
    *  Update button never mentioned. Same call, no extra round trip. */
   const [localHead, setLocalHead] = useState<PrLocalHead | null>(null);
@@ -1466,14 +1539,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * has three columns that scroll on their own, so the room the fold was buying
    * is room it no longer needs to buy.
    */
-  useEffect(() => { if (tab === "files") setCondensed(false); }, [tab]);
 
   /** The description editor has taken the whole column. Lifted out of
    *  <Description> so the shell can hide the masthead, tabs and sidebar behind
    *  it — editing a body is a mode, not a box wedged into the read view. */
   const [editingBody, setEditingBody] = useState(false);
   /** Open a pull request as a page. Back returns to the list, cursor intact. */
-  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setCondensed(false); setEditingBody(false); }, []);
+  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setEditingBody(false); }, []);
   const backToList = useCallback(() => { setSelected(null); setDetailErr(""); setEditingBody(false); }, []);
 
   /* Only this repository's: the panel shows one at a time, so a chip opening
@@ -1547,6 +1619,70 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump, repo, openPr]);
   const [busy, setBusy] = useState(false);
+  /** The label passed to `act` for the request in flight — see Btn `pending`. */
+  const [busyWhat, setBusyWhat] = useState("");
+  /* One scroller serves every tab, so each tab's place in it is remembered here
+     and put back on the way in. Cleared when the pull request changes: a new
+     page starts at the top, whatever the last one was showing. */
+  /** The board card whose action is running — the board disables all of them
+   *  while one does, and the spinner belongs to the one you pressed. */
+  const [actingOn, setActingOn] = useState<number | null>(null);
+  const tabBodyRef = useRef<HTMLDivElement>(null);
+  const tabScroll = useRef<Record<string, number>>({});
+  useEffect(() => { tabScroll.current = {}; }, [selected]);
+  /* Before paint, or the old offset is on screen for a frame and the jump is
+     the thing you see instead of the thing you asked for. */
+  useLayoutEffect(() => {
+    const el = tabBodyRef.current;
+    if (!el) return;
+    const want = tabScroll.current[tab] ?? 0;
+    el.scrollTop = want;
+    if (!want) return;
+    /*
+     * And again, once the tab has its height.
+     *
+     * A tab's content mounts empty and fills — the diffs highlight, the
+     * markdown lays out — so the first assignment is clamped to whatever the
+     * box was tall at that instant, which for Commits is nothing. Reported as
+     * the scroll resetting when you came back to it. Two frames and a
+     * ResizeObserver: the frames cover the ordinary case, the observer the one
+     * where the content arrives later than that.
+     */
+    let alive = true;
+    /* The first attempt observed the SCROLLER, whose own box never changes —
+       what grows is its content, so the observer never fired and the retry was
+       decoration. This watches `scrollHeight` instead, which is the number that
+       decides whether the offset can be honoured at all, and keeps trying while
+       it is still growing. */
+    let tall = el.scrollHeight;
+    const started = Date.now();
+    const put = () => {
+      if (!alive) return;
+      const now = el.scrollHeight;
+      const grew = now !== tall;
+      tall = now;
+      if (Math.abs(el.scrollTop - want) > 1 && el.scrollTop < want) el.scrollTop = want;
+      /* Stop as soon as it lands, or when the content has been still for a
+         while — two seconds is the ceiling, not the plan. */
+      if ((Math.abs(el.scrollTop - want) <= 1 && !grew) || Date.now() - started > 8_000) return;
+      requestAnimationFrame(put);
+    };
+    requestAnimationFrame(put);
+    /* Eight seconds is a long time to keep pushing a scroller around, so any
+       sign of the reader touching it ends the attempt at once. Restoring a
+       position on top of somebody who has started reading is worse than not
+       restoring it. */
+    const stop = () => { alive = false; };
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("touchstart", stop, { passive: true });
+    el.addEventListener("keydown", stop);
+    return () => {
+      alive = false;
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("touchstart", stop);
+      el.removeEventListener("keydown", stop);
+    };
+  }, [tab, selected]);
   /** What the merge control is doing right now, "" when it is doing nothing.
    *  A sentence rather than a boolean because the merge is two writes and they
    *  fail differently — see doMerge. */
@@ -1560,12 +1696,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [rawBots, setRawBots] = useState(true);
   /* Which voices the Conversation is showing. Up here because the rail's jump
      has to clear it before scrolling — see onGoToMention. */
-  const [convWho, setConvWho] = useState<"all" | "human" | "bot">("all");
+  const [convWho, setConvWho] = useState<ConvWho>("all");
   const [seen, setSeen] = useState<Record<string, string[]>>(() => loadMap<string[]>(SEEN_KEY));
   const [drafts, setDrafts] = useState<Record<string, DraftComment[]>>(() => loadMap<DraftComment[]>(DRAFT_KEY));
   const [reviews, setReviews] = useState<Record<string, ReviewDraft>>(() => loadMap<ReviewDraft>(REVIEW_KEY));
   const [methods, setMethods] = useState<Record<string, MergeMethod>>(() => loadMap<MergeMethod>(METHOD_KEY));
   const [diff, setDiff] = useState("");
+  /** Why there is no diff, when there is a reason. Empty while one is on its
+   *  way — the two states used to be the same empty string. */
+  const [diffErr, setDiffErr] = useState("");
   const [selFile, setSelFile] = useState<string | null>(null);
   /* What the Files tab is drawing right now, which in one-file mode is the
      first file the filter left when nothing has been clicked. The rail follows
@@ -1720,7 +1859,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     api.prList(root, filter, stateSel, force, cursor, serverQuery).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
-      setPrs(r.prs);
+      // Same rule as the board: a refresh may add and correct, but it may not
+      // un-know. Every fetch starts at the fast pass, so without this a list
+      // that had its check states dropped back to "not in yet" on every poll.
+      setPrs((cur) => keepLoadedChecks(cur, r.prs));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
@@ -1737,7 +1879,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       settleDelay.current = settle.next;
       // Nothing waiting on you: show your own instead of an empty pane. Once
       // only, so choosing "Needs my review" yourself is never overruled.
-      if (want === "review" && stateSel === "open" && r.prs.length === 0 && !r.loading && !r.error && !fellBack.current) {
+      /* …and never out from under an open pull request. Even with the
+         selection now surviving a scope change, a filter that changes itself
+         while you are reading is a pane rearranging behind your back. */
+      if (want === "review" && stateSel === "open" && r.prs.length === 0 && !r.loading && !r.error
+        && !fellBack.current && selectedRef.current == null) {
         fellBack.current = true;
         setFilter("mine");
       }
@@ -1759,7 +1905,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useEffect(() => {
     const scope = `${root}\u0000${filter}\u0000${stateSel}`;
     if (lastScope.current === scope) return; // re-render, not a switch
-    const first = lastScope.current === "";
+    /*
+     * The panel finishing its own boot is not you switching repository.
+     *
+     * `root` is empty for the first second — the repository list is a separate
+     * call — so the scope changes once from "\u0000open\u0000…" to the real
+     * one, and this effect took that for a switch and cleared the selection.
+     * Open a pull request inside that second and it threw you back to the
+     * board, which is exactly how it was reported: "entro en una PR rápido y me
+     * manda al board de nuevo".
+     */
+    const prev = lastScope.current;
+    const first = prev === "" || prev.startsWith("\u0000");
+    const sameRepo = prev.slice(0, prev.indexOf("\u0000")) === root;
     lastScope.current = scope;
     if (first) return; // nothing on screen yet to clear
     listReq.current++;
@@ -1777,10 +1935,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // and labelled as loading) is what GitHub does, and it turns that second and
     // a half from a wait into a redraw. `listReq` still guards the answer, so a
     // slow reply for the scope you left can never land on the one you are in.
-    setSelected(null);
-    setDetail(null);
-    setBehind(null);
-    setDetailErr("");
+    /*
+     * The open pull request survives a change of scope in the same repository.
+     *
+     * A filter is a question about the LIST. The page you are reading is not
+     * the list, and closing it because the rows behind it changed is the same
+     * mistake the row cursor already avoids two comments up. It also happens on
+     * its own: the panel falls back from "Needs my review" to "Mine" when the
+     * first comes back empty, so opening a pull request in the first seconds
+     * threw you straight back to the board — reported twice, and the second
+     * time after the boot guard above had already fixed a different half of it.
+     *
+     * A different REPOSITORY is another matter: that pull request is not in it.
+     */
+    if (!sameRepo) {
+      setSelected(null);
+      setDetail(null);
+      setBehind(null);
+      setDetailErr("");
+    }
     setListState((st) => ({ ...st, loading: true }));
   }, [filter, root, stateSel]);
 
@@ -1843,6 +2016,23 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return () => { live = false; };
   }, [active, root, stateSel, listState.fetchedAt]);
 
+  /*
+   * A wait with a deadline.
+   *
+   * `gh` is given 25 seconds server-side; the pane was given none, so a request
+   * that never came back was a skeleton for ever — the same failure the diff
+   * had, in another pane. Past the deadline it becomes a message with a retry,
+   * which is something somebody can act on.
+   */
+  useEffect(() => {
+    if (detail || detailErr || selected == null || !root) return;
+    const t = setTimeout(
+      () => setDetailErr("This is taking longer than usual — GitHub or `gh` has not answered."),
+      30_000,
+    );
+    return () => clearTimeout(t);
+  }, [detail, detailErr, selected, root]);
+
   /** Self-reference, so the stale follow-up can call the loader it lives in
    *  without either one having to be declared before the other. */
   const loadDetailRef = useRef<((n: number, force?: boolean) => void) | null>(null);
@@ -1873,18 +2063,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       else { setDetail(null); setDetailErr(r.error || "Could not load this pull request"); }
     }).catch((e) => { if (req === detailReq.current) setDetailErr(String(e)); })
       .finally(() => { if (req === detailReq.current) setDetailStale(false); });
-    /* And how far behind its base that branch is — see `behind`. Its own call,
-       after the detail, guarded by the same request counter so a fast click
-       through three pull requests cannot leave the third wearing the first
-       one's count. A failure leaves it null: no answer means no offer, which is
-       the safe way round for a button that rewrites a branch on GitHub. */
-    api.prBehind(root, n)
-      .then((r) => {
-        if (req !== detailReq.current) return;
-        setBehind(r.ok ? (r.behind ?? 0) : null);
-        setLocalHead(r.ok ? (r.local ?? null) : null);
-      })
-      .catch(() => { if (req === detailReq.current) { setBehind(null); setLocalHead(null); } });
+    /* How far behind its base that branch is comes from the shared store — see
+       the effect below. It used to be asked for here, which meant the board
+       could know a branch was 222 behind and the page you opened from that
+       board went and asked again: seconds of nothing over an answer already in
+       memory. */
     /* And, when there is one, WHICH files conflict. GitHub only ever says that
        a pull request is CONFLICTING; naming the files takes a merge, and this
        one happens entirely in git's object database — the checkout is never
@@ -1955,8 +2138,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * restore and nothing to reload.
    */
   const loadedFor = useRef<number | null>(null);
-  const selectedRef = useRef<number | null>(null);
-  useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => {
     if (!root || selected == null) { setDetail(null); loadedFor.current = null; return; }
     if (loadedFor.current === selected) return; // same pull request, already here
@@ -1983,15 +2164,31 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      */
     const held = heldDetail(root, selected);
     setDetail(held); setDetailStale(!!held); setDetailErr("");
-    setDiff(""); setSelFile(null); setSelCommit(null); setCommitText("");
+    setDiff(""); setDiffErr(""); setSelFile(null); setSelCommit(null); setCommitText("");
     loadDetail(selected);
   }, [root, selected, loadDetail]);
 
+  /*
+   * A diff that did not arrive is not a diff that is still arriving.
+   *
+   * A failure set the text to "" and stopped, and "" is also "not fetched yet"
+   * — so the Files tab sat on "Loading the diff…" for ever. Reported on a
+   * 275-file pull request where GitHub answers the whole-diff endpoint with
+   * "HTTP 406: the diff exceeded the maximum number of lines (20000)": a hard
+   * no, dressed as a wait, with no way to tell.
+   *
+   * The error is held so the pane can say what happened, and so this effect
+   * does not re-ask on every render for something that will not come.
+   */
   useEffect(() => {
-    if ((tab !== "files" && tab !== "review") || !detail || diff || !root) return;
+    if ((tab !== "files" && tab !== "review") || !detail || diff || diffErr || !root) return;
     const req = ++diffReq.current; // a later selection's diff must win over a slow earlier one
-    api.prDiff(root, detail.number).then((r) => { if (req === diffReq.current) setDiff(r.ok ? (r.text || "") : ""); }).catch(() => {});
-  }, [tab, detail, diff, root]);
+    api.prDiff(root, detail.number).then((r) => {
+      if (req !== diffReq.current) return;
+      if (r.ok) { setDiff(r.text || ""); setDiffErr(r.text ? "" : "GitHub returned an empty diff for this pull request."); }
+      else setDiffErr(r.error || "The diff could not be fetched.");
+    }).catch((e) => { if (req === diffReq.current) setDiffErr(String(e)); });
+  }, [tab, detail, diff, diffErr, root]);
 
   // Filter the current scope's rows by the search box: PR number (with or
   // without a leading #), title, or author login. Memoized so a 400-row "all"
@@ -2116,6 +2313,59 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * two before the first resolves — a claim, and the wrong one.
    */
   const [boardLoading, setBoardLoading] = useState(true);
+  /*
+   * The board asks again while the check rollups are still out.
+   *
+   * The two lists arrive in two passes — rows first, checks about four seconds
+   * behind — and the board used to read whatever the first pass said and stop
+   * there. So after a restart every card sat in the wrong lane until somebody
+   * pressed Refresh, which was the only thing that asked again. Reported that
+   * way.
+   *
+   * Counted, not endless: if the rollup never lands (a failed fetch, a rate
+   * limit) this must go quiet rather than poll for ever behind a view whose
+   * whole promise is that it costs two calls.
+   */
+  /*
+   * Is the board whole?
+   *
+   * Which lane a pull request belongs in is mostly a question about its checks,
+   * and those arrive in the second pass — so a board painted from the first one
+   * files what it cannot decide under "yours, in flight" and moves it a few
+   * seconds later. Reported as cards hopping between columns while you read.
+   *
+   * A card that moves on its own is worse than a card that is late, so the
+   * skeleton stays up until every row is complete. With a deadline: a rollup
+   * that never lands must not mean a board that never draws, and past it the
+   * cards say for themselves that their checks are still out.
+   */
+  const boardWhole = !boardLoading
+    && ![...boardMine, ...boardReview].some((p) => p.checksLoaded === false);
+  const [boardWaited, setBoardWaited] = useState(false);
+  const boardDrawn = useRef(false);
+  useEffect(() => { if (boardWhole) boardDrawn.current = true; }, [boardWhole]);
+  useEffect(() => {
+    boardDrawn.current = false;
+    setBoardWaited(false);
+    const t = setTimeout(() => setBoardWaited(true), 6_000);
+    return () => clearTimeout(t);
+  }, [boardOn, root, stateSel]);
+  /* Never on a REFRESH: `boardDrawn` means a whole board has been on screen
+     once, and last minute's answer beats a skeleton. */
+  const boardSettling = !boardWhole && !boardDrawn.current && !boardWaited;
+
+  const [boardTick, setBoardTick] = useState(0);
+  /** Set by Refresh, read once by the board's fetch. See the button. */
+  const boardForce = useRef(false);
+  const boardTries = useRef(0);
+  useEffect(() => { boardTries.current = 0; }, [boardOn, root, stateSel]);
+  useEffect(() => {
+    if (!boardOn) return;
+    const waiting = [...boardMine, ...boardReview].some((p) => p.checksLoaded === false);
+    if (!waiting || boardTries.current >= 8) return;
+    const t = setTimeout(() => { boardTries.current += 1; setBoardTick((n) => n + 1); }, 2_000);
+    return () => clearTimeout(t);
+  }, [boardOn, boardMine, boardReview]);
   useEffect(() => {
     if (!boardOn || !root) return;
     let live = true;
@@ -2123,12 +2373,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     /* Settled rather than all: one scope failing must not leave the board
        waiting for ever on the other. A failed list is an empty one, and the
        board then says so honestly instead of spinning. */
+    /* Forced only when somebody asked for it. The poll reads the server's
+       cache — that is what makes this board cost two calls — and Refresh is the
+       one press that means "go and look again". */
+    const force = boardForce.current;
+    boardForce.current = false;
     void Promise.allSettled([
-      api.prList(root, "mine", stateSel, false).then((r) => { if (live) setBoardMine(r.prs ?? []); }),
-      api.prList(root, "review", stateSel, false).then((r) => { if (live) setBoardReview(r.prs ?? []); }),
+      api.prList(root, "mine", stateSel, force).then((r) => { if (live) setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
+      api.prList(root, "review", stateSel, force).then((r) => { if (live) setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
     ]).then(() => { if (live) setBoardLoading(false); });
     return () => { live = false; };
-  }, [boardOn, root, stateSel, listState.fetchedAt]);
+  }, [boardOn, root, stateSel, listState.fetchedAt, boardTick]);
 
   // If the cursor's row is filtered out, move it to the first row still visible
   // rather than leaving a phantom highlight on a hidden PR — the same
@@ -2250,6 +2505,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const act = useCallback(async (label: string, fn: () => Promise<{ ok: boolean; error?: string; detail?: string }>) => {
     if (busy) return false;
     setBusy(true);
+    /* WHICH one is running, not just that something is. Every one of these is a
+       round trip through `gh`; a row of buttons all going grey says the app is
+       busy and not which press it heard. */
+    setBusyWhat(label);
     try {
       const r = await fn();
       flash(r.ok, r.ok ? (r.detail || `${label} — done`) : (r.error || `${label} failed`));
@@ -2264,15 +2523,192 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       if (selected != null) loadDetail(selected, true);
       return r.ok;
     } catch (e) { flash(false, String(e)); return false; }
-    finally { setBusy(false); }
+    finally { setBusy(false); setBusyWhat(""); }
   }, [busy, flash, loadList, selected, loadDetail]);
 
   // One picker for the masthead's "＋" and the sidebar's ✎ both — lifted here
   // so it can open from the masthead on every tab, not only where the sidebar
   // renders.
-  const fieldPicker = usePrFieldPicker(detail, root, act);
+  const fieldPicker = usePrFieldPicker(detail, root, act, flash);
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
+
+  /*
+   * When you last looked at this pull request — and why it is frozen.
+   *
+   * Read once, when the pull request opens, and held still for as long as it is
+   * open. A mark that advanced as you read would erase the very markers it puts
+   * up: you would open a conversation with three new replies on it, and by the
+   * time the poll came round they would all be "old" without you having found
+   * any of them.
+   *
+   * It moves in exactly two places: when you leave the pull request (you have
+   * had your chance to read it) and when you press "Mark read" (you say so).
+   */
+  const [storedSeen, setStoredSeen] = useState(0);
+  const seenKeyRef = useRef("");
+  useEffect(() => {
+    if (!key) { seenKeyRef.current = ""; setStoredSeen(0); return; }
+    if (seenKeyRef.current === key) return;
+    /* Leaving one pull request for another writes the mark for the one being
+       left — the same thing the unmount below does, and the reason it is a ref:
+       by the time this effect runs, `key` is already the new one. */
+    const leaving = seenKeyRef.current;
+    if (leaving) writeSeen(leaving, Date.now());
+    seenKeyRef.current = key;
+    setStoredSeen(readSeen()[key] ?? 0);
+  }, [key]);
+  useEffect(() => () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); }, []);
+  /*
+   * And nothing else moves it.
+   *
+   * There was a `pagehide` + `visibilitychange` writer here for about ten
+   * minutes, on the theory that closing the app is another way of leaving a
+   * pull request. It is not. Hiding a window is not reading — and the first
+   * thing that listener did in the wild was eat his markers when the app was
+   * restarted to install the build containing it: "quizás se marcaron como
+   * leídas, aunque yo no le di a marcar como leídas".
+   *
+   * The mark advances in two places, and both are the reader's own doing:
+   * navigating away from this pull request, and pressing the button that says
+   * so. Everything else leaves it exactly where it was.
+   */
+
+  /*
+   * With no mark of your own, your last word on it stands in for one.
+   *
+   * Reported from the app: everything worked and nothing showed, because the
+   * pull request being looked at is precisely the one this browser has never
+   * recorded a visit to. "Nothing is new until you have been here once" is
+   * defensible and useless — it means the feature introduces itself by doing
+   * nothing. See `bootstrapSince`.
+   */
+  const prSeenAt = useMemo(() => storedSeen || bootstrapSince(detail), [storedSeen, detail]);
+
+  /** Everything said since that mark, oldest first, and the same set by key so
+   *  a comment can ask "am I new" without walking the list. */
+  const newAtoms = useMemo(() => newSince(detail, prSeenAt), [detail, prSeenAt]);
+  const newSet = useMemo(() => newKeys(newAtoms), [newAtoms]);
+  const markPrRead = useCallback(() => {
+    if (!seenKeyRef.current) return;
+    const now = Date.now();
+    writeSeen(seenKeyRef.current, now);
+    setStoredSeen(now);
+  }, []);
+  /** Undo that. Throws the mark away, which drops this pull request back to
+   *  "everything since my last word", the state it has before any visit. */
+  const unmarkPrRead = useCallback(() => {
+    if (!seenKeyRef.current) return;
+    clearSeen(seenKeyRef.current);
+    setStoredSeen(0);
+  }, []);
+  /*
+   * What arrived after your last word, whether or not it has been marked read.
+   *
+   * Only used to offer the way back: with nothing new, a conversation where
+   * somebody answered you an hour ago and you have already cleared the mark is
+   * indistinguishable from one where nobody has said anything at all — and the
+   * first is worth a line saying the marks can be brought back.
+   */
+  const sinceMine = useMemo(
+    () => (storedSeen ? newSince(detail, bootstrapSince(detail)).length : 0),
+    [storedSeen, detail],
+  );
+
+  /*
+   * Something arrived while you were looking at it.
+   *
+   * The poll already re-reads the open pull request every twenty seconds; all
+   * this does is notice that the answer grew. Announced rather than left to be
+   * found: the whole failure this feature is about is a remark that was on the
+   * page and invisible, and one that lands while you are reading is the most
+   * invisible of the lot — nothing on screen moves.
+   *
+   * The first answer for a pull request is not an arrival. It is the page
+   * loading, and toasting "2 new" at somebody who has just opened it would be
+   * announcing the state as if it were an event.
+   */
+  /*
+   * How far behind, from the one place that knows.
+   *
+   * Read the moment a pull request is opened — instant when the board has
+   * already asked — and again whenever an answer lands. `asking` drives the
+   * placeholder beside the merge buttons: the space is held while the question
+   * is out, rather than a button appearing from nowhere a second later.
+   */
+  useEffect(() => {
+    if (!root || selected == null) { setBehind(null); setLocalHead(null); setBehindAsking(false); return; }
+    const n = selected;
+    const read = () => {
+      const a = behindAnswer(root, n);
+      setBehind(a.behind);
+      setLocalHead(a.local);
+      setBehindAsking(askingBehind(root, n));
+    };
+    read();
+    return onBehind(read);
+  }, [root, selected]);
+
+  /*
+   * The local half, on its own clock.
+   *
+   * How far behind the base a branch is takes a comparison over the network and
+   * is stable for minutes. Whether your checkout is dirty, or carries a commit
+   * GitHub has not seen, changes the moment you type — and both were arriving
+   * in one answer held for as long as the slow one was worth holding. Reported
+   * both ways round: it offered to fast-forward a checkout that had just gone
+   * dirty, and went on refusing one that had just been committed.
+   *
+   * This read is git only, no network, so it can be asked again while the pull
+   * request is open — every eight seconds, and the moment the window comes
+   * back, which is when somebody has just been in a terminal doing exactly the
+   * thing that changes the answer.
+   */
+  useEffect(() => {
+    const branch = detail?.headRefName;
+    if (!root || !branch) return;
+    let live = true;
+    const read = () => {
+      api.prLocalHead(root, branch)
+        .then((r) => { if (live && r.ok && r.local) setLocalHead(r.local); })
+        .catch(() => {});
+    };
+    read();
+    /* And the count itself, which is the slow half: asked again when you arrive
+       and every half minute you stay. It is cached for five minutes for the
+       board's sake — twelve comparisons over the network — and five minutes is
+       far too long for the pull request in front of you. Measured while he was
+       looking at one: the server said 0 behind, GitHub agreed, and the page
+       still said 936. */
+    const again = () => { refreshBehind(root, selectedRef.current ?? 0); };
+    again();
+    const slow = setInterval(again, 30_000);
+    const t = setInterval(read, 8_000);
+    const onBack = () => { if (document.visibilityState === "visible") { read(); again(); } };
+    window.addEventListener("focus", onBack);
+    document.addEventListener("visibilitychange", onBack);
+    return () => {
+      live = false;
+      clearInterval(t);
+      clearInterval(slow);
+      window.removeEventListener("focus", onBack);
+      document.removeEventListener("visibilitychange", onBack);
+    };
+  }, [root, detail?.headRefName]);
+
+  const arrivedRef = useRef<{ key: string; last: number } | null>(null);
+  useEffect(() => {
+    const newest = newAtoms.length ? newAtoms[newAtoms.length - 1]!.at : 0;
+    const before = arrivedRef.current;
+    arrivedRef.current = { key, last: newest };
+    if (!key || !before || before.key !== key || newest <= before.last) return;
+    const fresh = newAtoms.filter((a) => a.at > before.last);
+    const who = [...new Set(fresh.map((a) => a.author))].join(", ");
+    flash(true, fresh.length === 1
+      ? `${who} just commented — ${fresh[0]!.where}`
+      : `${fresh.length} new comments — ${who}`);
+  }, [key, newAtoms, flash]);
+
   // How this repository merges: your last choice on it if it still allows that
   // method, and otherwise the one GitHub's own button would have arrived on.
   const mergeMethod = pickMergeMethod(repo ? methods[repo.key] : undefined, detail?.mergePolicy);
@@ -2680,7 +3116,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const byTime = <T,>(xs: T[], at: (x: T) => string) =>
       [...xs].sort((p, q) => at(p).localeCompare(at(q)));
     return {
-      humans: byTime(detail.reviews.filter((r) => !r.isBot && (r.body.trim() || r.state !== "COMMENTED")), (r) => r.submittedAt),
+      // `reviewSpeaks` rather than the rule written out here: the counter above
+      // the timeline applies the same test, and when the two drifted apart the
+      // count said three over two visible markers.
+      humans: byTime(detail.reviews.filter((r) => !r.isBot && reviewSpeaks(r)), (r) => r.submittedAt),
       botReviews: byTime(detail.reviews.filter((r) => r.isBot && r.body.trim()), (r) => r.submittedAt),
       humanComments: byTime(detail.comments.filter((c) => !c.isBot), (c) => c.createdAt),
       bots: byTime(detail.comments.filter((c) => c.isBot), (c) => c.createdAt),
@@ -2702,9 +3141,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // already merged or been closed — GitHub takes the review form away too.
   const canReview = !!d && !d.viewerDidAuthor && d.state === "OPEN";
 
-  const TABS: { id: Tab; label: string; n?: number; warn?: boolean; one?: boolean }[] = d ? [
+  const TABS: { id: Tab; label: string; n?: number; warn?: boolean; one?: boolean; hot?: number }[] = d ? [
     { id: "overview", label: "Overview" },
-    { id: "conversation", label: "Conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length },
+    // `hot` is what has been said since you last looked. Its own field rather
+    // than `warn`: amber on Checks means something is broken, and a colleague
+    // answering you is not a failure — it is the one thing on this panel worth
+    // walking towards.
+    { id: "conversation", label: "Conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length, hot: newAtoms.length },
     { id: "commits", label: "Commits", n: d.commits.length },
     // `one` because Files stopped being a list of diffs: it is the tree, the
     // diff and the rail at once, and a tab that behaves unlike its neighbours
@@ -2822,7 +3265,27 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}${listState.loading || listState.checksPending ? " · updating" : ""}`
                 : "")}
           </span>
-          <Btn onClick={() => loadList(true)} disabled={busy} small>Refresh</Btn>
+          {/*
+            * Refresh means "ask again for what is in front of me".
+            *
+            * It forced the main list and nothing else: the board'"'"'s own two
+            * lists were re-read from the server'"'"'s cache, so a pull request that
+            * arrived after that cache was filled stayed invisible however many
+            * times it was pressed. Reported that way — a review requested of
+            * him, present in the list the server serves, and absent from the
+            * lane for it.
+            *
+            * Now: both board lists forced, the open pull request forced, and
+            * the counts that go stale with them dropped.
+            */}
+          <Btn onClick={() => {
+            forgetBehind();
+            forgetRollups();
+            boardForce.current = true;
+            setBoardTick((n) => n + 1);
+            loadList(true);
+            if (selected != null) loadDetail(selected, true);
+          }} disabled={busy} small>Refresh</Btn>
         </div>
       </div>
 
@@ -2896,7 +3359,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               ))}
             </div>
           </div>
-          {repo && prs.length > 0 && (
+          {/* Always, once the repository is known — not "once rows arrived".
+              The bar is built from the rows, so gating it on them made it drop
+              in a second late and shove the board down. It draws its own
+              placeholder row until it has something to count. */}
+          {repo && (
             <PrFilterBar
               query={query}
               filters={filters}
@@ -2935,7 +3402,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
                 onShowTable={() => { setBoard(false); setFilter("all"); setQuery(""); }}
                 busy={busy}
-                loading={boardLoading}
+                loading={boardLoading} settling={boardSettling} acting={actingOn} root={root}
                 /* Whoever opened them. A pinned pull request of a colleague's
                    is in no lane on this board, which is exactly why the strip
                    exists. */
@@ -2961,9 +3428,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   // available" is not a reason to skip the guard.
                   if (what === "merge") {
                     if (!p.headSha) { flash(false, "Merge — still reading this one's checks"); return; }
-                    void act("Merge", () => api.prMerge(root, p.number, mergeMethod, { headSha: p.headSha }));
+                    setActingOn(p.number);
+                    void act("Merge", () => api.prMerge(root, p.number, mergeMethod, { headSha: p.headSha }))
+                      .finally(() => setActingOn(null));
                   }
-                  else if (what === "rerun") void act("Re-run checks", () => api.prRerun(root, p.number));
+                  else if (what === "rerun") {
+                    setActingOn(p.number);
+                    void act("Re-run checks", () => api.prRerun(root, p.number)).finally(() => setActingOn(null));
+                  }
                   else openPr(p.number);
                 }} />
             ) : listState.needsAuth ? (
@@ -3054,11 +3526,28 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             </div>
           )}
           {!d ? (
-            // An error is a message and belongs at the top where messages go; a
-            // wait belongs in the middle of the space it is about to fill.
-            detailErr
-              ? <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{detailErr}</div>
-              : <Loading label={`Loading #${selected}…`} fill />
+            /*
+             * A wait in the SHAPE of the thing being waited for.
+             *
+             * It was a spinner in the middle of the pane, so a pull request did
+             * not arrive, it REPLACED something: a centred word one moment, and
+             * a masthead, a row of tabs and a page of text the next. Everything
+             * on screen moved. The skeleton stands where the real blocks will
+             * stand, so landing is a fill rather than a jump.
+             *
+             * An error is a message and belongs at the top where messages go —
+             * and it now carries the one thing it never had: a way to try again.
+             */
+            detailErr ? (
+              <div className="p-4 flex items-baseline gap-2 flex-wrap text-[11.5px]" style={{ color: "var(--error)" }}>
+                <span>{detailErr}</span>
+                <button onClick={() => { setDetailErr(""); if (selected != null) loadDetail(selected, true); }}
+                  className="agx-btn px-2 py-0.5 rounded text-[10.5px]"
+                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  Try again
+                </button>
+              </div>
+            ) : <DetailSkeleton number={selected} />
           ) : (
             <>
               {/* `onLocalReview` is wrapped rather than passed by reference:
@@ -3080,7 +3569,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               {fieldPicker.node}
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
                 {TABS.map((t) => (
-                  <button key={t.id} onClick={() => setTab(t.id)} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
+                  <button key={t.id}
+                    /* Written from the live element on the way out, as well as
+                       on scroll. A tab whose content shrinks is clamped by the
+                       browser the moment the new one renders, and a value read
+                       after that is zero. */
+                    onClick={() => {
+                      const el = tabBodyRef.current;
+                      if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;
+                      setTab(t.id);
+                    }} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
                     style={{
                       color: tab === t.id ? "var(--text)" : "var(--text3)",
                       borderBottom: `2px solid ${tab === t.id ? "var(--primary)" : "transparent"}`,
@@ -3098,6 +3596,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         with no count at all — a verdict is owed and nothing is
                         queued — which is a tint with nothing to tint. */}
                     {t.warn && <span className="ml-1" style={{ color: "var(--warning)" }}>●</span>}
+                    {/* Said as a number, not a dot: "somebody replied" and
+                        "seven people replied while you were at lunch" are
+                        different sizes of the same news, and the second is why
+                        you would leave what you are doing. */}
+                    {!!t.hot && (
+                      <span className="ml-1.5 text-[9.5px] px-1.5 rounded-full tabular-nums align-middle"
+                        title={`${t.hot} new since you last looked`}
+                        style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
+                          border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                        {t.hot} new
+                      </span>
+                    )}
                     {t.one && (
                       <span className="ml-1.5 text-[10px] px-1 rounded align-middle"
                         title="The tree, the diff and what the rest of the pull request says about the file you are on — all at once"
@@ -3137,13 +3647,32 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   columns scroll inside it, which is what the mockup means by
                   putting `overflow:auto` on each of the three. */}
               <CommitJumpCtx.Provider value={jumpToCommit}>
-              <div className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
+              <div ref={tabBodyRef} className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
                 onScroll={(e) => {
-                  // Hysteresis, not a threshold: a single line would flip the
-                  // masthead open and shut on every pixel of a trackpad wobble,
-                  // and it takes a row of the page with it each time.
-                  const y = e.currentTarget.scrollTop;
-                  setCondensed((was) => (was ? y > 24 : y > 72));
+                  /*
+                   * Files is a frame, not a page, and frames do not scroll.
+                   *
+                   * `overflow: hidden` stops a SCROLLBAR; it does not stop the
+                   * box from being scrolled. Anything inside that reveals
+                   * itself — a focused field, a `scrollIntoView` — walks up the
+                   * ancestors and moves this one, and with no scrollbar there
+                   * is nothing to put it back. Reported as the whole three
+                   * columns and the masthead sliding up by a few pixels and
+                   * staying there. Snapped back rather than prevented, because
+                   * the browser does it for reasons of its own and there is no
+                   * one place to intercept.
+                   */
+                  const el = e.currentTarget;
+                  if (tab === "files") {
+                    if (el.scrollTop || el.scrollLeft) { el.scrollTop = 0; el.scrollLeft = 0; }
+                    return;
+                  }
+                  const y = el.scrollTop;
+                  // Where this TAB was left. One box scrolls all of them, so
+                  // without this, reading to the bottom of Conversation and
+                  // stepping to Overview landed you at the bottom of Overview —
+                  // a page you had never scrolled. Reported exactly that way.
+                  tabScroll.current[tab] = y;
                 }}>
                 {(tab === "overview" || tab === "conversation") ? (
                   <div className="flex gap-4 items-start">
@@ -3152,7 +3681,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         <Overview
                           d={d} root={root} busy={busy} mergeWork={mergeWork} openThreads={openThreads.length}
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
-                          behind={behind} localHead={localHead}
+                          behind={behind} behindAsking={behindAsking} localHead={localHead} busyWhat={busyWhat}
                           conflictFiles={conflictFiles}
                           onEditRequest={() => setEditingBody(true)}
                           onLocalReview={() => doLocalReview()}
@@ -3165,7 +3694,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                             // empty rollup, so the panel has to already know
                             // why it is empty.
                             setPushed({ number: d.number, at: Date.now() });
-                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal));
+                            /* Thrown away AFTER it lands, not before: dropped
+                               first, the store simply re-asks GitHub for a
+                               count that has not changed yet and caches the old
+                               one all over again. */
+                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal))
+                              .finally(() => refreshBehind(root, d.number));
                           }}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={doAutoMerge}
@@ -3177,6 +3711,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                       ) : (
                         <Conversation
                           d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy} onComment={doComment}
+                          atoms={newAtoms} newSet={newSet} onMarkRead={markPrRead}
+                          sinceMine={sinceMine} onUnmarkRead={unmarkPrRead}
                           onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                           onReply={doReply}
                           onApply={doApplySuggestion}
@@ -3266,7 +3802,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                 <div className="my-2">
                                   {commitBusy ? <Loading label="Loading the diff…" size={18} />
                                     : commitFiles.length === 0 ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>This commit changed nothing textual</div>
-                                    : <FileStack files={commitFiles} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} />}
+                                    : <FileStack files={commitFiles} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} scope={c.oid} />}
                                 </div>
                               )}
                             </div>
@@ -3276,7 +3812,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     ))}
                     {d.truncated?.commits && (
                       <div className="text-[10px] px-1" style={{ color: "var(--warning)" }}>
-                        Showing the most recent {d.truncated.commits} commits — GitHub caps a page at that.
+                        Showing the most recent {d.truncated.commits} commits — a branch with more history than that is only listed in full on GitHub.
                       </div>
                     )}
                   </div>
@@ -3293,7 +3829,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   <div className="flex min-h-0 gap-0 items-start h-full">
                   <div className="flex-1 min-w-0 h-full">
                   <FilesTab
-                    d={d} root={root} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
+                    d={d} root={root} byPath={byPath} loaded={!!diff} diffErr={diffErr} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} onShowing={setShowingFile}
                     split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
                     drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment} onDropDraft={dropDraftItem}
@@ -3356,6 +3892,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     onApprove={canReview ? () => setMyReview({ verb: "approve" }) : undefined}
                     onRequestChanges={canReview ? () => setMyReview({ verb: "request_changes" }) : undefined}
                     onComment={canReview ? () => setMyReview({ verb: "comment" }) : undefined}
+                    /* The same draft the Review tab holds — see `body` on the
+                       rail. Two boxes with two bodies is a way to lose the one
+                       you typed in the other. */
+                    body={myReview.body} busyWhat={busyWhat}
+                    onBody={canReview ? (v: string) => setMyReview({ body: v }) : undefined}
                     /*
                      * The guard stays here, and it is the Review tab's: the rail
                      * cannot see the body being typed, so it cannot know whether
@@ -3379,7 +3920,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
                 {tab === "checks" && (
                   <Checks
-                    d={d} root={root} jobs={jobs} busy={busy}
+                    d={d} root={root} jobs={jobs} busy={busy} busyWhat={busyWhat}
                     onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                     onRerunJobs={(what, id) => act("Re-run", () => api.prRerunJobs(root, what, id))}
                     onAsk={onOpenChatWith ? (k) => askClaudeAboutCheck(k) : undefined}
@@ -3388,7 +3929,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
                 {tab === "review" && canReview && (
                   <ReviewTab
-                    d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy}
+                    d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
                     draft={myReview} onDraft={setMyReview}
                     onDrop={dropDraft} onSubmit={submitReview} onGoFiles={() => setTab("files")}
                   />
@@ -3499,7 +4040,7 @@ function ConflictActions({ root, number, branch, base, disabled }: {
   );
 }
 
-function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, behind, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditRequest, awaitingChecks }: {
+function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditRequest, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -3527,6 +4068,12 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
    *  the phone — and the button then behaves as it always did. */
   onReviewInTerminal?: () => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
+  /** Still asking how far behind the branch is. The row keeps its place and
+   *  says it is working, rather than growing a button a second later. */
+  behindAsking?: boolean;
+  /** The `act` label of the request in flight, so the button that started it is
+   *  the one that spins. */
+  busyWhat?: string;
   onUpdateBranch: (syncLocal: boolean) => void;
   onEditRequest: () => void;
   /** This panel pushed to the branch a moment ago, so runs are expected — see
@@ -3655,7 +4202,7 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
           </div>
           <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
             style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-            {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} title="Put it back to open, with its comments and reviews intact">↺ Reopen</Btn>}
+            {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} pending={busyWhat === "Reopen"} title="Put it back to open, with its comments and reviews intact">↺ Reopen</Btn>}
             <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open on GitHub ↗</a>
           </div>
@@ -3873,12 +4420,12 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
               would leave it armed with no way to disarm it. Arming a new one
               over a conflict is not offered. */}
           {d.autoMerge
-            ? <Btn onClick={onCancelAutoMerge} disabled={busy} warn title={`Armed by ${d.autoMerge.enabledBy}`}>Cancel auto-merge</Btn>
+            ? <Btn onClick={onCancelAutoMerge} disabled={busy} warn pending={busyWhat === "Auto-merge cancelled"} title={`Armed by ${d.autoMerge.enabledBy}`}>Cancel auto-merge</Btn>
             : !conflicted && (
               /* The right button in the waiting window, so it says so there.
                  Somebody who has just restarted CI and wants to stop thinking
                  about this pull request is asking for exactly this. */
-              <Btn onClick={onAutoMerge} disabled={busy || autoOff}
+              <Btn onClick={onAutoMerge} disabled={busy || autoOff} pending={busyWhat === "Auto-merge"}
                 title={autoOff
                   ? "Auto-merge is off for this repository — Settings › General › Pull requests › Allow auto-merge"
                   : awaitingChecks
@@ -3924,6 +4471,21 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
           {d.mergeable === "CONFLICTING" && (
             <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} disabled={busy} />
           )}
+          {/*
+            * The space the answer will fill, while it is being fetched.
+            *
+            * How far behind the branch is arrives after the pull request does,
+            * so this button used to appear out of nowhere and push the rest of
+            * the row sideways. Reported as: if we know something is loading,
+            * say so there instead of springing a control on somebody.
+            */}
+          {!canUpdate && behindAsking && !conflicted && d.viewerCanUpdate !== false && (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10.5px]"
+              style={{ color: "var(--text4)", border: "1px dashed color-mix(in srgb, var(--text) 18%, transparent)" }}>
+              <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5 }} />
+              Checking the base…
+            </span>
+          )}
           {canUpdate && (
             /*
              * Not while the last push is still landing.
@@ -3937,6 +4499,7 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
              * that has already been closed.
              */
             <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn
+              pending={busyWhat === "Update branch"}
               title={awaitingChecks
                 ? "The branch was just updated — waiting for the checks to start. Pushing again would restart them."
                 : updateMove.title}>
@@ -3944,12 +4507,12 @@ function Overview({ d, root, busy, mergeWork, openThreads, conversationCount, be
           )}
           {/* Only with something to re-run. `failure > 0` already implies the
               rollup is populated, so this cannot appear over an empty one. */}
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks}
+          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks} pending={busyWhat === "Re-run checks"}
             title={awaitingChecks ? "A new run is already starting from the update" : "Run the failed checks again"}>
             Re-run failed</Btn>}
           <span className="ml-auto flex gap-1.5">
-            <Btn onClick={onDraft} disabled={busy} small>{d.isDraft ? "Mark ready" : "To draft"}</Btn>
-            <Btn onClick={onClose} disabled={busy} danger small>Close</Btn>
+            <Btn onClick={onDraft} disabled={busy} small pending={busyWhat === "Mark ready" || busyWhat === "Convert to draft"}>{d.isDraft ? "Mark ready" : "To draft"}</Btn>
+            <Btn onClick={onClose} disabled={busy} danger small pending={busyWhat === "Close"}>Close</Btn>
           </span>
           {/* Last in the row, so its own line is UNDER everything rather than
               between the update button and the pair pinned to the right — which
@@ -4375,41 +4938,85 @@ type PickOption = { value: string; label: string; sub?: string; color?: string; 
  * the way GitHub's label menu does — so ticking four labels is one write, not
  * four. Single-select (milestone) commits on the click.
  */
-function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose }: {
+function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose, side }: {
   anchor: DOMRect; title: string; hint: string; multi: boolean; loading: boolean;
   options: PickOption[]; selected: string[];
-  onCommit: (next: string[]) => void; onClose: () => void;
+  /** Writes the difference, and says whether it landed. `true` when there was
+   *  nothing to write — this is "is it safe to go on", not "did it write". */
+  onCommit: (next: string[]) => boolean | Promise<boolean>;
+  onClose: () => void;
+  /**
+   * The other half of the same errand, under the people.
+   *
+   * Assigning a reviewer here and moving the card in ClickUp are one motion in
+   * somebody's head and two applications on the screen. The list of people is
+   * three hundred pixels of a tall menu with room to spare beside it, so the
+   * other half of the errand goes there — optional, never automatic, and only
+   * when the pull request actually has a card.
+   */
+  side?: (h: {
+    folded: boolean;
+    onFold: (v: boolean) => void;
+    onPlan: (p: { lines: string[]; run: () => Promise<boolean> }) => void;
+  }) => React.ReactNode;
 }) {
+  /* Folded to a line by default, and the line sits ABOVE Done: the errand is
+     the reviewer, and this is the thing you may also want. */
+  const [sideFolded, setSideFolded] = useState(true);
+  const [plan, setPlan] = useState<{ lines: string[]; run: () => Promise<boolean> }>({ lines: [], run: async () => true });
+  /* One button for both halves, and a summary before either happens: the two
+     writes land on two different companies' servers and only one of them can be
+     undone from here. */
+  const [asking, setAsking] = useState(false);
+  const [running, setRunning] = useState(false);
+  /** What went wrong, kept on the menu: it is still open over the toast. */
+  const [failed, setFailed] = useState("");
+  useEffect(() => { if (!plan.lines.length) setAsking(false); }, [plan.lines.length]);
   const [sel, setSel] = useState<string[]>(selected);
   const [q, setQ] = useState("");
   const selRef = useRef(sel); selRef.current = sel;
   const box = useRef<HTMLDivElement>(null);
 
-  const commitClose = useCallback(() => { onCommit(selRef.current); onClose(); }, [onCommit, onClose]);
-
   useEffect(() => {
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) commitClose(); };
-    // Escape abandons without writing; an outside click or a resize commits, so
-    // the change you made by ticking is not silently lost by looking away.
+    /*
+     * Looking away does not write.
+     *
+     * An outside click used to commit, the way GitHub's own label menu does —
+     * and with a Done button on the menu that is a second, invisible way to
+     * write: he ticked a reviewer, never pressed Done, and the request went out
+     * anyway. One writer, and it is the button. Escape and clicking away both
+     * abandon, which is what a button at the bottom promises.
+     */
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) onClose(); };
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
     document.addEventListener("mousedown", away);
     document.addEventListener("keydown", key, true);
-    window.addEventListener("resize", commitClose);
+    // The menu is placed against a rectangle measured when it opened, so a
+    // resize leaves it somewhere else entirely. Closing is honest; writing on
+    // the way out is not.
+    window.addEventListener("resize", onClose);
     return () => {
       document.removeEventListener("mousedown", away);
       document.removeEventListener("keydown", key, true);
-      window.removeEventListener("resize", commitClose);
+      window.removeEventListener("resize", onClose);
     };
-  }, [commitClose, onClose]);
+  }, [onClose]);
 
   const toggle = (v: string) => {
-    if (!multi) { onCommit([v]); onClose(); return; }
+    if (!multi) { void onCommit([v]); onClose(); return; }
     setSel((s) => s.includes(v) ? s.filter((x) => x !== v) : [...s, v]);
   };
+
+  /* What the GitHub half would do — nothing, most of the time. The summary said
+     "Set reviewers on GitHub" whether or not a single tick had moved. */
+  const ghChanged = sel.filter((x) => !selected.includes(x)).length + selected.filter((x) => !sel.includes(x)).length;
 
   const t = q.trim().toLowerCase();
   const shown = t ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t)) : options;
 
+  /* One width, always. The menu is already tall — that is the space going
+     spare, not the width — so the other half of the errand stacks under the
+     people rather than beside them. */
   const W = 300;
   const left = Math.round(Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)));
   const top = Math.round(Math.min(anchor.bottom + 6, window.innerHeight - 140));
@@ -4419,6 +5026,11 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
     <Portal>
       <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+        {/* `min-h-0`, and it is the whole bug: a flex child'"'"'s default floor is
+            its content, so the people list grew past the menu instead of
+            scrolling inside it — taking the ClickUp half and Done off the
+            bottom with it, and leaving nothing to scroll. */}
+        <div className="flex flex-col min-w-0 min-h-0 flex-1">
         {/* px-5 to match viewHeaderClass, which is the row directly above this
             one. At px-3 the filter chips started 8px to the left of the repo
             chips they sit under — two left edges in one header, which is the
@@ -4452,14 +5064,341 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             );
           })}
         </div>
+        </div>
+        {side?.({ folded: sideFolded, onFold: setSideFolded, onPlan: setPlan })}
         {multi && (
-          <div className="p-1.5 shrink-0 flex" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-            <button onClick={commitClose} className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px]"
-              style={{ background: "var(--primary)", color: "var(--bg)" }}>Done</button>
+          <div className="p-1.5 shrink-0 flex flex-col gap-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            {asking && (
+              /* What is about to happen, in the order it will happen, and
+                 nothing that is not a change. Read once and accepted, rather
+                 than two buttons pressed hopefully. */
+              <div className="px-1 text-[10.5px]" style={{ color: "var(--text2)" }}>
+                <div className="mb-1" style={{ color: "var(--text4)" }}>This will:</div>
+                {ghChanged > 0 && <div>· {title} on GitHub</div>}
+                {/* Nothing that is not a change: with an empty plan there is
+                    nothing to confirm and this step does not happen at all. */}
+                {plan.lines.map((l) => <div key={l}>· {l}</div>)}
+              </div>
+            )}
+            {failed && (
+              /* Said here rather than only in the toast: the menu is still open
+                 over it, and the toast is behind the menu. */
+              <div className="px-1 text-[10.5px]" style={{ color: "var(--warning)" }}>{failed}</div>
+            )}
+            <div className="flex items-center gap-2">
+              {asking && (
+                <button onClick={() => setAsking(false)} className="agx-btn px-2 py-1 rounded text-[10.5px]"
+                  style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>Back</button>
+              )}
+              <button
+                onClick={async () => {
+                  /* Nothing to confirm when this is only the GitHub half. */
+                  if (!plan.lines.length) { void onCommit(selRef.current); onClose(); return; }
+                  if (!asking) { setAsking(true); return; }
+                  setRunning(true);
+                  setFailed("");
+                  /* GitHub first, and ClickUp only if it landed — and now it is
+                     awaited, which is what makes that sentence true. A card that
+                     says "code review, assigned to you" over a pull request
+                     nobody was asked to review is a worse state than an
+                     unfinished one. */
+                  const wrote = await onCommit(selRef.current);
+                  if (wrote === false) {
+                    setRunning(false);
+                    setFailed("GitHub refused that, so the card was left alone.");
+                    return;
+                  }
+                  const moved = await plan.run();
+                  setRunning(false);
+                  if (!moved) { setFailed("The card did not move — GitHub is done."); return; }
+                  onClose();
+                }}
+                disabled={running}
+                className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px] inline-flex items-center gap-1.5 disabled:opacity-50"
+                style={{ background: "var(--primary)", color: "var(--bg)" }}>
+                {running && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />}
+                {/* The button names what it is about to do. "Done · and
+                    ClickUp" over a menu where only the card changed claimed a
+                    GitHub write that was not going to happen. */}
+                {asking
+                  ? (ghChanged ? "Yes, do both" : "Yes, move the card")
+                  : plan.lines.length
+                    ? (ghChanged ? "Done · and ClickUp" : "Move the card")
+                    : "Done"}
+              </button>
+            </div>
           </div>
         )}
       </div>
     </Portal>
+  );
+}
+
+/**
+ * The same errand, on the other board.
+ *
+ * A reviewer goes on the pull request and the card goes to Code Review — one
+ * motion, two applications, and the second one is the one people forget. It is
+ * offered beside the people list rather than after it, and nothing here happens
+ * until Apply is pressed: assigning on GitHub must never be conditional on
+ * ClickUp being reachable, or right, or wanted.
+ *
+ * Only when the pull request really carries a card. `mergeCardRef` is the
+ * strict reader — a reference in a branch name alone is a convention other
+ * trackers share — and the same one the merge dialog trusts before it writes.
+ */
+function ClickUpSide({ d, folded, onFold, onPlan, note }: {
+  d: PrDetail;
+  /** Folded by default: most presses of this menu are only about the reviewer. */
+  folded: boolean;
+  onFold: (v: boolean) => void;
+  /** How this half says what happened. It used to say nothing at all — which is
+   *  why a card that refused two of its three writes looked like a success. */
+  note: (ok: boolean, msg: string) => void;
+  /**
+   * What this half would do, and how to do it — handed up so the menu can put
+   * ONE button at the bottom for both halves of the errand.
+   *
+   * `lines` is the summary somebody confirms. It lists only what actually
+   * changes: a card already in Code Review being "moved" to Code Review is not
+   * a change, and neither is leaving yourself on it. With nothing in it, this
+   * half sends nothing at all and the press is a GitHub assignment.
+   */
+  onPlan: (plan: { lines: string[]; run: () => Promise<boolean> }) => void;
+}) {
+  const setup = useClickupSetup();
+  /*
+   * On the branch and the title, not on the object they arrived in.
+   *
+   * `d` is a new object on every poll of the pull request, carrying the same
+   * card — and this was memoized on `d`, so a new `ref` appeared every few
+   * seconds, the effect below started over, and whoever you had just ticked was
+   * replaced by whoever the card had on it. Reported after measuring it: "a los
+   * segundos lo seleccionado se ha reiniciado al estado inicial".
+   */
+  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  /* The card, as a string. Everything below keys off this rather than off `ref`
+     — an object rebuilt each render is a dependency that is never equal. */
+  const query = ref?.query ?? "";
+  const label = ref?.label ?? "";
+  const [card, setCard] = useState<{ id: string; title: string; status: string; updated?: number; listId?: string } | null>(null);
+  const [statuses, setStatuses] = useState<CuStatus[]>([]);
+  const [members, setMembers] = useState<CuMember[] | null>(null);
+  const [on, setOn] = useState<Set<number>>(new Set());
+  const [was, setWas] = useState<Set<number>>(new Set());
+  const [pick, setPick] = useState<string>("");
+  const [q, setQ] = useState("");
+  const [stOpen, setStOpen] = useState(false);
+  /* Folded away, and it comes back.
+     This is the optional half of the errand and most presses of this menu are
+     only about the reviewer — so it can be put away to a strip, which leaves
+     the people list the whole width, and pulled out again with one press. The
+     choice is not remembered on purpose: it is per errand, not a setting. */
+
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!query) return;
+    let live = true;
+    setErr("");
+    void (async () => {
+      const found = await api.clickupFind(query).catch(() => null);
+      if (!live) return;
+      if (!found?.ok || !found.task) { setErr(found?.error || "ClickUp could not find it"); return; }
+      const t = found.task;
+      const people = new Set<number>((t.people ?? []).map((p) => p.id).filter((n): n is number => n != null));
+      setCard({ id: t.id, title: t.title, status: t.status, updated: t.updated, listId: t.listId });
+      setOn(people); setWas(new Set(people));
+      if (!t.listId) return;
+      const [meta, mem] = await Promise.all([
+        api.clickupList(t.listId).catch(() => null),
+        api.clickupMembers(t.listId).catch(() => null),
+      ]);
+      if (!live) return;
+      const st = meta?.ok ? (meta.statuses ?? []) : [];
+      setStatuses(st);
+      setMembers(mem?.ok ? (mem.members ?? []) : []);
+      /* Code review by default, found by asking the LIST rather than by
+         knowing the word: one board's "Code Review" is another's "In review".
+         The match is on the name because that is all a status has, and the
+         fallback is to leave it exactly where it is. */
+      const review = st.find((x) => /review/i.test(x.status) && x.type !== "done" && x.type !== "closed");
+      setPick(review && review.status !== t.status ? review.status : "");
+    })();
+    return () => { live = false; };
+  }, [query]);
+
+  const nameOf = useCallback(
+    (id: number) => (members ?? []).find((m) => m.id === id)?.name || `#${id}`,
+    [members],
+  );
+
+  /*
+   * Only what actually changes, worked out in one place.
+   *
+   * A card already in Code Review being "moved" to Code Review is not a change,
+   * and leaving yourself on it is not an assignment. With none of them this half
+   * is silent and the press is a GitHub assignment, which is exactly what it is.
+   */
+  const plan = useMemo(
+    () => cardPlan({ label, pick, statusNow: card?.status, on, was, nameOf }),
+    [label, pick, card?.status, on, was, nameOf],
+  );
+
+  const run = useCallback(async () => {
+    if (folded || !card || !plan.lines.length) return true;
+    /*
+     * One write, not three.
+     *
+     * It used to be a loop of assignments and then the status, each carrying
+     * `card.updated` — the stamp read when the menu opened. The first write
+     * moves that stamp, so ClickUp refused the rest as "somebody changed this
+     * card while you had it open", and nothing checked the answer: he was told
+     * the card would move to Code Review, gain Ana and lose him, and what
+     * happened was only the first of the three.
+     */
+    const r = await api.clickupCard(
+      card.id,
+      { add: plan.add, rem: plan.drop, status: plan.status || undefined },
+      card.updated,
+    ).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    note(r.ok, r.ok ? cardPlanNote(plan, label) : (r.error || `${label} did not move`));
+    if (r.ok) {
+      setWas(new Set(on));
+      setPick("");
+      const moved = plan.status;
+      setCard((c) => c ? { ...c, status: moved || c.status, updated: r.task?.updated ?? c.updated } : c);
+      /* The sidebar is holding the status this write just changed. Throwing it
+         away is what makes the card's own section agree with the menu that
+         moved it, without waiting out the minute. */
+      forgetCard(query);
+    }
+    return r.ok;
+  }, [folded, card, plan, on, label, note, query]);
+
+  /* Folded means "not this time": the plan it publishes is empty, so the button
+     downstairs goes back to plain Done. It was still announcing its changes
+     while put away, which left "Done · and ClickUp" on a menu with nothing
+     showing. */
+  useEffect(() => { onPlan({ lines: folded ? [] : plan.lines, run }); }, [folded, plan, run, onPlan]);
+
+  /*
+   * Every hook above this line, and that is not a style rule.
+   *
+   * `ref` is null until `useClickupSetup` answers — a read cached for a minute,
+   * so on a menu opened a while later the first render has no card and the
+   * second one does. With the plan and the write below this return, those two
+   * renders ran a different number of hooks, React threw, and the window went
+   * black. That is the blank app in his screenshot.
+   */
+  if (!ref) return null;
+
+  const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
+    .sort((a, b) => {
+      const ah = on.has(a.id) ? 0 : 1, bh = on.has(b.id) ? 0 : 1;
+      if (ah !== bh) return ah - bh;
+      if (a.me !== b.me) return a.me ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  if (folded) {
+    return (
+      <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
+        className="agx-btn shrink-0 w-full flex items-center gap-2 px-3 py-1.5 text-[10.5px]"
+        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
+        <span aria-hidden>▴</span>
+        <span className="truncate">Also move {ref.label} in ClickUp</span>
+      </button>
+    );
+  }
+
+  return (
+    /* Under the people, not beside them: the menu'"'"'s height is what was going
+       spare. Capped, so the list above it keeps most of the window and this
+       never pushes Done off the bottom. */
+    <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        <div className="flex items-center gap-2">
+          <div className="text-[11px] font-semibold min-w-0 truncate" style={{ color: "var(--text)" }}>
+            Also in ClickUp <span style={{ color: "var(--text4)", fontWeight: 400 }}>· optional</span>
+          </div>
+          <button onClick={() => onFold(true)} title="Leave the card alone — this folds away and comes back on the strip"
+            className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
+            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            Not now ▾
+          </button>
+        </div>
+        <div className="text-[10px] truncate" style={{ color: "var(--text3)" }} title={card?.title}>
+          {ref.label}{card ? ` · ${card.title}` : ""}
+        </div>
+      </div>
+      {err ? (
+        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--warning)" }}>{err}</div>
+      ) : !card ? (
+        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Looking it up…</div>
+      ) : (
+        <>
+          <div className="px-2 pt-2 pb-1 shrink-0">
+            <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Status</div>
+            {/* The card's own control, not a second design for the same choice:
+                a pill you press that opens a list of pills. A status has a
+                colour its board gave it, and a row of bordered words throws
+                that away — which is the one thing that makes this list
+                readable at a glance. */}
+            <button onClick={() => setStOpen((o) => !o)}
+              className="agx-btn w-full text-left rounded px-1 py-1 hover:bg-white/5 flex items-center gap-2">
+              <span className="min-w-0 truncate">
+                <StatusPill status={pick || card.status} color={statusColor(statuses, pick || card.status)} />
+              </span>
+              {!pick && <span className="text-[9.5px]" style={{ color: "var(--text4)" }}>unchanged</span>}
+              <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>▾</span>
+            </button>
+            {stOpen && (
+              <div className="agx-scroll mt-1 rounded-lg flex flex-col overflow-y-auto"
+                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", maxHeight: 220 }}>
+                <button className="text-left px-2 py-1.5 hover:bg-white/5 text-[10.5px]"
+                  style={{ color: "var(--text3)" }}
+                  onClick={() => { setPick(""); setStOpen(false); }}>
+                  leave it where it is
+                </button>
+                {statuses.filter((x) => x.status !== card.status).map((x) => (
+                  <button key={x.status} className="text-left px-2 py-1.5 hover:bg-white/5"
+                    onClick={() => { setPick(x.status); setStOpen(false); }}>
+                    <StatusPill status={x.status} color={x.color} dim={x.type === "done" || x.type === "closed"} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="px-2 pt-2 shrink-0">
+            <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter people…" spellCheck={false}
+              className="w-full px-2 py-1 rounded text-[11px] outline-none"
+              style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+          </div>
+          <div className="overflow-y-auto agx-scroll flex-1 min-h-0 py-1">
+            {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
+            {people.map((m) => (
+              <button key={m.id} onClick={() => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
+                className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
+                {/* The face, as everywhere else people are drawn in this app.
+                    Two initials is a puzzle in a workspace of five hundred. */}
+                {m.avatar
+                  ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
+                      style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+                  : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
+                      style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
+                      {m.initials}
+                    </span>}
+                <span className="truncate" style={{ color: on.has(m.id) ? "var(--success)" : "var(--text2)" }}>
+                  {m.name}{m.me ? " · you" : ""}
+                </span>
+                {on.has(m.id) && <span className="ml-auto text-[10px]" style={{ color: "var(--success)" }}>✓</span>}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -4481,7 +5420,10 @@ type PrAct = (label: string, fn: () => Promise<{ ok: boolean; error?: string; de
  * each write goes through the same add/remove endpoints, diffed against what
  * the PR has now.
  */
-function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct) {
+function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
+  /** How to say what happened on the other board — the panel's own toast, so a
+   *  ClickUp write reports where every other write reports. */
+  note: (ok: boolean, msg: string) => void) {
   const [facets, setFacets] = useState<Facets | null>(null);
   const [mentions, setMentions] = useState<Mentions | null>(null);
   const [loading, setLoading] = useState(false);
@@ -4508,7 +5450,11 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct) {
   const commit = (was: string[], label: string, fn: (add: string[], remove: string[]) => Promise<{ ok: boolean; error?: string; detail?: string }>) => (next: string[]) => {
     const add = next.filter((x) => !was.includes(x));
     const remove = was.filter((x) => !next.includes(x));
-    if (add.length || remove.length) void act(label, () => fn(add, remove));
+    // Nothing to write is not a failure — and the answer is awaited now, so
+    // "GitHub first, and the card only if it landed" is true rather than
+    // aspirational.
+    if (!add.length && !remove.length) return true;
+    return act(label, () => fn(add, remove));
   };
 
   let node: React.ReactNode = null;
@@ -4523,11 +5469,13 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct) {
       const was = d.reviewers.map((r) => r.login);
       node = <FieldPicker anchor={a} title="Request reviewers" hint="Collaborators on this repository" multi loading={loading}
         options={(mentions?.users ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+        side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
         options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+        side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Assignees", (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
     } else {
       // Milestone is one-of, not many: picking commits at once, and a leading
@@ -4537,11 +5485,85 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct) {
       node = <FieldPicker anchor={a} title="Set milestone" hint="Choose one, or clear it" multi={false} loading={loading}
         options={[{ value: "", label: "No milestone" }, ...(facets?.milestones ?? []).map((m) => ({ value: m, label: m }))]}
         selected={was} onClose={close}
-        onCommit={(next) => { const title = next[0] ?? ""; if (title !== (d.milestone ?? "")) void act("Milestone", () => api.prMilestone(root, d.number, title)); }} />;
+        onCommit={(next) => { const title = next[0] ?? ""; return title === (d.milestone ?? "") ? true : act("Milestone", () => api.prMilestone(root, d.number, title)); }} />;
     }
   }
 
   return { open, node };
+}
+
+/**
+ * Where the card stands, beside where the pull request stands.
+ *
+ * The panel already knows which card this is — the masthead chip opens it, and
+ * the reviewer menu moves it — and every answer to "has anybody picked this up"
+ * was on the other board, behind a click. Two facts, the two that decide
+ * whether it is waiting on somebody: the status, in the colour its board gave
+ * it, and who is on it.
+ *
+ * Read-only on purpose. Moving a card is the reviewer menu's errand, where it
+ * belongs to a GitHub assignment somebody is already making; a second place to
+ * change it is a second place to change it by accident.
+ */
+function CardFacts({ d }: { d: PrDetail }) {
+  const setup = useClickupSetup();
+  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  const query = ref?.query ?? "";
+  /* The store tells everyone when an answer lands; this only has to redraw.
+     Subscribed before the early return below — a pull request with no card
+     still runs every hook, because `setup` arrives a render late and a
+     component whose hook count changes takes the window with it. */
+  const [, redraw] = useState(0);
+  useEffect(() => onCard(() => redraw((n) => n + 1)), []);
+  const hit = cardOf(query);
+  const asking = askingCard(query);
+
+  if (!ref) return null;
+
+  const task = hit?.task ?? null;
+  return (
+    <SidebarSection title="ClickUp">
+      <div className="flex flex-col gap-1.5 min-w-0">
+        <button onClick={() => openCard(ref.query, ref.label)}
+          title={`Open ${ref.label} in Tasks${task ? ` — ${task.title}` : ""}`}
+          className="agx-btn text-[11px] text-left truncate" style={{ color: "var(--primary)" }}>
+          {ref.label}
+        </button>
+        {/* Something in the hole while it is asked for, rather than a section
+            that appears a second after the rest of the sidebar. */}
+        {!task ? (
+          <span className="text-[10.5px]" style={{ color: asking ? "var(--text3)" : "var(--warning)" }}>
+            {asking ? "Reading the card…" : (hit?.error || "ClickUp could not find it")}
+          </span>
+        ) : (
+          <>
+            <span className="min-w-0"><StatusPill status={task.status} color={task.statusColor} dim={task.statusKind === "done"} /></span>
+            {task.people?.length
+              ? (
+                <div className="flex flex-col gap-1">
+                  {task.people.map((p, i) => (
+                    <span key={p.id ?? `${p.name}-${i}`} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}>
+                      {/* The face, as everywhere else people are drawn here.
+                          Two initials is a puzzle in a workspace of five
+                          hundred. */}
+                      {p.avatar
+                        ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
+                            style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+                        : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
+                            style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
+                            {p.initials}
+                          </span>}
+                      <span className="truncate">{p.name}{p.me ? " · you" : ""}</span>
+                    </span>
+                  ))}
+                </div>
+              )
+              : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No one assigned</span>}
+          </>
+        )}
+      </div>
+    </SidebarSection>
+  );
 }
 
 function PrSidebar({ d, onEditField }: {
@@ -4616,6 +5638,9 @@ function PrSidebar({ d, onEditField }: {
           </div>
         </SidebarSection>
       )}
+      {/* Under the GitHub facts, where he asked for it: the pull request first,
+          and then the card it came from. */}
+      <CardFacts d={d} />
       {d.autoMerge && (
         <SidebarSection title="Auto-merge">
           <span className="text-[10.5px]" style={{ color: "var(--warning)" }}>
@@ -4994,14 +6019,67 @@ function DiffToolbar({ path, add, del, split, wrap, onSplit, onWrap, right }: {
   );
 }
 
+/**
+ * Where each file box inside a commit was scrolled to.
+ *
+ * Every one of them is its own scroller — a diff is capped at 520px and scrolls
+ * inside that — so leaving the tab and coming back put every open commit back
+ * at the top of every file. Keyed by the thing being read (the commit) and the
+ * file, and written on scroll rather than collected on the way out: a node that
+ * has left the document reports a scrollTop of zero, which is how the Files tab
+ * managed to remember zero perfectly for an hour.
+ */
+const DIFF_SCROLL = new Map<string, number>();
+
 /** Several files, each with its own header — how a commit reads. */
-function FileStack({ files, split, wrap, onSplit, onWrap }: {
+function FileStack({ files, split, wrap, onSplit, onWrap, scope }: {
   files: FileChange[]; split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
+  /** What these files belong to — a commit's sha. Without one nothing is
+   *  remembered, which is right for a caller that has no stable identity. */
+  scope?: string;
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const keyOf = (el: HTMLElement): string | null => {
+    const box = el.closest("[data-diff-file]") as HTMLElement | null;
+    const path = box?.dataset.diffFile;
+    if (!scope || !path) return null;
+    // A split diff has two scrollers side by side and they scroll together, but
+    // the key still says which, so restoring cannot cross them over.
+    return `${scope}:${path}:${(el as HTMLElement).dataset.side ?? "u"}`;
+  };
+  /* Put back after mount, and keep trying while the diff is still being
+     highlighted — the box is short until then and the offset gets clamped. */
+  useEffect(() => {
+    const root = wrapRef.current;
+    if (!root || !scope) return;
+    let alive = true;
+    const started = Date.now();
+    const put = () => {
+      if (!alive) return;
+      let done = true;
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-vscroll]"))) {
+        const k = keyOf(el);
+        const want = k ? DIFF_SCROLL.get(k) ?? 0 : 0;
+        if (!want) continue;
+        if (Math.abs(el.scrollTop - want) > 1) { el.scrollTop = want; done = false; }
+      }
+      if (done || Date.now() - started > 6_000) return;
+      requestAnimationFrame(put);
+    };
+    requestAnimationFrame(put);
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, files, split, wrap]);
   return (
-    <div className="flex flex-col gap-2">
+    <div ref={wrapRef} className="flex flex-col gap-2"
+      /* Capture, because a scroll event does not bubble. */
+      onScrollCapture={(e) => {
+        const el = e.target as HTMLElement;
+        const k = keyOf(el);
+        if (k) DIFF_SCROLL.set(k, el.scrollTop);
+      }}>
       {files.map((f, i) => (
-        <div key={f.file_path} className="rounded overflow-hidden flex flex-col"
+        <div key={f.file_path} data-diff-file={f.file_path} className="rounded overflow-hidden flex flex-col"
           style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", maxHeight: 520 }}>
           <DiffToolbar path={f.file_path} add={f.additions} del={f.deletions}
             split={split} wrap={wrap} onSplit={i === 0 ? onSplit : onSplit} onWrap={onWrap} />
@@ -5374,8 +6452,54 @@ const FILE_HEAD_H = 30;
 const vScrollerOf = (el: Element): HTMLElement | null =>
   verticalScrollerOf(el as HTMLElement, (e) => getComputedStyle(e).overflowY);
 
-function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
+/**
+ * The pull request, in the shape it will be, while it is being fetched.
+ *
+ * A centred spinner is honest about the wait and wrong about the space: the
+ * pull request does not arrive, it REPLACES the spinner, and a masthead, a row
+ * of tabs and a page of text all appear where a single word was. Standing the
+ * blocks where the real ones stand turns landing into a fill.
+ */
+function DetailSkeleton({ number }: { number: number | null }) {
+  const bar = (h: number, w: string, delay: number) => (
+    <div className="rounded animate-pulse" aria-hidden
+      style={{ height: h, width: w, background: "color-mix(in srgb, var(--text) 7%, transparent)", animationDelay: `${delay}s` }} />
+  );
+  return (
+    <div className="p-3 flex flex-col gap-3" role="status" aria-label={`Loading pull request ${number ?? ""}`}>
+      {/* masthead: title, then the strip of facts under it */}
+      <div className="flex flex-col gap-2">
+        {bar(20, "58%", 0)}
+        <div className="flex gap-4">{["96px", "120px", "88px", "104px"].map((w, i) => bar(11, w, 0.05 * (i + 1)))}</div>
+      </div>
+      {/* the tab row */}
+      <div className="flex gap-3 pt-1" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        {["64px", "92px", "70px", "58px", "62px"].map((w, i) => <div key={i} className="pb-2">{bar(11, w, 0.03 * i)}</div>)}
+      </div>
+      {/* the body: a wide column and the sidebar beside it, same as Overview */}
+      <div className="flex gap-4">
+        <div className="flex-1 min-w-0 flex flex-col gap-2">
+          {["100%", "94%", "88%", "62%"].map((w, i) => bar(12, w, 0.04 * i))}
+          <div className="mt-2 rounded-lg animate-pulse" aria-hidden
+            style={{ height: 120, background: "color-mix(in srgb, var(--text) 5%, transparent)" }} />
+        </div>
+        <div className="shrink-0 flex flex-col gap-2" style={{ width: 230 }}>
+          {["70%", "88%", "54%", "76%"].map((w, i) => bar(11, w, 0.05 * i))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Where the Files tab was left, per pull request. Outside the component
+ *  because the component is what goes away when you change tab. */
+const FILES_SCROLL = new Map<string, number>();
+
+function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
+  /** Why the diff is missing, when it is missing for a reason rather than for a
+   *  moment. Without it a refusal is drawn as a spinner. */
+  diffErr?: string;
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
   /**
@@ -5509,6 +6633,55 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
   const threadsFor = (p: string) => d.threads.filter((t) => t.path === p)
     .sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
   const frameRef = useRef<HTMLDivElement>(null);
+  /*
+   * Files scrolls inside itself, so the panel's per-tab memory cannot see it.
+   *
+   * This component unmounts when you step to another tab, which is why the
+   * store is outside it: a ref would go with the component. Keyed by pull
+   * request, so a different one starts at the top.
+   */
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const key = `${root}#${d.number}`;
+    const want = FILES_SCROLL.get(key) ?? 0;
+    if (want) {
+      let alive = true;
+      const started = Date.now();
+      const put = () => {
+        if (!alive) return;
+        if (el.scrollTop < want - 1) el.scrollTop = want;
+        if (Math.abs(el.scrollTop - want) <= 1 || Date.now() - started > 8_000) return;
+        requestAnimationFrame(put);
+      };
+      requestAnimationFrame(put);
+      return () => { alive = false; };
+    }
+    return;
+  }, [root, d.number]);
+  /*
+   * How tall the tree may be, measured rather than guessed.
+   *
+   * It cannot be a percentage: the tree is `sticky` in a row whose height is
+   * the diff's, so a percentage would resolve against a column of diff and let
+   * the tree grow past the screen. It cannot be `100vh - something` either:
+   * that "something" is a guess about everything above this frame, and on a
+   * screen where the guess is short the tree comes out taller than its own
+   * column — which is the scroll that belongs to nothing, dragging the toolbar
+   * and the file list up with it.
+   *
+   * So: the frame's own height, minus where the tree starts inside it, kept up
+   * to date by a ResizeObserver and published as a CSS variable.
+   */
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const put = () => el.style.setProperty("--agx-tree-max", `${Math.max(160, el.clientHeight - 76)}px`);
+    put();
+    const ro = new ResizeObserver(put);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   /**
    * How tall the sticky toolbar is, right now.
    *
@@ -5887,7 +7060,18 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
      * `vScrollerOf` finds this rather than the page, so j/k and the file jump
      * follow it without being told.
      */
-    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey} className="agx-col3 agx-scroll text-[11px] flex flex-col gap-2 outline-none">
+    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
+      /*
+       * Written on every scroll, never on the way out.
+       *
+       * The first version saved in the effect's cleanup — and by the time a
+       * passive cleanup runs the node is already out of the document, where
+       * `scrollTop` reads 0. So it faithfully remembered zero, every time, and
+       * the tab always came back at the top. Reported as "el scroll de la file
+       * abierta no se mantiene nunca".
+       */
+      onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); }}
+      className="agx-col3 agx-scroll text-[11px] flex flex-col gap-2 outline-none">
       {/* One bar, and it stays put: filter, view mode, progress. Everything that
           used to be repeated on each file's own toolbar lives here once.
 
@@ -5972,6 +7156,12 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
       {/* Tree on the left, diffs on the right — the arrangement GitHub uses, and
           the only way to keep your bearings in a change that touches thirty
           files. The tree is the navigator; the stack is still the reading. */}
+      {/* The row is as tall as the diff, on purpose: the tree is `sticky` inside
+          it, and a sticky element only stays put while its own row is still on
+          screen. Capping this row to the viewport — which is what the first fix
+          for the phantom scroll did — meant the tree unpinned and scrolled away
+          with the diff the moment you went past one screen. Reported that way.
+          The tree is capped by measurement instead, see `--agx-tree-max`. */}
       <div className="flex gap-3 items-start">
         {/* Always present in one-file mode: it is the only way to reach the
             other eight, so hiding it below five files would strand you. */}
@@ -5996,7 +7186,10 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
           noticed the hundred-and-first file was missing. Say it. */}
       {d.truncated?.files ? (
         <div className="text-[10px] px-1 py-1" style={{ color: "var(--warning)" }}>
-          {d.truncated.files} more file{d.truncated.files === 1 ? "" : "s"} changed than GitHub will return on one page — open it on GitHub to see the rest.
+          {/* Nine pages of names are fetched now, so this line means a branch of
+              nine hundred files and more — a vendor drop or a generated tree,
+              not a review somebody is reading top to bottom. */}
+          {d.truncated.files} more file{d.truncated.files === 1 ? "" : "s"} changed than this list holds — a branch this size is only listed in full on GitHub.
         </div>
       ) : null}
 
@@ -6112,7 +7305,14 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
                       the image put every PNG down the text path and rendered an
                       empty diff pane, which is why the image viewer never
                       appeared at all. */}
-                  {!loaded ? <Loading label="Loading the diff…" size={18} />
+                  {!loaded && diffErr ? (
+                    /* Said, not spun. GitHub refuses the whole-diff endpoint
+                       past 20,000 lines, and a refusal drawn as a spinner is a
+                       pane somebody waits at for ever. */
+                    <div className="text-[11px] p-3" style={{ color: "var(--warning)" }}>
+                      {diffErr}
+                    </div>
+                  ) : !loaded ? <Loading label="Loading the diff…" size={18} />
                     : diffKind(f.path, change?.hunks.length ?? 0) === "image"
                       ? <ImageDiff root={root} number={d.number} path={f.path} status={f.status} />
                     : change?.hunks.length ? (
@@ -6405,13 +7605,18 @@ function AssocChip({ a }: { a?: PrAuthorAssociation }) {
   return <Chip text={label} tint={tint} title={`GitHub says this author is ${label}`} />;
 }
 
-function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, onReact, children }: {
+function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, onReact, fresh, children }: {
   who: string; chip?: React.ReactNode; when?: string; tone?: "chg" | "appr" | "bot"; url?: string;
   edited?: string | null; assoc?: PrAuthorAssociation;
   nodeId?: string; reactions?: PrReaction[]; onReact?: (nodeId: string, content: string, on: boolean) => void;
+  /** Said since this browser last looked at the pull request. Wins over the
+   *  verdict tint: a two-day-old "requested changes" being green or red is
+   *  history, and "this arrived while you were away" is news. */
+  fresh?: boolean;
   children: React.ReactNode;
 }) {
-  const edge = tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : tone === "bot" ? "var(--info)" : "var(--border)";
+  const edge = fresh ? "var(--warning)"
+    : tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : tone === "bot" ? "var(--info)" : "var(--border)";
   return (
     /* `data-node` is the address the rail jumps to. The timeline's own entry
        key is positional inside a FILTERED lane, so it changes when the Humans
@@ -6425,6 +7630,10 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         <AssocChip a={assoc} />
         {chip}
+        {fresh && (
+          <span className="text-[9px] px-1.5 rounded-full"
+            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>new</span>
+        )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {when && <span className="text-[10px]" style={{ color: "var(--text3)" }}>{when}</span>}
           {/* GitHub says "edited" here, and it matters: the words you are
@@ -6487,9 +7696,18 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
   );
 }
 
-function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
+function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom }: {
   t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
+  /** The comments said since this browser last looked, by `${threadId}:${id}`.
+   *  Absent where the question does not arise — a thread drawn under a line in
+   *  the diff is somewhere you went deliberately, not somewhere you are being
+   *  told to look. */
+  newSet?: Set<string>;
+  /** The review this thread was submitted with, when it has been pulled out to
+   *  the top of the timeline for having moved on since. Without this the
+   *  promotion loses the one thing the nesting was for. */
+  cameFrom?: string;
   /** Rendered anchored under its line in the diff, not in the file's thread
    *  list: drop the path (obvious from where it sits) and the duplicated code
    *  snippet (the line is right above it). */
@@ -6512,8 +7730,31 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
    * Opening it again is one click and the state is local, so it stays open
    * while you read it and folds again on the next load.
    */
-  const [open, setOpen] = useState(!t.isResolved);
-  useEffect(() => { setOpen(!t.isResolved); }, [t.isResolved]);
+  /* A resolved thread with an unread reply in it opens anyway: "resolved" is a
+     statement about the code, and somebody answering after it is exactly the
+     case where folding hides the thing you came for. */
+  const hot = useMemo(
+    () => new Set(t.comments.map((c, i) => (newSet?.has(`${t.id}:${c.id}`) ? i : -1)).filter((i) => i >= 0)),
+    [t.comments, t.id, newSet],
+  );
+  const [open, setOpen] = useState(!t.isResolved || hot.size > 0);
+  useEffect(() => { setOpen(!t.isResolved || hot.size > 0); }, [t.isResolved, hot.size]);
+
+  /*
+   * The middle of a long thread, folded.
+   *
+   * A thread is read from its ends — what was raised, and what was last said.
+   * On the one this was written for, three long comments sat between the reader
+   * and the reply they were looking for, and none of the three was the point.
+   * The ends stay, anything new stays wherever it sits, and the rest becomes
+   * one line you can open.
+   */
+  const [unfolded, setUnfolded] = useState(false);
+  const hidden = useMemo(
+    () => (unfolded ? new Set<number>() : foldedIdx(t.comments.length, hot)),
+    [unfolded, t.comments.length, hot],
+  );
+  const last = t.comments[t.comments.length - 1];
   // A suggestion inside this thread knows the file and the lines because the
   // thread does. An outdated thread is refused: its lines have moved, so the
   // range in hand no longer points where the comment meant.
@@ -6541,7 +7782,28 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
             : `${t.path}${t.line ? `:${t.line}` : ""}`}
         </span>
         {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="The code under this comment has changed since" />}
+        {/* Where it came from, now that it no longer sits under it. */}
+        {cameFrom && (
+          <Chip text={`from ${cameFrom}'s review`} tint="var(--text3)"
+            title="Submitted with that review, and answered since — so it is shown at the time of its last reply rather than the review's" />
+        )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {/* How much conversation, and when it last moved. A thread carries two
+              dates and only one of them was ever on screen: "opened two days
+              ago" says nothing about the argument that happened this morning. */}
+          {t.comments.length > 1 && (
+            <span className="text-[10px] tabular-nums" style={{ color: "var(--text3)" }}
+              title={`Last reply ${ago(last?.createdAt ?? "")}`}>
+              {t.comments.length} replies · {ago(last?.createdAt ?? "")}
+            </span>
+          )}
+          {hot.size > 0 && (
+            <span className="text-[9.5px] px-1.5 rounded-full tabular-nums"
+              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--warning) 42%, transparent)" }}>
+              {hot.size} new
+            </span>
+          )}
           {t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}
           {/* The count is the whole point of a folded row: it says how much is
               under it, so you can tell a one-line "done" from an argument. */}
@@ -6556,8 +7818,20 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
       </div>
       {open && <>
       {!inline && <ThreadSnippet hunk={t.diffHunk} line={t.originalLine ?? t.line} />}
-      {t.comments.map((c, i) => (
-        <div key={c.id} className="px-3 py-3 relative"
+      {t.comments.map((c, i) => hidden.has(i) ? (
+        /* One line where the folded run is, drawn once — at the first of them,
+           so the button sits where the missing comments were rather than at the
+           end of the thread. */
+        i > 0 && !hidden.has(i - 1) ? (
+          <button key={c.id} onClick={() => setUnfolded(true)}
+            className="agx-btn w-full text-left px-3 py-1.5 text-[10.5px]"
+            style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+              background: "color-mix(in srgb, var(--border) 9%, transparent)" }}>
+            ▸ {hidden.size} earlier {hidden.size === 1 ? "reply" : "replies"}
+          </button>
+        ) : null
+      ) : (
+        <div key={c.id} id={anchorId(`${t.id}:${c.id}`)} className="px-3 py-3 relative"
           style={{
             paddingLeft: i ? 30 : 12,
             /* A reply hangs off what it answers, and now it looks like it. The
@@ -6569,6 +7843,13 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
                line back to the remark they all hang from. */
             borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined,
             background: i ? "color-mix(in srgb, var(--border) 9%, transparent)" : undefined,
+            /* Last, so it wins over the reply tint above rather than being
+               quietly overwritten by it — the whole point is that this one
+               block does not look like the others. */
+            ...(newSet?.has(`${t.id}:${c.id}`)
+              ? { background: "color-mix(in srgb, var(--warning) 10%, transparent)",
+                  boxShadow: "inset 2px 0 0 0 var(--warning)" }
+              : null),
           }}>
           {i > 0 && (
             <span aria-hidden className="absolute"
@@ -6578,6 +7859,12 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
           <div className="flex items-center gap-1.5 mb-1.5 text-[10px]">
             <Avatar login={c.author} size={15} />
             <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
+            {newSet?.has(`${t.id}:${c.id}`) && (
+              <span className="text-[9px] px-1.5 rounded-full"
+                style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
+                new
+              </span>
+            )}
             {c.isBot && <Chip text="automation" tint="var(--info)" />}
             <span className="ml-auto flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
               {ago(c.createdAt)}
@@ -6704,7 +7991,89 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   );
 }
 
-function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, onApply, busy, who, onWho }: {
+/**
+ * A minimap of what is new, down the side of the timeline.
+ *
+ * The bar above says how many; this says WHERE, against the length of the page
+ * they are hiding in — which is the thing a reader is actually estimating while
+ * they scroll ("is it worth carrying on, or has it gone past?"). Every entry
+ * gets a faint tick and the new ones an amber one, because a rail carrying only
+ * the amber marks says where they are without saying how much is between them.
+ *
+ * Sticky against the scroller so it stays in view like a scrollbar, with a band
+ * showing the part of the conversation currently on screen. Measured from the
+ * DOM rather than computed: the entries are markdown of unknown height, and
+ * anything else would be a guess that drifts the longer the page gets.
+ */
+function NewRail({ container, atoms, onGo, depKey }: {
+  container: React.RefObject<HTMLDivElement | null>;
+  atoms: NewAtom[];
+  onGo: (i: number) => void;
+  /** Changes whenever the timeline is redrawn — the marks are positions, and a
+   *  position measured before a filter changed is a lie. */
+  depKey: string;
+}) {
+  const [marks, setMarks] = useState<{ key: string; pct: number; i: number }[]>([]);
+  const [rows, setRows] = useState<number[]>([]);
+  const [view, setView] = useState<{ top: number; height: number } | null>(null);
+  const [tall, setTall] = useState(0);
+
+  useEffect(() => {
+    const el = container.current;
+    if (!el) return;
+    const scroller = vScrollerOf(el);
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      const h = box.height || 1;
+      const pctOf = (n: Element) => Math.max(0, Math.min(100, ((n.getBoundingClientRect().top - box.top) / h) * 100));
+      setMarks(atoms.flatMap((a, i) => {
+        const n = document.getElementById(anchorId(a.key));
+        return n ? [{ key: a.key, pct: pctOf(n), i }] : [];
+      }));
+      setRows([...el.querySelectorAll(".agx-ev")].map(pctOf));
+      if (scroller) {
+        setTall(scroller.clientHeight);
+        const sBox = scroller.getBoundingClientRect();
+        setView({
+          top: Math.max(0, Math.min(100, ((sBox.top - box.top) / h) * 100)),
+          height: Math.max(2, Math.min(100, (scroller.clientHeight / h) * 100)),
+        });
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    scroller?.addEventListener("scroll", measure, { passive: true });
+    return () => { ro.disconnect(); scroller?.removeEventListener("scroll", measure); };
+  }, [container, atoms, depKey]);
+
+  if (!marks.length) return null;
+  return (
+    <div className="shrink-0 self-start sticky" aria-hidden
+      style={{ top: 0, width: 9, height: tall || 240, position: "sticky" }}>
+      <div className="relative w-full h-full rounded"
+        style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)" }}>
+        {view && (
+          <span className="absolute left-0 right-0 rounded"
+            style={{ top: `${view.top}%`, height: `${view.height}%`, background: "color-mix(in srgb, var(--text) 7%, transparent)" }} />
+        )}
+        {rows.map((pct, i) => (
+          <span key={`r${i}`} className="absolute rounded-full"
+            style={{ top: `calc(${pct}% - 1px)`, left: 3, width: 3, height: 3, background: "color-mix(in srgb, var(--text) 26%, transparent)" }} />
+        ))}
+        {marks.map((m) => (
+          <button key={m.key} onClick={() => onGo(m.i)} title="Go to this one"
+            className="absolute rounded-full"
+            style={{ top: `calc(${m.pct}% - 2px)`, left: 1, width: 7, height: 5, background: "var(--warning)",
+              boxShadow: "0 0 5px color-mix(in srgb, var(--warning) 70%, transparent)", pointerEvents: "auto" }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, onApply, busy, who, onWho,
+  atoms, newSet, onMarkRead, sinceMine, onUnmarkRead }: {
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
@@ -6717,31 +8086,127 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      to clear it: the row you are being sent to may be a bot's, and landing on a
      conversation filtered to Humans scrolls to nothing and reads as a dead
      button. */
-  who: "all" | "human" | "bot"; onWho: (v: "all" | "human" | "bot") => void;
+  who: ConvWho; onWho: (v: ConvWho) => void;
+  /** What has been said since this browser last looked, oldest first, and the
+   *  same thing as a set so a comment can ask about itself in one step. */
+  atoms: NewAtom[]; newSet: Set<string>; onMarkRead: () => void;
+  /** How much arrived after your own last word here, marked read or not. Only
+   *  to offer the way back when the marks have been cleared. */
+  sinceMine: number; onUnmarkRead: () => void;
 }) {
   const [newest, setNewest] = useState(false);
   const setWho = onWho;
+  const [cursor, setCursor] = useState(-1);
+  const tlRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * Walk to the next thing said since you last looked.
+   *
+   * The scroll is the point, and so is the flash: on a conversation this long
+   * a jump that lands silently is indistinguishable from a jump that did
+   * nothing, and the reader starts scrolling anyway to check. `block: "center"`
+   * for the same reason — a reply flush against the top edge of a scroller
+   * reads as the top of a section rather than as the thing you were sent to.
+   */
+  const jump = useCallback((i: number) => {
+    const list = atoms;
+    if (!list.length) return;
+    /* Step over anything with nothing on the page to land on. One counted
+       remark that the timeline does not draw used to make the button do
+       nothing at all, silently, which reads as broken rather than as a
+       disagreement between a counter and a list. The direction of travel is
+       kept, so "Next" past a gap is still Next. */
+    const step = i < cursor ? -1 : 1;
+    let n = ((i % list.length) + list.length) % list.length;
+    let el = document.getElementById(anchorId(list[n]!.key));
+    for (let tries = 0; !el && tries < list.length; tries++) {
+      n = ((n + step) % list.length + list.length) % list.length;
+      el = document.getElementById(anchorId(list[n]!.key));
+    }
+    setCursor(n);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.classList.remove("agx-found");
+    void el.offsetWidth; // restart the animation when it is the same element twice
+    el.classList.add("agx-found");
+  }, [atoms, cursor]);
+
+  /* n and p, because both hands are already on the keyboard when you are
+     reading. Ignored while typing — a reply with the letter n in it is not a
+     navigation command, and that bug is only found by whoever writes "nothing"
+     into a review and watches the page jump. */
+  useEffect(() => {
+    if (!atoms.length) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+      if (e.key === "n") { e.preventDefault(); jump(cursor + 1); }
+      else if (e.key === "p") { e.preventDefault(); jump(cursor - 1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [atoms.length, cursor, jump]);
+
+  /* A filter that empties itself is a dead end: mark everything read while
+     "New" is showing and you are left staring at nothing with no clue why. */
+  useEffect(() => { if (who === "new" && !atoms.length) setWho("all"); }, [who, atoms.length, setWho]);
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
   const reviewAuthors = new Set(lanes.humans.map((r) => r.author));
-  const orphanThreads = d.threads.filter((t) => !reviewAuthors.has(t.comments[0]?.author ?? ""));
+
+  /*
+   * The threads that have moved on since the review they were submitted with.
+   *
+   * A review owns its threads, and that grouping is the meaning of a "requested
+   * changes": the verdict, with its reasons under it. But it is also what
+   * buries a live argument — the review is dated two days ago, so everything
+   * nested under it sits two days back on the page however recently anybody
+   * spoke. Measured on a real one: a reply nine minutes old, three comments
+   * deep, in the middle of a long page, and no sign anywhere that it existed.
+   *
+   * So a thread that has been answered SINCE its review comes out to the top
+   * level and takes its place by its last reply. It keeps a chip naming the
+   * review it came from, so the grouping is still readable — trading one loss
+   * for another would not be a fix.
+   */
+  const cameFrom = new Map<string, string>();
+  for (const r of lanes.humans) {
+    for (const t of d.threads) {
+      if (t.comments[0]?.author !== r.author) continue;
+      if (threadMovedOn(t, r.submittedAt)) cameFrom.set(t.id, r.author);
+    }
+  }
+  const orphanThreads = d.threads.filter(
+    (t) => cameFrom.has(t.id) || !reviewAuthors.has(t.comments[0]?.author ?? ""),
+  );
 
   /** Who said it, so the timeline can be narrowed to one kind of voice. An
    *  `event` is nobody speaking — a push, a label — and belongs to neither
    *  side, so it shows in the whole timeline and in no filtered view. */
   type Lane = "human" | "bot" | "event";
-  type Entry = { at: string; key: string; lane: Lane; node: React.ReactNode; body: React.ReactNode };
+  /** `ms` is what the timeline sorts on, and for a thread it is its LAST
+   *  comment. It used to be the first, which is the ordering bug this whole
+   *  feature was written for. */
+  type Entry = { at: string; ms: number; key: string; lane: Lane; hot?: number; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
+  const ms = (iso: string) => Date.parse(iso) || 0;
+  /** How many of the things said since your last visit are inside this one. */
+  const hotOf = (keys: string[]) => keys.filter((k) => newSet.has(k)).length;
+  const threadHot = (t: PrThread) => hotOf(t.comments.map((c) => `${t.id}:${c.id}`));
 
   for (const [i, r] of lanes.humans.entries()) {
-    const mine = d.threads.filter((t) => t.comments[0]?.author === r.author);
+    const mine = d.threads.filter((t) => t.comments[0]?.author === r.author && !cameFrom.has(t.id));
     const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
     entries.push({
-      at: r.submittedAt, key: `r${i}`, lane: "human",
+      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human",
+      hot: hotOf([`r${r.author}-${r.submittedAt}`]) + mine.reduce((n, t) => n + threadHot(t), 0),
       node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
         {r.state === "CHANGES_REQUESTED" ? "✕" : r.state === "APPROVED" ? "✓" : "💬"}</span>,
       body: (
         <>
+          <span id={anchorId(`r${r.author}-${r.submittedAt}`)} />
           <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
+            fresh={newSet.has(`r${r.author}-${r.submittedAt}`)}
             edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
             chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
               : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
@@ -6750,7 +8215,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           </Card>
           {mine.length > 0 && (
             <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
+              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} newSet={newSet} />)}
             </div>
           )}
         </>
@@ -6759,9 +8224,11 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.humanComments) {
     entries.push({
-      at: c.createdAt, key: `c${c.id}`, lane: "human", node: <span style={{ color: "var(--text3)" }}>💬</span>,
-      body: <Card who={c.author} when={ago(c.createdAt)} url={c.url}
-        edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}><Md body={c.body} /></Card>,
+      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", hot: hotOf([`c${c.id}`]),
+      node: <span style={{ color: "var(--text3)" }}>💬</span>,
+      body: <><span id={anchorId(`c${c.id}`)} />
+        <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
+          edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}><Md body={c.body} /></Card></>,
     });
   }
   for (const t of orphanThreads) {
@@ -6783,14 +8250,18 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      */
     const lane: Lane = t.comments[0]?.isBot ? "bot" : "human";
     entries.push({
-      at: t.comments[0]?.createdAt ?? "", key: `t${t.id}`, lane,
+      // Its LAST comment, not its first. A thread nobody has touched sorts
+      // exactly where it always did; one that has just been answered arrives
+      // where the answer belongs.
+      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, hot: threadHot(t),
       node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? "✓" : "○"}</span>,
-      body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />,
+      body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy}
+        newSet={newSet} cameFrom={cameFrom.get(t.id)} />,
     });
   }
   for (const [i, r] of lanes.botReviews.entries()) {
     entries.push({
-      at: r.submittedAt, key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      at: r.submittedAt, ms: ms(r.submittedAt), key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
       body: <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot"
         nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
         chip={<Chip text="automation" tint="var(--info)" />}><Md body={r.body} /></Card>,
@@ -6798,7 +8269,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.bots) {
     entries.push({
-      at: c.createdAt, key: `b${c.id}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      at: c.createdAt, ms: ms(c.createdAt), key: `b${c.id}`, lane: "bot", hot: hotOf([`c${c.id}`]),
+      node: <span style={{ color: "var(--info)" }}>⌬</span>,
       body: (
         <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
           nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
@@ -6821,20 +8293,22 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   // — the force-push that invalidated a review simply is not there.
   for (const [i, e] of d.timeline.entries()) {
     entries.push({
-      at: e.at, key: `e${i}`, lane: "event",
+      at: e.at, ms: ms(e.at), key: `e${i}`, lane: "event",
       node: <span style={{ color: EVENT_TINT[e.kind] ?? "var(--text3)" }}>{EVENT_GLYPH[e.kind] ?? "•"}</span>,
       body: <TimelineEvent e={e} />,
     });
   }
 
-  entries.sort((a, b) => (newest ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at)));
+  entries.sort((a, b) => (newest ? b.ms - a.ms : a.ms - b.ms));
 
   // Events are not remarks, so they are not counted — Humans plus Bots adds up
   // to All, which is the sum a reader checks. They still show in the whole
   // timeline, where the push that invalidated a review is part of the story.
   const humanCount = entries.filter((e) => e.lane === "human").length;
   const botCount = entries.filter((e) => e.lane === "bot").length;
-  const shown = who === "all" ? entries : entries.filter((e) => e.lane === who);
+  const shown = who === "all" ? entries
+    : who === "new" ? entries.filter((e) => !!e.hot)
+    : entries.filter((e) => e.lane === who);
 
   /* The events between the comments. GitHub has no timestamp on either of these
      — "opened" is not on the detail payload and a force-push is a boolean —
@@ -6870,6 +8344,70 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
 
   return (
     <div className="text-[11px]">
+      {/*
+        * What has been said since you last looked, and a way to walk to it.
+        *
+        * The number alone would be no better than GitHub's: knowing there are
+        * three is not the same as finding them, and on the pull request this
+        * was written for the third one was three comments deep in a thread
+        * dated two days earlier. So the bar is a control — next, previous, and
+        * where you are in the set — and it says WHERE the one you are on lives,
+        * because "src/billing/receipts.py:420" is the part you were looking for
+        * when you gave up scrolling.
+        */}
+      {atoms.length > 0 && (
+        /*
+         * Pinned to the top of the scroller, because it is a control and not a
+         * notice. Reported the moment it worked: "Next" sends you three
+         * screens down and the button that says Next is now three screens up,
+         * so walking three replies means scrolling back to the top twice.
+         *
+         * Opaque, not tinted-transparent — comment text slides under it — and
+         * the shadow is the trick that covers the scroller's own 12px of top
+         * padding: sticky `top: 0` parks against the padding edge, and without
+         * the band you get a strip of moving text above a pinned bar.
+         */
+        <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 rounded-lg text-[10.5px] flex-wrap sticky"
+          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, var(--bg))",
+            border: "1px solid color-mix(in srgb, var(--warning) 34%, transparent)",
+            position: "sticky", top: 0, zIndex: 8, boxShadow: "0 -12px 0 0 var(--bg)" }}>
+          <span aria-hidden>●</span>
+          <span><b style={{ fontWeight: 600 }}>{atoms.length}</b> new since you last looked</span>
+          {cursor >= 0 && atoms[cursor] && (
+            <span style={{ color: "color-mix(in srgb, var(--warning) 80%, var(--text))" }}>
+              · {cursor + 1} of {atoms.length} · {atoms[cursor]!.author} · {atoms[cursor]!.where}
+            </span>
+          )}
+          <span className="flex-1" />
+          <button onClick={() => jump(cursor - 1)} title="Previous new one (p)"
+            className="agx-btn px-1.5 py-0.5 rounded" style={{ color: "inherit", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>◂</button>
+          <button onClick={() => jump(cursor + 1)} title="Next new one (n)"
+            className="agx-btn px-2 py-0.5 rounded" style={{ color: "inherit", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+            {cursor < 0 ? "Take me to it" : "Next"} ▸
+          </button>
+          {/* Clears the marks for good. Its own button because leaving the pull
+              request does the same thing silently, and somebody who has read
+              the lot while standing on it should not have to leave to say so. */}
+          <button onClick={onMarkRead} title="Clear these marks — everything here counts as read"
+            className="agx-btn px-1.5 py-0.5 rounded" style={{ color: "inherit", opacity: 0.85 }}>Mark read</button>
+        </div>
+      )}
+      {/* The way back.
+          With nothing new, a conversation where somebody answered you an hour
+          ago and the mark has since been cleared looks exactly like one where
+          nobody has said anything — so the offer is made where the bar would
+          have been, quietly. Written because the marks were cleared by an app
+          restart with nothing to blame it on and no way to undo it. */}
+      {!atoms.length && sinceMine > 0 && (
+        <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text4)" }}>
+          <span>Nothing new since you last looked.</span>
+          <button onClick={onUnmarkRead} className="agx-btn px-1.5 py-0.5 rounded"
+            title="Forget the mark and show everything said after your own last comment"
+            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            Show the {sinceMine} since your last comment
+          </button>
+        </div>
+      )}
       <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text3)" }}>
         <span>One timeline — reviews, comments, threads and events in the order they happened</span>
         {d.truncated?.comments ? (
@@ -6892,31 +8430,52 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           "Humans 0" is the most useful thing this row can say, so it shows
           wherever there is automation at all rather than only where both sides
           spoke. */}
-      {botCount > 0 && (
+      {/* "New" earns its place beside the voices even though it is not one:
+          on a long pull request it is the only filter that answers the question
+          you came back with. It appears only when there is something under it —
+          a filter that is always there and usually empty teaches people not to
+          press it. */}
+      {(botCount > 0 || atoms.length > 0) && (
         <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-          {([["all", "All", humanCount + botCount], ["human", "Humans", humanCount], ["bot", "Bots", botCount]] as const).map(([id, label, n]) => (
+          {([
+            ["all", "All", humanCount + botCount] as const,
+            ...(botCount > 0 ? [["human", "Humans", humanCount] as const, ["bot", "Bots", botCount] as const] : []),
+            ...(atoms.length ? [["new", "New", atoms.length] as const] : []),
+          ]).map(([id, label, n]) => (
             <button key={id} onClick={() => setWho(id)}
               className="agx-btn flex-1 text-[10.5px] py-1.5 flex items-center justify-center gap-1.5"
               style={{
-                color: who === id ? "var(--text)" : "var(--text3)",
-                background: who === id ? "color-mix(in srgb, var(--border) 30%, transparent)" : "transparent",
+                color: id === "new" && who !== id ? "var(--warning)" : who === id ? "var(--text)" : "var(--text3)",
+                background: who === id
+                  ? (id === "new" ? "color-mix(in srgb, var(--warning) 22%, transparent)" : "color-mix(in srgb, var(--border) 30%, transparent)")
+                  : "transparent",
               }}>
               {label}<span className="tabular-nums opacity-70">{n}</span>
             </button>
           ))}
         </div>
       )}
-      <div className="agx-tl">
-        {!newest && opened}
-        {newest && forced}
-        {shown.map((e) => (
-          <div key={e.key} className="agx-ev">
-            <span className="agx-node">{e.node}</span>
-            {e.body}
-          </div>
-        ))}
-        {!newest && forced}
-        {newest && opened}
+      {/* The timeline, with a rail of marks beside it.
+          The rail answers "how much page is between me and the next new thing"
+          — which is the question you are actually asking while you scroll, and
+          the one a count in a bar cannot answer. */}
+      <div className="flex gap-2 items-stretch">
+        <div className="agx-tl flex-1 min-w-0" ref={tlRef}>
+          {!newest && opened}
+          {newest && forced}
+          {shown.map((e) => (
+            <div key={e.key} className="agx-ev" data-hot={e.hot ? "1" : undefined}>
+              <span className="agx-node">{e.node}</span>
+              {e.body}
+            </div>
+          ))}
+          {!newest && forced}
+          {newest && opened}
+        </div>
+        {atoms.length > 0 && (
+          <NewRail container={tlRef} atoms={atoms} onGo={jump}
+            depKey={`${shown.length}|${who}|${newest}|${raw}`} />
+        )}
       </div>
       <div className="mt-3">{composer}</div>
     </div>
@@ -7278,7 +8837,10 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
   );
 }
 
-function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean }) {
+function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
+  /** Which request is in flight, so the button that started it is the one that
+   *  spins — see Btn `pending`. */
+  busyWhat?: string }) {
   const c = d.checks;
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [showSkipped, setShowSkipped] = useState(false);
@@ -7315,7 +8877,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
           </span>
         </span>
         <span className="ml-auto shrink-0 flex items-center gap-2">
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} small>Re-run failed</Btn>}
+          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"}>Re-run failed</Btn>}
           <span className="text-[10px]" style={{ color: "var(--text3)" }}>{c.allDone ? "Notified once, not " + c.total : "You will be told once, at the end"}</span>
         </span>
       </div>
@@ -7365,7 +8927,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
                         <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
                           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open run ↗</a>
                       )}
-                      <Btn onClick={onRerun} disabled={busy} small title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
+                      <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
                       {/* GitHub offers all three, and "the whole run failed
                           again for one flaky job" is exactly when you want the
                           single-job one. */}
@@ -7374,8 +8936,8 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
                         if (!job || !onRerunJobs) return null;
                         return (
                           <>
-                            <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small title={`Re-run only ${job.name}`}>↻ This job</Btn>
-                            <Btn onClick={() => onRerunJobs("all", job.runId)} disabled={busy} small title="Re-run every job in this run, passing ones included">↻ All jobs</Btn>
+                            <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small pending={busyWhat === "Re-run"} title={`Re-run only ${job.name}`}>↻ This job</Btn>
+                            <Btn onClick={() => onRerunJobs("all", job.runId)} disabled={busy} small pending={busyWhat === "Re-run"} title="Re-run every job in this run, passing ones included">↻ All jobs</Btn>
                           </>
                         );
                       })()}
@@ -7415,8 +8977,10 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
  * review, and it exists so a reviewer leaves one notification rather than a
  * dozen. The comments and the verdict travel in a single request.
  */
-function ReviewTab({ d, drafts, seen, busy, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
+function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
   d: PrDetail; drafts: DraftComment[]; seen: number; busy: boolean;
+  /** Which request is in flight — see Btn `pending`. */
+  busyWhat?: string;
   /** The unsent review, held by the panel and written to storage — not state of
    *  this tab, which stops existing the moment you go and look at Files. */
   draft: ReviewDraft; onDraft: (patch: Partial<ReviewDraft>) => void;
@@ -7553,6 +9117,7 @@ function ReviewTab({ d, drafts, seen, busy, draft, onDraft, onDrop, onSubmit, on
             </div>
             <span className="ml-auto">
               <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
+                pending={busyWhat === "Review"}
                 title={verb !== "approve" && nothing ? "Say something, or queue a line comment" : undefined}>Submit review</Btn>
             </span>
           </div>

@@ -118,11 +118,11 @@ const rail = await Bun.file(new URL("../src/components/FileRail.tsx", import.met
 
 describe("the three columns", () => {
   it("each scrolls on its own", () => {
-    expect(css).toContain(".agx-col3 { max-height: 100%; overflow-y: auto; overflow-x: hidden; }");
+    expect(css).toContain(".agx-col3 { height: 100%; max-height: 100%; overflow-y: auto; overflow-x: hidden; }");
     /* Two carry the class; the tree caps itself against the viewport instead,
        for the reason in the test below. */
     expect(src.split("agx-col3").length - 1).toBe(1);
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: calc(100vh - 160px); overflow-y: auto; }");
+    expect(css).toContain(".agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
     expect(rail).toContain("agx-col3");
   });
 
@@ -148,16 +148,32 @@ describe("the three columns", () => {
     expect(src).toContain('className="flex min-h-0 gap-0 items-start h-full"');
   });
 
-  it("caps the tree against the viewport, because a percentage cannot resolve there", () => {
+  it("caps the tree against its own column, not against the window", () => {
     /*
-     * The tree is `position: sticky` inside the diff's scroller, so its
-     * containing block is a content-sized flex row — and CSS resolves a
-     * percentage max-height against one of those as `none`. Measured with the
-     * tree forced to 2252px: no scrollbar, and a bottom edge at 2584 against a
-     * 617px window. With the viewport cap: max-height 457, scrollHeight 2252,
-     * scrollable true.
+     * A percentage max-height needs a parent with a DEFINITE height, and the
+     * row the tree sits in was content-sized — so the original fix measured the
+     * window instead: `calc(100vh - 160px)`, where 160 stood in for everything
+     * above the column.
+     *
+     * That guess is wrong on any screen where the panel starts lower than 160px
+     * — his does, by about a hundred — and a tree taller than the box holding it
+     * gives the middle column scroll that belongs to nothing. Dragging it took
+     * the toolbar and the file list up with it: "ese scroll raro mueve el
+     * listado de files hacia arriba".
+     *
+     * The row is a flex child with `flex-1 min-h-0` now, which is a definite
+     * height, so the percentage resolves and the cap is the column itself.
      */
-    expect(css).toContain(".agx-tree3 { width: 250px; max-height: calc(100vh - 160px); overflow-y: auto; }");
+    /* Not a percentage and not a viewport formula: the tree is sticky in a row
+       as tall as the diff, so a percentage resolves against a column of diff,
+       and `100vh - something` is a guess about everything above the frame that
+       is wrong on a screen where the frame starts lower. The frame measures
+       itself. */
+    expect(src).toContain('el.style.setProperty("--agx-tree-max"');
+    // The row must NOT be capped: a sticky element only stays put while its own
+    // row is on screen, and capping it unpinned the tree after one screenful.
+    expect(src).not.toContain('className="flex gap-3 items-start flex-1 min-h-0"');
+    expect(css).toContain(".agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }");
     expect(src).not.toContain("agx-tree3 agx-col3");
   });
 
@@ -218,13 +234,65 @@ describe("who is talking, in the Humans/Bots filter", () => {
 
 describe("a resolved thread arrives folded", () => {
   it("opens on the flag, so pressing Resolve folds it there and then", () => {
-    expect(src).toContain("const [open, setOpen] = useState(!t.isResolved);");
-    expect(src).toContain("useEffect(() => { setOpen(!t.isResolved); }, [t.isResolved]);");
+    /* …unless somebody has answered since you last looked. A resolved thread
+       with an unread reply in it is precisely the case where folding hides the
+       thing you came back for, so the fold yields to it. */
+    expect(src).toContain("const [open, setOpen] = useState(!t.isResolved || hot.size > 0);");
+    expect(src).toContain("useEffect(() => { setOpen(!t.isResolved || hot.size > 0); }, [t.isResolved, hot.size]);");
   });
 
   it("says how much is under it, so a done can be told from an argument", () => {
     expect(src).toContain("Show resolved · ");
     expect(src).toContain("{t.comments.length}");
+  });
+});
+
+/*
+ * Finding what was said while you were away.
+ *
+ * The logic has a seam and is tested through it in `pr-new.test.ts`. What has
+ * no seam is the WIRING, and the wiring is where the original bug lived: a
+ * thread entered the timeline at the timestamp of its first comment, so a reply
+ * left nine minutes ago sorted two days back and could not be found at all.
+ * These are one-literal guards on exactly that.
+ */
+describe("a thread sorts by when it was last spoken in", () => {
+  it("uses the last comment, not the first, in the timeline entry", () => {
+    expect(src).toContain("ms: threadLastAt(t)");
+    // The old ordering, and the reason for all of this.
+    expect(src).not.toContain("entries.sort((a, b) => (newest ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at)))");
+  });
+
+  it("pulls a thread out of the review it came with once it has moved on", () => {
+    expect(src).toContain("if (threadMovedOn(t, r.submittedAt)) cameFrom.set(t.id, r.author);");
+    // …and still says where it came from, which is what the nesting was for.
+    expect(src).toContain("from ${cameFrom}'s review");
+  });
+});
+
+describe("the bar that walks you through what is new", () => {
+  it("is pinned to the top of the scroller, because it is a control", () => {
+    /* Reported the moment it worked: "Next" sends you three screens down and
+       the button that says Next is now three screens up. */
+    expect(src).toContain('position: "sticky", top: 0, zIndex: 8, boxShadow: "0 -12px 0 0 var(--bg)"');
+    // Opaque: comment text slides under it.
+    expect(src).toContain('background: "color-mix(in srgb, var(--warning) 14%, var(--bg))"');
+  });
+});
+
+describe("the mark of when you last looked", () => {
+  it("is not the key the viewed-files map already owns", () => {
+    /* Both wanted to be called `agentglass.pr.seen`, and one storage key for
+       two questions means each feature silently deletes the other's answer. */
+    const lib = Bun.file(new URL("../src/lib/prNew.ts", import.meta.url));
+    expect(src).toContain('const SEEN_KEY = "agentglass.pr.seen"');
+    expect(lib.text()).resolves.toContain('export const SEEN_KEY = "agentglass.pr.lastlooked"');
+  });
+
+  it("is frozen while the pull request is open, so reading it does not erase it", () => {
+    // Advanced in two places only: leaving the pull request, and saying so.
+    expect(src).toContain("if (leaving) writeSeen(leaving, Date.now());");
+    expect(src).toContain("useEffect(() => () => { if (seenKeyRef.current) writeSeen(seenKeyRef.current, Date.now()); }, []);");
   });
 });
 
@@ -330,5 +398,370 @@ describe("a reply looks like a reply", () => {
     // the order already say who is answering whom.
     const i = src.indexOf('style={{ left: 15, top: 0, bottom: 0, width: 2');
     expect(src.slice(Math.max(0, i - 200), i)).toContain("aria-hidden");
+  });
+});
+
+describe("opening a pull request while the panel is still booting", () => {
+  it("does not treat the repository arriving as a scope switch", () => {
+    /*
+     * `root` is empty for the first second — the repository list is its own
+     * call — so the scope string changes once, from one with no root to the
+     * real one. The switch handler took that for "you changed repository" and
+     * cleared the selection, so a pull request opened inside that second threw
+     * you back to the board. Reported exactly that way.
+     */
+    expect(src).toContain('const first = prev === "" || prev.startsWith("\\u0000");');
+  });
+});
+
+describe("the open pull request survives what happens to the list behind it", () => {
+  it("is only closed by a change of repository", () => {
+    /*
+     * Reported twice. The panel falls back from "Needs my review" to "Mine"
+     * when the first comes back empty, and that filter change was read as a
+     * scope switch — so a pull request opened in the first seconds was thrown
+     * back to the board on its own. A filter is a question about the LIST; the
+     * page you are reading is not the list.
+     */
+    expect(src).toContain("if (!sameRepo) {");
+    expect(src).toContain('const sameRepo = prev.slice(0, prev.indexOf("\\u0000")) === root;');
+  });
+
+  it("does not change the filter under an open pull request either", () => {
+    // Even with the selection surviving, a pane that rearranges itself while
+    // you read is its own bug.
+    expect(src).toContain("&& !fellBack.current && selectedRef.current == null) {");
+  });
+
+  it("declares that ref above every callback that reads it", () => {
+    // A `const` referenced before its line is a temporal dead zone waiting for
+    // the day somebody calls one of those during render.
+    expect(src.indexOf("const selectedRef = useRef")).toBeLessThan(src.indexOf("selectedRef.current == null"));
+  });
+});
+
+/*
+ * Loading, as one rule instead of six.
+ *
+ * Reported after a morning of one-at-a-time fixes: "hace cosas raras y da
+ * saltos cuando carga cosas por completo… me parece que no lo estás planeando
+ * bien". He was right. The rule these pin: nothing is asserted twice, nothing
+ * moves once it is on screen, and no wait is unbounded.
+ */
+describe("waiting for a pull request", () => {
+  it("waits in the shape of the thing, not as a spinner in the middle", () => {
+    // A centred word replaced by a masthead, a tab row and a page of text is
+    // every element on screen moving at once.
+    expect(src).toContain("<DetailSkeleton number={selected} />");
+    expect(src).toContain("function DetailSkeleton({ number }");
+    expect(src).not.toContain("<Loading label={`Loading #${selected}…`} fill />");
+  });
+
+  it("has a deadline, and something to press when it passes", () => {
+    expect(src).toContain("This is taking longer than usual");
+    expect(src).toContain("Try again");
+  });
+});
+
+describe("waiting for the board", () => {
+  it("holds the skeleton until the answer is whole, so no card changes lane", () => {
+    /*
+     * Which lane a pull request belongs in is mostly a question about its
+     * checks, and those come in the second pass — so a board painted from the
+     * first files what it cannot decide under "yours, in flight" and moves it
+     * seconds later. A card that moves on its own is worse than a card that is
+     * late.
+     */
+    expect(src).toContain("const boardWhole = !boardLoading");
+    expect(src).toContain("p.checksLoaded === false");
+    expect(src).toContain("settling={boardSettling}");
+  });
+
+  it("never holds it on a refresh, and never for ever", () => {
+    // Last minute's board beats a skeleton; a rollup that never lands must not
+    // mean a board that never draws.
+    expect(src).toContain("const boardSettling = !boardWhole && !boardDrawn.current && !boardWaited;");
+    expect(src).toContain("setTimeout(() => setBoardWaited(true), 6_000)");
+  });
+});
+
+describe("feedback on a request in flight", () => {
+  it("spins inside the button that started it, not on all of them", () => {
+    /*
+     * Every action here is a round trip through `gh`, and the only feedback was
+     * the button going grey — the same grey it wears when it is disabled for a
+     * reason that has nothing to do with you. Reported as the worst thing about
+     * the app: "tenemos que dar feedback en las peticiones async, SIEMPRE".
+     */
+    expect(src).toContain("pending?: boolean;");
+    expect(src).toContain("setBusyWhat(label);");
+    expect(src).toContain('finally { setBusy(false); setBusyWhat(""); }');
+    for (const label of ["Update branch", "Re-run checks", "Review"]) {
+      expect(src, label).toContain(`pending={busyWhat === "${label}"}`);
+    }
+  });
+
+  it("keeps the label, so you can still tell the buttons apart", () => {
+    // A control that swaps its words for "Working…" moves everything beside it.
+    expect(src).toContain('<span className="agx-spin mr-1.5 shrink-0" aria-hidden');
+    expect(src).toContain("{children}\n    </button>");
+  });
+
+  it("says the base is being checked instead of growing a button late", () => {
+    expect(src).toContain("Checking the base…");
+    expect(src).toContain("{!canUpdate && behindAsking && !conflicted");
+  });
+});
+
+describe("each tab keeps its own place", () => {
+  it("remembers where the tab was left and puts it back before paint", () => {
+    /*
+     * One scroller serves every tab, so reading to the bottom of Conversation
+     * and stepping to Overview landed you at the bottom of a page you had never
+     * scrolled. Reported exactly that way.
+     */
+    expect(src).toContain("tabScroll.current[tab] = y;");
+    // Before paint: after it, the old offset is on screen for a frame and the
+    // jump is the thing you see instead of the thing you asked for.
+    expect(src).toContain("const want = tabScroll.current[tab] ?? 0;");
+    expect(src).toContain("el.scrollTop = want;");
+    /* And again once the tab has its height: content mounts empty and fills, so
+       the first assignment is clamped to nothing. Reported as Commits losing
+       its place every time you came back. */
+    /* The first retry observed the SCROLLER, whose own box never changes — what
+       grows is its content — so it never fired. This watches `scrollHeight`,
+       which is the number that decides whether the offset can be honoured. */
+    expect(src).toContain("let tall = el.scrollHeight;");
+    expect(src).toContain("const grew = now !== tall;");
+    /* And the position is written on the way OUT as well: a tab whose content
+       shrinks is clamped by the browser the moment the next one renders, and a
+       value read after that is zero. */
+    expect(src).toContain('if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;');
+    // Files scrolls inside itself, so it keeps its own place, outside the
+    // component — the component is what goes away when you change tab.
+    expect(src).toContain("const FILES_SCROLL = new Map<string, number>();");
+    /* Written on every scroll, never on the way out: by the time a passive
+       cleanup runs the node is out of the document, where `scrollTop` reads 0 —
+       so it faithfully remembered zero every time. */
+    expect(src).toContain("onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); }}");
+  });
+
+  it("starts a different pull request at the top", () => {
+    expect(src).toContain("useEffect(() => { tabScroll.current = {}; }, [selected]);");
+  });
+});
+
+describe("the facts strip", () => {
+  it("does not fold away while you scroll", () => {
+    /*
+     * It used to collapse once you scrolled, to buy back a fifth of the window
+     * while reading a diff. Files never did it — that tab does not scroll the
+     * page — so one tab kept the strip and the rest lost it, reported as an
+     * inconsistency. And it changed the HEIGHT of the scroller while you were
+     * scrolling it, which is what made "put me back where I was" a race nobody
+     * could win: three attempts at remembering a scroll position lost to it.
+     */
+    expect(src).toContain("const condensed = false;");
+    expect(src).not.toContain("setCondensed((was) => (was ? y > 24 : y > 72));");
+    expect(src).not.toContain("setCondensed(false)");
+  });
+});
+
+describe("the diff inside a commit", () => {
+  it("keeps where each file box was scrolled to", () => {
+    /*
+     * Every file in a commit is its own scroller — the box is capped at 520px —
+     * so leaving the tab put every open commit back at the top of every file.
+     * Keyed by commit and path, written on scroll (a node that has left the
+     * document reports zero, which is how the Files tab remembered zero
+     * perfectly for an hour), and re-applied while the diff is still being
+     * highlighted, because until then the box is too short to hold the offset.
+     */
+    expect(src).toContain("const DIFF_SCROLL = new Map<string, number>();");
+    expect(src).toContain("onScrollCapture={(e) => {");
+    expect(src).toContain("scope={c.oid}");
+    // Capture, because a scroll event does not bubble.
+    expect(src).toContain("/* Capture, because a scroll event does not bubble. */");
+  });
+});
+
+describe("how far behind, on the page and on the board", () => {
+  it("is one store, read by both", () => {
+    /*
+     * The board found out a branch was 222 behind and the page you opened from
+     * that board went and asked again — seconds of nothing over an answer
+     * already in memory.
+     */
+    expect(src).toContain("const a = behindAnswer(root, n);");
+    expect(src).not.toContain("api.prBehind(root, n)");
+  });
+
+  it("does not wear the previous pull request's count", () => {
+    /*
+     * Open one at 10294 behind, open another, and the old number sat there for
+     * a few seconds. The effect is keyed by the pull request, so the read for a
+     * number nobody has asked about yet is null — and null draws the
+     * placeholder, not somebody else's answer.
+     */
+    expect(src).toContain("if (!root || selected == null) { setBehind(null); setLocalHead(null); setBehindAsking(false); return; }");
+    expect(src).toContain("}, [root, selected]);");
+  });
+
+  it("asks again after an update, and not before it", () => {
+    /* Dropped first, the store re-asks GitHub for a number that has not changed
+       yet and caches the old one all over again — the same stale count by
+       another route. */
+    expect(src).toContain(".finally(() => refreshBehind(root, d.number));");
+    expect(src).not.toContain("forgetOneBehind(root, d.number);");
+  });
+
+  it("re-asks while you are looking at it, and on Refresh", () => {
+    // Five minutes is right for a board of twelve and far too long for the page
+    // in front of you.
+    expect(src).toContain("const slow = setInterval(again, 30_000);");
+    expect(src).toContain("forgetBehind();");
+  });
+});
+
+describe("assigning on GitHub, and the card on the other board", () => {
+  it("offers ClickUp beside the people, never instead of them", () => {
+    /*
+     * A reviewer goes on the pull request and the card goes to Code Review —
+     * one motion in somebody's head, two applications on the screen, and the
+     * second is the one people forget. Optional: assigning on GitHub must never
+     * be conditional on ClickUp being reachable, right, or wanted.
+     */
+    expect(src).toContain("side={(h) => <ClickUpSide d={d} note={note} {...h} />}");
+    expect(src).toContain("Also in ClickUp");
+    expect(src).toContain("· optional");
+  });
+
+  it("only when the pull request really carries a card", () => {
+    // `mergeCardRef` is the strict reader — a reference in a branch name alone
+    // is a convention other trackers share — and the same one the merge dialog
+    // trusts before it writes. Read off the fields rather than off `d`: see
+    // pr-card-picker.test.ts, where a new `d` every poll wiped the selection.
+    expect(src).toContain("const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);");
+    expect(src).toContain("if (!ref) return null;");
+  });
+
+  it("writes nothing until the summary is accepted", () => {
+    /* One button for both halves, and a summary before either happens: the two
+       writes land on two different companies' servers and only one of them can
+       be undone from here. */
+    expect(src).toContain('? (ghChanged ? "Yes, do both" : "Yes, move the card")');
+    expect(src).toContain('if (!asking) { setAsking(true); return; }');
+  });
+
+  it("sends nothing to ClickUp when nothing there would change", () => {
+    /* A card already in Code Review being "moved" to Code Review is not a
+       change, and leaving yourself on it is not an assignment. An empty plan
+       skips the confirmation entirely and the press is a GitHub assignment. */
+    expect(src).toContain("if (!plan.lines.length) { void onCommit(selRef.current); onClose(); return; }");
+    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
+  });
+
+  it("does GitHub first and ClickUp only after it", () => {
+    // A card saying "code review, assigned to you" over a pull request nobody
+    // was asked to review is a worse state than an unfinished one — and the
+    // GitHub half is now awaited, which is what makes that true rather than
+    // hoped for.
+    expect(src).toContain("const wrote = await onCommit(selRef.current);");
+    expect(src).toContain("const moved = await plan.run();");
+  });
+
+  it("finds Code Review by asking the list, not by knowing the word", () => {
+    // One board's "Code Review" is another's "In review"; the match is on the
+    // name because that is all a status has, and the fallback is to leave it.
+    expect(src).toContain('const review = st.find((x) => /review/i.test(x.status)');
+    expect(src).toContain('setPick(review && review.status !== t.status ? review.status : "");');
+  });
+
+  it("moves the people and the status together, or not at all", () => {
+    /*
+     * It used to be three writes in a row — each person, then the status —
+     * ordered so that a failure left the card unfinished rather than lying.
+     * They all carried the same `updated`, the first one moved it, and ClickUp
+     * refused the rest: the card gained an assignee, lost nobody and never
+     * moved. One PUT has one precondition and no order to get wrong.
+     */
+    expect(src).toContain("{ add: plan.add, rem: plan.drop, status: plan.status || undefined }");
+    expect(src).not.toContain("await api.clickupStatus(card.id");
+  });
+});
+
+describe("the ClickUp half, as its own controls", () => {
+  it("reuses the card's own status pill and its dropdown", () => {
+    // A status has a colour its board gave it, and a row of bordered words
+    // throws that away — which is the one thing that makes the list readable.
+    expect(src).toContain("<StatusPill status={pick || card.status} color={statusColor(statuses, pick || card.status)} />");
+    expect(src).toContain("leave it where it is");
+  });
+
+  it("draws people as faces, with their own colour when there is no picture", () => {
+    expect(src).toContain("referrerPolicy=\"no-referrer\"");
+    expect(src).toContain("background: m.color || \"var(--bg4)\"");
+  });
+
+  it("stacks under the people rather than widening the menu", () => {
+    /* The menu is already tall — that is the space going spare, not the width.
+       Widening it to 620 pushed a second column across the pane; this uses the
+       height that was already there. */
+    expect(src).toContain("const W = 300;");
+    expect(src).not.toContain("const W = side ? 620 : 300;");
+    expect(src).toContain('className="fixed rounded-lg overflow-hidden flex flex-col"');
+  });
+
+  it("starts folded, on a line above Done", () => {
+    // The errand is the reviewer; this is the thing you may also want.
+    expect(src).toContain("const [sideFolded, setSideFolded] = useState(true);");
+    expect(src).toContain("Not now ▾");
+    expect(src).toContain("Also move {ref.label} in ClickUp");
+  });
+});
+
+describe("the picker's own height", () => {
+  it("lets the people scroll inside it rather than growing past it", () => {
+    /*
+     * A flex child's default floor is its content, so without `min-h-0` the
+     * list grew past the menu instead of scrolling inside it — taking the
+     * ClickUp half and Done off the bottom, and leaving nothing to scroll.
+     */
+    expect(src).toContain('className="flex flex-col min-w-0 min-h-0 flex-1"');
+  });
+});
+
+describe("folding it away", () => {
+  it("takes its plan with it", () => {
+    /* It was still announcing its changes while put away, which left "Done ·
+       and ClickUp" on a menu with nothing showing. Folded means "not this
+       time". */
+    expect(src).toContain("onPlan({ lines: folded ? [] : plan.lines, run })");
+    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
+  });
+
+  it("drops a summary that no longer has anything to summarise", () => {
+    expect(src).toContain("useEffect(() => { if (!plan.lines.length) setAsking(false); }, [plan.lines.length]);");
+  });
+});
+
+describe("what Refresh asks for", () => {
+  it("asks again for everything on screen, not only the main list", () => {
+    /*
+     * It forced the main list and nothing else, so the board's own two lists
+     * were re-read from the server's cache — and a review requested of him,
+     * present in the list the server serves, stayed invisible however many
+     * times he pressed it.
+     */
+    expect(src).toContain("boardForce.current = true;");
+    expect(src).toContain("if (selected != null) loadDetail(selected, true);");
+    expect(src).toContain("forgetRollups();");
+  });
+
+  it("forces the board once, and leaves the poll on the cache", () => {
+    // That cache is what makes this board cost two calls; a forced poll would
+    // spend a `gh` run every twenty seconds for nothing.
+    expect(src).toContain("const force = boardForce.current;\n    boardForce.current = false;");
+    expect(src).toContain('api.prList(root, "mine", stateSel, force)');
   });
 });

@@ -21,6 +21,22 @@ import { railScan, checksAbout, threadsAbout, queuedOn, railAge,  railPreview, t
 import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict } from "../lib/mergeReason.ts";
 import { ICON } from "../lib/iconSize.ts";
 
+/** How your own last verdict reads back, and in what colour. Its own map so the
+ *  three states are spelled once — the buttons above already spell them as
+ *  actions, and "You approved this" is not the same sentence as "Approve". */
+const MINE_SAID: Record<string, string> = {
+  APPROVED: "approved this",
+  CHANGES_REQUESTED: "asked for changes",
+  COMMENTED: "commented on this",
+  DISMISSED: "reviewed this, and it was dismissed",
+};
+const MINE_TINT: Record<string, string> = {
+  APPROVED: "var(--success)",
+  CHANGES_REQUESTED: "var(--error)",
+  COMMENTED: "var(--text3)",
+  DISMISSED: "var(--text4)",
+};
+
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 /** An identifier inside a quote, so it stops being a word in the sentence.
@@ -64,7 +80,7 @@ export type RailVerdict = "approve" | "request_changes" | "comment";
 export function FileRail({
   d, path, drafts, loading, queuedCount, verdict,
   onGoConversation, onGoChecks, onGoReview, onGoToMention, onMerge, canMerge, awaitingChecks,
-  onApprove, onRequestChanges, onComment, onSubmit,
+  onApprove, onRequestChanges, onComment, onSubmit, body, onBody, busyWhat,
 }: {
   d: PrDetail;
   /** The file the diff is showing. Null means nothing is selected yet, which is
@@ -144,6 +160,22 @@ export function FileRail({
   onRequestChanges?: () => void;
   onComment?: () => void;
   onSubmit?: () => void;
+  /**
+   * The review note being written, and a way to write it.
+   *
+   * The rail used to carry the three verdicts and the Submit and no field, so
+   * everything except an approval bounced you to another tab — "si quiero hacer
+   * la review desde aquí no tengo input para meter texto, entonces es inútil".
+   *
+   * It is the SAME draft the Review tab holds, not a second one: two boxes with
+   * two bodies is a way to lose the one you typed in the other.
+   */
+  body?: string;
+  onBody?: (v: string) => void;
+  /** The request in flight, by the label the panel gave it. The button that
+   *  started it says so — a round trip through `gh` with no feedback but a grey
+   *  button is the thing this app was worst at. */
+  busyWhat?: string;
 }) {
   /*
    * One walk, remembered.
@@ -206,6 +238,11 @@ export function FileRail({
     { id: "comment" as const, label: "💬 Comment", tint: "var(--text)", on: onComment },
   ].filter((v) => !!v.on);
   const armed = verdicts.length > 0 || !!onSubmit;
+  /* Your own last review on this pull request, newest first. GitHub keeps every
+     one of them, and only the latest says where you stand. */
+  const mine = [...(d.reviews ?? [])]
+    .filter((r) => r.viewerDidAuthor && r.state !== "PENDING")
+    .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""))[0];
   /* The whole review's queued lines, not this file's — what one submit is about
      to send. `drafts` is every file's, so its length is the same number rather
      than an estimate of it, and either prop alone is enough to say this. */
@@ -458,9 +495,26 @@ export function FileRail({
         </Sec>
       ) : (<>
       <Sec title="Your review" action={{ label: "Open", on: onGoReview }}>
+        {/*
+          * What you already said, before what you might say next.
+          *
+          * The box drew "Approve / Request changes / Comment" identically
+          * whether or not you had already reviewed — reported from a pull
+          * request he had approved two hours earlier. Your own last verdict is
+          * the one fact that changes what this box is for, so it goes first.
+          *
+          * `viewerRequested` still shows underneath when it is set: GitHub only
+          * keeps that flag while your review is outstanding, so after you have
+          * answered it means they have asked you AGAIN.
+          */}
+        {mine && (
+          <p className="m-0 mb-1.5 text-[10.5px]" style={{ color: MINE_TINT[mine.state] ?? "var(--text3)" }}>
+            You {MINE_SAID[mine.state] ?? "reviewed this"} {railAge(mine.submittedAt)}.
+          </p>
+        )}
         {d.viewerRequested && (
           <p className="m-0 mb-1.5 text-[10.5px]" style={{ color: "var(--warning)" }}>
-            You were asked to look at this.
+            {mine ? "They have asked you to look again." : "You were asked to look at this."}
           </p>
         )}
         {armed ? (
@@ -485,11 +539,24 @@ export function FileRail({
                 );
               })}
             </div>
+            {/* The note. Two rows, because a summary is a line or two and the
+                column is 320px — anything taller pushes Merge off the fold,
+                which is the other decision this rail exists to keep in view. */}
+            {onBody && (
+              <textarea value={body ?? ""} onChange={(e) => onBody(e.target.value)} rows={2}
+                placeholder="Summary — optional for an approval, markdown works"
+                className="w-full mt-1.5 rounded-md p-2 text-[10.5px] resize-y"
+                style={{ background: "var(--bg2)", color: "var(--text)", border: edge(18) }} />
+            )}
             <p className="m-0 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{goesWith}</p>
             {onSubmit && (
-              <button onClick={onSubmit}
-                className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px]"
+              <button onClick={onSubmit} disabled={busyWhat === "Review"}
+                className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
                 style={{ background: "var(--primary)", color: "var(--bg)", border: edge(20) }}>
+                {busyWhat === "Review" && (
+                  <span className="agx-spin" aria-hidden
+                    style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />
+                )}
                 Submit review
               </button>
             )}
@@ -517,11 +584,15 @@ export function FileRail({
             `mergeBlockedWhy`, and "1 check still running" twice in two lines is
             how a box starts reading like a form letter. */}
         {under && <p className="m-0 mt-1 text-[10px]" style={{ color: "var(--text4)" }}>{under}</p>}
-        <button onClick={onMerge} disabled={!canMerge}
-          className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] disabled:opacity-40"
+        <button onClick={onMerge} disabled={!canMerge || busyWhat === "Merge"}
+          className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
           style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: edge(20) }}>
           {/* "anyway" is a word about overriding something. With nothing to
               override it turned a plain press into a dare. */}
+          {busyWhat === "Merge" && (
+            <span className="agx-spin" aria-hidden
+              style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: allClear ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor", borderTopColor: "transparent" }} />
+          )}
           {willTake ? "Merge" : "Merge anyway…"}
         </button>
         <p className="m-0 mt-1.5 text-[9.5px] leading-snug" style={{ color: "var(--text4)" }}>

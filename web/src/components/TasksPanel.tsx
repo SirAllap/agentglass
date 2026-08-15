@@ -16,6 +16,7 @@ import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, 
 import type { ProviderTask, ProviderTasksResponse, SavedView, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail } from "../../../shared/providers.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { Portal } from "./Portal.tsx";
 import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { StatusPill } from "./StatusPill.tsx";
@@ -656,12 +657,34 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
 }
 
 /** Pick a time, or type one. Anchored to the row it was opened from. */
-function RemindPopover({ task, onClose, onSet }: {
-  task: LocalTask; onClose: () => void; onSet: (civil: string) => void;
+/**
+ * The reminder picker, drawn OUT of the row it belongs to.
+ *
+ * It was `position: absolute` inside the row, and a row lives in a scroller —
+ * so the popover was clipped to a few pixels of itself and could not be used at
+ * all. Reported that way: "ese reminder está como dentro de la línea y no puedo
+ * usarlo".
+ *
+ * Through a Portal, positioned against the button that opened it, which is what
+ * every other menu in the app does. A popover anchored inside content that
+ * scrolls is a popover that will be clipped by something eventually.
+ */
+function RemindPopover({ task, anchor, onClose, onSet }: {
+  task: LocalTask;
+  /** The control it hangs off, measured when it opens. */
+  anchor: HTMLElement | null;
+  onClose: () => void; onSet: (civil: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [free, setFree] = useState("");
   useDismiss(true, ref, onClose);
+  /* Measured once, on open. Following the row while it scrolls would need a
+     listener per popover for a box that is dismissed on the next click
+     anywhere — and a menu that drifts under the pointer is worse than one that
+     stays put. */
+  const box = anchor?.getBoundingClientRect();
+  const top = Math.min((box?.bottom ?? 0) + 6, (typeof window === "undefined" ? 800 : window.innerHeight) - 220);
+  const right = Math.max(8, (typeof window === "undefined" ? 1200 : window.innerWidth) - (box?.right ?? 0));
   const parsed = useMemo(() => {
     const m = free.trim().match(/^(?:(\d{1,2})[:h](\d{2}))$/);
     if (!m) return null;
@@ -670,8 +693,12 @@ function RemindPopover({ task, onClose, onSet }: {
     return d;
   }, [free]);
   return (
-    <div ref={ref} className="absolute right-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
-      style={{ zIndex: 40, background: "var(--bg2)", border: edge(28), minWidth: 240, padding: 4 }}>
+    <Portal>
+      {/* A catcher, so a click anywhere else closes it — the same shape the
+          facet menus use. */}
+      <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={onClose} />
+      <div ref={ref} className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col"
+        style={{ top, right, zIndex: 9999, background: "var(--bg2)", border: edge(28), minWidth: 240, padding: 4 }}>
       {presetTimes().map((p) => (
         <button key={p.label} onClick={() => onSet(civilOf(p.at))}
           className="text-left px-2.5 py-1.5 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
@@ -688,7 +715,8 @@ function RemindPopover({ task, onClose, onSet }: {
         {parsed ? `→ ${remindLabel(parsed.getTime())}` : free.trim() ? "a time like 8:30" : ""}
       </div>
       <span className="sr-only">{task.description}</span>
-    </div>
+      </div>
+    </Portal>
   );
 }
 
@@ -863,16 +891,34 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     }
   }, []);
 
+  /*
+   * Which board was asked for last, so a slow answer cannot win.
+   *
+   * Reported: open one board, step to another and come back quickly, and a few
+   * seconds later the panel moves you to the one you left. That is the first
+   * board's answer landing after the second — and the settle loop behind it,
+   * which keeps re-reading for up to 45 seconds and painting whatever it finds.
+   * Neither of them checked whether you were still looking.
+   */
+  const asking = useRef(0);
   const load = useCallback(async (id?: string, force = false, asked = false) => {
+    const ticket = ++asking.current;
+    /* Any settle still running belongs to the board being left. Bumping the
+       counter is how it is told to stand down — see `settle`. */
+    settling.current++;
     setBusy(true);
     if (asked && id) setWanted(id);
     try {
       const r = await api.clickupView(id, force);
+      if (ticket !== asking.current) return; // a later board already won
       setData(r);
       if (r.revalidating && r.view?.id) void settle(r.view.id, r.at);
     } catch {
+      if (ticket !== asking.current) return;
       setData({ tasks: [], statuses: [], fields: [], at: 0, error: "Could not reach the server" });
-    } finally { setBusy(false); setWanted(null); }
+    } finally {
+      if (ticket === asking.current) { setBusy(false); setWanted(null); }
+    }
   }, [settle]);
 
   useEffect(() => { if (active) { void loadBoards(); void load(); } }, [active, loadBoards, load]);
@@ -892,11 +938,30 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   /** What this board costs to ask, which is what decides how often we do. */
   const pollMs = data?.view?.builtin ? CU_POLL_SLOW_MS : CU_POLL_MS;
 
+  /*
+   * A filter belongs to the board it was set on.
+   *
+   * They were panel state, so narrowing one board to `backend` and stepping to
+   * another arrived with `backend` still on — over a board where it means
+   * something else, or nothing. Reported that way. Kept per board instead: what
+   * you set is still there when you come back, and never travels.
+   */
+  const filtersByBoard = useRef<Record<string, {
+    q: string; tag: string | null; mineOnly: boolean; statusPick: string[]; readyOnly: boolean;
+  }>>({});
   const landedOn = useRef<string | null>(null);
   useEffect(() => {
     const id = data?.view?.id;
     if (!id || landedOn.current === id) return;
+    const leaving = landedOn.current;
+    if (leaving) filtersByBoard.current[leaving] = { q, tag, mineOnly, statusPick, readyOnly };
     landedOn.current = id;
+    const kept = filtersByBoard.current[id];
+    setQ(kept?.q ?? "");
+    setTag(kept?.tag ?? null);
+    setMineOnly(kept?.mineOnly ?? false);
+    setStatusPick(kept?.statusPick ?? []);
+    setReadyOnly(kept?.readyOnly ?? false);
     setShowDone(!!data?.view?.builtin);
     /* An open address bar belongs to the board it was opened from. Left alone
        it stays on screen carrying the PREVIOUS board's address, over a board it
@@ -1160,10 +1225,23 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      never the same, which is the whole reason the card carries one. */
   const cardPlaceShown = otherList || !data?.place ? cardPlace : undefined;
 
+  /* Everybody who appears on a card of this board — the people the assignee
+     picker shows first. A workspace answers with five hundred names; these are
+     the dozen who actually work here. */
+  const boardPeople = useMemo(() => {
+    const ids = new Set<number>();
+    for (const t of data?.tasks ?? []) for (const p of t.people ?? []) if (p.id != null) ids.add(p.id);
+    return ids;
+  }, [data?.tasks]);
   const anyWho = (data?.tasks ?? []).some((t) => t.assignees.length);
   const anySprint = (data?.tasks ?? []).some((t) => t.sprint);
   const anyEst = (data?.tasks ?? []).some((t) => t.estimateHours);
-  const grid = cuGrid(anyWho, anySprint, anyEst);
+  /* The swatch column names itself after the field it is showing — "Squad" on
+     one board, "Pod" on the next — so the heading is the board's word rather
+     than ours. Taken from the first row that has one; they are all the same
+     field, since `swatch` picks by name across every card. */
+  const squadLabel = (data?.tasks ?? []).map(swatch).find(Boolean)?.name ?? "";
+  const grid = cuGrid(anyWho, !!squadLabel, anySprint, anyEst);
 
   /* The looked-up cards, by where each one lives. The search box filters these
      too — it is the only chip that still means anything on this board. */
@@ -1481,22 +1559,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title="Cards nothing unfinished is blocking"
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={readyOnly
-            ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+            ? ON_CHIP
             : { border: edge(14), color: "var(--text2)" }}>
-          ready <span style={{ color: "var(--text3)" }}>{counts.ready}</span>
+          {/* The count has to survive the fill: --text3 on the accent is a
+              number you cannot read. */}
+          ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{counts.ready}</span>
         </button>
         <button onClick={() => setMineOnly((v) => !v)} aria-pressed={mineOnly}
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={mineOnly
-            ? { background: "color-mix(in srgb, var(--success) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)", color: "var(--text)" }
+            ? ON_CHIP_OK
             : { border: edge(14), color: "var(--text2)" }}>
-          mine <span style={{ color: "var(--text3)" }}>{counts.mine}</span>
+          mine <span style={{ color: mineOnly ? "var(--bg)" : "var(--text3)", opacity: mineOnly ? 0.75 : 1 }}>{counts.mine}</span>
         </button>
         {tags.slice(0, 6).map((t) => (
           <button key={t} onClick={() => setTag((cur) => (cur === t ? null : t))} aria-pressed={tag === t}
             className="text-[11px] px-2.5 py-0.5 rounded-full"
             style={tag === t
-              ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+              ? ON_CHIP
               : { border: edge(14), color: "var(--text3)" }}>{t}</button>
         ))}
         <StatusFilter statuses={data?.statuses ?? []} tasks={data?.tasks ?? []}
@@ -1570,6 +1650,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               borderTop: edge(10), borderBottom: edge(10) }}>
             <span>Task</span>
             {anyWho && <span className="text-center">Who</span>}
+            {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
             {anySprint && <span>Sprint</span>}
             {/* Centred over the columns they label, because those columns hold
                 two-character numbers in a 30px track — a heading hard against
@@ -1639,7 +1720,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 {g.rows.map((t) => (
                   <div key={t.id} className="relative group">
                     <ClickUpRow t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                      grid={grid} showWho={anyWho} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard} />
+                      grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard} />
                     {/* One card at a time, because a history you can only throw
                         away whole is one nobody prunes. */}
                     <CloseButton onClick={() => { setLooked((cur) => { const left = cur.filter((x) => x.id !== t.id); if (!left.length) setOnLooked(false); return left; }); if (sel === t.id) setSel(null); }} title="Forget this one" style={{ color: "var(--text3)", background: "var(--bg2)", border: edge(14) }} className="absolute top-1.5 right-1.5 rounded opacity-0 group-hover:opacity-100" />
@@ -1694,7 +1775,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 </button>
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard} />
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard} />
                 ))}
               </div>
             ))}
@@ -1780,7 +1861,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   writable={boards.writeEnabled} repos={repos} here={here}
                   onOpenChatWith={onOpenChatWith}
                   wide={wide}
-                  byId={byId} onGo={(id) => setSel(id)}
+                  byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
                   skills={skills}
                   onNote={(text) => setNote({ ok: true, text })}
                   onAsk={(p) => setConfirm(p)} />
@@ -1959,6 +2040,22 @@ const WIDE_KEY = "agentglass.clickup.wideCard";
 /** How many looked-up cards to keep. A history you have to scroll is not a
  *  history, and these are all one click from being fetched again. */
 const LOOKED_MAX = 12;
+/*
+ * A filter that is ON has to look ON.
+ *
+ * The old treatment was the accent at 18% behind a normal-weight label, which
+ * beside five identical outlined chips reads as "slightly warmer", not as "this
+ * one is doing something". Reported as not being able to tell what was picked.
+ * Filled, in the accent'"'"'s own colour, with the panel'"'"'s background for the text —
+ * the same way the app marks a pressed control everywhere else.
+ */
+const ON_CHIP = {
+  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--bg)", fontWeight: 600,
+} as const;
+const ON_CHIP_OK = {
+  background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,
+} as const;
+
 const CU_POLL_MS = 60_000;
 const CU_POLL_SLOW_MS = 300_000;
 
@@ -1972,7 +2069,7 @@ const CU_POLL_SLOW_MS = 300_000;
  * `Who` and `Sprint` appear only once some card actually has one. A column of
  * blanks costs the title its width and tells you nothing.
  */
-const cuGrid = (who: boolean, sprint: boolean, est: boolean) =>
+const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean) =>
   // The comments column is unconditional, unlike Who and Sprint. Those come and
   // go because a board where nobody is assigned has nothing to put in them; a
   // count of zero is a real answer and worth the 30px — "nobody has said
@@ -1982,7 +2079,33 @@ const cuGrid = (who: boolean, sprint: boolean, est: boolean) =>
   // pixels tall — so a card with 3 points and 8 comments read as either. Two
   // columns of the same shape need something between them, and Due is the
   // widest thing on the row.
-  ["1fr", who ? "50px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px"].filter(Boolean).join(" ");
+  // The swatch track is 36px for a dot that is 18: the width belongs to the
+  // HEADING, not the dot. A colour with no word over it is a code the reader has
+  // to have been told, and this column is the one thing on the row that is pure
+  // colour — so it pays for the label that says which field it is.
+  ["1fr", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px"].filter(Boolean).join(" ");
+
+/**
+ * The one custom field worth a column of its own: a coloured drop-down.
+ *
+ * A squad, a pod, a team — whatever the board calls it, it is the field people
+ * scan a board BY, and ClickUp itself renders it as a block of colour rather
+ * than as a word. Picked by name first, so a board with several coloured
+ * drop-downs shows the one that means "whose work is this"; otherwise the first
+ * coloured one, which on a board with exactly one is the same answer without
+ * anybody having to configure it.
+ *
+ * Null for a field nobody coloured: a grey dot in a colour column is a value
+ * pretending to be a category, and the card still spells the value out.
+ */
+function swatch(t: ProviderTask): { name: string; value: string; color: string } | null {
+  const coloured = (t.custom ?? []).filter((c) => c.color);
+  const hit = coloured.find((c) => /squad|team|pod|tribe/i.test(c.name)) ?? coloured[0];
+  // The "(DO NOT EDIT!!!)" kind of parenthesis is a note to whoever edits the
+  // field, not part of its name, and the card already strips it. A heading is
+  // three characters wide here — it cannot carry an aside as well.
+  return hit ? { name: hit.name.replace(/\s*\(.*\)\s*$/, ""), value: hit.value, color: hit.color! } : null;
+}
 
 /**
  * A status, spelled and coloured the way the board spells and colours it.
@@ -2082,9 +2205,9 @@ function PriorityChip({ p }: { p: NonNullable<ProviderTask["priority"]> }) {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, blocked, onHand }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
-  grid: string; showWho: boolean; showSprint: boolean; showEst: boolean;
+  grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
   blocked: ProviderTask[];
   /** Hand this card over without opening it. Absent where there is no checkout
@@ -2112,6 +2235,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, 
   const late = !!t.due && t.due < today;
   const now = t.due === today;
   const done = t.statusKind === "done";
+  const sq = showSquad ? swatch(t) : null;
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
@@ -2168,6 +2292,26 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, 
           )}
         </span>
       )}
+      {/* The squad as the board paints it, at the size of a face.
+          Colour is how a multi-squad board is read — ClickUp itself gives that
+          field a solid block of it — and the word was one click deep, on the
+          card. A dot the size of an avatar sits on the same optical line as the
+          faces beside it, so the two columns read as one glance. The name and
+          the value are both on hover, because a colour on its own is only
+          learnable by someone who already knows the board. */}
+      {showSquad && (
+        <span className="flex items-center justify-center">
+          {sq && (
+            <span title={`${sq.name}: ${sq.value}`} aria-label={`${sq.name}: ${sq.value}`}
+              style={{
+                width: 18, height: 18, borderRadius: 999, background: sq.color,
+                // The same ring the faces wear, so a pale option does not float
+                // off a dark row and a dark one does not sink into it.
+                boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent)",
+              }} />
+          )}
+        </span>
+      )}
       {showSprint && (
         <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
           title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
@@ -2214,6 +2358,15 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, 
           <MenuItem onClick={() => copy(t.id, "the ClickUp id")}>
             Copy {t.id} <span style={{ color: "var(--text4)" }}>· ClickUp&apos;s own</span>
           </MenuItem>
+          {/* The link, not the id. Pasting a card into a message, a commit or a
+              PR body wants the address somebody can click — and until now the
+              only way to get it was to open the card in a browser and read it
+              out of the bar. Next to the ids because it is the third thing this
+              row can hand you, and above "Open" because copying is what you
+              came to the menu for; opening has a ↗ on the row itself. */}
+          {t.url && (
+            <MenuItem onClick={() => copy(t.url, "the card link")}>Copy card URL</MenuItem>
+          )}
           {externalUrl(t.url) && (
             <MenuItem onClick={() => { openExternal(t.url); setMenu(null); }}>Open in ClickUp ↗</MenuItem>
           )}
@@ -2285,12 +2438,9 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
     <div className="relative" ref={box}>
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
         className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
-        style={picked.length
-          ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-          : { border: edge(14), color: "var(--text2)" }}>
+        style={picked.length ? ON_CHIP : { border: edge(14), color: "var(--text2)" }}>
         {picked.length ? `${picked.length} selected` : "Status"}
-        <span style={{ color: "var(--text4)" }}>▾</span>
+        <span style={{ color: picked.length ? "var(--bg)" : "var(--text4)", opacity: picked.length ? 0.7 : 1 }}>▾</span>
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
@@ -2354,7 +2504,7 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
  * then does anything leave this machine. That is not ceremony. A status change
  * here fires automations and notifies people, and there is no undo.
  */
-function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onAsk, skills, onNote, wide, byId, onGo }: {
+function CardDetail({ t, today, statuses, fields, place, writable, repos, here, onOpenChatWith, onAsk, skills, onNote, wide, byId, onGo, boardPeople }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   /** Space / Folder / List, for the card in hand. */
@@ -2370,6 +2520,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   /** The board's own cards, for resolving dependencies without a call each. */
   byId: Map<string, ProviderTask>;
   onGo: (id: string) => void;
+  /** Everybody already on a card of the board being shown. They go to the top
+   *  of the people picker, which is what ClickUp does with its own list. */
+  boardPeople?: Set<number>;
 }) {
   const [full, setFull] = useState<(Partial<TaskDetail> & { ok?: boolean; error?: string }) | null>(null);
   /** Which comment threads are open, by comment id. Closed by default: a card
@@ -2391,8 +2544,38 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * avoid, not to tune; the request belongs to the click that asked for it.
    */
   const [whoOpen, setWhoOpen] = useState(false);
+  /** What is typed into the people filter. A real workspace answers with five
+   *  hundred names; without this the picker is a scroll, not a choice. */
+  const [whoQ, setWhoQ] = useState("");
   const [members, setMembers] = useState<ListMember[] | null>(null);
   const [membersBusy, setMembersBusy] = useState(false);
+  /*
+   * Who to show first: the people this board already runs on.
+   *
+   * `/list/{id}/member` answered with twenty names that included none of the
+   * six ClickUp itself offers for these cards, so the picker now takes the
+   * workspace too — and a workspace here is five hundred and twenty-seven
+   * people. The ones already on the cards in front of you are the answer nine
+   * times in ten, and they are the group ClickUp puts at the top of its own
+   * picker.
+   */
+  const onBoard = useMemo(() => {
+    const ids = new Set<number>();
+    for (const p of t.people ?? []) if (p.id != null) ids.add(p.id);
+    for (const id of boardPeople ?? []) ids.add(id);
+    return ids;
+  }, [t.people, boardPeople]);
+  const shownMembers = useMemo(() => {
+    const needle = whoQ.trim().toLowerCase();
+    return (members ?? [])
+      .filter((m) => m.name && (!needle || m.name.toLowerCase().includes(needle)))
+      .sort((a, b) => {
+        const ah = onBoard.has(a.id) ? 0 : 1, bh = onBoard.has(b.id) ? 0 : 1;
+        if (ah !== bh) return ah - bh;
+        if (a.me !== b.me) return a.me ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  }, [members, whoQ, onBoard]);
   /** The card this answer is for, so a click on the next card cannot be
    *  answered by the last card's request. */
   const asked = useRef<string | null>(null);
@@ -2414,7 +2597,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   const [askOpen, setAskOpen] = useState(false);
   /** Where a hand-off goes. Read once and kept, so the pills reflect it. */
   const [to, setTo] = useState<HandoffTo>(handoffTo);
-  const [copied, setCopied] = useState<"human" | "raw" | null>(null);
+  const [copied, setCopied] = useState<"human" | "raw" | "url" | null>(null);
   /*
    * Which half of the card you are reading.
    *
@@ -2495,7 +2678,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * of the time. Both are offered, and both are SHOWN — the internal id was
    * invisible before, so there was no way to read it off the screen at all.
    */
-  const copyIt = async (v: string, which: "human" | "raw") => {
+  const copyIt = async (v: string, which: "human" | "raw" | "url") => {
     try { await navigator.clipboard.writeText(v); setCopied(which); setTimeout(() => setCopied(null), 1200); } catch { /* no clipboard */ }
   };
 
@@ -2656,16 +2839,32 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                  ellipsis and a title, not cropped by a container. */
               <div className="agx-scroll absolute right-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
                 style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 200, maxWidth: 260, maxHeight: 300 }}>
+                {/* 527 names on a real workspace, which is why this is here.
+                    ClickUp'"'"'s own picker opens on the people already on the card
+                    and the ones around it, and keeps everybody else behind a
+                    search box; a flat alphabetical list of the company is a
+                    list nobody scrolls twice. */}
+                {!membersBusy && (members?.length ?? 0) > 12 && (
+                  <input value={whoQ} onChange={(e) => setWhoQ(e.target.value)} autoFocus
+                    placeholder="Filter people…" spellCheck={false}
+                    className="mx-1 mb-1 px-2 py-1 rounded text-[11px] outline-none shrink-0"
+                    style={{ background: "var(--bg3)", border: edge(16), color: "var(--text)" }} />
+                )}
                 {membersBusy && <Spinner label="Reading the team…" />}
                 {!membersBusy && members?.length === 0 && (
                   <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
                     Nobody is a member of this list.
                   </div>
                 )}
-                {!membersBusy && members?.map((m) => {
+                {!membersBusy && shownMembers.map((m, i) => {
+                  /* One rule between the two groups: everybody above it works
+                     this board, everybody below it merely could. */
+                  const divide = i > 0 && onBoard.has(m.id) !== onBoard.has(shownMembers[i - 1]!.id);
                   const on = (t.people ?? []).some((p) => p.id === m.id);
                   return (
-                    <button key={m.id} className="text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2"
+                    <div key={m.id}>
+                    {divide && <div className="my-1" style={{ borderTop: edge(14) }} />}
+                    <button className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2"
                       onClick={() => {
                         setWhoOpen(false);
                         onAsk({
@@ -2681,8 +2880,12 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                       </span>
                       {on && <span className="text-[10px]" style={{ color: "var(--success)" }}>✓</span>}
                     </button>
+                    </div>
                   );
                 })}
+                {!membersBusy && !shownMembers.length && (members?.length ?? 0) > 0 && (
+                  <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Nobody matches that.</div>
+                )}
               </div>
             )}
           </div>
@@ -2711,11 +2914,30 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             <span style={{ color: "var(--text3)" }} title={new Date(t.updated).toLocaleString()}>{fmtAgo(t.updated)}</span>
           </CardField>
         ) : null}
+        {/* A coloured drop-down as a chip in its own colour, the way the board
+            draws it. "Blue" printed in grey is a value you have to read and
+            then translate back into the colour you already recognise — and the
+            colour is ClickUp's own, so this window and that one agree. Fill and
+            border at low alpha rather than ClickUp's solid block: this is a
+            value in a column of values, and a saturated rectangle here would
+            outshout the status pill, which is the thing on the card that
+            actually changes. */}
         {t.custom?.map((c) => {
           const spec = fields.find((f) => f.id === c.id);
           return (
             <CardField key={c.id} label={c.name.replace(/\s*\(.*\)\s*$/, "")}>
-              <span style={{ color: "var(--text2)" }}>{c.value}{spec?.readOnly ? " 🔒" : ""}</span>
+              {c.color ? (
+                <span className="text-[10.5px] px-1.5 py-0.5 rounded whitespace-nowrap" title={c.value}
+                  style={{
+                    color: c.color,
+                    background: `color-mix(in srgb, ${c.color} 15%, transparent)`,
+                    border: `1px solid color-mix(in srgb, ${c.color} 34%, transparent)`,
+                  }}>
+                  {c.value}{spec?.readOnly ? " 🔒" : ""}
+                </span>
+              ) : (
+                <span style={{ color: "var(--text2)" }}>{c.value}{spec?.readOnly ? " 🔒" : ""}</span>
+              )}
             </CardField>
           );
         })}
@@ -3106,6 +3328,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         </div>
         <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2 py-1 rounded-lg"
           style={{ border: line, color: "var(--text2)" }}>Copy {t.customId ? "PROJ id" : "id"}</button>
+        {/* Beside the id it belongs with, and before Open: the two buttons are
+            the two ways to take this card somewhere else, and the one that
+            leaves the app should not be the only way to get its address. */}
+        {t.url && (
+          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2 py-1 rounded-lg"
+            style={{ border: line, color: "var(--text2)" }}
+            title={t.url}>{copied === "url" ? "copied ✓" : "Copy URL"}</button>
+        )}
         {t.url && (
           <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2 py-1 rounded-lg"
             style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
@@ -3613,6 +3843,10 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
   marked?: boolean; onMark?: () => void;
   onFilter?: (kind: "tag" | "project", value: string) => void;
 }) {
+  /* The cell the reminder popover hangs off. It is portalled out of this row —
+     a row lives in a scroller, and a popover inside one gets clipped — so the
+     only thing left here is where it should point. */
+  const remindAnchor = useRef<HTMLSpanElement>(null);
   const isDone = t.status === "completed";
   const late = overdue(t, today);
   const dueToday = t.due === today;
@@ -3716,7 +3950,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           actually tell you. So the offer sits here rather than a blank that
           reads as "handled" — and it is an offer, not the announcement that
           nothing is going to happen. */}
-      <span className="relative text-[11px] tabular-nums">
+      <span ref={remindAnchor} className="relative text-[11px] tabular-nums">
         {reminder ? (
           <span style={{ color: reminder.firedAt ? "var(--error)" : reminder.due - Date.now() < 3_600_000 ? "var(--warning)" : "var(--primary)" }}>
             ⏰ {remindLabel(reminder.due)}
@@ -3730,7 +3964,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           </button>
         )}
         {remindOpen && onSetRemind && onCloseRemind && (
-          <RemindPopover task={t} onClose={onCloseRemind} onSet={onSetRemind} />
+          <RemindPopover task={t} anchor={remindAnchor.current} onClose={onCloseRemind} onSet={onSetRemind} />
         )}
       </span>
 

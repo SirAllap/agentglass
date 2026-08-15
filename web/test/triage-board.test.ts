@@ -22,6 +22,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TriageBoard } from "../src/components/TriageBoard.tsx";
 import { LANES } from "../src/lib/prLanes.ts";
+
+const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
 import type { PrSummary } from "../../shared/types.ts";
 
 const day = 86_400_000;
@@ -93,14 +95,23 @@ const segment = (html: string, lane: string): string | null =>
  * rather than by naming lanes directly — if fileInLane changes its mind, these
  * counts move with it instead of asserting a fiction.
  *
- *   review  8 — asked of you, over the cap of six
+ *   review  9 — asked of you, over the cap of six
  *   land    2 — yours, approved and green
  *   blocked 1 — yours, red
  *   flight  1 — yours, still running
- *   others  1 — asked of you, approved, and red: not yours to move
+ *   others  1 — a draft you were asked to look at: nobody's job, including yours
+ *
+ * #300 — asked of you, approved by somebody else, and red — is in `review`, not
+ * in `others`: `asked` comes from `review-requested:@me`, which GitHub empties
+ * the moment you review, so it means YOUR review is still outstanding whatever
+ * anybody else has said.
  */
 const ASKED = Array.from({ length: 8 }, (_, i) => pr(100 + i));
-const REVIEW = [...ASKED, pr(300, { reviewDecision: "APPROVED", fail: 1 })];
+const REVIEW = [
+  ...ASKED,
+  pr(300, { reviewDecision: "APPROVED", fail: 1 }),
+  pr(301, { isDraft: true }),
+];
 const MINE = [
   pr(200, { reviewDecision: "APPROVED" }),
   pr(201, { reviewDecision: "APPROVED" }),
@@ -128,7 +139,7 @@ describe("the markup these tests read", () => {
 describe("the lanes", () => {
   it("counts each lane from the two lists it was handed", () => {
     const html = full();
-    expect(heading(html, "review")).toBe("8");
+    expect(heading(html, "review")).toBe("9");
     expect(heading(html, "land")).toBe("2");
     expect(heading(html, "blocked")).toBe("1");
     expect(heading(html, "others")).toBe("1");
@@ -144,8 +155,8 @@ describe("the lanes", () => {
      */
     const html = full();
     expect(drawn(html, "review")).toBe(6);
-    expect(heading(html, "review")).toBe("8");
-    expect(column(html, "review")).toContain("+2 more in this lane");
+    expect(heading(html, "review")).toBe("9");
+    expect(column(html, "review")).toContain("+3 more in this lane");
   });
 
   it("leaves a lane under the cap alone", () => {
@@ -293,7 +304,7 @@ describe("the footer", () => {
 describe("the summary bar", () => {
   it("carries a segment per lane, with that lane's count", () => {
     const html = full();
-    expect(segment(html, "review")).toBe("8");
+    expect(segment(html, "review")).toBe("9");
     expect(segment(html, "land")).toBe("2");
     expect(segment(html, "blocked")).toBe("1");
     expect(segment(html, "others")).toBe("1");
@@ -373,8 +384,18 @@ describe("the lane headings line up", () => {
   it("keeps every why as something you can still read", () => {
     // Hidden, not deleted: it is what the ⓘ says, read once while you are
     // learning what a lane means rather than on every glance for ever after.
+    //
+    // Every lane DRAWN, which is not every lane declared: `others` opts out of
+    // being shown empty, and on this board it is empty. Asserting over all five
+    // would be asserting that a column nobody can see explains itself.
     const html = render({ mine: [pr(1)] });
-    for (const l of LANES) expect(html).toContain(l.why);
+    for (const l of LANES) {
+      if (l.hideWhenEmpty) continue;
+      expect(html).toContain(l.why);
+    }
+    // And with something in it, it is a column again, ⓘ and all.
+    const withOthers = render({ review: [pr(9, { isDraft: true })] });
+    for (const l of LANES) expect(withOthers).toContain(l.why);
   });
 });
 
@@ -462,5 +483,129 @@ describe("a long title cannot decide the card's height", () => {
     const html = render({ mine: [pr(1, { title: long })] });
     expect(html).toContain("-webkit-line-clamp:2");
     expect(html).toContain(long.slice(0, 40)); // still there, still in the title attribute
+  });
+});
+
+/*
+ * Find, inside the board.
+ *
+ * The bar at the top of the panel asks GitHub, and pressing return in it leaves
+ * the board for a table of every pull request in the repository. This is the
+ * other question — "which of THESE twelve" — asked in the space the summary
+ * leaves empty.
+ */
+describe("finding a card on the board", () => {
+  it("has a box, once there is something to look through", () => {
+    expect(full()).toContain("Find in these");
+    // Nothing to search on an empty board, and nothing to search while the two
+    // lists are still arriving.
+    expect(render({ mine: [], review: [], total: 0 })).not.toContain("Find in these");
+  });
+
+  it("quietens what does not match rather than removing it", () => {
+    /*
+     * A card that stops being drawn takes its lane's shape with it, and the
+     * counts above start disagreeing with what is under them — and the shape is
+     * the reason this is a board and not a list.
+     *
+     * Read from the source: nothing is dimmed until somebody types, and there
+     * is no typing in `renderToStaticMarkup`.
+     */
+    expect(board).toContain("dim={!matches(p)}");
+    expect(board).toContain('...(dim ? { opacity: 0.32, filter: "saturate(0.25)" } : null),');
+    // Never a filtered list: every card is still rendered.
+    expect(board).not.toContain(".filter(matches)</");
+  });
+
+  it("searches only what the card shows", () => {
+    // Matching on something invisible is how a search comes back with a card
+    // whose row says nothing about why it is there.
+    expect(board).toContain("`#${p.number}`, String(p.number), p.title, p.author, p.headRefName, p.baseRefName,");
+  });
+});
+
+describe("who is on it", () => {
+  it("is drawn as faces, not as two letters", () => {
+    /*
+     * Two letters is a puzzle on a board where the same pair belongs to two
+     * people, and every other surface in the panel draws a person as a picture.
+     * `Avatar` keeps initials as its own fallback, so nothing is lost where
+     * there is no face.
+     */
+    expect(board).toContain("<Avatar login={login} size={16} />");
+    expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
+  });
+
+  it("is the author and whoever was asked, capped", () => {
+    // The two facts a list row carries. Past five the card is a contact sheet,
+    // and the pull request itself lists them all.
+    expect(board).toContain("[p.author, ...(p.reviewers ?? []).map((r) => r.login)]");
+    expect(board).toContain(".slice(0, 5)");
+  });
+});
+
+describe("a board is for pointing at, not for pressing", () => {
+  it("opens the pull request instead of performing the lane's action", () => {
+    /*
+     * Reported after pressing "Re-run failed" by accident on a card that was
+     * under the pointer for a different reason — and Merge sat in the same
+     * place on the lane next to it.
+     */
+    expect(board).toContain('onAct(p, "open")');
+    expect(board).not.toContain("onAct(p, act)");
+    expect(board).toContain('if (k === "a") { e.preventDefault(); onAct(at, "open"); return; }');
+  });
+
+  it("still says what the card is asking for", () => {
+    // The verdict travels; only the press moves.
+    expect(board).toContain('Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""}');
+  });
+});
+
+describe("the number on a card", () => {
+  it("copies when pressed, without opening the card underneath", () => {
+    expect(board).toContain("copyNumber(p.number)");
+    expect(board).toContain("e.stopPropagation(); copyNumber(p.number)");
+  });
+
+  it("wears the same chip the masthead does, so it reads as pressable", () => {
+    // Plain grey text is a label, and nobody presses a label.
+    expect(board).toContain('{copied === p.number ? "✓" : "⧉"}');
+    expect(board).toContain("border: `1px solid color-mix(in srgb, ${copied === p.number ? \"var(--success) 50%\" : \"var(--border) 55%\"}, transparent)`,");
+  });
+});
+
+/*
+ * A card that claims failure asks whether it is true.
+ *
+ * The list's rollup is GitHub's aggregate counts, and those count a re-run's
+ * old attempt beside the new one. Measured on a pull request their own page
+ * calls "All checks have passed": counts of 45 SUCCESS, 20 SKIPPED, 1
+ * CANCELLED, 1 FAILURE — and `state: FAILURE`, which their page does not use
+ * either. Aggregates have no names to de-duplicate by, so the only honest fix
+ * is to ask per card.
+ */
+describe("a red card", () => {
+  it("checks itself against the latest run per name", () => {
+    expect(board).toContain("const real = rollupOf(root, p.number);");
+    expect(board).toContain("return real ? { ...p, checks: real } : p;");
+  });
+
+  it("only asks when it claims red, and only with a checkout to ask from", () => {
+    // Everything green is already telling the truth; asking for it would be a
+    // request per card on every board paint.
+    expect(board).toContain("if (!root || !p.checks || p.checks.failure === 0) return p;");
+  });
+});
+
+describe("taking a card away with you", () => {
+  it("copies its link, beside the pin and the same size", () => {
+    /* The number copies the number — what goes in a branch or a commit. This is
+       the other thing a card gets taken away as: a link to paste into a
+       message. */
+    expect(board).toContain("copyLink()");
+    expect(board).toContain('navigator.clipboard?.writeText(p.url || "")');
+    // Same 26px box as the star it sits next to.
+    expect(board.split("width: 26, height: 26").length - 1).toBe(2);
   });
 });

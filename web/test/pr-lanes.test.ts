@@ -62,9 +62,54 @@ describe("what is asked of you comes first", () => {
     expect(f.reason).toContain("fix, not the first look");
   });
 
-  it("stops asking once you have approved it", () => {
-    // Otherwise your own approval keeps the card in your face for ever.
-    expect(fileInLane(pr({ reviewDecision: "APPROVED" }), ASKED).lane).not.toBe("review");
+  it("still asks when somebody ELSE has approved it", () => {
+    /*
+     * This used to file it anywhere but `review`, guarding against "your own
+     * approval keeps the card in your face for ever" — a case that cannot
+     * happen. `asked` comes from `review-requested:@me`, and GitHub drops a
+     * pull request from that search the moment you review it, so `asked`
+     * already means your review is outstanding.
+     *
+     * Reported from the app: the pill said "Needs my review 1" and the board's
+     * review lane said "Nothing here. Good."
+     */
+    const f = fileInLane(pr({ reviewDecision: "APPROVED" }), ASKED);
+    expect(f.lane).toBe("review");
+    expect(f.reason).toContain("already approved");
+    // And it says the useful part: you are not what it is waiting on.
+    expect(f.reason).toContain("can land whenever you like");
+  });
+});
+
+describe("before the check rollups have landed", () => {
+  /*
+   * The list arrives in two passes: rows in ~1.5s, check rollups about four
+   * seconds behind. For that moment every rollup is empty — and read as fact,
+   * an empty rollup says "no checks". Reported from the app: after a restart
+   * the whole board sat in "yours, in flight" reading "Open, green, and nobody
+   * has been asked to look yet", and came right on Refresh.
+   */
+  it("says it is still loading rather than calling it green", () => {
+    const f = fileInLane(pr({ checksLoaded: false, ok: 0 } as never), MINE);
+    expect(f.lane).toBe("flight");
+    expect(f.reason).toContain("Still reading its checks");
+  });
+
+  it("does not let it reach ready-to-land on an empty rollup", () => {
+    expect(fileInLane(pr({ reviewDecision: "APPROVED", checksLoaded: false, ok: 0 } as never), MINE).lane)
+      .not.toBe("land");
+  });
+
+  it("still hands you a review that was asked of you", () => {
+    // Whether the checks are in has nothing to do with whether your name is on
+    // it, and the review lane is above this test for that reason.
+    expect(fileInLane(pr({ checksLoaded: false, ok: 0 } as never), ASKED).lane).toBe("review");
+  });
+
+  it("leaves a caller that never had two passes alone", () => {
+    // `undefined` is "this summary was not built that way"; only an explicit
+    // false is the server saying the second pass is still out.
+    expect(fileInLane(pr({ ok: 0 }), MINE).reason).not.toContain("Still reading");
   });
 });
 
@@ -188,5 +233,26 @@ describe("a conflict is not a green pull request", () => {
     // Forty cards in a column is a scroll inside a scroll — worse than the flat
     // list the board replaced.
     expect(LANE_CAP).toBeLessThanOrEqual(8);
+  });
+});
+
+describe("a suite that is still running", () => {
+  it("is a wait, even when it is carrying a failure", () => {
+    /*
+     * Measured against GitHub on a pull request whose failing check had just
+     * been re-run: their aggregate answers FAILURE: 1 and IN_PROGRESS: 2,
+     * because the run that failed is still counted alongside the one replacing
+     * it. github.com says "Some checks haven't completed yet". A card sat in
+     * Blocked reading "2 checks failing" over a suite that was busy and green,
+     * and no amount of pressing Refresh could move it.
+     */
+    const f = fileInLane(pr({ fail: 2, pend: 3, ok: 30 }), MINE);
+    expect(f.lane).toBe("flight");
+    expect(f.reason).toContain("which a re-run may be replacing");
+  });
+
+  it("is still blocked once everything has reported", () => {
+    const f = fileInLane(pr({ fail: 2, ok: 30 }), MINE);
+    expect(f.lane).toBe("blocked");
   });
 });

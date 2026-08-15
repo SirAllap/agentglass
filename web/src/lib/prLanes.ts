@@ -32,6 +32,19 @@ export interface Lane {
   why: string;
   /** Which CSS variable tints it. */
   tint: string;
+  /**
+   * Drawn only when it holds something.
+   *
+   * An empty lane is usually the most valuable thing on this board — "Needs
+   * your review · Nothing here. Good." is the answer somebody came for. That
+   * only holds where the zero is news. `others` can only ever be fed by the two
+   * lists the board is given, yours and the ones you were asked to look at, so
+   * for it to have a card at all somebody must have asked you to review a draft
+   * or something conflicting. Reported after weeks of use: "0 waiting on
+   * someone else, nunca he visto una PR ahí". A column that is always empty is
+   * a column that teaches you to skip a fifth of the screen.
+   */
+  hideWhenEmpty?: boolean;
 }
 
 export const LANES: Lane[] = [
@@ -42,7 +55,7 @@ export const LANES: Lane[] = [
   { id: "blocked", label: "Blocked", tint: "var(--error)",
     why: "Red checks or conflicts. Reviewing these is wasted work until they move." },
   { id: "others", label: "Waiting on someone else", tint: "var(--info)",
-    why: "Not yours to move. The only useful action is a poke." },
+    why: "Not yours to move. The only useful action is a poke.", hideWhenEmpty: true },
   { id: "flight", label: "Yours, in flight", tint: "var(--primary)",
     why: "Open by you and still moving. Nothing is owed by you right now." },
 ];
@@ -119,8 +132,19 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
    * asked for is the one thing on this board that nobody else can do, and
    * burying it under a failing check would hide the only card with your name on
    * it. The state is said in the sentence instead.
+   *
+   * Even APPROVED. This used to read `stake.asked && !approved`, guarding
+   * against "your own approval keeps the card in your face for ever" — a case
+   * that cannot happen: `asked` comes from `review-requested:@me`, and GitHub
+   * drops a pull request from that search the moment you review it. So `asked`
+   * already means "your review is still outstanding", and the guard only ever
+   * fired when somebody ELSE had approved.
+   *
+   * Reported from the app exactly that way: the pill said "Needs my review 1"
+   * and the board's own review lane said "Nothing here. Good." One screen, one
+   * fact, two answers — which is worse than either answer alone.
    */
-  if (stake.asked && !approved) {
+  if (stake.asked) {
     if (red) {
       return { lane: "review",
         reason: `Asked of you — and ${plural(c.failure, "check")} ${c.failure === 1 ? "is" : "are"} red, so read it knowing the author still has work.` };
@@ -132,10 +156,37 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
       return { lane: "review",
         reason: "Asked of you — and it conflicts with the base branch, so it cannot land as it stands." };
     }
+    if (approved) {
+      // Said plainly, because it changes what you do with it: read it if you
+      // want to, or press merge — you are not the thing standing in its way.
+      return { lane: "review",
+        reason: !red && !running && p.checks.total > 0
+          ? "Asked of you — and somebody else has already approved it, so it is green and can land whenever you like."
+          : "Asked of you — somebody else has already approved it, so your review is not what it is waiting on." };
+    }
     return { lane: "review",
       reason: changesAsked
         ? "You asked for changes and were re-requested — this is the fix, not the first look."
         : "Asked of you. Nobody else can unblock it." };
+  }
+
+  /*
+   * The checks have not come back yet, and that is not the same as none.
+   *
+   * The list arrives in two passes on purpose — the rows in 1.5s, the check
+   * rollups four seconds behind them — so for a moment every pull request has
+   * an empty rollup. Read as fact, that empty rollup says "no checks", and the
+   * board filed a whole repository under "Open, green, and nobody has been
+   * asked to look yet". Reported exactly that way: every card in the wrong lane
+   * after a restart, correct after pressing Refresh.
+   *
+   * Said as a wait instead. `checksLoaded === false` is the server telling us
+   * the second pass is still out; `undefined` is a caller that never had two
+   * passes, and is left alone.
+   */
+  if (p.checksLoaded === false) {
+    return { lane: stake.mine ? "flight" : "others",
+      reason: "Still reading its checks — this card is not finished loading." };
   }
 
   /*
@@ -175,8 +226,29 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
   }
 
   /*
-   * Blocked: something has to change before anybody can move. Red beats
-   * running, because red is a fact and running is a wait.
+   * Still running beats red, and that is a correction.
+   *
+   * Measured against GitHub on a pull request whose failing check had just been
+   * re-run: their aggregate answers `FAILURE: 1` and `IN_PROGRESS: 2`, because
+   * the run that failed is still counted alongside the one replacing it.
+   * github.com does not show it that way — it keeps the latest run per check
+   * name and says "Some checks haven't completed yet" — and neither should we.
+   * A card sat in Blocked reading "2 checks failing" over a suite that was
+   * green and busy, and no amount of pressing Refresh could move it, because
+   * the number was real and its meaning was not.
+   *
+   * So a suite with anything still in flight is a wait. The failure it is
+   * carrying is, more often than not, the attempt being replaced.
+   */
+  if (running) {
+    return { lane: stake.mine ? "flight" : "others",
+      reason: red
+        ? `${c.success} of ${c.total} checks in — ${plural(c.failure, "failure")} so far, which a re-run may be replacing.`
+        : `${c.success} of ${c.total} checks in, nothing red yet.` };
+  }
+
+  /*
+   * Blocked: something has to change before anybody can move.
    */
   if (red) {
     const names = c.failing.slice(0, 2).map((f) => f.name).join(", ");
@@ -192,15 +264,6 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
       reason: stake.mine
         ? "Changes were asked for. The ball is with you."
         : "Changes were asked for. The ball is with the author, not you." };
-  }
-
-  /*
-   * Still running is not blocked and not ready — it is a wait, and the honest
-   * place for a wait of yours is your own lane with the count on it.
-   */
-  if (running) {
-    return { lane: stake.mine ? "flight" : "others",
-      reason: `${c.success} of ${c.total} checks in, nothing red yet.` };
   }
 
   if (stake.mine) {
@@ -252,6 +315,16 @@ export type Suggested = "open" | "merge" | "rerun";
 
 export function suggestedAction(p: PrSummary, filed: Filed): Suggested {
   if (filed.lane === "land") return "merge";
+  /*
+   * A review asked of you on something already approved and green: the press
+   * that moves it is Merge, not Review. It sits in the review lane because your
+   * name is on it — see `fileInLane` — but offering "Review" on a pull request
+   * whose only missing step is a button would be the board answering a question
+   * nobody asked.
+   */
+  if (filed.lane === "review" && p.reviewDecision === "APPROVED"
+    && p.checks.failure === 0 && p.checks.pending === 0 && p.checks.total > 0
+    && p.mergeable !== "CONFLICTING") return "merge";
   // Yours and red: the useful press is the one that finds out whether it is
   // flake, and it is the only one of these that does not need a human read.
   if (filed.lane === "blocked" && p.checks.failure > 0) return "rerun";

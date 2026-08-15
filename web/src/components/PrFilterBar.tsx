@@ -1,6 +1,6 @@
 import { FacetMenu } from "./FacetMenu.tsx";
 import {
-  serializeQuery, toggleFacet, clearFacet, setSort, DEFAULT_SORT, SORT_OPTIONS,
+  serializeQuery, toggleFacet, clearFacet, setSort, DEFAULT_SORT, SORT_OPTIONS, FACETS,
   type FilterState, type FacetView, type SortTok,
 } from "../lib/prFilter.ts";
 
@@ -114,6 +114,23 @@ export function PrFilterBar({
 
       {/* Facet pills — wrap in the narrow sidebar; each menu floats via a Portal. */}
       <div className="flex flex-wrap items-center gap-1">
+        {/*
+          * The row exists before the rows do.
+          *
+          * These pills are built from the pull requests that have been loaded,
+          * so the bar used to appear a second or two after everything else and
+          * shove the board down as it landed — reported as "tarda en cargar,
+          * entonces como que salta". Drawn from the static facet table instead
+          * while there is nothing to count, dimmed and inert: same row, same
+          * height, same place, filling in rather than arriving.
+          */}
+        {facets.length === 0 && FACETS.map((f) => (
+          <span key={f.key} aria-hidden
+            className="text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap select-none"
+            style={{ color: "var(--text4)", border, opacity: 0.55 }}>
+            {f.label} ▾
+          </span>
+        ))}
         {facets.map((f) => (
           <FacetMenu
             key={f.key}

@@ -1,5 +1,5 @@
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -779,6 +779,17 @@ const realApi = {
   prsForBranch: (root: string, branch: string) =>
     get<{ ok: boolean; repo?: string; from?: PrBranchSummary; into: PrBranchSummary[]; needsAuth?: boolean; error?: string }>(
       `/prs/for-branch?${new URLSearchParams({ root, branch })}`),
+  /** Just the local half — whether your checkout is dirty, ahead, or can be
+   *  fast-forwarded. Git only, no network, so it can be asked again while a
+   *  pull request is open; `prBehind` holds the slow half. */
+  prLocalHead: (root: string, branch: string) =>
+    get<{ ok: boolean; local?: PrLocalHead }>(
+      `/prs/local-head?${new URLSearchParams({ root, branch })}`),
+  /** The latest run per check name for ONE pull request — the list's rollup
+   *  counts a re-run's old attempt beside the new one. See prRollupStore. */
+  prRollup: (root: string, number: number) =>
+    get<{ ok: boolean; checks?: PrCheckRollup; error?: string }>(
+      `/prs/rollup?${new URLSearchParams({ root, number: String(number) })}`),
   prBehind: (root: string, number: number) =>
     get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }>(
       `/prs/behind?${new URLSearchParams({ root, number: String(number) })}`),
@@ -793,6 +804,15 @@ const realApi = {
     post<ClickUpWrite>("/clickup/assign", { id, on, updated, ...(user != null ? { user } : null) }),
   clickupStatus: (id: string, status: string, updated?: number) =>
     post<ClickUpWrite>("/clickup/status", { id, status, updated }),
+  /**
+   * Several changes to one card, as one write.
+   *
+   * Not three calls in a row: `updated` is the precondition, the first write
+   * moves it, and the second and third were refused as "somebody changed this
+   * card while you had it open" — by us.
+   */
+  clickupCard: (id: string, changes: { add?: number[]; rem?: number[]; status?: string }, updated?: number) =>
+    post<ClickUpWrite>("/clickup/card", { id, updated, ...changes }),
   clickupField: (id: string, field: string, value: string) =>
     post<ClickUpWrite>("/clickup/field", { id, field, value }),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
@@ -1402,6 +1422,13 @@ const demoApi: typeof realApi = {
   // shows the whole offer: how far behind, and that the local branch comes
   // along. Everything else keeps the old "no answer, no promises" shape.
   prsForBranch: (_r: string, _b: string) => D({ ok: true, into: [] as PrSummary[] }),
+  /* The demo has no checkout, so the local half is simply absent — the panel
+     then makes no promises about here, which is its oldest behaviour. */
+  prLocalHead: (_r: string, branch: string) => D({
+    ok: true,
+    local: { branch, exists: false, ahead: 0, behind: 0, dirty: false, sync: "absent" as const },
+  }),
+  prRollup: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prBehind: (_r: string, n: number) => D(n === 461
     ? {
       ok: true, behind: 12, ahead: 3,
@@ -1418,6 +1445,7 @@ const demoApi: typeof realApi = {
   clickupAssign: (_i: string, _o: boolean, _u?: number, _w?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupMembers: (_l: string) => D({ ok: false, error: "not available in the demo" }),
   clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupCard: (_i: string, _c: { add?: number[]; rem?: number[]; status?: string }, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupField: (_i: string, _f: string, _v: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),

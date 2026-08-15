@@ -253,6 +253,37 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
   return { ok: true, repo: id.nameWithOwner, from: out[0] ? shape(out[0]) : undefined, into: incoming.map(shape) };
 }
 
+/**
+ * The true rollup for ONE pull request — the latest run per check name.
+ *
+ * The list cannot have this. Its rollup is GitHub'"'"'s aggregate counts, and those
+ * count a re-run'"'"'s old attempt alongside the new one: measured on a pull
+ * request github.com calls "All checks have passed", the aggregate answers
+ * `state: FAILURE` with one FAILURE in the counts. Even their own `state` field
+ * is wrong here, because their page does not use it either — it keeps the
+ * latest run per name, which is what `latestPerName` does.
+ *
+ * So a card that claims failure can ask for the truth, one pull request at a
+ * time and only when it is on screen. One GraphQL call, the same contexts the
+ * detail view already reads.
+ */
+export async function prRollup(rootIn: unknown, numberIn: unknown): Promise<{ ok: boolean; checks?: PrCheckRollup; error?: string }> {
+  const number = Number(numberIn);
+  const repo = await repoIdFor(rootIn);
+  if (!repo || !Number.isFinite(number)) return { ok: false, error: "no GitHub remote here" };
+  const q = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){`
+    + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){${SEL_CHECKS}}}}}}`
+    + `}}}`;
+  const r = await ghJson<any>([
+    "api", "graphql", "-f", `query=${q}`,
+    "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
+  ]);
+  const raw = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
+  if (!raw) return { ok: false, error: "GitHub would not list its checks" };
+  const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
+  return { ok: true, checks: rollupChecks(normalised).rollup };
+}
+
 export async function branchBehind(root: string, number: number): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }> {
   const id = await repoIdFor(root);
   if (!id) return { ok: false, error: "no GitHub remote here" };
@@ -517,10 +548,39 @@ function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
   return { state: "failure", done: true };
 }
 
+/**
+ * One run per check name — the newest.
+ *
+ * A re-run does not replace the run it repeats: GitHub keeps both, so a check
+ * that failed and was re-run comes back twice, once FAILURE and once
+ * IN_PROGRESS. Measured on a real pull request: their aggregate answered
+ * `FAILURE: 1, IN_PROGRESS: 2` while github.com'"'"'s own page said "Some checks
+ * haven'"'"'t completed yet" and listed no failures — because their UI keeps the
+ * latest run per name and the aggregate does not.
+ *
+ * Counting both put a pull request in Blocked over a suite that was busy and
+ * green, and no amount of refreshing could move it: the number was real and its
+ * meaning was not. Later in the list wins, which is the order GitHub returns
+ * them in; a run still going wins outright, because a check cannot be finished
+ * and running at the same time and the running one is the attempt that counts.
+ */
+export function latestPerName(raw: RawCheck[]): RawCheck[] {
+  const by = new Map<string, RawCheck>();
+  for (const c of raw) {
+    const name = `${c.workflowName || ""}\u0001${c.name || c.context || "check"}`;
+    const had = by.get(name);
+    if (!had) { by.set(name, c); continue; }
+    const hadRunning = !checkState(had).done;
+    const isRunning = !checkState(c).done;
+    if (isRunning || !hadRunning) by.set(name, c);
+  }
+  return [...by.values()];
+}
+
 export function rollupChecks(raw: RawCheck[] | null | undefined): { rollup: PrCheckRollup; all: PrCheck[] } {
   const all: PrCheck[] = [];
   let success = 0, failure = 0, skipped = 0, pending = 0;
-  for (const c of raw || []) {
+  for (const c of latestPerName(raw || [])) {
     const { state, done } = checkState(c);
     const check: PrCheck = {
       name: c.name || c.context || "check",
@@ -1042,7 +1102,17 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   }
   const rows: PrSummary[] = bare.map((r) => {
     const hit = second.get(r.number);
-    return hit ? { ...r, ...hit.stats, checks: hit.rollup, checksLoaded: true } : r;
+    /*
+     * `false`, spelled out, for a row the second pass has not reached.
+     *
+     * It used to be left off entirely, and `undefined` reads as "this caller
+     * never had two passes" — which is exactly what the panel treats as a
+     * complete answer. So every guard built on it was dead on real data: the
+     * board painted half-loaded rows on every refresh, filed the approved and
+     * green ones under "yours, in flight" for four seconds, and put them back.
+     * Reported as the app looking broken.
+     */
+    return hit ? { ...r, ...hit.stats, checks: hit.rollup, checksLoaded: true } : { ...r, checksLoaded: false };
   });
   return { rows, ...meta };
 }
@@ -1128,6 +1198,33 @@ export function rollupFromCounts(checkRun: StateCount[] | undefined, statusCtx: 
  * absent from the answer (or a failed call) is simply left out, and its row
  * keeps saying "checks…" rather than claiming "no checks".
  */
+/**
+ * What the fast pass cannot answer, kept from the answer before it.
+ *
+ * Measured, not guessed — sampling the running server through a forced refresh,
+ * the early rows come back with exactly these fields emptied: the review
+ * decision, mergeability, the reviewers, the check rollup and the diff stats.
+ * Everything else
+ * (title, state, labels, assignees, `updatedAt`) IS fresher in the new row and
+ * is taken from it.
+ */
+function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummary {
+  if (!old || next.checksLoaded) return next;
+  return {
+    ...next,
+    checks: next.checksLoaded ? next.checks : old.checks,
+    checksLoaded: old.checksLoaded,
+    additions: next.additions || old.additions,
+    deletions: next.deletions || old.deletions,
+    changedFiles: next.changedFiles || old.changedFiles,
+    reviewDecision: next.reviewDecision ?? old.reviewDecision,
+    mergeable: next.mergeable === "UNKNOWN" ? old.mergeable : next.mergeable,
+    /* Measured the same way: the early rows come back with nobody on them, and
+       the card's reviewer chip blinked out and back on every refresh. */
+    reviewers: next.reviewers?.length ? next.reviewers : old.reviewers,
+  };
+}
+
 async function fetchCheckRollups(repo: PrRepoId, numbers: number[]): Promise<Map<number, PrCheckRollup>> {
   const out = new Map<number, PrCheckRollup>();
   if (!numbers.length) return out;
@@ -1186,7 +1283,7 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: P
       // newer list may have replaced it while the fetch was in flight.
       const cur = listCache.get(key);
       if (!cur) return;
-      const next = cur.prs.map((p) => (rollups.has(p.number) ? { ...p, checks: rollups.get(p.number)!, checksLoaded: true } : p));
+      const next = cur.prs.map((p) => (rollups.has(p.number) ? { ...p, checks: rollups.get(p.number)!, checksLoaded: true } : { ...p, checksLoaded: p.checksLoaded ?? false }));
       listCache.set(key, { ...cur, prs: next, checksPending: false });
       // Notify only for the filters the user has a stake in (never the
       // passively-warmed `all`, see #244). The latch dedupes, so a cache hit with
@@ -1227,8 +1324,25 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
       // Put the rows on screen the moment they arrive; the checks land a beat
       // later and only fill in the dots.
       const page = await fetchList(repo, filter, state, after, (early) => {
+        /*
+         * The early rows, with the last full answer laid underneath them.
+         *
+         * Measured against the running app: for about a second and a half of
+         * every refresh this pass publishes rows where `reviewDecision` is
+         * null, `mergeable` is UNKNOWN, the rollup is empty and the diff stats
+         * are zero — and the board, which files a pull request mostly by those,
+         * moved every approved and green card into "yours, in flight" and moved
+         * it back when the second pass landed. Reported twice as the app
+         * looking broken.
+         *
+         * A refresh may add and it may correct. It may not un-know. So where
+         * this pass has no answer for a pull request we already had one for,
+         * the previous answer stands until a real one replaces it.
+         */
+        const before = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
         listCache.set(key, {
-          at: Date.now(), prs: early.rows, loading: false, checksPending: true,
+          at: Date.now(), prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
+          loading: false, checksPending: true,
           total: early.total, hasNext: early.hasNext, cursor: early.cursor,
         });
       }, query);
@@ -1566,56 +1680,136 @@ export function parseChecklist(body: string): PrChecklistItem[] {
 // Note `comments(last:…)`: GraphQL's `first:` is oldest-first, so a PR with
 // more comments than the page size lost its NEWEST ones — the opposite of what
 // anyone wants from a conversation. `last:` keeps the recent end.
-const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
-  repository(owner:$owner,name:$name){
-    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed deleteBranchOnMerge
-    pullRequest(number:$number){
-    id number title url state isDraft createdAt updatedAt closedAt mergedAt
-    additions deletions changedFiles totalCommentsCount
-    baseRefName headRefName body
-    headRepositoryOwner{login}
-    mergeable mergeStateStatus reviewDecision viewerDidAuthor viewerCanUpdate
-    author{login}
-    mergedBy{login}
-    reactionGroups{content viewerHasReacted users{totalCount}}
-    labels(first:50){nodes{name color}}
-    milestone{title}
-    closingIssuesReferences(first:10){nodes{number title url state}}
-    participants(first:30){nodes{login}}
-    autoMergeRequest{enabledBy{login} mergeMethod}
-    assignees(first:20){nodes{login}}
-    reviewRequests(first:20){nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
-    reviews(last:60){nodes{
+/**
+ * The rest of a connection, page by page.
+ *
+ * One follow-up query per page, asking for the same fields the first page asked
+ * for — see the SEL_ constants. A page that fails ends the walk rather than the
+ * request: what is already in hand is a better answer than none, and the
+ * `truncated` counts say what is missing either way.
+ */
+async function morePages(
+  repo: PrRepoId,
+  number: number,
+  conn: { key: string; arg: string; dir: "back" | "fwd"; sel: string; pages: number },
+  start: string,
+): Promise<unknown[]> {
+  const out: unknown[] = [];
+  const cursorArg = conn.dir === "back" ? "before" : "after";
+  const query = `query($owner:String!,$name:String!,$number:Int!,$cursor:String!){`
+    + `repository(owner:$owner,name:$name){pullRequest(number:$number){`
+    + `${conn.key}(${conn.arg}, ${cursorArg}:$cursor){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${conn.sel}}`
+    + `}}}`;
+  let cursor: string | null = start;
+  for (let page = 0; page < conn.pages && cursor; page++) {
+    const r: any = await ghJson<any>([
+      "api", "graphql",
+      "-f", `query=${query}`,
+      "-F", `owner=${repo.owner}`,
+      "-F", `name=${repo.name}`,
+      "-F", `number=${number}`,
+      "-f", `cursor=${cursor}`,
+    ]);
+    const got: any = r?.data?.repository?.pullRequest?.[conn.key];
+    if (!got?.nodes?.length) break;
+    // Backwards walks hand back older pages, so they go in FRONT: every reader
+    // downstream assumes one list in the order it happened.
+    if (conn.dir === "back") out.unshift(...got.nodes);
+    else out.push(...got.nodes);
+    cursor = conn.dir === "back"
+      ? (got.pageInfo?.hasPreviousPage ? got.pageInfo.startCursor : null)
+      : (got.pageInfo?.hasNextPage ? got.pageInfo.endCursor : null);
+  }
+  return out;
+}
+
+/**
+ * Top every list on this pull request up to the cap, in parallel.
+ *
+ * Parallel across connections and sequential within one, because a cursor is
+ * only known once the page before it has answered. Most pull requests pay
+ * nothing here: the walk only starts where GitHub said there was another page.
+ */
+/** The check contexts, which hang two levels down and so need their own walk. */
+async function fillChecks(p: any, repo: PrRepoId, number: number): Promise<void> {
+  const conn = p?.statusCheckRollup?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+  if (!conn?.pageInfo?.hasNextPage) return;
+  const query = `query($owner:String!,$name:String!,$number:Int!,$cursor:String!){`
+    + `repository(owner:$owner,name:$name){pullRequest(number:$number){`
+    + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100, after:$cursor){pageInfo{hasNextPage endCursor} ${SEL_CHECKS}}}}}}`
+    + `}}}`;
+  let cursor: string | null = conn.pageInfo.endCursor;
+  for (let page = 0; page < 3 && cursor; page++) {
+    const r: any = await ghJson<any>([
+      "api", "graphql", "-f", `query=${query}`,
+      "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
+      "-f", `cursor=${cursor}`,
+    ]);
+    const got: any = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+    if (!got?.nodes?.length) break;
+    conn.nodes = [...(conn.nodes || []), ...got.nodes];
+    cursor = got.pageInfo?.hasNextPage ? got.pageInfo.endCursor : null;
+  }
+  conn.pageInfo = { hasNextPage: !!cursor };
+}
+
+async function fillPages(p: any, repo: PrRepoId, number: number): Promise<void> {
+  await Promise.all([fillChecks(p, repo, number), ...CONNECTIONS.map(async (conn) => {
+    const got = p?.[conn.key];
+    const info = got?.pageInfo;
+    const cursor = conn.dir === "back"
+      ? (info?.hasPreviousPage ? info.startCursor : null)
+      : (info?.hasNextPage ? info.endCursor : null);
+    if (!cursor) return;
+    const rest = await morePages(repo, number, conn, cursor);
+    got.nodes = conn.dir === "back" ? [...rest, ...(got.nodes || [])] : [...(got.nodes || []), ...rest];
+    /* Whether the cap was reached, for the counts below. A walk that ran out of
+       pages has everything; one that ran out of budget has not, and that is the
+       only case worth a sentence on screen. */
+    got.pageInfo = { ...info, capped: rest.length >= conn.pages * Number(conn.arg.replace(/\D+/g, "")) };
+  })]);
+}
+
+/*
+ * Every list on a pull request is a page, and every one has been the wrong
+ * answer at least once.
+ *
+ * GitHub caps each connection — 100 commits, 80 comments, 80 threads, 100 check
+ * contexts — and the panel took the first page as the whole thing. Reported
+ * from a real branch: "Showing the most recent 100 commits", on one with more,
+ * right after the same bug had been fixed for files.
+ *
+ * The node selections live here rather than inline in the query, because the
+ * follow-up that fetches page two has to ask for exactly the same fields. Two
+ * copies of a field list is two field lists that drift, and a row from page two
+ * missing a field is worse than a row nobody fetched: it renders, and it is
+ * quietly wrong.
+ */
+const SEL_REVIEWS = `nodes{
       id author{login} state body submittedAt url lastEditedAt authorAssociation viewerDidAuthor
       reactionGroups{content viewerHasReacted users{totalCount}}
-    }}
-    comments(last:80){nodes{
+    }`;
+const SEL_COMMENTS = `nodes{
       id databaseId author{login} body createdAt url lastEditedAt authorAssociation viewerDidAuthor
       reactionGroups{content viewerHasReacted users{totalCount}}
-    }}
-    commits(last:100){nodes{commit{
+    }`;
+const SEL_COMMITS = `nodes{commit{
       oid message committedDate parents{totalCount}
       author{user{login} name}
       authors(first:8){nodes{user{login} name}}
       signature{isValid state}
       statusCheckRollup{state}
-    }}}
-    files(first:100){nodes{path additions deletions changeType viewerViewedState}}
-    reviewThreads(first:80){nodes{
+    }}`;
+const SEL_FILES = `nodes{path additions deletions changeType viewerViewedState}`;
+const SEL_THREADS = `nodes{
       id isResolved isOutdated path line startLine
       comments(first:50){nodes{
         id databaseId author{login} body createdAt url diffHunk originalLine
         lastEditedAt authorAssociation viewerDidAuthor
         reactionGroups{content viewerHasReacted users{totalCount}}
       }}
-    }}
-    timelineItems(last:80, itemTypes:[
-      HEAD_REF_FORCE_PUSHED_EVENT, RENAMED_TITLE_EVENT, LABELED_EVENT, UNLABELED_EVENT,
-      ASSIGNED_EVENT, UNASSIGNED_EVENT, REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT,
-      READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, MERGED_EVENT, CLOSED_EVENT, REOPENED_EVENT,
-      CROSS_REFERENCED_EVENT, MILESTONED_EVENT, DEMILESTONED_EVENT, HEAD_REF_DELETED_EVENT,
-      AUTO_MERGE_ENABLED_EVENT, AUTO_MERGE_DISABLED_EVENT
-    ]){nodes{
+    }`;
+const SEL_TIMELINE = `nodes{
       __typename
       ... on HeadRefForcePushedEvent{createdAt actor{login} beforeCommit{oid} afterCommit{oid}}
       ... on RenamedTitleEvent{createdAt actor{login} previousTitle currentTitle}
@@ -1638,12 +1832,63 @@ const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
       ... on HeadRefDeletedEvent{createdAt actor{login} headRefName}
       ... on AutoMergeEnabledEvent{createdAt actor{login}}
       ... on AutoMergeDisabledEvent{createdAt actor{login} reason}
-    }}
-    statusCheckRollup:commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{
+    }`;
+const SEL_CHECKS = `nodes{
       __typename
       ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}}}}
       ... on StatusContext{context state targetUrl}
-    }}}}}}
+    }`;
+const TIMELINE_TYPES = `[
+      HEAD_REF_FORCE_PUSHED_EVENT, RENAMED_TITLE_EVENT, LABELED_EVENT, UNLABELED_EVENT,
+      ASSIGNED_EVENT, UNASSIGNED_EVENT, REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT,
+      READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, MERGED_EVENT, CLOSED_EVENT, REOPENED_EVENT,
+      CROSS_REFERENCED_EVENT, MILESTONED_EVENT, DEMILESTONED_EVENT, HEAD_REF_DELETED_EVENT,
+      AUTO_MERGE_ENABLED_EVENT, AUTO_MERGE_DISABLED_EVENT
+    ]`;
+
+/**
+ * Each connection, and which way to walk it when there is more.
+ *
+ * `back` for the ones the query asks for with `last:` — the newest page is the
+ * one worth having, so a cap keeps the recent end rather than the ancient one.
+ * `pages` is that cap: the round trips are sequential and hold the detail open,
+ * and a branch with four thousand commits is a history nobody reads here.
+ */
+const CONNECTIONS = [
+  { key: "reviews", arg: "last:60", dir: "back", pages: 4, sel: SEL_REVIEWS },
+  { key: "comments", arg: "last:80", dir: "back", pages: 4, sel: SEL_COMMENTS },
+  { key: "commits", arg: "last:100", dir: "back", pages: 10, sel: SEL_COMMITS },
+  { key: "files", arg: "first:100", dir: "fwd", pages: 8, sel: SEL_FILES },
+  { key: "reviewThreads", arg: "first:80", dir: "fwd", pages: 5, sel: SEL_THREADS },
+  { key: "timelineItems", arg: `last:80, itemTypes:${TIMELINE_TYPES}`, dir: "back", pages: 4, sel: SEL_TIMELINE },
+] as const;
+
+export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){
+    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed deleteBranchOnMerge
+    pullRequest(number:$number){
+    id number title url state isDraft createdAt updatedAt closedAt mergedAt
+    additions deletions changedFiles totalCommentsCount
+    baseRefName headRefName body
+    headRepositoryOwner{login}
+    mergeable mergeStateStatus reviewDecision viewerDidAuthor viewerCanUpdate
+    author{login}
+    mergedBy{login}
+    reactionGroups{content viewerHasReacted users{totalCount}}
+    labels(first:50){nodes{name color}}
+    milestone{title}
+    closingIssuesReferences(first:10){nodes{number title url state}}
+    participants(first:30){nodes{login}}
+    autoMergeRequest{enabledBy{login} mergeMethod}
+    assignees(first:20){nodes{login}}
+    reviewRequests(first:20){nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
+    reviews(last:60){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_REVIEWS}}
+    comments(last:80){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_COMMENTS}}
+    commits(last:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_COMMITS}}
+    files(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_FILES}}
+    reviewThreads(first:80){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_THREADS}}
+    timelineItems(last:80, itemTypes:${TIMELINE_TYPES}){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_TIMELINE}}
+    statusCheckRollup:commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_CHECKS}}}}}}
   } } }`;
 
 /** The reaction tallies, "edited", standing and ownership that ride on
@@ -1860,6 +2105,9 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   const p = data?.data?.repository?.pullRequest;
   if (!p) return { ok: false, error: "pull request not found, or gh could not reach the host" };
   const mergePolicy = mergePolicyOf(data?.data?.repository);
+  // Everything GitHub cut into pages, topped up before a single reader below
+  // reads a length and believes it. See fillPages.
+  await fillPages(p, repo, number);
 
   const rawChecks = p.statusCheckRollup?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [];
   const normalised = rawChecks.map((c: any) => ({
@@ -1957,7 +2205,24 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   const openByPath = new Map<string, number>();
   for (const t of threads) if (!t.isResolved) openByPath.set(t.path, (openByPath.get(t.path) ?? 0) + 1);
 
-  const files: PrFile[] = (p.files?.nodes || []).map((f: any) => ({
+  /*
+   * The rest of the file list, for a pull request bigger than one page.
+   *
+   * GraphQL hands back 100 files at a time and the panel took the first page as
+   * the whole answer, so a 275-file pull request arrived as 100 files and a line
+   * saying the other 175 were on github.com. That is the exact case somebody
+   * needs this panel for: a review that big is one you want a tree and a filter
+   * for, not a browser tab.
+   *
+   * Paged here, in the detail fetch, because the detail is cached on disk — the
+   * cost is two extra requests once per pull request, not per look. Capped
+   * rather than unbounded: a 4,000-file branch is a merge of a vendor directory,
+   * and forty sequential round trips to list it would hold the panel open on a
+   * question nobody is asking. Past the cap the count still says what is
+   * missing, which is what `truncated.files` has always been for.
+   */
+
+  const files: PrFile[] = ((p.files?.nodes || []) as any[]).map((f: any) => ({
     path: f.path,
     additions: f.additions ?? 0,
     deletions: f.deletions ?? 0,
@@ -2040,12 +2305,23 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     // different things (totalCommentsCount includes review bodies) invents a
     // "1 more comment" that does not exist, and a lying badge is worse than
     // none. `files` is the exception: `changedFiles` is an exact total.
+    /*
+     * What is still missing after the paging, which is almost always nothing.
+     *
+     * These used to mean "the first page came back full", which was the only
+     * signal there was when a page was all anybody fetched. Now the lists are
+     * walked to a cap, so the honest question is whether the WALK ran out of
+     * budget — `capped`, set by fillPages — and the number is what we hold
+     * rather than a page size. `files` keeps its own answer because
+     * `changedFiles` is an exact total and subtraction beats a flag.
+     */
     truncated: {
       files: Math.max(0, (p.changedFiles ?? 0) - files.length) || undefined,
-      commits: (p.commits?.nodes || []).length >= 100 ? 100 : undefined,
-      comments: comments.length >= 80 ? 80 : undefined,
-      threads: (p.reviewThreads?.nodes || []).length >= 80 ? 80 : undefined,
-      checks: rawChecks.length >= 100 ? 100 : undefined,
+      commits: p.commits?.pageInfo?.capped ? (p.commits?.nodes || []).length : undefined,
+      comments: p.comments?.pageInfo?.capped ? comments.length : undefined,
+      threads: p.reviewThreads?.pageInfo?.capped ? (p.reviewThreads?.nodes || []).length : undefined,
+      checks: p.statusCheckRollup?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage
+        ? rawChecks.length : undefined,
     },
   };
 
@@ -2144,12 +2420,67 @@ function keepDiff(key: string, text: string): void {
   saveDiffCache();
 }
 
+/**
+ * GitHub refusing to render a diff at all, which it does on the big ones.
+ *
+ * Measured on a real 275-file pull request: `gh pr diff` exits non-zero with
+ * "HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)".
+ * That is the whole-pull-request diff endpoint having a hard cap, not a network
+ * failure and not something a retry fixes.
+ */
+const DIFF_TOO_BIG = /exceeded the maximum number of lines|too_large|HTTP 406/i;
+
+/**
+ * The same diff, rebuilt one file at a time.
+ *
+ * The per-file endpoint has no such cap: it hands back each file's own patch,
+ * a hundred files a page. Stitched back into ordinary unified diff text so
+ * everything downstream — the parser, the file rail, line comments, the
+ * suggestion applier — carries on reading exactly what it always read. The
+ * alternative was a second diff format in the client, which is a second set of
+ * bugs.
+ *
+ * A file GitHub sends without a `patch` (binary, or one file so large it
+ * refuses that too) gets its header and no hunks, so it still appears in the
+ * tree and says nothing rather than vanishing.
+ */
+async function diffFromFiles(nameWithOwner: string, number: number): Promise<string | null> {
+  const parts: string[] = [];
+  // Nine pages, the same 900 files the name list is capped at — see CONNECTIONS.
+  for (let page = 1; page <= 9; page++) {
+    const rows = await ghJson<any[]>([
+      "api", `repos/${nameWithOwner}/pulls/${number}/files?per_page=100&page=${page}`,
+    ]);
+    if (!rows?.length) break;
+    for (const f of rows) {
+      const to = String(f.filename || "");
+      if (!to) continue;
+      const from = String(f.previous_filename || to);
+      parts.push(`diff --git a/${from} b/${to}`);
+      if (f.status === "added") parts.push("new file mode 100644");
+      else if (f.status === "removed") parts.push("deleted file mode 100644");
+      else if (f.status === "renamed") parts.push(`rename from ${from}`, `rename to ${to}`);
+      if (typeof f.patch !== "string" || !f.patch) continue;
+      parts.push(`--- ${f.status === "added" ? "/dev/null" : `a/${from}`}`, `+++ ${f.status === "removed" ? "/dev/null" : `b/${to}`}`);
+      parts.push(f.patch.replace(/\n$/, ""));
+    }
+    if (rows.length < 100) break;
+  }
+  return parts.length ? `${parts.join("\n")}\n` : null;
+}
+
 function fetchDiff(key: string, number: number, nameWithOwner: string) {
   const running = diffInflight.get(key);
   if (running) return running;
   const p = gh(["pr", "diff", String(number), "-R", nameWithOwner])
-    .then((r) => {
-      if (r.code !== 0) return { ok: false as const, error: r.stderr.trim() || "gh pr diff failed" };
+    .then(async (r) => {
+      if (r.code !== 0) {
+        if (!DIFF_TOO_BIG.test(r.stderr)) return { ok: false as const, error: r.stderr.trim() || "gh pr diff failed" };
+        const stitched = await diffFromFiles(nameWithOwner, number);
+        if (!stitched) return { ok: false as const, error: "GitHub will not render this diff, and its file list came back empty" };
+        keepDiff(key, stitched);
+        return { ok: true as const, text: stitched };
+      }
       keepDiff(key, r.stdout);
       return { ok: true as const, text: r.stdout };
     })
@@ -2723,7 +3054,10 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   if (!root) return r;
-  return { ...r, detail: `updated on GitHub · ${await syncLocalHead(root, Number(number))}` };
+  /* "Synced" first, because what somebody wants to know is whether it worked;
+     the two halves follow, in the order they happened. The old wording opened
+     with "updated on GitHub", which reads as a report rather than an answer. */
+  return { ...r, detail: `Synced — updated on GitHub, and ${await syncLocalHead(root, Number(number))}` };
 }
 
 /**

@@ -245,8 +245,15 @@ export interface ProviderTask {
   blocks?: string[];
   /** How many subtasks it has, so a card with hidden work says so. */
   subtasks?: number;
-  /** Custom field values worth showing, already resolved from ids to names. */
-  custom?: { id: string; name: string; value: string }[];
+  /**
+   * Custom field values worth showing, already resolved from ids to names.
+   *
+   * `color` is the option's own colour when the field is a drop-down that has
+   * one — the workspace picked it, and a board where "Blue" is blue and
+   * "Purple" is purple is read at a glance rather than word by word. Absent for
+   * text fields and for options nobody coloured.
+   */
+  custom?: { id: string; name: string; value: string; color?: string }[];
 }
 
 export interface ClickUpUser { id: string; name: string; email: string }
@@ -420,7 +427,7 @@ export interface ListField {
   id: string;
   name: string;
   type: string;
-  options?: { id: string; name: string }[];
+  options?: { id: string; name: string; color?: string }[];
   /**
    * Some fields are marked off-limits by their own name — "(DO NOT EDIT!!!)"
    * is a real one on a real board. It is somebody telling every reader

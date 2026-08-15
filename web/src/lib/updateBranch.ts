@@ -49,8 +49,11 @@ export function updateBranchMove(behind: number | null, base: string, local?: Pr
     };
   }
 
+  /* What to do about it, not only what will not happen. "It stays put" is true
+     and leaves you nowhere; a local branch that is ahead is one push away from
+     being the easy case, and that is the sentence worth reading. */
   const why = local.sync === "diverged"
-    ? `your local ${local.branch} has ${local.ahead} commit${local.ahead === 1 ? "" : "s"} GitHub does not have — it stays put`
+    ? `your local ${local.branch} has ${local.ahead} commit${local.ahead === 1 ? "" : "s"} GitHub does not have — push ${local.ahead === 1 ? "it" : "them"} and this can pull too`
     : local.sync === "busy"
       ? `${tail(local.worktree)} is mid-merge — your local ${local.branch} stays put`
       : `uncommitted changes in ${tail(local.worktree)} — your local ${local.branch} stays put`;
