@@ -34,6 +34,35 @@ function spawnServerLike(script: string, env: Record<string, string>) {
 }
 const out = async (p: ReturnType<typeof spawnServerLike>) => (await new Response(p.stdout).text()).trim();
 
+/**
+ * Wait for a child to SAY it is ready, rather than for a number of seconds to
+ * pass.
+ *
+ * The holder below claims the database and then stays alive for ever, so its
+ * stdout cannot be drained to EOF; this reads it incrementally until the word
+ * arrives. The version before it polled the database on a 5-second budget,
+ * which is plenty on an idle laptop and not always enough for a Bun process to
+ * start and import three modules on a loaded CI runner — a test that fails on
+ * how busy the machine is, which is the only kind of red nobody reads.
+ */
+async function saysReady(p: ReturnType<typeof spawnServerLike>, word: string, ms = 60_000): Promise<boolean> {
+  const reader = p.stdout.getReader();
+  const dec = new TextDecoder();
+  let seen = "";
+  const deadline = Date.now() + ms;
+  try {
+    while (Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) return seen.includes(word);
+      seen += dec.decode(value, { stream: true });
+      if (seen.includes(word)) return true;
+    }
+    return false;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 describe("two server processes, one database", () => {
   test("a racing sweep abandons its batch instead of ingesting the same lines twice", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agx-2nd-scanner-"));
@@ -166,7 +195,10 @@ describe("two server processes, one database", () => {
         return row;
       } catch { return null; } // the file/table may not exist yet
     };
-    for (let i = 0; i < 100 && claimRow()?.pid !== claimedPid; i++) await Bun.sleep(50);
+    // Its own word first — the child prints it after `claimDatabase` returns —
+    // and only then the row, which is a second fact about the same event.
+    expect(await saysReady(holder, "claimed")).toBe(true);
+    for (let i = 0; i < 200 && claimRow()?.pid !== claimedPid; i++) await Bun.sleep(50);
     expect(claimRow()?.pid).toBe(claimedPid);
 
     const second = spawnServerLike(
@@ -199,5 +231,5 @@ describe("two server processes, one database", () => {
     );
     await third.exited;
     expect(JSON.parse(await out(third))).toEqual({ ok: true, tookOver: claimedPid, scanning: true });
-  }, 30_000);
+  }, 90_000);
 });
