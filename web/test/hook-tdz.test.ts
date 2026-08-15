@@ -64,7 +64,12 @@ const code = (l: string) => l
   .replace(/\/\/.*$/, "")
   // A regular expression is not code that reads names: `/^(?:(\d{1,2}))$/`
   // contains a `d`, and that was enough to accuse a `const d` of being read.
-  .replace(/\/(?![*/])(?:\\.|\[[^\]]*\]|[^/\\\n])+\/[gimsuy]*/g, "//")
+  // The branches do not overlap on purpose: `[` can only be matched by the
+  // character-class branch, never by the "anything else" one. With both able to
+  // consume it the engine has two ways to reach the same position, which is the
+  // shape a scanner reads as backtracking that can be made to explode — fairly,
+  // even though the only input here is this repository's own source.
+  .replace(/\/(?![*/])(?:\\.|\[[^\]\n]*\]|[^/\\\n[])+\/[gimsuy]*/g, "//")
   // `s.done`, `tree?.branch`, `m.at` — a property that happens to share a name
   // with a local is not a read of it, and this file is full of them.
   .replace(/\??\.\s*\w+/g, ".")
