@@ -25,9 +25,26 @@ const dbUrl = pathToFileURL(join(SRC, "db.ts")).href;
 /** A child that is a *server process*, not a test: NODE_ENV must not be "test"
  *  or db.ts routes it to its own scratch file and the two never share one. */
 function spawnServerLike(script: string, env: Record<string, string>) {
+  /*
+   * `AGENTGLASS_SCAN_DISABLED` is cleared on purpose, and it is the whole of
+   * the flake this file was red for.
+   *
+   * `bun test` runs every suite in ONE process, and `reminders.test.ts` sets
+   * that variable on `process.env` at module scope. Whether this file's
+   * children inherited it came down to which suite bun happened to run first —
+   * so `scanningEnabled()` answered `false` here on some runs and `true` on
+   * others, and the test that asserts a fresh claim may scan failed on the
+   * order of the file list rather than on anything it was testing. In CI, which
+   * is the same process on a machine that sorts them differently, it failed
+   * nearly every time.
+   *
+   * A test that spawns its own server states its own preconditions.
+   */
+  const clean = { ...process.env };
+  delete clean.AGENTGLASS_SCAN_DISABLED;
   return Bun.spawn([process.execPath, "--eval", script], {
     cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, NODE_ENV: "production", ...env },
+    env: { ...clean, NODE_ENV: "production", ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
