@@ -147,6 +147,17 @@ type Sess = {
   /** The server refused an open and said why. Read once by whoever asked and
    *  then cleared: it is an answer to a request, not a state of the shell. */
   openFail?: string | null;
+  /**
+   * A console docked in another view, rather than one of this view's tabs.
+   *
+   * It changes one thing on the wire: the server resumes the tmux session the
+   * desk was last in for any plain shell, and a docked console must not join
+   * it. Measured on his machine — three tmux clients, all on session `orbit` —
+   * so the console under Docker's logs mirrored whichever tab the terminal view
+   * had selected, and a `docker exec` typed there would have gone to the pane
+   * running an agent. See PtyWsData.fresh.
+   */
+  console?: boolean;
   /** A one-use agent ticket this pane was created with, spent on first connect.
    *  Held rather than passed so a reconnect cannot try to spend it twice — the
    *  server would refuse the second, but a shell that silently became an agent
@@ -156,6 +167,9 @@ type Sess = {
    *  the strip belongs to the app rather than to whatever .tmux.conf this
    *  machine carries; tmux still decides what is in it and which is active. */
   tmuxWindows: TmuxWindow[];
+  /** This shell is on agentglass's own tmux, not the machine's. The strip hides
+   *  "Use tmux's bar" there: that server's status line is off by design. */
+  tmuxEngine?: boolean;
   /** The panes of the tmux window on screen, when it has more than one. Empty
    *  otherwise — see the server's sweep. */
   tmuxPanes: TmuxPane[];
@@ -459,7 +473,7 @@ function connect(s: Sess) {
   // Spent here, not on arrival: a reconnect after a drop must open a shell,
   // not start the agent a second time in the same worktree.
   s.agentTicket = null;
-  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket));
+  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true));
   ws.binaryType = "arraybuffer";
   s.ws = ws;
   ws.onmessage = (ev) => {
@@ -495,6 +509,7 @@ function connect(s: Sess) {
       ws.send(ptyFrame({ t: "resize", cols: s.term.cols, rows: s.term.rows }));
       notify(s);
     } else if (f.t === "tmux") {
+      s.tmuxEngine = f.engine === true;
       // tmux brings its own tabs, splits and status line. The panel's split and
       // its own shell tabs stand down while it runs, since two pane models is
       // how you get a split inside a split you didn't ask for. The *window*
@@ -1000,6 +1015,8 @@ export function runInConsole(root: string, cmd: string): boolean {
   const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
   const s = existing ?? createSession(root);
   s.title = CONSOLE_TITLE;
+  // Its own shell, never the desk's tmux session — see Sess.console.
+  s.console = true;
   const sent = runInShell(s, cmd);
   if (!sent) consoleBlocked(cmd);
   return sent;
@@ -1108,6 +1125,8 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
     const s = existing ?? createSession(root);
     s.title = CONSOLE_TITLE;
+    // Its own shell, never the desk's tmux session — see Sess.console.
+    s.console = true;
     setSid(s.id);
   }, [open, root]);
 
@@ -1885,6 +1904,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** The tab being carried, and the one it would land before. */
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);
   /** The same box, for `move-window`: a number rather than a name, so it is a
    *  separate mode rather than a flag on the one above. */
   const [moving, setMoving] = useState<string | null>(null);
@@ -2383,6 +2405,22 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         one you are looking at — a distinction that stopped
                         being academic the moment a restore could move the
                         client from one session to another underneath you. */}
+                    {/* WHOSE tmux, before which session of it.
+                        Two servers can be on one screen — the engine's and the
+                        machine's own — and nothing said which was which. That
+                        is not a detail: the prefix in the settings panel moves
+                        one of them, so pressing the new key in a pane belonging
+                        to the other looks exactly like a setting that did not
+                        apply. Reported as precisely that, twice. */}
+                    <span className="shrink-0 px-1.5 rounded text-[9.5px] uppercase tracking-wider"
+                      style={sess?.tmuxEngine
+                        ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 13%, transparent)" }
+                        : { color: "var(--text4)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
+                      title={sess?.tmuxEngine
+                        ? "agentglass's own tmux — the Pane engine. Its prefix, config and restore are in Settings ▸ Pane engine."
+                        : "the tmux on this machine — your ~/.tmux.conf, your bindings. The Pane engine settings do not touch it."}>
+                      {sess?.tmuxEngine ? "engine" : "your tmux"}
+                    </span>
                     {sess?.tmuxSession && (
                       <span className="shrink-0 px-1 text-[10px] max-w-[9rem] truncate" style={{ color: "var(--text4)" }} title={`tmux session: ${sess.tmuxSession}`}>
                         {sess.tmuxSession}
@@ -2402,14 +2440,64 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       // there, which is confusing precisely when it is invisible.
                       const zoomed = w.flags.includes("Z");
                       return (
+                        /* Draggable, because typing a number to reorder tabs is
+                           not how anyone reorders tabs. The drop sends the same
+                           `move` the number box does — one path to the server,
+                           one behaviour — and `move-window -b` inserts before
+                           the tab you dropped on and pushes the rest along, so
+                           the strip stays 1..N. */
                         <div key={w.id}
-                          onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd({ cmd: "select", window: w.id }); } }}
+                          draggable
+                          onDragStart={(e) => {
+                            setDragging(w.id);
+                            e.dataTransfer.effectAllowed = "move";
+                            // A drag carrying no data at all is refused outright
+                            // by some targets — the rail learned this first, and
+                            // without it the tab simply would not lift.
+                            try { e.dataTransfer.setData("text/plain", w.id); } catch { /* not fatal */ }
+                          }}
+                          onDragEnd={() => { setDragging(null); setDropOn(null); }}
+                          onDragOver={(e) => {
+                            if (!dragging || dragging === w.id) return;
+                            // Without this the drop never fires: the default is
+                            // "not a drop target", and preventDefault is how an
+                            // element says otherwise.
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = "move";
+                            setDropOn(w.id);
+                          }}
+                          onDragLeave={() => setDropOn((cur) => (cur === w.id ? null : cur))}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const from = dragging;
+                            setDragging(null); setDropOn(null);
+                            if (!from || from === w.id) return;
+                            tmuxCmd({ cmd: "move", window: from, name: String(w.index) });
+                          }}
+                          /* The focus is handed back here rather than kept by
+                             the strip's `keepTermFocus`: that works by calling
+                             preventDefault on the mousedown, which is ALSO how
+                             you tell the browser not to start a drag, so a
+                             draggable tab is exempt from it. Same outcome —
+                             click a tab, keep typing — reached the other way
+                             round. */
+                          onClick={() => {
+                            if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd({ cmd: "select", window: w.id }); }
+                            focusTerm();
+                          }}
                           onDoubleClick={() => setRenaming(w.id)}
-                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
+                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename, drag to reorder`}
                           className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
-                          style={w.id === activeWindow
-                            ? { color: "var(--primary-hover)" }
-                            : { color: "var(--text2)" }}>
+                          style={{
+                            ...(w.id === activeWindow ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }),
+                            // The tab being carried fades; the one it would land
+                            // before takes a line on its leading edge, which is
+                            // where it will actually go.
+                            ...(dragging === w.id ? { opacity: 0.4 } : null),
+                            ...(dropOn === w.id && dragging && dragging !== w.id
+                              ? { boxShadow: "inset 2px 0 0 0 var(--primary)" }
+                              : null),
+                          }}>
                           {/* The index doubles as the move box: `prefix .`
                               asks which number, and the number it is asking
                               about is right here. Typing over it is a more
@@ -2509,11 +2597,47 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         </div>
                       );
                     })}
+                    {/* The end of the strip is a drop target of its own.
+                        Dropping ON a tab inserts BEFORE it — which is what the
+                        line on its leading edge promises — so without this
+                        there is no way to make a window the last one. It sends
+                        `after` on the last tab, because `-b` against an index
+                        one past the end silently puts the window at the FRONT
+                        (measured on 3.6a). */}
+                    <span
+                      onDragOver={(e) => {
+                        if (!dragging) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        setDropOn("__end__");
+                      }}
+                      onDragLeave={() => setDropOn((cur) => (cur === "__end__" ? null : cur))}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const from = dragging;
+                        const last = tmuxWindows[tmuxWindows.length - 1];
+                        setDragging(null); setDropOn(null);
+                        if (!from || !last || from === last.id) return;
+                        tmuxCmd({ cmd: "move", window: from, name: String(last.index), after: true });
+                      }}
+                      className="shrink-0 self-stretch"
+                      style={{
+                        width: dragging ? 18 : 2,
+                        boxShadow: dropOn === "__end__" ? "inset -2px 0 0 0 var(--primary)" : undefined,
+                      }}
+                      aria-hidden />
                     <button onClick={() => tmuxCmd({ cmd: "new" })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
-                    <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-0.5 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
-                      title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
-                      Use tmux's bar
-                    </button>
+                    {/* Not on the engine. That server keeps its status line off
+                        by design — the config gate refuses any config that turns
+                        it on — so the button would be offering a bar that cannot
+                        arrive. On the machine's own tmux it is a real choice,
+                        because that bar is the user's and they may prefer it. */}
+                    {!sess?.tmuxEngine && (
+                      <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-0.5 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
+                        title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
+                        Use tmux's bar
+                      </button>
+                    )}
                   </div>
                 )}
 

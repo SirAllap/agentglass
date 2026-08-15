@@ -15,9 +15,9 @@
 // theirs. `tmux ls` in their terminal cannot see any of this, and ours cannot see
 // their sessions — which is also what makes `tmux -L agentglass attach` a safe
 // thing to hand them.
-import { mkdirSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { resolveTmuxBin } from "./tmuxbin.ts";
+import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
 
 /** Our socket name. Overridable so tests get a server of their own and never
  *  race, kill, or inherit the one a running app is using.
@@ -29,6 +29,64 @@ import { join } from "node:path";
  *  silently reverting to the real one the running app is using. */
 export const tmuxSocket = (): string => process.env.AGENTGLASS_TMUX_SOCKET || "agentglass";
 
+/**
+ * One engine session per checkout, named after it.
+ *
+ * tmux refuses `.` and `:` in a session name, and the error it gives — "bad
+ * session name" — says nothing about which character it minded. Everything
+ * outside a safe set becomes `-`, so a worktree called `agentglass.tmux` or a
+ * path with a colon in it opens a terminal instead of an error.
+ */
+export function engineSessionName(root: string): string {
+  const base = root.split("/").filter(Boolean).pop() || "shell";
+  // Trimmed of the dashes the substitution leaves behind: a directory named
+  // entirely in characters tmux will not take would otherwise become "-", which
+  // is a legal name and an unreadable one.
+  const safe = base.replace(/[^A-Za-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  return safe || "shell";
+}
+
+/**
+ * The command that opens a terminal ON THE ENGINE rather than on the user's own
+ * tmux.
+ *
+ * Attach-or-create, so the second tab of the same checkout lands in the session
+ * the first one made, and closing the app leaves it running exactly as their
+ * own tmux would. `-f` is the engine's config, as everywhere else here: the
+ * user's ~/.tmux.conf is never loaded on this server.
+ *
+ * Null when there is no tmux to run, which is the caller's cue to fall back to
+ * a plain shell — a terminal that opens on "command not found" is worse than
+ * one that opens somewhere unremarkable.
+ */
+export function engineAttachArgv(root: string): string[] | null {
+  const bin = resolveTmuxBin();
+  if (!bin) return null;
+  if (!confHealth().ok) return null;
+  ensureConf();
+  return [bin, "-L", tmuxSocket(), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root];
+}
+
+/**
+ * Hand the running engine its config again, without restarting anything.
+ *
+ * tmux reads its config when the SERVER starts, so a saved prefix used to wait
+ * for the engine to be restarted — and restarting it takes every pane on it
+ * with it. `source-file` re-runs the generated conf in the live server instead:
+ * `set -g`, `bind` and `unbind` are all idempotent, so the new key is in your
+ * fingers a moment after Save and the sessions are untouched.
+ *
+ * False when there is no server to tell (nothing running yet, or no tmux),
+ * which is not a failure: the config is on disk and the next start reads it.
+ * Replace mode keeps one honest limit — an option the old config set and the
+ * new one does not is not un-set by re-sourcing, and only a restart clears it.
+ */
+export async function reloadEngineConf(): Promise<boolean> {
+  if (!resolveTmuxBin()) return false;
+  const r = await tmux(["source-file", confPath()]);
+  return r.ok;
+}
+
 /** Under `bun test`, nothing this module touches may be real.
  *
  *  Same guard main adopted for settings (#321) and the database (#319), for the
@@ -39,53 +97,6 @@ export const tmuxSocket = (): string => process.env.AGENTGLASS_TMUX_SOCKET || "a
 const IS_TEST = process.env.NODE_ENV === "test";
 const underScratch = (p: string): boolean => p.startsWith(tmpdir());
 
-/** Where our tmux config lives. Under the state dir rather than a temp path so
- *  the same file is reused across restarts — a server started by yesterday's
- *  process must not be talked to with a config that has since been deleted. */
-function stateDir(): string {
-  const asked = process.env.AGENTGLASS_STATE_DIR;
-  if (asked) {
-    if (!IS_TEST || underScratch(asked)) return asked;
-  } else if (!IS_TEST) {
-    const base = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
-    return join(base, "agentglass");
-  }
-  // A test that did not redirect, or redirected somewhere real, gets scratch
-  // rather than the developer's state directory.
-  return join(tmpdir(), "agentglass-test-state");
-}
-
-const CONF = `# Written by agentglass. Do not edit — it is regenerated.
-#
-# This server must never load the user's tmux.conf. Theirs loads tpm, and
-# through it tmux-continuum, whose autosave would write our chat panes over
-# their own saved layout in ~/.tmux/resurrect/. Hence \`-f\` on every call.
-set -g default-terminal "tmux-256color"
-set -g history-limit 20000
-# Nothing ever looks at our status line; the chat UI is the status line. Off
-# also removes the one place a plugin would have hooked itself in.
-set -g status off
-set -g mouse on
-set -g escape-time 0
-# Claude Code asks for this by name and warns in the pane without it.
-set -g focus-events on
-`;
-
-let confPath: string | null = null;
-/** Write (once per process) and return our config path. */
-function ensureConf(): string {
-  if (confPath) return confPath;
-  const dir = stateDir();
-  mkdirSync(dir, { recursive: true });
-  const p = join(dir, "tmux.conf");
-  // Rewritten every process start rather than only when missing: the file is
-  // ours, tiny, and a stale one from an older version is a silent behaviour
-  // difference that would be very hard to see from the symptoms.
-  Bun.write(p, CONF);
-  confPath = p;
-  return p;
-}
-
 /** How long a tmux call may take before we give up. A local socket answers in
  *  single-digit milliseconds; anything near this means the server is wedged, and
  *  a wedged tmux must not be able to hang a chat turn. */
@@ -95,11 +106,13 @@ export interface TmuxResult { ok: boolean; stdout: string; stderr: string }
 
 /** Run one tmux command against our server. `stdin` feeds commands that read it
  *  (`load-buffer -`), which is how prompt text gets in without ever being
- *  interpreted as arguments. */
+ *  interpreted as arguments. The binary comes from the resolver (tmuxbin.ts) —
+ *  bundled, system or env-override — and the config from the generation gate
+ *  (tmuxconf.ts); this call only ever talks to OUR socket. */
 export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> {
-  const bin = Bun.which("tmux");
+  const bin = resolveTmuxBin();
   if (!bin) return { ok: false, stdout: "", stderr: "tmux is not installed" };
-  const argv = [bin, "-L", tmuxSocket(), "-f", ensureConf(), ...args];
+  const argv = [bin, "-L", tmuxSocket(), "-f", confPath(), ...args];
   try {
     const proc = Bun.spawn(argv, {
       stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
@@ -152,7 +165,9 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
  *  honestly absent one. */
 export function tmuxCapability(): { available: boolean; reason: string } {
   if (process.platform === "win32") return { available: false, reason: "tmux chat panes need a Unix shell — not available on Windows" };
-  if (!Bun.which("tmux")) return { available: false, reason: "tmux is not installed" };
+  if (!resolveTmuxBin()) return { available: false, reason: "tmux is not installed — install it, or use the bundled binary from the settings panel" };
+  const health = confHealth();
+  if (!health.ok) return { available: false, reason: health.reason };
   return { available: true, reason: "" };
 }
 
@@ -164,6 +179,30 @@ export function tmuxCapability(): { available: boolean; reason: string } {
  *  rather than merely escaped. */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
 export const validPaneName = (n: string): boolean => NAME_RE.test(n);
+
+/**
+ * A session name this app is willing to ADDRESS — as opposed to one it made.
+ *
+ * `validPaneName` guards the names we generate for chat panes: UUID-shaped,
+ * eight characters minimum. Using it to gate the layout and the restore made
+ * both inert for every session a person had named — `orbit`, `scratch`, `7` —
+ * silently: the first real capture on a machine using the engine for its
+ * terminal held one session, the chat's, and had dropped the four that mattered.
+ *
+ * What needs guarding here is different and smaller. The name is passed to tmux
+ * as its own argv entry, never through a shell, and it becomes a DIRECTORY under
+ * the restore dir where the scrollback is written. So: nothing that can climb
+ * out of that directory, nothing an option parser would read as a flag, no
+ * control characters, and a length a filesystem takes. tmux itself already
+ * refuses `.` and `:` in a session name.
+ */
+export function validSessionName(n: string): boolean {
+  if (!n || n.length > 64) return false;
+  if (n.startsWith("-")) return false;
+  if (n.includes("/") || n.includes("\\") || n === "." || n === "..") return false;
+  // eslint-disable-next-line no-control-regex
+  return !/[\u0000-\u001f\u007f]/.test(n);
+}
 
 /** How a session is addressed as a *session*: `=` is tmux's exact-match prefix,
  *  so a name can never prefix-match its way onto a different session. */

@@ -24,7 +24,8 @@ import { isViewTemp, viewTempDirOf } from "./viewtemp.ts";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
-import { inScope, workspaceRoot, terminalDisabledSource } from "./config.ts";
+import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal } from "./config.ts";
+import { engineAttachArgv } from "./tmuxpane.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -150,7 +151,24 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    */
   pane?: string;
   /** Let this client's size win over the desk's — see attachArgvFor. */
-  fit?: boolean };
+  fit?: boolean;
+  /**
+   * A shell in a directory, and nothing clever: do not resume the tmux session
+   * the desk was last in.
+   *
+   * The resume below is for the terminal VIEW, whose whole promise is "the work
+   * you left running". Every other shell this app opens is a shell somebody
+   * asked for in a place — the console docked under Docker's logs, the one that
+   * pre-types an install command — and joining the desk's session makes those a
+   * SECOND CLIENT on it. Measured on his machine: three clients, all on session
+   * `orbit`, so the Docker console mirrored whichever tab the terminal was
+   * showing, and anything typed into it would have gone to the pane running an
+   * agent.
+   *
+   * Opt-out rather than opt-in because the phone connects with a root and no
+   * pane and does want the desk — see mobile/src/terminal/TerminalView.tsx.
+   */
+  fresh?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 /**
@@ -229,6 +247,10 @@ let attachSeq = 0;
 
 type Session = {
   proc: ReturnType<typeof Bun.spawn>;
+  /** This shell was opened on agentglass's own tmux rather than the machine's.
+   *  Carried to the panel so it can hide the one control that makes no sense
+   *  there — see the `engine` field on the tmux frame. */
+  onEngine?: boolean;
   mode: "pty" | "pipe";
   grouped: boolean;
   sizeDir: string | null; // tmp dir holding the resize file (pty_bridge mode)
@@ -534,6 +556,27 @@ export function editorFor(env: NodeJS.ProcessEnv = process.env): string | null {
 }
 
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
+/**
+ * Whether this socket gets the tmux session the desk was last in.
+ *
+ * Its own function because it is a rule rather than a line: four things beat
+ * the resume, each of them somebody asking for a particular thing — a tap on a
+ * live pane, an agent's ticket, a file to read, and a caller that said plainly
+ * it wants a shell in a directory. What is left is the case where nobody asked
+ * for anything, which is the terminal view opening, and there "the session you
+ * left running" is the better answer than a fresh prompt.
+ *
+ * The fourth was missing, and a console docked inside another view had no way
+ * to say so: it became a second client on the desk's session, showing whichever
+ * tab the terminal view had selected. See PtyWsData.fresh.
+ */
+export function wantsDeskResume(
+  d: Pick<PtyWsData, "pane" | "fresh">,
+  chose: { attach: boolean; agent: boolean; editor: boolean },
+): boolean {
+  return !chose.attach && !chose.agent && !chose.editor && !d.pane && !d.fresh;
+}
+
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) {
@@ -675,18 +718,34 @@ export function ptyOpen(ws: PtyWs) {
    * where nobody asked for anything, and "the session you were in" is a better
    * answer to that than "a fresh prompt".
    *
+   * `fresh` is the fourth thing that wins, and it is the one that was missing:
+   * a caller who did ask for a particular thing — a plain shell in a directory
+   * — and had no way to say so. See PtyWsData.fresh.
+   *
    * `deskAttachArgv` returns null unless that session is still live on that
    * socket, so a machine rebooted since — or a session killed — falls through
    * to the shell exactly as before. See tmuxmemory.ts.
    */
-  const resume = (!attach && !agentRun.length && !editor && !d.pane)
+  /*
+   * The engine, or the tmux on this machine.
+   *
+   * Same four things stand aside for both — a tapped pane, an agent's ticket, a
+   * file to read, a caller that asked for a plain shell — so the choice is only
+   * ever made for the case where somebody opened a terminal and said nothing
+   * else. The engine wins when it is chosen, and falls through to the resume
+   * (and then to a bare shell) when it cannot run: `engineAttachArgv` answers
+   * null with no tmux and with a config the gate has refused.
+   */
+  const plain = wantsDeskResume(d, { attach: !!attach, agent: agentRun.length > 0, editor: !!editor });
+  const engine = plain && tmuxTerminal() === "engine" ? engineAttachArgv(startIn) : null;
+  const resume = !engine && plain
     ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
     : null;
 
   const run = attach
     ? attach.argv
     : agentRun.length ? agentRun
-    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : resume ?? [shell, ...args];
+    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : engine ?? resume ?? [shell, ...args];
 
   let argv: string[];
   let mode: Session["mode"] = "pty";
@@ -720,6 +779,7 @@ export function ptyOpen(ws: PtyWs) {
   const viewDir = editor ? viewTempDirOf(wanted!) : null;
   const session: Session = {
     proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null,
+    onEngine: !!engine,
     phoneAttach: attach
       ? { socket: attach.socket, sessionId: attach.groupedWith, windowId: attach.windowId, paneId: String(d.pane), hadWindowSize: attach.hadWindowSize, fit: d.fit === true, zoomed: attach.zoomed, phoneSession: attach.session, seq: ++attachSeq }
       : null,
@@ -963,6 +1023,19 @@ export function ptyOpen(ws: PtyWs) {
     // parsePaneGeometry. Empty is the honest answer for an unsplit window too:
     // one pane covering everything is nothing to choose between.
     const panes = (frame?.panes ?? []).length > 1 ? frame!.panes : [];
+    /*
+     * Re-read, not remembered from the attach.
+     *
+     * The prefix was captured once, when tmux was first noticed, and the strip
+     * and the hint bar drew that for the life of the shell. Change the key in
+     * the settings panel — which now applies to the running server — and every
+     * label still said the old one, which reads exactly like a setting that
+     * did nothing. Reported as "I have to restart agentglass anyway".
+     *
+     * One `show -g prefix` per sweep against a local socket; the same sweep
+     * already asks for the windows and the panes.
+     */
+    if (session.tmux) session.tmuxPrefix = prefixKeys(session.tmux);
     /**
      * A prompt tmux would have drawn, taken off the window and forwarded once.
      *
@@ -1002,12 +1075,13 @@ export function ptyOpen(ws: PtyWs) {
      * including the case of somebody resizing back to matching, where it is the
      * TERMINAL that changed and no window did.
      */
-    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null]);
+    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null, session.onEngine === true, session.tmuxPrefix ?? []]);
     if (shape === sent) return;
     sent = shape;
     ctl(ws, {
       t: "tmux", active: true, session: session.tmux?.session ?? null,
       prefix: session.tmuxPrefix ?? [], windows, panes, client: frame?.client ?? null,
+      engine: session.onEngine === true,
     });
   };
   session.tmuxSweep = sweep;
@@ -1592,7 +1666,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     // The panel's own grid goes with it, for `fit`: only the client knows how
     // big the thing you are looking at is. Range-checked in runAction, because
     // it ends up as an argument to `resize-window`.
-    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows)) return;
+    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows, msg.after === true)) return;
     if (action === "takeover") tellPhonesTheWindowMoved(s.tmux, msg.window!);
     // Answer now rather than at the next tick. The command has already been
     // applied by the time it returns, so the strip can be correct within a

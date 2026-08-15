@@ -118,10 +118,18 @@ import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
+import { tmuxBinStatus } from "./tmuxbin.ts";
+import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf } from "./tmuxconf.ts";
+import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper } from "./tmuxrestore.ts";
+import {
+  windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
+  renameWindow, resizePane,
+} from "./tmuxlayout.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
@@ -877,6 +885,10 @@ const server = Bun.serve<WsData>({
         // Reflow the tmux window to this client instead of keeping the desk's
         // size. A choice the phone makes per connection — see attachArgvFor.
         fit: url.searchParams.get("fit") === "1",
+        // A shell in a directory, rather than the tmux session the desk was
+        // last in. Sent by the consoles docked inside other views — see
+        // PtyWsData.fresh for the three clients this was measured on.
+        fresh: url.searchParams.get("fresh") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,
@@ -2869,6 +2881,159 @@ const server = Bun.serve<WsData>({
       return json({ ok: true, ticket: id });
     }
 
+    // --- the pane engine's tmux, exposed to the agentglass UI -------------
+    // Everything tmux's own bar would have done — tabs, splits, focus, kill,
+    // rename, resize — is served here, so the UI is the only surface the user
+    // ever sees. Every target id is validated against tmux's own shapes before
+    // it reaches a command (see tmuxlayout.ts), and every write goes through
+    // the same trusted-caller gate as the rest of the app.
+    if (pathname === "/terminal/tmux-status") {
+      const bin = tmuxBinStatus();
+      const health = confHealth();
+      return json({
+        ok: true,
+        bin,
+        capability: health.ok ? { available: bin.available, reason: bin.reason } : { available: false, reason: health.reason },
+        confMode: tmuxConfMode(),
+        override: tmuxOverride(),
+        overrideActive: tmuxOverride().trim().length > 0,
+        broken: !health.ok,
+        brokenReason: health.ok ? "" : health.reason,
+        restoreEnabled: tmuxRestoreEnabled(),
+        resumeMode: tmuxResume(),
+        // The engine's prefix key. Empty means tmux's own default (C-b).
+        prefix: tmuxPrefix(),
+        // Which tmux the terminal VIEW opens on.
+        terminal: tmuxTerminal(),
+        source: tmuxSource(),
+        lastCaptureAt: lastCaptureAt(),
+      });
+    }
+
+    if (pathname === "/terminal/tmux-conf" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const mode = b.confMode === "replace" ? "replace" : "append";
+      const override = typeof b.override === "string" ? b.override : tmuxOverride();
+      const applied = applyTmuxConf(mode, override);
+      // Same as the prefix: hand the live server its new config instead of
+      // making somebody restart the engine — which would take every pane on it.
+      const appliedNow = applied.ok ? await reloadEngineConf() : false;
+      return json({ ...applied, appliedNow }, applied.ok ? 200 : 400);
+    }
+
+    if (pathname === "/terminal/tmux-settings" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const fields: Parameters<typeof writeTmuxSettings>[0] = {};
+      if (b.source !== undefined) {
+        if (!["auto", "bundled", "system", "custom"].includes(String(b.source))) return json({ ok: false, error: "unknown tmux source" }, 400);
+        fields.tmuxSource = b.source;
+      }
+      if (b.path !== undefined) fields.tmuxPath = typeof b.path === "string" ? b.path.trim() : "";
+      if (b.restore !== undefined) fields.tmuxRestore = b.restore === true;
+      if (b.resume !== undefined) fields.tmuxResume = b.resume === "all" ? "all" : "lazy";
+      // The prefix is a key name, and it is interpolated into a config file the
+      // engine executes — so it is checked here rather than escaped later.
+      if (b.terminal !== undefined) {
+        if (!["engine", "desk"].includes(String(b.terminal))) return json({ ok: false, error: "unknown terminal mode" }, 400);
+        fields.tmuxTerminal = b.terminal;
+      }
+      if (b.prefix !== undefined) {
+        const key = String(b.prefix).trim();
+        if (key && !validTmuxPrefix(key)) {
+          return json({ ok: false, error: "that is not a key tmux would take — try C-a, M-Space or F5" }, 400);
+        }
+        fields.tmuxPrefix = key;
+      }
+      const w = writeTmuxSettings(fields);
+      // Regenerate AND hand it to the running server: tmux reads its config
+      // when the server starts, so without this a saved prefix waited for a
+      // restart — and restarting the engine takes every pane on it with it.
+      let appliedNow = false;
+      if (w.ok && b.prefix !== undefined) { ensureConf(); appliedNow = await reloadEngineConf(); }
+      return json({ ...w, appliedNow }, w.ok ? 200 : 400);
+    }
+
+    if (pathname === "/terminal/tmux-reset" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const r = await resetTmuxConf(async () => {
+        const { tmux } = await import("./tmuxpane.ts");
+        return tmux(["kill-server"]);
+      });
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    if (pathname === "/terminal/tmux-restore" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      switch (b.action) {
+        case "capture": {
+          const state = await captureLayout();
+          return json({ ok: true, capturedAt: state?.capturedAt ?? null });
+        }
+        case "restore": {
+          const r = await restoreLayout(b.mode === "all" ? "all" : "lazy");
+          return json(r, r.ok ? 200 : 400);
+        }
+        case "clear": {
+          clearRestoreState();
+          return json({ ok: true });
+        }
+        default:
+          return json({ ok: false, error: "unknown action" }, 400);
+      }
+    }
+
+    if (pathname === "/terminal/tmux/windows") {
+      const name = String(url.searchParams.get("session") ?? "");
+      if (!validPaneName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      return json({ ok: true, windows: await windowTree(name) });
+    }
+
+    if (pathname === "/terminal/tmux/windows" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const name = String(b.session ?? "");
+      if (!validPaneName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      const cwd = gitSafeAbs(b.cwd);
+      if (!cwd || !fsExists(cwd)) return json({ ok: false, error: "that directory is not available" }, 400);
+      let res: { ok: boolean; stdout: string; stderr: string };
+      switch (b.op) {
+        case "new":
+          res = await newWindow(name, cwd, Array.isArray(b.argv) ? b.argv.map(String) : [], typeof b.title === "string" ? b.title : undefined);
+          break;
+        case "split":
+          res = await splitPane(name, String(b.windowId ?? ""), b.direction === "horizontal" ? "horizontal" : "vertical", cwd, Array.isArray(b.argv) ? b.argv.map(String) : []);
+          break;
+        case "kill-window":
+          res = await killWindow(name, String(b.windowId ?? ""));
+          break;
+        case "kill-pane":
+          res = await killLayoutPane(name, String(b.windowId ?? ""), String(b.paneId ?? ""));
+          break;
+        case "select-window":
+          res = await selectWindow(name, String(b.windowId ?? ""));
+          break;
+        case "select-pane":
+          res = await selectPane(name, String(b.windowId ?? ""), String(b.paneId ?? ""));
+          break;
+        case "rename":
+          res = await renameWindow(name, String(b.windowId ?? ""), String(b.title ?? ""));
+          break;
+        case "resize":
+          res = await resizePane(name, String(b.windowId ?? ""), String(b.paneId ?? ""), Number(b.x ?? 0), Number(b.y ?? 0));
+          break;
+        default:
+          return json({ ok: false, error: "unknown op" }, 400);
+      }
+      return json(res, res.ok ? 200 : 400);
+    }
+
     if (pathname === "/terminal/commands") {
       const root = url.searchParams.get("root") || "";
       return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));
@@ -3447,6 +3612,16 @@ setInterval(prune, 3_600_000);
 startPaneSweeper();
 startTaskSweep();
 startReminderTick();
+
+// Photograph the pane layout so a reboot can give it back. When the restore
+// feature is on: capture immediately (a reboot in the next minute loses
+// nothing), restore at boot — idempotent, since live sessions are skipped —
+// and sweep on a timer. All no-ops when the feature is off or tmux is gone.
+if (tmuxRestoreEnabled()) {
+  void captureLayout();
+  void restoreLayout();
+}
+startRestoreSweeper(tmuxRestoreEnabled);
 
 /*
  * Take the database file for this process, before anything sweeps it.
