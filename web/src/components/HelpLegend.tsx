@@ -21,7 +21,7 @@ const STATUS: [string, string][] = [
 
 export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <Portal>
+    <Portal find>
       <AnimatePresence>
         {open && (
           <>

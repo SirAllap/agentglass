@@ -184,9 +184,19 @@ export interface ProviderTask {
   due: string | null;
   updated: number;
   tags: string[];
-  /** The list, board or project it sits in. */
+  /** The list, board or project it sits in — its HOME, in ClickUp's words. */
   list: string | null;
   listId?: string;
+  /**
+   * The other lists it also appears in.
+   *
+   * ClickUp lets one card live in several ("Tasks in Multiple Lists"), and on a
+   * team that uses it the home list is often not the one you were looking at:
+   * a bug filed in `Defects` and pulled into a squad's list is worked from the
+   * squad's list and belongs to both. The card had no way to say so — it named
+   * one list, which read as "this is where it is" and was half the answer.
+   */
+  alsoIn?: { id: string; name: string }[];
   assignees: string[];
   /**
    * Who is on it, with what a row needs to draw them.
@@ -312,6 +322,54 @@ export interface SavedView {
   /** This one ships with the app rather than being pasted — see
    *  `ASSIGNED_VIEW_ID`. It cannot be removed and has no address. */
   builtin?: boolean;
+  /**
+   * Where it sits in the workspace, so the sidebar can draw ClickUp's own
+   * hierarchy instead of a flat list of names.
+   *
+   * `folderId` is set on the ones that CAME from a saved folder: those are not
+   * stored at all — they are whatever that folder holds today — and this is
+   * what tells them apart from a list somebody pasted the address of.
+   */
+  folderId?: string;
+  folderName?: string;
+  spaceName?: string;
+}
+
+/**
+ * A folder somebody added, and the reason the app stores a folder rather than
+ * the lists inside it.
+ *
+ * A team's folder is a living thing: `Projects Purple` gains a list when the
+ * next project starts, and a copy of its contents taken on the day it was added
+ * is wrong by the end of the sprint. So the id is what is kept, and the lists
+ * are read back from ClickUp — one call per space, which is the same call the
+ * picker already makes because `/space/{id}/folder` answers with the lists
+ * inside each folder.
+ *
+ * `lists` here is a CACHE of that answer, not the truth: it exists so the
+ * sidebar draws its tree the moment the app opens, before any request has come
+ * back.
+ */
+export interface SavedFolder {
+  /** ClickUp's own folder id. */
+  id: string;
+  /**
+   * The workspace it belongs to.
+   *
+   * Kept because a list's address needs it — `app.clickup.com/{workspace}/v/l/li/{list}`
+   * — and the lists under a folder are synthesised rather than pasted, so
+   * nobody supplies one. Written when the folder is added; a folder saved
+   * before this simply has no link until it is re-added.
+   */
+  workspaceId?: string;
+  /** With its emoji, as ClickUp stores it. */
+  name: string;
+  spaceId: string;
+  spaceName: string;
+  addedAt: number;
+  /** Last known contents. Refreshed whenever the folder is read. */
+  lists?: { id: string; name: string }[];
+  listsAt?: number;
 }
 
 /**
@@ -371,6 +429,9 @@ export interface ListPlace {
  */
 export interface ClickUpBoards {
   views: SavedView[];
+  /** The folders on the sidebar, in the order they were added. Their lists are
+   *  already in `views`, carrying `folderId`. */
+  folders?: SavedFolder[];
   /**
    * Whether there is a ClickUp token on this machine at all.
    *
@@ -446,6 +507,15 @@ export interface ViewTasksResponse {
   /** Where the board's own list sits — Space / Folder / List. Absent for the
    *  built-in board, whose rows come from many lists; those carry their own. */
   place?: ListPlace;
+  /**
+   * The blurb the list carries in ClickUp — the brief, the docs, the team.
+   *
+   * Absent on most lists, which is the whole reason it is optional rather than
+   * a section that is sometimes empty: a heading over nothing is worse than no
+   * heading. Plain text; ClickUp's API hands out the words and keeps the chips
+   * to itself.
+   */
+  description?: string;
   view?: SavedView;
   error?: string;
   unauthorised?: boolean;

@@ -86,8 +86,8 @@ import { procDetail, revealEnv } from "./procdetail.ts";
 import {
   listIssues, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
-import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
-import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
+import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
+import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
 import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
@@ -2203,6 +2203,25 @@ const server = Bun.serve<WsData>({
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : 400);
     }
+    /* The "Review with Claude" menu. Read is open — it is a list of titles and
+       prose. Writes go through `saveReviewRecipe`, which is where a title, a
+       body and a skill line are checked; nothing here runs anything, the same
+       way /recipes does not run a recipe. */
+    if (pathname === "/pr-prompts") {
+      const { reviewRecipes } = await import("./reviewPrompts.ts");
+      return json({ ok: true, recipes: reviewRecipes() });
+    }
+    if (pathname.startsWith("/pr-prompts/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const { saveReviewRecipe, removeReviewRecipe, resetReviewRecipe } = await import("./reviewPrompts.ts");
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = pathname === "/pr-prompts/save" ? saveReviewRecipe(b as never)
+        : pathname === "/pr-prompts/remove" ? removeReviewRecipe(String(b.id ?? ""))
+        : pathname === "/pr-prompts/reset" ? resetReviewRecipe(String(b.id ?? ""))
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : 400);
+    }
     if (pathname === "/clickup/views") {
       // `prefix` is what this workspace's ids look like, so a surface that has
       // only a string — the pull-request masthead reading a branch name — can
@@ -2212,7 +2231,41 @@ const server = Bun.serve<WsData>({
       // `connected` is said out loud because `views` cannot say it: the
       // built-in board is always in that list, so its length answers "yes" on a
       // machine with no ClickUp at all. See ClickUpBoards.
-      return json({ views: savedViews(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+      /* A folder is stored, its contents are not — so this is where they get
+         re-read. In the background and on a long fuse: the answer on screen is
+         the last one ClickUp agreed to, a list appearing a few minutes late is
+         nobody's problem, and the sidebar must not wait on a request to draw
+         the tree it already has. */
+      void refreshFoldersIfStale();
+      return json({ views: savedViews(), folders: savedFolders(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+    }
+    /* The folder picker's two reads. Spaces first, then one call per space that
+       answers with its folders AND the lists inside each of them — which is why
+       adding a folder costs nothing beyond what the picker already spent. */
+    if (pathname === "/clickup/spaces") {
+      const { clickupSpaces } = await import("./clickup.ts");
+      const r = await clickupSpaces();
+      return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error });
+    }
+    /* The tabs a list has in ClickUp, for the sidebar to hang under it. Read on
+       demand — one call, and only for a list somebody actually opened. */
+    if (pathname === "/clickup/list-views") {
+      const { listViews } = await import("./clickup.ts");
+      const { secretFor } = await import("./credentials.ts");
+      const token = secretFor("clickup");
+      if (!token) return json({ ok: false, error: "ClickUp is not connected" });
+      const listId = url.searchParams.get("list") || "";
+      const r = await listViews(token, listId);
+      /* Remembered here rather than trusted from the client later: opening one
+         of these views is a read of a board, and the id has to be one WE
+         offered rather than any string a caller sends. */
+      if (r.ok) (await import("./providers.ts")).rememberListViews(listId, r.data?.views ?? []);
+      return json(r.ok ? { ok: true, views: r.data?.views ?? [], links: r.data?.links ?? [] } : { ok: false, error: r.error });
+    }
+    if (pathname === "/clickup/folders") {
+      const { clickupFolders } = await import("./clickup.ts");
+      const r = await clickupFolders(url.searchParams.get("space") || "");
+      return json(r.ok ? { ok: true, folders: r.data?.folders ?? [] } : { ok: false, error: r.error });
     }
     if (pathname === "/clickup/view") {
       // Falls back to the first board rather than to nothing, and the first
@@ -2289,7 +2342,9 @@ const server = Bun.serve<WsData>({
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const id = String(b.id ?? "");
       const seen = typeof b.updated === "number" ? b.updated : undefined;
-      const r = pathname === "/clickup/views/add" ? await addViewByUrl(String(b.url ?? ""))
+      const r = pathname === "/clickup/folders/add" ? await addClickupFolder(String(b.id ?? ""), String(b.spaceName ?? ""))
+        : pathname === "/clickup/folders/remove" ? (removeFolder(String(b.id ?? "")), { ok: true })
+        : pathname === "/clickup/views/add" ? await addViewByUrl(String(b.url ?? ""))
         : pathname === "/clickup/views/replace" ? await replaceViewUrl(id, String(b.url ?? ""))
         : pathname === "/clickup/views/remove" ? (removeView(id), { ok: true })
         // `user` names somebody other than you; without it this stays what it
@@ -2698,7 +2753,7 @@ const server = Bun.serve<WsData>({
       ));
     }
     if (pathname === "/prs/diff") {
-      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));
+      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || "", url.searchParams.get("force") === "1"));
     }
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.
@@ -2746,7 +2801,7 @@ const server = Bun.serve<WsData>({
         case "/prs/apply-suggestion": res = await applySuggestion(root, n, b); break;
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
-        case "/prs/review-prompt": res = await prepareReviewPrompt(root, n); break;
+        case "/prs/review-prompt": res = await prepareReviewPrompt(root, n, b.recipe, b.card); break;
         case "/prs/pending-review": res = await pendingReviewFor(root, n); break;
         default: res = null;
       }

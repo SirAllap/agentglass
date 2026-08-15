@@ -21,7 +21,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { ASSIGNED_VIEW_ID, ASSIGNED_VIEW_NAME } from "../../shared/providers.ts";
-import type { SavedView, ProviderTask, ListStatus, ListField, ListPlace } from "../../shared/providers.ts";
+import type { SavedView, SavedFolder, ProviderTask, ListStatus, ListField, ListPlace } from "../../shared/providers.ts";
 
 const FILE = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -43,6 +43,9 @@ export interface CachedView {
   /** Space / Folder / List, kept with the rest of what the list told us so a
    *  restart opens with the breadcrumb already drawn. */
   place?: ListPlace;
+  /** The list's own blurb, when it has one. Kept beside the breadcrumb for the
+   *  same reason: it changes about never and a restart should not lose it. */
+  description?: string;
   /** When that read happened. Shown as "read N ago" rather than implied. */
   at: number;
   /** The view had more pages than we were willing to follow. */
@@ -51,6 +54,8 @@ export interface CachedView {
 
 interface Store {
   views: SavedView[];
+  /** Folders added whole. Their lists are not stored — see SavedFolder. */
+  folders?: SavedFolder[];
   /** Whether changes may be sent to ClickUp. Off until somebody says so — see
    *  clickup.ts for why this default is the opposite of the local list's. */
   writes?: boolean;
@@ -71,6 +76,7 @@ function load(): Store {
     cache = { views: [], cache: {} };
   }
   cache!.views ??= [];
+  cache!.folders ??= [];
   cache!.cache ??= {};
   return cache!;
 }
@@ -103,7 +109,95 @@ const ASSIGNED: SavedView = {
   id: ASSIGNED_VIEW_ID, name: ASSIGNED_VIEW_NAME, url: "", addedAt: 0, builtin: true,
 };
 
-export const savedViews = (): SavedView[] => [ASSIGNED, ...load().views];
+/**
+ * The boards on the bar: the built-in one, the ones somebody pasted, and every
+ * list inside every saved folder.
+ *
+ * The folder lists are synthesised here rather than stored, which is what makes
+ * "add the folder" mean what it says — the day a colleague creates a list in it,
+ * it is on the bar. Everything downstream (the cache, "which board was I on",
+ * the chip you click) works on a `SavedView`, so they are handed the same shape
+ * and need no branch of their own.
+ *
+ * A list that is BOTH inside a saved folder and pasted by hand appears once, as
+ * the folder's: same id, and the folder is the one that will keep it up to date.
+ */
+export function savedViews(): SavedView[] {
+  const s = load();
+  const fromFolders = (s.folders ?? []).flatMap((f) => (f.lists ?? []).map((l): SavedView => ({
+    id: `list:${l.id}`,
+    name: l.name,
+    listId: l.id,
+    listName: l.name,
+    /* The workspace, not the list, is the first segment. It used to be the
+       list id in both places, which is a well-formed address for a workspace
+       that does not exist — ClickUp answers "This page is unavailable", which
+       reads as a permission problem rather than as a typo of ours. No
+       workspace, no link: a button that goes nowhere is worse than no button,
+       and the panel already hides it when the address is empty. */
+    url: f.workspaceId ? `https://app.clickup.com/${f.workspaceId}/v/l/li/${l.id}` : "",
+    addedAt: f.addedAt,
+    folderId: f.id,
+    folderName: f.name,
+    spaceName: f.spaceName,
+  })));
+  const taken = new Set(fromFolders.map((v) => v.id));
+  /*
+   * The same list, added twice, and only one of the two is worth keeping.
+   *
+   * Somebody who pastes a list's address and later adds the folder it lives in
+   * gets it twice — once as their own row, once as the folder's — and it looks
+   * exactly like a bug because it is one. The folder's copy wins: it is the one
+   * that keeps up with ClickUp.
+   *
+   * A saved ClickUp VIEW over that list is not the same thing, though, and this
+   * is where a blunter rule would delete somebody's work: `Eng list by start
+   * date view` is a filter and an order somebody set up, over a list a folder
+   * happens to hold. So the test is whether the pasted row is the LIST itself,
+   * which is exactly the case where its name is the list's name.
+   */
+  const covered = new Set(fromFolders.map((v) => v.listId).filter(Boolean) as string[]);
+  /* A pasted list knows where it lives too — the breadcrumb was read the first
+     time it was opened and kept with its cached page. Filling it in here is
+     what lets the sidebar file "Orbit v2 – Phase 1" under the folder it is
+     actually in without anybody adding that folder. Absent until the board has
+     been read once, which is honest: we do not know yet. */
+  const pasted = s.views.filter((v) => {
+    if (taken.has(v.id)) return false;
+    if (!v.listId || !covered.has(v.listId)) return true;
+    return (v.name || "").trim() !== (v.listName || "").trim();
+  }).map((v) => {
+    const place = s.cache[v.id]?.place;
+    return place && (place.folder || place.space)
+      ? { ...v, folderName: v.folderName ?? place.folder, spaceName: v.spaceName ?? place.space }
+      : v;
+  });
+  return [ASSIGNED, ...pasted, ...fromFolders];
+}
+
+export const savedFolders = (): SavedFolder[] => load().folders ?? [];
+
+/** Add one, or replace what is known about one already there. The lists that
+ *  come with it are a cache — see SavedFolder — so re-adding is also how a
+ *  refresh lands. */
+export function addFolder(f: SavedFolder): void {
+  const s = load();
+  const folders = [...(s.folders ?? []).filter((x) => x.id !== f.id), f];
+  save({ ...s, folders });
+}
+
+export function removeFolder(id: string): void {
+  const s = load();
+  const gone = new Set(((s.folders ?? []).find((f) => f.id === id)?.lists ?? []).map((l) => `list:${l.id}`));
+  const folders = (s.folders ?? []).filter((f) => f.id !== id);
+  // Their cached pages go with them: a page is meaningless once its board is
+  // gone, which is the rule `removeView` already follows.
+  const cacheLeft = Object.fromEntries(Object.entries(s.cache).filter(([k]) => !gone.has(k)));
+  save({
+    ...s, folders, cache: cacheLeft,
+    current: s.current && gone.has(s.current) ? undefined : s.current,
+  });
+}
 
 /** The stored answer to "may this app change my company's board". */
 export const writesAllowed = (): boolean => load().writes === true;

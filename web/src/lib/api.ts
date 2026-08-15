@@ -1,6 +1,6 @@
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit } from "../../../shared/types.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -802,6 +802,26 @@ const realApi = {
   clickupAddView: (url: string) =>
     post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/add", { url }),
   clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
+  /** The folder picker: the workspace's spaces, then one space's folders — the
+   *  second answer already carries the lists inside each folder. */
+  clickupSpaces: () => get<{ ok: boolean; error?: string; spaces?: { id: string; name: string }[] }>("/clickup/spaces"),
+  clickupFolders: (spaceId: string) =>
+    get<{ ok: boolean; error?: string; folders?: { id: string; name: string; lists: { id: string; name: string }[] }[] }>(
+      `/clickup/folders?space=${encodeURIComponent(spaceId)}`),
+  /** Add a folder whole. `spaceName` is only the heading to file it under —
+   *  ClickUp's folder endpoint does not repeat it and a call to learn it would
+   *  buy nothing. */
+  clickupAddFolder: (id: string, spaceName: string) =>
+    post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/clickup/folders/add", { id, spaceName }),
+  clickupRemoveFolder: (id: string) => post<{ ok: boolean }>("/clickup/folders/remove", { id }),
+  /** The other tabs a list has in ClickUp — its saved list views. */
+  clickupListViews: (listId: string) =>
+    get<{
+      ok: boolean; error?: string;
+      views?: { id: string; name: string }[];
+      /** The ones this app cannot draw — Gantt, dashboard — as links out. */
+      links?: { id: string; name: string; type: string }[];
+    }>(`/clickup/list-views?list=${encodeURIComponent(listId)}`),
   /** Point a saved board at a different address. Resolves the new one before it
    *  drops the old — see replaceViewUrl. */
   clickupReplaceView: (id: string, url: string) =>
@@ -1065,8 +1085,8 @@ const realApi = {
       `/prs/counts?root=${encodeURIComponent(root)}&state=${state}`),
   prDetail: (root: string, number: number, force = false) =>
     get<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
-  prDiff: (root: string, number: number) =>
-    get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}`),
+  prDiff: (root: string, number: number, force = false) =>
+    get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
   /** Images in a PR body go through the server, which attaches the gh token —
    *  GitHub's own attachment URLs 404 without it. This is an `<img src>`, a
    *  navigation the browser can't put an auth header on, so the shared secret
@@ -1115,8 +1135,20 @@ const realApi = {
   notifyReach: () => get<{ ok: boolean; slack: boolean }>("/notify/reach"),
   prPendingReview: (root: string, number: number) =>
     post<{ ok: boolean; id: string | null; comments: { path: string; line: number | null; startLine: number | null; body: string }[] }>("/prs/pending-review", { root, number }),
-  prReviewPrompt: (root: string, number: number) =>
-    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number }),
+  /** `recipe` is which entry of the Review menu; empty means "the one this pull
+   *  request calls for". `card` is the tracker id the panel already worked out
+   *  from the branch — the server has no ClickUp reader, and the prompt that
+   *  checks a card against its diff needs the id. */
+  prReviewPrompt: (root: string, number: number, recipe = "", card = "") =>
+    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number, recipe, card }),
+  /** The Review menu itself: built-ins with the user's edits already laid over
+   *  them, in menu order. */
+  prPrompts: () => get<ReviewRecipesResponse>("/pr-prompts"),
+  prPromptSave: (r: ReviewRecipe) =>
+    post<{ ok: boolean; recipe?: ReviewRecipe; error?: string }>("/pr-prompts/save", r as unknown as Record<string, unknown>),
+  prPromptRemove: (id: string) => post<{ ok: boolean }>("/pr-prompts/remove", { id }),
+  /** Put a built-in back the way it shipped, deleted or merely reworded. */
+  prPromptReset: (id: string) => post<{ ok: boolean; recipe?: ReviewRecipe }>("/pr-prompts/reset", { id }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
    *  with no network at all; a gone one resolves to the PR it came from. */
   prCommitDiff: (root: string, sha: string) =>
@@ -1425,7 +1457,7 @@ const demoApi: typeof realApi = {
   prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
-  prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
+  prDiff: (_root: string, number: number, _force?: boolean) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
   prFileTemp: (_r: string, _n: number, _p: string) => D({ ok: false as const, error: "not available in the demo" }),
   prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
@@ -1448,7 +1480,11 @@ const demoApi: typeof realApi = {
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
-  prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),
+  prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
+  prPromptSave: (_r: ReviewRecipe) => D({ ok: false, error: "not available in the demo" }),
+  prPromptRemove: (_id: string) => D({ ok: false }),
+  prPromptReset: (_id: string) => D({ ok: false }),
   prPendingReview: (_r: string, _n: number) => D({ ok: true, id: null, comments: [] }),
   clickupComment: (_i: string, _t: string, _a?: number) => D({ ok: false, error: "not available in the demo" }),
   notifyReach: () => D({ ok: true, slack: false }),
@@ -1486,6 +1522,11 @@ const demoApi: typeof realApi = {
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
+  clickupSpaces: () => D({ ok: true, spaces: [] as { id: string; name: string }[] }),
+  clickupFolders: (_s: string) => D({ ok: true, folders: [] as { id: string; name: string; lists: { id: string; name: string }[] }[] }),
+  clickupAddFolder: (_i: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupRemoveFolder: (_i: string) => D({ ok: true }),
+  clickupListViews: (_l: string) => D({ ok: true, views: [] as { id: string; name: string }[], links: [] as { id: string; name: string; type: string }[] }),
   clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),

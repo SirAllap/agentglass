@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { inScope } from "./config.ts";
+import { recipePromptText } from "./reviewPrompts.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
@@ -93,6 +94,32 @@ async function ghJson<T>(args: string[], cwd?: string): Promise<T | null> {
   const r = await gh(args, cwd);
   if (r.code !== 0) return null;
   try { return JSON.parse(r.stdout) as T; } catch { return null; }
+}
+
+/**
+ * Every page of a list endpoint, not the first hundred.
+ *
+ * `?per_page=100` reads as "all of them" and is not: this repository has 153
+ * labels, `review:caveman` is the 106th alphabetically, and it was simply
+ * missing from the label picker — a label somebody could see on GitHub and not
+ * apply here. Measured, not guessed.
+ *
+ * `--slurp` is what makes this parseable. A bare `--paginate` concatenates the
+ * pages' bodies, so two pages of an array arrive as `[…][…]`, which is not
+ * JSON; `--slurp` wraps them in one array of arrays, and this flattens it.
+ *
+ * `pages` is a real cap rather than a formality — 894 branches is nine round
+ * trips for a dropdown nobody scrolls to the end of. Callers say how far they
+ * are willing to go.
+ */
+async function ghJsonAll<T>(path: string, pages = 4, cwd?: string): Promise<T[] | null> {
+  const r = await gh(["api", path, "--paginate", "--slurp"], cwd);
+  if (r.code !== 0) return null;
+  try {
+    const all = JSON.parse(r.stdout) as T[][];
+    if (!Array.isArray(all)) return null;
+    return all.slice(0, pages).flat();
+  } catch { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,8 +1527,11 @@ export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data
   const [contribs, assignees, labels, milestones, branches] = await Promise.all([
     ghJson<any[]>(["api", `repos/${r}/contributors?per_page=100`]),
     ghJson<any[]>(["api", `repos/${r}/assignees?per_page=100`]),
-    ghJson<any[]>(["api", `repos/${r}/labels?per_page=100`]),
-    ghJson<any[]>(["api", `repos/${r}/milestones?state=all&per_page=100`]),
+    /* Every label, however many there are: this is a picker of the whole set,
+       and the one that was missing sat at number 106. Capped at four pages —
+       four hundred labels is already a repository with a problem of its own. */
+    ghJsonAll<any>(`repos/${r}/labels?per_page=100`, 4),
+    ghJsonAll<any>(`repos/${r}/milestones?state=all&per_page=100`, 2),
     ghJson<any[]>(["api", `repos/${r}/branches?per_page=100`]),
   ]);
   const data: PrFacetOptions = {
@@ -1802,6 +1832,7 @@ async function fillPages(p: any, repo: PrRepoId, number: number): Promise<void> 
  */
 const SEL_REVIEWS = `nodes{
       id author{login} state body submittedAt url lastEditedAt authorAssociation viewerDidAuthor
+      commit{oid}
       reactionGroups{content viewerHasReacted users{totalCount}}
     }`;
 const SEL_COMMENTS = `nodes{
@@ -1816,11 +1847,15 @@ const SEL_COMMITS = `nodes{commit{
       statusCheckRollup{state}
     }}`;
 const SEL_FILES = `nodes{path additions deletions changeType viewerViewedState}`;
+/* `state` is PENDING or SUBMITTED, and it is the only thing that tells a
+   comment somebody posted from one you have written and not sent: GitHub hands
+   your own unsubmitted comments back inside their threads, exactly like the
+   rest. See `threadsFrom` for what that costs when it is not asked for. */
 const SEL_THREADS = `nodes{
       id isResolved isOutdated path line startLine
       comments(first:50){nodes{
         id databaseId author{login} body createdAt url diffHunk originalLine
-        lastEditedAt authorAssociation viewerDidAuthor
+        state lastEditedAt authorAssociation viewerDidAuthor
         reactionGroups{content viewerHasReacted users{totalCount}}
       }}
     }`;
@@ -2078,6 +2113,54 @@ function mergeStateOf(s: string | undefined, isDraft: boolean): PrMergeState {
   return (known as string[]).includes(v) ? (v as PrMergeState) : "UNKNOWN";
 }
 
+/**
+ * The review threads, made of only what has actually been said.
+ *
+ * A line comment you drafted into a pending review comes back inside its
+ * thread, indistinguishable from a posted one except for `state`. Kept, it
+ * draws as a thread that exists: an OPEN marker, a Reply box and a Resolve
+ * button over a comment nobody else can see and GitHub holds no conversation
+ * for — and counted twice besides, because the panel already draws what is
+ * unsent from the pending-review endpoint, under "drafted on GitHub". So the
+ * unsent ones leave here, and a thread that was nothing but unsent comments
+ * leaves with them.
+ *
+ * Its own function so that rule can be tested: everything around it needs a
+ * pull request and the network to reach.
+ */
+export function threadsFrom(nodes: unknown): PrThread[] {
+  return (Array.isArray(nodes) ? nodes : []).flatMap((t: any) => {
+    const said = (t?.comments?.nodes || []).filter((c: any) => c?.state !== "PENDING");
+    if (!said.length) return [];
+    return [{
+      id: t.id,
+      path: t.path || "",
+      line: t.line ?? null,
+      startLine: t.startLine ?? null,
+      isResolved: !!t.isResolved,
+      isOutdated: !!t.isOutdated,
+      // The hunk GitHub stored with the comment, not one reconstructed from the
+      // pull request's diff. It arrives with the thread, so the code a comment is
+      // about is on screen without the diff having been fetched at all — and it
+      // is the same few lines GitHub shows, including on an outdated thread whose
+      // hunk no longer exists in the current diff.
+      diffHunk: said[0]?.diffHunk || "",
+      originalLine: said[0]?.originalLine ?? null,
+      url: said[0]?.url || "",
+      comments: said.map((c: any) => ({
+        id: c.id,
+        databaseId: c.databaseId ?? null,
+        author: c.author?.login || "",
+        isBot: isBotLogin(c.author?.login || ""),
+        body: c.body || "",
+        createdAt: c.createdAt || "",
+        url: c.url || "",
+        ...authoredOf(c),
+      })),
+    }] as PrThread[];
+  });
+}
+
 export async function prDetail(rootIn: unknown, numberIn: unknown, force = false): Promise<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
@@ -2139,6 +2222,10 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     submittedAt: r.submittedAt || "",
     url: r.url || "",
     nodeId: r.id || "",
+    /* Which commit this review was written against. Free — it rides the same
+       query — and it is the only honest answer to "what has changed since I
+       last looked", which a timestamp can only approximate. */
+    commit: r.commit?.oid || "",
     ...authoredOf(r),
   }));
 
@@ -2158,32 +2245,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     };
   });
 
-  const threads: PrThread[] = (p.reviewThreads?.nodes || []).map((t: any) => ({
-    id: t.id,
-    path: t.path || "",
-    line: t.line ?? null,
-    startLine: t.startLine ?? null,
-    isResolved: !!t.isResolved,
-    isOutdated: !!t.isOutdated,
-    // The hunk GitHub stored with the comment, not one reconstructed from the
-    // pull request's diff. It arrives with the thread, so the code a comment is
-    // about is on screen without the diff having been fetched at all — and it
-    // is the same few lines GitHub shows, including on an outdated thread whose
-    // hunk no longer exists in the current diff.
-    diffHunk: t.comments?.nodes?.[0]?.diffHunk || "",
-    originalLine: t.comments?.nodes?.[0]?.originalLine ?? null,
-    url: t.comments?.nodes?.[0]?.url || "",
-    comments: (t.comments?.nodes || []).map((c: any) => ({
-      id: c.id,
-      databaseId: c.databaseId ?? null,
-      author: c.author?.login || "",
-      isBot: isBotLogin(c.author?.login || ""),
-      body: c.body || "",
-      createdAt: c.createdAt || "",
-      url: c.url || "",
-      ...authoredOf(c),
-    })),
-  }));
+  const threads = threadsFrom(p.reviewThreads?.nodes);
 
   const commits: PrCommit[] = (p.commits?.nodes || []).map((n: any) => {
     const c = n.commit || {};
@@ -2334,7 +2396,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
       files: Math.max(0, (p.changedFiles ?? 0) - files.length) || undefined,
       commits: p.commits?.pageInfo?.capped ? (p.commits?.nodes || []).length : undefined,
       comments: p.comments?.pageInfo?.capped ? comments.length : undefined,
-      threads: p.reviewThreads?.pageInfo?.capped ? (p.reviewThreads?.nodes || []).length : undefined,
+      threads: p.reviewThreads?.pageInfo?.capped ? threads.length : undefined,
       checks: p.statusCheckRollup?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.pageInfo?.hasNextPage
         ? rawChecks.length : undefined,
     },
@@ -2504,13 +2566,23 @@ function fetchDiff(key: string, number: number, nameWithOwner: string) {
   return p;
 }
 
-export async function prDiff(rootIn: unknown, numberIn: unknown): Promise<{ ok: boolean; text?: string; error?: string }> {
+export async function prDiff(rootIn: unknown, numberIn: unknown, force = false): Promise<{ ok: boolean; text?: string; error?: string }> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const key = `${repo.nameWithOwner}#${number}`;
-  const hit = diffCache.get(key);
+  /*
+   * "Force" here means what it means on the detail: skip what is held, ask
+   * GitHub. The caller that uses it knows something this cache cannot — that
+   * the head commit moved — and stale-while-revalidate answers that with the
+   * text from before the push, refreshing in the background for a second
+   * request that nobody makes.
+   *
+   * It still goes through `fetchDiff`, so a forced read joins an in-flight one
+   * rather than starting a second `gh pr diff` beside it.
+   */
+  const hit = force ? undefined : diffCache.get(key);
   if (hit) {
     // Stale-while-revalidate: hand back what we have, and go and check only if
     // it has aged. A diff on screen a moment sooner is worth more than one that
@@ -3342,14 +3414,13 @@ export type ReviewPromptPlan =
  * That last one is also what makes a fork work without a remote for it.
  */
 /**
- * The chat's opening line for a pull request. Two shapes, chosen by who owns the
- * PR and what its review said — pulled out of prepareReviewPrompt so this wording
- * (a contract with the agent) can be tested without a `gh` round-trip.
+ * The chat's opening line for a pull request, kept as a function of the
+ * situation alone.
  *
- *  - Your PR, review asked for changes → address them: get on the branch, work
- *    through the threads, keep tests green, commit. Not read-only.
- *  - A PR whose review is waiting on YOU → understand it, then review the diff.
- *  - Anything else → understand it, read-only.
+ * It is now a thin read of the catalogue — `recipePromptText` with no id, which
+ * is "give me the one this pull request calls for". Left here, and left
+ * exported, because the wording is a contract with the agent and this is where
+ * the suite asserts it without a `gh` round trip.
  */
 export function reviewPromptText(pr: {
   number: number;
@@ -3358,57 +3429,31 @@ export function reviewPromptText(pr: {
   viewerDidAuthor: boolean;
   reviewDecision: string | null;
   viewerRequested: boolean;
+  branch?: string;
+  title?: string;
+  author?: string;
+  url?: string;
+  since?: string;
+  card?: string;
 }): string {
-  // When it is YOURS and the review asked for changes, describing the PR is the
-  // wrong job — the job is to address the review — so it says so and gets onto
-  // the branch. Every other case is the read-only understand/review chat.
-  const mustAddress = pr.viewerDidAuthor && pr.reviewDecision === "CHANGES_REQUESTED";
-  const asked = pr.viewerRequested && !pr.viewerDidAuthor;
-
-  if (mustAddress) {
-    return [
-      `Pull request #${pr.number} of ${pr.repo}.`,
-      ``,
-      `This is your pull request and its review asked for changes — address them, don't just describe them.`,
-      ``,
-      `  gh pr checkout ${pr.number}`,
-      `  gh pr view ${pr.number}`,
-      `  gh pr diff ${pr.number}`,
-      ``,
-      // `gh pr checkout` moves this working tree onto the PR branch, so the "not
-      // this pull request" note is dropped on purpose: for the address flow you
-      // *want* to be on it. The worktree caveat is because this checkout may be
-      // holding other work.
-      `\`gh pr checkout\` puts you on the branch — make a worktree for the branch first if this checkout is holding work you don't want moved. \`gh pr view\` carries the reviewers' comments and every open thread. Work through each requested change: edit on the branch, keep the tests green (add one where a fix needs it), and commit. Don't push or post anything to GitHub unless I ask. Pinned at ${pr.head}.`,
-    ].join("\n");
-  }
-
-  const lines = [
-    `Pull request #${pr.number} of ${pr.repo}.`,
-    ``,
-    `Read-only: change nothing, commit nothing, push nothing, and post nothing to GitHub. Answer here.`,
-    ``,
-    `  gh pr view ${pr.number}`,
-    `  gh pr diff ${pr.number}`,
-    ``,
-    // Worth its line: without it the obvious move is to read the working tree,
-    // which is the same project on a different commit — the surroundings, not
-    // the change.
-    `This checkout is the same project but not this pull request (it is at whatever you have checked out). Read the change from the commands above; use the working tree only for the surroundings.`,
-    ``,
-    `What is this pull request about?`,
-  ];
-  // Only when it is actually your review that is being waited on. Asking for a
-  // verdict on a pull request nobody asked you to review is how a chat you
-  // opened to understand something turns into one arguing with it. Pushed
-  // conditionally and joined bare — a `.filter(l => l !== "")` would have taken
-  // the blank separators above out with the empty trailing line, leaving the
-  // whole read-only prompt cramped.
-  if (asked) lines.push(`\nMy review has been requested on it, so go through the diff as well: what the changes do, and anything that looks wrong. Pinned at ${pr.head}.`);
-  return lines.join("\n");
+  return recipePromptText({
+    id: "",
+    pr: {
+      number: pr.number, repo: pr.repo, head: pr.head,
+      branch: pr.branch ?? "", title: pr.title ?? "", author: pr.author ?? "",
+      url: pr.url ?? "", since: pr.since ?? "", card: pr.card ?? "",
+    },
+    situation: {
+      viewerDidAuthor: pr.viewerDidAuthor,
+      reviewDecision: pr.reviewDecision,
+      viewerRequested: pr.viewerRequested,
+      movedSinceMyReview: !!pr.since && pr.since !== pr.head,
+      card: pr.card ?? "",
+    },
+  });
 }
 
-export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown): Promise<ReviewPromptPlan> {
+export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown, recipeId?: unknown, cardIn?: unknown): Promise<ReviewPromptPlan> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const abs = safeAbs(rootIn);
@@ -3445,13 +3490,45 @@ export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown): P
    * that this is read-only, and that the checkout it is sitting in is not this
    * pull request.
    */
-  const prompt = reviewPromptText({
-    number: pr.number,
-    repo: repo.nameWithOwner,
-    head,
-    viewerDidAuthor: pr.viewerDidAuthor,
-    reviewDecision: pr.reviewDecision,
-    viewerRequested: pr.viewerRequested,
+  /*
+   * Which prompt, and what it is allowed to know.
+   *
+   * The menu asks for one by id; without one, the situation picks the opener it
+   * always picked. `since` is the commit MY last review was written against —
+   * the difference between "read this pull request" and "read what happened
+   * since I read it", and the only field here GitHub does not put in front of
+   * you. It is deliberately the last review of mine, not the last review: what
+   * somebody else has already seen is their problem.
+   */
+  const mine = [...pr.reviews].reverse().find((r) => r.viewerDidAuthor && r.state !== "PENDING");
+  /* The base branch when you have never reviewed it. Measured on a real pull
+     request: an empty `since` rendered as `compare/...abc123` and a sentence
+     asking what changed "since ", which is a prompt that has to be read twice
+     to be ignored. The base is the honest answer to "where does the part I
+     have not seen start" for somebody arriving new — it is the whole change. */
+  const since = mine?.commit || pr.baseRefName;
+  const prompt = recipePromptText({
+    id: typeof recipeId === "string" ? recipeId : "",
+    pr: {
+      number: pr.number,
+      repo: repo.nameWithOwner,
+      head,
+      branch: pr.headRefName,
+      title: pr.title,
+      author: pr.author,
+      url: pr.url,
+      since,
+      card: typeof cardIn === "string" ? cardIn : "",
+    },
+    situation: {
+      viewerDidAuthor: pr.viewerDidAuthor,
+      reviewDecision: pr.reviewDecision,
+      viewerRequested: pr.viewerRequested,
+      movedSinceMyReview: !!since && since !== head,
+      reviewsSoFar: pr.reviews.filter((r) => r.state !== "PENDING").length,
+      blocked: pr.mergeable === "CONFLICTING" || pr.checks.failure > 0,
+      card: typeof cardIn === "string" ? cardIn : "",
+    },
   });
 
   return { ok: true, cwd: root, prompt, branch: pr.headRefName };
@@ -3595,10 +3672,21 @@ export interface PendingLineComment {
  * to make depends on whether there are any: an empty pending review really is
  * a leftover, one with comments is somebody's unfinished work.
  */
-export async function pendingReview(nameWithOwner: string, n: number): Promise<{ id: string; comments: PendingLineComment[] } | null> {
+export async function pendingReview(nameWithOwner: string, n: number): Promise<{ id: string; restId: number | null; comments: PendingLineComment[] } | null> {
   const [owner, name] = nameWithOwner.split("/");
   if (!owner || !name) return null;
-  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviews(states:[PENDING],first:1){nodes{id comments(first:100){nodes{path line originalLine startLine body}}}}}}}`;
+  /*
+   * `databaseId` alongside `id`, and the difference is not cosmetic.
+   *
+   * GraphQL answers with a node id — `PRR_kwDO…` — and every REST endpoint that
+   * takes a review wants the NUMBER. Submitting a review that GitHub was
+   * holding therefore posted to
+   * `/pulls/{n}/reviews/PRR_kwDO…/events` and got `gh: Not Found (HTTP 404)`,
+   * on the one path that exists to finish a review started in the browser.
+   * Measured on a real pull request: node id `PRR_kwDOAjkAGs8…`, databaseId
+   * 4925096670, same review.
+   */
+  const q = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviews(states:[PENDING],first:1){nodes{id databaseId comments(first:100){nodes{path line originalLine startLine body}}}}}}}`;
   const r = await gh(["api", "graphql", "-f", `query=${q}`, "-F", `o=${owner}`, "-F", `r=${name}`, "-F", `n=${n}`]);
   if (r.code !== 0) return null;
   try {
@@ -3610,7 +3698,7 @@ export async function pendingReview(nameWithOwner: string, n: number): Promise<{
          diff — an outdated one. `originalLine` is where it was written, which
          is the only honest thing to show for it. */
       .map((c: any) => ({ path: String(c.path), line: c.line ?? c.originalLine ?? null, startLine: c.startLine ?? null, body: String(c.body ?? "") }));
-    return { id: String(node.id), comments };
+    return { id: String(node.id), restId: Number.isSafeInteger(node.databaseId) ? Number(node.databaseId) : null, comments };
   } catch { return null; }
 }
 
@@ -3698,8 +3786,15 @@ export async function submitReviewWith(
     /* Its own comments and nothing queued here: submit the review GitHub is
        already holding rather than replacing it. This is what makes a review
        started in the browser finishable from here. */
+    /* The numeric id, never the node id — see pendingReview. Without one there
+       is nothing safe to do: submitting would need an id we do not have, and
+       falling through to "create a review" would leave GitHub's drafts behind
+       and 422 on top of it. */
+    if (pending.restId == null) {
+      return { ok: false, error: "GitHub is holding a pending review here but did not give it an id we can submit — finish it on GitHub." };
+    }
     const ev = await gh(
-      ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.id}/events`, "--input", "-"],
+      ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.restId}/events`, "--input", "-"],
       undefined, JSON.stringify({ event, ...(text ? { body: text } : {}) }),
     );
     invalidate(repo, n);
@@ -3710,8 +3805,11 @@ export async function submitReviewWith(
     const k = pending.comments.length;
     return { ok: true, detail: `review submitted with ${k} line comment${k === 1 ? "" : "s"} drafted on GitHub` };
   }
-  if (pending) {
-    await gh(["api", "--method", "DELETE", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.id}`]);
+  /* An empty pending review, discarded so the create below is not refused:
+     GitHub allows one per pull request. The numeric id again — the DELETE was
+     404ing on the node id too, silently, since nothing reads its result. */
+  if (pending?.restId != null) {
+    await gh(["api", "--method", "DELETE", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pending.restId}`]);
   }
 
   const payload = JSON.stringify({ event, ...(text ? { body: text } : {}), ...(comments.length ? { comments } : {}) });

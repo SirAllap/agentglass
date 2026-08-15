@@ -10,6 +10,7 @@
 // they control, and downloads say what you actually get.
 import { Fragment, createContext, isValidElement, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { RecipesPane } from "./RecipesPane.tsx";
+import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
 import { lastTerminalRoot } from "./TerminalPanel.tsx";
 import { Filter, Fold, SettingRow } from "./SettingRow.tsx";
 import { motion, AnimatePresence } from "motion/react";
@@ -321,7 +322,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
   );
 }
 
-type Pane = "recipes" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "chat" | "notifications" | "browser" | "rail" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "connections" | "tmux" | "remote" | "about";
+type Pane = "recipes" | "review-prompts" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "chat" | "notifications" | "browser" | "rail" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "connections" | "tmux" | "remote" | "about";
 /** "" is the ungrouped tail: a heading over one item is a rule that separates
  *  nothing, so About sits alone at the foot of the nav. */
 type TabGroup = "Interface" | "Agents & work" | "Connections" | "Your data" | "";
@@ -388,6 +389,10 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   { id: "log", label: "Activity", group: "Your data", kw: "activity log history events feed", what: "What the app itself has been doing." },
   { id: "open", label: "Opening files", group: "Interface", kw: "open external editor file reveal", what: "What opens a file when you ask for it outside the app." },
   { id: "recipes", label: "Commands", group: "Agents & work", kw: "commands recipes custom script make run shortcut alias task saved own", what: "Commands you keep, with the parts that change asked for when you run them." },
+  /* Filed under the work rather than under the pull-request panel: these are
+     prompts an agent is given, and the panel is only where the button happens
+     to be. */
+  { id: "review-prompts", label: "Review prompts", group: "Agents & work", kw: "review prompts pr pull request claude menu skill re-review reviewer wording edit", what: "What ✦ Review with Claude offers, and the words it sends." },
   { id: "export", label: "Export", group: "Your data", kw: "export download data json csv", what: "Take your data out, in a shape a spreadsheet or a script can read." },
   /* Its own section, not a block inside Tools & services: it is the engine
      every pane and every chat runs on, with a binary, a config and a restore of
@@ -2891,7 +2896,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   }, [open, onClose]);
 
   return (
-    <Portal z={LAYER.settings}>
+    <Portal z={LAYER.settings} find>
       <AnimatePresence>
         {open && (
           <>
@@ -3238,6 +3243,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   )}
                   {pane === "privacy" && <PrivacyPane open={open} />}
                   {pane === "recipes" && <RecipesPane open={open} />}
+                  {pane === "review-prompts" && <ReviewPromptsPane open={open} />}
                   {pane === "prefs" && (
                   <Section>
                     {/* Desktop only, like launch-at-login: in a browser tab the

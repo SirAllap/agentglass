@@ -1439,7 +1439,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
  *  than navigate to it (GitPanel's commit log, the file-card deep link). */
 export function ChangesModal({ open, onClose, ...rest }: Omit<DiffViewProps, "active"> & { open: boolean; onClose: () => void }) {
   return (
-    <Portal>
+    <Portal find>
       <AnimatePresence>
         {open && (
           <>

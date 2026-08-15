@@ -59,7 +59,22 @@ function bodyStart(lines: string[], declLine: number, indent: number): number {
 
 /** Quoted text and comments are not reads. `scopeSessions(s, "live")` is not a
  *  use of a variable called `live`. */
-const code = (l: string) => l.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, '""').replace(/\/\/.*$/, "");
+const code = (l: string) => l
+  .replace(/"[^"]*"|'[^']*'|`[^`]*`/g, '""')
+  .replace(/\/\/.*$/, "")
+  // A regular expression is not code that reads names: `/^(?:(\d{1,2}))$/`
+  // contains a `d`, and that was enough to accuse a `const d` of being read.
+  // The branches do not overlap on purpose: `[` can only be matched by the
+  // character-class branch, never by the "anything else" one. With both able to
+  // consume it the engine has two ways to reach the same position, which is the
+  // shape a scanner reads as backtracking that can be made to explode — fairly,
+  // even though the only input here is this repository's own source.
+  .replace(/\/(?![*/])(?:\\.|\[[^\]\n]*\]|[^/\\\n[])+\/[gimsuy]*/g, "//")
+  // `s.done`, `tree?.branch`, `m.at` — a property that happens to share a name
+  // with a local is not a read of it, and this file is full of them.
+  .replace(/\??\.\s*\w+/g, ".")
+  // `{ key: string; rows: PrSummary[] }` — a type's field, same story.
+  .replace(/\b\w+\s*:/g, ":");
 
 /** Exported so the test below can prove it catches the real thing. */
 export function findTdzReads(source: string, file = "<src>"): Hit[] {
@@ -68,11 +83,31 @@ export function findTdzReads(source: string, file = "<src>"): Hit[] {
   const decls: { name: string; line: number; indent: number }[] = [];
   lines.forEach((l, i) => {
     const m = /^(\s*)const \[\s*(\w+)\s*,[^\]]*\]\s*=\s*(?:React\.)?use(?:State|Reducer)\s*[(<]/.exec(l);
-    if (m) decls.push({ name: m[2]!, line: i, indent: m[1]!.length });
+    if (m) { decls.push({ name: m[2]!, line: i, indent: m[1]!.length }); return; }
+    /*
+     * And a plain `const x = …` in the same body, which is the shape that got
+     * through: `const railActive = …lit…` five hundred lines above
+     * `const lit = wanted ?? data?.view?.id`. A derived value is as dead in its
+     * dead zone as a hook's, and the panel threw on first render — a blank
+     * window, every open, found in a devtools console again.
+     *
+     * A function declared with `const f = () => …` is excluded: it is only a
+     * problem if it RUNS during render, and where it does, the call itself
+     * shows up as a read on that line anyway.
+     */
+    const c = /^(\s*)const (\w+)\s*(?::[^=]+)?=\s*(.*)$/.exec(l);
+    if (c && !/^\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>/.test(c[3]!) && !/^\s*function\b/.test(c[3]!)) {
+      decls.push({ name: c[2]!, line: i, indent: c[1]!.length });
+    }
   });
 
   for (const d of decls) {
     const from = bodyStart(lines, d.line, d.indent);
+    /* A parameter of the function this body belongs to is not the same name:
+       `function slug(name: string)` shadows any `const name` further down, and
+       reading it above that const is correct. */
+    const sig = lines.slice(Math.max(0, from - 3), from).join(" ");
+    if (new RegExp(`[(,]\\s*${d.name}\\s*[:,)=]`).test(sig)) continue;
     for (let i = from; i < d.line; i++) {
       const raw = lines[i]!;
       const t = raw.trim();
@@ -114,6 +149,21 @@ export function TerminalPanel() {
     expect(hit).toHaveLength(1);
     expect(hit[0]!.name).toBe("root");
     expect(findTdzReads(fixed)).toEqual([]);
+  });
+
+  it("catches a derived const too, which is how the second one shipped", () => {
+    /* `const railActive = …lit…` five hundred lines above `const lit = …`.
+       Same dead zone, same blank window, and the first version of this check
+       only looked at useState — so it passed. */
+    const broken = `
+export function TasksView() {
+  const [boards, setBoards] = useState(null);
+  const railActive = (boards?.views ?? []).find((x) => x.id === lit)?.name ?? "";
+  const lit = wanted ?? data?.view?.id;
+}`;
+    const hit = findTdzReads(broken);
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.name).toBe("lit");
   });
 
   it("leaves deferred callbacks alone", () => {

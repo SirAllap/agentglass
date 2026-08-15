@@ -69,3 +69,85 @@ describe("the board nobody has to add", () => {
     expect(V.currentView()).toBe("6-1-1");
   });
 });
+
+/*
+ * A folder is not a shortcut for adding its lists.
+ *
+ * What is stored is the folder id; the lists are whatever ClickUp says it holds
+ * today. That distinction is the feature: a team's folder gains a list when the
+ * next project starts, and a snapshot taken on the day it was added is wrong by
+ * the end of the sprint.
+ */
+const folder = (id: string, lists: string[]) => ({
+  id, name: `Folder ${id}`, spaceId: "1", spaceName: "Space",
+  addedAt: 1, lists: lists.map((l) => ({ id: l, name: `List ${l}` })), listsAt: 1,
+});
+
+describe("a folder on the sidebar", () => {
+  it("puts every list it holds on the bar, marked with the folder", () => {
+    V.addFolder(folder("f1", ["10", "11"]));
+    const ids = V.savedViews().map((v) => v.id);
+    expect(ids).toContain("list:10");
+    expect(ids).toContain("list:11");
+    const one = V.savedViews().find((v) => v.id === "list:10")!;
+    expect(one.folderId).toBe("f1");
+    expect(one.folderName).toBe("Folder f1");
+    expect(one.listName).toBe("List 10");
+  });
+
+  it("is re-read rather than stored: replacing it changes what is on the bar", () => {
+    V.addFolder(folder("f1", ["10", "11"]));
+    // What a refresh does — same id, the contents ClickUp answers with now.
+    V.addFolder(folder("f1", ["11", "12"]));
+    const ids = V.savedViews().map((v) => v.id);
+    expect(ids).not.toContain("list:10");
+    expect(ids).toContain("list:12");
+    expect(V.savedFolders().length).toBe(1);
+  });
+
+  it("shows a list once when it is both in a folder and pasted by hand", () => {
+    V.addView({ ...board("list:10"), listId: "10", listName: "Pasted" });
+    V.addFolder(folder("f1", ["10"]));
+    const rows = V.savedViews().filter((v) => v.id === "list:10");
+    expect(rows.length).toBe(1);
+    // The folder's, because that is the one that will keep it up to date.
+    expect(rows[0]!.folderId).toBe("f1");
+  });
+
+  it("drops a pasted LIST the folder already holds, whatever its row id", () => {
+    /* Reported: the folder went on and the list somebody had pasted stayed
+       beside it — same name, twice, under two headings reading the same
+       folder. The folder's copy wins; it is the one that keeps up. */
+    V.addView({ id: "v-9", name: "List 10", listId: "10", listName: "List 10", url: "https://x/y", addedAt: 1 });
+    V.addFolder(folder("f1", ["10"]));
+    const rows = V.savedViews().filter((v) => v.listId === "10");
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.folderId).toBe("f1");
+  });
+
+  it("keeps a saved VIEW over a list the folder holds", () => {
+    /* The other half, and the reason the rule is not "same list, drop it": a
+       ClickUp view is a filter and an order somebody set up. Its name is not
+       the list's name, and that is exactly what tells the two apart. */
+    V.addView({ id: "6-10-1", name: "Eng list by start date", listId: "10", listName: "List 10", url: "https://x/y", addedAt: 1 });
+    V.addFolder(folder("f1", ["10"]));
+    const rows = V.savedViews().filter((v) => v.listId === "10");
+    expect(rows.map((r) => r.id).sort()).toEqual(["6-10-1", "list:10"]);
+  });
+
+  it("takes its lists with it when it goes, and leaves the pasted ones", () => {
+    V.addView(board("list:99"));
+    V.addFolder(folder("f1", ["10"]));
+    V.removeFolder("f1");
+    const ids = V.savedViews().map((v) => v.id);
+    expect(ids).not.toContain("list:10");
+    expect(ids).toContain("list:99");
+    expect(V.savedFolders()).toEqual([]);
+  });
+
+  it("never removes the built-in board, whatever a folder holds", () => {
+    V.addFolder(folder("f1", ["10"]));
+    V.removeFolder("f1");
+    expect(V.savedViews()[0]!.id).toBe(ASSIGNED_VIEW_ID);
+  });
+});

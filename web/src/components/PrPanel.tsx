@@ -19,7 +19,7 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { handoffTo } from "../lib/handoffTo.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
@@ -30,6 +30,7 @@ import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
+  ReviewRecipe, ReviewRecipeGroup, ReviewRecipeContext,
 } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import {
@@ -46,7 +47,8 @@ import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, To
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
-import { stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
+import { afterViewed, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
+import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
@@ -65,6 +67,9 @@ import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } f
 import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
+import { expandRecipe } from "../../../shared/recipeText.ts";
+import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
+import { openSettings } from "../lib/openSettings.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
@@ -73,7 +78,6 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember } from "../../../shared/providers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { seedChat } from "../lib/chatStore.ts";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { FileRail } from "./FileRail.tsx";
@@ -794,6 +798,15 @@ export function Md({ body, className }: { body: string; className?: string }) {
 // diff, through the app's own viewer
 // ---------------------------------------------------------------------------
 
+/** Which commit a pull request currently points at — `headSha` when the list
+ *  filled it in, the last commit otherwise, and "" when neither is loaded yet.
+ *  Used to tell "the same pull request" from "the same pull request, pushed
+ *  to", which is the difference between a cached diff and a wrong one. */
+function headOfDetail(d: PrDetail | null): string {
+  if (!d) return "";
+  return d.headSha || (d.commits.length ? d.commits[d.commits.length - 1].oid : "");
+}
+
 /** A parsed diff in the shape ChangesModal's viewer speaks. The synthetic
  *  fields are inert — that component reads path, counts and hunks. */
 function toFileChange(f: ParsedFile, i: number): FileChange {
@@ -1352,7 +1365,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   jumpTo?: import("../lib/openPrs.ts").PrJump | null;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** Hand the review to the user's own tmux instead of to the chat. */
-  onReviewInTerminal?: (root: string, number: number) => void;
+  onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string) => void;
 }) {
   const { ask, askText, dialog } = useDialogs();
   const { askMerge, dialog: mergeDialog } = useMergeDialog();
@@ -1784,6 +1797,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *  diff of a pull request (or commit) you have since left can take seconds to
    *  arrive, and without this its late reply overwrites the one you switched to. */
   const diffReq = useRef(0);
+  /** The head commit the diff on screen was fetched for, and whether the next
+   *  fetch must go past the server's cache. See the effect that compares them. */
+  const diffHead = useRef("");
+  const diffFresh = useRef(false);
   const commitReq = useRef(0);
 
   const flash = useCallback((ok: boolean, msg: string) => {
@@ -2189,12 +2206,40 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useEffect(() => {
     if ((tab !== "files" && tab !== "review") || !detail || diff || diffErr || !root) return;
     const req = ++diffReq.current; // a later selection's diff must win over a slow earlier one
-    api.prDiff(root, detail.number).then((r) => {
+    const want = diffFresh.current; diffFresh.current = false;
+    const head = headOfDetail(detail);
+    api.prDiff(root, detail.number, want).then((r) => {
       if (req !== diffReq.current) return;
-      if (r.ok) { setDiff(r.text || ""); setDiffErr(r.text ? "" : "GitHub returned an empty diff for this pull request."); }
+      if (r.ok) { diffHead.current = head; setDiff(r.text || ""); setDiffErr(r.text ? "" : "GitHub returned an empty diff for this pull request."); }
       else setDiffErr(r.error || "The diff could not be fetched.");
     }).catch((e) => { if (req === diffReq.current) setDiffErr(String(e)); });
   }, [tab, detail, diff, diffErr, root]);
+
+  /*
+   * A push replaces the diff. Nothing used to notice.
+   *
+   * The text above is fetched once per selected pull request — the effect
+   * refuses to re-ask while `diff` holds anything — and the detail beside it is
+   * re-read constantly: by the list poll, and by Refresh, which forces it. So
+   * after somebody pushes to a pull request you have open, the file LIST is the
+   * new one and the diff TEXT is the old one, and a file the push added has a
+   * row, a `+42 −0`, and no hunks to draw. That renders as "No textual diff —
+   * binary, renamed, or too large to show", which is three wrong answers: the
+   * diff was fetched before that file existed. Measured on a pull request with
+   * eight pushes in an afternoon; GitHub showed the file fine in the browser.
+   *
+   * Keyed on the head commit rather than on a timer: it is the thing that
+   * actually changes when the diff does, and comparing it costs a string
+   * compare per detail load. `diffFresh` then makes the refetch skip the
+   * server's own five-minute cache — otherwise the answer to "the head moved"
+   * is the same stale text that prompted the question.
+   */
+  useEffect(() => {
+    const head = headOfDetail(detail);
+    if (!head || !diffHead.current || head === diffHead.current) return;
+    diffFresh.current = true;
+    setDiff(""); setDiffErr("");
+  }, [detail]);
 
   // Filter the current scope's rows by the search box: PR number (with or
   // without a leading #), title, or author login. Memoized so a 400-row "all"
@@ -2970,12 +3015,17 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * making the row load a whole detail page just to reach this would be a
    * round trip spent on nothing.
    */
-  const doLocalReview = async (n?: number) => {
+  const doLocalReview = async (n?: number, recipe = "") => {
     const num = n ?? detail?.number;
     if (num == null) return;
     setBusy(true);
     try {
-      const r = await api.prReviewPrompt(root, num);
+      /* The card id is worked out here and sent, rather than looked up there:
+         `cardRef` reads a branch name and a title with rules this app owns, and
+         the server has no reader for the tracker at all. Empty is fine — the
+         prompt that wants it is the only one that uses it. */
+      const card = detail ? cardRef(detail)?.label ?? "" : "";
+      const r = await api.prReviewPrompt(root, num, recipe, card);
       if (!r.ok || !r.cwd || !r.prompt) { flash(false, r.error || "Could not prepare the review"); return; }
       if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt, `Review #${num}`); flash(true, `#${num} is waiting in chat`); }
       else flash(false, "The chat is not available here");
@@ -3296,6 +3346,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             *
             * Now: both board lists forced, the open pull request forced, and
             * the counts that go stale with them dropped.
+            *
+            * And the diff, which was the last thing here still answering from
+            * memory: it is fetched once per selected pull request and was never
+            * dropped, so pressing this on a pull request somebody had pushed to
+            * re-read everything around a diff that stayed as it was.
             */}
           <Btn onClick={() => {
             forgetBehind();
@@ -3303,7 +3358,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             boardForce.current = true;
             setBoardTick((n) => n + 1);
             loadList(true);
-            if (selected != null) loadDetail(selected, true);
+            if (selected != null) {
+              loadDetail(selected, true);
+              diffFresh.current = true;
+              setDiff(""); setDiffErr("");
+            }
           }} disabled={busy} small>Refresh</Btn>
         </div>
       </div>
@@ -3575,8 +3634,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <Masthead
                 d={d} busy={busy}
                 onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
-                onClose={doClose} onLocalReview={() => doLocalReview()}
-                onReviewInTerminal={onReviewInTerminal && d ? () => onReviewInTerminal(root, d.number) : undefined}
+                onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
+                onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
                 onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
                 onEditField={fieldPicker.open}
@@ -3703,8 +3762,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           behind={behind} behindAsking={behindAsking} localHead={localHead} busyWhat={busyWhat}
                           conflictFiles={conflictFiles}
                           onEditRequest={() => setEditingBody(true)}
-                          onLocalReview={() => doLocalReview()}
-                          onReviewInTerminal={onReviewInTerminal && d ? () => onReviewInTerminal(root, d.number) : undefined}
+                          onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
+                          onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                           onMerge={doMerge} onClose={doClose}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={(syncLocal: boolean) => {
@@ -4082,10 +4141,10 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
   /** How this repository merges. Owned by the panel, not by this component, so
    *  it survives the Files tab and is remembered for next time. */
   method: MergeMethod; onMethod: (m: MergeMethod) => void;
-  onLocalReview: () => void;
+  onLocalReview: (recipe?: string) => void;
   /** The terminal half of the same choice. Absent where there is no terminal —
    *  the phone — and the button then behaves as it always did. */
-  onReviewInTerminal?: () => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
+  onReviewInTerminal?: (recipe?: string) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
   /** Still asking how far behind the branch is. The row keeps its place and
    *  says it is working, rather than growing a button a second later. */
@@ -4553,23 +4612,13 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
             same name and the same icon behaving differently depending on which
             one you press is worse than neither of them asking: you learn that
             this control lets you choose, and then one of them does not. */}
-        {onReviewInTerminal ? (
-          <Menu label="✦ Review with Claude ▾" title="Review this pull request" primary>
-            {(close) => (
-              <>
-                {/* Same order and same glyphs as the masthead's copy. Two
-                    menus with the same name offering the same two things in a
-                    different order, in different alphabets, is the defect the
-                    comment above this block already warns about — and it was
-                    true again the moment only one of them was fixed. */}
-                <MenuItem onClick={() => { close(); onReviewInTerminal(); }}>&gt;_ In a terminal</MenuItem>
-                <MenuItem onClick={() => { close(); onLocalReview(); }}>&#8942; In the chat pane</MenuItem>
-              </>
-            )}
-          </Menu>
-        ) : (
-          <Btn onClick={onLocalReview} disabled={busy} primary title="Open a chat with the review prompt ready. Reads only: no checkout, nothing written to this repository">Review with Claude</Btn>
-        )}
+        {/* One component for both copies of this button. They used to be two
+            hand-written menus with the same name, which is how they came to
+            offer the same two things in a different order and in different
+            alphabets — twice, because the first fix only reached one of
+            them. */}
+        <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
+          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
         {/* The panel's own Btn, like its neighbour. A hand-rolled anchor with
             its own padding beside a Btn is two heights in a row of two. */}
         {/* `small`, like the Menu it stands beside. Without it this was the
@@ -4870,6 +4919,175 @@ function MenuItem({ children, onClick, danger, kbd }: {
 }
 
 const MenuSep = () => <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "3px 0" }} />;
+
+const MenuHead = ({ children }: { children: React.ReactNode }) => (
+  <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{children}</div>
+);
+
+/**
+ * The chat, as an afterthought on a row that is already a button.
+ *
+ * It was two icons — a terminal and a chat — on a row whose TITLE did a third
+ * thing. Reported straight away: pressing the row anywhere but exactly on the
+ * `>_` "sends me to the terminal and then nothing happens". A row with three
+ * targets and no obvious one is a row you have to aim at, and the whole point
+ * of the menu is picking a prompt, not picking a pane.
+ *
+ * So the row runs it in a terminal — see ReviewMenu — and this is the one
+ * exception, kept because the chat pane is genuinely the quicker read
+ * sometimes. `stopPropagation`, or it would fire the row's terminal underneath
+ * it.
+ */
+function ChatInstead({ onChat }: { onChat: () => void }) {
+  return (
+    <button onClick={(e) => { e.stopPropagation(); onChat(); }} title="In the chat pane instead"
+      className="ml-auto inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"
+      style={{ width: 20, height: 20, color: "var(--text3)" }} aria-label="In the chat pane instead">
+      <span className="text-[13px] leading-none">&#8942;</span>
+    </button>
+  );
+}
+
+/**
+ * The prompts, once, for every menu that offers them.
+ *
+ * A module-level cache rather than a fetch per open: the list is a dozen short
+ * strings that only change when somebody edits them in Settings, and re-reading
+ * it on every click of the button would put a round trip between the press and
+ * the menu appearing. `bumpReviewRecipes` is what Settings calls after a save,
+ * which is the only event that can invalidate this.
+ */
+let recipeCache: ReviewRecipe[] | null = null;
+const recipeSubs = new Set<() => void>();
+export function bumpReviewRecipes(): void { recipeCache = null; recipeSubs.forEach((f) => f()); }
+function useReviewRecipes(): ReviewRecipe[] {
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    recipeSubs.add(redraw);
+    if (!recipeCache) void api.prPrompts().then((r) => { if (r.ok && r.recipes) { recipeCache = r.recipes; redraw(); } }).catch(() => {});
+    return () => { recipeSubs.delete(redraw); };
+  }, []);
+  return recipeCache ?? [];
+}
+
+const GROUP_LABEL: Record<ReviewRecipeGroup, string> = {
+  reviewing: "Reviewing",
+  focused: "One thing only",
+  mine: "Your pull request",
+  // Never printed by the review menu, which lists its groups by name — it is
+  // here because the record is total, and because the day this group does get
+  // shown somewhere it must not appear as the word `telling`.
+  telling: "Telling somebody",
+};
+
+/** The prompt behind the Ping button, by id. In the same catalogue as the
+ *  review prompts, and for the same reason: the wording is personal, it is
+ *  edited in Settings, and it is stored in the user's own file rather than in
+ *  this repository. */
+const PING_RECIPE = "ready-for-review";
+
+/**
+ * "Review with Claude", with the whole catalogue behind it.
+ *
+ * Every prompt is always here, and the situation only decides which one is
+ * printed at the top under "Suggested". That is the whole design decision: the
+ * pull request that forced this feature had been reviewed twice and handed back
+ * a third time without the reviewer being re-requested, so a menu that hid
+ * prompts GitHub's fields did not ask for would have hidden the one that was
+ * wanted.
+ *
+ * Both destinations on every row, rather than a remembered default: a terminal
+ * window and a chat pane are not the same thing badly — the terminal is a real
+ * agent in tmux you can attach to and keep working in, the chat is the quicker
+ * read — and which one you want depends on the prompt you just picked.
+ */
+function ReviewMenu({ d, onPick, canTerm, primary = true }: {
+  d: PrDetail;
+  onPick: (recipe: string, where: "term" | "chat") => void;
+  /** False in a window with no terminal to send it to — the row then offers
+   *  the chat alone rather than a button that quietly does nothing. */
+  canTerm: boolean;
+  primary?: boolean;
+}) {
+  const recipes = useReviewRecipes();
+  const suggested = useMemo(() => {
+    const mine = [...d.reviews].reverse().find((r) => r.viewerDidAuthor && r.state !== "PENDING");
+    const head = d.commits.length ? d.commits[d.commits.length - 1]!.oid : "";
+    return suggestRecipeId({
+      viewerDidAuthor: d.viewerDidAuthor,
+      reviewDecision: d.reviewDecision,
+      viewerRequested: d.viewerRequested,
+      movedSinceMyReview: !!mine?.commit && !!head && mine.commit !== head,
+      reviewsSoFar: d.reviews.filter((r) => r.state !== "PENDING").length,
+      blocked: d.mergeable === "CONFLICTING" || d.checks.failure > 0,
+      card: cardRef(d)?.label ?? "",
+    });
+  }, [d]);
+
+  const top = recipes.find((r) => r.id === suggested) ?? recipes[0];
+  const groups: ReviewRecipeGroup[] = ["reviewing", "focused", "mine"];
+
+  return (
+    <Menu label="✦ Review with Claude ▾" title="Review this pull request" primary={primary}>
+      {(close) => (
+        <div style={{ maxHeight: "min(62vh, 520px)", overflowY: "auto" }}>
+          {/* The suggestion keeps the shape the button had before: a named
+              prompt and the two places to run it, one click each. */}
+          {top && (
+            <>
+              <MenuHead>Suggested</MenuHead>
+              {/* The same row as every other one, rather than the two
+                  destination lines it used to be: one shape to learn, and the
+                  suggestion is a prompt like the rest — it is just the one this
+                  pull request calls for. */}
+              <div role="button" tabIndex={0}
+                onClick={() => { close(); onPick(top.id, canTerm ? "term" : "chat"); }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(top.id, canTerm ? "term" : "chat"); } }}
+                title={top.skill || top.title}
+                className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text)" }}>
+                <span className="min-w-0 truncate flex-1">
+                  {top.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                  {top.title}
+                </span>
+                <ChatInstead onChat={() => { close(); onPick(top.id, "chat"); }} />
+              </div>
+            </>
+          )}
+          {groups.map((g) => {
+            const rows = recipes.filter((r) => r.group === g && r.id !== top?.id);
+            if (!rows.length) return null;
+            return (
+              <Fragment key={g}>
+                <MenuSep />
+                <MenuHead>{GROUP_LABEL[g]}</MenuHead>
+                {rows.map((r) => (
+                  /* The whole row, not a button inside it: the title used to be
+                     the only live part, so a press on the padding beside it did
+                     nothing at all. And it runs in a terminal, because that is
+                     where a review belongs — a real agent in tmux that survives
+                     this app, which you can attach to and keep working in. */
+                  <div key={r.id} role="button" tabIndex={0}
+                    onClick={() => { close(); onPick(r.id, canTerm ? "term" : "chat"); }}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(r.id, canTerm ? "term" : "chat"); } }}
+                    title={r.skill || r.title}
+                    className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text2)" }}>
+                    <span className="min-w-0 truncate flex-1">
+                      {r.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                      {r.title}
+                    </span>
+                    <ChatInstead onChat={() => { close(); onPick(r.id, "chat"); }} />
+                  </div>
+                ))}
+              </Fragment>
+            );
+          })}
+          <MenuSep />
+          <MenuItem onClick={() => { close(); openSettings("review-prompts"); }}>Edit these prompts…</MenuItem>
+        </div>
+      )}
+    </Menu>
+  );
+}
 
 /**
  * One cell of the masthead's field strip: a key, and its value under it.
@@ -5535,6 +5753,11 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
   const [msg, setMsg] = useState("");
   const [sending, setSending] = useState(false);
   const [said, setSaid] = useState("");
+  /* The wording the ping is sent with. The same catalogue the review menu
+     reads, because it is the same kind of thing: personal, edited in Settings,
+     stored in the user's own file and not in this repository. */
+  const recipes = useReviewRecipes();
+  const repoName = useContext(RepoCtx);
   useEffect(() => {
     let live = true;
     api.notifyReach().then((r) => { if (live) setSlack(!!r?.slack); }).catch(() => { /* assume not */ });
@@ -5596,15 +5819,15 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
             {/* Telling somebody it is ready.
                 Two routes, and they are not the same kind of thing. The card is
                 ours to write on — agentglass holds a ClickUp token. Slack is
-                not: posting there means holding a workspace token to do what
-                the agent already does with its own, so that button writes the
-                message and hands it to a chat. Which is also why one of them
-                can be missing and the other cannot. */}
+                not: posting there means holding a workspace token to do what an
+                agent already does with its own, so that button gathers the
+                facts and opens a tmux tab with an agent on it. Which is also
+                why one of them can be missing and the other cannot. */}
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
               {slack && (
-                <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(defaultPing(d, whoToTell(task))); }}
+                <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(""); }}
                   className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
-                  title={`Ask the agent to say this in Slack`}
+                  title="Ask an agent to say it in Slack — it writes the message"
                   style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
                   Ping Slack
                 </button>
@@ -5620,28 +5843,52 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
 
             {tell && (
               <div className="flex flex-col gap-1.5">
-                {/* Prefilled and editable, in that order. The default is the
-                    sentence you were going to type; leaving it as a blank box
-                    makes the common case the slow one. */}
+                {/* Two different boxes wearing one control. On the card it is
+                    the note itself, prefilled with the sentence you were going
+                    to type, and posted as it stands. In Slack the message is
+                    the agent's to write, so this is only what you would have
+                    added by hand — empty is the common case, and prefilling it
+                    would put this app's English into somebody's DM. */}
                 <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
+                  placeholder={tell === "slack" ? "Anything to add — what to look at first, whether it is urgent. Optional." : ""}
                   className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
                   style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
-                    {tell === "slack" ? "the agent posts this" : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
+                    {tell === "slack" ? `an agent writes it${whoToTell(task) ? ` to ${whoToTell(task)!.name}` : ""}, in the words that chat is written in` : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
                   </span>
-                  <button disabled={sending || !msg.trim()} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
+                  <button disabled={sending || (tell === "card" && !msg.trim())} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
                     style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                     onClick={async () => {
                       const target = whoToTell(task);
                       if (tell === "slack") {
-                        /* Handed over rather than sent. The chat is where the
-                           Slack connection lives, and it is also where you can
-                           see what was actually said — a fire-and-forget button
-                           into somebody else's workspace is not something to
-                           offer without a transcript. */
-                        seedChat(root, slackPrompt(msg, target?.name), `Ping about #${d.number}`);
-                        setTell(null); setSaid("handed to a chat");
+                        /* Handed over rather than sent, and handed to a tmux
+                           window rather than to the chat. Slack is not ours to
+                           post into — that takes an agent with its own
+                           connection — and a message into somebody else's
+                           workspace is not a fire-and-forget button: it is
+                           worth watching, attached, where you can take the
+                           keyboard off it before it says the wrong thing. */
+                        const text = pingPrompt(recipes, {
+                          number: d.number,
+                          repo: repoName ?? "",
+                          head: d.commits.length ? d.commits[d.commits.length - 1]!.oid : "",
+                          branch: d.headRefName,
+                          title: d.title,
+                          author: d.author,
+                          url: d.url,
+                          card: ref.label,
+                          // The address of the card actually resolved, not one
+                          // built from the id: a message carrying `ORBIT-1042`
+                          // and no link is the half that makes somebody search.
+                          // Empty until ClickUp answers, which is also when the
+                          // rest of this section is still a spinner.
+                          cardUrl: task?.url || "",
+                          who: target?.name ?? "",
+                          note: msg.trim(),
+                        });
+                        requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`);
+                        setTell(null); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
                         return;
                       }
                       if (!task) return;
@@ -5651,7 +5898,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                       if (r?.ok) { setTell(null); setSaid("written on the card"); }
                       else setSaid(`!${r?.error || "ClickUp refused it"}`);
                     }}>
-                    {sending ? "Sending…" : tell === "slack" ? "Hand to a chat" : "Write it"}
+                    {sending ? "Sending…" : tell === "slack" ? "Hand to a tmux tab" : "Write it"}
                   </button>
                 </div>
               </div>
@@ -5676,11 +5923,43 @@ function defaultPing(d: PrDetail, who: { name: string } | null): string {
   return `${who ? `@${who.name} ` : ""}PR ready to review — #${d.number} ${d.title}\n${d.url}`;
 }
 
-/** What the agent is asked to do. Spelled as an instruction and not as the
- *  message itself, so a chat that is already mid-conversation cannot mistake it
- *  for something to answer. */
-function slackPrompt(msg: string, name?: string): string {
-  return `Post this in Slack${name ? ` to ${name}` : ""}, as it is written, and tell me where it landed:\n\n${msg}`;
+/**
+ * The wording used when the catalogue has none — deleted, or not fetched yet.
+ *
+ * Short on purpose. It is not a second copy of the shipped prompt to keep in
+ * step with it; it is the least that still makes a message rather than a paste,
+ * for the seconds before the catalogue arrives and for somebody who deleted the
+ * entry and pressed the button anyway.
+ */
+const FALLBACK_PING = [
+  "Ask {who} for a review of pull request #{number} — {title} — in the chat we use for this.",
+  "",
+  "Not in these words: read the recent messages in the conversation you are posting in and write it the way they are written. Carry the link ({url}), the card ({card} {cardUrl}) and enough about the change to decide when to pick it up.",
+  "",
+  "{note}",
+  "",
+  "Show me the draft and where it will land, and wait.",
+].join("\n");
+
+/**
+ * What the agent is asked to do, in the user's own words.
+ *
+ * The wording is NOT here. It is `ready-for-review` in the prompt catalogue,
+ * which ships a neutral frame and is edited in Settings into whatever somebody
+ * actually says to a colleague — their language, their greeting, their sign-off
+ * — and stored in their own file. Wording that belongs to a person does not
+ * belong in a repository, and this is the one prompt in the app that is read by
+ * another human rather than by an agent.
+ *
+ * Expanded here rather than on the server because this prompt goes straight to
+ * a tmux window from the panel; `expandRecipe` is shared so the two cannot
+ * disagree about what `{card}` means.
+ */
+function pingPrompt(recipes: ReviewRecipe[], ctx: ReviewRecipeContext): string {
+  const r = recipes.find((x) => x.id === PING_RECIPE);
+  const body = (r?.body || "").trim() || FALLBACK_PING;
+  const skill = r?.skill ? expandRecipe(r.skill, ctx).trim() : "";
+  return [skill, expandRecipe(body, ctx).trim()].filter(Boolean).join("\n\n");
 }
 
 function PrSidebar({ d, root, onEditField }: {
@@ -5787,9 +6066,9 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
 
 function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink, onEditField, condensed, viewed, threads, queued, awaitingChecks }: {
   d: PrDetail; busy: boolean;
-  onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: () => void;
+  onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: (recipe?: string) => void;
   /** Absent when the workspace has no terminal to send it to. */
-  onReviewInTerminal?: () => void;
+  onReviewInTerminal?: (recipe?: string) => void;
   /** Scrolled past the top: the metadata folds away and the title stays. */
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
@@ -5919,23 +6198,14 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
             sight, the terminal gives you the session itself, attached, in a tab
             beside your shells. Which one you want depends on whether you intend
             to watch or to join in. */}
-        <Menu label="✦ Review with Claude ▾" title="Review this pull request" primary>
-          {(close) => (
-            <>
-              {/* A terminal first, and the chat last.
-                  The chat pane is a second home for a conversation that already
-                  has one: a real agent in a real tmux window, which survives a
-                  restart of this app, can be attached to from anywhere, and is
-                  where the work continues after the review. The chat is kept
-                  because it is occasionally the quicker read, not because it is
-                  the better place to send somebody by default. */}
-              {onReviewInTerminal && (
-                <MenuItem onClick={() => { close(); onReviewInTerminal(); }}>&gt;_ In a terminal</MenuItem>
-              )}
-              <MenuItem onClick={() => { close(); onLocalReview(); }}>&#8942; In the chat pane</MenuItem>
-            </>
-          )}
-        </Menu>
+        {/* A terminal first, and the chat last, in both copies — see
+            ReviewMenu. The chat pane is a second home for a conversation that
+            already has one: a real agent in a real tmux window, which survives
+            a restart of this app and is where the work continues after the
+            review. The chat is kept because it is occasionally the quicker
+            read, not because it is the better place to send somebody. */}
+        <ReviewMenu d={d} canTerm={!!onReviewInTerminal}
+          onPick={(recipe, where) => (where === "term" ? onReviewInTerminal?.(recipe) : onLocalReview(recipe))} />
         {/* Out of the overflow, because it is the most-pressed thing in it.
             "Open on GitHub" is what you reach for whenever this panel does not
             do the thing — and burying the escape hatch two clicks deep is the
@@ -6238,8 +6508,6 @@ function LazyMount({ minHeight, children }: { minHeight: number; children: React
  *  not something anybody reads, and it should not be what the tab opens on. */
 const BIG_FILE_LINES = 600;
 
-/** A directory node in the changed-files tree. */
-type TreeNode = { name: string; path: string; dirs: Map<string, TreeNode>; files: PrFile[] };
 
 /** Generated files GitHub holds behind a "Load diff" button — lockfiles,
  *  minified bundles, source maps. Nobody reads these line by line, and a
@@ -6273,31 +6541,6 @@ function statusGlyph(status: string): { ch: string; tint: string; title: string 
   }
 }
 
-/** Group changed paths into directories, then collapse the runs of single-child
- *  directories the way GitHub does (`web/src/lib` on one row, not three). */
-function buildFileTree(files: PrFile[]): TreeNode {
-  const root: TreeNode = { name: "", path: "", dirs: new Map(), files: [] };
-  for (const f of files) {
-    const parts = f.path.split("/");
-    let node = root;
-    for (const dir of parts.slice(0, -1)) {
-      let next = node.dirs.get(dir);
-      if (!next) { next = { name: dir, path: node.path ? `${node.path}/${dir}` : dir, dirs: new Map(), files: [] }; node.dirs.set(dir, next); }
-      node = next;
-    }
-    node.files.push(f);
-  }
-  const squash = (n: TreeNode): TreeNode => {
-    let cur = n;
-    while (cur.files.length === 0 && cur.dirs.size === 1) {
-      const only = [...cur.dirs.values()][0]!;
-      cur = { ...only, name: `${cur.name}/${only.name}`.replace(/^\//, "") };
-    }
-    return { ...cur, dirs: new Map([...cur.dirs].map(([k, v]) => [k, squash(v)])) };
-  };
-  return { ...root, dirs: new Map([...root.dirs].map(([k, v]) => [k, squash(v)])) };
-}
-
 /**
  * "Open the whole file", and the second and a half it takes to say anything.
  *
@@ -6325,7 +6568,7 @@ function PeekButton({ path, onPeek }: { path: string; onPeek: (p: string) => voi
 }
 
 function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
-  node: TreeNode; sel: string | null; onPick: (p: string) => void;
+  node: TreeNode<PrFile>; sel: string | null; onPick: (p: string) => void;
   /** Open the whole file in an editor, over the panel. The diff shows what
    *  changed; this is for the times the answer is in the part that did not. */
   onPeek?: (p: string) => void | Promise<void>;
@@ -7060,28 +7303,52 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
    * folded files or unmounted rows, so leaving it in place would answer "no
    * results" for a word that is in four files.
    */
+  /*
+   * …and only while this tab is the thing on screen.
+   *
+   * The workspace keeps every visited view mounted (see Workspace.tsx), so
+   * this effect used to run wherever you were: leave the Files tab open, walk
+   * over to the board, press Ctrl+F, and the diff's find opened on a view you
+   * could not see. `checkVisibility` on this tab's own box is the honest test —
+   * it answers no for a `visibility: hidden` ancestor, which is exactly how a
+   * background view is hidden.
+   *
+   * `capture: true`, and it matters: the shell's own find bar listens on the
+   * same window. Capture runs first, so this one gets to decide, and stopping
+   * the event there is what keeps the two from both opening. When it declines,
+   * it touches nothing and the shell's bar takes it.
+   */
   useEffect(() => {
     const onWinKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "f" || !(e.ctrlKey || e.metaKey) || e.altKey) return;
       // A terminal owns its own keys — a peeked file is being read in nvim, and
       // Ctrl+F there is page-down.
       if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
+      const box = frameRef.current as (HTMLElement & { checkVisibility?: () => boolean }) | null;
+      if (!box) return;
+      if (typeof box.checkVisibility === "function" ? !box.checkVisibility() : !box.offsetParent) return;
       e.preventDefault();
+      e.stopPropagation();
       setFind((cur) => cur ?? "");
       requestAnimationFrame(() => { findRef.current?.focus(); findRef.current?.select(); });
     };
-    window.addEventListener("keydown", onWinKey);
-    return () => window.removeEventListener("keydown", onWinKey);
+    window.addEventListener("keydown", onWinKey, true);
+    return () => window.removeEventListener("keydown", onWinKey, true);
   }, []);
 
   const shownFiles = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return d.files.filter((f) => {
+    const kept = d.files.filter((f) => {
       if (needle && !f.path.toLowerCase().includes(needle)) return false;
       if (hiddenExts.length && hiddenExts.includes(fileExt(f.path))) return false;
       if (!showViewed && seenFiles.includes(f.path)) return false;
       return true;
     });
+    /* In the order the rail paints them, not the order GitHub sends them — see
+       `treeOrder`. Everything downstream calls this list "the files": the tree,
+       the stack of diffs, j/k, and what "the next one" means to the Viewed tick.
+       They agree only if the list is already in the order you read. */
+    return treeOrder(kept);
   }, [d.files, q, hiddenExts, showViewed, seenFiles]);
 
   /* The same expression the render uses below, so the rail can never name a
@@ -7106,20 +7373,22 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
       if (wasViewed) next.delete(path); else next.add(path);
       return next;
     });
-    // Marking a file viewed collapses it, and everything under it jumps up by
-    // however tall it was — so the file you move on to arrives already scrolled
-    // to wherever the last one happened to end. Put the next one at the top,
-    // which is the only place a file you have not read yet should start.
-    //
-    // Only on the way in: unfolding is you going back to look at something, and
-    // moving the page under that would be taking the click away from you.
-    if (wasViewed) return;
-    const i = shownFiles.findIndex((f) => f.path === path);
-    // The last file has no next — hold the one just folded, rather than
-    // throwing the page to the bottom of a list that has just got shorter.
-    const target = shownFiles[i + 1]?.path ?? path;
+    // Where the tick leaves you — see `afterViewed`. In the stack: marking a
+    // file viewed collapses it, everything under it jumps up by however tall it
+    // was, and the file you move on to would arrive already scrolled to wherever
+    // the last one happened to end, so the next one is put at the top. In one-
+    // file mode there is nothing under it to scroll to, so the next file is
+    // opened instead.
+    const move = afterViewed(shownFiles.map((f) => f.path), path, { oneFile, wasViewed });
+    if (move.kind === "stay") return;
+    if (move.kind === "open") {
+      onSel(move.path);
+      const frame = frameRef.current;
+      if (frame) vScrollerOf(frame)?.scrollTo({ top: 0 });
+      return;
+    }
     requestAnimationFrame(() => {
-      scrollToFileStable(() => document.querySelector(`[data-path="${target}"]`));
+      scrollToFileStable(() => document.querySelector(`[data-path="${move.path}"]`));
     });
   };
   const allFolded = shownFiles.length > 0 && shownFiles.every((f) => folded.has(f.path));
@@ -7621,7 +7890,15 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                         }}
                       />
                     )
-                    : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
+                    /* Two different nothings, and saying the wrong one is how a
+                       stale diff looked like a broken file. `change` present
+                       with no hunks is GitHub sending a header and no text:
+                       binary, a pure rename. `change` ABSENT means this file is
+                       not in the diff we hold at all — which, since the file
+                       list comes from the detail and the diff does not, means
+                       the detail is newer than the text beside it. */
+                    : change ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>
+                    : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>This file is not in the diff on screen — it arrived with a newer push. Press Refresh.</div>}
                 </div>
               </LazyMount>
               )

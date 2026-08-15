@@ -318,6 +318,12 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     tags: (raw.tags ?? []).map((t) => t.name ?? "").filter(Boolean),
     list: raw.list?.name ?? null,
     listId: raw.list?.id ? String(raw.list.id) : undefined,
+    /* Free — it rides on the same response, on every endpoint that returns a
+       task — and it is the difference between "this card is in Defects" and
+       "this card is in Defects and in the two lists you actually work from". */
+    ...(Array.isArray(raw.locations) && raw.locations.length
+      ? { alsoIn: raw.locations.map((l) => ({ id: String(l?.id ?? ""), name: String(l?.name ?? "") })).filter((l) => l.id && l.name) }
+      : {}),
     assignees: assignees.map((a) => a.username ?? "").filter(Boolean),
     people: assignees.map((a) => ({
       id: a.id != null ? Number(a.id) : undefined,
@@ -1075,9 +1081,14 @@ function tableMarkdown(t: { rows?: unknown[]; columns?: unknown[]; cells?: Recor
  *  us, and the two a picker needs in order not to guess. */
 export async function listMeta(
   token: string, listId: string,
-): Promise<CallResult<{ name: string; statuses: ListStatus[]; fields: ListField[]; place: ListPlace }>> {
+): Promise<CallResult<{ name: string; statuses: ListStatus[]; fields: ListField[]; place: ListPlace; description?: string }>> {
   const l = await call<{
     name?: string;
+    /** The blurb at the top of a list in ClickUp: the brief, the docs, who is
+     *  on it. Plain text through the API — the chips and links it draws in the
+     *  browser are rich blocks v2 does not hand out — and empty on most lists,
+     *  which is why nothing is drawn for it unless there is something. */
+    content?: string;
     statuses?: { status: string; type: string; orderindex: number; color?: string }[];
     // Verified against a real list: `/list/{id}` carries its own space and
     // folder. The breadcrumb therefore costs no call of its own.
@@ -1094,6 +1105,10 @@ export async function listMeta(
     ok: true,
     data: {
       name: l.data?.name ?? "",
+      /* Always set, even to "": `undefined` has to keep meaning "never asked",
+         which is what lets a cache written before this field existed be told
+         apart from a list that genuinely has no blurb. */
+      description: String(l.data?.content ?? "").trim() ? String(l.data!.content) : "",
       place: {
         space: l.data?.space?.name || undefined,
         // A folderless list gets a hidden placeholder — see ListPlace.
@@ -1125,6 +1140,63 @@ export async function listMeta(
  * spending the whole rate budget discovering that helps no one.
  */
 const MAX_PAGES = 10;
+
+/**
+ * The view a list opens on in ClickUp — the thing somebody is actually looking
+ * at when they say "that list".
+ *
+ * Cached because it is a property of the list rather than of its contents: one
+ * call, then never again this session.
+ */
+const listViewCache = new Map<string, { at: number; id: string | null }>();
+const LIST_VIEW_TTL_MS = 30 * 60_000;
+
+export async function defaultViewOf(token: string, listId: string): Promise<string | null> {
+  const hit = listViewCache.get(listId);
+  if (hit && Date.now() - hit.at < LIST_VIEW_TTL_MS) return hit.id;
+  const r = await call<{ required_views?: { list?: { id?: string } } }>(
+    `/list/${encodeURIComponent(listId)}/view`, token,
+  );
+  const id = r.ok ? (r.data?.required_views?.list?.id ?? null) : null;
+  // A failure is not cached as "no view": the next read should try again rather
+  // than fall back to the raw list for the rest of the session.
+  if (r.ok) listViewCache.set(listId, { at: Date.now(), id });
+  return id;
+}
+
+/**
+ * The views a list offers — the tabs along the top of it in ClickUp.
+ *
+ * Only the ones that are a list of tasks. A Gantt and a dashboard are real
+ * views and this app has nothing to draw them with, and offering a row that
+ * opens a board of nothing is worse than not offering it.
+ *
+ * The list's own default view is left out on purpose: it is what the list row
+ * already opens, and a child that repeats its parent is a row people click by
+ * mistake once each.
+ */
+export async function listViews(token: string, listId: string): Promise<CallResult<{ views: { id: string; name: string }[]; links: { id: string; name: string; type: string }[] }>> {
+  const id = String(listId || "").trim();
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a list id" };
+  const r = await call<{
+    views?: { id?: string; name?: string; type?: string }[];
+    required_views?: { list?: { id?: string } };
+  }>(`/list/${encodeURIComponent(id)}/view`, token);
+  if (!r.ok) return { ...r, data: undefined };
+  const home = r.data?.required_views?.list?.id ?? "";
+  const all = (r.data?.views ?? []).filter((v) => v?.id && v.id !== home);
+  const views = all
+    .filter((v) => v.type === "list")
+    .map((v) => ({ id: String(v.id), name: String(v.name ?? "View") }));
+  /* The ones this app cannot draw — a Gantt, a dashboard, a whiteboard — are
+     still worth knowing about: they are one click away in ClickUp, and a team
+     that keeps its plan in a Gantt should not have to go and find it. Handed
+     over with their TYPE, because that is what decides the address. */
+  const links = all
+    .filter((v) => v.type && v.type !== "list")
+    .map((v) => ({ id: String(v.id), name: String(v.name ?? "View"), type: String(v.type) }));
+  return { ok: true, data: { views, links } };
+}
 
 export async function viewTasks(
   token: string, viewId: string, myId?: string,
@@ -1819,5 +1891,82 @@ export async function cardPullRequests(
     // Stated first, then by number descending — newest work at the top, which
     // is the one somebody is looking for.
     prs: [...out.values()].sort((a, b) => Number(!!b.stated) - Number(!!a.stated) || b.number - a.number),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// the shape of the workspace: spaces, folders, and the lists inside them
+// ---------------------------------------------------------------------------
+
+/**
+ * The picker's data, and it is one call per level rather than the three the
+ * hierarchy suggests.
+ *
+ * Measured against a real workspace: `/space/{id}/folder` answers with each
+ * folder AND the lists inside it — fifteen folders and their lists in a single
+ * request. So "add the Purple folder" needs no walk of its lists, and neither
+ * does re-reading it later to notice a list somebody added this morning.
+ *
+ * That is what makes a saved folder worth storing as a FOLDER: the app keeps
+ * an id, and the contents are whatever ClickUp says they are today.
+ */
+export async function clickupSpaces(): Promise<CallResult<{ spaces: { id: string; name: string }[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const me = redacted("clickup");
+  if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
+  const r = await call<{ spaces?: { id: string; name?: string }[] }>(
+    `/team/${encodeURIComponent(me.workspaceId)}/space?archived=false`, token,
+  );
+  if (!r.ok) return { ...r, data: undefined };
+  return { ok: true, data: { spaces: (r.data?.spaces ?? []).map((s) => ({ id: String(s.id), name: s.name ?? "" })).filter((s) => s.id) } };
+}
+
+export interface ClickUpFolder {
+  id: string;
+  name: string;
+  lists: { id: string; name: string }[];
+}
+
+export async function clickupFolders(spaceId: string): Promise<CallResult<{ folders: ClickUpFolder[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const id = String(spaceId || "").trim();
+  // An id, and only an id: this reaches a URL, and a space id from the UI must
+  // not be able to become a path of its own.
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a space id" };
+  const r = await call<{ folders?: { id: string; name?: string; archived?: boolean; lists?: { id: string; name?: string; archived?: boolean }[] }[] }>(
+    `/space/${encodeURIComponent(id)}/folder?archived=false`, token,
+  );
+  if (!r.ok) return { ...r, data: undefined };
+  const folders = (r.data?.folders ?? [])
+    .filter((f) => f && !f.archived)
+    .map((f) => ({
+      id: String(f.id),
+      name: f.name ?? "",
+      lists: (f.lists ?? []).filter((l) => l && !l.archived).map((l) => ({ id: String(l.id), name: l.name ?? "" })),
+    }))
+    .filter((f) => f.id);
+  return { ok: true, data: { folders } };
+}
+
+/** One folder's lists, for a folder already saved — the same call as above,
+ *  narrowed. Kept separate so a refresh of one board does not read a whole
+ *  space's worth of folders. */
+export async function clickupFolderLists(folderId: string): Promise<CallResult<{ name: string; lists: { id: string; name: string }[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const id = String(folderId || "").trim();
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "not a folder id" };
+  const r = await call<{ name?: string; lists?: { id: string; name?: string; archived?: boolean }[] }>(
+    `/folder/${encodeURIComponent(id)}`, token,
+  );
+  if (!r.ok) return { ...r, data: undefined };
+  return {
+    ok: true,
+    data: {
+      name: r.data?.name ?? "",
+      lists: (r.data?.lists ?? []).filter((l) => l && !l.archived).map((l) => ({ id: String(l.id), name: l.name ?? "" })),
+    },
   };
 }

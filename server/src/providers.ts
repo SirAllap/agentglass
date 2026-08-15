@@ -11,8 +11,8 @@
  * The one genuinely new probe is the credential one, because until now no
  * provider had a secret we hold.
  */
-import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type ProviderState, type SavedView, type ViewTasksResponse } from "../../shared/providers.ts";
-import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView } from "./clickupviews.ts";
+import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type ProviderState, type SavedView, type SavedFolder, type ViewTasksResponse } from "../../shared/providers.ts";
+import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders } from "./clickupviews.ts";
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
 import { hasCredential, redacted, setCredential, clearCredential } from "./credentials.ts";
@@ -304,6 +304,79 @@ export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: 
  * agreed the new one exists. A failed change leaves you exactly where you were
  * rather than with nothing.
  */
+/**
+ * Add a whole folder to the sidebar.
+ *
+ * Resolved before it is stored, like every other add here: the id has to come
+ * back from ClickUp with a name and its lists, or nothing is written. What IS
+ * written is the folder — the lists ride along as a cache so the sidebar has a
+ * tree to draw on the next cold start, and are replaced by whatever ClickUp
+ * says the next time it is read.
+ */
+export async function addClickupFolder(folderId: string, spaceName = ""): Promise<{ ok: boolean; error?: string; folder?: SavedFolder }> {
+  const { clickupFolderLists } = await import("./clickup.ts");
+  const { secretFor } = await import("./credentials.ts");
+  if (!secretFor("clickup")) return { ok: false, error: "Connect ClickUp first" };
+  const id = String(folderId || "").trim();
+  if (!/^[0-9]+$/.test(id)) return { ok: false, error: "That is not a folder id" };
+
+  const r = await clickupFolderLists(id);
+  if (!r.ok || !r.data) return { ok: false, error: r.error || "ClickUp did not answer for that folder" };
+  const me = (await import("./credentials.ts")).redacted("clickup");
+  const folder: SavedFolder = {
+    id,
+    name: r.data.name || `Folder ${id}`,
+    ...(me?.workspaceId ? { workspaceId: String(me.workspaceId) } : {}),
+    // The space is what the picker knew; ClickUp's folder endpoint does not
+    // repeat it, and a second call to learn a heading is not worth a request.
+    spaceId: "",
+    spaceName,
+    addedAt: Date.now(),
+    lists: r.data.lists,
+    listsAt: Date.now(),
+  };
+  addFolder(folder);
+  return { ok: true, folder };
+}
+
+/**
+ * Read a saved folder's lists again.
+ *
+ * The point of storing a folder rather than its contents: this is what notices
+ * the list somebody created this morning. Failure is not an error worth showing
+ * — the sidebar keeps the tree it has, which is the last thing ClickUp agreed
+ * to, and tries again next time.
+ */
+export async function refreshClickupFolders(): Promise<void> {
+  const { clickupFolderLists } = await import("./clickup.ts");
+  const { secretFor } = await import("./credentials.ts");
+  if (!secretFor("clickup")) return;
+  for (const f of savedFolders()) {
+    const r = await clickupFolderLists(f.id);
+    if (!r.ok || !r.data) continue;
+    addFolder({ ...f, name: r.data.name || f.name, lists: r.data.lists, listsAt: Date.now() });
+  }
+}
+
+/**
+ * The fuse on that refresh, and why it is here rather than on a timer.
+ *
+ * Ten minutes, and only when somebody is looking: the sidebar asks for its
+ * boards whenever the Tasks view is open, so this rides that. A folder costs
+ * one request; three folders on a ten-minute floor is at most eighteen an hour
+ * against a ten-thousand budget, and a machine with the app open on another
+ * view spends nothing at all.
+ */
+const FOLDER_TTL_MS = 10 * 60_000;
+let foldersRunning = false;
+export async function refreshFoldersIfStale(): Promise<void> {
+  if (foldersRunning) return;
+  const stale = savedFolders().some((f) => !f.listsAt || Date.now() - f.listsAt > FOLDER_TTL_MS);
+  if (!stale) return;
+  foldersRunning = true;
+  try { await refreshClickupFolders(); } finally { foldersRunning = false; }
+}
+
 export async function replaceViewUrl(oldId: string, url: string): Promise<{ ok: boolean; error?: string; view?: SavedView }> {
   const before = savedViews().find((v) => v.id === oldId);
   if (!before) return { ok: false, error: "That board is not saved any more" };
@@ -371,17 +444,50 @@ export function __resetViewCache(): void { inFlight.clear(); cooling.clear(); }
  * A failure NEVER empties a board. What was last seen stays, with the reason
  * named above it.
  */
+/*
+ * The views the sidebar has offered, by id.
+ *
+ * Filled when the panel asks a list for its views and read when one of them is
+ * opened. Memory only and deliberately: it is a lookup table for this session's
+ * clicks, not a thing to remember — the file holds what somebody chose to keep.
+ */
+const ephemeralViews = new Map<string, string>();
+const ephemeralNames = new Map<string, string>();
+export function rememberListViews(listId: string, views: { id: string; name: string }[]): void {
+  for (const v of views) { ephemeralViews.set(v.id, listId); ephemeralNames.set(v.id, v.name); }
+}
+
 export async function readView(viewId: string, force = false): Promise<ViewTasksResponse> {
   const { secretFor } = await import("./credentials.ts");
-  const view = savedViews().find((v) => v.id === viewId);
-  if (!view) return { tasks: [], statuses: [], fields: [], at: 0, error: "That board is not saved any more" };
+  /*
+   * A saved board, or one of a saved list's own views.
+   *
+   * The second kind is not in the file and should not be: the sidebar hangs a
+   * list's ClickUp views under it — `Blue Eng list view`, `Frontend` — and
+   * those come and go with the list. Refusing them ("that board is not saved
+   * any more") is what a row that opens nothing looks like, and saving them on
+   * first click would quietly fill somebody's sidebar with every tab they ever
+   * glanced at.
+   *
+   * So they are read as themselves: the id is enough for the API, the name
+   * comes back with it, and everything downstream — the cache, the statuses,
+   * the breadcrumb — works on a `SavedView` shape it never has to know is
+   * borrowed.
+   */
+  let view = savedViews().find((v) => v.id === viewId);
+  if (!view) {
+    const owner = savedViews().find((v) => v.listId && ephemeralViews.get(viewId) === v.listId);
+    const listId = owner?.listId ?? ephemeralViews.get(viewId);
+    if (!listId) return { tasks: [], statuses: [], fields: [], at: 0, error: "That board is not saved any more" };
+    view = { id: viewId, name: ephemeralNames.get(viewId) ?? "View", listId, listName: owner?.listName, url: "", addedAt: 0 };
+  }
 
   /** Whatever we hold, dressed as an answer. */
   const shown = (extra: Partial<ViewTasksResponse> = {}): ViewTasksResponse => {
     const c = cachedFor(viewId);
     return {
       tasks: c?.tasks ?? [], statuses: c?.statuses ?? [], fields: c?.fields ?? [],
-      place: c?.place, view: c?.view ?? view, at: c?.at ?? 0, truncated: c?.truncated, ...extra,
+      place: c?.place, description: c?.description, view: c?.view ?? view, at: c?.at ?? 0, truncated: c?.truncated, ...extra,
     };
   };
 
@@ -390,7 +496,12 @@ export async function readView(viewId: string, force = false): Promise<ViewTasks
 
   const held = cachedFor(viewId);
   const age = held ? Date.now() - held.at : Number.POSITIVE_INFINITY;
-  if (!force && age < ttlFor(view)) return shown();
+  /* A cache from before the blurb existed is not fresh, however young it is:
+     otherwise the field only appears for whoever happens to have an empty cache
+     and reads as broken for everyone else. `""` is a known answer — see
+     `listMeta` — so this fires once per board and never again. */
+  const missingBlurb = !!view.listId && held?.description === undefined;
+  if (!force && age < ttlFor(view) && !missingBlurb) return shown();
 
   const rest = cooling.get(view.id);
   const resting = !force && !!rest && Date.now() < rest.until;
@@ -519,9 +630,19 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   let statuses = held?.statuses ?? [];
   let fields = held?.fields ?? [];
   let place = held?.place;
-  if (view.listId && (!statuses.length || !place || force)) {
+  let description = held?.description;
+  /* `description === undefined` is in here for a reason: it was added after
+     these caches were written, so every board held one of them and the blurb
+     never appeared until something else forced a re-read. A field that only
+     shows up for people with an empty cache is a field that looks broken. */
+  if (view.listId && (!statuses.length || !place || description === undefined || force)) {
     const l = await listMeta(token, view.listId);
-    if (l.ok && l.data) { statuses = l.data.statuses; fields = l.data.fields; place = l.data.place; }
+    if (l.ok && l.data) {
+      statuses = l.data.statuses; fields = l.data.fields; place = l.data.place;
+      // Assigned rather than merged: a blurb that was deleted in ClickUp has to
+      // be able to disappear here too.
+      description = l.data.description ?? "";
+    }
   }
 
   const r = view.id.startsWith("list:")
@@ -547,7 +668,7 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   void refreshCommentCounts(r.data.tasks, token)
     .then(() => recount(view.id))
     .catch(() => { /* a count is not worth a log line */ });
-  putCache({ view, tasks, statuses, fields, place, at: Date.now(), truncated: r.data.truncated });
+  putCache({ view, tasks, statuses, fields, place, description, at: Date.now(), truncated: r.data.truncated });
   return { ok: true };
 }
 
@@ -569,8 +690,50 @@ function myWorkUrl(tasks: { url?: string }[], workspaceId: string): string {
   return "";
 }
 
-/** A bare list, for an address that named one directly. */
+/**
+ * A list, read the way ClickUp itself shows one.
+ *
+ * `/list/{id}/task` is the obvious endpoint and it answers a different question
+ * from the one on screen. Measured on a real list of a couple of hundred cards:
+ *
+ *   - it returns only the tasks whose HOME list is this one. A card added to
+ *     the list through "Tasks in Multiple Lists" — which is most of them there
+ *     — is simply absent: its home is some other list, this one is a location
+ *     it appears in, and the list endpoint has never heard of it. Neither had
+ *     this app.
+ *   - it ignores the view's filter and its sort. What the list opens on is a
+ *     VIEW, with a filter on a custom field and `sorting: priority`.
+ *
+ * The view endpoint answers the question on screen: of its 105 tasks, 63 have
+ * another list as their home. So: resolve the list's default view once, read
+ * that, and only fall back to the raw list when the workspace will not name one
+ * (a permission, an older workspace) — where the old behaviour is still better
+ * than nothing.
+ */
 async function listTasksOf(token: string, listId: string, me?: string) {
-  const { rawListTasks } = await import("./clickup.ts");
+  const { rawListTasks, defaultViewOf, viewTasks } = await import("./clickup.ts");
+  const viewId = await defaultViewOf(token, listId);
+  if (viewId) {
+    const r = await viewTasks(token, viewId, me);
+    /*
+     * An EMPTY view is not the same as an empty list, and this is measured
+     * rather than guessed: on one list the default view answers 105 tasks, and
+     * on another — a list with a hundred cards, twelve of them on screen in the
+     * browser — the same endpoint answers zero while the list's other views
+     * answer thirty each. Whatever ClickUp is doing there (a filter its API
+     * evaluates differently, a view the web client fills in another way), a
+     * board that draws "nothing here" over a hundred cards is the worst of the
+     * available answers.
+     *
+     * So an empty view is checked against the list before it is believed. It
+     * costs one extra call in exactly two cases: a list that really is empty,
+     * and this one.
+     */
+    if (r.ok && (r.data?.tasks.length ?? 0) > 0) return r;
+    const raw = await rawListTasks(token, listId, me);
+    if (raw.ok && (raw.data?.tasks.length ?? 0) > 0) return raw;
+    if (r.ok) return r;
+    return raw;
+  }
   return rawListTasks(token, listId, me);
 }

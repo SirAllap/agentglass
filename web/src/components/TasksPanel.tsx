@@ -10,10 +10,10 @@
 // Finishing removes the worktree, deletes the branch and kills the window. The
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
-import type { ProviderTask, ProviderTasksResponse, SavedView, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail } from "../../../shared/providers.ts";
+import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail } from "../../../shared/providers.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { Portal } from "./Portal.tsx";
@@ -23,15 +23,17 @@ import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { useFindScope } from "../lib/findScope.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
 import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
-import type { CardJump } from "../lib/openCard.ts";
+import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
+import { LAYER } from "../lib/layers.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { cardSkills, skillCommand, windowName, skillModes, namedForIt, shortName } from "../lib/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
@@ -790,7 +792,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   /** "Show me this card" — from the pull-request masthead. See lib/openCard.ts. */
   jump?: CardJump | null;
 }) {
-  const [boards, setBoards] = useState<{ views: SavedView[]; current?: string; writeEnabled: boolean; writeForced?: boolean } | null>(null);
+  const [boards, setBoards] = useState<{ views: SavedView[]; folders?: SavedFolder[]; current?: string; writeEnabled: boolean; writeForced?: boolean } | null>(null);
   const [data, setData] = useState<ViewTasksResponse | null>(null);
   const [busy, setBusy] = useState(false);
   /** The board somebody just clicked, before its answer arrives. See `load`. */
@@ -800,6 +802,50 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
      this board's address" rather than "add another", so the same bar serves
      both — prefilled, and replacing instead of appending. */
   const [menu, setMenu] = useState<{ v: SavedView; x: number; y: number } | null>(null);
+  /** The same idea one level up: right-click a folder heading to take the whole
+   *  folder off the sidebar. */
+  const [folderMenu, setFolderMenu] = useState<{ f: SavedFolder; x: number; y: number } | null>(null);
+  /** The card dialog, when it is open over the table: what a find searches. */
+  const cardBox = useRef<HTMLDivElement>(null);
+  /*
+   * A list's own tabs, hung under it in the rail.
+   *
+   * ClickUp calls them views and a list can have several — `Eng list view`,
+   * `Blue Eng list view`, `Frontend` — each a different filter over the same
+   * cards, and they are what a team actually works from. Read on demand rather
+   * than up front: one call per list somebody opens, cached for the session,
+   * instead of one per list on every board load.
+   */
+  const [aboutOpen, setAboutOpen] = useState(false);
+  /* A brief belongs to the board it describes: switching boards with it open
+     would leave the last one's on screen over the new one's rows. Keyed on the
+     loaded board rather than on `lit`, which is defined below the panel's early
+     returns — and a hook cannot live down there. */
+  useEffect(() => { setAboutOpen(false); }, [data?.view?.id]);
+  const [listViews, setListViews] = useState<Record<string, { id: string; name: string }[]>>({});
+  /** The views this app cannot draw — a Gantt, a dashboard — as shortcuts out
+   *  to ClickUp, hung under the same list. */
+  const [listLinks, setListLinks] = useState<Record<string, { id: string; name: string; type: string }[]>>({});
+  const [openLists, setOpenLists] = useState<Record<string, boolean>>({});
+  /** Ask once, remember for the session. Safe to call for a list already
+   *  known or already in flight. */
+  const asked = useRef(new Set<string>());
+  const ensureListViews = useCallback((listId: string) => {
+    if (!listId || asked.current.has(listId)) return;
+    asked.current.add(listId);
+    api.clickupListViews(listId)
+      .then((r) => {
+        setListViews((m) => ({ ...m, [listId]: r.views ?? [] }));
+        setListLinks((m) => ({ ...m, [listId]: r.links ?? [] }));
+      })
+      .catch(() => setListViews((m) => ({ ...m, [listId]: [] })));
+  }, []);
+
+  const openList = useCallback((v: SavedView) => {
+    if (!v.listId) return;
+    setOpenLists((m) => ({ ...m, [v.id]: !m[v.id] }));
+    ensureListViews(v.listId);
+  }, [ensureListViews]);
   const [editing, setEditing] = useState<SavedView | null>(null);
   /** Put the address bar away, whatever it was in the middle of. */
   const closeAddBar = useCallback(() => { setAdding(false); setEditing(null); setUrlText(""); }, []);
@@ -870,6 +916,224 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     if (!needle) return all;
     return all.filter((v) => `${v.listName ?? ""} ${v.name}`.toLowerCase().includes(needle));
   }, [boards, railQ]);
+
+  /*
+   * The sidebar as ClickUp draws it: space › folder › list.
+   *
+   * A flat column of list names is fine at four boards and unreadable at
+   * twenty — which is what adding a folder whole produces, since a real one
+   * holds a dozen. The grouping is not a preference: `Orbit v2 – Phase 1`
+   * and `Grasshopper V1` mean different things depending on which folder they
+   * are in, and the folder is the thing somebody actually navigates by.
+   *
+   * Two kinds of heading, and they behave differently on purpose:
+   *   - a SAVED folder, which can be taken off the sidebar whole;
+   *   - the folder a pasted list happens to live in, which is only a heading.
+   * The built-in board and anything with no folder yet stay ungrouped at the
+   * top, where they were.
+   */
+  const railGroups = useMemo(() => {
+    const saved = new Map((boards?.folders ?? []).map((f) => [f.id, f]));
+    /* A saved folder, found by NAME — for the rows that only know their
+       breadcrumb. A pasted view carries the folder's name and not its id, and
+       keying those separately drew the same folder twice: once with the five
+       lists it holds, once with the one view somebody had saved over it. */
+    const byName = new Map((boards?.folders ?? []).map((f) => [f.name, f.id]));
+    const loose: SavedView[] = [];
+    const groups = new Map<string, { key: string; folderId?: string; folder: string; space?: string; views: SavedView[] }>();
+    for (const v of railViews) {
+      const folder = v.folderName || "";
+      if (v.builtin || !folder) { loose.push(v); continue; }
+      const id = v.folderId ?? byName.get(folder);
+      const key = id ? `f:${id}` : `n:${v.spaceName ?? ""}/${folder}`;
+      const g = groups.get(key) ?? { key, folderId: id, folder, space: v.spaceName, views: [] };
+      g.views.push(v);
+      groups.set(key, g);
+    }
+    /* Saved folders first and in the order they were added — they are the ones
+       somebody chose — then the folders inferred from pasted lists. */
+    const rank = (g: { folderId?: string }) => (g.folderId && saved.has(g.folderId) ? saved.get(g.folderId)!.addedAt : Number.MAX_SAFE_INTEGER);
+    return { loose, groups: [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.folder.localeCompare(b.folder)) };
+  }, [railViews, boards]);
+
+  /*
+   * One row of the sidebar, at a depth.
+   *
+   * A function rather than a component so the grouped and ungrouped halves
+   * cannot drift: they were one `.map` and everything about a row — the
+   * right-click menu, the busy dots, which one is lit — belongs to both.
+   */
+  /**
+   * A list, with its own views folded underneath it.
+   *
+   * The twisty is separate from the row on purpose: opening a list's tabs and
+   * opening the list are different intentions, and one target that did both
+   * would mean every glance at the tabs also spent a board read.
+   */
+  const railList = (v: SavedView) => {
+    const kids = v.listId ? listViews[v.listId] : undefined;
+    const links = v.listId ? listLinks[v.listId] ?? [] : [];
+    const open = !!openLists[v.id];
+    return (
+      <Fragment key={v.id}>
+        <div className="flex items-stretch">
+          {/* Only when there is something behind it. The views are read for
+              every list in an open folder, so "no arrow" means "asked, and it
+              has none" rather than "not looked yet" — and an arrow that opens a
+              line saying "no other views" is a control that exists to
+              disappoint. */}
+          {kids?.length || links.length ? (
+            <button onClick={() => openList(v)} aria-expanded={open}
+              title={open ? "Hide this list's views" : `${(kids?.length ?? 0) + links.length} more view${(kids?.length ?? 0) + links.length === 1 ? "" : "s"} on this list in ClickUp`}
+              className="shrink-0 grid place-items-center agx-btn"
+              style={{ width: 16, color: "var(--text4)" }}>
+              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
+                style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
+                <path d="M6 3.5 10.5 8 6 12.5Z" />
+              </svg>
+            </button>
+          ) : <span aria-hidden style={{ width: 16 }} />}
+          <div className="min-w-0 flex-1">{railRow(v, 1)}</div>
+        </div>
+        {open && (!!kids?.length || !!links.length) && (
+          /* Their own guide line, indented past the list's glyph: without it
+             they sat at the list's own indent and read as siblings of it rather
+             than as what it holds. */
+          <div style={{ marginLeft: 24, borderLeft: `1px solid color-mix(in srgb, var(--text) 12%, transparent)` }}>
+            {kids?.map((view) => railRow({
+              id: view.id, name: view.name, listId: v.listId, listName: v.listName ?? v.name,
+              url: "", addedAt: 0, folderId: v.folderId, folderName: v.folderName, spaceName: v.spaceName,
+            }, 1))}
+            {/* And the ones that only exist over there. Marked with the arrow
+                this app uses everywhere for "this leaves", because a row that
+                looks like the others and opens a browser is a small betrayal. */}
+            {links.filter((l) => clickupViewUrl(boards?.folders ?? [], l)).map((l) => (
+              <button key={l.id}
+                onClick={() => { const u = clickupViewUrl(boards?.folders ?? [], l); if (u) openExternal(u); }}
+                title={`${l.name} — opens in ClickUp (${l.type})`}
+                className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px] agx-btn"
+                style={{ paddingLeft: 8, paddingRight: 10, color: "var(--text4)" }}>
+                <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 13 }}>
+                  <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+                    strokeWidth={1.6} strokeLinecap="round" aria-hidden>
+                    {l.type === "gantt"
+                      ? <path d="M2.5 4h6M4.5 8h7M2.5 12h4" />
+                      : <path d="M2.5 12.5V8M6.5 12.5V4M10.5 12.5V6M14 12.5V9.5" />}
+                  </svg>
+                </span>
+                <span className="truncate min-w-0 flex-1">{l.name}</span>
+                <span aria-hidden className="shrink-0 text-[9px]" style={{ opacity: 0.7 }}>↗</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </Fragment>
+    );
+  };
+
+  const railRow = (v: SavedView, depth: number) => (
+    <button key={v.id}
+      onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
+      aria-current={!onLooked && lit === v.id}
+      aria-busy={wanted === v.id}
+      className="w-full text-left flex items-center gap-1.5 py-1 text-[11.5px]"
+      style={{
+        // Inside a folder the guide line already carries the indent, so the row
+        // only owes it a small step. Outside one it starts where the folder
+        // glyph does, so the two columns line up rather than nearly line up.
+        paddingLeft: depth ? 8 : 10, paddingRight: 10,
+        ...(!onLooked && lit === v.id
+          ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)" }
+          : { color: "var(--text3)" }),
+      }}
+      title={v.builtin
+        ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
+        : v.listName ? `${v.listName} · ${v.name}` : v.name}>
+      {/* The built-in one stays marked: beside four board names it reads as a
+          fifth board somebody added, and it is the one that behaves
+          differently. */}
+      {v.builtin && (
+        <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
+          width: 6, height: 6, borderRadius: 999,
+          border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
+        }} />
+      )}
+      {/*
+        * A saved ClickUp VIEW draws its own name, not its list's.
+        *
+        * The rail drew `listName || name` for everything, which is right for a
+        * list and wrong for a view: `Eng list by start date view` over
+        * `Orbit v2 – Phases 2 & 3` appeared as a second row called
+        * `Orbit v2 – Phases 2 & 3`, directly under the folder's copy of that
+        * same list. A tag saying "view" was the first attempt and it did not
+        * help — two rows with one name and a badge is still two rows with one
+        * name. The name is what tells them apart, so the name is what changes;
+        * which list it is over is in the tooltip, where it was already.
+        */}
+      {/* A list glyph beside every row that is one, so a list and the folder
+          above it are told apart by shape and not only by indent. The built-in
+          board keeps its own ring — it is not a list and does not behave like
+          one. */}
+      {!v.builtin && depth > 0 && (
+        <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
+          <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+            strokeWidth={1.6} strokeLinecap="round" aria-hidden>
+            <path d="M2.5 4.5h2M2.5 8h2M2.5 11.5h2M6.75 4.5h6.75M6.75 8h6.75M6.75 11.5h6.75" />
+          </svg>
+        </span>
+      )}
+      <span className="truncate min-w-0 flex-1">{v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name)}</span>
+      {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
+    </button>
+  );
+
+  /**
+   * What the folded rail says: the board on screen, by the name the rail would
+   * draw for it.
+   *
+   * `wanted ?? data?.view?.id` written out rather than reading `lit`, which is
+   * the same expression five hundred lines below this one. Reading it here
+   * threw `Cannot access 'lit' before initialization` the moment this panel
+   * rendered — a blank window, every time, with the whole app gone.
+   *
+   * TypeScript did not catch it and could not: the read sits inside the
+   * callback of a `.find`, and a callback is only a temporal-dead-zone error
+   * when it happens to run immediately, which this one does. The rule that
+   * follows is the cheap one — a value used at the top of a component is
+   * DEFINED at the top of it.
+   */
+  const railActive = (() => {
+    const on = wanted ?? data?.view?.id;
+    const v = (boards?.views ?? []).find((x) => x.id === on);
+    if (!v) return "Lists";
+    return v.name && v.listName && v.name !== v.listName ? v.name : (v.listName || v.name);
+  })();
+
+  /** Which folders are folded shut. By folder key and kept across restarts: a
+   *  sidebar that reopens with twelve folders expanded is the flat list again. */
+  const [railShut, setRailShut] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem(RAIL_SHUT_KEY) || "{}") as Record<string, boolean>; } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem(RAIL_SHUT_KEY, JSON.stringify(railShut)); } catch { /* private mode */ } }, [railShut]);
+
+  /*
+   * Ask every visible list what views it has, once.
+   *
+   * The alternative is asking when somebody clicks the arrow — but then the
+   * arrow has to be drawn before the answer is known, on every list, and half
+   * of them open a line saying "no other views". Knowing costs one small call
+   * per list in an OPEN folder, cached for the session, and it is what lets the
+   * rail draw an arrow only where there is something behind it.
+   */
+  useEffect(() => {
+    if (!railOpen) return;
+    for (const g of railGroups.groups) {
+      if (railShut[g.key]) continue;
+      for (const v of g.views) if (v.listId) ensureListViews(v.listId);
+    }
+  }, [railOpen, railGroups, railShut, ensureListViews]);
+
   /* Sidebar or modal. Global for the same reason the width is: how you like to
      read a card is about you, not about which list you are on. Full screen was
      offered and turned down — it covers the table entirely, and in an app that
@@ -878,6 +1142,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     try { return localStorage.getItem(CARD_MODE_KEY) === "modal" ? "modal" : "side"; } catch { return "side"; }
   });
   useEffect(() => { try { localStorage.setItem(CARD_MODE_KEY, cardMode); } catch { /* private mode */ } }, [cardMode]);
+  /* While the card is a dialog over the table, it IS the screen — a find that
+     also walked the hundred rows behind it would be answering a question
+     nobody asked. In the sidebar it is part of the same screen, so it is not
+     scoped. */
+  useFindScope(cardBox, cardMode === "modal" && sel !== null);
   /* Escape closes the modal, and only the modal: in the sidebar the card is
      part of the layout rather than something laid over it, and a key that
      empties a pane you did not open is a key that loses your place. */
@@ -1101,6 +1370,34 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     setUrlText(""); setAdding(false); setEditing(null); setNote(null);
     await loadBoards();
     await load(r.view?.id, true);
+  };
+
+  /**
+   * Add a folder whole.
+   *
+   * Not a shortcut for adding its lists: what is stored is the FOLDER, so a
+   * list created in it next month turns up here without anybody coming back to
+   * this dialog. Nothing is opened afterwards — a folder is a heading, and
+   * jumping into an arbitrary one of its twelve lists is a decision the app
+   * does not get to make.
+   */
+  const addFolder = async (id: string, spaceName: string) => {
+    setBusy(true);
+    const r = await api.clickupAddFolder(id, spaceName);
+    setBusy(false);
+    if (!r.ok) { setNote({ ok: false, text: r.error ?? "That folder did not go on" }); return; }
+    setNote({ ok: true, text: `${r.folder?.name ?? "Folder"} added — ${r.folder?.lists?.length ?? 0} list${r.folder?.lists?.length === 1 ? "" : "s"}` });
+    await loadBoards();
+  };
+
+  /** Take a folder off the sidebar. Its lists go with it; ClickUp is not
+   *  touched, and a list you had ALSO pasted by hand stays. */
+  const dropFolder = async (f: SavedFolder) => {
+    setFolderMenu(null);
+    await api.clickupRemoveFolder(f.id).catch(() => {});
+    setNote({ ok: true, text: `${f.name} is off the sidebar — untouched in ClickUp` });
+    await loadBoards();
+    if (data?.view?.id && (f.lists ?? []).some((l) => `list:${l.id}` === data.view?.id)) await load(undefined, true);
   };
 
   /** Take a board off the bar. The built-in one has no address and cannot go. */
@@ -1341,10 +1638,25 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
       const k = t.status || "—";
       (by.get(k) ?? by.set(k, []).get(k)!).push(t);
     }
+    /*
+     * Inside a status group, ClickUp's own order: priority first.
+     *
+     * Read off the list's default view rather than guessed — its `sorting` is
+     * `{ field: "priority" }`, which is what makes `URGENT` sit at the top of a
+     * column in ClickUp and looked arbitrary here. Cards with no priority keep
+     * the order the workspace sent them in, which is its own ranking, so this
+     * only ever LIFTS the flagged ones.
+     */
+    const RANK: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+    const byPriority = (list: ProviderTask[]) => [...list]
+      .map((t, i) => ({ t, i }))
+      .sort((a, b) => (RANK[a.t.priority ?? ""] ?? 2.5) - (RANK[b.t.priority ?? ""] ?? 2.5) || a.i - b.i)
+      .map((x) => x.t);
+
     return [...by.entries()]
       .map(([status, list]) => ({
         status,
-        rows: list,
+        rows: byPriority(list),
         color: order.get(status)?.color ?? list[0]?.statusColor,
         done: (order.get(status)?.type ?? "") === "done" || (order.get(status)?.type ?? "") === "closed",
         points: list.reduce((n, t) => n + (t.points ?? 0), 0),
@@ -1429,6 +1741,19 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             A breadcrumb is a claim about where you are; keeping the previous
             one through a switch makes it a wrong one. */}
         <Breadcrumb place={stale ? undefined : data?.place} className="min-w-0 max-w-[420px] pl-1" />
+        {/* The brief, as a chip on a row that already exists.
+            It was a fold above the table, and opening it pushed the rows down
+            by two hundred pixels — the reference material shoving aside the
+            thing you came to read. A dialog costs the table nothing, which is
+            also what ClickUp does with it. */}
+        {!onLooked && !!data?.description?.trim() && (
+          <button onClick={() => setAboutOpen(true)}
+            title="What this list is for — the brief, the docs, the team"
+            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full agx-btn"
+            style={{ border: edge(14), color: "var(--text3)" }}>
+            About
+          </button>
+        )}
         <span className="flex-1" />
         <button onClick={async () => {
             const on = !boards.writeEnabled;
@@ -1601,10 +1926,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           )}
         </ContextMenu>
       )}
+      {/* Right-click on a folder heading. One item, because there is only one
+          thing a folder can do that its lists cannot: leave. */}
+      {folderMenu && (
+        <ContextMenu x={folderMenu.x} y={folderMenu.y} onClose={() => setFolderMenu(null)}>
+          <div className="px-2 py-1.5 text-[10.5px] max-w-[240px]" style={{ color: "var(--text4)" }}>
+            {folderMenu.f.spaceName ? `${folderMenu.f.spaceName} · ` : ""}{folderMenu.f.name}
+          </div>
+          <MenuItem danger onClick={() => void dropFolder(folderMenu.f)}>Take this folder off the sidebar</MenuItem>
+          <div className="px-2 pb-1 text-[9.5px] max-w-[240px]" style={{ color: "var(--text4)" }}>
+            Only here — the folder and its lists stay exactly as they are in ClickUp.
+          </div>
+        </ContextMenu>
+      )}
       {adding && (
         <AddBoardBar value={urlText} onValue={setUrlText} onAdd={addBoard}
           onClose={closeAddBar}
-          busy={busy} editing={editing?.listName || editing?.name || null} />
+          busy={busy} editing={editing?.listName || editing?.name || null}
+          folders={boards?.folders ?? []} onAddFolder={addFolder} />
       )}
 
       <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">
@@ -1682,6 +2021,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         )}
       </div>
 
+      {/* Over the board, not above it — see AboutList. */}
+      {aboutOpen && !!data?.description?.trim() && (
+        <AboutList
+          name={data.view?.listName || data.view?.name || "This list"}
+          text={data.description}
+          url={data.view?.url}
+          onClose={() => setAboutOpen(false)} />
+      )}
+
       {note && <NoteStrip note={note} onClose={() => setNote(null)} />}
       {data?.error && (
         <div className="px-5 py-1 text-[10.5px] shrink-0 flex items-center gap-2"
@@ -1737,11 +2085,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
          * Down the side they are a column that scrolls, with a filter box —
          * and the filter is the part that actually scales, not the shape.
          *
-         * Deliberately FLAT. ClickUp nests these under spaces and folders and
-         * the mockup showed that, but agentglass only learns a board's folder
-         * when the board is opened: drawing the tree would mean asking ClickUp
-         * once per board every time this opened. Told rather than decided —
-         * grouping can come back the day we hold the places.
+         * Grouped by folder now, which it was not: the note that used to sit
+         * here said the tree would cost a call per board because a board's
+         * folder was only learned when it was opened. Two things changed. A
+         * folder can be added WHOLE — and then every list under it arrives
+         * knowing where it lives, for no calls at all — and a pasted list's
+         * breadcrumb, which was already being kept beside its cached page, is
+         * now read back out of it. So the day we hold the places came, and the
+         * shape ClickUp draws is the shape here.
          */}
         <nav aria-label="Lists" className="flex flex-col shrink-0 min-w-0"
           style={{ width: railOpen ? 214 : 34, borderRight: edge(12), transition: "width 120ms ease" }}>
@@ -1768,37 +2119,96 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: edge(14) }} />
             )}
           </div>
+          {/*
+            * Folded, it was 34 pixels of nothing but the button that unfolds
+            * it — asked about as "is it normal that nothing shows". A column
+            * that is empty when closed teaches people it holds nothing, and
+            * the one thing worth knowing at a glance is which list you are on:
+            * the breadcrumb says it too, above a table that scrolls away from
+            * it.
+            *
+            * Vertical rather than truncated to four characters: `Orbit v2 –
+            * Phases 2 & 3` and `Orbit v2 – Phase 1` share their first
+            * twenty. Bottom-to-top is the direction editors put a folded
+            * sidebar's label in, and it reads without turning your head.
+            */}
+          {!railOpen && (
+            <button onClick={() => setRailOpen(true)} title={`${railActive} — show the lists`}
+              className="flex-1 min-h-0 w-full flex justify-center pt-2 pb-3 overflow-hidden"
+              style={{ color: "var(--text4)" }}>
+              <span className="truncate" style={{
+                writingMode: "vertical-rl", transform: "rotate(180deg)",
+                fontSize: 10.5, letterSpacing: "0.06em", maxHeight: "100%",
+              }}>{railActive}</span>
+            </button>
+          )}
           {railOpen && (
             <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
               {railViews.length === 0 && (
                 <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>No list by that name.</div>
               )}
-              {railViews.map((v) => (
-                <button key={v.id}
-                  onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
-                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
-                  aria-current={!onLooked && lit === v.id}
-                  aria-busy={wanted === v.id}
-                  className="w-full text-left flex items-center gap-1.5 px-2.5 py-1 text-[11.5px]"
-                  style={!onLooked && lit === v.id
-                    ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)" }
-                    : { color: "var(--text3)" }}
-                  title={v.builtin
-                    ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
-                    : v.listName ? `${v.listName} · ${v.name}` : v.name}>
-                  {/* The built-in one stays marked: beside four board names it
-                      reads as a fifth board somebody added, and it is the one
-                      that behaves differently. */}
-                  {v.builtin && (
-                    <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
-                      width: 6, height: 6, borderRadius: 999,
-                      border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
-                    }} />
-                  )}
-                  <span className="truncate min-w-0 flex-1">{v.listName || v.name}</span>
-                  {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
-                </button>
-              ))}
+              {/* Ungrouped first: the built-in board, and any list whose
+                  folder we do not know yet — a pasted one is only filed once it
+                  has been opened and told us its breadcrumb. */}
+              {railGroups.loose.map((v) => railRow(v, 0))}
+              {railGroups.groups.map((g) => {
+                const shut = railShut[g.key] === true;
+                const savedFolder = (boards?.folders ?? []).find((f) => f.id === g.folderId);
+                return (
+                  /*
+                   * A folder has to look like a folder, and its lists have to
+                   * look like they are inside it.
+                   *
+                   * The first version was a dim caption over rows at the same
+                   * indent, and it read as one flat column with the odd label
+                   * in it — "no da margen de error de andar siempre click donde
+                   * no deberia". ClickUp's own sidebar answers this with three
+                   * things and they are all here: a folder glyph, brighter type
+                   * for the folder than for its lists, and a guide line down
+                   * the left of the children so the eye can follow the nesting
+                   * without counting pixels.
+                   */
+                  <div key={g.key} className="mt-1.5">
+                    <button
+                      onClick={() => setRailShut((m) => ({ ...m, [g.key]: !shut }))}
+                      onContextMenu={(e) => {
+                        if (!savedFolder) return;
+                        e.preventDefault(); e.stopPropagation();
+                        setFolderMenu({ f: savedFolder, x: e.clientX, y: e.clientY });
+                      }}
+                      className="w-full text-left flex items-center gap-1.5 pl-1.5 pr-2 py-1 text-[11px] agx-btn rounded"
+                      style={{ color: "var(--text2)" }}
+                      title={savedFolder
+                        ? `${g.space ? `${g.space} · ` : ""}${g.folder} — added whole, so a list created in it turns up here on its own. Right-click to take it off.`
+                        : `${g.space ? `${g.space} · ` : ""}${g.folder}`}>
+                      {/* The twisty and the folder are one target: 20px of it,
+                          which is the smallest square this rail has room for
+                          and still wider than the 9px caret it replaced. */}
+                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--text4)" }}>
+                        <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="currentColor" aria-hidden
+                          style={{ transform: shut ? "none" : "rotate(90deg)", transition: "transform 120ms ease" }}>
+                          <path d="M6 3.5 10.5 8 6 12.5Z" />
+                        </svg>
+                      </span>
+                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--primary)" }}>
+                        <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="currentColor"
+                          strokeWidth={1.5} strokeLinejoin="round" aria-hidden>
+                          <path d="M1.75 4.25A1.5 1.5 0 0 1 3.25 2.75h2.4l1.3 1.5h5.8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.25a1.5 1.5 0 0 1-1.5-1.5Z" />
+                        </svg>
+                      </span>
+                      <span className="truncate min-w-0 flex-1" style={{ letterSpacing: "0.01em" }}>{g.folder}</span>
+                      <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text4)" }}>{g.views.length}</span>
+                    </button>
+                    {!shut && (
+                      /* The guide line sits on the children, not on the folder:
+                         it has to stop where the folder's contents stop. */
+                      <div style={{ marginLeft: 14, borderLeft: `1px solid color-mix(in srgb, var(--text) 14%, transparent)` }}>
+                        {g.views.map((v) => railList(v))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               {/* Where you have been, beside the lists rather than inside one —
                   a card from another list sitting in somebody's sprint reads as
                   being IN it. Dashed and only while it holds something. */}
@@ -1915,6 +2325,20 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
                 {data?.error ? "Nothing to show — the last read did not get through."
                   : q || tag || mineOnly || statusPick.length ? "Nothing matches that."
+                  /*
+                   * "Nothing open" on a board that holds twelve finished cards
+                   * reads as a board that failed to load — asked about exactly
+                   * that, against a ClickUp list whose every card sits in
+                   * "won't fix / obsolete". The count is already on a chip at
+                   * the top of the panel, which is the one place somebody
+                   * looking at an empty table is not looking.
+                   */
+                  : !showDone && counts.done > 0 ? (
+                    <>
+                      Nothing open here — {counts.done} card{counts.done === 1 ? " is" : "s are"} done or dropped.{" "}
+                      <button onClick={() => setShowDone(true)} style={{ color: "var(--primary)" }}>Show them</button>
+                    </>
+                  )
                   : "This board has nothing open."}
               </div>
             )}
@@ -2082,7 +2506,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <div className="absolute inset-0 z-30 flex items-start justify-center p-6"
             style={{ background: "color-mix(in srgb, var(--bg) 62%, transparent)" }}
             onClick={() => setSel(null)}>
+            {/* The card is what "this screen" means while it is open — see
+                findScope.ts. Without this, a search over the board would walk
+                the hundred rows behind it as well. */}
             <div role="dialog" aria-modal="true" aria-label={picked.title}
+              ref={cardBox}
               onClick={(e) => e.stopPropagation()}
               className="flex flex-col min-h-0 rounded-xl overflow-hidden"
               style={{ width: "min(760px, 100%)", maxHeight: "100%",
@@ -2143,6 +2571,161 @@ function ConfirmStrip({ pending, onGo, onCancel }: { pending: Pending; onGo: () 
  * app has never verified, and a breadcrumb of dead links is worse than one that
  * never promised to be clickable.
  */
+/**
+ * What a list is for, as ClickUp's own dialog is: over the board, not above it.
+ *
+ * The text is all the API gives — measured twice, including with
+ * `include_markdown_description`: ClickUp's rich chips (a Google Doc, a Figma
+ * file, a Slack channel) are blocks it renders in the browser and does not
+ * publish, so they arrive as their labels with nothing behind them. What DOES
+ * arrive is every plain URL, the branch name and the card ids, and those are
+ * the ones worth wiring: a pull request opens in this app's own pull-request
+ * view rather than in a browser, a card id opens the card, and a branch offers
+ * to take you to it in Git.
+ */
+/**
+ * Where a view lives on the web.
+ *
+ * ClickUp's own addresses are `/{workspace}/v/{kind}/{viewId}`, and the kind is
+ * a two-or-three letter code per view type. Only the two that were asked for
+ * are mapped: a Gantt and a dashboard. Anything else gets no shortcut rather
+ * than a guessed one — the last invented address in this file answered "This
+ * page is unavailable", which reads as a permission problem rather than as our
+ * typo.
+ *
+ * The workspace comes off a saved folder, which is where it was written when
+ * the folder was added; without one there is no address to build and the row
+ * is not drawn.
+ */
+const VIEW_KIND: Record<string, string> = { gantt: "g", dashboard: "dsb" };
+function clickupViewUrl(folders: SavedFolder[], view: { id: string; type: string }): string {
+  const kind = VIEW_KIND[view.type];
+  const workspace = folders.find((f) => f.workspaceId)?.workspaceId;
+  if (!kind || !workspace) return "";
+  return `https://app.clickup.com/${workspace}/v/${kind}/${encodeURIComponent(view.id)}`;
+}
+
+function AboutList({ name, text, url, onClose }: {
+  name: string; text: string; url?: string; onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useDismiss(true, box, onClose);
+  return (
+    <Portal find z={LAYER.viewer}>
+      <div className="fixed inset-0" style={{ background: "color-mix(in srgb, var(--bg) 62%, transparent)" }} onClick={onClose} />
+      <div ref={box} role="dialog" aria-modal="true" aria-label={`About ${name}`}
+        onClick={(e) => e.stopPropagation()}
+        className="fixed left-1/2 top-1/2 flex flex-col min-h-0 rounded-xl overflow-hidden"
+        style={{
+          transform: "translate(-50%, -50%)", width: "min(760px, 92vw)", maxHeight: "82vh",
+          background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+        }}>
+        <div className="flex items-center gap-2 px-4 py-2.5 shrink-0" style={{ borderBottom: edge(12) }}>
+          <span className="text-[12.5px]" style={{ color: "var(--text)" }}>{name}</span>
+          <span className="text-[10px]" style={{ color: "var(--text4)" }}>what this list is for</span>
+          <span className="flex-1" />
+          {externalUrl(url ?? "") && (
+            <button onClick={() => openExternal(url!)} className="text-[10.5px] px-2 py-0.5 rounded-lg"
+              style={{ border: edge(16), color: "var(--text3)" }}>Open in ClickUp ↗</button>
+          )}
+          <CloseButton onClick={onClose} title="Close (Esc)" />
+        </div>
+        <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-4 py-3 text-[12px]" style={{ color: "var(--text2)" }}>
+          <AboutBody text={text} />
+        </div>      </div>
+    </Portal>
+  );
+}
+
+/**
+ * The brief, laid out as the label/value pairs it actually is.
+ *
+ * The first attempt printed it line by line and shouted every heading in
+ * capitals, which turned `Project requirements document:` into a banner and the
+ * whole thing into a wall. It is a form: a label, and what is on the other side
+ * of the colon. Two columns read it in a glance.
+ *
+ * The empty halves are the ones ClickUp keeps to itself — a Doc, a Figma file,
+ * a Slack channel are rich blocks its API does not publish — so they are shown
+ * greyed rather than dropped (a missing row reads as a brief that never had
+ * one) and counted once at the foot, where the way to see them is offered.
+ */
+function AboutBody({ text }: { text: string }) {
+  const rows = text.split("\n").map((l) => l.trimEnd()).filter((l, i, all) => l.trim() || (i > 0 && all[i - 1]!.trim()));
+  const blanks = rows.filter((l) => /^[^:]{1,40}:\s*$/.test(l.trim())).length;
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 12rem) 1fr", columnGap: 12, rowGap: 3 }}>
+        {rows.map((line, i) => {
+          const t = line.trim();
+          if (!t) return <div key={i} style={{ gridColumn: "1 / -1", height: 6 }} />;
+          const m = /^([^:]{1,40}):\s*(.*)$/.exec(t);
+          if (!m) return <div key={i} style={{ gridColumn: "1 / -1" }}><AboutValue text={t} /></div>;
+          const [, label, value] = m;
+          return (
+            <Fragment key={i}>
+              <div className="truncate" style={{ color: value!.trim() ? "var(--text3)" : "var(--text4)" }}>{label}</div>
+              <div className="min-w-0">
+                {value!.trim()
+                  ? <AboutValue text={value!} />
+                  : <span style={{ color: "var(--text4)" }}>—</span>}
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+      {blanks >= 2 && (
+        /* No count: the empty rows are a mix of section headings (`Docs:`,
+           `Team:`) and genuinely missing chips, and a number that lumps them
+           together is a number that is wrong. */
+        <div className="mt-3 pt-2 text-[10.5px]" style={{ borderTop: edge(10), color: "var(--text4)" }}>
+          The blanks are ClickUp's own cards — a Doc, a Figma file, a Slack channel. Its API publishes the words and keeps those to itself; open the list there to follow them.
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A value, with the parts this app can act on turned into buttons. */
+function AboutValue({ text }: { text: string }) {
+  /* Split on anything addressable. The card pattern is a workspace prefix and a
+     number — the shape `cardRef` looks for — and a branch is recognised by
+     carrying one. */
+  const parts = text.split(/(https?:\/\/[^\s)]+|\b[A-Z][A-Z0-9]+-\d{3,}[\w-]*)/g).filter(Boolean);
+  return (
+    <span className="break-words">
+      {parts.map((p, i) => {
+        const pr = prRefFromUrl(p);
+        if (pr) {
+          return (
+            <button key={i} onClick={() => openPr(pr.repo, pr.number)} title={`Open #${pr.number} here`}
+              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>
+              #{pr.number} <span style={{ color: "var(--text4)" }}>{pr.repo}</span>
+            </button>
+          );
+        }
+        if (/^https?:\/\//.test(p)) {
+          return (
+            <button key={i} onClick={() => openExternal(p)} title={p}
+              className="underline underline-offset-2 break-all" style={{ color: "var(--primary)" }}>{p}</button>
+          );
+        }
+        /* A card id, or a branch that carries one. Both open the card: a branch
+           name is how a team says which card a branch is for, and there is
+           nothing else here a bare branch name can open. */
+        if (/^[A-Z][A-Z0-9]+-\d{3,}/.test(p)) {
+          const id = p.match(/^[A-Z][A-Z0-9]+-\d+/)?.[0] ?? p;
+          return (
+            <button key={i} onClick={() => openCard(id, id)} title={p.length > id.length ? `${p} — open ${id}` : `Open ${id}`}
+              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>{p}</button>
+          );
+        }
+        return <span key={i}>{p}</span>;
+      })}
+    </span>
+  );
+}
+
 function Breadcrumb({ place, className }: { place?: ListPlace; className?: string }) {
   if (!place) return null;
   const parts = [place.space, place.folder, place.list].filter(Boolean) as string[];
@@ -2162,26 +2745,153 @@ function Breadcrumb({ place, className }: { place?: ListPlace; className?: strin
   );
 }
 
-function AddBoardBar({ value, onValue, onAdd, onClose, busy, editing }: {
+/**
+ * Two ways to put something on the sidebar, on one bar.
+ *
+ * Pasting an address was the only way, and it is the wrong shape for the common
+ * case: somebody who wants their team's boards wants a FOLDER — eleven lists
+ * that change over the quarter — and pasting eleven addresses is both tedious
+ * and stale by the next sprint.
+ *
+ * The picker is two reads and no more, because `/space/{id}/folder` answers
+ * with the lists inside each folder: pick a space, see its folders with their
+ * sizes, add one.
+ */
+function AddBoardBar({ value, onValue, onAdd, onClose, busy, editing, folders, onAddFolder }: {
   value: string; onValue: (v: string) => void; onAdd: () => void; onClose: () => void; busy: boolean;
   /** The board whose address is being changed, when that is the errand. */
   editing?: string | null;
+  /** Already on the sidebar, so the picker can say so instead of offering it
+   *  again. */
+  folders: SavedFolder[];
+  onAddFolder: (id: string, spaceName: string) => void;
 }) {
+  /* Changing an address is about ONE board, so the picker is not offered then:
+     a tab strip on a bar that exists to edit a single row is a way to lose what
+     you were doing. */
+  const [tab, setTab] = useState<"folder" | "url">(editing ? "url" : "folder");
   return (
-    <div className="px-5 pb-2 flex items-center gap-2 shrink-0">
-      <input autoFocus value={value} onChange={(e) => onValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") onAdd(); if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
-        placeholder={editing ? `New address for ${editing} — the board itself is untouched` : "Paste the address of a ClickUp board — the one in your browser's bar"}
-        spellCheck={false} autoComplete="off"
-        className="flex-1 min-w-0 text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
-        style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }} />
-      <button onClick={onAdd} disabled={busy || !value.trim()}
-        className="text-[11.5px] px-3 py-1.5 rounded-lg"
-        style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--primary) 48%, transparent)",
-          color: "var(--text)", opacity: busy || !value.trim() ? 0.4 : 1 }}>
-        {busy ? "Checking…" : editing ? "Change" : "Add"}
-      </button>
+    <div className="px-5 pb-2 flex flex-col gap-1.5 shrink-0">
+      {!editing && (
+        <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.14em]">
+          {([["folder", "A folder"], ["url", "By address"]] as const).map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)}
+              className="pb-0.5"
+              style={{
+                color: tab === id ? "var(--text)" : "var(--text4)",
+                borderBottom: `2px solid ${tab === id ? "var(--primary)" : "transparent"}`,
+              }}>{label}</button>
+          ))}
+          <span className="flex-1" />
+          <button onClick={onClose} className="text-[10px]" style={{ color: "var(--text4)", textTransform: "none", letterSpacing: 0 }}>Close</button>
+        </div>
+      )}
+      {tab === "url" || editing ? (
+        <div className="flex items-center gap-2">
+          <input autoFocus value={value} onChange={(e) => onValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onAdd(); if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
+            placeholder={editing ? `New address for ${editing} — the board itself is untouched` : "Paste the address of a ClickUp board — the one in your browser's bar"}
+            spellCheck={false} autoComplete="off"
+            className="flex-1 min-w-0 text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
+            style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }} />
+          <button onClick={onAdd} disabled={busy || !value.trim()}
+            className="text-[11.5px] px-3 py-1.5 rounded-lg"
+            style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 48%, transparent)",
+              color: "var(--text)", opacity: busy || !value.trim() ? 0.4 : 1 }}>
+            {busy ? "Checking…" : editing ? "Change" : "Add"}
+          </button>
+        </div>
+      ) : (
+        <FolderPicker folders={folders} busy={busy} onAdd={onAddFolder} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Space, then folder.
+ *
+ * Both reads are cached for as long as the bar is open — a workspace's spaces
+ * do not change while somebody picks one — and the folder list carries its own
+ * count, which is the number that decides whether you want it on a sidebar at
+ * all: `Projects (Backlog)` holds 144 lists and is not a thing anybody wants
+ * expanded in a column 200 pixels wide.
+ */
+function FolderPicker({ folders, busy, onAdd }: {
+  folders: SavedFolder[]; busy: boolean; onAdd: (id: string, spaceName: string) => void;
+}) {
+  const [spaces, setSpaces] = useState<{ id: string; name: string }[] | null>(null);
+  const [space, setSpace] = useState("");
+  const [found, setFound] = useState<{ id: string; name: string; lists: { id: string; name: string }[] }[] | null>(null);
+  const [err, setErr] = useState("");
+  const seen = useRef(new Map<string, { id: string; name: string; lists: { id: string; name: string }[] }[]>());
+
+  useEffect(() => {
+    let live = true;
+    api.clickupSpaces().then((r) => {
+      if (!live) return;
+      if (!r.ok) { setErr(r.error || "ClickUp did not answer"); return; }
+      const list = r.spaces ?? [];
+      setSpaces(list);
+      /* The space the sidebar already draws from, when there is one: somebody
+         adding a second folder is almost always adding it from the same place
+         as the first. */
+      setSpace(folders[0]?.spaceName ? (list.find((x) => x.name === folders[0]!.spaceName)?.id ?? list[0]?.id ?? "") : list[0]?.id ?? "");
+    }).catch((e) => { if (live) setErr(String(e)); });
+    return () => { live = false; };
+  }, [folders]);
+
+  useEffect(() => {
+    if (!space) { setFound(null); return; }
+    const had = seen.current.get(space);
+    if (had) { setFound(had); return; }
+    let live = true;
+    setFound(null);
+    api.clickupFolders(space).then((r) => {
+      if (!live) return;
+      if (!r.ok) { setErr(r.error || "ClickUp did not answer"); return; }
+      seen.current.set(space, r.folders ?? []);
+      setFound(r.folders ?? []);
+    }).catch((e) => { if (live) setErr(String(e)); });
+    return () => { live = false; };
+  }, [space]);
+
+  const on = new Set(folders.map((f) => f.id));
+  const spaceName = spaces?.find((x) => x.id === space)?.name ?? "";
+
+  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error)" }}>{err}</div>;
+  if (!spaces) return <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading your workspace…</div>;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <select value={space} onChange={(e) => setSpace(e.target.value)}
+        className="text-[11.5px] px-2 py-1.5 rounded-lg self-start min-w-[200px]"
+        style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }}>
+        {spaces.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+      </select>
+      {!found ? (
+        <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading its folders…</div>
+      ) : !found.length ? (
+        <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>No folders in that space.</div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {found.map((f) => (
+            <button key={f.id} disabled={busy || on.has(f.id)}
+              onClick={() => onAdd(f.id, spaceName)}
+              title={on.has(f.id) ? "Already on the sidebar" : `${f.lists.length} list${f.lists.length === 1 ? "" : "s"} — added whole, so new ones turn up on their own`}
+              className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1.5"
+              style={{
+                border: on.has(f.id) ? "1px solid color-mix(in srgb, var(--success) 40%, transparent)" : edge(18),
+                color: on.has(f.id) ? "var(--success)" : "var(--text2)",
+                opacity: busy ? 0.5 : 1,
+              }}>
+              <span className="truncate max-w-[190px]">{f.name}</span>
+              <span className="tabular-nums text-[9.5px]" style={{ color: "var(--text4)" }}>{on.has(f.id) ? "on" : f.lists.length}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2236,6 +2946,8 @@ const YOLO_KEY = "agentglass.clickup.skipPermissions";
 const WIDE_KEY = "agentglass.clickup.wideCard";
 const CARD_W_KEY = "agentglass.clickup.cardWidth";
 const RAIL_KEY = "agentglass.clickup.listRail";
+/** Which folders in that rail are folded shut, by folder key. */
+const RAIL_SHUT_KEY = "agentglass.clickup.listRail.shut";
 const CARD_MODE_KEY = "agentglass.clickup.cardMode";
 /** The width it goes back to. The old narrow setting, kept as the default
  *  because it is the one most cards are read at. */
@@ -2864,7 +3576,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   const [askOpen, setAskOpen] = useState(false);
   /** Where a hand-off goes. Read once and kept, so the pills reflect it. */
   const [to, setTo] = useState<HandoffTo>(handoffTo);
-  const [copied, setCopied] = useState<"human" | "raw" | "url" | null>(null);
+  const [copied, setCopied] = useState<"human" | "raw" | "url" | "title" | null>(null);
   /*
    * Which half of the card you are reading.
    *
@@ -2945,7 +3657,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * of the time. Both are offered, and both are SHOWN — the internal id was
    * invisible before, so there was no way to read it off the screen at all.
    */
-  const copyIt = async (v: string, which: "human" | "raw" | "url") => {
+  const copyIt = async (v: string, which: "human" | "raw" | "url" | "title") => {
     try { await navigator.clipboard.writeText(v); setCopied(which); setTimeout(() => setCopied(null), 1200); } catch { /* no clipboard */ }
   };
 
@@ -3014,6 +3726,39 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         </div>
         <h2 className="text-[13px] font-semibold leading-snug mt-1.5" style={{ color: "var(--text)", textWrap: "balance" }}>
           {t.title}
+          {/* The title is the other half of what you paste beside the id — a
+              branch name, a commit subject, the line you send a colleague. The
+              ids had a button each and the title had none, so the only way to
+              take it was to select 60 characters of a balanced, wrapping
+              heading by hand.
+
+              Inside the <h2> and after the last word rather than in the chip
+              row above: it belongs to this string, and an icon parked at the
+              far right of a two-line heading points at whitespace. Being
+              inline also means it follows the wrap instead of fighting it.
+
+              20x20 around a 14px glyph. The glyph alone would be a target the
+              height of a 13px line box, which is the mistake the icon ladder
+              was written for; 20 is what fits inside a heading that sets its
+              own line height. */}
+          <button onClick={() => void copyIt(t.title, "title")}
+            className="inline-flex items-center justify-center align-middle ml-1.5 rounded hover:bg-white/10"
+            style={{ width: 20, height: 20, color: copied === "title" ? "var(--success)" : "var(--text4)" }}
+            title="Copy the title"
+            aria-label={copied === "title" ? "Title copied" : "Copy the title"}>
+            {copied === "title" ? (
+              <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M4 12.5l5.2 5.2L20 6.9" />
+              </svg>
+            ) : (
+              <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+          </button>
         </h2>
         {/* Only when there is a second thing to switch to. One tab is not a tab,
             it is a label — and a card with no conversation should look exactly
@@ -3180,7 +3925,27 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </CardField>
         )}
         {t.start && <CardField label="Starts"><span style={{ color: "var(--text2)" }}>{dueLabel(t.start, today)}</span></CardField>}
-        {t.list && <CardField label="List"><span style={{ color: "var(--text2)" }}>{t.list}</span></CardField>}
+        {t.list && (
+          /*
+             Every list this card is in, not only the one it was filed under.
+             ClickUp lets a card live in several, and on a team that uses it the
+             home list is routinely not the one you are looking at — the card
+             said "Bugs" while you were reading it on a squad's board, which is
+             true and useless. The home first, in the brighter colour, and the
+             others after it.
+           */
+          <CardField label={t.alsoIn?.length ? "Lists" : "List"}>
+            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              <span style={{ color: "var(--text2)" }}>{t.list}</span>
+              {(t.alsoIn ?? []).map((l) => (
+                <span key={l.id} className="flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
+                  <span aria-hidden style={{ color: "var(--text4)" }}>·</span>
+                  {l.name}
+                </span>
+              ))}
+            </span>
+          </CardField>
+        )}
         {t.updated ? (
           <CardField label="Last moved">
             <span style={{ color: "var(--text3)" }} title={new Date(t.updated).toLocaleString()}>{fmtAgo(t.updated)}</span>

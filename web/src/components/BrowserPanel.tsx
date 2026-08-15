@@ -43,6 +43,7 @@ import { IS_DEMO } from "../lib/demo.ts";
 import { DEMO_BROWSER_TABS } from "../lib/demoBrowser.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { registerClaim } from "../lib/findScope.ts";
 import { suggest, type Suggestion } from "../lib/suggest.ts";
 import {
   BackIcon, BlankPageIcon, CloseIcon, CodeIcon, ExternalIcon, ForwardIcon, GlobeIcon,
@@ -110,10 +111,15 @@ function Favicon({ src }: { src: string | null }) {
 
 /* -------------------------------------------------------------------- view */
 
-/** The workspace hands every view an `active`, and this one has no use for it:
- *  there is nothing to poll, and a page must keep running while you are looking
- *  at something else — that is the point of the views staying mounted. */
-export function BrowserView(_props: { active: boolean }) {
+/**
+ * The workspace hands every view an `active`, and this one uses it for exactly
+ * one thing: taking the shell's find chord while it is the view on screen.
+ *
+ * Nothing else here needs it — there is nothing to poll, and a page must keep
+ * running while you are looking at something else, which is the point of the
+ * views staying mounted.
+ */
+export function BrowserView({ active: viewOn }: { active: boolean }) {
   // Only the *first* page is read at mount. Everything else asks
   // `browserPrefs` at the moment it needs an answer, because this view is
   // mounted once for the life of the app: a home page cached here would ignore
@@ -552,6 +558,25 @@ export function BrowserView(_props: { active: boolean }) {
   }, [patch]);
 
   /* ------------------------------------------------------------- keyboard */
+
+  /*
+   * The shell's Ctrl+F, when this view is the one on screen.
+   *
+   * The panel already handles the key itself, but only when the focus is
+   * inside it — and after a click on the page, the focus is inside the
+   * `<webview>`, where Chromium's own find takes over. This claim covers the
+   * gap in between: the view is up, the focus is nowhere in particular, and
+   * "find" should mean the page you are looking at rather than the app's
+   * chrome around it.
+   */
+  useEffect(() => {
+    if (!viewOn) return;
+    return registerClaim(() => {
+      setFind((f) => f ?? "");
+      setTimeout(() => findRef.current?.focus(), 0);
+      return true;
+    });
+  }, [viewOn]);
 
   const onKey = (e: React.KeyboardEvent) => {
     if (!(e.metaKey || e.ctrlKey)) return;

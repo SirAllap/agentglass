@@ -20,6 +20,7 @@
 // not among them until you ask for it.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
+import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, seedChat, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { FilesView } from "../FilesPanel.tsx";
@@ -96,8 +97,8 @@ export function Workspace({
    *  their shell was not inside one — see terminal.ts's `review` handler.
    *  Left as a request rather than called directly: the terminal view owns the
    *  socket, and may not be mounted when the button is pressed. */
-  const reviewInTerminal = useCallback((root: string, number: number) => {
-    requestTermReview(root, number);
+  const reviewInTerminal = useCallback((root: string, number: number, recipe = "", card = "") => {
+    requestTermReview(root, number, recipe, card);
     onView("term");
   }, [onView]);
 
@@ -151,8 +152,9 @@ export function Workspace({
         {mounted.map((v) => {
           const active = v.id === view;
           return (
-            <div
+            <ViewBox
               key={v.id}
+              active={active}
               // `visibility`, not `display:none`: xterm's fit addon measures its
               // container, and a display:none parent measures 0x0 — which is how
               // a hidden terminal comes back reflowed to a single column.
@@ -161,18 +163,52 @@ export function Workspace({
               // stacked and a content-visibility box still hit-tests, so a
               // hidden view on top would swallow clicks meant for the active one
               // beneath it. `visibility: hidden` does not.
-              className="absolute inset-0 flex flex-col min-h-0"
-              style={{ visibility: active ? "visible" : "hidden" }}
-              aria-hidden={!active}
             >
               {v.id === "dash"
                 ? dashboard(active)
                 : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prJump={prJump}
                     cardJump={cardJump} issueJump={issueJump} reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
-            </div>
+            </ViewBox>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * One view's box, and — while it is the one on screen — what "find on this
+ * screen" means.
+ *
+ * The stacking is why this needs saying out loud: every visited view stays
+ * mounted and the inactive ones are merely `visibility: hidden`, so a search
+ * over the document would walk several screens' worth of text nobody can see.
+ * The active box registers itself as the find scope and gives it up on the way
+ * out; anything that opens OVER it (a card, Settings, the file viewer) pushes
+ * itself on top at a higher rank. See findScope.ts.
+ */
+function ViewBox({ active, children }: { active: boolean; children: React.ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!active || !box.current) return;
+    return pushScope(box.current, 0);
+  }, [active]);
+  return (
+    <div
+      ref={box}
+      // `visibility`, not `display:none`: xterm's fit addon measures its
+      // container, and a display:none parent measures 0x0 — which is how a
+      // hidden terminal comes back reflowed to a single column.
+      //
+      // NOT `content-visibility: hidden`: these views are absolutely stacked
+      // and a content-visibility box still hit-tests, so a hidden view on top
+      // would swallow clicks meant for the active one beneath it.
+      // `visibility: hidden` does not.
+      className="absolute inset-0 flex flex-col min-h-0"
+      style={{ visibility: active ? "visible" : "hidden" }}
+      aria-hidden={!active}
+    >
+      {children}
     </div>
   );
 }
@@ -183,7 +219,7 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
   id: ViewId; active: boolean;
   openChat: () => void;
   openChatWith: (cwd: string, prompt: string, title: string) => void;
-  reviewInTerminal: (root: string, number: number) => void;
+  reviewInTerminal: (root: string, number: number, recipe?: string, card?: string) => void;
   chatFocusId?: string | null;
   prJump?: import("../../lib/openPrs.ts").PrJump | null;
   cardJump?: import("../../lib/openCard.ts").CardJump | null;
