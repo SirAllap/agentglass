@@ -211,7 +211,7 @@ beforeAll(async () => {
     await Bun.sleep(250);
   }
   throw new Error(`the server never answered ${ORIGIN}/health`);
-});
+}, 40_000);
 
 afterAll(async () => {
   server?.kill();
