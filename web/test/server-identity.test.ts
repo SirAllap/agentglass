@@ -31,7 +31,17 @@ const json = (body: unknown, status = 200) => () =>
 
 const servers: Array<{ stop: (force?: boolean) => void }> = [];
 const serve = (fetchFn: () => Response) => {
-  const s = Bun.serve({ port: 0, fetch: fetchFn });
+  /*
+   * Bound to 127.0.0.1 explicitly, and fetched at the same address.
+   *
+   * `port: 0` alone binds every interface, and the URL below then names one of
+   * them by hand — so the test asks a port number rather than the socket it
+   * just opened. On a busy CI runner that came back as somebody else's answer
+   * in under three milliseconds: four assertions in this file failed together
+   * with "foreign", which is what this helper says when the body it read is not
+   * the one it served. Binding and asking the same address removes the gap.
+   */
+  const s = Bun.serve({ port: 0, hostname: "127.0.0.1", reusePort: false, fetch: fetchFn });
   servers.push(s);
   return `http://127.0.0.1:${s.port}`;
 };
