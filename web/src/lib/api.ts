@@ -352,7 +352,16 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
    * whichever tab the terminal is on and typing into whatever pane that tab has
    * — an agent's, in the case that was reported.
    */
-  fresh = false) =>
+  fresh = false,
+  /**
+   * This socket is the docked console.
+   *
+   * The server gives it the engine whatever the terminal view is set to, and in
+   * a session of its own. Passed rather than inferred from `fresh`: they are
+   * different questions — `fresh` says "not the session the desk resumed", and
+   * this says "this is the app's shell, and it must outlive the window".
+   */
+  isConsole = false) =>
   withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
     // A single-use ticket for an agent to start in this pane — never the prompt
     // itself, which is kilobytes and has no business in a URL. See
@@ -366,7 +375,8 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
     // a temp copy, a file tree is your checkout. The server refuses this for a
     // temp copy however loudly the client asks.
     + (view && edit ? "&edit=1" : "")
-    + (fresh ? "&fresh=1" : ""));
+    + (fresh ? "&fresh=1" : "")
+    + (isConsole ? "&console=1" : ""));
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(SERVER + path, { headers: authHeaders() });
@@ -1094,6 +1104,17 @@ const realApi = {
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
   /** The prompt to review a PR with Claude, and the directory to run it in.
    *  Reads only: no fetch, no checkout, nothing left behind. */
+  /** The line comments GitHub is holding in your unsubmitted review, so the
+   *  Review tab can show a review you started in the browser instead of
+   *  claiming nothing is queued. */
+  /** A note on a ClickUp card's activity. `assignee` is what makes it arrive:
+   *  an `@Name` inside the text is plain text and notifies nobody. */
+  clickupComment: (id: string, text: string, assignee?: number) =>
+    post<{ ok: boolean; error?: string; unauthorised?: boolean }>("/clickup/comment", { id, text, ...(assignee != null ? { assignee } : null) }),
+  /** Whether the agent on this machine can post to Slack — see slackreach.ts. */
+  notifyReach: () => get<{ ok: boolean; slack: boolean }>("/notify/reach"),
+  prPendingReview: (root: string, number: number) =>
+    post<{ ok: boolean; id: string | null; comments: { path: string; line: number | null; startLine: number | null; body: string }[] }>("/prs/pending-review", { root, number }),
   prReviewPrompt: (root: string, number: number) =>
     post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
@@ -1428,6 +1449,9 @@ const demoApi: typeof realApi = {
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prPendingReview: (_r: string, _n: number) => D({ ok: true, id: null, comments: [] }),
+  clickupComment: (_i: string, _t: string, _a?: number) => D({ ok: false, error: "not available in the demo" }),
+  notifyReach: () => D({ ok: true, slack: false }),
   prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
   prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
   // The demo has no machine to report on and no checkout to browse: it is a

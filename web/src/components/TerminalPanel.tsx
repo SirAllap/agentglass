@@ -473,7 +473,7 @@ function connect(s: Sess) {
   // Spent here, not on arrival: a reconnect after a drop must open a shell,
   // not start the agent a second time in the same worktree.
   s.agentTicket = null;
-  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true));
+  const ws = new WebSocket(ptyWsUrl(s.root, s.term.cols, s.term.rows, undefined, false, ticket, s.console === true, s.console === true));
   ws.binaryType = "arraybuffer";
   s.ws = ws;
   ws.onmessage = (ev) => {
@@ -1367,8 +1367,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * DROPPED rather than kept, because a stale one from a previous scope would
    * silently open shells, and list commands, in a repo outside the project.
    */
+  /*
+   * Asked for on MOUNT, not on becoming visible.
+   *
+   * This was gated on `open`, and the checkout it settles is not the terminal's
+   * — Git, the pull requests and the boards all read it. This view is always
+   * mounted, so on a machine that reopened on Git the effect simply never ran:
+   * the panel sat there with nothing in it until you stepped through Terminal
+   * once, and then everything worked at once. Reported exactly that way.
+   *
+   * `open` stays in the deps so the list is also re-read when you come back to
+   * this view, which is where a worktree made elsewhere shows up.
+   */
   useEffect(() => {
-    if (!open) return;
     api.gitRepos().then(({ repos }) => {
       setRepos(repos);
       setRoot((cur) => (cur && repos.some((r) => r.root === cur) ? cur : repos[0]?.root || ""));

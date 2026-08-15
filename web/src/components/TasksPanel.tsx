@@ -24,7 +24,8 @@ import { Spinner } from "./Spinner.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { handoffTo, setHandoffTo, type HandoffTo } from "../lib/handoffTo.ts";
-import { openPrs } from "../lib/openPrs.ts";
+import { openPrs, openPr, prRefFromUrl } from "../lib/openPrs.ts";
+import { matchesQuery } from "../lib/boardSearch.ts";
 import type { CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
@@ -536,9 +537,17 @@ function Detail({ root, number, onSay, onChanged }: {
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
-              <button onClick={() => openPrs(String(p.number), p.state === "OPEN" ? "open" : "all")}
+              {/* The pull request itself, not a search for its number. The row
+                  carries the URL, and the URL carries the repository — which is
+                  the half `openPrs` was missing, and why pressing this landed on
+                  a filtered list instead of on the pull request. */}
+              <button onClick={() => {
+                const ref = prRefFromUrl(p.url);
+                if (ref) openPr(ref.repo, p.number);
+                else openPrs(String(p.number), p.state === "OPEN" ? "open" : "all");
+              }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
-                title="Open this in Pull Requests">
+                title="Open this pull request">
                 <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
                 <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
                   style={p.state === "MERGED"
@@ -831,10 +840,68 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   const [listMeta, setListMeta] = useState<Record<string, { statuses: ListStatus[]; fields: ListField[]; place?: ListPlace }>>({});
   /* Some cards are a page of prose with tables in them. Remembered, because
      whoever needs the room needs it for the whole board, not for one card. */
-  const [wide, setWide] = useState(() => {
-    try { return localStorage.getItem(WIDE_KEY) === "1"; } catch { return false; }
+  /*
+   * How wide the card pane is, in pixels, dragged by its edge.
+   *
+   * It used to be a boolean behind a `narrow`/`wider` button — two widths,
+   * 380 and 720, and nothing in between. The button is gone because a drag does
+   * its whole job and more; double-clicking the handle is what is left of its
+   * one useful property, getting back to the usual width in one press.
+   *
+   * Global rather than per board: this is about your screen, not about the
+   * list. The opposite of the folds and the filters, which belong to a board
+   * because a board is a place.
+   */
+  /* The list menu. Open by default and remembered: with twenty boards it is the
+     way you move, and a navigation that hides itself between sessions makes
+     people learn the search box instead. */
+  const [railOpen, setRailOpen] = useState(() => {
+    try { return localStorage.getItem(RAIL_KEY) !== "0"; } catch { return true; }
   });
-  useEffect(() => { try { localStorage.setItem(WIDE_KEY, wide ? "1" : "0"); } catch { /* private mode */ } }, [wide]);
+  useEffect(() => { try { localStorage.setItem(RAIL_KEY, railOpen ? "1" : "0"); } catch { /* private mode */ } }, [railOpen]);
+  const [railQ, setRailQ] = useState("");
+  /* Filtered on both names a board has: what ClickUp calls the list and what it
+     calls the view. The rail draws `listName || name`, so matching only the
+     drawn one would leave a board findable by a word that is not on screen and
+     unfindable by the one that is. */
+  const railViews = useMemo(() => {
+    const needle = railQ.trim().toLowerCase();
+    const all = boards?.views ?? [];
+    if (!needle) return all;
+    return all.filter((v) => `${v.listName ?? ""} ${v.name}`.toLowerCase().includes(needle));
+  }, [boards, railQ]);
+  /* Sidebar or modal. Global for the same reason the width is: how you like to
+     read a card is about you, not about which list you are on. Full screen was
+     offered and turned down — it covers the table entirely, and in an app that
+     already lives in tabs it does nothing the modal does not. */
+  const [cardMode, setCardMode] = useState<"side" | "modal">(() => {
+    try { return localStorage.getItem(CARD_MODE_KEY) === "modal" ? "modal" : "side"; } catch { return "side"; }
+  });
+  useEffect(() => { try { localStorage.setItem(CARD_MODE_KEY, cardMode); } catch { /* private mode */ } }, [cardMode]);
+  /* Escape closes the modal, and only the modal: in the sidebar the card is
+     part of the layout rather than something laid over it, and a key that
+     empties a pane you did not open is a key that loses your place. */
+  useEffect(() => {
+    if (cardMode !== "modal" || !sel) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSel(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cardMode, sel]);
+  const [cardW, setCardW] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(CARD_W_KEY));
+      if (Number.isFinite(saved) && saved > 0) return clampCardW(saved);
+      // The old two-state setting, read once so nobody who liked it wide
+      // arrives narrow the first time.
+      return localStorage.getItem(WIDE_KEY) === "1" ? 720 : CARD_W_DEFAULT;
+    } catch { return CARD_W_DEFAULT; }
+  });
+  useEffect(() => { try { localStorage.setItem(CARD_W_KEY, String(cardW)); } catch { /* private mode */ } }, [cardW]);
+  /* The card's own layout still asks one question — "have I got room for two
+     columns" — and it is a question about pixels, so it is answered from them
+     rather than kept as a second source of truth. */
+  const wide = cardW >= 560;
+  const dragging = useRef(false);
   const [finding, setFinding] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const today = todayStr();
@@ -948,13 +1015,20 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    */
   const filtersByBoard = useRef<Record<string, {
     q: string; tag: string | null; mineOnly: boolean; statusPick: string[]; readyOnly: boolean;
+    /* Which status groups are rolled up. It rode on the status NAME alone and
+       nothing said which board — so folding "In development" away on one list
+       folded it on every other list that happens to use the same word, which is
+       all of them: the statuses come from one workspace. Reported as boards
+       sharing what you do on them, and it belongs here for the same reason the
+       filters do — a board is a place, and what you set in it stays in it. */
+    folded: Record<string, boolean>;
   }>>({});
   const landedOn = useRef<string | null>(null);
   useEffect(() => {
     const id = data?.view?.id;
     if (!id || landedOn.current === id) return;
     const leaving = landedOn.current;
-    if (leaving) filtersByBoard.current[leaving] = { q, tag, mineOnly, statusPick, readyOnly };
+    if (leaving) filtersByBoard.current[leaving] = { q, tag, mineOnly, statusPick, readyOnly, folded };
     landedOn.current = id;
     const kept = filtersByBoard.current[id];
     setQ(kept?.q ?? "");
@@ -962,6 +1036,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     setMineOnly(kept?.mineOnly ?? false);
     setStatusPick(kept?.statusPick ?? []);
     setReadyOnly(kept?.readyOnly ?? false);
+    // Nothing kept means a board arrives fully expanded, which is what you want
+    // the first time you open one.
+    setFolded(kept?.folded ?? {});
     setShowDone(!!data?.view?.builtin);
     /* An open address bar belongs to the board it was opened from. Left alone
        it stays on screen carrying the PREVIOUS board's address, over a board it
@@ -1064,7 +1141,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
 
   const rows = useMemo(() => {
     const all = data?.tasks ?? [];
-    const needle = q.trim().toLowerCase();
     return all.filter((t) =>
       // An explicit pick overrides the done/not-done default: asking to see
       // "in production" and getting nothing would be absurd.
@@ -1072,7 +1148,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
       && (!mineOnly || t.mine)
       && (!tag || t.tags.includes(tag))
       && (!readyOnly || !blockedBy(t).length)
-      && (!needle || t.title.toLowerCase().includes(needle)));
+      && matchesQuery(t, q));
   }, [data, q, tag, mineOnly, showDone, statusPick, readyOnly, blockedBy]);
 
   const tags = useMemo(() => {
@@ -1246,10 +1322,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
   /* The looked-up cards, by where each one lives. The search box filters these
      too — it is the only chip that still means anything on this board. */
   const lookedGroups = useMemo(() => {
-    const needle = q.trim().toLowerCase();
     const by = new Map<string, ProviderTask[]>();
     for (const t of looked) {
-      if (needle && !t.title.toLowerCase().includes(needle) && !(t.customId ?? "").toLowerCase().includes(needle)) continue;
+      if (!matchesQuery(t, q)) continue;
       const k = t.list || "Elsewhere";
       (by.get(k) ?? by.set(k, []).get(k)!).push(t);
     }
@@ -1306,6 +1381,21 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
    * The exception is a re-read of the board you are already looking at: its
    * rows are real and still true, so they stay uncovered and the bar carries it.
    */
+  /* The card, built once and put in whichever shell is chosen. Two copies of
+     this would be two places for a field to go stale. */
+  const cardBody = (
+    picked
+    ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
+    writable={boards.writeEnabled} repos={repos} here={here}
+    onOpenChatWith={onOpenChatWith}
+    wide={wide}
+    byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
+    skills={skills}
+    onNote={(text) => setNote({ ok: true, text })}
+    onAsk={(p) => setConfirm(p)} />
+    : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>
+  );
+
   const veiled = !!wanted && (stale || !data?.tasks.length);
 
   return (
@@ -1315,37 +1405,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           list of 36 rows of which 13 fitted. Boards and controls now share a
           line, and the search shares the next with the filters. */}
       <div className="flex items-center gap-1.5 px-4 pt-2 pb-1.5 flex-wrap shrink-0">
-        {boards.views.map((v) => (
-          <button key={v.id} onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
-            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
-            aria-pressed={!onLooked && lit === v.id}
-            aria-busy={wanted === v.id}
-            className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap max-w-[240px]"
-            style={lit === v.id
-              ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-                  border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)", color: "var(--text)" }
-              : { border: edge(14), color: "var(--text2)" }}
-            title={v.builtin
-              ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
-              : v.listName ? `${v.listName} · ${v.name}` : v.name}>
-            {/* The built-in one is marked, because "Assigned to me" beside four
-                board names reads as a fifth board somebody added — and it is the
-                one that behaves differently: no address, no removing it, and it
-                takes ten seconds rather than one. */}
-            {v.builtin && (
-              <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
-                width: 7, height: 7, borderRadius: 999,
-                border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
-              }} />
-            )}
-            <span className="truncate">{v.listName || v.name}</span>
-            {/* On the chip itself, because that is where the eye is when the
-                click lands — and where it stays for the next twelve seconds. */}
-            {wanted === v.id && (
-              <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>
-            )}
-          </button>
-        ))}
+        {/* The boards themselves moved into the rail on the left — see the
+            note there. What is left on this line is the things that act on the
+            board you are already on. */}
         {/* The same button both ways round. It used to open the address bar and
             then keep saying "＋", so the only way out was Escape — a key nobody
             is told about, on a bar with no other exit. */}
@@ -1356,28 +1418,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title={adding ? "Never mind" : "Add a board by pasting its address"}>
           {adding ? "✕" : "＋"}
         </button>
-        {/* The cards you went and fetched, as their own board.
-            Dashed, and only there while it holds something: this is not a list
-            anybody owns, it is where you have been. Beside the real boards
-            rather than inside one, which is the whole point — a card from
-            another list sitting in someone's sprint reads as being IN it. */}
-        {looked.length > 0 && (
-          <span className="flex items-center rounded-full"
-            style={onLooked
-              ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }
-              : { border: `1px dashed color-mix(in srgb, var(--text) 26%, transparent)` }}>
-            <button onClick={() => { setOnLooked(true); setSel(looked[0]?.id ?? null); }}
-              aria-pressed={onLooked}
-              className="flex items-center gap-1.5 text-[11px] pl-2.5 pr-1.5 py-0.5 whitespace-nowrap"
-              style={{ color: onLooked ? "var(--text)" : "var(--text2)" }}
-              title="Cards you have opened by id. They are not on any of your boards — this is where you have been, and it is forgotten when the app closes.">
-              <span aria-hidden style={{ color: "var(--text3)" }}>⌕</span>
-              Looked up
-              <span className="tabular-nums" style={{ color: "var(--text3)" }}>{looked.length}</span>
-            </button>
-            <CloseButton onClick={() => { setLooked([]); setOnLooked(false); }} title="Forget them" style={{ color: "var(--text4)" }} className="pr-2 pl-0.5" />
-          </span>
-        )}
+
         {/* Where this board sits, beside the chip that chose it — which is where
             ClickUp puts it and where it was first asked for. It shares the
             chips' line rather than taking one of its own: this panel spent 216
@@ -1435,6 +1476,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             Open ↗
           </a>
         )}
+        {/* Where a card opens. Two, not three: full screen was offered and
+            turned down — it covers the table entirely, and in an app that
+            already lives in tabs it does nothing the modal does not. */}
+        <div className="flex rounded-lg overflow-hidden shrink-0" style={{ border: edge(16) }}>
+          {([["side", "Sidebar"], ["modal", "Modal"]] as const).map(([id, label]) => (
+            <button key={id} onClick={() => setCardMode(id)}
+              aria-pressed={cardMode === id}
+              title={id === "side"
+                ? "Open a card beside the list, in a pane you can drag wider"
+                : "Open a card over the list, with room for a long description"}
+              className="text-[10.5px] px-2 py-0.5"
+              style={cardMode === id
+                ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" }
+                : { color: "var(--text3)" }}>
+              {label}
+            </button>
+          ))}
+        </div>
         <button onClick={() => void load(data?.view?.id, true, true)} disabled={busy}
           className="text-[10.5px] px-2 py-0.5 rounded-lg"
           style={{ border: edge(16), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
@@ -1453,11 +1512,22 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         * silent, because a bar that appears on its own is a flicker, not
         * progress.
         */}
+      {/* The progress line is ALWAYS here, and only sometimes visible.
+          Two pixels, which sounds like nothing and is the whole complaint: as a
+          conditional block it appeared on every board you clicked, pushed the
+          table down by its own height and pulled it back. A gap that is always
+          the same size cannot move anything, so the track is drawn either way
+          and only its contents come and go. */}
+      <div className="shrink-0" role="status" aria-live="polite" style={{ paddingBottom: 4 }}>
+        {/* The 4px below is part of the reserved gap, not a margin that comes
+            and goes: the line sat directly on the search box, and a progress
+            bar touching an input reads as the input's own underline. */}
+        <div aria-hidden style={{ height: 2, overflow: "hidden", background: wanted ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+          {wanted && <div className="agx-indeterminate" style={{ height: "100%", background: "var(--primary)" }} />}
+        </div>
+      </div>
       {wanted && (
-        <div className="shrink-0" role="status" aria-live="polite">
-          <div aria-hidden style={{ height: 2, overflow: "hidden", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
-            <div className="agx-indeterminate" style={{ height: "100%", background: "var(--primary)" }} />
-          </div>
+        <div className="shrink-0">
           {/* Only when nothing else is saying it. A board being re-read has its
               own rows on screen and no veil over them, so this line is the only
               sign; a board that gets the veil is already told, at more length. */}
@@ -1637,39 +1707,117 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           of the board, which is long enough that "Do it" followed by nothing
           reads as a button that did not work — and the second press is a
           second write. */}
-      {busy && !confirm && (
-        <div className="px-5 py-1 shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
-          <Spinner label="Telling ClickUp…" className="" />
-        </div>
-      )}
+      {/*
+       * A lane for the panel to say it is busy, whose height never changes.
+       *
+       * Reported twice, and the second time is what settled the shape: a status
+       * bar that appears pushes everything below it down by its own height and
+       * pulls it back a moment later, and on a list you click all day that
+       * reads as the whole page flinching. Told to keep the gap and hide the
+       * contents, which is exactly right — a reserved lane cannot move anything
+       * because it is always the same size.
+       *
+       * Reads say nothing in it. The list you clicked already wears its own
+       * spinner in the rail, where you are looking; a second, louder answer
+       * across the panel is not more information. A write has no such home — it
+       * is started from a menu that closes behind it — so it says so here.
+       */}
+      <div className="px-5 shrink-0 flex items-center overflow-hidden" aria-live="polite"
+        style={{ height: 22, background: busy && !confirm && !wanted ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "transparent" }}>
+        {busy && !confirm && !wanted && <Spinner label="Telling ClickUp…" className="" />}
+      </div>
 
-      <div className="flex flex-1 min-h-0">
-        <div className="flex flex-col flex-1 min-w-0">
-          <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] shrink-0"
-            style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
-              borderTop: edge(10), borderBottom: edge(10) }}>
-            <span>Task</span>
-            {anyWho && <span className="text-center">Who</span>}
-            {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
-            {anySprint && <span>Sprint</span>}
-            {/* Centred over the columns they label, because those columns hold
-                two-character numbers in a 30px track — a heading hard against
-                the left of it sits above nothing, and the eye stops pairing the
-                two. `Task` and the rest stay left: they label text that starts
-                at the left. */}
-            {/* Hairlines before Cmts and before Pts, and only there. A rule
-                between every column stripes the table and reads as a grid you
-                are meant to study; two of them just say "the numbers start
-                here" and "this one is not that one" — which is the whole
-                complaint, since a count and a point score are the same shape.
-                `edge(6)` is the same weight as the row separators, so it reads
-                as part of the table rather than as decoration. */}
-            <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
-            <span>Due</span>
-            {anyEst && <span className="text-center">Est</span>}
-            <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Pts</span>
-            <span />
+      <div className="flex flex-1 min-h-0 relative">
+        {/*
+         * The lists, down the side.
+         *
+         * They used to be a row of chips above the table, which works at four
+         * and stops working well before twenty: they wrap onto a second and
+         * third line, push the table down, and there is no way to search them.
+         * Down the side they are a column that scrolls, with a filter box —
+         * and the filter is the part that actually scales, not the shape.
+         *
+         * Deliberately FLAT. ClickUp nests these under spaces and folders and
+         * the mockup showed that, but agentglass only learns a board's folder
+         * when the board is opened: drawing the tree would mean asking ClickUp
+         * once per board every time this opened. Told rather than decided —
+         * grouping can come back the day we hold the places.
+         */}
+        <nav aria-label="Lists" className="flex flex-col shrink-0 min-w-0"
+          style={{ width: railOpen ? 214 : 34, borderRight: edge(12), transition: "width 120ms ease" }}>
+          <div className="flex items-center gap-1 px-1.5 shrink-0"
+            style={{ height: HEAD_H, borderBottom: edge(10) }}>
+            <button onClick={() => setRailOpen((o) => !o)}
+              aria-expanded={railOpen}
+              title={railOpen ? "Fold the list menu" : "Show the lists"}
+              className="shrink-0 grid place-items-center rounded"
+              style={{ width: 22, height: 22, border: edge(14), color: "var(--text3)" }}>
+              {/* Drawn rather than typed. `‹` is a text glyph and sits on a text
+                  baseline, so centring the box still left it riding high inside
+                  it — the alignment cannot be fixed by the box because the gap
+                  is inside the glyph. An SVG has no baseline to fight. */}
+              <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor"
+                strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden focusable="false">
+                <path d={railOpen ? "M10 3.5 5.5 8l4.5 4.5" : "M6 3.5 10.5 8 6 12.5"} />
+              </svg>
+            </button>
+            {railOpen && (
+              <input value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
+                aria-label="Filter lists"
+                className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] outline-none"
+                style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: edge(14) }} />
+            )}
           </div>
+          {railOpen && (
+            <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
+              {railViews.length === 0 && (
+                <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>No list by that name.</div>
+              )}
+              {railViews.map((v) => (
+                <button key={v.id}
+                  onClick={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(v.id, false, true); }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ v, x: e.clientX, y: e.clientY }); }}
+                  aria-current={!onLooked && lit === v.id}
+                  aria-busy={wanted === v.id}
+                  className="w-full text-left flex items-center gap-1.5 px-2.5 py-1 text-[11.5px]"
+                  style={!onLooked && lit === v.id
+                    ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)" }
+                    : { color: "var(--text3)" }}
+                  title={v.builtin
+                    ? "Every card assigned to you, across the workspace — the same list as ClickUp's My Work. Slower than a board (it asks the whole workspace), so it opens on what you last saw."
+                    : v.listName ? `${v.listName} · ${v.name}` : v.name}>
+                  {/* The built-in one stays marked: beside four board names it
+                      reads as a fifth board somebody added, and it is the one
+                      that behaves differently. */}
+                  {v.builtin && (
+                    <span aria-hidden className={`shrink-0${wanted === v.id ? " animate-pulse" : ""}`} style={{
+                      width: 6, height: 6, borderRadius: 999,
+                      border: `1.5px solid ${lit === v.id ? "var(--primary)" : "var(--text4)"}`,
+                    }} />
+                  )}
+                  <span className="truncate min-w-0 flex-1">{v.listName || v.name}</span>
+                  {wanted === v.id && <span className="shrink-0 animate-pulse" style={{ color: "var(--text3)" }}>…</span>}
+                </button>
+              ))}
+              {/* Where you have been, beside the lists rather than inside one —
+                  a card from another list sitting in somebody's sprint reads as
+                  being IN it. Dashed and only while it holds something. */}
+              {looked.length > 0 && (
+                <button onClick={() => { setOnLooked(true); setSel(looked[0]?.id ?? null); }}
+                  aria-current={onLooked}
+                  className="w-full text-left flex items-center gap-1.5 px-2.5 py-1 mt-1 text-[11.5px]"
+                  style={{ color: onLooked ? "var(--text)" : "var(--text3)",
+                    background: onLooked ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
+                    borderTop: `1px dashed color-mix(in srgb, var(--text) 22%, transparent)` }}
+                  title="Cards you have opened by id. They are not on any of your boards — this is where you have been, and it is forgotten when the app closes.">
+                  <span className="truncate min-w-0 flex-1">Looked up</span>
+                  <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{looked.length}</span>
+                </button>
+              )}
+            </div>
+          )}
+        </nav>
+        <div className="flex flex-col flex-1 min-w-0">
           {/*
             * The wait is drawn ON TOP of the old rows, not applied to them.
             *
@@ -1682,7 +1830,39 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             * keeping through a ten-second read.
             */}
           <div className="relative flex flex-col flex-1 min-h-0 min-w-0">
-          <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+          {/* One scroller for the heading AND the rows. They used to be
+              siblings, which is fine while nothing moves sideways and wrong the
+              moment something does: two boxes scrolled independently put the
+              heading over the wrong column. */}
+          <div className="agx-scroll flex-1 min-w-0 overflow-auto">
+            <div className="px-5 text-[8.5px] uppercase tracking-[0.16em] sticky top-0 z-10"
+                style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
+                  alignItems: "center", height: HEAD_H,
+                  minWidth: TABLE_MIN_W, background: "var(--bg)",
+                  borderBottom: edge(10) }}>
+              <span className="agx-stick-head">Task</span>
+              {anyWho && <span className="text-center">Who</span>}
+              {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
+              {anySprint && <span>Sprint</span>}
+              {/* Centred over the columns they label, because those columns hold
+                  two-character numbers in a 30px track — a heading hard against
+                  the left of it sits above nothing, and the eye stops pairing the
+                  two. `Task` and the rest stay left: they label text that starts
+                  at the left. */}
+              {/* Hairlines before Cmts and before Pts, and only there. A rule
+                  between every column stripes the table and reads as a grid you
+                  are meant to study; two of them just say "the numbers start
+                  here" and "this one is not that one" — which is the whole
+                  complaint, since a count and a point score are the same shape.
+                  `edge(6)` is the same weight as the row separators, so it reads
+                  as part of the table rather than as decoration. */}
+              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
+              <span>Due</span>
+              {anyEst && <span className="text-center">Est</span>}
+              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Pts</span>
+              <span />
+            </div>
+
             {/* Looks like a card number and is not on this board — so offer to
                 go and get it, rather than reporting nothing and leaving you to
                 work out that "not here" is not "does not exist". */}
@@ -1837,37 +2017,82 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             unbroken URL in a card pushed the whole pane sideways and dragged the
             list with it — which is the horizontal scrollbar that appeared under
             everything. */}
+        {/* Two shells, one card.
+            Chosen from a mockup: the sidebar, which is what this always was,
+            and a modal for a card that is a page of prose rather than six
+            fields — where the pane's width is the thing in the way. Full screen
+            was in the mockup too and was turned down: it covers the table
+            entirely, and in an app that already lives in tabs it does nothing
+            the modal does not.
+
+            The card itself is the same element in both, built once above. Two
+            copies of it would be two places for a field to be wrong. */}
+        {/* The handle lives in the gap, wide enough for a pointer even though
+            the line it draws is one pixel. */}
+        {cardMode === "side" && picked && <div role="separator" aria-orientation="vertical" tabIndex={0}
+          aria-label="Drag to resize the card pane"
+          title="Drag to resize · double-click for the usual width"
+          onDoubleClick={() => setCardW(CARD_W_DEFAULT)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") { e.preventDefault(); setCardW((w) => clampCardW(w + (e.shiftKey ? 40 : 12))); }
+            else if (e.key === "ArrowRight") { e.preventDefault(); setCardW((w) => clampCardW(w - (e.shiftKey ? 40 : 12))); }
+            else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setCardW(CARD_W_DEFAULT); }
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            dragging.current = true;
+            /* Measured against the window's right edge rather than by adding up
+               deltas: a drag that accumulates drifts away from the pointer the
+               moment one move is dropped. */
+            const right = window.innerWidth;
+            const move = (ev: PointerEvent) => { if (dragging.current) setCardW(clampCardW(right - ev.clientX)); };
+            const up = () => {
+              dragging.current = false;
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+          className="shrink-0 self-stretch"
+          style={{ width: 5, marginRight: -5, cursor: "col-resize", zIndex: 5 }} />}
+        {/* Only with a card in it. An empty pane saying "Pick a card." spent
+            380px telling you to do the thing you were already doing, and took
+            that width from the table you were reading to choose. */}
+        {cardMode === "side" && picked && (
         <aside className="flex flex-col shrink-0 min-w-0"
-          style={{ width: wide ? 720 : 380, borderLeft: edge(12), transition: "width 120ms ease" }}>
-          {/* The width control belongs to the PANE, not to whatever is in it.
-              Inside the card it was unreachable the moment you deselected: the
-              pane stayed at 720px around the words "Pick a card", with the only
-              button that could narrow it hidden behind picking one again. */}
-          <div className="flex items-center gap-2 px-4 pt-3 shrink-0">
-            <span className="text-[8.5px] uppercase tracking-[0.16em] truncate" style={{ color: "var(--text4)" }}>
-              {picked ? "Card" : ""}
-            </span>
-            <span className="flex-1" />
-            <button onClick={() => setWide((w) => !w)}
-              title={wide ? "Narrow this pane" : "Some cards are a page of prose — give it room"}
-              className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-              style={{ border: edge(16), color: "var(--text3)" }}>
-              {wide ? "⇥ narrow" : "⇤ wider"}
-            </button>
-          </div>
-          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 pt-0 text-[11.5px] flex flex-col">
-            {picked
-              ? <CardDetail t={picked} today={today} statuses={cardStatuses} fields={cardFields} place={cardPlaceShown}
-                  writable={boards.writeEnabled} repos={repos} here={here}
-                  onOpenChatWith={onOpenChatWith}
-                  wide={wide}
-                  byId={byId} onGo={(id) => setSel(id)} boardPeople={boardPeople}
-                  skills={skills}
-                  onNote={(text) => setNote({ ok: true, text })}
-                  onAsk={(p) => setConfirm(p)} />
-              : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>}
+          style={{ width: cardW, borderLeft: edge(12) }}>
+          {/* No eyebrow over this pane. It said the word "Card" above a card,
+              which was already earning its keep only by carrying the width
+              button beside it — and the width is dragged from the edge now. A
+              heading that labels the obvious costs the card its first line, and
+              this pane starts level with the table's own heading instead. */}
+          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col"
+            style={{ paddingTop: 0 }}>
+            {cardBody}
           </div>
         </aside>
+        )}
+        {/* Laid over the panel, with the list dimmed behind rather than gone:
+            you are reading one card OUT of a list, and the list is the context
+            that makes it mean anything. Click the dimmed part or press Escape
+            to come back. */}
+        {cardMode === "modal" && picked && (
+          <div className="absolute inset-0 z-30 flex items-start justify-center p-6"
+            style={{ background: "color-mix(in srgb, var(--bg) 62%, transparent)" }}
+            onClick={() => setSel(null)}>
+            <div role="dialog" aria-modal="true" aria-label={picked.title}
+              onClick={(e) => e.stopPropagation()}
+              className="flex flex-col min-h-0 rounded-xl overflow-hidden"
+              style={{ width: "min(760px, 100%)", maxHeight: "100%",
+                background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)" }}>
+              <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col">
+              {cardBody}
+          </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2009,6 +2234,15 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
  */
 const YOLO_KEY = "agentglass.clickup.skipPermissions";
 const WIDE_KEY = "agentglass.clickup.wideCard";
+const CARD_W_KEY = "agentglass.clickup.cardWidth";
+const RAIL_KEY = "agentglass.clickup.listRail";
+const CARD_MODE_KEY = "agentglass.clickup.cardMode";
+/** The width it goes back to. The old narrow setting, kept as the default
+ *  because it is the one most cards are read at. */
+const CARD_W_DEFAULT = 380;
+/** Under 280 the card stops being readable; over 720 the table it sits beside
+ *  stops being one. Both ends are a floor rather than a preference. */
+const clampCardW = (w: number): number => Math.max(280, Math.min(720, Math.round(w)));
 /*
  * Where a hand-off goes, remembered.
  *
@@ -2069,6 +2303,34 @@ const CU_POLL_SLOW_MS = 300_000;
  * `Who` and `Sprint` appear only once some card actually has one. A column of
  * blanks costs the title its width and tells you nothing.
  */
+/**
+ * The width below which the table scrolls sideways instead of squeezing.
+ *
+ * The title track is `1fr`, so without a floor the columns just get narrower
+ * and narrower as the card pane is dragged open — sprint names clip, the point
+ * count lands under its own heading, and nothing tells you it happened. Past
+ * this the row keeps its shape and the columns move off the right instead,
+ * with Task held still. Which is what ClickUp does, and for the same reason.
+ *
+ * The number is the fixed tracks plus their gaps plus a title wide enough to
+ * read: it is not a preference, it is the point where the row stops working.
+ */
+const TABLE_MIN_W = 720;
+
+/**
+ * The height both headers share.
+ *
+ * The rail's filter box and the table's column titles start at the same line
+ * and used to end at different ones, so the two rules under them were a few
+ * pixels apart across the whole panel — the kind of thing you cannot unsee once
+ * it is pointed at. One number, used by both, is what keeps them level when
+ * either changes.
+ *
+ * Set by the taller of the two: the rail holds a real input and a button, and
+ * shrinking those to meet a text label would cost a control to save a rule.
+ */
+const HEAD_H = 34;
+
 const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean) =>
   // The comments column is unconditional, unlike Who and Sprint. Those come and
   // go because a board where nobody is assigned has nothing to put in them; a
@@ -2247,10 +2509,15 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
            14 plus the hairlines below is what separates them; the numbers are
            centred in their own track rather than crowded against its edge. */
         display: "grid", gridTemplateColumns: grid, gap: 14, borderBottom: edge(6), position: "relative",
+        /* Matches the heading above it. Without it the row squeezes while the
+           heading scrolls, and the two stop lining up. */
+        minWidth: TABLE_MIN_W,
         background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
-      <div className="min-w-0">
+      {/* Held still while the columns to its right scroll under it — see
+          `.agx-stick` for why its background has to be opaque. */}
+      <div className="min-w-0 agx-stick">
         <div className="flex items-baseline gap-1.5 min-w-0">
           {/* Blocked first, because it changes whether the rest is worth
               reading. 28 of 30 cards on a real board have dependencies and none
@@ -2718,8 +2985,13 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * them — which reads as a translucent bar rather than as the gap it is.
         * Same reason the footer carries its own bottom padding.
         */}
-      <div className="sticky top-0 z-20 pt-2.5 pb-1.5" style={{ background: "var(--bg)" }}>
-        <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="sticky top-0 z-20 pb-1.5" style={{ background: "var(--bg)" }}>
+        {/* The identity chips sit in the SAME band as the table's column titles
+            beside them — one height, centred, rather than a top padding chosen
+            to look about right. A padding is a guess that has to be re-guessed
+            every time either side changes its type size; a shared band cannot
+            drift because there is only one number. */}
+        <div className="flex items-center gap-1.5 flex-wrap" style={{ minHeight: HEAD_H }}>
           <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] tabular-nums rounded px-1.5 py-0.5"
             style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
             title={`Copy ${t.customId || t.id} — the id for a branch, a commit or a colleague`}>
@@ -3008,9 +3280,13 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
-              <button onClick={() => openPrs(String(p.number), p.state === "OPEN" || !p.state ? "open" : "all")}
+              <button onClick={() => {
+                const ref = prRefFromUrl(p.url);
+                if (ref) openPr(ref.repo, p.number);
+                else openPrs(String(p.number), p.state === "OPEN" || !p.state ? "open" : "all");
+              }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
-                title="Open this in Pull Requests">
+                title="Open this pull request">
                 <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
                 {p.state && (
                   <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"

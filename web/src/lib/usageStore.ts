@@ -27,6 +27,29 @@ export const providerUsage = (): ProviderUsage[] | null => snapshot;
 export const usageOf = (p: ProviderUsage["provider"]): ProviderUsage | null =>
   snapshot?.find((u) => u.provider === p) ?? null;
 
+/**
+ * Whose quota to show when nothing says whose it should be.
+ *
+ * The strip picks its provider from the focused chat, which is right while you
+ * are in one and answers `null` the rest of the time — on the dashboard, in the
+ * terminal, in a browser tab. The meter then vanished, and a meter that
+ * disappears while you are working reads as "you have used nothing": the
+ * opposite of what is true, and the reported symptom.
+ *
+ * The one closest to its limit, because that is the only reading worth a strip
+ * you are not looking at. Same rule the Usage panel's headline uses — one board
+ * cannot say Claude is at 80% while the strip above it shows Codex at 3%.
+ */
+export function busiestOf(rows: ProviderUsage[] | null): ProviderUsage | null {
+  let best: ProviderUsage | null = null;
+  let top = -1;
+  for (const u of rows ?? []) {
+    if (!u.available) continue;
+    for (const w of u.windows) if (w.usedPercent > top) { top = w.usedPercent; best = u; }
+  }
+  return best;
+}
+
 /** Whether the first fetch has come back, so a surface can tell "loading" from
  *  "nothing to show" — the distinction the About pane bug was made of. */
 export const usageLoaded = (): boolean => firstFetchDone;

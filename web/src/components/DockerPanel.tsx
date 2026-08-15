@@ -8,7 +8,7 @@ import { depSpec } from "../../../shared/deps.ts";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
-import { ConsoleStrip, consoleRoot, runInConsole, consoleInTmux, subscribeSessions } from "./TerminalPanel.tsx";
+import { ConsoleStrip, consoleRoot, runInConsole } from "./TerminalPanel.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -286,10 +286,6 @@ export function DockerView({ active }: { active: boolean }) {
   const sidebarW = useSidebarWidth();
   const { ask, dialog } = useDialogs();
   const [consoleOpen, setConsoleOpen] = useState(false);
-  /* Whether this console is already inside tmux. Subscribed rather than read
-     once: it becomes true a beat after the command is sent, when the client
-     actually starts, and the button has to stop offering to do it again. */
-  const inTmux = useSyncExternalStore(subscribeSessions, () => consoleInTmux(consoleRoot()), () => false);
   const [consoleH, setConsoleH] = useState<number>(() => {
     try { return Math.min(0.85, Math.max(0.08, Number(localStorage.getItem(CONSOLE_KEY)) || 0.1)); } catch { return 0.1; }
   });
@@ -737,32 +733,15 @@ export function DockerView({ active }: { active: boolean }) {
                       * the whole reason it is one line here instead of a change
                       * to how shells are started.
                       */}
-                    <button
-                      onClick={() => {
-                        const root = consoleRoot();
-                        // Already inside: the only thing left to do is show it.
-                        // Sending the command again would type at tmux instead
-                        // of at a prompt, which is what the full-screen guard
-                        // was catching.
-                        if (consoleInTmux(root)) { setConsoleOpen(true); return; }
-                        // tmux refuses `.` and `:` in a session name, and a
-                        // checkout called `orbit-WEB-1042` has neither — but
-                        // one called `app.v2` does, and the failure is a cryptic
-                        // "bad session name" rather than anything about naming.
-                        const name = `agentglass-${(root.split("/").pop() || "shell").replace(/[^A-Za-z0-9_-]/g, "-")}`;
-                        setConsoleOpen(true);
-                        runInConsole(root, `tmux new-session -A -s ${name}`);
-                      }}
-                      className="ml-1 px-2.5 py-1 rounded-lg text-[10.5px] whitespace-nowrap transition-colors"
-                      title={inTmux
-                        ? "This console is inside tmux — what runs here survives agentglass closing, and comes back where you left it. Type `exit` to come back out."
-                        : "Run this console inside tmux, so a long build survives agentglass closing.\n\nThe shell here belongs to agentglass and dies with it. A tmux session does not: closing the app detaches, and opening this again puts you back in the same session with the build still running.\n\nType `exit` to come back out. Needs tmux installed."}
-                      style={inTmux
-                        ? { color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)" }
-                        : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}
-                    >
-                      {inTmux ? "⧉ kept running" : "⧉ keep running"}
-                    </button>
+                    {/* The "keep running" button used to be here.
+                        It typed `tmux new-session -A -s …` into this shell — a
+                        BARE tmux, which is the machine's own server with the
+                        machine's own config, borrowed to make an app shell
+                        outlive the app. The console runs on the engine now, in
+                        a session of its own, so it already outlives the window
+                        and comes back where you left it. A button that offers
+                        what is already true is a button that teaches people the
+                        thing was optional. */}
                     <button
                       onClick={() => (consoleOpen ? closeConsole() : setConsoleOpen(true))}
                       className="ml-1 px-2.5 py-1 rounded-lg text-[10.5px] font-medium whitespace-nowrap transition-colors flex items-center gap-1.5"

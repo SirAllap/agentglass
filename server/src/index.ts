@@ -3,6 +3,7 @@
 import "./cookieentry.ts";
 import type { ServerWebSocket } from "bun";
 import type { IngestBody, WsFrame, WorkingTree, PanesResponse } from "../../shared/types.ts";
+import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
@@ -87,7 +88,7 @@ import {
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -104,7 +105,7 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup,
@@ -889,6 +890,7 @@ const server = Bun.serve<WsData>({
         // last in. Sent by the consoles docked inside other views — see
         // PtyWsData.fresh for the three clients this was measured on.
         fresh: url.searchParams.get("fresh") === "1",
+        console: url.searchParams.get("console") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,
@@ -2268,6 +2270,12 @@ const server = Bun.serve<WsData>({
       const r = await listMembers(url.searchParams.get("list") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
+    /* Whether the agent here can post to Slack. A route rather than a build-time
+       constant: somebody connects the integration without restarting agentglass,
+       and a button that stays hidden until the next launch reads as broken. */
+    if (pathname === "/notify/reach") {
+      return json({ ok: true, slack: slackReachable() });
+    }
     if (pathname === "/clickup/task") {
       const r = await taskDetail(url.searchParams.get("id") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
@@ -2301,6 +2309,11 @@ const server = Bun.serve<WsData>({
           }, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
+        // A note on the card's activity. No `updated` guard: a comment adds to
+        // the history rather than overwriting anybody's field, so a card that
+        // moved underneath is not a reason to refuse this one.
+        : pathname === "/clickup/comment"
+          ? await commentOn(id, String(b.text ?? ""), b.assignee != null ? Number(b.assignee) : undefined)
         : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
@@ -2734,6 +2747,7 @@ const server = Bun.serve<WsData>({
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
         case "/prs/review-prompt": res = await prepareReviewPrompt(root, n); break;
+        case "/prs/pending-review": res = await pendingReviewFor(root, n); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why
@@ -3609,6 +3623,19 @@ setInterval(prune, 3_600_000);
 // point of the pane engine and also its whole cost (~380MB and climbing), so an
 // abandoned chat gives its memory back and resumes transparently next time.
 // A no-op when the engine is off, tmux is absent, or eviction is disabled.
+/*
+ * Hand the running engine its config at every boot.
+ *
+ * tmux reads a config when the SERVER starts, and the engine's server outlives
+ * this process by design — so a conf change that ships in a release would
+ * otherwise wait for somebody to kill every pane on it. `source-file` re-runs
+ * the generated file in place: `set -g` and `bind` are idempotent, the sessions
+ * are untouched, and a machine with nothing running answers false, which is not
+ * a failure — the file is on disk and the next start reads it.
+ */
+ensureConf();
+void reloadEngineConf();
+
 startPaneSweeper();
 startTaskSweep();
 startReminderTick();

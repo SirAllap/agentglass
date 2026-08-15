@@ -539,6 +539,29 @@ export const sanitizeWindowName = (s: unknown): string | null => {
   return name || null;
 };
 
+/**
+ * Does this window actually exist on THIS server?
+ *
+ * Ids are validated for shape — `@7` is a window id — and shape is not identity.
+ * They are also per-SERVER: `@7` names a different window on every tmux running
+ * on the machine, and this app now talks to at least two (yours, and the
+ * engine). An id that arrived from one and is spent on the other names
+ * something real and wrong, and the destructive verbs here are `kill-window`,
+ * `rename-window`, `move-window` and `resize-window`.
+ *
+ * That is not hypothetical: a stale id once resized a session somebody was
+ * working in. One `list-windows` before a write is the cost of never doing it
+ * again, and these are user clicks rather than a hot path.
+ *
+ * A server that cannot be asked answers no. Refusing an action is recoverable;
+ * performing it on the wrong window is not.
+ */
+function windowOnSocket(socket: string[], windowId: string): boolean {
+  const out = tmux(socket, ["list-windows", "-a", "-F", "#{window_id}"]);
+  if (out === null) return false;
+  return out.split("\n").some((l) => l.trim() === windowId);
+}
+
 export function runAction(
   t: TmuxTarget, action: TmuxAction, window?: string, name?: string,
   /** The asking client's grid. Only `fit` uses it — see that case for why an
@@ -554,7 +577,13 @@ export function runAction(
   // landing a moment later selects, renames or kills something the user was not
   // pointing at. An id refers to the same window for as long as it exists, and
   // to nothing at all once it does not.
-  const id = WINDOW_ID.test(window ?? "") ? window! : null;
+  const shaped = WINDOW_ID.test(window ?? "") ? window! : null;
+  /* Checked against the server as well as against the syntax, and only for the
+     verbs that change something: `select` landing on nothing is a no-op, while
+     `kill` landing on the wrong window is somebody's work. */
+  const changes = action === "kill" || action === "rename" || action === "move"
+    || action === "fit" || action === "takeover";
+  const id = shaped !== null && (!changes || windowOnSocket(t.socket, shaped)) ? shaped : null;
   switch (action) {
     case "select":
       return id === null ? false : tmux(t.socket, ["select-window", "-t", id]) !== null;

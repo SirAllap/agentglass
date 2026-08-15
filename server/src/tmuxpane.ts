@@ -68,6 +68,33 @@ export function engineAttachArgv(root: string): string[] | null {
 }
 
 /**
+ * The docked console's own engine session.
+ *
+ * A SEPARATE session from the terminal view's, and the separation is the whole
+ * function. Sharing one meant two clients attached to the same tmux session,
+ * which tmux answers by mirroring: the console showed whatever the terminal was
+ * showing, keystroke for keystroke, and both fought over the size. That was
+ * reported as "the Docker console is a mirror of the Terminal".
+ *
+ * Attach-or-create like the other one, so the console you had is the console
+ * you get back — and because it lives on the engine, it is still there after
+ * the app is closed and reopened. That is what the console's "keep running"
+ * button used to fake by typing `tmux` into the shell, on the user's own
+ * server, with the user's own config.
+ */
+export function engineConsoleArgv(root: string): string[] | null {
+  const base = engineAttachArgv(root);
+  if (!base) return null;
+  // Same argv with the session renamed. Built from the other one rather than
+  // repeated, so the socket, the config and the flags cannot drift apart.
+  const at = base.lastIndexOf("-s");
+  if (at < 0 || !base[at + 1]) return null;
+  const named = [...base];
+  named[at + 1] = `${named[at + 1]}-console`;
+  return named;
+}
+
+/**
  * Hand the running engine its config again, without restarting anything.
  *
  * tmux reads its config when the SERVER starts, so a saved prefix used to wait
@@ -241,6 +268,80 @@ export async function listPanes(): Promise<string[]> {
  *  without starting a tmux server — the bug this guards against was invisible
  *  from the outside, and reproducing it needs a machine whose login shell is not
  *  POSIX. */
+/**
+ * A window on the ENGINE, running something, for a checkout.
+ *
+ * The counterpart of tmuxctl's `newWindowRunning`, and the whole point of it is
+ * the socket. That one opens windows in whatever tmux the panel's shell happens
+ * to be running — the user's own server, with the user's own config. Everything
+ * the app STARTS belongs here instead, for three measured reasons:
+ *
+ *   - It worked only if you had typed `tmux` in that pane. Without a client to
+ *     resolve out of /proc, the review button and the issue button answered
+ *     "this terminal has no tmux" — a feature whose availability depended on
+ *     something you did in a shell.
+ *   - It put the app's windows in among yours, where a `kill-window` or a
+ *     `resize-window` aimed at one of ours could reach one of yours. Pane and
+ *     window ids are per-SERVER, and that ambiguity has cost a real session
+ *     more than once.
+ *   - The engine survives the app closing and comes back on restart, which is
+ *     what the user's tmux was being borrowed FOR.
+ *
+ * Attach-or-create on the session, so the second review of the day lands beside
+ * the first rather than starting a server's worth of sessions.
+ */
+export async function engineWindowRunning(
+  root: string, name: string, argv: string[], cwd: string = root,
+): Promise<{ paneId: string; windowId: string } | null> {
+  const session = engineSessionName(root);
+  if (!validSessionName(session)) return null;
+  /* The config, before the first tmux call rather than only on the attach path.
+     `tmux()` passes `-f confPath()` whatever the caller is, so a window opened
+     before anybody attached ran against a file that might be stale or not there
+     at all — and tmux reads its config when the SERVER starts, so whichever
+     call happens to be first decides what the engine believes for the rest of
+     its life. */
+  ensureConf();
+  /*
+   * Asked for, then created — not `new-session -A`.
+   *
+   * `-A` is attach-or-create and reads as exactly what is wanted here. It is
+   * not: on a session that already exists it tries to ATTACH, and this runs
+   * with no terminal, so tmux answers `open terminal failed: not a terminal`
+   * and exits non-zero. `-d` does not save it.
+   *
+   * Measured, because the first call always worked and every one after it
+   * returned null: the second pull request review of a day would have opened
+   * nothing at all, silently. `has-session` costs one more call and cannot lie.
+   */
+  const there = await tmux(["has-session", "-t", `=${session}`]);
+  if (!there.ok) {
+    const made = await tmux(["new-session", "-d", "-s", session, "-c", root]);
+    if (!made.ok) return null;
+  }
+  const clean = engineWindowName(name);
+  const out = await tmux([
+    "new-window", "-P", "-F", "#{pane_id}\t#{window_id}", "-t", session, "-c", cwd,
+    ...(clean ? ["-n", clean] : []),
+    ...argv,
+  ]);
+  if (!out.ok) return null;
+  const [paneId = "", windowId = ""] = (out.stdout.split("\n")[0] ?? "").trim().split("\t");
+  // Both or neither: tmux printing something this does not recognise is not a
+  // reason to hand a caller a string that goes on a command line.
+  return paneId.startsWith("%") && windowId.startsWith("@") ? { paneId, windowId } : null;
+}
+
+/** Window names reach a status line and a shell prompt, so they are held to
+ *  printable, single-line and short — the same rule tmuxctl applies, and a dot
+ *  removed on top: tmux reads one as a pane separator in a target, so a window
+ *  named with one cannot be selected by name afterwards. */
+export function engineWindowName(s: unknown): string | null {
+  if (typeof s !== "string") return null;
+  const name = s.replace(/[\u0000-\u001f\u007f]/g, "").replace(/\./g, "-").trim().slice(0, 64);
+  return name || null;
+}
+
 export function newSessionArgv(name: string, cwd: string, argv: string[]): string[] {
   const quoted = argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
   const cmd = `${quoted}; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' "$?"; exec sleep 86400`;

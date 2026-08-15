@@ -62,3 +62,24 @@ export function onOpenPr(fn: ((j: { repo: string; number: number }) => void) | n
 export function openPr(repo: string, number: number): void {
   exact?.({ repo, number });
 }
+
+/**
+ * The repository and number inside a pull request's own URL.
+ *
+ * The card panel lists the pull requests on a ClickUp card and had only the
+ * number to hand — so pressing one typed it into the panel's filter and left
+ * you looking at "376 matches, 1 shown", one more click from the thing you
+ * asked for. The URL is right there in the same row and carries the half that
+ * was missing.
+ *
+ * Any host, not only github.com: an enterprise install serves the same path.
+ * Null for anything that is not one — a card can state a pull request nobody
+ * has linked, and that row has no URL at all.
+ */
+export function prRefFromUrl(url: string | undefined | null): { repo: string; number: number } | null {
+  if (!url) return null;
+  const m = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:[/?#]|$)/.exec(url.trim());
+  if (!m) return null;
+  const number = Number(m[3]);
+  return Number.isSafeInteger(number) && number > 0 ? { repo: `${m[1]}/${m[2]}`, number } : null;
+}

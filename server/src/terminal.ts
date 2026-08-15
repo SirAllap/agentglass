@@ -25,7 +25,7 @@ import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWind
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal } from "./config.ts";
-import { engineAttachArgv } from "./tmuxpane.ts";
+import { engineAttachArgv, engineConsoleArgv, engineWindowRunning } from "./tmuxpane.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -168,7 +168,16 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    * Opt-out rather than opt-in because the phone connects with a root and no
    * pane and does want the desk — see mobile/src/terminal/TerminalView.tsx.
    */
-  fresh?: boolean };
+  fresh?: boolean;
+  /**
+   * This socket is the docked console.
+   *
+   * It gets the engine whatever the terminal view is set to. The setting is
+   * about YOUR terminal — where you may well want your own tmux, your own
+   * config and your own sessions — and the console is the app's, where a shell
+   * that dies with the window is the thing being fixed.
+   */
+  console?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 /**
@@ -446,22 +455,12 @@ function killGroup(s: Session, sigNum: number) {
 import { findTmuxBelow } from "./procchildren.ts";
 import { recall, remember, SETTLE_MS } from "./tmuxmemory.ts";
 import { deskAttachArgv } from "./tmuxctl.ts";
-import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { agentArgv, claimAgentTicket } from "./agentticket.ts";
 
-/*
- * What a client is told when it sends a tmux-shaped request to a terminal with
- * no tmux in it.
- *
- * Said rather than implied: the panel's own answer is to open the agent in a
- * pane instead (see the `agent` ticket below), so a client reaching this line
- * is one that could not — an older build, or the phone, which has no pane to
- * open. Both deserve the reason.
- */
-const NO_TMUX = "this terminal has no tmux — open the agent in a pane instead, or start tmux here";
 import { applyThemeTo } from "./themesync.ts";
 
 const enc = new TextEncoder();
@@ -737,7 +736,12 @@ export function ptyOpen(ws: PtyWs) {
    * null with no tmux and with a config the gate has refused.
    */
   const plain = wantsDeskResume(d, { attach: !!attach, agent: agentRun.length > 0, editor: !!editor });
-  const engine = plain && tmuxTerminal() === "engine" ? engineAttachArgv(startIn) : null;
+  /* The console is not offered the choice: it is always the engine. Its own
+     session, too — sharing the terminal's meant two clients on one tmux
+     session, which tmux answers by mirroring both screens. */
+  const engine = d.console
+    ? engineConsoleArgv(startIn)
+    : plain && tmuxTerminal() === "engine" ? engineAttachArgv(startIn) : null;
   const resume = !engine && plain
     ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
     : null;
@@ -1490,21 +1494,23 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       // The window is named after the checkout, which is what tells six of them
       // apart in a strip — `agentglass`, `width-toast`, `phone-new-tab`.
       const name = basename(root) || "agent";
-      const opened = bin
-        ? newWindowRunning(target, root, name, [
-            bin,
-            ...(msg.yolo === true ? ["--dangerously-skip-permissions"] : []),
-          ])
-        // No agent on this machine is not a reason to open nothing: a shell in
-        // the right project is still most of what was asked for, and the same
-        // answer `cmd:"issue"` gives.
-        : newWindowRunning(target, root, name, []);
-      if (!opened) {
-        ctl(ws, { t: "openfail", error: "tmux would not open a window" });
-        return;
-      }
-      ctl(ws, { t: "opened", pane: opened.paneId, window: opened.windowId, cwd: root });
-      s.tmuxSweep?.();
+      /* Off the hot path, like `review` below: `ptyMessage` runs for every
+         keystroke on this socket, and making it return a promise to serve one
+         message would be a poor trade. */
+      void (async () => {
+        const opened = await engineWindowRunning(root, name, bin
+          ? [bin, ...(msg.yolo === true ? ["--dangerously-skip-permissions"] : [])]
+          // No agent on this machine is not a reason to open nothing: a shell
+          // in the right project is still most of what was asked for, and the
+          // same answer `cmd:"issue"` gives.
+          : []);
+        if (!opened) {
+          ctl(ws, { t: "openfail", error: "the engine would not open a window" });
+          return;
+        }
+        ctl(ws, { t: "opened", pane: opened.paneId, window: opened.windowId, cwd: root });
+        s.tmuxSweep?.();
+      })();
       return;
     }
 
@@ -1533,21 +1539,11 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
      * button actions into arbitrary execution in the user's shell.
      */
     if (msg.cmd === "review") {
-      let target = s.tmux;
-      if (!target) {
-        /*
-         * Resolve NOW rather than wait for the next poll.
-         *
-         * The sweep runs every 500ms and the first one is 500ms after the
-         * socket opens, so a button pressed the instant this terminal appears
-         * asks a question nobody has looked up yet. Answering "no tmux" then
-         * would send a tmux user's card to a pane — right answer, wrong
-         * machine. The sweep is synchronous and cheap, so it is simply run.
-         */
-        s.tmuxSweep?.();
-        target = s.tmux;
-      }
-      if (!target) { ctl(ws, { t: "openfail", error: NO_TMUX }); return; }
+      /* No tmux of YOURS is needed here any more, and that is the point: this
+         used to refuse with "this terminal has no tmux" unless you had typed
+         `tmux` in this very pane, which made a button's availability depend on
+         something you did in a shell. It opens on the engine now, which is
+         always there. */
       const number = msg.number;
       // A review of nothing, in nowhere, is not a request this can serve.
       if (typeof number !== "number" || !msg.root) return;
@@ -1564,7 +1560,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // prompt and submits it, so the window opens with the review already
         // running rather than with something typed that nobody pressed return
         // on.
-        newWindowRunning(target, plan.cwd, `pr-${number}`, [bin, plan.prompt]);
+        await engineWindowRunning(plan.cwd, `pr-${number}`, [bin, plan.prompt]);
         s.tmuxSweep?.();
       })();
       return;
@@ -1584,21 +1580,11 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
      * this handler can verify.
      */
     if (msg.cmd === "issue") {
-      let target = s.tmux;
-      if (!target) {
-        /*
-         * Resolve NOW rather than wait for the next poll.
-         *
-         * The sweep runs every 500ms and the first one is 500ms after the
-         * socket opens, so a button pressed the instant this terminal appears
-         * asks a question nobody has looked up yet. Answering "no tmux" then
-         * would send a tmux user's card to a pane — right answer, wrong
-         * machine. The sweep is synchronous and cheap, so it is simply run.
-         */
-        s.tmuxSweep?.();
-        target = s.tmux;
-      }
-      if (!target) { ctl(ws, { t: "openfail", error: NO_TMUX }); return; }
+      /* No tmux of YOURS is needed here any more, and that is the point: this
+         used to refuse with "this terminal has no tmux" unless you had typed
+         `tmux` in this very pane, which made a button's availability depend on
+         something you did in a shell. It opens on the engine now, which is
+         always there. */
       const cwd = safeAbs(msg.cwd);
       if (!cwd || !inScope(cwd) || !existsSync(cwd)) return;
       const name = typeof msg.name === "string" ? msg.name : "issue";
@@ -1622,11 +1608,10 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin));
         // No agent available is not a reason to open nothing: a shell in the
         // right worktree is still most of what was asked for.
-        newWindowRunning(target, cwd, name, argv);
+        void engineWindowRunning(cwd, name, argv).then(() => s.tmuxSweep?.());
       } else {
-        newWindowRunning(target, cwd, name, []);
+        void engineWindowRunning(cwd, name, []).then(() => s.tmuxSweep?.());
       }
-      s.tmuxSweep?.();
       return;
     }
 

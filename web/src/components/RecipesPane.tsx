@@ -16,7 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { retryLoad } from "../lib/retryLoad.ts";
 import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
-import { consoleRoot, runInConsole, consoleInTmux } from "./TerminalPanel.tsx";
+import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { SettingRow } from "./SettingRow.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
@@ -80,7 +80,6 @@ export function RecipesPane({ open }: { open: boolean }) {
             {r.desc && <span className="block truncate">{r.desc}</span>}
             {r.scope === "global" ? "global" : (r.repo?.split("/").pop() ?? "repo")} · {r.steps.length} step{r.steps.length === 1 ? "" : "s"}
             {r.params?.length ? ` · ${r.params.length} param${r.params.length === 1 ? "" : "s"}` : ""}
-            {r.tmux ? " · tmux" : ""}
             {r.boot ? " · at start" : ""}
           </>}
           control={<span className="flex items-center gap-2">
@@ -166,10 +165,13 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
             </select>
           </label>
         )}
-        <label className="flex items-center gap-1.5 text-[11px] pb-1.5" style={{ color: "var(--text2)" }}>
-          <input type="checkbox" checked={!!r.tmux} onChange={(e) => set({ tmux: e.target.checked })} />
-          Run inside tmux <span style={{ color: "var(--text4)" }}>— survives closing the app</span>
-        </label>
+        {/* The "run inside tmux" box was here, promising "survives closing the
+            app". It kept that promise on the MACHINE's tmux, by typing a bare
+            `tmux new-session` into the shell. The console runs on the engine
+            now and every recipe outlives the app already, so the box had
+            nothing left to offer. The stored flag is left alone rather than
+            migrated away — an old recipe carrying it is not wrong, it is just
+            describing something that is now true of all of them. */}
         <label className="flex items-center gap-1.5 text-[11px] pb-1.5" style={{ color: "var(--text2)" }}>
           <input type="checkbox" checked={!!r.confirm} onChange={(e) => set({ confirm: e.target.checked })}
             disabled={!!r.boot} title={r.boot ? "A command that runs at start fires with nobody to ask" : undefined} />
@@ -239,32 +241,23 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
  * what keeps `tmux attach` from being typed at Claude, and makes the three
  * surfaces behave the same.
  *
- * `wrapInTmux` is the recipe's own "run inside tmux" flag: start (or reuse) an
- * agentglass-named session first so a long job outlives the app, then wait for
- * the client to actually attach before sending the steps — sending them in the
- * same tick loses to tmux taking the shell, and the console's guard then refuses
- * every line after the first.
+ * There is no "run inside tmux" flag any more, and there is nothing left for one
+ * to do: the console runs on the engine, in a session of its own, so every
+ * recipe already outlives the app being closed and comes back where it was. The
+ * flag used to type `tmux new-session -A -s …` into the shell first — a bare
+ * `tmux`, which is the machine's own server with the machine's own config — and
+ * then poll for the client to attach before sending a step, because sending in
+ * the same tick lost the race to tmux taking the shell.
  */
-export function runRecipeSteps(root: string, steps: string[], wrapInTmux: boolean): { ran: boolean; reason?: "in-tmux" } {
-  // A recipe not meant to run inside tmux (a `tmux attach`, a one-off that wants
-  // a bare prompt) must NOT be typed once the console has entered tmux. The
-  // full-screen guard waves tmux through — it cannot see the pane's program — so
-  // the line would land in whatever owns the active pane: an agent, an editor.
-  // That is exactly how `tmux attach -t …` ended up at a Claude prompt. Refuse,
-  // and let the caller say why. A freshly opened console is not in tmux, so the
-  // common case (attach on app open) still runs.
-  if (!wrapInTmux && consoleInTmux(root)) return { ran: false, reason: "in-tmux" };
-  const send = () => { for (const line of steps) runInConsole(root, line); };
-  if (wrapInTmux && !consoleInTmux(root)) {
-    const name = `agentglass-${(root.split("/").pop() || "shell").replace(/[^A-Za-z0-9_-]/g, "-")}`;
-    runInConsole(root, `tmux new-session -A -s ${name}`);
-    // Poll rather than guess a delay: how long tmux takes to attach depends on
-    // the machine, and a fixed wait is either a stall or the same race.
-    let tries = 0;
-    const t = setInterval(() => {
-      if (consoleInTmux(root) || ++tries > 40) { clearInterval(t); send(); }
-    }, 150);
-  } else send();
+export function runRecipeSteps(root: string, steps: string[], _wrapInTmux?: boolean): { ran: boolean; reason?: "in-tmux" } {
+  /* The refusal that used to live here is gone with the flag that needed it.
+     It existed because a console that had entered tmux would type a step at
+     whatever owned the active pane — an agent, an editor — and the full-screen
+     guard waves tmux through, since it cannot see the pane's program. Keeping
+     it now would refuse EVERY recipe, because the console is always in tmux.
+     What is left guarding that case is `runInConsole`, which answers false
+     rather than typing when the shell will not take a line. */
+  for (const line of steps) runInConsole(root, line);
   return { ran: true };
 }
 
@@ -294,7 +287,7 @@ export function runBootRecipes(): void {
   // the whole automation. Four goes over ~8s, then it stops.
   retryLoad(() => api.recipes(root)
     .then(({ recipes }) => {
-      for (const r of recipes) if (r.boot) runRecipeSteps(root, r.steps, !!r.tmux);
+      for (const r of recipes) if (r.boot) runRecipeSteps(root, r.steps);
       return true;
     })
     .catch(() => false));
@@ -361,20 +354,22 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
   // docked console. Read once per render: it flips only on attach/detach, not
   // while this small dialog is open.
   const where = onRunStep ? "the shell" : "the console";
-  const inTmux = !r.tmux && (onRunStep ? !!targetInTmux : consoleInTmux(consoleRoot()));
+  /* Only the caller's own shell can still be the wrong place to type. The
+     console cannot: it is the engine's, and a step going there is the whole
+     point of it. A shell the user is driving may have an agent in its active
+     pane, and the full-screen guard cannot see through tmux to say so. */
+  const inTmux = onRunStep ? !!targetInTmux : false;
 
   const go = () => {
     if (!preview || preview.missing.length || inTmux) return;
-    if (onRunStep && !r.tmux) {
+    if (onRunStep) {
       for (const s of preview.steps) onRunStep(s);
       onNote({ ok: true, text: `${r.name} sent to ${where}` });
       onClose();
       return;
     }
-    const res = runRecipeSteps(consoleRoot(), preview.steps, !!r.tmux);
-    onNote(res.ran
-      ? { ok: true, text: `${r.name} sent to the console` }
-      : { ok: false, text: `The console is inside tmux — ${r.name} runs from a plain shell. Detach it (Ctrl-b d) or reopen the app, then run it.` });
+    runRecipeSteps(consoleRoot(), preview.steps);
+    onNote({ ok: true, text: `${r.name} sent to the console` });
     onClose();
   };
 

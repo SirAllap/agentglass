@@ -71,7 +71,7 @@ export function ShellConsole({ command, cwd, onClose }: {
        This console pre-types a command and leaves the Enter to you — and on a
        machine where the server resumed that session, the command would have
        been typed into whatever pane the terminal view was showing. */
-    const ws = new WebSocket(ptyWsUrl(cwd, term.cols, term.rows, undefined, false, undefined, true));
+    const ws = new WebSocket(ptyWsUrl(cwd, term.cols, term.rows, undefined, false, undefined, true, true));
     let typed = false;
     /**
      * Our own teardown is not a failure, and it has to say so.

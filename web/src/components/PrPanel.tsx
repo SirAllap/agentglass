@@ -73,6 +73,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember } from "../../../shared/providers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { seedChat } from "../lib/chatStore.ts";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { FileRail } from "./FileRail.tsx";
@@ -131,6 +132,11 @@ const VIEWS: { id: string; label: string; scope: Filter; query: string; tint?: s
  */
 const DETAIL_CACHE = new Map<string, PrDetail>();
 const DETAIL_CACHE_MAX = 40;
+/** A line comment sitting in YOUR unsubmitted review on GitHub. Not a thread —
+ *  it has no id to reply to and no state to resolve — and not one of our own
+ *  drafts either, which live only in this browser until they are sent. */
+type PendingLine = { path: string; line: number | null; startLine?: number | null; body: string };
+
 const detailKey = (root: string, n: number) => `${root}#${n}`;
 const heldDetail = (root: string, n: number): PrDetail | null => DETAIL_CACHE.get(detailKey(root, n)) ?? null;
 function rememberDetail(root: string, n: number, d: PrDetail): void {
@@ -3127,6 +3133,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   }, [detail]);
 
   const openThreads = useMemo(() => (detail?.threads ?? []).filter((t) => !t.isResolved), [detail]);
+  /* The review you started in GitHub's own UI and never submitted. Read once
+     per pull request here rather than inside a tab: Review lists them and Files
+     draws them on the lines they belong to, and two fetches would be two
+     answers that can disagree. */
+  const [held, setHeld] = useState<PendingLine[]>([]);
+  useEffect(() => {
+    if (!selected) { setHeld([]); return; }
+    let alive = true;
+    api.prPendingReview(root, selected)
+      .then((r) => { if (alive && r.ok) setHeld(r.comments); })
+      .catch(() => { /* offline — both tabs still work for what is queued here */ });
+    return () => { alive = false; };
+  }, [root, selected]);
   const d = detail;
 
   /* Asked once and handed to both readers. The masthead strip and the Overview
@@ -3721,7 +3740,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         />
                       )}
                     </div>
-                    <PrSidebar d={d} onEditField={fieldPicker.open} />
+                    <PrSidebar d={d} root={root} onEditField={fieldPicker.open} />
                   </div>
                 ) : null}
 
@@ -3831,7 +3850,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   <FilesTab
                     d={d} root={root} byPath={byPath} loaded={!!diff} diffErr={diffErr} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} onShowing={setShowingFile}
-                    split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
+                    split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} held={held}
                     drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment} onDropDraft={dropDraftItem}
                     onPeek={async (p) => {
                       // The pull request's copy, not the checkout's. A branch
@@ -3929,7 +3948,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
                 {tab === "review" && canReview && (
                   <ReviewTab
-                    d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
+                    d={d} root={root} held={held} drafts={myDrafts} seen={seenFiles.length} busy={busy} busyWhat={busyWhat}
                     draft={myReview} onDraft={setMyReview}
                     onDrop={dropDraft} onSubmit={submitReview} onGoFiles={() => setTab("files")}
                   />
@@ -5505,8 +5524,22 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
  * belongs to a GitHub assignment somebody is already making; a second place to
  * change it is a second place to change it by accident.
  */
-function CardFacts({ d }: { d: PrDetail }) {
+function CardFacts({ d, root }: { d: PrDetail; root: string }) {
   const setup = useClickupSetup();
+  /* Whether the agent here can post to Slack — see server/src/slackreach.ts.
+     Asked once per mount rather than baked in: somebody connects the
+     integration without restarting agentglass, and a button that only appears
+     after the next launch reads as broken. */
+  const [slack, setSlack] = useState(false);
+  const [tell, setTell] = useState<"slack" | "card" | null>(null);
+  const [msg, setMsg] = useState("");
+  const [sending, setSending] = useState(false);
+  const [said, setSaid] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.notifyReach().then((r) => { if (live) setSlack(!!r?.slack); }).catch(() => { /* assume not */ });
+    return () => { live = false; };
+  }, []);
   const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
   const query = ref?.query ?? "";
   /* The store tells everyone when an answer lands; this only has to redraw.
@@ -5559,6 +5592,70 @@ function CardFacts({ d }: { d: PrDetail }) {
                 </div>
               )
               : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No one assigned</span>}
+
+            {/* Telling somebody it is ready.
+                Two routes, and they are not the same kind of thing. The card is
+                ours to write on — agentglass holds a ClickUp token. Slack is
+                not: posting there means holding a workspace token to do what
+                the agent already does with its own, so that button writes the
+                message and hands it to a chat. Which is also why one of them
+                can be missing and the other cannot. */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              {slack && (
+                <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(defaultPing(d, whoToTell(task))); }}
+                  className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
+                  title={`Ask the agent to say this in Slack`}
+                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  Ping Slack
+                </button>
+              )}
+              <button onClick={() => { setSaid(""); setTell(tell === "card" ? null : "card"); setMsg(defaultPing(d, whoToTell(task))); }}
+                className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
+                title="Write a note on this card's activity"
+                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                Note on card
+              </button>
+              {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
+            </div>
+
+            {tell && (
+              <div className="flex flex-col gap-1.5">
+                {/* Prefilled and editable, in that order. The default is the
+                    sentence you were going to type; leaving it as a blank box
+                    makes the common case the slow one. */}
+                <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
+                  className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
+                  style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
+                    {tell === "slack" ? "the agent posts this" : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
+                  </span>
+                  <button disabled={sending || !msg.trim()} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
+                    style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                    onClick={async () => {
+                      const target = whoToTell(task);
+                      if (tell === "slack") {
+                        /* Handed over rather than sent. The chat is where the
+                           Slack connection lives, and it is also where you can
+                           see what was actually said — a fire-and-forget button
+                           into somebody else's workspace is not something to
+                           offer without a transcript. */
+                        seedChat(root, slackPrompt(msg, target?.name), `Ping about #${d.number}`);
+                        setTell(null); setSaid("handed to a chat");
+                        return;
+                      }
+                      if (!task) return;
+                      setSending(true);
+                      const r = await api.clickupComment(task.id, msg.trim(), target?.id ?? undefined).catch(() => null);
+                      setSending(false);
+                      if (r?.ok) { setTell(null); setSaid("written on the card"); }
+                      else setSaid(`!${r?.error || "ClickUp refused it"}`);
+                    }}>
+                    {sending ? "Sending…" : tell === "slack" ? "Hand to a chat" : "Write it"}
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -5566,8 +5663,29 @@ function CardFacts({ d }: { d: PrDetail }) {
   );
 }
 
-function PrSidebar({ d, onEditField }: {
+/** Who the note is for: whoever is on the card. Falls back to nobody rather
+ *  than to the pull request's author — telling somebody their own branch is
+ *  ready is the one message that is never useful. */
+function whoToTell(task: { people?: { id?: number; name: string }[] } | null): { id?: number; name: string } | null {
+  return task?.people?.[0] ?? null;
+}
+
+/** The sentence, ready to send. The mention is always there, because a note
+ *  that does not name anybody is a note nobody reads as theirs. */
+function defaultPing(d: PrDetail, who: { name: string } | null): string {
+  return `${who ? `@${who.name} ` : ""}PR ready to review — #${d.number} ${d.title}\n${d.url}`;
+}
+
+/** What the agent is asked to do. Spelled as an instruction and not as the
+ *  message itself, so a chat that is already mid-conversation cannot mistake it
+ *  for something to answer. */
+function slackPrompt(msg: string, name?: string): string {
+  return `Post this in Slack${name ? ` to ${name}` : ""}, as it is written, and tell me where it landed:\n\n${msg}`;
+}
+
+function PrSidebar({ d, root, onEditField }: {
   d: PrDetail;
+  root: string;
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
@@ -5640,7 +5758,7 @@ function PrSidebar({ d, onEditField }: {
       )}
       {/* Under the GitHub facts, where he asked for it: the pull request first,
           and then the card it came from. */}
-      <CardFacts d={d} />
+      <CardFacts d={d} root={root} />
       {d.autoMerge && (
         <SidebarSection title="Auto-merge">
           <span className="text-[10.5px]" style={{ color: "var(--warning)" }}>
@@ -6495,7 +6613,7 @@ function DetailSkeleton({ number }: { number: number | null }) {
  *  because the component is what goes away when you change tab. */
 const FILES_SCROLL = new Map<string, number>();
 
-function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
+function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, onSel, onShowing, split, wrap, onSplit, onWrap, drafts, held, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   /** Why the diff is missing, when it is missing for a reason rather than for a
    *  moment. Without it a refusal is drawn as a spinner. */
@@ -6515,7 +6633,10 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
    */
   onShowing?: (p: string | null) => void;
   split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
-  drafts: DraftComment[]; onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT", body?: string) => void;
+  drafts: DraftComment[];
+  /** Your unsubmitted review on GitHub, drawn on the lines it belongs to. */
+  held: PendingLine[];
+  onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT", body?: string) => void;
   /** Post one line comment on its own, now — the other half of what GitHub
    *  offers at the box, beside holding it for a review. */
   onPostOne: (path: string, line: number, startLine: number | undefined, side: "LEFT" | "RIGHT" | undefined, body: string) => Promise<boolean>;
@@ -6550,6 +6671,19 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
   /** This file's pending comments, keyed the way a diff row asks for them:
    *  the side letter and the line, so a row can find its own without scanning
    *  the whole list on every render. */
+  /* The comments GitHub is holding for this file, by line. Read-only: there is
+     no API that edits one, so they are drawn and nothing else. Keyed on the new
+     side, which is where GitHub reports a pending line comment. */
+  const heldBy = (p: string) => {
+    const m = new Map<number, PendingLine[]>();
+    for (const h of held) {
+      if (h.path !== p || h.line == null) continue;
+      const arr = m.get(h.line) ?? [];
+      arr.push(h);
+      m.set(h.line, arr);
+    }
+    return m;
+  };
   const pendingBy = (p: string) => {
     const m = new Map<string, DraftComment[]>();
     for (const dc of drafts) {
@@ -7205,6 +7339,13 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
         const focused = sel === f.path;
         const nd = draftsFor(f.path);
         const pendingHere = pendingBy(f.path);
+        const heldHere = heldBy(f.path);
+        /* One whose line the diff does not reach — outdated, or in a hunk that
+           is not shown — has no row to sit under. It keeps its place under the
+           file rather than disappearing, which is what a comment nobody can
+           find amounts to. */
+        const heldBelow = held.filter((h) => h.path === f.path && (h.line == null || !heldHere.has(h.line)));
+        const heldOnFile = held.filter((h) => h.path === f.path).length;
         const change = byPath.get(f.path);
         // Anchor each thread inline, under the line it is about — GitHub's
         // placement. A thread whose line is not in the diff (outdated, or a
@@ -7259,7 +7400,17 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                 <span className="truncate" style={{ ...CODE_FONT_STYLE, color: done ? "var(--text3)" : "var(--text)" }}>{f.path}</span>
                 {f.status && f.status !== "modified" && <Chip text={f.status} tint="var(--text3)" />}
                 {f.comments > 0 && <Chip text={`${f.comments} open`} tint="var(--warning)" />}
-                {nd > 0 && <Chip text={`${nd} pending`} tint="var(--primary)" title="Queued in your review" />}
+                {/* Both kinds counted, and told apart. They go to the same
+                    place when you submit, so a file that says "2 pending" with
+                    three comments under it is a file whose header disagrees
+                    with itself — but they are not the same thing, and lumping
+                    them into one number would say the two you can still edit
+                    are three. */}
+                {nd > 0 && <Chip text={`${nd} pending`} tint="var(--primary)" title="Queued in your review, in this browser" />}
+                {heldOnFile > 0 && (
+                  <Chip text={`${heldOnFile} on GitHub`} tint="var(--primary)"
+                    title="Drafted in GitHub's review UI and not submitted — sent when you submit from here" />
+                )}
                 <span className="ml-auto shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
                 <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
               </button>
@@ -7321,7 +7472,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                         onPick={(pk) => pickLine(f.path, pk)}
                         sel={selRange?.path === f.path ? selRange.sel : null}
                         permalink={repoName && headSha ? (line) => `https://github.com/${repoName}/blob/${headSha}/${f.path}#L${line}` : undefined}
-                        rowAfter={(inlineThreads.size || pendingHere.size || composing?.path === f.path) ? (newN, oldN) => {
+                        rowAfter={(inlineThreads.size || pendingHere.size || heldHere.size || composing?.path === f.path) ? (newN, oldN) => {
                           const ts = newN != null ? inlineThreads.get(newN) : null;
                           // A queued comment has to be visible where it was
                           // written. It used to exist only as a number on the
@@ -7332,7 +7483,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                           const pend = pendingHere.get(`${newN != null ? "R" : "L"}${newN ?? oldN}`) ?? [];
                           const composeHere = composing?.path === f.path &&
                             ((composing.side === "RIGHT" && composing.line === newN) || (composing.side === "LEFT" && composing.line === oldN));
-                          if (!ts?.length && !pend.length && !composeHere) return null;
+                          const heldOnLine = newN != null ? (heldHere.get(newN) ?? []) : [];
+                          if (!ts?.length && !pend.length && !heldOnLine.length && !composeHere) return null;
                           const pfx = composing?.side === "LEFT" ? "L" : "R";
                           // Bounded and pinned to the left so it reads at a sane
                           // width and stays put while the code scrolls sideways.
@@ -7365,6 +7517,26 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                                       style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={dc.body} /></div>
+                                </div>
+                              ))}
+                              {/* Written in GitHub's own review UI and never
+                                  submitted. A third kind of mark on purpose: it
+                                  is not a published thread — there is nobody to
+                                  reply to and nothing to resolve — and it is not
+                                  one of our drafts either, which live in this
+                                  browser until they are sent. No Drop, because
+                                  no API edits a comment inside somebody's
+                                  pending review; offering one would either lie
+                                  or delete the whole review to reach one line. */}
+                              {heldOnLine.map((h, i) => (
+                                <div key={`held-${h.line}-${i}`} className="rounded-lg overflow-hidden"
+                                  style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+                                  <div className="px-2.5 py-1 text-[10px] flex items-center gap-2"
+                                    style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
+                                    <span>drafted on GitHub</span>
+                                    <span className="ml-auto" style={{ color: "var(--text3)" }}>sent when you submit</span>
+                                  </div>
+                                  <div className="px-2.5 py-2"><Md body={h.body} /></div>
                                 </div>
                               ))}
                               {composeHere && composing && (
@@ -7458,6 +7630,21 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                 header said threads existed but you had to leave for the
                 conversation tab to read them, which is the wrong way round
                 while you are looking at the code they are about. */}
+            {open && heldBelow.length > 0 && (
+              <div className="px-3 pb-2 flex flex-col gap-2">
+                {heldBelow.map((h, i) => (
+                  <div key={`heldb-${i}`} className="rounded-lg overflow-hidden"
+                    style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+                    <div className="px-2.5 py-1 text-[10px] flex items-center gap-2"
+                      style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
+                      <span>drafted on GitHub{h.line == null ? " · outdated" : `:${h.line}`}</span>
+                      <span className="ml-auto" style={{ color: "var(--text3)" }}>the diff does not reach its line</span>
+                    </div>
+                    <div className="px-2.5 py-2"><Md body={h.body} /></div>
+                  </div>
+                ))}
+              </div>
+            )}
             {open && belowThreads.length > 0 && (
               <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
                 {/* Not anchored to a visible line — outdated threads, or ones on
@@ -7484,16 +7671,72 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
 
 /** Out to GitHub, for the one thing the panel does not show — the full history
  *  of an edit, a reaction, the blame behind a line. */
+/** GitHub's mark, so a link to GitHub says where it goes before you hover it. */
+function GhMark({ size = ICON.sm }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="currentColor" aria-hidden focusable="false">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
+  );
+}
+
+/**
+ * The two things you ever want to do with somebody else's comment: go to it,
+ * and hand somebody its address.
+ *
+ * The arrow alone said "this leaves" and not where to — worth saying, because
+ * the same row can send you to ClickUp. The mark says it without a hover.
+ *
+ * Sized off ICON rather than off the 10px type beside it. An icon-only control
+ * inheriting the scale of the line it sits on ends up a target nobody can hit;
+ * both of these keep a 20px box whatever the row does.
+ */
 function GhLink({ href, title }: { href: string; title: string }) {
   // Nothing rather than a link we cannot vouch for: every one of these comes
   // out of an API response, and a link that does not navigate somewhere plain
   // is not one we should be offering.
   const safe = externalUrl(href);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(id);
+  }, [copied]);
   if (!safe) return null;
+  const box = "shrink-0 inline-grid place-items-center rounded";
+  const style = { width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" };
+  /* Two glyphs need more than the square the single-glyph button uses: at 20
+     wide the mark and the arrow touched the border and each other. Same height,
+     so the pair still reads as one row of controls. */
+  const wide = { ...style, width: 32 };
   return (
-    <a href={safe} target="_blank" rel="noreferrer noopener" title={title}
-      className="shrink-0 text-[10px] px-1 rounded"
-      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↗</a>
+    <span className="shrink-0 inline-flex items-center gap-1">
+      <a href={safe} target="_blank" rel="noreferrer noopener" title={title} className={box} style={wide}>
+        <span className="inline-flex items-center" style={{ gap: 2 }}>
+          <GhMark size={ICON.xs} />
+          {/* Raised like a superscript rather than sat on the baseline, where it
+              read as a second glyph of equal weight instead of a modifier. */}
+          <span aria-hidden style={{ fontSize: 8, lineHeight: 1, opacity: 0.75, transform: "translateY(-3px)" }}>↗</span>
+        </span>
+      </a>
+      <button type="button" className={box} style={{ ...style, color: copied ? "var(--success)" : style.color }}
+        title={copied ? "Link copied" : "Copy a link to this comment"}
+        onClick={(e) => {
+          e.stopPropagation();
+          /* The address, not the text: what you paste into a chat so somebody
+             lands on this exact remark. */
+          navigator.clipboard?.writeText(safe).then(() => setCopied(true)).catch(() => { /* no clipboard permission */ });
+        }}>
+        {copied ? (
+          <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={2} aria-hidden><path d="M3 8.5l3.2 3.2L13 5" /></svg>
+        ) : (
+          <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden>
+            <path d="M6.5 9.5a2.6 2.6 0 0 0 3.9.3l2-2a2.6 2.6 0 0 0-3.7-3.7l-1 1" />
+            <path d="M9.5 6.5a2.6 2.6 0 0 0-3.9-.3l-2 2a2.6 2.6 0 0 0 3.7 3.7l1-1" />
+          </svg>
+        )}
+      </button>
+    </span>
   );
 }
 
@@ -8097,6 +8340,12 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const [newest, setNewest] = useState(false);
   const setWho = onWho;
   const [cursor, setCursor] = useState(-1);
+  /* Which person, inside Humans. Its own state and not part of `who`, because
+     it has to survive nothing and clear itself the moment you leave the lane —
+     a hidden filter is how a conversation reads as empty for no reason. */
+  const [person, setPerson] = useState<string | null>(null);
+  const [pCursor, setPCursor] = useState(-1);
+  useEffect(() => { setPerson(null); setPCursor(-1); }, [who]);
   const tlRef = useRef<HTMLDivElement>(null);
 
   /*
@@ -8187,7 +8436,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   /** `ms` is what the timeline sorts on, and for a thread it is its LAST
    *  comment. It used to be the first, which is the ordering bug this whole
    *  feature was written for. */
-  type Entry = { at: string; ms: number; key: string; lane: Lane; hot?: number; node: React.ReactNode; body: React.ReactNode };
+  /* `author` is whoever's remark this row IS — for a thread, whoever raised it,
+     the same rule the lane uses. Absent on events, which nobody said. */
+  type Entry = { at: string; ms: number; key: string; lane: Lane; author?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
   const ms = (iso: string) => Date.parse(iso) || 0;
   /** How many of the things said since your last visit are inside this one. */
@@ -8198,7 +8449,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     const mine = d.threads.filter((t) => t.comments[0]?.author === r.author && !cameFrom.has(t.id));
     const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
     entries.push({
-      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human",
+      at: r.submittedAt, ms: ms(r.submittedAt), key: `r${i}`, lane: "human", author: r.author,
       hot: hotOf([`r${r.author}-${r.submittedAt}`]) + mine.reduce((n, t) => n + threadHot(t), 0),
       node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
         {r.state === "CHANGES_REQUESTED" ? "✕" : r.state === "APPROVED" ? "✓" : "💬"}</span>,
@@ -8224,7 +8475,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.humanComments) {
     entries.push({
-      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", hot: hotOf([`c${c.id}`]),
+      at: c.createdAt, ms: ms(c.createdAt), key: `c${c.id}`, lane: "human", author: c.author, hot: hotOf([`c${c.id}`]),
       node: <span style={{ color: "var(--text3)" }}>💬</span>,
       body: <><span id={anchorId(`c${c.id}`)} />
         <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
@@ -8253,7 +8504,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
       // Its LAST comment, not its first. A thread nobody has touched sorts
       // exactly where it always did; one that has just been answered arrives
       // where the answer belongs.
-      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, hot: threadHot(t),
+      at: t.comments[0]?.createdAt ?? "", ms: threadLastAt(t), key: `t${t.id}`, lane, author: t.comments[0]?.author, hot: threadHot(t),
       node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? "✓" : "○"}</span>,
       body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy}
         newSet={newSet} cameFrom={cameFrom.get(t.id)} />,
@@ -8306,9 +8557,41 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   // timeline, where the push that invalidated a review is part of the story.
   const humanCount = entries.filter((e) => e.lane === "human").length;
   const botCount = entries.filter((e) => e.lane === "bot").length;
-  const shown = who === "all" ? entries
+  const laned = who === "all" ? entries
     : who === "new" ? entries.filter((e) => !!e.hot)
     : entries.filter((e) => e.lane === who);
+  /* Who has actually spoken in this lane, most talkative first, counted off the
+     rows the timeline draws rather than off the participant list: somebody who
+     was requested and never answered is not a filter worth offering. */
+  const speakers = (() => {
+    const by = new Map<string, number>();
+    for (const e of laned) if (e.author) by.set(e.author, (by.get(e.author) ?? 0) + 1);
+    return [...by.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  })();
+  const shown = person ? laned.filter((e) => e.author === person) : laned;
+  /* Same dead end as the "New" guard above, one level down: a person picked in
+     Humans who then has nothing on screen. Placed HERE and not up with the
+     other effects on purpose — `speakers` is computed below them, and a hook
+     reading it from up there is the temporal-dead-zone crash that takes the
+     whole window black. */
+  /* Walking one person's remarks. Same landing as the New walker — centred and
+     flashed — because a jump that lands silently on a long page is
+     indistinguishable from one that did nothing. */
+  const step = (dir: 1 | -1) => {
+    if (!shown.length) return;
+    const next = ((pCursor + dir) % shown.length + shown.length) % shown.length;
+    setPCursor(next);
+    const el = document.getElementById(anchorId(shown[next]!.key));
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.classList.remove("agx-found");
+    void el.offsetWidth;
+    el.classList.add("agx-found");
+  };
+  const speakerKey = speakers.map(([n]) => n).join("\u0000");
+  useEffect(() => {
+    if (person && !speakerKey.split("\u0000").includes(person)) { setPerson(null); setPCursor(-1); }
+  }, [person, speakerKey]);
 
   /* The events between the comments. GitHub has no timestamp on either of these
      — "opened" is not on the detail payload and a force-push is a boolean —
@@ -8453,6 +8736,50 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
               {label}<span className="tabular-nums opacity-70">{n}</span>
             </button>
           ))}
+        </div>
+      )}
+      {/* Inside Humans, WHO. On a long review the lane is still forty rows and
+          the question is usually about one person — so the people who have
+          actually spoken get a row of their own, with what each of them said
+          counted, and a pair of steps to walk their remarks without scrolling
+          past everybody else's.
+
+          Only in this lane, and only past two speakers: a sub-filter offering
+          "the author" on a pull request nobody else has touched is a control
+          that can only ever do nothing. */}
+      {who === "human" && speakers.length > 1 && (
+        <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+          {speakers.map(([name, n]) => {
+            const on = person === name;
+            return (
+              <button key={name} onClick={() => { setPerson(on ? null : name); setPCursor(-1); }}
+                title={on ? `Show everyone again` : `Only ${name} — ${n} remark${n === 1 ? "" : "s"}`}
+                className="agx-btn text-[10.5px] px-2 py-0.5 rounded-full inline-flex items-center gap-1.5 tabular-nums"
+                style={{
+                  color: on ? "var(--text)" : "var(--text3)",
+                  border: `1px solid color-mix(in srgb, var(--text) ${on ? 30 : 16}%, transparent)`,
+                  background: on ? "color-mix(in srgb, var(--border) 30%, transparent)" : "transparent",
+                }}>
+                {name}<span className="opacity-70">{n}</span>
+              </button>
+            );
+          })}
+          {person && (
+            <span className="inline-flex items-center gap-1 ml-auto">
+              {/* Steps rather than a scrollbar: the rows are scattered through a
+                  conversation that may be hundreds long, and "the next thing
+                  THEY said" is the movement being asked for. */}
+              <button onClick={() => step(-1)} title={`Previous remark by ${person}`}
+                className="agx-btn inline-grid place-items-center rounded"
+                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↑</button>
+              <button onClick={() => step(1)} title={`Next remark by ${person}`}
+                className="agx-btn inline-grid place-items-center rounded"
+                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↓</button>
+              <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
+                {pCursor >= 0 ? `${pCursor + 1}/${shown.length}` : shown.length}
+              </span>
+            </span>
+          )}
         </div>
       )}
       {/* The timeline, with a rail of marks beside it.
@@ -8977,8 +9304,11 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
  * review, and it exists so a reviewer leaves one notification rather than a
  * dozen. The comments and the verdict travel in a single request.
  */
-function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
-  d: PrDetail; drafts: DraftComment[]; seen: number; busy: boolean;
+function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
+  d: PrDetail; root: string; drafts: DraftComment[]; seen: number; busy: boolean;
+  /** The line comments GitHub is holding in a review you started there and
+   *  never submitted. Read by the panel so Files can draw them too. */
+  held: PendingLine[];
   /** Which request is in flight — see Btn `pending`. */
   busyWhat?: string;
   /** The unsent review, held by the panel and written to storage — not state of
@@ -8997,6 +9327,10 @@ function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, on
    *  is the thing that has to stay a row, and opening every remark at once is
    *  the layout this replaced. */
   const [openDraft, setOpenDraft] = useState<number | null>(null);
+  /* The line comments GitHub is holding in a review you started in its own UI
+     and never submitted. Asked for here rather than carried on PrDetail: only
+     this tab needs them, and the answer is yours alone — GitHub shows a pending
+     review to nobody but its author. */
   // Dropping one renumbers the rest, so an index held across that change points
   // at somebody else's remark. Closed whenever the queue changes length.
   useEffect(() => { setOpenDraft(null); }, [drafts.length]);
@@ -9083,8 +9417,32 @@ function ReviewTab({ d, drafts, seen, busy, busyWhat, draft, onDraft, onDrop, on
             </div>
           ) : (
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-              No line comments queued. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
+              No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
               use the “+” on a line to attach one.
+            </div>
+          )}
+
+          {/* A review started in GitHub's own UI and left unsubmitted. Shown
+              because the tab used to say nothing was queued while GitHub held
+              three comments — and because submitting from here now finishes
+              THAT review rather than replacing it. Read-only: editing somebody's
+              draft through an API that has no endpoint for it is how they get
+              lost. */}
+          {held.length > 0 && (
+            <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+              <div className="px-2.5 py-1.5 text-[10.5px] flex items-center gap-2"
+                style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
+                <span>{held.length} line comment{held.length === 1 ? "" : "s"} drafted on GitHub</span>
+                <span className="ml-auto" style={{ color: "var(--text3)" }}>submitting here sends them</span>
+              </div>
+              {held.map((c, i) => (
+                <div key={`${c.path}:${c.line}:${i}`} className="px-2.5 py-2"
+                  style={{ borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined }}>
+                  <div className="text-[10px] tabular-nums truncate" style={{ color: "var(--text3)" }}
+                    title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</div>
+                  <div className="mt-1"><Md body={c.body} /></div>
+                </div>
+              ))}
             </div>
           )}
 

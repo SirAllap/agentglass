@@ -1507,6 +1507,51 @@ export async function setField(taskId: string, fieldId: string, optionId: string
   } finally { clearTimeout(kill); }
 }
 
+/**
+ * Write a comment on a card's activity.
+ *
+ * `assignee` alongside the text is not decoration. ClickUp's `@Name` inside
+ * `comment_text` is plain text — it reads as a mention and notifies nobody,
+ * which is the worst of both: the card says somebody was told and they were
+ * not. Assigning the comment to them is the documented way to make it arrive,
+ * so the two together mean what the sentence claims.
+ *
+ * `notify_all: false` on purpose. This is a note for one person; waking a whole
+ * watching list for it is how a team learns to mute the card.
+ */
+export async function commentOn(taskId: string, text: string, assignee?: number): Promise<WriteOutcome> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
+  const body = String(text ?? "").trim();
+  // An empty comment is a mistake upstream, not a write. It would still bump
+  // the card's date and show up in somebody's inbox as nothing at all.
+  if (!body) return { ok: false, error: "nothing to say" };
+  const ctl = new AbortController();
+  const kill = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${base}/task/${encodeURIComponent(taskId)}/comment`, {
+      method: "POST",
+      headers: { Authorization: token, "content-type": "application/json" },
+      body: JSON.stringify({
+        comment_text: body,
+        notify_all: false,
+        ...(Number.isFinite(assignee) ? { assignee } : null),
+      }),
+      signal: ctl.signal,
+    });
+    __reset();
+    // Classified here rather than through `put`, and saying the same words: a
+    // refused token must not be a reconnect prompt on three routes and prose on
+    // the fourth.
+    if (r.status === 401 || r.status === 403) return { ok: false, unauthorised: true, error: "ClickUp refused this token" };
+    if (!r.ok) return { ok: false, error: `ClickUp answered ${r.status}` };
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Could not reach ClickUp" };
+  } finally { clearTimeout(kill); }
+}
+
 /** The full card: description, subtasks, checklists — everything the list row
  *  cannot hold. Read on demand, never for every row. */
 export async function taskDetail(taskId: string): Promise<CallResult<TaskDetail>> {
