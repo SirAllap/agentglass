@@ -35,6 +35,14 @@
 # `sha256sum` is GNU coreutils; macOS ships `shasum`. The release runners are
 # both, and the first tag cut after these scripts landed died on a macOS runner
 # with "sha256sum: command not found" — after downloading three tarballs.
+# `nproc` is GNU; macOS has `sysctl -n hw.ncpu`. With neither, `make -j""` runs
+# with NO limit — which is how the first macOS release build died: ncurses'
+# makefiles raced and `make` reported "No rule to make target ../lib/libtinfo.a"
+# for a library its own tree had not finished writing yet.
+jobs_n() {
+  nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -120,7 +128,7 @@ build_uuid() {
     CC="$CC" ./configure ${TRIPLE:+--host="$TRIPLE"} --prefix="$WORK/prefix" \
       --disable-all-programs --enable-libuuid --disable-shared --enable-static \
       --without-python --without-systemd --without-udev >/dev/null
-    make -s -j"$(nproc)" && make -s install )
+    make -s -j"$(jobs_n)" && make -s install )
 }
 
 build_task() {
@@ -147,7 +155,7 @@ build_task() {
     # No `--target task`: 2.6.2 names its executable target differently from
     # the binary, and asking for one that does not exist ends with cmake
     # cheerfully doing nothing and the copy below failing on a missing file.
-    cmake --build build -j"$(nproc)" >/dev/null )
+    cmake --build build -j"$(jobs_n)" >/dev/null )
 }
 
 [ "$NEEDS_UUID" = "1" ] && [ "${SKIP_UUID:-0}" != "1" ] && build_uuid
