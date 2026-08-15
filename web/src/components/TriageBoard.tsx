@@ -211,13 +211,38 @@ export function TriageBoard({
     const hay = [
       `#${p.number}`, String(p.number), p.title, p.author, p.headRefName, p.baseRefName,
       ...(p.labels ?? []).map((l) => l.name),
+      /* The PEOPLE, which is the question this box is actually asked: "where is
+         Javi on this board". It matched the author and stopped, so typing a
+         name dimmed every card — including the one saying "Waiting on
+         javidoe" in as many words. Assignees and requested reviewers both:
+         who owns it and who is being waited on are one question to somebody
+         looking for their own name. */
+      ...(p.assignees ?? []),
+      ...(p.reviewers ?? []).map((r) => r.login),
     ].join(" ").toLowerCase();
     return hay.includes(needle);
   }, [needle]);
   const hits = useMemo(() => (needle ? cards.filter(matches).length : 0), [needle, cards, matches]);
+  /**
+   * Lanes opened past their cap, by lane id.
+   *
+   * The cap keeps the board a glance, and the four it left over used to be a
+   * button that sent you to the TABLE — a different surface, sorted
+   * differently, with the lane you were reading nowhere in it. "¿Qué sentido
+   * tiene tener las cards entonces?" is the right question: the rest of a lane
+   * belongs in the lane. The board already holds those rows; only the slice was
+   * hiding them.
+   */
+  const [openLanes, setOpenLanes] = useState<Record<string, boolean>>({});
   const [cur, setCur] = useState<{ lane: number; row: number }>({ lane: 0, row: 0 });
   const frame = useRef<HTMLDivElement>(null);
-  const shown = useCallback((i: number) => (lanes.get(cols[i]?.id ?? "review") ?? []).slice(0, LANE_CAP), [lanes, cols]);
+  // Keyboard navigation walks exactly what is drawn — an opened lane included,
+  // or j past the cap would step onto a card nobody can see.
+  const shown = useCallback((i: number) => {
+    const id = cols[i]?.id ?? "review";
+    const all = lanes.get(id) ?? [];
+    return openLanes[id] ? all : all.slice(0, LANE_CAP);
+  }, [lanes, cols, openLanes]);
   const at = shown(cur.lane)[cur.row];
 
   // Keep the cursor on something. Lanes empty and fill as checks land, and a
@@ -427,7 +452,8 @@ export function TriageBoard({
           <div className="grid gap-2.5 h-full" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(268px, 1fr))` }}>
             {cols.map((l, i) => {
               const all = lanes.get(l.id) ?? [];
-              const rows = all.slice(0, LANE_CAP);
+              const opened = !!openLanes[l.id];
+              const rows = opened ? all : all.slice(0, LANE_CAP);
               const more = all.length - rows.length;
               return (
                 /* A column is a box of its own height: heading fixed, cards
@@ -464,7 +490,12 @@ export function TriageBoard({
                     </h3>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">
+                  {/* `pb-2`: the last thing in a lane sat flush against the
+                      bottom edge of the column, and a bordered button there
+                      reads as clipped — "el botón Show fewer está como
+                      comido". Cards had `mb-2` between them and nothing after
+                      the final one. */}
+                  <div className="flex-1 min-h-0 overflow-y-auto agx-scroll pb-2">
                     {waiting ? (
                       /* The shape of the thing being waited for, and no text:
                          a lane cannot honestly say how many it will hold. */
@@ -482,13 +513,25 @@ export function TriageBoard({
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
                             onAct={onAct} busy={busy} acting={acting} dim={!matches(p)} root={root} />
                         ))}
-                        {/* Counted, not hidden. A lane may be forty on a bad
-                            week, and the column scrolls but the cap is what
-                            keeps the board a glance rather than a list. */}
+                        {/* Counted, and openable HERE. The cap is what keeps
+                            the board a glance on a bad week; the rest of the
+                            lane is one press away and lands in the lane it
+                            belongs to, not in a table on the other side of the
+                            panel. The column already scrolls. */}
                         {more > 0 && (
-                          <button onClick={onShowTable} className="w-full rounded-md py-1 text-[10px]"
+                          <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: true }))}
+                            title={`Show the other ${more} in this lane`}
+                            className="w-full rounded-md py-1 mb-2 text-[10px]"
                             style={{ color: "var(--text3)", border: edge(16) }}>
                             +{more} more in this lane
+                          </button>
+                        )}
+                        {opened && all.length > LANE_CAP && (
+                          <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: false }))}
+                            title={`Back to the first ${LANE_CAP}`}
+                            className="w-full rounded-md py-1 mb-2 text-[10px]"
+                            style={{ color: "var(--text4)", border: edge(12) }}>
+                            Show fewer
                           </button>
                         )}
                         {all.length === 0 && (

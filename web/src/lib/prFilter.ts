@@ -200,10 +200,50 @@ export function activeCount(s: FilterState): number {
   return n;
 }
 
+/**
+ * What the box matches: the number, the title, and the PEOPLE.
+ *
+ * It was number, title and author, which answers "whose pull request is this"
+ * and not the question actually asked of a board — "where is Javi on this".
+ * Typing a reviewer's name found nothing, while the card under the cursor said
+ * "Waiting on javidoe" in as many words.
+ *
+ * Assignees and requested reviewers both, because on this board they are the
+ * same question wearing two hats: the one is who owns it, the other is who is
+ * being waited on, and a person looking for their own name does not care which
+ * column it landed in. The facets stay the exact filters they were — this is
+ * the free-text box, where a partial name is the whole point.
+ *
+ * Logins, because that is what a row carries. A display name is not on the
+ * summary at all, so matching it would need a fetch per row.
+ */
+/**
+ * Who on this row the query names, when that is why it is here.
+ *
+ * A row that matched on its title explains itself; one that matched because a
+ * person's login contains "javi" does not, and a list that answers a name with
+ * rows carrying somebody else's name in the author column reads as broken. The
+ * caller draws this beside the row — see PrRow.
+ *
+ * Empty when the text matches the title or the author, because then the row is
+ * already legible, and empty when there is no text at all.
+ */
+export function peopleMatched(p: PrSummary, text: string): string[] {
+  const q = text.trim().toLowerCase();
+  if (!q) return [];
+  if (p.title.toLowerCase().includes(q) || p.author.toLowerCase().includes(q)) return [];
+  const who = [...(p.assignees ?? []), ...(p.reviewers ?? []).map((r) => r.login)];
+  return who.filter((l, i) => l.toLowerCase().includes(q) && who.indexOf(l) === i);
+}
+
 function textMatch(p: PrSummary, text: string): boolean {
   const q = text.trim().toLowerCase();
   if (!q) return true;
-  return String(p.number).includes(q) || p.title.toLowerCase().includes(q) || p.author.toLowerCase().includes(q);
+  if (String(p.number).includes(q) || p.title.toLowerCase().includes(q) || p.author.toLowerCase().includes(q)) return true;
+  // `?? []` on both: a row from a fixture, an older cache or a by-branch lookup
+  // may carry neither field, and a filter is not the place to find that out.
+  if ((p.assignees ?? []).some((a) => a.toLowerCase().includes(q))) return true;
+  return (p.reviewers ?? []).some((r) => r.login.toLowerCase().includes(q));
 }
 
 // AND across facets, OR within a facet. A facet with nothing selected is a

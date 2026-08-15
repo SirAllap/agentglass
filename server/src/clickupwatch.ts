@@ -379,7 +379,7 @@ export function stopCardWatch(): void {
  * destination that leaves this app.
  *
  * The title, though, is enough: the watcher already keeps every card of yours
- * it has seen, with its id and its `PROJ-…` label, in the file it uses to tell
+ * it has seen, with its id and its `ORBIT-…` label, in the file it uses to tell
  * a status change from a new assignment. Looking a title up in that costs
  * nothing and is not a guess.
  *

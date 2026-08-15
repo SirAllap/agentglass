@@ -691,11 +691,22 @@ describe("assigning on GitHub, and the card on the other board", () => {
 });
 
 describe("the ClickUp half, as its own controls", () => {
-  it("reuses the card's own status pill and its dropdown", () => {
-    // A status has a colour its board gave it, and a row of bordered words
-    // throws that away — which is the one thing that makes the list readable.
-    expect(src).toContain("<StatusPill status={pick || card.status} color={statusColor(statuses, pick || card.status)} />");
-    expect(src).toContain("leave it where it is");
+  it("picks the status through the app's own Select, not a list in the flow", () => {
+    /*
+     * A status keeps the colour its board gave it — a row of bordered words
+     * throws away the one thing that makes seventeen of them scannable — so the
+     * options are pills.
+     *
+     * They go through `Select` because the list used to be drawn in the flow,
+     * inside a column that clips and scrolls with a Done button under it: it
+     * opened INSIDE the container, most of the statuses were unreachable, and
+     * near the bottom of the screen there was nowhere for it to go. `Select`
+     * portals out of the clipping and flips above the trigger.
+     */
+    expect(src).toContain("value={pick}");
+    expect(src).toContain("value: x.status, label: x.status, tint: x.color, pill: true,");
+    expect(src).toContain('{ value: "", label: "leave it where it is" }');
+    expect(src).not.toContain("setStOpen");
   });
 
   it("draws people as faces, with their own colour when there is no picture", () => {

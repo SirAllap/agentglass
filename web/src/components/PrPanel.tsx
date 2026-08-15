@@ -65,7 +65,7 @@ import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict } from "../lib/mergeReason.ts";
-import { parseQuery, applyFilters, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
+import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
 import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
@@ -141,7 +141,7 @@ const DETAIL_CACHE_MAX = 40;
 /** A line comment sitting in YOUR unsubmitted review on GitHub. Not a thread —
  *  it has no id to reply to and no state to resolve — and not one of our own
  *  drafts either, which live only in this browser until they are sent. */
-type PendingLine = { path: string; line: number | null; startLine?: number | null; body: string };
+type PendingLine = { path: string; line: number | null; startLine?: number | null; body: string; url?: string };
 
 const detailKey = (root: string, n: number) => `${root}#${n}`;
 const heldDetail = (root: string, n: number): PrDetail | null => DETAIL_CACHE.get(detailKey(root, n)) ?? null;
@@ -1254,8 +1254,12 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
   );
 }
 
-function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin }: {
+function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q }: {
   p: PrSummary; active: boolean; onSelect: () => void; onReview: () => void;
+  /** What is in the filter box, so a row that is here because of a PERSON can
+   *  say which one. Without it a search for "javi" returns rows whose author
+   *  column says somebody else, and the list looks like it ignored you. */
+  q?: string;
   /** On the bar at the top. Undefined where there is no repository to pin it
    *  against, and the control then does not appear at all. */
   pinned?: boolean; onTogglePin?: () => void;
@@ -1310,6 +1314,18 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin }: {
         </div>
         <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
           <span className="truncate shrink-0" style={{ maxWidth: 140 }}>{p.author}</span>
+          {/* Why this row is in the answer. Assignees and requested reviewers
+              both — on a board they are one question, "where is this person",
+              and which hat they wear on a given pull request is not what was
+              being asked. */}
+          {peopleMatched(p, q ?? "").slice(0, 3).map((login) => (
+            <span key={login} className="shrink-0 flex items-center gap-1 rounded px-1"
+              title={`${login} is on this pull request`}
+              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)" }}>
+              <Avatar login={login} size={ICON.xs} />
+              <span className="truncate" style={{ maxWidth: 110 }}>{login}</span>
+            </span>
+          ))}
           {/*
             * Where it lands.
             *
@@ -3554,7 +3570,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <div style={{ opacity: listState.loading ? 0.45 : 1, transition: "opacity .15s" }}>
                 <PrTableHead />
                 {visiblePrs.map((p) => (
-                  <PrRow key={p.number} p={p} active={p.number === rowCursor}
+                  <PrRow key={p.number} p={p} active={p.number === rowCursor} q={filters.text}
                     onSelect={() => openPr(p.number)} onReview={() => doLocalReview(p.number)}
                     pinned={!!repo && isPinned(repo.nameWithOwner, p.number)}
                     onTogglePin={repo ? () => togglePin(repo.nameWithOwner, p.number, p.title) : undefined} />
@@ -3928,7 +3944,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   />
                   </div>
                   <FileRail d={d} path={showingFile ?? selFile}
-                    drafts={myDrafts}
+                    drafts={myDrafts} held={held}
                     /* The window where the held copy is on screen and the
                        refresh has not landed — exactly when an empty answer is
                        a wait rather than a fact. */
@@ -5316,7 +5332,34 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
                  than two buttons pressed hopefully. */
               <div className="px-1 text-[10.5px]" style={{ color: "var(--text2)" }}>
                 <div className="mb-1" style={{ color: "var(--text4)" }}>This will:</div>
-                {ghChanged > 0 && <div>· {title} on GitHub</div>}
+                {/* WHO, not just "something will change here".
+                    It said "Request reviewers on GitHub" for a step that was
+                    taking a reviewer OFF — the same sentence for both
+                    directions, while the ClickUp lines under it named the
+                    person either way. Reported as: it should say remove that
+                    user, with their avatar like adding one has. */}
+                {ghChanged > 0 && (() => {
+                  const add = sel.filter((x) => !selected.includes(x));
+                  const gone = selected.filter((x) => !sel.includes(x));
+                  const line = (v: string, on: boolean) => {
+                    const o = options.find((x) => x.value === v);
+                    return (
+                      <div key={`${on ? "+" : "-"}${v}`} className="flex items-center gap-1.5 pl-3">
+                        <span className="shrink-0" style={{ color: on ? "var(--success)" : "var(--error)" }}>{on ? "+" : "−"}</span>
+                        {o?.avatar != null && <Avatar login={o.avatar} size={14} />}
+                        {o?.color != null && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: `#${o.color}` }} />}
+                        <span className="truncate">{o?.label ?? v}</span>
+                      </div>
+                    );
+                  };
+                  return (
+                    <>
+                      <div>· {title} on GitHub</div>
+                      {add.map((v) => line(v, true))}
+                      {gone.map((v) => line(v, false))}
+                    </>
+                  );
+                })()}
                 {/* Nothing that is not a change: with an empty plan there is
                     nothing to confirm and this step does not happen at all. */}
                 {plan.lines.map((l) => <div key={l}>· {l}</div>)}
@@ -5430,7 +5473,6 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   const [was, setWas] = useState<Set<number>>(new Set());
   const [pick, setPick] = useState<string>("");
   const [q, setQ] = useState("");
-  const [stOpen, setStOpen] = useState(false);
   /* Folded away, and it comes back.
      This is the optional half of the errand and most presses of this menu are
      only about the reviewer — so it can be put away to a strip, which leaves
@@ -5586,28 +5628,38 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
                 colour its board gave it, and a row of bordered words throws
                 that away — which is the one thing that makes this list
                 readable at a glance. */}
-            <button onClick={() => setStOpen((o) => !o)}
-              className="agx-btn w-full text-left rounded px-1 py-1 hover:bg-white/5 flex items-center gap-2">
-              <span className="min-w-0 truncate">
-                <StatusPill status={pick || card.status} color={statusColor(statuses, pick || card.status)} />
-              </span>
-              {!pick && <span className="text-[9.5px]" style={{ color: "var(--text4)" }}>unchanged</span>}
-              <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>▾</span>
-            </button>
-            {stOpen && (
-              <div className="agx-scroll mt-1 rounded-lg flex flex-col overflow-y-auto"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", maxHeight: 220 }}>
-                <button className="text-left px-2 py-1.5 hover:bg-white/5 text-[10.5px]"
-                  style={{ color: "var(--text3)" }}
-                  onClick={() => { setPick(""); setStOpen(false); }}>
-                  leave it where it is
-                </button>
-                {statuses.filter((x) => x.status !== card.status).map((x) => (
-                  <button key={x.status} className="text-left px-2 py-1.5 hover:bg-white/5"
-                    onClick={() => { setPick(x.status); setStOpen(false); }}>
-                    <StatusPill status={x.status} color={x.color} dim={x.type === "done" || x.type === "closed"} />
-                  </button>
-                ))}
+            {/*
+              * The app's own Select, not a list drawn in the flow.
+              *
+              * This was an absolutely-placed panel under the button, inside a
+              * column that clips and scrolls and has a "Done" button under it:
+              * the list opened INSIDE the container, most of the statuses were
+              * unreachable, and near the bottom of the screen there was nowhere
+              * for it to go. Reported exactly that way. `Select` portals out of
+              * the clipping and flips above the trigger when down does not fit,
+              * which is what every other menu in this app does.
+              *
+              * "leave it where it is" is an option rather than a button above
+              * the list, because it is one of the choices — and being the empty
+              * value it is also what the control already holds.
+              */}
+            <Select
+              value={pick}
+              onChange={setPick}
+              title="Status"
+              options={[
+                { value: "", label: "leave it where it is" },
+                ...statuses.filter((x) => x.status !== card.status).map((x) => ({
+                  value: x.status, label: x.status, tint: x.color, pill: true,
+                  dim: x.type === "done" || x.type === "closed",
+                })),
+              ]}
+            />
+            {!pick && (
+              <div className="mt-1 text-[9.5px] flex items-center gap-2" style={{ color: "var(--text4)" }}>
+                <span>now</span>
+                <StatusPill status={card.status} color={statusColor(statuses, card.status)} />
+                <span>· unchanged</span>
               </div>
             )}
           </div>
@@ -6572,12 +6624,17 @@ function PeekButton({ path, onPeek }: { path: string; onPeek: (p: string) => voi
   );
 }
 
-function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
+function FileTree({ node, sel, onPick, onPeek, seen, drafts, pending, depth = 0 }: {
   node: TreeNode<PrFile>; sel: string | null; onPick: (p: string) => void;
   /** Open the whole file in an editor, over the panel. The diff shows what
    *  changed; this is for the times the answer is in the part that did not. */
   onPeek?: (p: string) => void | Promise<void>;
-  seen: (p: string) => boolean; drafts: (p: string) => number; depth?: number;
+  seen: (p: string) => boolean; drafts: (p: string) => number;
+  /** How many comments GitHub is holding in an unsubmitted review on this file.
+   *  A different thing from `drafts`, which never left this browser, and the
+   *  reason the tree needs its own mark: a review you started on the website is
+   *  invisible here otherwise, and you find out you had one by submitting. */
+  pending: (p: string) => number; depth?: number;
 }) {
   return (
     <>
@@ -6586,13 +6643,14 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
           <div className="truncate text-[10px] px-1 py-0.5" style={{ paddingLeft: 6 + depth * 10, color: "var(--text3)" }} title={dir.path}>
             {dir.name}
           </div>
-          <FileTree node={dir} sel={sel} onPick={onPick} onPeek={onPeek} seen={seen} drafts={drafts} depth={depth + 1} />
+          <FileTree node={dir} sel={sel} onPick={onPick} onPeek={onPeek} seen={seen} drafts={drafts} pending={pending} depth={depth + 1} />
         </div>
       ))}
       {node.files.map((f) => {
         const base = f.path.split("/").pop() ?? f.path;
         const on = sel === f.path;
         const n = drafts(f.path);
+        const pend = pending(f.path);
         return (
           <button key={f.path} onClick={() => onPick(f.path)}
             // Alt-click opens it whole, which is the gesture that costs nothing
@@ -6611,6 +6669,18 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
                 opening it. */}
             {(() => { const g = statusGlyph(f.status); return <span className="shrink-0 text-center leading-none" style={{ width: 12, fontSize: 10, color: g.tint }} title={g.title}>{g.ch}</span>; })()}
             <span className="truncate text-[10.5px]">{base}</span>
+            {/* Something is drafted here, on GitHub. A count would read as the
+                thread count two marks along; a speech bubble with a pen says
+                what it is, and the title says the rest. */}
+            {pend > 0 && (
+              <span className="shrink-0 ml-1" title={`${pend} comment${pend === 1 ? "" : "s"} drafted on GitHub in your unsubmitted review`}>
+                <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" aria-hidden="true"
+                  stroke="var(--primary)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 4.2a1.7 1.7 0 0 1 1.7-1.7h7.6a1.7 1.7 0 0 1 1.7 1.7v4.6a1.7 1.7 0 0 1-1.7 1.7H6.4L3.2 13v-2.5h-.7z" />
+                  <path d="M6 6.6h4" />
+                </svg>
+              </span>
+            )}
             {n > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--warning)" }}>{n}</span>}
             {f.comments > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--primary)" }}>{f.comments}</span>}
             {seen(f.path) && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--success)" }}>✓</span>}
@@ -6916,6 +6986,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
   };
 
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
+  const heldFor = (p: string) => held.filter((x) => x.path === p).length;
   /** This file's pending comments, keyed the way a diff row asks for them:
    *  the side letter and the line, so a row can find its own without scanning
    *  the whole list on every render. */
@@ -7576,11 +7647,19 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
         {(oneFile || shownFiles.length > 4) && (
           <aside className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
             style={{ borderRight: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            {/* `showing`, not `sel`.
+                
+                In one-file mode the first file is on screen before anybody has
+                clicked anything, and `sel` is still null — so the pane showed a
+                diff while the tree beside it marked nothing, and the row you
+                were reading looked no different from the eleven you were not.
+                `showing` is the same expression the diff itself renders from,
+                which is what makes them agree. */}
             <FileTree
-              node={buildFileTree(shownFiles)} sel={sel}
+              node={buildFileTree(shownFiles)} sel={showing}
               onPick={(path) => { onSel(path); setFolded((cur) => { const n = new Set(cur); n.delete(path); return n; }); scrollToFileStable(() => frameRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)); }}
               seen={(path) => seenFiles.includes(path)}
-              drafts={draftsFor} onPeek={onPeek}
+              drafts={draftsFor} pending={heldFor} onPeek={onPeek}
             />
           </aside>
         )}
@@ -7610,7 +7689,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
       {(oneFile ? shownFiles.filter((f) => f.path === showing) : shownFiles).map((f) => {
         const done = seenFiles.includes(f.path);
         const open = !folded.has(f.path);
-        const focused = sel === f.path;
+        // Same reason as the tree above: what is on screen is what is marked.
+        const focused = showing === f.path;
         const nd = draftsFor(f.path);
         const pendingHere = pendingBy(f.path);
         const heldHere = heldBy(f.path);
@@ -7722,7 +7802,16 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                     how a click in the tree lands on a file you then cannot
                     scroll, and it is not what GitHub does. Long files are
                     folded by default instead, which is the honest cap. */}
-                <div className="flex" style={{ overflowX: "auto" }}>
+                {/* No overflow here, deliberately. `overflow-x: auto` alone is
+                    not one axis: the other computes to `auto` too, so this was
+                    a second scroll container wrapped around the diff's own —
+                    two vertical scrollbars side by side at the edge of the
+                    column, one of them themed and one of them not, and the
+                    inner one behaving like it was dead because the outer had
+                    the wheel. Measured in Chrome: `overflow-x:auto` reports
+                    `overflowY: auto`. The diff pane inside scrolls itself, and
+                    the files column is the one that scrolls vertically. */}
+                <div className="flex min-w-0">
                   {/* An image first, and a file with no hunks second.
                       `gh pr diff` still emits a header for a binary file — just
                       "Binary files … differ" and nothing else — so the parser
@@ -7809,6 +7898,18 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                                     style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
                                     <span>drafted on GitHub</span>
                                     <span className="ml-auto" style={{ color: "var(--text3)" }}>sent when you submit</span>
+                                    {/* The way OUT to the only place it can be
+                                        edited. No API changes a comment inside
+                                        a pending review without submitting the
+                                        review, so the honest affordance is the
+                                        page where it can be changed rather than
+                                        a button here that would have to lie. */}
+                                    {h.url && (
+                                      <button onClick={() => openExternal(h.url!)}
+                                        title="Edit this pending comment on GitHub"
+                                        className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                                    )}
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={h.body} /></div>
                                 </div>
@@ -7921,6 +8022,15 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, sel, on
                       style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--text2)" }}>
                       <span>drafted on GitHub{h.line == null ? " · outdated" : `:${h.line}`}</span>
                       <span className="ml-auto" style={{ color: "var(--text3)" }}>the diff does not reach its line</span>
+                      {/* And here more than anywhere: this one has no row to sit
+                          under, so the page where it lives is the only place it
+                          can be seen in context. */}
+                      {h.url && (
+                        <button onClick={() => openExternal(h.url!)}
+                          title="Edit this pending comment on GitHub"
+                          className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                          style={{ color: "var(--primary)" }}>Edit ↗</button>
+                      )}
                     </div>
                     <div className="px-2.5 py-2"><Md body={h.body} /></div>
                   </div>
@@ -9699,8 +9809,14 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
             </div>
           ) : (
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-              No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
-              use the “+” on a line to attach one.
+              {/* "Nothing queued" was a lie whenever GitHub was holding a review
+                  started on the website: nothing is queued HERE, and something
+                  is going out. The box below says how many; this line stops
+                  contradicting it. */}
+              {held.length > 0
+                ? <>Nothing queued from here — {held.length} comment{held.length === 1 ? " is" : "s are"} already drafted on GitHub, below.</>
+                : <>No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
+                  use the “+” on a line to attach one.</>}
             </div>
           )}
 
@@ -9720,8 +9836,18 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               {held.map((c, i) => (
                 <div key={`${c.path}:${c.line}:${i}`} className="px-2.5 py-2"
                   style={{ borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined }}>
-                  <div className="text-[10px] tabular-nums truncate" style={{ color: "var(--text3)" }}
-                    title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</div>
+                  <div className="text-[10px] tabular-nums flex items-center gap-2">
+                    <span className="truncate" title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</span>
+                    {/* The way to change it. Nothing in this app can: the API
+                        has no endpoint for a comment inside a pending review,
+                        so the button that would edit it here would have to
+                        submit the review to do it. */}
+                    {c.url && (
+                      <button onClick={() => openExternal(c.url!)} title="Edit this comment on GitHub"
+                        className="agx-btn shrink-0 ml-auto px-1.5 py-0.5 rounded"
+                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                    )}
+                  </div>
                   <div className="mt-1"><Md body={c.body} /></div>
                 </div>
               ))}

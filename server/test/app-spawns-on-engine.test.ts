@@ -33,8 +33,11 @@ describe("where the app opens its windows", () => {
   });
 
   it("opens them on the engine instead, all three of them", () => {
-    // Review, issue, and the phone's plus.
-    expect(terminal.match(/engineWindowRunning\(/g)?.length).toBe(4);
+    /* Review, issue, the phone's plus — and the resume picker, twice: once for
+       "in a tab", once as the fallback when there is no window to split. */
+    expect(terminal.match(/engineWindowRunning\(/g)?.length).toBe(6);
+    // Beside what is on screen, when the picker asks for that.
+    expect(terminal).toContain("engineSplitRunning(cwd, cwd, argv)");
     expect(terminal).toContain("`pr-${number}`");
   });
 

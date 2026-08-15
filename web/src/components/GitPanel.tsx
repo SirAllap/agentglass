@@ -16,6 +16,7 @@ import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { CHIP } from "./workspace/Chrome.tsx";
+import { ICON } from "../lib/iconSize.ts";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding, GitSubmodule } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
@@ -618,7 +619,13 @@ function DirRow({ name, depth, count, collapsed, onToggle }: {
   return (
     <div onClick={onToggle} className="flex items-center gap-1.5 py-0.5 rounded-md cursor-pointer select-none hover:opacity-80"
       style={{ paddingLeft: 8 + depth * 12 }}>
-      <span className="w-2.5 text-[10px] shrink-0 t-dim2">{collapsed ? "▶" : "▼"}</span>
+      {/* Drawn and rotated rather than two typed characters. A 10px ▶ is a
+          speck: the same finding that took the ▾ out of the notification rows
+          and out of the git group headings. */}
+      <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden
+        className="shrink-0" style={{ color: "var(--text4)", transform: collapsed ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
+        <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
       <span className="text-[11px] truncate" style={{ color: "var(--text2)" }}>{name}</span>
       {/* Only meaningful while folded — otherwise you can just count the rows. */}
       {collapsed && <span className="text-[10px] tabular-nums t-dim2">{count}</span>}
@@ -1095,6 +1102,16 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
   const all = useMemo(() => [...(tree?.staged ?? []), ...(tree?.unstaged ?? [])], [tree]);
   const selected = useMemo(() => all.find((c) => keyOf(c) === selKey) ?? all[0] ?? null, [all, selKey]);
+  /*
+   * What the LIST marks, which is not the same as what was clicked.
+   *
+   * With nothing clicked yet the pane already shows the first file — that is
+   * the `?? all[0]` above — but the rows compared against `selKey`, which is
+   * still null, so a diff was on screen while every row beside it looked
+   * equally unselected. Reported for this list and for the pull-request one,
+   * which had the same split between "what is displayed" and "what is marked".
+   */
+  const activeKey = selected ? keyOf(selected) : null;
 
   /**
    * Mid-merge, open the conflict — in the resolver, not in the file list.
@@ -2450,7 +2467,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const renderFiles = (changes: GitFileChange[], action: "stage" | "unstage", onAction: (c: GitFileChange) => void, prefix: string) => {
     const row = (c: GitFileChange, depth?: number) => (
       <FileRow key={prefix + c.file_path} c={c} root={root} writeEnabled={writeEnabled} depth={depth}
-        desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)}
+        desc={descMap.get(c.file_path)?.description} active={activeKey === keyOf(c)}
         onSelect={() => setSelKey(keyOf(c))} action={action} onAction={() => onAction(c)}
         onBlame={writeEnabled ? () => setBlamePath({ path: c.file_path }) : undefined}
         onMenu={(x, y) => setRowMenu({
@@ -2928,7 +2945,17 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     */}
                     <button onClick={refreshAll} disabled={refreshing} title="Refresh this view and the working tree"
                       className="text-[11px] px-2 py-1 rounded-lg disabled:opacity-60" style={{ color: refreshed ? "var(--success)" : "var(--text2)" }}>
-                      <span className={refreshing ? "inline-block animate-spin" : "inline-block"}>{refreshed && !refreshing ? "✓" : "⟳"}</span>
+                      <span className={refreshing ? "inline-flex animate-spin" : "inline-flex"} aria-hidden>
+                        {refreshed && !refreshing ? (
+                          <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 14 14" fill="none">
+                            <path d="M3 7.4l2.6 2.6L11 4.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        ) : (
+                          <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 14 14" fill="none">
+                            <path d="M12 7a5 5 0 1 1-1.6-3.7M12 2.2V4.8H9.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </span>
                     </button>
                   </div>
                 </div>

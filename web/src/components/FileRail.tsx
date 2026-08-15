@@ -17,7 +17,8 @@ import { useMemo } from "react";
 // they came from, rather than squeeze all three into something none of them can
 // be read in.
 import type { PrDetail } from "../../../shared/types.ts";
-import { railScan, checksAbout, threadsAbout, queuedOn, railAge,  railPreview, type RailDraft, type RailMention } from "../lib/fileRail.ts";
+import { railScan, checksAbout, threadsAbout, queuedOn, heldOn, railAge,  railPreview, type RailDraft, type RailHeld, type RailMention } from "../lib/fileRail.ts";
+import { openExternal } from "../lib/externalUrl.ts";
 import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict } from "../lib/mergeReason.ts";
 import { ICON } from "../lib/iconSize.ts";
 
@@ -78,7 +79,7 @@ const lines = (line: number, startLine?: number | null) =>
 export type RailVerdict = "approve" | "request_changes" | "comment";
 
 export function FileRail({
-  d, path, drafts, loading, queuedCount, verdict,
+  d, path, drafts, held, loading, queuedCount, verdict,
   onGoConversation, onGoChecks, onGoReview, onGoToMention, onMerge, canMerge, awaitingChecks,
   onApprove, onRequestChanges, onComment, onSubmit, body, onBody, busyWhat,
 }: {
@@ -92,6 +93,10 @@ export function FileRail({
    *  no section, which is the difference between "nothing queued" and "this
    *  panel cannot know". */
   drafts?: RailDraft[];
+  /** Every comment GitHub is holding in your unsubmitted review, all files. The
+   *  rail keeps this file's. Optional for the same reason `drafts` is: no prop
+   *  is "this caller cannot know", not "there are none". */
+  held?: RailHeld[];
   /** The detail on screen is being refreshed. Everything below is filtered from
    *  it, so while this is true an empty answer is a wait and not a fact — see
    *  the empty states. */
@@ -195,6 +200,7 @@ export function FileRail({
   const failing = useMemo(() => checksAbout(d.checks.failing ?? [], path), [d.checks.failing, path]);
   const threads = useMemo(() => threadsAbout(d, path), [d, path]);
   const queued = useMemo(() => queuedOn(drafts, path), [drafts, path]);
+  const heldHere = useMemo(() => heldOn(held, path), [held, path]);
   const standing = checksStanding(d.checks, awaitingChecks);
   const allClear = d.mergeState === "CLEAN" && standing === "green";
   /*
@@ -246,7 +252,14 @@ export function FileRail({
   /* The whole review's queued lines, not this file's — what one submit is about
      to send. `drafts` is every file's, so its length is the same number rather
      than an estimate of it, and either prop alone is enough to say this. */
-  const willSend = queuedCount ?? drafts?.length;
+  const willSend = (queuedCount ?? drafts?.length) === undefined
+    ? undefined
+    : (queuedCount ?? drafts?.length ?? 0) + (held?.length ?? 0);
+  /* `held` counts here because submitting from this app finishes the review
+     GitHub is holding rather than opening a second one — so those comments go
+     out with this verdict. The box used to read "No line comments queued" over
+     three comments drafted on the website, which is the one sentence that made
+     somebody submit thinking they were sending nothing. */
   const goesWith = willSend
     ? `${willSend} line comment${willSend === 1 ? " goes" : "s go"} with it — one notification, not ${willSend + 1}.`
     : willSend === 0
@@ -465,6 +478,34 @@ export function FileRail({
                   ))}
                 </>
               )}
+            </Sec>
+          )}
+
+          {/* Started on the website and left there. Shown short on purpose: the
+              Review tab prints these whole, and what this column is for is
+              noticing one exists on the file you are reading — with the way to
+              the only place it can be edited, which is GitHub. */}
+          {heldHere.length > 0 && (
+            <Sec title="Drafted on GitHub"
+              action={{ label: "Review", on: onGoReview }}>
+              <p className="m-0 mb-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
+                {heldHere.length} comment{heldHere.length === 1 ? "" : "s"} in your unsubmitted review — they go out when you submit.
+              </p>
+              {heldHere.map((h, i) => (
+                <div key={i} className="mb-2 last:mb-0 text-[11px] flex items-start gap-1.5">
+                  <span className="min-w-0">
+                    <span style={{ color: "var(--primary)" }}>
+                      {h.line == null ? "Outdated" : lines(h.line)}
+                    </span>
+                    <Quote body={h.body} max={90} />
+                  </span>
+                  {h.url && (
+                    <button onClick={() => openExternal(h.url!)} title="Edit this comment on GitHub"
+                      className="agx-btn shrink-0 ml-auto text-[9.5px] px-1 rounded"
+                      style={{ color: "var(--primary)" }}>Edit ↗</button>
+                  )}
+                </div>
+              ))}
             </Sec>
           )}
         </>

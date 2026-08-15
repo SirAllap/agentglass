@@ -82,10 +82,22 @@ const Cap = ({ k }: { k: string }) => (
 );
 
 function Line({ n, text, tone }: { n: number; text: string; tone?: "ours" | "theirs" }) {
+  /* Pinned to the left edge and opaque, like the diff panes: the lines are
+     `white-space: pre`, so a long one scrolls this pane sideways, and a number
+     that scrolls away with the code stops answering the only question it is
+     there for. Opaque because the code passes BEHIND it — the tint is mixed
+     into `--bg` rather than laid over it, which is the same trick `numBg` does
+     next door. */
+  const stampBg = tone === "ours" ? "color-mix(in srgb, var(--primary) 8%, var(--bg))"
+    : tone === "theirs" ? "color-mix(in srgb, var(--warning) 8%, var(--bg))"
+      : "var(--bg)";
   return (
     <div className="flex" style={{ whiteSpace: "pre" }}>
-      <span className="shrink-0 text-right tabular-nums select-none pr-2"
-        style={{ width: "5ch", color: "var(--text3)", opacity: 0.6 }}>{n}</span>
+      {/* The fade is on the DIGITS, not on the box. `opacity` on the element
+          takes its background down with it, and a 60% gutter is a gutter you
+          can read the code through. */}
+      <span className="shrink-0 text-right tabular-nums select-none pr-2 sticky left-0 z-[1]"
+        style={{ width: "5ch", color: "var(--text3)", background: stampBg }}><span style={{ opacity: 0.6 }}>{n}</span></span>
       <span className="pl-2" style={{ color: tone ? "var(--text)" : "var(--text2)" }}>{text || " "}</span>
     </div>
   );
@@ -505,7 +517,17 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
   const order = file.blocks.map((b) => b.index);
 
   return (
-    <div className="py-2">
+    /*
+     * One width for the whole file, and it is the longest line in it.
+     *
+     * The lines are `white-space: pre`, so a long one scrolls this pane
+     * sideways — and everything painted here (an ours/theirs tint, the taken
+     * side's green bar, the cursor rail) is a plain block, which is as wide as
+     * the pane and not as wide as what the pane can scroll to. Scroll right and
+     * the tint ends mid-air over code that is still conflicted. Same shape of
+     * bug as the diff panes; same fix.
+     */
+    <div className="py-2" style={{ width: "max-content", minWidth: "100%" }}>
       {file.segments.map((seg, i) => {
         if (seg.kind === "text") {
           const prevIsConflict = i > 0;

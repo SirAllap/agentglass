@@ -34,7 +34,7 @@
  * defines. What changed is how much of each one there is.
  */
 import type { CSSProperties, ReactNode } from "react";
-import { ICON } from "../../lib/iconSize.ts";
+import { HIT, ICON } from "../../lib/iconSize.ts";
 import { CHIP } from "../workspace/Chrome.tsx";
 
 export const edge = (pct: number): string => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -237,7 +237,15 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
 
 /** A chip. Small, round, and the only place a status word is allowed to be
  *  coloured — everything else on the card is text or grey. */
-export function Chip({ tone = "neutral", children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
+export function Chip({ tone = "neutral", children, title, clip }: {
+  tone?: Tone; children: ReactNode; title?: string;
+  /** This chip carries arbitrary text — a commit's refs, not a status word.
+   *  It gives up its `shrink-0` and ellipsizes instead, because a chip that
+   *  refuses to shrink in a flex row does not get clipped by the row: it
+   *  OVERFLOWS it and paints over whatever is beside it. Which is what a
+   *  branch name of sixty characters did to the date and author next to it. */
+  clip?: boolean;
+}) {
   return (
     /*
      * `.chip`'s own geometry: 6px radius, 1px/6px padding, no bold.
@@ -247,7 +255,7 @@ export function Chip({ tone = "neutral", children, title }: { tone?: Tone; child
      * as loud as the branch name they were describing, and put a third radius
      * on a screen that already had two.
      */
-    <span className="shrink-0 text-[9.5px] px-1.5 py-px rounded-md whitespace-nowrap"
+    <span className={`text-[9.5px] px-1.5 py-px rounded-md whitespace-nowrap ${clip ? "min-w-0 truncate" : "shrink-0"}`}
       style={{ color: TONE[tone], background: wash(tone === "neutral" ? "--text" : `--${tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "primary"}`, tone === "neutral" ? 10 : 14) }}
       title={title}>
       {children}
@@ -269,6 +277,38 @@ export function RowAction({ label, danger, disabled, onClick, title }: {
         {label}
       </button>
     </span>
+  );
+}
+
+/**
+ * The tick that puts a row into a bulk action.
+ *
+ * It was the character `☐` at 11px — which renders as a seven-pixel outline
+ * with no tick you can see when it is ON, in a list where the whole point is
+ * knowing which rows you have selected. Reported as "el checkbox es ENANO, ni
+ * se ve", and it was not a control at all: a `<span>` with an onClick, no role,
+ * no keyboard, no target.
+ *
+ * Drawn now, at `ICON.sm` inside the app's own `HIT` square — the same
+ * geometry every other icon-only control in this app has — with a real tick and
+ * a filled box when it is on, because "is this one selected" has to be
+ * answerable from across the room and not by squinting at a glyph.
+ */
+export function TickBox({ on, onClick, title }: { on: boolean; onClick: (e: React.MouseEvent) => void; title?: string }) {
+  const colour = on ? "var(--primary)" : "var(--text4)";
+  return (
+    <button
+      type="button" role="checkbox" aria-checked={on} title={title}
+      onClick={(e) => { e.stopPropagation(); onClick(e); }}
+      className="inline-flex items-center justify-center rounded shrink-0 transition-colors"
+      style={{ width: HIT - 6, height: HIT - 6, color: colour }}
+    >
+      <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 14 14" fill="none" aria-hidden>
+        <rect x="1.75" y="1.75" width="10.5" height="10.5" rx="3"
+          fill={on ? "var(--primary)" : "transparent"} stroke="currentColor" strokeWidth="1.5" />
+        {on && <path d="M4.2 7.1l2 2 3.6-4" stroke="var(--bg)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />}
+      </svg>
+    </button>
   );
 }
 

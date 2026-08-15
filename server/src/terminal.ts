@@ -25,7 +25,7 @@ import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWind
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal } from "./config.ts";
-import { engineAttachArgv, engineConsoleArgv, engineWindowRunning } from "./tmuxpane.ts";
+import { engineAttachArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning } from "./tmuxpane.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -1736,6 +1736,49 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     }
 
     /*
+     * Resume a session the picker found.
+     *
+     * The three steps this replaces are: open a tab, start the agent, type
+     * `/resume` and hunt through a list scoped to whatever directory that tab
+     * happened to be in. The last part is the one that cannot be fixed by
+     * typing faster — a session from a worktree is not in the list you get from
+     * the main checkout, which is exactly the one you are usually after.
+     *
+     * The id is a file name and the cwd a directory, both from this server's
+     * own `/agent/sessions`; they are checked again here anyway. A session id
+     * shaped like anything else does not reach `--resume`.
+     */
+    /** What Claude Code names a transcript: a uuid, and nothing else reaches
+     *  `--resume`. */
+    const SESSION_ID = /^[0-9a-fA-F-]{8,64}$/;
+    if (msg.cmd === "resume") {
+      const cwd = safeAbs(msg.cwd);
+      if (!cwd || !inScope(cwd) || !existsSync(cwd)) return;
+      const id = typeof msg.id === "string" && SESSION_ID.test(msg.id) ? msg.id : "";
+      if (!id) return;
+      const bin = claudeCode.bin();
+      if (!bin) {
+        ctl(ws, { t: "openfail", error: claudeCode.missingReason() });
+        return;
+      }
+      // The server's argv, not the client's: the binary, `--resume` and the one
+      // flag the picker is allowed to ask for.
+      const argv = [bin, "--resume", id, ...(msg.yolo === true ? ["--dangerously-skip-permissions"] : [])];
+      const name = basename(cwd) || "resume";
+      void (async () => {
+        // Beside what is on screen, when asked — and a window when there is
+        // nothing to split, which is the honest fallback rather than a refusal
+        // for a press that has an obvious answer.
+        const opened = msg.split === true
+          ? (await engineSplitRunning(cwd, cwd, argv)) ?? (await engineWindowRunning(cwd, name, argv))
+          : await engineWindowRunning(cwd, name, argv);
+        if (!opened) { ctl(ws, { t: "openfail", error: "the engine would not open a window" }); return; }
+        s.tmuxSweep?.();
+      })();
+      return;
+    }
+
+    /*
      * Everything below acts ON tmux, so with none there is nothing to do and
      * silence is right.
      *
@@ -1771,7 +1814,23 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     // The panel's own grid goes with it, for `fit`: only the client knows how
     // big the thing you are looking at is. Range-checked in runAction, because
     // it ends up as an argument to `resize-window`.
-    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows, msg.after === true)) return;
+    /*
+     * Where a new tab starts.
+     *
+     * The panel sends the project it is showing; this checks it rather than
+     * trusting it, because it ends up as `-c` on a command line. Three
+     * questions, in order: is it a string, does it exist, and is it inside the
+     * workspace — the same envelope `cmd:"issue"` and `cmd:"agent"` pass
+     * through, and for the same reason.
+     *
+     * Nothing usable means no `-c` at all, which is tmux's own behaviour and
+     * not a guessed home directory. See the `new` case in tmuxctl.ts.
+     */
+    const wanted = typeof msg.root === "string" ? msg.root : "";
+    const startIn = wanted && existsSync(wanted) && inScope(repoRootOf(wanted) ?? wanted)
+      ? (repoRootOf(wanted) ?? wanted)
+      : undefined;
+    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows, msg.after === true, startIn)) return;
     if (action === "takeover") tellPhonesTheWindowMoved(s.tmux, msg.window!);
     // Answer now rather than at the next tick. The command has already been
     // applied by the time it returns, so the strip can be correct within a

@@ -36,6 +36,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
+import { ResumeSessions } from "./ResumeSessions.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
 import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
 import { isFindChord, isAppChord } from "../lib/termKeys.ts";
@@ -2288,6 +2289,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       outside the pickers group above. */}
                   <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} runTargetInTmux={!!sess?.tmux} onClose={focusTerm} />
 
+                  {/* Past sessions, in the middle of the bar where it can be
+                      seen. The one control here that is about work you have
+                      already done rather than the shell in front of you — see
+                      ResumeSessions for why it lists every checkout. */}
+                  <ResumeSessions
+                    root={root}
+                    disabled={disabled || !sess?.tmux}
+                    onOpen={(sn, how) => { tmuxCmd({ cmd: "resume", id: sn.id, cwd: sn.cwd, split: how.split, yolo: how.yolo }); focusTerm(); }}
+                    onGo={(at) => { void api.focusPane({ sessionId: at.sessionId, windowId: at.windowId, paneId: at.paneId }); }}
+                  />
+
                   {/* keepTermFocus so none of these buttons — split, restart,
                       clear, the status pill — steals the shell's cursor on
                       press; they act and the terminal keeps the keyboard. */}
@@ -2684,7 +2696,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         boxShadow: dropOn === "__end__" ? "inset -2px 0 0 0 var(--primary)" : undefined,
                       }}
                       aria-hidden />
-                    <button onClick={() => tmuxCmd({ cmd: "new" })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
+                    <button onClick={() => tmuxCmd({ cmd: "new", root })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
                     {/* Not on the engine. That server keeps its status line off
                         by design — the config gate refuses any config that turns
                         it on — so the button would be offering a bar that cannot

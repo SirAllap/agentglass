@@ -2,6 +2,7 @@
 // compose project with live CPU/mem, a streaming-ish log viewer, and start/
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { PlayIcon, RefreshIcon } from "../lib/glyphIcons.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { depSpec } from "../../../shared/deps.ts";
@@ -181,7 +182,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
         {writeEnabled && (running
           ? <>
-              <DockerAction onClick={() => onAction("restart")} disabled={busy} tint="var(--warning)" title="Restart">⟳</DockerAction>
+              <DockerAction onClick={() => onAction("restart")} disabled={busy} tint="var(--warning)" title="Restart"><RefreshIcon /></DockerAction>
               <DockerAction onClick={() => onAction("stop")} disabled={busy} tint="var(--error)" title="Stop">■</DockerAction>
             </>
           : <>
@@ -540,7 +541,7 @@ export function DockerView({ active }: { active: boolean }) {
                         : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
                       Dense
                     </button>
-                    <button onClick={() => { loadOverview(); loadStats(); }} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
+                    <button onClick={() => { loadOverview(); loadStats(); }} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}><RefreshIcon /></button>
                   </div>
                 </div>
 
@@ -577,7 +578,7 @@ export function DockerView({ active }: { active: boolean }) {
                             {writeEnabled && (
                               <span className="flex items-center gap-1 ml-2">
                                 {cs.some((c) => c.state !== "running") && (
-                                  <DockerAction onClick={() => doGroupAction(cs, "start")} disabled={busy} tint="var(--success)" title={`Start every stopped container in ${proj}`}>▶</DockerAction>
+                                  <DockerAction onClick={() => doGroupAction(cs, "start")} disabled={busy} tint="var(--success)" title={`Start every stopped container in ${proj}`}><PlayIcon /></DockerAction>
                                 )}
                                 {cs.some((c) => c.state === "running") && (
                                   <>

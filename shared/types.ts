@@ -611,6 +611,17 @@ export type PtyClientFrame =
    * makes. It is a boolean rather than a string for that reason.
    */
   | { t: "tmux"; cmd: "agent"; yolo?: boolean }
+  /**
+   * Bring a past session back — the picker's "open this one".
+   *
+   * `id` is a transcript's name and `cwd` the checkout it ran in; both come
+   * from `/agent/sessions`, and both are checked again on arrival because this
+   * socket is reachable from a browser and they end up on a command line.
+   * `split` puts it beside what is on screen instead of in a window of its own,
+   * and `yolo` is the only flag the client may ask for — the binary and every
+   * other argument are the server's.
+   */
+  | { t: "tmux"; cmd: "resume"; id: string; cwd: string; split?: boolean; yolo?: boolean }
   | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit"; window?: string; name?: string;
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
@@ -619,7 +630,14 @@ export type PtyClientFrame =
       /** `move` only: land AFTER the named window instead of before it. What
        *  the trailing drop zone at the end of the tab strip sends — it is the
        *  only way to make a window the last one. */
-      after?: boolean };
+      after?: boolean;
+      /** `new` only: the project the panel is showing, so the tab opens in it.
+       *  Without it tmux starts the window in the SESSION's directory, which is
+       *  wherever the server happened to be launched from — for a desktop build
+       *  that is the install checkout, so every new tab landed in agentglass's
+       *  own tree instead of the repository on screen. Checked on the server
+       *  against the workspace before it reaches a command line. */
+      root?: string };
 
 /**
  * Every key any member of a union carries, and what that key can hold.
@@ -1993,6 +2011,42 @@ export interface PrLabel { name: string; color?: string }
 
 /** Somebody asked for a review. A team has no avatar and no login, so it is
  *  named rather than pictured — the row must not draw a broken image for it. */
+/**
+ * One resumable agent session, as the terminal's picker draws it.
+ *
+ * Read from `~/.claude/projects` — the same transcripts `/resume` lists — so
+ * the picker and the CLI cannot disagree about what exists. See
+ * server/src/agentsessions.ts.
+ */
+export interface AgentSessionRow {
+  /** What `--resume` takes. */
+  id: string;
+  title: string;
+  /** The first user message, when the title came from somewhere else. */
+  opening: string;
+  /** The last thing said in it. "Which one was I on" is a question about the
+   *  end of a conversation, not its beginning. */
+  last: string;
+  /** The checkout it ran in, and where resuming it has to start. */
+  cwd: string;
+  /** Last write to the transcript, ms since epoch. */
+  at: number;
+  size: number;
+  /** Where it is running right now, when it is. A session already open is not
+   *  one to resume — it is one to go to. */
+  openIn?: {
+    /** The tmux session's NAME, for saying where; and its id, for going there.
+     *  Both, because a name is what a person reads and an id is what addresses
+     *  the same session on a server where names repeat. */
+    session: string;
+    sessionId: string;
+    windowId: string;
+    windowIndex: string;
+    windowName: string;
+    paneId: string;
+  };
+}
+
 export interface PrReviewer {
   /** A user's login, or a team's name when `isTeam`. */
   login: string;

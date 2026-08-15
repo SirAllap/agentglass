@@ -21,7 +21,7 @@ import type {
   GitBranch, GitTag, GitStash, GitWorktree, GitRemote, GitRemoteBranch,
   GitSubmodule, GitReflogEntry,
 } from "../../../../shared/types.ts";
-import { Row, Chip, RowAction, GroupHead, Empty, wash, type Tone } from "./ui.tsx";
+import { Row, Chip, RowAction, GroupHead, Empty, TickBox, wash, type Tone } from "./ui.tsx";
 import { primaryAction, actionsFor, grouped, groupByPrefix, type GitKind, type GitRowState } from "../../lib/gitActions.ts";
 
 export interface ListRow {
@@ -147,7 +147,10 @@ function Detail({ row, disabled }: { row: ListRow; disabled?: boolean }) {
           style={{ color: "var(--text)", fontFamily: "var(--font-mono, ui-monospace, monospace)", letterSpacing: "-0.01em" }}>
           {row.name}
         </div>
-        {!!row.chips && <div className="flex flex-wrap items-center gap-1.5 mt-2">{row.chips}</div>}
+        {/* `chips-stack`: down here there is room for the whole thing, so the
+            chip wraps rather than running off the column — the row's ellipsis
+            is a row's compromise and this is not a row. */}
+        {!!row.chips && <div className="chips-stack flex flex-wrap items-start gap-1.5 mt-2 min-w-0">{row.chips}</div>}
       </div>
 
       {!!row.facts?.length && (
@@ -212,11 +215,9 @@ export function branchRows(
       run: (id) => ctx.run(id, b),
       title: (
         <span className="flex items-center gap-2 min-w-0">
-          <span onClick={(e) => { e.stopPropagation(); ctx.onPick(b.name); }}
-            className={`shrink-0 cursor-pointer text-[11px] ${ctx.picked.size ? "" : "opacity-0 group-hover:opacity-100"} transition-opacity`}
-            style={{ color: ctx.picked.has(b.name) ? "var(--primary)" : "var(--text3)" }}
-            title={ctx.picked.has(b.name) ? "Untick" : "Tick for a bulk action"}>
-            {ctx.picked.has(b.name) ? "☑" : "☐"}
+          <span className={`shrink-0 ${ctx.picked.size ? "" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"} transition-opacity`}>
+            <TickBox on={ctx.picked.has(b.name)} onClick={() => ctx.onPick(b.name)}
+              title={ctx.picked.has(b.name) ? "Untick" : "Tick for a bulk action"} />
           </span>
           <span className="truncate">{b.name}</span>
         </span>
@@ -348,7 +349,13 @@ export function commitRows(
     gutter: <GraphCell row={graph[i]} width={width} selected={ctx.picked.has(l.hash!)} />,
     run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
     title: <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
-    chips: l.refs ? <Chip tone="good">{l.refs}</Chip> : undefined,
+    /* `clip`, and capped: this is the one chip in the app whose text is not a
+       word but a list of branch names, and on a busy commit it is longer than
+       the subject it sits beside. Uncapped it ate the row and drew itself over
+       the date and author — reported as "se ve por encima del texto". */
+    chips: l.refs
+      ? <span className="chip-ref"><Chip tone="good" clip title={l.refs}>{l.refs}</Chip></span>
+      : undefined,
     facts: [l.date, l.hash, l.author],
   }));
 }

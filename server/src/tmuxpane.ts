@@ -331,6 +331,38 @@ export async function engineWindowRunning(
   return paneId.startsWith("%") && windowId.startsWith("@") ? { paneId, windowId } : null;
 }
 
+/**
+ * Split the window the panel is looking at, and run something in the new pane.
+ *
+ * The other half of "open this session": a tab is a fresh window, a split is
+ * beside what you are already reading, and which of the two you want depends on
+ * whether the session you are resuming is the thing you are doing or a thing you
+ * are consulting.
+ *
+ * The target is the engine session rather than a pane id, deliberately: tmux
+ * splits the ACTIVE pane of the current window, which is the pane the panel is
+ * showing. A pane id from the client would be a second source of truth about
+ * that, out of date by however long the frame took to arrive.
+ *
+ * `-h` — beside, not below. A terminal is wider than it is tall on every screen
+ * this runs on, and half the height of a pane is not enough transcript to read.
+ */
+export async function engineSplitRunning(
+  root: string, cwd: string, argv: string[],
+): Promise<{ paneId: string } | null> {
+  const session = engineSessionName(root);
+  if (!validSessionName(session)) return null;
+  ensureConf();
+  const there = await tmux(["has-session", "-t", `=${session}`]);
+  // Nothing to split. The caller opens a window instead — a refusal here is not
+  // a reason to leave a press with no answer.
+  if (!there.ok) return null;
+  const out = await tmux(["split-window", "-h", "-P", "-F", "#{pane_id}", "-t", session, "-c", cwd, ...argv]);
+  if (!out.ok) return null;
+  const paneId = (out.stdout.split("\n")[0] ?? "").trim();
+  return paneId.startsWith("%") ? { paneId } : null;
+}
+
 /** Window names reach a status line and a shell prompt, so they are held to
  *  printable, single-line and short — the same rule tmuxctl applies, and a dot
  *  removed on top: tmux reads one as a pane separator in a target, so a window

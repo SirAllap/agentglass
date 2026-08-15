@@ -66,6 +66,44 @@ describe("base branch", () => {
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 
+  /*
+   * A branch stacked on another feature branch, which is most of them here.
+   *
+   * Reported with three screenshots: the base picker offered "origin/master —
+   * current base" on a worktree cut from another card's branch, while the
+   * header two centimetres away read "tracking origin/<that branch>". Both were
+   * reading the same repository; only one of them was asking git what the
+   * branch says about itself.
+   *
+   * Inference cannot answer this. `for-each-ref --merged <branch>` only matches
+   * a base the branch still contains, so the moment the base picks up a commit
+   * of its own it stops being an ancestor, drops out of the candidates, and the
+   * ladder falls through to the trunk. Tracking is written down at checkout
+   * time and stays true.
+   */
+  it("takes what the branch tracks over a guess at the shape of history", async () => {
+    run(repo, "branch", "feature-lane");
+    run(repo, "worktree", "add", "-q", "-b", "CARD-2", `${repo}-CARD-2`, "feature-lane");
+    run(`${repo}-CARD-2`, "branch", "--set-upstream-to=feature-lane", "CARD-2");
+    // The base moves on, which is what puts it out of reach of inference.
+    run(repo, "checkout", "-q", "feature-lane");
+    writeFileSync(join(repo, "lane.txt"), "lane\n");
+    run(repo, "add", "-A"); run(repo, "commit", "-qm", "on the lane");
+    run(repo, "checkout", "-q", "main");
+    expect(await gw.baseOf(repo, "CARD-2")).toBe("feature-lane");
+    rmSync(`${repo}-CARD-2`, { recursive: true, force: true });
+    run(repo, "worktree", "prune");
+  });
+
+  it("does not call a branch its own base when tracking is just where it pushes", async () => {
+    /* Every pushed branch tracks a copy of ITSELF. Read as a base that would
+       measure a branch against itself and report zero for ever — and zero is
+       exactly what a wrong base usually reports. */
+    run(repo, "branch", "CARD-3", "main");
+    run(repo, "branch", "--set-upstream-to=CARD-3", "CARD-3");
+    expect(await gw.baseOf(repo, "CARD-3")).not.toBe("CARD-3");
+  });
+
   it("treats clearing an override that was never set as done, not as an error", async () => {
     // `git config --unset` exits 5 on a missing key. Taken literally, the
     // picker's "work it out for me" would fail on every branch that never had

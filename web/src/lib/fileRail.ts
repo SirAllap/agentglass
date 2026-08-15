@@ -517,6 +517,39 @@ export interface RailDraft {
 }
 
 /**
+ * A line comment GitHub is holding in a review you started on the website and
+ * never submitted.
+ *
+ * Same shape as a draft plus the one thing that makes it different: it lives on
+ * a server, so it has an address. No API edits a comment inside a pending
+ * review without submitting the whole review, so everything this app can offer
+ * about one is a way to READ it and a way to get to where it can be changed —
+ * which is exactly `url`.
+ */
+export interface RailHeld {
+  path: string;
+  /** Null when the diff moved under it — GitHub calls that outdated. */
+  line: number | null;
+  body: string;
+  /** The comment's own page. Empty when the server could not resolve one. */
+  url?: string;
+}
+
+/**
+ * The ones on this file, top of the file first.
+ *
+ * Outdated comments (`line === null`) sort last: they are attached to a version
+ * of the file that is no longer on screen, so there is no row to put them
+ * beside and no order to put them in.
+ */
+export function heldOn(held: RailHeld[] | undefined, path: string | null): RailHeld[] {
+  if (!path || !held) return [];
+  return held
+    .filter((c) => c.path === path)
+    .sort((a, b) => (a.line ?? Number.MAX_SAFE_INTEGER) - (b.line ?? Number.MAX_SAFE_INTEGER));
+}
+
+/**
  * What YOU have queued on this file.
  *
  * The other sections here answer "what did somebody else say"; this one answers

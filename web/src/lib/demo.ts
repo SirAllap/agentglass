@@ -453,7 +453,7 @@ export function gitGraph(): { lines: GitGraphLine[] } {
 export function gitWorktrees(): { worktrees: GitWorktree[] } {
   return { worktrees: [
     { path: "/home/you/code/shop-api", branch: "main", head: "9f2c1a7", current: true, bare: false, locked: false },
-    { path: "/home/you/code/shop-api-PROJ-42", branch: "feat/PROJ-42-callbacks", head: "3b7d0e2", current: false, bare: false, locked: false },
+    { path: "/home/you/code/shop-api-ORBIT-42", branch: "feat/ORBIT-42-callbacks", head: "3b7d0e2", current: false, bare: false, locked: false },
     { path: "/home/you/code/shop-api-hotfix", branch: "hotfix/cache-ttl", head: "a1c9f34", current: false, bare: false, locked: true },
   ] };
 }

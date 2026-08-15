@@ -11,6 +11,7 @@
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RefreshIcon } from "../lib/glyphIcons.tsx";
 import { api } from "../lib/api.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
 import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail } from "../../../shared/providers.ts";
@@ -303,7 +304,7 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
             className="flex-1 min-w-0 bg-transparent outline-none text-[11px]" style={{ color: "var(--text)" }} />
         </span>
         <button onClick={load} title="Refresh" className="agx-btn text-[11px] px-2 py-1 rounded"
-          style={{ color: "var(--text2)", border: edge(20) }}>⟳</button>
+          style={{ color: "var(--text2)", border: edge(20) }}><RefreshIcon /></button>
       </div>
 
       {note && <NoteStrip note={note} onClose={() => setNote(null)} />}

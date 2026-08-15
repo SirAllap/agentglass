@@ -85,7 +85,7 @@ export function recipesFor(root: string): Recipe[] {
   return recipes().filter((r) => r.scope === "global" || (!!r.repo && (root === r.repo || root.startsWith(r.repo + "/") || sameFamily(root, r.repo))));
 }
 
-/** `~/code/app` and `~/code/app-PROJ-1` are the same project to a person, and
+/** `~/code/app` and `~/code/app-ORBIT-1` are the same project to a person, and
  *  git worktrees are conventionally cut as siblings named after the parent. */
 function sameFamily(root: string, repo: string): boolean {
   const base = repo.split("/").pop() ?? "";
