@@ -27,6 +27,14 @@
 # `sha256sum` is GNU coreutils; macOS ships `shasum`. The release runners are
 # both, and the first tag cut after these scripts landed died on a macOS runner
 # with "sha256sum: command not found" — after downloading three tarballs.
+# `nproc` is GNU; macOS has `sysctl -n hw.ncpu`. With neither, `make -j""` runs
+# with NO limit — which is how the first macOS release build died: ncurses'
+# makefiles raced and `make` reported "No rule to make target ../lib/libtinfo.a"
+# for a library its own tree had not finished writing yet.
+jobs_n() {
+  nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -110,7 +118,7 @@ build_libevent() {
   tar -xzf "$t" -C "$WORK/src"
   ( cd "$WORK/src/libevent-${LIBEVENT_VERSION}-stable"
     CC="$CC" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --disable-shared --enable-static --disable-openssl --disable-samples --disable-libevent-regress >/dev/null
-    make -s -j"$(nproc)" && make -s install )
+    make -s -j"$(jobs_n)" && make -s install )
 }
 
 build_ncurses() {
@@ -126,7 +134,7 @@ build_ncurses() {
     # final link is the only thing that fails, looking for a file ncurses was
     # never asked to make.
     CC="$CC" CFLAGS="-O2" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --without-shared --without-progs --without-tests --without-manpages --without-ada --disable-db-install --enable-widec --with-termlib=tinfo >/dev/null
-    make -s -j"$(nproc)" && make -s install )
+    make -s -j"$(jobs_n)" && make -s install )
 }
 
 build_tmux() {
@@ -165,7 +173,7 @@ build_tmux() {
     LDFLAGS="-L$WORK/prefix/lib -static -s" \
     LIBS="-levent_core -levent -lncursesw -ltinfo -lm" \
     ./configure --host="$TRIPLE" --prefix="$WORK/prefix" >/dev/null
-    make -s -j"$(nproc)" )
+    make -s -j"$(jobs_n)" )
   file "$WORK/src/tmux-${TMUX_VERSION}/tmux"
 }
 
