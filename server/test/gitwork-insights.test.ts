@@ -54,11 +54,24 @@ describe("repo insights", () => {
   });
 
   it("honors the days window", async () => {
-    commit("a.txt", "feat: old", "2026-06-01T10:00:00+00:00");
-    commit("b.txt", "feat: new", "2026-08-01T10:00:00+00:00");
+    /*
+     * Dated relative to today, not written down.
+     *
+     * The fixture used to commit on fixed dates and ask for a 14-day window,
+     * which passed for as long as those dates were inside it and then started
+     * failing on the day the window moved past them — a suite that goes red on
+     * a calendar rather than on a change. The question being asked is "does the
+     * window exclude what is outside it", and that is a question about
+     * distances, not about August.
+     */
+    const day = 86_400_000;
+    const at = (daysAgo: number) => new Date(Date.now() - daysAgo * day).toISOString();
+    const recent = at(2);
+    commit("a.txt", "feat: old", at(60));
+    commit("b.txt", "feat: new", recent);
     const s = await repoStats(repo, 14);
     expect(s.churn.reduce((n, d) => n + d.commits, 0)).toBe(1);
-    expect(s.churn[0].date).toBe("2026-08-01");
+    expect(s.churn[0].date).toBe(recent.slice(0, 10));
   });
 
   it("treats a merge-heavy repo without merges", async () => {
