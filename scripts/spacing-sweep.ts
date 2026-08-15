@@ -219,13 +219,44 @@ const scan = async (name: string, shot = false) => {
   if (shot || rows.length) await shoot(name);
   console.log(`· ${name.padEnd(34)} ${String(rows.length).padStart(3)}`);
 };
+/*
+ * Read, then decide here, then click by INDEX.
+ *
+ * Both of these used to build the expression that runs in the page out of the
+ * label or the pattern they were given — `…===${JSON.stringify(label)}` and
+ * `new RegExp(${JSON.stringify(re)})`. The values are literals written a few
+ * lines below, so nothing could ever have been injected through them, but the
+ * shape is code assembled from data and a scanner is right to say so: change
+ * one of these call sites to take a repository name, a branch or anything else
+ * read off a machine, and the same two lines become an injection.
+ *
+ * So the page is only ever asked two fixed questions — "what are the labels"
+ * and "what is the text" — the matching happens in this process, and the click
+ * is sent as a number. No value from here reaches a string that is evaluated.
+ */
+const CLICKABLE = "button,[role=tab],a";
+const clickNth = async (selector: string, i: number) =>
+  (await evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(selector)})][${Number(i)}];if(!b)return false;b.click();return true;})()`)) === true;
+
 const byLabel = async (label: string, wait = 2400) => {
-  const ok = await evaluate(`(()=>{const b=[...document.querySelectorAll('button,[role=tab],a')].find(x=>(x.getAttribute('aria-label')||'')===${JSON.stringify(label)});if(!b)return false;b.click();return true;})()`);
+  const labels: string[] = JSON.parse(
+    (await evaluate(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(CLICKABLE)})].map(x=>x.getAttribute('aria-label')||''))`)) || "[]",
+  );
+  const i = labels.indexOf(label);
+  if (i < 0) return false;
+  const ok = await clickNth(CLICKABLE, i);
   await Bun.sleep(wait);
   return ok;
 };
 const byText = async (re: string, wait = 1800) => {
-  const ok = await evaluate(`(()=>{const rx=new RegExp(${JSON.stringify(re)});const b=[...document.querySelectorAll('button,[role=tab],summary,a')].filter(x=>x.offsetParent).find(x=>rx.test((x.textContent||'').trim()));if(!b)return false;b.click();return true;})()`);
+  const SEL = "button,[role=tab],summary,a";
+  const texts: Array<{ t: string; shown: boolean }> = JSON.parse(
+    (await evaluate(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(SEL)})].map(x=>({t:(x.textContent||'').trim(),shown:!!x.offsetParent})))`)) || "[]",
+  );
+  const rx = new RegExp(re);
+  const i = texts.findIndex((x) => x.shown && rx.test(x.t));
+  if (i < 0) return false;
+  const ok = await clickNth(SEL, i);
   await Bun.sleep(wait);
   return ok;
 };
