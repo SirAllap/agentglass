@@ -68,7 +68,8 @@ import {
   createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
 } from "./gitwork.ts";
-import { changeRows, fileDiff, repoStats, generateChangelog } from "./changerows.ts";
+import { changeRows, fileDiff } from "./changerows.ts";
+import { repoStats, generateChangelog } from "./gitinsights.ts";
 import { saveShot } from "./shots.ts";
 import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
