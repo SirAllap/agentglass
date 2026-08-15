@@ -1259,6 +1259,65 @@ export interface GitReflogEntry {
   subject: string;
   date: string;
 }
+/** Repo analytics over a time window (see /git/stats). */
+export interface RepoInsightContributor { name: string; email: string; commits: number; added: number; deleted: number }
+export interface RepoInsightHotspot { path: string; commits: number; added: number; deleted: number }
+export interface RepoInsightDay { date: string; commits: number; added: number; deleted: number }
+export interface RepoStats {
+  days: number;
+  commitsPerDay: number;
+  contributors: RepoInsightContributor[];
+  filesTouched: number;
+  linesChanged: number;
+  topContributors: RepoInsightContributor[];
+  hotspots: RepoInsightHotspot[];
+  churn: RepoInsightDay[];
+  error?: string;
+}
+export interface ChangelogEntry { kind: string; scope: string; breaking: boolean; subject: string; hash: string }
+export interface ChangelogSection { title: string; entries: ChangelogEntry[] }
+export interface Changelog { from: string; to: string; sections: ChangelogSection[]; error?: string }
+/** A submodule as the panel shows it — the index pin, the URL, the checkout state. */
+export interface GitSubmodule {
+  name: string;
+  path: string;
+  url: string;
+  sha: string;
+  branch?: string;
+  status: "clean" | "modified" | "uninitialized" | "conflict";
+}
+/** One line of blame — which commit wrote it, and the content. */
+export interface BlameLine {
+  line: number;
+  sha: string;
+  author: string;
+  time: number;
+  subject: string;
+  content: string;
+}
+export interface FileHistoryEntry {
+  hash: string;
+  fullHash: string;
+  author: string;
+  time: number;
+  subject: string;
+}
+/** The state of a `git bisect` session — parsed from `git bisect status`. */
+export interface GitBisectStatus {
+  ok: boolean;
+  bisecting: boolean;
+  error?: string;
+  remaining?: number;
+  steps?: number;
+  current?: { sha: string; subject: string };
+  firstBad?: { sha: string; subject: string };
+}
+/** One `git grep` hit — path:line + the matching line. */
+export interface GitGrepHit {
+  path: string;
+  line: number;
+  text: string;
+}
 export interface GitWorktree {
   path: string;    // absolute
   branch: string;  // branch short name, or "(detached)"
@@ -1714,6 +1773,18 @@ export type MergeInfo = {
   step?: number;
   total?: number;
   error?: string;
+};
+
+/**
+ * A multi-commit cherry-pick. `hashes` are full or short commit ids — git's
+ * sequencer replays them in one run, so the set stops together on the first
+ * conflict instead of each commit being an independent attempt.
+ */
+export type CherryPickRequest = {
+  root: string;
+  hashes: string[];
+  /** `-n`: apply to the index and working tree without committing. */
+  noCommit?: boolean;
 };
 
 /** The notes for one release: the tag annotation the GitHub release was made

@@ -25,14 +25,60 @@ const dbUrl = pathToFileURL(join(SRC, "db.ts")).href;
 /** A child that is a *server process*, not a test: NODE_ENV must not be "test"
  *  or db.ts routes it to its own scratch file and the two never share one. */
 function spawnServerLike(script: string, env: Record<string, string>) {
+  /*
+   * `AGENTGLASS_SCAN_DISABLED` is cleared on purpose, and it is the whole of
+   * the flake this file was red for.
+   *
+   * `bun test` runs every suite in ONE process, and `reminders.test.ts` sets
+   * that variable on `process.env` at module scope. Whether this file's
+   * children inherited it came down to which suite bun happened to run first —
+   * so `scanningEnabled()` answered `false` here on some runs and `true` on
+   * others, and the test that asserts a fresh claim may scan failed on the
+   * order of the file list rather than on anything it was testing. In CI, which
+   * is the same process on a machine that sorts them differently, it failed
+   * nearly every time.
+   *
+   * A test that spawns its own server states its own preconditions.
+   */
+  const clean = { ...process.env };
+  delete clean.AGENTGLASS_SCAN_DISABLED;
   return Bun.spawn([process.execPath, "--eval", script], {
     cwd: join(import.meta.dir, ".."),
-    env: { ...process.env, NODE_ENV: "production", ...env },
+    env: { ...clean, NODE_ENV: "production", ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
 }
 const out = async (p: ReturnType<typeof spawnServerLike>) => (await new Response(p.stdout).text()).trim();
+
+/**
+ * Wait for a child to SAY it is ready, rather than for a number of seconds to
+ * pass.
+ *
+ * The holder below claims the database and then stays alive for ever, so its
+ * stdout cannot be drained to EOF; this reads it incrementally until the word
+ * arrives. The version before it polled the database on a 5-second budget,
+ * which is plenty on an idle laptop and not always enough for a Bun process to
+ * start and import three modules on a loaded CI runner — a test that fails on
+ * how busy the machine is, which is the only kind of red nobody reads.
+ */
+async function saysReady(p: ReturnType<typeof spawnServerLike>, word: string, ms = 60_000): Promise<boolean> {
+  const reader = p.stdout.getReader();
+  const dec = new TextDecoder();
+  let seen = "";
+  const deadline = Date.now() + ms;
+  try {
+    while (Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) return seen.includes(word);
+      seen += dec.decode(value, { stream: true });
+      if (seen.includes(word)) return true;
+    }
+    return false;
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 describe("two server processes, one database", () => {
   test("a racing sweep abandons its batch instead of ingesting the same lines twice", async () => {
@@ -166,7 +212,10 @@ describe("two server processes, one database", () => {
         return row;
       } catch { return null; } // the file/table may not exist yet
     };
-    for (let i = 0; i < 100 && claimRow()?.pid !== claimedPid; i++) await Bun.sleep(50);
+    // Its own word first — the child prints it after `claimDatabase` returns —
+    // and only then the row, which is a second fact about the same event.
+    expect(await saysReady(holder, "claimed")).toBe(true);
+    for (let i = 0; i < 200 && claimRow()?.pid !== claimedPid; i++) await Bun.sleep(50);
     expect(claimRow()?.pid).toBe(claimedPid);
 
     const second = spawnServerLike(
@@ -199,5 +248,5 @@ describe("two server processes, one database", () => {
     );
     await third.exited;
     expect(JSON.parse(await out(third))).toEqual({ ok: true, tookOver: claimedPid, scanning: true });
-  }, 30_000);
+  }, 90_000);
 });
