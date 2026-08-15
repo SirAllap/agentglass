@@ -2494,7 +2494,7 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
   const r = run(root, newBranch ? ["worktree", "add", "-b", branch, abs, ...from] : ["worktree", "add", abs, branch]);
   // Record what the new branch was cut from, so a later "sync" merges from its
   // REAL base instead of falling back to the trunk. Without this a card stacked
-  // on another feature branch (base = PROJ-…, not master) synced against master
+  // on another feature branch (base = ORBIT-…, not master) synced against master
   // and pulled in changes that never belonged on it — the exact failure this
   // config exists to prevent. Only for a genuinely new branch off a start point;
   // `git worktree add <path> <existing-branch>` adopts a branch whose base, if
