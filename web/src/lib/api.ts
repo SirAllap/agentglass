@@ -1,5 +1,5 @@
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -467,6 +467,12 @@ const realApi = {
       headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify(payload),
     }).then((r) => r.json() as Promise<CommitResult>),
+  gitAmend: (payload: { root: string; files: string[]; title: string; body: string }) =>
+    fetch(SERVER + "/git/amend", {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(payload),
+    }).then((r) => r.json() as Promise<CommitResult>),
   walkthrough: (files: WalkthroughInputFile[]) =>
     fetch(SERVER + "/walkthrough", {
       method: "POST",
@@ -535,12 +541,19 @@ const realApi = {
   gitUnstageAll: (root: string) => post<GitActionResult>("/git/unstage-all", { root }),
   gitDiscard: (root: string, paths: string[]) => post<GitActionResult>("/git/discard", { root, paths }),
   gitCommitStaged: (root: string, title: string, body: string) => post<GitActionResult>("/git/commit-staged", { root, title, body }),
-  gitPush: (root: string) => post<GitActionResult>("/git/push", { root }),
+  gitPush: (root: string, opts?: { force?: boolean }) => post<GitActionResult>("/git/push", { root, force: opts?.force === true }),
   gitPull: (root: string) => post<GitActionResult>("/git/pull", { root }),
   gitFetch: (root: string) => post<GitActionResult>("/git/fetch", { root }),
   gitBranches: (root: string) => get<{ current: string; branches: GitBranch[]; trunk?: string | null; checking?: boolean }>(`/git/branches?root=${encodeURIComponent(root)}`),
   gitLog: (root: string, limit = 100) => get<{ commits: GitCommit[] }>(`/git/log?root=${encodeURIComponent(root)}&limit=${limit}`),
   gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
+  gitRefs: (root: string) => get<{ ok: boolean; refs?: string[]; error?: string }>(`/git/refs?root=${encodeURIComponent(root)}`),
+  gitSnapshots: (root: string) => get<{ ok: boolean; snapshots?: { sha: string; ref: string; time: string; label: string }[]; error?: string }>(`/git/snapshots?root=${encodeURIComponent(root)}`),
+  gitSnapshotCreate: (root: string, label?: string) => post<GitActionResult & { sha?: string; ref?: string }>("/git/snapshot-create", { root, label }),
+  gitSnapshotRestore: (root: string, sha: string) => post<GitActionResult>("/git/snapshot-restore", { root, sha }),
+  gitSnapshotDelete: (root: string, sha: string) => post<GitActionResult>("/git/snapshot-delete", { root, sha }),
+  gitProtectedBranches: (root: string) => get<{ ok: boolean; branches?: string[]; error?: string }>(`/git/protected-branches?root=${encodeURIComponent(root)}`),
+  gitProtectedBranchesSet: (root: string, names: string[]) => post<GitActionResult>("/git/protected-branches-set", { root, names }),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),
   gitTidy: (root: string) => get<TidyReport>(`/git/tidy?root=${encodeURIComponent(root)}`),
   gitRemotes: (root: string) => get<{ remotes: GitRemote[] }>(`/git/remotes?root=${encodeURIComponent(root)}`),
@@ -552,6 +565,27 @@ const realApi = {
   gitTrackRemote: (root: string, ref: string, switchTo: boolean) => post<GitActionResult>("/git/track-remote", { root, ref, switch: switchTo }),
   gitTags: (root: string) => get<{ tags: GitTag[] }>(`/git/tags?root=${encodeURIComponent(root)}`),
   gitReflog: (root: string) => get<{ entries: GitReflogEntry[] }>(`/git/reflog?root=${encodeURIComponent(root)}`),
+  gitRepoStats: (root: string, days?: number) => get<RepoStats>(`/git/stats?root=${encodeURIComponent(root)}&days=${days ?? 30}`),
+  gitChangelog: (root: string, from?: string, to?: string) => get<Changelog>(`/git/changelog?root=${encodeURIComponent(root)}&from=${encodeURIComponent(from ?? "")}&to=${encodeURIComponent(to ?? "")}`),
+  gitSubmodules: (root: string) => get<{ submodules: GitSubmodule[] }>(`/git/submodules?root=${encodeURIComponent(root)}`),
+  gitSubmoduleAdd: (root: string, url: string, path: string) => post<GitActionResult>("/git/submodule-add", { root, url, path }),
+  gitSubmoduleUpdate: (root: string, path?: string) => post<GitActionResult>("/git/submodule-update", { root, path }),
+  gitSubmoduleSync: (root: string, path?: string) => post<GitActionResult>("/git/submodule-sync", { root, path }),
+  gitSubmoduleDeinit: (root: string, path: string) => post<GitActionResult>("/git/submodule-deinit", { root, path }),
+  gitSubmoduleRemove: (root: string, path: string) => post<GitActionResult>("/git/submodule-remove", { root, path }),
+  gitBlame: (root: string, path: string, ref?: string) => get<{ ok: boolean; lines?: BlameLine[]; error?: string }>(`/git/blame?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref ?? "")}`),
+  gitFileHistory: (root: string, path: string) => get<{ ok: boolean; entries?: FileHistoryEntry[]; error?: string }>(`/git/file-history?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  gitBisectStatus: (root: string) => get<GitBisectStatus>(`/git/bisect-status?root=${encodeURIComponent(root)}`),
+  gitBisectStart: (root: string, bad: string, good: string) => post<GitActionResult>("/git/bisect-start", { root, bad, good }),
+  gitBisectMark: (root: string, mark: "good" | "bad") => post<GitActionResult>("/git/bisect-mark", { root, mark }),
+  gitBisectReset: (root: string) => post<GitActionResult>("/git/bisect-reset", { root }),
+  gitSearchCommits: (root: string, q: string, author?: string, since?: string) => get<{ ok: boolean; entries: FileHistoryEntry[]; error?: string }>(`/git/search-commits?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${author ? `&author=${encodeURIComponent(author)}` : ""}${since ? `&since=${encodeURIComponent(since)}` : ""}`),
+  gitGrep: (root: string, q: string, opts: { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean }) => get<{ ok: boolean; hits: GitGrepHit[]; error?: string }>(`/git/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}&caseSensitive=${opts.caseSensitive ? 1 : 0}&wholeWord=${opts.wholeWord ? 1 : 0}&regex=${opts.regex ? 1 : 0}`),
+  gitPickaxe: (root: string, q: string, type?: "S" | "G") => get<{ ok: boolean; entries: FileHistoryEntry[]; error?: string }>(`/git/pickaxe?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}&type=${type ?? "S"}`),
+  gitTagCreate: (root: string, name: string, opts: { annotated?: boolean; message?: string; signed?: boolean; target?: string }) => post<GitActionResult>("/git/tag-create", { root, name, ...opts }),
+  gitTagDelete: (root: string, name: string) => post<GitActionResult>("/git/tag-delete", { root, name }),
+  gitTagPush: (root: string, name: string, remote?: string) => post<GitActionResult>("/git/tag-push", { root, name, remote }),
+  gitTagDeleteRemote: (root: string, name: string, remote?: string) => post<GitActionResult>("/git/tag-delete-remote", { root, name, remote }),
   gitCommandLog: (since = 0) => get<{ entries: GitLogEntry[] }>(`/git/commandlog?since=${since}`),
   /** Is a running nvim reachable for this file? Lets the key be labelled
    *  honestly before it's pressed. */
@@ -569,6 +603,10 @@ const realApi = {
   gitStashApply: (root: string, index: number) => post<GitActionResult>("/git/stash-apply", { root, index }),
   gitStashPop: (root: string, index: number) => post<GitActionResult>("/git/stash-pop", { root, index }),
   gitStashDrop: (root: string, index: number) => post<GitActionResult>("/git/stash-drop", { root, index }),
+  gitStashRename: (root: string, index: number, message: string) => post<GitActionResult>("/git/stash-rename", { root, index, message }),
+  gitStashToBranch: (root: string, index: number, branch: string) => post<GitActionResult>("/git/stash-to-branch", { root, index, branch }),
+  gitStashPartial: (root: string, paths: string[], keepIndex?: boolean) => post<GitActionResult>("/git/stash-partial", { root, paths, keepIndex: keepIndex === true }),
+  gitStashApplyOverwrite: (root: string, index: number) => post<GitActionResult>("/git/stash-apply-overwrite", { root, index }),
   gitApplyHunk: (root: string, path: string, staged: boolean, action: "stage" | "unstage" | "discard", hunk: DiffHunk) => post<GitActionResult>("/git/apply-hunk", { root, path, staged, action, hunk }),
   gitConflictBlocks: (root: string, path: string) => get<{ ok: boolean; blocks: ConflictBlock[]; error?: string }>(`/git/conflict-blocks?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
   gitResolveBlocks: (root: string, path: string, choices: BlockChoice[], stamp?: string) => post<GitActionResult>("/git/resolve-blocks", { root, path, choices, stamp }),
@@ -592,7 +630,7 @@ const realApi = {
   gitMerge: (root: string, name: string) => post<GitActionResult>("/git/merge", { root, name }),
   gitRebase: (root: string, name: string) => post<GitActionResult>("/git/rebase", { root, name }),
   gitBranchRename: (root: string, name: string, to: string) => post<GitActionResult>("/git/branch-rename", { root, name, to }),
-  gitReset: (root: string, ref: string, mode: "soft" | "mixed" | "hard") => post<GitActionResult>("/git/reset", { root, ref, mode }),
+  gitReset: (root: string, ref: string, mode: "soft" | "mixed" | "hard", force?: boolean) => post<GitActionResult>("/git/reset", { root, ref, mode, force }),
   /** `startPoint` is what the new branch is cut from — a remote branch when the
    *  Remotes tab asks; HEAD when omitted. */
   gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean, startPoint?: string) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch, startPoint }),
@@ -620,6 +658,25 @@ const realApi = {
   gitMergeAbort: (root: string) => post<GitActionResult>("/git/merge-abort", { root }),
   gitUndoMerge: (root: string) => post<GitActionResult>("/git/undo-merge", { root }),
   gitMergeContinue: (root: string, anyway?: boolean) => post<GitActionResult>("/git/merge-continue", { root, anyway }),
+  /** One sequencer run for the whole set — a conflict pauses the series, not
+   *  each commit. Order is the caller's, oldest-first. */
+  gitCherryPick: (root: string, hashes: string[], noCommit?: boolean) => post<GitActionResult>("/git/cherry-pick", { root, hashes, noCommit }),
+  gitCherryPickContinue: (root: string) => post<GitActionResult>("/git/cherry-pick-continue", { root }),
+  gitCherryPickAbort: (root: string) => post<GitActionResult>("/git/cherry-pick-abort", { root }),
+  /** A new commit undoing the picked one, `--no-edit` so nothing opens. */
+  gitRevert: (root: string, hash: string) => post<GitActionResult>("/git/revert", { root, hash }),
+  /** Fold the staged changes into the previous commit. */
+  /** Fold the staged changes into the previous commit — the Source Control
+   *  composer's variant, which amends the index as it stands. */
+  gitAmendStaged: (root: string, title: string, body: string) => post<GitActionResult>("/git/amend-staged", { root, title, body }),
+  /** Fold a contiguous tip-span into one commit; ORIG_HEAD is the undo point. */
+  gitSquash: (root: string, oldest: string, newest: string) => post<GitActionResult>("/git/squash", { root, oldest, newest }),
+  /** The commits `base..HEAD`, oldest first, for the rebase editor. */
+  gitRebaseSteps: (root: string, base: string) => post<GitActionResult & { steps?: { action: string; hash: string; subject: string }[] }>("/git/rebase-steps", { root, base }),
+  /** Run the edited plan as one interactive rebase. */
+  gitRebaseRun: (root: string, base: string, steps: { action: string; hash: string; subject: string; newMessage?: string }[]) => post<GitActionResult>("/git/rebase-run", { root, base, steps }),
+  /** Compare two refs: how far ahead/behind each is, and the diff between them. */
+  gitCompare: (root: string, base: string, other: string) => post<GitActionResult & { ahead?: GitCommit[]; behind?: GitCommit[]; diff?: GitFileChange[] }>("/git/compare", { root, base, other }),
   // --- live docker panel (lazydocker-style) ---
   /** Installed / daemon-down / OK — so the panel can show install guidance for a
    *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
@@ -1086,6 +1143,7 @@ const demoApi: typeof realApi = {
   gateDecide: (id: string) => D(demo.gateDecide(id)),
   gitStatus: (_paths: string[]) => D(demo.gitStatus()),
   gitCommit: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),
+  gitAmend: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),
   walkthrough: (files: WalkthroughInputFile[]) => D(demo.walkthrough(files)),
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
@@ -1135,12 +1193,40 @@ const demoApi: typeof realApi = {
   gitTrackRemote: (_root: string, _ref: string, _switchTo: boolean) => D(demo.gitActionUnavailable()),
   gitTags: (_root: string) => D({ tags: [] as GitTag[] }),
   gitReflog: (_root: string) => D({ entries: [] as GitReflogEntry[] }),
+  gitRepoStats: (_root: string, _days?: number) => D({ days: 30, commitsPerDay: 0, contributors: [], filesTouched: 0, linesChanged: 0, topContributors: [], hotspots: [], churn: [] } as RepoStats),
+  gitChangelog: (_root: string, _from?: string, _to?: string) => D({ from: "", to: "", sections: [] } as Changelog),
+  gitSubmodules: (_root: string) => D({ submodules: [] as GitSubmodule[] }),
+  gitSubmoduleAdd: (_root: string, _url: string, _path: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleUpdate: (_root: string, _path?: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleSync: (_root: string, _path?: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleDeinit: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
+  gitSubmoduleRemove: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
+  gitBlame: (_root: string, _path: string, _ref?: string) => D({ ok: false, error: "not available in the demo" }),
+  gitFileHistory: (_root: string, _path: string) => D({ ok: false, error: "not available in the demo" }),
+  gitBisectStatus: (_root: string) => D({ ok: true, bisecting: false }),
+  gitBisectStart: (_root: string, _bad: string, _good: string) => D(demo.gitActionUnavailable()),
+  gitBisectMark: (_root: string, _mark: "good" | "bad") => D(demo.gitActionUnavailable()),
+  gitBisectReset: (_root: string) => D(demo.gitActionUnavailable()),
+  gitSearchCommits: (_root: string, _q: string, _author?: string, _since?: string) => D({ ok: false, entries: [], error: "not available in the demo" }),
+  gitGrep: (_root: string, _q: string, _opts: { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean }) => D({ ok: false, hits: [], error: "not available in the demo" }),
+  gitPickaxe: (_root: string, _q: string, _type?: "S" | "G") => D({ ok: false, entries: [], error: "not available in the demo" }),
+  gitTagCreate: (_root: string, _name: string, _opts: { annotated?: boolean; message?: string; signed?: boolean; target?: string }) => D(demo.gitActionUnavailable()),
+  gitTagDelete: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
+  gitTagPush: (_root: string, _name: string, _remote?: string) => D(demo.gitActionUnavailable()),
+  gitTagDeleteRemote: (_root: string, _name: string, _remote?: string) => D(demo.gitActionUnavailable()),
   gitCommandLog: (_since?: number) => D({ entries: [] as GitLogEntry[] }),
   editorCapability: () => D({ hasNvim: false, editor: null as string | null }),
   editorTarget: (_path: string) => D({ running: false, hasNvim: false }),
   editorOpen: (_path: string, _line: number) => D({ ok: false, error: "no editor in the demo" }),
   gitLog: (_root: string, _limit?: number) => D(demo.gitLog()),
   gitCommitDiff: (_root: string, hash: string) => D(demo.gitCommitDiff(hash)),
+  gitRefs: (_root: string) => D({ ok: true, refs: ["main", "origin/main"] as string[] }),
+  gitSnapshots: (_root: string) => D({ ok: true, snapshots: [] as { sha: string; ref: string; time: string; label: string }[] }),
+  gitSnapshotCreate: (_root: string, _label?: string) => D(demo.gitActionUnavailable()),
+  gitSnapshotRestore: (_root: string, _sha: string) => D(demo.gitActionUnavailable()),
+  gitSnapshotDelete: (_root: string, _sha: string) => D(demo.gitActionUnavailable()),
+  gitProtectedBranches: (_root: string) => D({ ok: true, branches: ["main", "master"] as string[] }),
+  gitProtectedBranchesSet: (_root: string, _names: string[]) => D(demo.gitActionUnavailable()),
   gitStashes: (_root: string) => D(demo.gitStashes()),
   gitTidy: (_root: string) => D({ root: "", base: "main", findings: [], error: "not available in the demo" }),
   gitCheckout: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
@@ -1150,6 +1236,10 @@ const demoApi: typeof realApi = {
   gitStashApply: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitStashPop: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitStashDrop: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
+  gitStashRename: (_root: string, _index: number, _message: string) => D(demo.gitActionUnavailable()),
+  gitStashToBranch: (_root: string, _index: number, _branch: string) => D(demo.gitActionUnavailable()),
+  gitStashPartial: (_root: string, _paths: string[], _keepIndex?: boolean) => D(demo.gitActionUnavailable()),
+  gitStashApplyOverwrite: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitApplyHunk: (_root: string, _path: string, _staged: boolean, _action: "stage" | "unstage" | "discard", _hunk: DiffHunk) => D(demo.gitActionUnavailable()),
   gitConflictBlocks: (_root: string, _path: string) => D({ ok: false, blocks: [] as ConflictBlock[], error: "not available in the demo" }),
   gitResolveBlocks: (_root: string, _path: string, _choices: BlockChoice[], _stamp?: string) => D(demo.gitActionUnavailable()),
@@ -1162,7 +1252,7 @@ const demoApi: typeof realApi = {
   gitMerge: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitRebase: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitBranchRename: (_root: string, _name: string, _to: string) => D(demo.gitActionUnavailable()),
-  gitReset: (_root: string, _ref: string, _mode: "soft" | "mixed" | "hard") => D(demo.gitActionUnavailable()),
+  gitReset: (_root: string, _ref: string, _mode: "soft" | "mixed" | "hard", _force?: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean, _startPoint?: string) => D(demo.gitActionUnavailable()),
   gitSyncBase: (_root: string, _base?: string) => D(demo.gitActionUnavailable()),
   gitSetBase: (_root: string, _branch: string, _base: string | null) => D(demo.gitActionUnavailable()),
@@ -1172,6 +1262,15 @@ const demoApi: typeof realApi = {
   gitMergeAbort: (_root: string) => D(demo.gitActionUnavailable()),
   gitUndoMerge: (_root: string) => D(demo.gitActionUnavailable()),
   gitMergeContinue: (_root: string, _anyway?: boolean) => D(demo.gitActionUnavailable()),
+  gitCherryPick: (_root: string, _hashes: string[], _noCommit?: boolean) => D(demo.gitActionUnavailable()),
+  gitCherryPickContinue: (_root: string) => D(demo.gitActionUnavailable()),
+  gitCherryPickAbort: (_root: string) => D(demo.gitActionUnavailable()),
+  gitRevert: (_root: string, _hash: string) => D(demo.gitActionUnavailable()),
+  gitAmendStaged: (_root: string, _title: string, _body: string) => D(demo.gitActionUnavailable()),
+  gitSquash: (_root: string, _oldest: string, _newest: string) => D(demo.gitActionUnavailable()),
+  gitRebaseSteps: (_root: string, _base: string) => D(demo.gitActionUnavailable()),
+  gitRebaseRun: (_root: string, _base: string, _steps: { action: string; hash: string; subject: string; newMessage?: string }[]) => D(demo.gitActionUnavailable()),
+  gitCompare: (_root: string, _base: string, _other: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),

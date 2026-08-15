@@ -5,7 +5,8 @@
 // every mutating op is gated by AGENTGLASS_GIT_WRITE_DISABLED=1.
 
 import { resolve, basename, relative, dirname, sep, delimiter, join } from "node:path";
-import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
@@ -704,8 +705,7 @@ function validRels(root: string, rels: unknown): string[] | null {
 let onGitChange: (() => void) | null = null;
 export function setGitChangeHook(fn: (() => void) | null): void { onGitChange = fn; }
 
-function run(root: string, args: string[]): GitActionResult {
-  const r = git(root, args);
+function afterMutation(root: string): void {
   // Every mutating path goes through here, so this is the one place that has to
   // know the merged-set may have moved — rather than each of the twenty callers
   // remembering to say so.
@@ -724,6 +724,11 @@ function run(root: string, args: string[]): GitActionResult {
   // One signal out to every panel. Without it each of them discovered the
   // change on its own clock — 5s, 90s, or not until it was remounted.
   try { onGitChange?.(); } catch { /* a broken listener must not fail the op */ }
+}
+
+function run(root: string, args: string[]): GitActionResult {
+  const r = git(root, args);
+  afterMutation(root);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || r.stdout.trim() || `git ${args[0]} failed`, output: (r.stdout + r.stderr).trim() };
   return { ok: true, output: (r.stdout + r.stderr).trim() };
 }
@@ -793,15 +798,67 @@ export function commitStaged(rootIn: string, title: string, body: string): GitAc
 }
 
 // Network ops — bounded and gated. pull is --ff-only to avoid surprise merges.
-export function push(rootIn: string): GitActionResult {
+
+/** Branches the guardrails treat as shared — the default list, plus whatever
+ *  the repo's own config says on top of it. Stored as a comma-joined config
+ *  value (`git config agx.protectedbranches`), so a terminal user can see and
+ *  edit it with plain git, and it travels with the repo, not the panel. */
+export function protectedBranches(rootIn: unknown): { ok: boolean; branches?: string[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const set = new Set<string>(["main", "master"]);
+  const raw = git(root, ["config", "--get", "agx.protectedbranches"]).stdout.trim();
+  for (const name of raw.split(",")) {
+    const n = name.trim();
+    if (n) set.add(n);
+  }
+  return { ok: true, branches: [...set] };
+}
+
+/** Replace the protected list with exactly these names (main/master always
+ *  survive — unprotecting the default trunk is the user shooting their own
+ *  foot, and they can do it in a terminal if they really mean it). */
+export function setProtectedBranches(rootIn: unknown, namesIn: unknown): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
-  return run(root, ["push"]);
+  const names = Array.isArray(namesIn)
+    ? namesIn.filter((n): n is string => typeof n === "string" && validRef(n.trim()))
+    : [];
+  const joined = [...new Set(["main", "master", ...names.map((n) => n.trim())])].join(",");
+  return run(root, ["config", "agx.protectedbranches", joined]);
+}
+
+/** Is this branch on the protected list? (List read fresh each call — the
+ *  guard is a config read, not a cache that can go stale.) */
+function isProtected(root: string, branch: string): boolean {
+  if (!branch) return false;
+  return (protectedBranches(root).branches ?? []).includes(branch);
+}
+
+export function push(rootIn: string, optsIn?: { force?: boolean }): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const force = optsIn?.force === true;
+  // The refspec is explicit: a bare `git push` reads push.default and can
+  // resolve to nothing ("src refspec main does not match any") or to more
+  // than one branch. "Push the current branch to its own upstream" is the
+  // only reading this panel ever means.
+  const branch = git(root, ["symbolic-ref", "--short", "HEAD"]).stdout.trim();
+  const remote = git(root, ["config", "--get", `branch.${branch}.remote`]).stdout.trim() || "origin";
+  if (!branch) return { ok: false, error: "not on a branch (detached HEAD) — nothing to push" };
+  // A force-push from the panel is ALWAYS --force-with-lease: it refuses to
+  // overwrite a remote that has moved since the last fetch, which is the
+  // only thing that protects the work of whoever else shares the branch.
+  // Plain `--force` is what "a colleague's push got clobbered" is made of,
+  // and no panel button is worth that.
+  return run(root, force ? ["push", "--force-with-lease", remote, branch] : ["push", remote, branch]);
 }
 export function pull(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
-  return run(root, ["pull", "--ff-only"]);
+  // Dirty tree + --ff-only fails; auto-stash makes the pull go through and
+  // restores the changes after, or leaves them safely stashed on conflict.
+  return withAutoStash(root, () => run(root, ["pull", "--ff-only"]));
 }
 /**
  * Keep ahead/behind honest, in the background.
@@ -919,6 +976,7 @@ export function fetch(rootIn: string): GitActionResult {
 
 // --- branches / log / stash --------------------------------------------------
 const US = "\x1f"; // field separator
+const RS = "\x1e"; // record separator (same convention as gitinsights)
 const validRef = (n: string) => typeof n === "string" && /^(?!-)(?!.*\.\.)[A-Za-z0-9._\/-]+$/.test(n) && !n.endsWith("/") && !n.endsWith(".lock");
 const validHash = (h: string) => typeof h === "string" && /^[0-9a-fA-F]{4,40}$/.test(h);
 
@@ -1368,12 +1426,250 @@ export function renameBranch(rootIn: string, name: string, to: string): GitActio
   if (!validRef(name) || !validRef(to)) return { ok: false, error: "invalid branch name" };
   return run(root, ["branch", "-m", name, to]);
 }
-export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "hard"): GitActionResult {
+/** Hard-reset a protected branch: refused unless `force` — the escape hatch
+ *  the reflog's own "reset here" uses (that path already double-confirms). */
+export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "hard", force = false): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   if (!validHash(ref) && !validRef(ref)) return { ok: false, error: "invalid ref" };
   if (!["soft", "mixed", "hard"].includes(mode)) return { ok: false, error: "invalid reset mode" };
+  // Hard resetting a protected branch rewrites its history — the same act a
+  // force-push then ships. The guardrails refuse the act outright; an
+  // unprotect in the Branches tab is the way around it, not a louder confirm.
+  if (mode === "hard" && !force) {
+    const branch = git(root, ["symbolic-ref", "--short", "HEAD"]).stdout.trim();
+    if (isProtected(root, branch)) return { ok: false, error: `${branch} is protected — unprotect it in the Branches tab to hard-reset it` };
+  }
   return run(root, ["reset", `--${mode}`, ref]);
+}
+
+/**
+ * Replay commits onto the current branch.
+ *
+ * One call for the whole set: `git cherry-pick h1 h2 h3` is a single sequencer
+ * run, so a conflict pauses the whole thing mid-series instead of each commit
+ * being an independent attempt that has to be undone before the next. The
+ * existing conflict machinery already knows how to finish it — `treeState()`
+ * reports `cherry-picking`, `mergeInfo()` names the two sides, and
+ * `mergeContinue`/`mergeAbort` already branch on that state.
+ *
+ * Refuses to start while anything else is in progress: a repo mid-merge must
+ * not begin a second sequencer run, and the message names the state so the
+ * panel can point at the banner instead of making the user guess.
+ */
+export function cherryPick(rootIn: string, hashesIn: unknown, noCommitIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before cherry-picking` };
+  // Hashes only, never refs: the sequencer resolves each argument itself, and
+  // letting "HEAD" or a branch name through would replay something that moves
+  // with the run it is part of.
+  const hashes = Array.isArray(hashesIn) ? hashesIn.filter((h): h is string => validHash(h)) : [];
+  if (!hashes.length) return { ok: false, error: "no valid commit hashes to cherry-pick" };
+  const args = ["cherry-pick"];
+  if (noCommitIn === true) args.push("-n");
+  // Preserve the caller's order: the sequencer picks oldest-first, and the
+  // panel sends them that way already. Sorting here would only create a
+  // second place to get the direction wrong.
+  args.push(...hashes);
+  return withAutoStash(root, () => run(root, args));
+}
+
+/** Finish a paused cherry-pick once every conflict is resolved. */
+export function cherryPickContinue(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (treeState(root) !== "cherry-picking") return { ok: false, error: "nothing to continue" };
+  // The shared path already knows the editor trap: plain `--continue` can open
+  // an editor when a conflict was resolved, so it passes `-c core.editor=true`.
+  return mergeContinue(root);
+}
+
+/** Abandon the paused cherry-pick and put the tree back. */
+export function cherryPickAbort(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (treeState(root) !== "cherry-picking") return { ok: false, error: "nothing to abort" };
+  return mergeAbort(root);
+}
+
+/**
+ * Undo a commit with a new commit, keeping history.
+ *
+ * The conflict path rides the existing machinery exactly as cherry-picks do:
+ * `treeState()` reports `reverting`, `mergeAbort()` runs `git revert --abort`,
+ * and `mergeContinue()` commits the staged resolution with `--no-edit`.
+ * `--no-edit` on the way in too: the panel has no message editor for a revert,
+ * and an interactive editor opening out of a web request is a hang.
+ */
+export function revertCommit(rootIn: unknown, hashIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const hash = typeof hashIn === "string" && validHash(hashIn) ? hashIn : "";
+  if (!hash) return { ok: false, error: "no valid commit hash to revert" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before reverting` };
+  return run(root, ["-c", "core.editor=true", "revert", "--no-edit", hash]);
+}
+
+/**
+ * Fold the staged changes into the previous commit.
+ *
+ * Refuses while anything else is in progress, and requires the working tree to
+ * be clean besides what is staged — `--amend` with stray unstaged changes would
+ * silently leave them out of the commit they look like they belong to.
+ */
+export function amendCommit(rootIn: unknown, titleIn: unknown, bodyIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const title = typeof titleIn === "string" ? titleIn.trim() : "";
+  if (!title) return { ok: false, error: "commit title required" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before amending` };
+  const staged = git(root, ["diff", "--cached", "--name-only"]).stdout.trim();
+  const stray = git(root, ["diff", "--name-only"]).stdout.trim();
+  if (!staged && !stray) return { ok: false, error: "nothing staged to amend" };
+  // Checked before the "nothing staged" branch above can hide it: a tree with
+  // only unstaged changes must not be told to stage before being told it is
+  // about to lose them.
+  if (stray) return { ok: false, error: `unstaged changes in ${stray.split("\n")[0]} — stage or discard them first, or the amend will silently drop them` };
+  const args = ["commit", "--amend", "-m", title];
+  const body = typeof bodyIn === "string" ? bodyIn.trim() : "";
+  if (body) args.push("-m", body);
+  return run(root, args);
+}
+
+/**
+ * Fold a contiguous run of commits into one, tree preserved.
+ *
+ * Soft-reset to just before the oldest picked commit, then a single commit.
+ * The old tip is left in ORIG_HEAD, which is the undo point the panel can offer
+ * ("I meant to keep three commits"). `oldest`/`newest` are the span's ends; the
+ * whole range is verified contiguous BEFORE anything moves, so a gap cannot
+ * silently swallow commits that were never picked.
+ */
+export function squashCommits(rootIn: unknown, oldestIn: unknown, newestIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const oldest = typeof oldestIn === "string" && validHash(oldestIn) ? oldestIn : "";
+  const newest = typeof newestIn === "string" && validHash(newestIn) ? newestIn : "";
+  if (!oldest || !newest) return { ok: false, error: "no valid commit hashes to squash" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before squashing` };
+  // The picked range must sit at the tip of this branch and be contiguous.
+  if (git(root, ["merge-base", "--is-ancestor", newest, "HEAD"]).code !== 0)
+    return { ok: false, error: `${newest} is not in this branch's history — squash only commits on the current branch` };
+  const count = git(root, ["rev-list", "--count", `${oldest}^..${newest}`]).stdout.trim();
+  const span = git(root, ["rev-list", "--count", `${oldest}^..HEAD`]).stdout.trim();
+  if (count !== span) return { ok: false, error: `${oldest}..${newest} is not a contiguous run to HEAD — pick a consecutive span ending at the tip` };
+  const msg = git(root, ["log", "-1", "--format=%s", newest]).stdout.trim();
+  const headBefore = git(root, ["rev-parse", "HEAD"]).stdout.trim();
+  // Two steps, each observable: the soft reset stops with the tree intact and
+  // everything the run touched staged, so a failure cannot lose work — the
+  // index is the squash's contents either way.
+  const reset = run(root, ["reset", "--soft", `${oldest}^`]);
+  if (!reset.ok) return reset;
+  const commit = run(root, ["commit", "-m", `squash! ${msg}`]);
+  if (!commit.ok) return { ...commit, error: `${commit.error} — the changes are staged at ${oldest}^; commit them to finish the squash` };
+  const undone = git(root, ["rev-parse", "ORIG_HEAD"]).stdout.trim();
+  if (undone !== headBefore) {
+    // Should not happen: reset --soft writes ORIG_HEAD. Refuse silently losing
+    // the tip rather than claim a clean squash.
+    return { ok: false, error: `squash completed but the undo point is missing — the old tip was ${headBefore}` };
+  }
+  return { ...commit, output: `${commit.output} — old tip saved at ORIG_HEAD (${headBefore.slice(0, 7)})` };
+}
+
+// --- interactive rebase ------------------------------------------------------
+/** One line of an interactive-rebase todo list. `newMessage` is set only for
+ *  reword steps; the engine turns those into `exec git commit --amend` lines,
+ *  because git's own `reword` opens an editor we have no way to drive. */
+export interface RebaseStep {
+  action: "pick" | "squash" | "fixup" | "drop" | "reword" | "edit";
+  hash: string;
+  subject: string;
+  newMessage?: string;
+}
+
+/** The commits `base..HEAD`, oldest first — the list an interactive rebase
+ *  starts from. Read-only; the caller edits it and passes it back to
+ *  `runRebase`. */
+export function rebaseSteps(rootIn: unknown, baseIn: unknown): { ok: boolean; steps?: RebaseStep[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const base = typeof baseIn === "string" && validRef(baseIn) ? baseIn : "";
+  if (!base) return { ok: false, error: "invalid base ref" };
+  if (git(root, ["merge-base", "--is-ancestor", base, "HEAD"]).code !== 0)
+    return { ok: false, error: `${base} is not an ancestor of HEAD — pick the point this branch forked` };
+  const out = git(root, ["log", "--reverse", "--format=%H%x1f%s", `${base}..HEAD`]).stdout;
+  const steps: RebaseStep[] = [];
+  for (const line of out.split("\n")) {
+    const [hash, subject] = line.split(US);
+    if (hash && subject) steps.push({ action: "pick", hash, subject });
+  }
+  if (!steps.length) return { ok: false, error: `nothing to rebase — ${base} is already an ancestor with no commits in between` };
+  return { ok: true, steps };
+}
+
+const REBASE_ACTIONS = new Set(["pick", "squash", "fixup", "drop", "reword", "edit"]);
+/** One `sh`-safe single-quoted argument, for the exec lines. */
+const shq = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "'\\''")}'`;
+
+/**
+ * Run the todo list `steps` as ONE `git rebase -i` — the whole edit in one
+ * sequencer run, so a conflict stops the series and `mergeContinue`/abort
+ * (which already branch on `rebasing`) finish or abandon it.
+ *
+ * The todo file is handed to git through `sequence.editor`, which is the whole
+ * trick: git invokes that command with the path of the todo it just wrote, so
+ * `cp` of our prepared file over it is all an "editor" has to do. No pty, no
+ * keystrokes, nothing interactive. Every commit in `base..HEAD` must appear in
+ * the list exactly once, and every hash must be one of them — otherwise a
+ * stale or tampered list could drop or invent commits silently.
+ */
+export function runRebase(rootIn: unknown, baseIn: unknown, stepsIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const base = typeof baseIn === "string" && validRef(baseIn) ? baseIn : "";
+  if (!base) return { ok: false, error: "invalid base ref" };
+  const state = treeState(root);
+  if (state !== "clean") return { ok: false, error: `this checkout is mid-${state.replace(/ing$/, "")} — finish or abandon it before rebasing` };
+  if (!Array.isArray(stepsIn) || !stepsIn.length) return { ok: false, error: "empty rebase plan" };
+
+  const todo: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of stepsIn) {
+    const s = raw as RebaseStep;
+    if (!REBASE_ACTIONS.has(s.action) || !validHash(s.hash)) return { ok: false, error: "invalid rebase step" };
+    if (seen.has(s.hash)) return { ok: false, error: `commit ${s.hash.slice(0, 7)} appears more than once in the plan` };
+    seen.add(s.hash);
+    if (s.action === "reword") {
+      const msg = typeof s.newMessage === "string" && s.newMessage.trim() ? s.newMessage.trim() : s.subject;
+      todo.push(`pick ${s.hash} ${s.subject}`);
+      todo.push(`exec git commit --amend -m ${shq(msg)}`);
+    } else if (s.action === "drop") {
+      todo.push(`drop ${s.hash} ${s.subject}`);
+    } else {
+      todo.push(`${s.action} ${s.hash} ${s.subject}`);
+    }
+  }
+  // Every commit between base and HEAD is accounted for, exactly once.
+  const span = git(root, ["rev-list", "--format=%H", base + "..HEAD"]).stdout.split("\n").filter((l) => /^[0-9a-f]{40}$/.test(l));
+  const spanSet = new Set(span);
+  for (const h of seen) if (!spanSet.has(h)) return { ok: false, error: `commit ${h.slice(0, 7)} is not in ${base}..HEAD — the plan no longer matches the branch` };
+  if (span.some((h) => !seen.has(h))) return { ok: false, error: "the plan is missing commits from the branch — every commit must appear exactly once" };
+
+  // A temp dir owned by this call: the todo file is consumed by the sequence
+  // editor, and must not collide with a rebase running at the same time.
+  const td = mkdtempSync(join(tmpdir(), "agx-rebase-"));
+  const todoFile = join(td, "todo");
+  writeFileSync(todoFile, todo.join("\n") + "\n");
+  try {
+    return withAutoStash(root, () => run(root, ["-c", "core.editor=true", "-c", `sequence.editor=cp ${todoFile}`, "rebase", "-i", base]));
+  } finally {
+    try { rmSync(td, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
 }
 
 /**
@@ -1818,6 +2114,7 @@ export function mergeContinue(rootIn: unknown, anywayIn?: unknown): GitActionRes
   const state = treeState(root);
   const r = state === "rebasing" ? run(root, ["-c", "core.editor=true", "rebase", "--continue"])
     : state === "cherry-picking" ? run(root, ["-c", "core.editor=true", "cherry-pick", "--continue"])
+    : state === "reverting" ? run(root, ["-c", "core.editor=true", "revert", "--continue"])
     // `merge --continue` needs an editor; --no-edit keeps git's own message.
     : run(root, ["commit", "--no-edit"]);
 
@@ -2756,6 +3053,66 @@ export function commitDiff(rootIn: unknown, hash: string): GitFileChange[] {
   return parseDiff(root, r.stdout, false);
 }
 
+/**
+ * The difference between two refs, in the shape a branch-comparison dialog
+ * wants: how far ahead/behind each side is, and the diff between the two
+ * tips. A three-dot range — `other...base` — compares the merge-base, so
+ * the diff is "what your side changed", not the full downstream drift.
+ */
+export function compareRefs(rootIn: unknown, baseIn: unknown, otherIn: unknown): { ok: boolean; ahead?: GitCommit[]; behind?: GitCommit[]; diff?: GitFileChange[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const base = typeof baseIn === "string" ? baseIn.trim() : "";
+  const other = typeof otherIn === "string" ? otherIn.trim() : "";
+  if (!base || !other) return { ok: false, error: "two refs are required" };
+  // git log is silent about refs it cannot resolve — an empty ahead/behind is
+  // indistinguishable from a real \"nothing to compare\" unless we ask.
+  if (git(root, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]).code !== 0) return { ok: false, error: `${base} is not a commit` };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `${other}^{commit}`]).code !== 0) return { ok: false, error: `${other} is not a commit` };
+  const fmt = `%H${US}%h${US}%s${US}%an${US}%ar${US}%D`;
+  // Ahead: commits base has that other lacks (other..base).
+  const aheadOut = git(root, ["log", "--pretty=format:" + fmt, `${other}..${base}`]);
+  // Behind: commits other has that base lacks (base..other).
+  const behindOut = git(root, ["log", "--pretty=format:" + fmt, `${base}..${other}`]);
+  const parse = (text: string): GitCommit[] => text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [hash, shortHash, subject, author, date, refs] = line.split(US);
+      return { hash, shortHash, subject: subject || "", author: author || "", date: date || "", refs: refs || "" };
+    });
+  const diffOut = git(root, ["-c", "core.quotePath=false", "diff", `${other}...${base}`, "--no-color", "--unified=3"]);
+  return {
+    ok: true,
+    ahead: parse(aheadOut.stdout),
+    behind: parse(behindOut.stdout),
+    diff: parseDiff(root, diffOut.stdout, false),
+  };
+}
+
+/**
+ * Every ref a compare dialog could pick: local branches, tags, then remote
+ * branches. Short names, roughly grouped, so a ref menu reads like a menu.
+ */
+export function refs(rootIn: unknown): { ok: boolean; refs?: string[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const out: string[] = [];
+  for (const [prefix, re] of [
+    ["refs/heads", null],
+    ["refs/tags", null],
+    ["refs/remotes", /\/HEAD$/],
+  ] as const) {
+    const r = git(root, ["for-each-ref", "--format=%(refname:short)", prefix]);
+    for (const line of r.stdout.split("\n")) {
+      if (!line) continue;
+      if (re && re.test(line)) continue;
+      out.push(line);
+    }
+  }
+  return { ok: true, refs: out };
+}
+
 /** Configured remotes, with a branch count each so the list says something
  *  before you drill into it. `remote -v` lists fetch and push separately, and
  *  they differ on a fork setup (push to yours, fetch from upstream). */
@@ -2896,6 +3253,510 @@ export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
   return out;
 }
 
+// --- Tags power-ups ---------------------------------------------------------
+
+/** Create a tag. Lightweight by default; `annotated` adds `-a -m`, `signed`
+ *  adds `-s` (which is annotated too and so also needs the message — a signed
+ *  tag without one would open an editor nobody can drive). The target is HEAD
+ *  unless `target` is given. Refuses names that already exist locally. */
+export function createTag(rootIn: unknown, nameIn: unknown, optsIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code === 0) {
+    return { ok: false, error: `tag ${name} already exists` };
+  }
+  const opts = (optsIn ?? {}) as { annotated?: boolean; message?: string; signed?: boolean; target?: string };
+  const args = ["tag"];
+  if (opts.signed) args.push("-s");
+  else if (opts.annotated) args.push("-a");
+  const message = String(opts.message ?? "").trim();
+  if (opts.signed || opts.annotated) {
+    if (!message) return { ok: false, error: "an annotated tag needs a message" };
+    args.push("-m", message);
+  }
+  args.push(name);
+  const target = String(opts.target ?? "").trim();
+  if (target) args.push(target);
+  return run(root, args);
+}
+
+/** Delete a local tag. `tag -d` refuses tags that are not stored in
+ *  `refs/tags` (i.e. on a branch or remote), which is the ownership check the
+ *  plan wants: it never touches a tag you don't have locally. */
+export function deleteTag(rootIn: unknown, nameIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code !== 0) {
+    return { ok: false, error: `no local tag ${name}` };
+  }
+  return run(root, ["tag", "-d", name]);
+}
+
+function tagRemote(root: string, remoteIn?: unknown): string | null {
+  const remote = String(remoteIn ?? "").trim() || "origin";
+  return git(root, ["remote"]).stdout.split("\n").includes(remote) ? remote : null;
+}
+
+/** Push a tag to the remote. */
+export function pushTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]).code !== 0) {
+    return { ok: false, error: `no local tag ${name}` };
+  }
+  const remote = tagRemote(root, remoteIn);
+  if (!remote) return { ok: false, error: "no such remote" };
+  return run(root, ["push", remote, name]);
+}
+
+/** Delete a tag on the remote (`push <remote> :refs/tags/<name>`). */
+export function deleteRemoteTag(rootIn: unknown, nameIn: unknown, remoteIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const name = String(nameIn ?? "").trim();
+  if (!validRef(name)) return { ok: false, error: "invalid tag name" };
+  const remote = tagRemote(root, remoteIn);
+  if (!remote) return { ok: false, error: "no such remote" };
+  return run(root, ["push", remote, `:refs/tags/${name}`]);
+}
+
+// --- Blame + file history ---------------------------------------------------
+
+/** A line of blame: the final line number, the commit that wrote it, and the
+ *  content. `sha` is empty for lines not yet committed (working-tree edits). */
+export type BlameLine = {
+  line: number;
+  sha: string;
+  author: string;
+  time: number;
+  subject: string;
+  content: string;
+};
+
+export type FileHistoryEntry = {
+  hash: string;      // short
+  fullHash: string;
+  author: string;
+  time: number;
+  subject: string;
+};
+
+/** `git blame --line-porcelain`: every group of consecutive lines from one
+ *  commit carries its own header block, then the content lines (tab-prefixed).
+ *  The header fields we keep are `author`, `author-time` and `summary`. */
+export function blameFile(rootIn: unknown, pathIn: unknown, refIn: unknown): { ok: boolean; lines?: BlameLine[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const pathStr = String(pathIn ?? "").trim();
+  if (!pathStr || pathStr.startsWith("-")) return { ok: false, error: "invalid path" };
+  const abs = inRepo(root, pathStr);
+  if (!abs) return { ok: false, error: "invalid path" };
+  const path = relative(root, abs);
+  const ref = typeof refIn === "string" && refIn.trim() && refIn.trim() !== "HEAD" ? refIn.trim() : null;
+  const inTree = git(root, ["cat-file", "-e", `${ref ?? "HEAD"}:${path}`]);
+  if (inTree.code !== 0) return { ok: false, error: `${path} is not in ${ref ?? "HEAD"} — nothing to blame` };
+  // Only pass the revision when there is one. With a rev git blames the file
+  // CONTENT at that rev — which is exactly what "reblame as of this commit"
+  // wants — while without one it blames the working tree, where the lines not
+  // yet committed come out as zero-sha "local" entries. Measured on 2.55.0.
+  const r = git(root, ["blame", "--line-porcelain", ...(ref ? [ref] : []), "--", path]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "blame failed" };
+  const lines: BlameLine[] = [];
+  let cur: BlameLine | null = null;
+  for (const line of r.stdout.split("\n")) {
+    if (line.startsWith("\t")) {
+      // Content line: completes the current header block.
+      const c = cur ?? { line: 0, sha: "", author: "", time: 0, subject: "", content: "" };
+      c.content = line.slice(1);
+      lines.push(c);
+      cur = null;
+      continue;
+    }
+    // `sha orig final [count] [boundary]` — the count only appears on the
+    // FIRST line of a commit's group; later lines of the same group carry
+    // just `sha orig final`. (Measured on 2.55.0.)
+    const m = /^([0-9a-f]{40})\s+(\d+)\s+(\d+)(?:\s+\d+)?(?:\s+boundary)?$/.exec(line);
+    if (m) {
+      const zero = m[1].replace(/0/g, "").length === 0;
+      cur = { line: Number(m[3]), sha: zero ? "" : m[1], author: "", time: 0, subject: "", content: "" };
+      continue;
+    }
+    if (!cur) continue;
+    const colon = line.indexOf(" ");
+    if (colon === -1) continue;
+    const key = line.slice(0, colon);
+    const value = line.slice(colon + 1);
+    if (key === "author") cur.author = value;
+    else if (key === "author-time") cur.time = Number(value) || 0;
+    // Zero-sha groups carry a placeholder like "Version of a.txt from a.txt"
+    // as their summary; a local edit has no commit, so it gets no subject.
+    else if (key === "summary") cur.subject = cur.sha ? value : "";
+  }
+  return { ok: true, lines };
+}
+
+/** A file's commit history, following renames. `--follow` only accepts a
+ *  single path, which is exactly what this takes. */
+export function fileHistory(rootIn: unknown, pathIn: unknown): { ok: boolean; entries?: FileHistoryEntry[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const pathStr = String(pathIn ?? "").trim();
+  if (!pathStr || pathStr.startsWith("-")) return { ok: false, error: "invalid path" };
+  const abs = inRepo(root, pathStr);
+  if (!abs) return { ok: false, error: "invalid path" };
+  const path = relative(root, abs);
+  const r = git(root, ["log", "--follow", `--format=%H${US}%an${US}%at${US}%s${RS}`, "--", path]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "git log failed" };
+  const entries: FileHistoryEntry[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [hash, author, at, subject] = line.split(US);
+    if (!hash) continue;
+    entries.push({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+  }
+  return { ok: true, entries };
+}
+
+// --- Guided bisect ----------------------------------------------------------
+
+/** The shape of a `git bisect` session, parsed from the replayed `bisect log`
+ *  (BISECT_LOG in the git dir — `git bisect status` does not exist on 2.55,
+ *  and the log carries every mark plus the verdict). When `bisecting` is true
+ *  the repo is mid-run (or finished but not reset — git keeps the state until
+ *  `bisect reset`): `current` is the candidate checked out at HEAD, `firstBad`
+ *  the verdict once the run has converged. */
+export type GitBisectStatus = {
+  ok: boolean;
+  bisecting: boolean;
+  error?: string;
+  /** How many candidate commits the current good/bad bounds still contain.
+   *  git's own "N left to test" display does different arithmetic, so this is
+   *  the honest range count rather than a re-parse of its wording. */
+  remaining?: number;
+  steps?: number;
+  current?: { sha: string; subject: string };
+  firstBad?: { sha: string; subject: string };
+};
+
+function headInfo(root: string, ref: string): { sha: string; subject: string } | null {
+  const r = git(root, ["log", "-1", `--format=%H${US}%s`, ref]);
+  if (r.code !== 0) return null;
+  const [sha, subject] = r.stdout.trim().split(US);
+  if (!sha) return null;
+  return { sha, subject: (subject || "").replace(/\x1e$/, "") };
+}
+
+export function bisectStatus(rootIn: unknown): GitBisectStatus {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, bisecting: false, error: "not a git repository root" };
+  const dir = gitDir(root);
+  if (!dir || !existsSync(join(dir, "BISECT_LOG"))) return { ok: true, bisecting: false };
+  const log = readFileSync(join(dir, "BISECT_LOG"), "utf8");
+  const st: GitBisectStatus = { ok: true, bisecting: true };
+  st.current = headInfo(root, "HEAD") ?? undefined;
+  // Converged: "# first <term> commit: [<sha>] <subject>" (terms are quoted
+  // with the default bad/good — "first 'bad' commit" — so accept any term).
+  const verdict = /^# first .* commit: \[([0-9a-f]{7,40})\] (.+)$/m.exec(log);
+  if (verdict) {
+    st.firstBad = headInfo(root, verdict[1]) ?? { sha: verdict[1], subject: verdict[2] };
+    return st;
+  }
+  // Mid-run: the latest bad and good marks bound the remaining suspects.
+  const bads = [...log.matchAll(/^# bad: \[([0-9a-f]{7,40})\]/gm)];
+  const goods = [...log.matchAll(/^# good: \[([0-9a-f]{7,40})\]/gm)];
+  if (bads.length && goods.length) {
+    const n = git(root, ["rev-list", "--count", bads[bads.length - 1][1], `^${goods[goods.length - 1][1]}`]);
+    if (n.code === 0) {
+      st.remaining = Math.max(0, Number(n.stdout.trim()) || 0);
+      st.steps = Math.max(0, Math.ceil(Math.log2(st.remaining + 1)));
+    }
+  }
+  return st;
+}
+
+function bisectRef(root: string, refIn: unknown, label: string): { ok: boolean; ref?: string; error?: string } {
+  const ref = String(refIn ?? "").trim();
+  if (!ref || ref.startsWith("-")) return { ok: false, error: `invalid ${label} ref` };
+  // Refnames like "HEAD~4" legitimately reach a commit; git's own
+  // rev-parse --verify is the judge of whether that is true.
+  if (git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).code !== 0) {
+    return { ok: false, error: `${label} ${ref} is not a commit` };
+  }
+  return { ok: true, ref };
+}
+
+export function bisectStart(rootIn: unknown, badIn: unknown, goodIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const bad = bisectRef(root, badIn, "bad");
+  if (!bad.ok) return bad;
+  const good = bisectRef(root, goodIn, "good");
+  if (!good.ok) return good;
+  return run(root, ["bisect", "start", bad.ref!, good.ref!]);
+}
+
+export function bisectMark(rootIn: unknown, markIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const mark = String(markIn ?? "").trim();
+  if (mark !== "good" && mark !== "bad") return { ok: false, error: "mark must be good or bad" };
+  return run(root, ["bisect", mark]);
+}
+
+export function bisectReset(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  return run(root, ["bisect", "reset"]);
+}
+
+// --- Commit + code search ---------------------------------------------------
+
+export type GitGrepHit = {
+  path: string;
+  line: number;
+  text: string;
+};
+
+/** Commits whose message matches the query (case-insensitive substring), plus
+ *  the commit itself when the query looks like a sha prefix. Reuses the
+ *  FileHistoryEntry shape, so commit rows render one way across the UI. */
+export function searchCommits(rootIn: unknown, qIn: unknown, authorIn?: unknown, sinceIn?: unknown): { ok: boolean; entries: FileHistoryEntry[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, entries: [], error: "not a git repository root" };
+  const q = String(qIn ?? "").trim();
+  if (!q || q.startsWith("-")) return { ok: false, entries: [], error: "empty or invalid query" };
+  const args = ["log", "--all", "-i", "-F", `--grep=${q}`, `--format=%H${US}%an${US}%at${US}%s${RS}`];
+  if (authorIn) { const a = String(authorIn).trim(); if (a) args.push(`--author=${a}`); }
+  if (sinceIn) { const s = String(sinceIn).trim(); if (s) args.push(`--since=${s}`); }
+  const r = git(root, args);
+  if (r.code !== 0) return { ok: false, entries: [], error: r.stderr.trim() || "git log failed" };
+  const entries: FileHistoryEntry[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [hash, author, at, subject] = line.split(US);
+    if (!hash) continue;
+    entries.push({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+  }
+  // A sha prefix is not a message. Resolve it directly and prepend it.
+  if (/^[0-9a-f]{4,40}$/i.test(q) && git(root, ["rev-parse", "--verify", "--quiet", q]).code === 0) {
+    const r2 = git(root, ["log", "-1", `--format=%H${US}%an${US}%at${US}%s${RS}`, q]);
+    if (r2.code === 0) {
+      const [hash, author, at, subject] = r2.stdout.trim().split(US);
+      if (hash && !entries.some((e) => e.fullHash === hash)) {
+        entries.unshift({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+      }
+    }
+  }
+  return { ok: true, entries };
+}
+
+/** Grep the working tree. Exit 1 is "no matches", not an error. */
+export function grepWorkingTree(rootIn: unknown, qIn: unknown, optsIn?: unknown): { ok: boolean; hits: GitGrepHit[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, hits: [], error: "not a git repository root" };
+  const q = String(qIn ?? "").trim();
+  if (!q) return { ok: false, hits: [], error: "empty query" };
+  const opts = (optsIn ?? {}) as { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean };
+  const args = ["grep", "-n", "-I"];
+  if (opts.wholeWord) args.push("-w");
+  if (!opts.regex) args.push("-F");
+  if (!opts.caseSensitive) args.push("-i");
+  args.push("--", q);
+  const r = git(root, args);
+  if (r.code === 1) return { ok: true, hits: [] };
+  if (r.code !== 0) return { ok: false, hits: [], error: r.stderr.trim() || "git grep failed" };
+  const hits: GitGrepHit[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const i = line.indexOf(":");
+    const j = i === -1 ? -1 : line.indexOf(":", i + 1);
+    if (i === -1 || j === -1) continue;
+    hits.push({ path: line.slice(0, i), line: Number(line.slice(i + 1, j)) || 0, text: line.slice(j + 1) });
+  }
+  return { ok: true, hits };
+}
+
+/** Pickaxe: which commits added/removed a string (`-S`, exact) or matched a
+ *  regex in the patch (`-G`). */
+export function searchHistory(rootIn: unknown, qIn: unknown, typeIn?: unknown): { ok: boolean; entries: FileHistoryEntry[]; error?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, entries: [], error: "not a git repository root" };
+  const q = String(qIn ?? "").trim();
+  if (!q || q.startsWith("-")) return { ok: false, entries: [], error: "empty or invalid query" };
+  const pickaxe = String(typeIn ?? "").trim() === "G" ? "G" : "S";
+  const r = git(root, ["log", "--all", `-${pickaxe}${q}`, `--format=%H${US}%an${US}%at${US}%s${RS}`]);
+  if (r.code !== 0) return { ok: false, entries: [], error: r.stderr.trim() || "git log failed" };
+  const entries: FileHistoryEntry[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [hash, author, at, subject] = line.split(US);
+    if (!hash) continue;
+    entries.push({ hash: hash.slice(0, 7), fullHash: hash, author: author || "", time: Number(at) || 0, subject: (subject || "").replace(/\x1e$/, "") });
+  }
+  return { ok: true, entries };
+}
+
+// --- Submodules -------------------------------------------------------------
+/** A submodule as the panel shows it: the gitlink the index pins (the source
+ *  of truth for what this repo expects), the URL from .gitmodules, and the
+ *  checked-out state from `git submodule status`. */
+export type GitSubmodule = {
+  name: string;
+  path: string;
+  url: string;
+  sha: string;
+  branch?: string;
+  status: "clean" | "modified" | "uninitialized" | "conflict";
+};
+
+/** Merge three sources: the .gitmodules sections (name → path/url/branch),
+ *  the index gitlinks (mode 160000 — what this repo pins), and `submodule
+ *  status` (where the checkout actually is: "-" uninitialized, "+" ahead of
+ *  the pin, "U" conflicted). */
+export function submodules(rootIn: unknown): GitSubmodule[] {
+  const root = repoRoot(rootIn);
+  if (!root) return [];
+  // .gitmodules sections: submodule.<name>.path / .url / .branch. The path is
+  // the stable join key with the index gitlinks below.
+  const byName = new Map<string, { name: string; path: string; url: string; branch: string }>();
+  const cfg = git(root, ["config", "-f", ".gitmodules", "--null", "--list"]);
+  // --null emits "<key>\n<value>\0" per entry — the parts split on \0 and the
+  // key/value pair is joined by the first \n.
+  for (const part of cfg.stdout.split("\0")) {
+    if (!part) continue;
+    const nl = part.indexOf("\n");
+    if (nl === -1) continue;
+    const m = /^submodule\.([^.\s]+)\.(path|url|branch)$/.exec(part.slice(0, nl));
+    if (!m) continue;
+    const e = byName.get(m[1]) ?? { name: m[1], path: "", url: "", branch: "" };
+    if (m[2] === "path") e.path = part.slice(nl + 1);
+    else if (m[2] === "url") e.url = part.slice(nl + 1);
+    else e.branch = part.slice(nl + 1);
+    byName.set(m[1], e);
+  }
+  const byPath2 = new Map<string, GitSubmodule>();
+  for (const e of byName.values()) {
+    if (!e.path) continue;
+    byPath2.set(e.path, { name: e.name, path: e.path, url: e.url, sha: "", branch: e.branch, status: "uninitialized" });
+  }
+  // Gitlinks in the index (mode 160000) — the authoritative submodule set.
+  // The index rather than HEAD: `submodule add` only stages, and a remove only
+  // un-stages; reading HEAD would ghost in or out entries that never moved.
+  const ls = git(root, ["ls-files", "-s"]);
+  for (const line of ls.stdout.split("\n")) {
+    const m = /^160000 ([0-9a-f]{40}) \d+\t(.+)$/.exec(line.trim());
+    if (!m) continue;
+    const path = m[2];
+    const existing = byPath2.get(path);
+    byPath2.set(path, existing
+      ? { ...existing, sha: m[1], status: existing.status === "uninitialized" ? "uninitialized" : "clean" }
+      : { name: path, path, url: "", sha: m[1], status: "uninitialized" });
+  }
+  // The checkout state from `git submodule status` — "-" uninitialized, "+"
+  // checked-out differs from the pin, "U" conflicted.
+  const st = git(root, ["submodule", "status"]);
+  for (const line of st.stdout.split("\n")) {
+    const m = /^([-+U]?)([0-9a-f]{40})\s+(.+?)(?:\s+\((.*)\))?$/.exec(line.trim());
+    if (!m) continue;
+    const [_, flag, sha, path, describe] = m;
+    const e = byPath2.get(path);
+    if (!e) continue;
+    e.sha = sha;
+    if (flag === "-") e.status = "uninitialized";
+    else if (flag === "+") e.status = "modified";
+    else if (flag === "U") e.status = "conflict";
+    else e.status = "clean";
+    if (describe) e.branch = describe;
+  }
+  return [...byPath2.values()];
+}
+
+function submodulePath(root: string, pathIn: unknown): string | null {
+  if (typeof pathIn !== "string" || !pathIn.trim()) return null;
+  const p = pathIn.trim();
+  return submodules(root).some((s) => s.path === p) ? p : null;
+}
+
+/** Add a submodule: clone `url` into `path` and record the gitlink. A network
+ *  op like pull, so it is bounded by the same machinery. */
+export function submoduleAdd(rootIn: unknown, urlIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const url = String(urlIn ?? "").trim();
+  if (!url || url.startsWith("-")) return { ok: false, error: "invalid submodule URL" };
+  const path = String(pathIn ?? "").trim();
+  if (!path || path.startsWith("-") || path.includes("..") || !validRef(path.replace(/\//g, "-"))) {
+    return { ok: false, error: "invalid submodule path" };
+  }
+  if (git(root, ["ls-files", "--error-unmatch", "--", path]).code === 0) {
+    return { ok: false, error: `${path} is already tracked` };
+  }
+  return run(root, ["submodule", "add", url, path]);
+}
+
+/** Initialize and check out submodules (optionally one). A network op —
+ *  async so the terminal's loop never blocks on it. */
+export async function submoduleUpdate(rootIn: unknown, pathIn: unknown): Promise<GitActionResult> {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const args = ["submodule", "update", "--init", "--recursive"];
+  const path = submodulePath(root, pathIn);
+  if (path) args.push("--", path);
+  const r = await gitAsync(root, args);
+  afterMutation(root);
+  return { ok: r.code === 0, error: r.code !== 0 ? (r.stderr.trim() || r.stdout.trim() || "submodule update failed") : undefined, output: (r.stdout + r.stderr).trim() };
+}
+
+/** Re-write the submodule URLs from .gitmodules into the checkouts (and into
+ *  .git/config) — what you run after the remote URL moves. */
+export function submoduleSync(rootIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const args = ["submodule", "sync", "--recursive"];
+  const path = submodulePath(root, pathIn);
+  if (path) args.push("--", path);
+  return run(root, args);
+}
+
+/** Detach a submodule's checkout: the directory goes, the gitlink and the
+ *  .gitmodules section stay. */
+export function submoduleDeinit(rootIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const path = submodulePath(root, pathIn);
+  if (!path) return { ok: false, error: "pick a submodule from the list" };
+  return run(root, ["submodule", "deinit", "-f", "--", path]);
+}
+
+/** Remove a submodule for good: deinit (directory goes), drop the gitlink,
+ *  strip its .gitmodules section (and the file itself if it empties). */
+export function submoduleRemove(rootIn: unknown, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const path = submodulePath(root, pathIn);
+  if (!path) return { ok: false, error: "pick a submodule from the list" };
+  const sm = submodules(root).find((s) => s.path === path);
+  const name = sm?.name || path;
+  let r = run(root, ["submodule", "deinit", "-f", "--", path]);
+  if (!r.ok) return r;
+  r = run(root, ["rm", "--cached", "-f", "--", path]);
+  if (!r.ok) return r;
+  // deinit only empties the directory; the shell of it can survive, and a
+  // stale checkout directory at the gitlink path would shadow the next add.
+  const absPath = inRepo(root, path);
+  if (absPath && existsSync(absPath)) rmSync(absPath, { recursive: true, force: true });
+  r = run(root, ["config", "-f", ".gitmodules", "--remove-section", `submodule.${name}`]);
+  if (!r.ok) return r;
+  const modulesFile = join(root, ".gitmodules");
+  const remaining = existsSync(modulesFile) ? readFileSync(modulesFile, "utf8").trim() : "";
+  if (!remaining) {
+    r = run(root, ["rm", "-f", "--", ".gitmodules"]);
+  } else {
+    r = run(root, ["add", "-A", "--", ".gitmodules"]);
+  }
+  return r;
+}
+
 /**
  * Where HEAD has been — the trail that makes a bad reset or rebase recoverable.
  *
@@ -2954,6 +3815,244 @@ function stashOp(rootIn: string, op: "apply" | "pop" | "drop", index: number): G
 export const stashApply = (r: string, i: number) => stashOp(r, "apply", i);
 export const stashPop = (r: string, i: number) => stashOp(r, "pop", i);
 export const stashDrop = (r: string, i: number) => stashOp(r, "drop", i);
+
+/** The stash is a reflog: `logs/refs/stash`, oldest entry first, so entry i is
+ *  `lines[len - 1 - i]`. Each line is "<sha> <sha> <name> <email> <ts> <tz>\t
+ *  <subject>" and the subject is what `git stash list` shows. */
+function stashReflog(root: string): string {
+  const common = git(root, ["rev-parse", "--git-common-dir"]).stdout.trim();
+  return join(resolve(root, common), "logs", "refs", "stash");
+}
+
+/** Rename a stash, keeping the "On <branch>: " / "WIP on <branch>: " prefix so
+ *  the row still says which branch it belongs to. There is no porcelain for
+ *  this — `update-ref` can only append entries — so the reflog file is
+ *  rewritten in place, preserving identity, timestamp and every other field. */
+export function stashRename(rootIn: unknown, indexIn: unknown, messageIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const index = Number(indexIn);
+  if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
+  const message = String(messageIn ?? "").trim();
+  if (!message) return { ok: false, error: "stash message required" };
+  const file = stashReflog(root);
+  if (!existsSync(file)) return { ok: false, error: "no stashes to rename" };
+  const lines = readFileSync(file, "utf8").split("\n");
+  const pos = lines.length - 2 - index; // -1 for the trailing newline, -index for the entry
+  if (pos < 0 || pos >= lines.length - 1) return { ok: false, error: `no stash@{${index}}` };
+  const line = lines[pos];
+  const tab = line.indexOf("\t");
+  if (tab === -1) return { ok: false, error: `stash@{${index}} has no message to rename` };
+  const subject = line.slice(tab + 1);
+  // Prefix = everything through the first ": " ("On main: ", "WIP on main: ").
+  // Branch names cannot contain ":", so the first colon is always the split.
+  const colon = subject.indexOf(":");
+  const prefix = colon === -1 ? "" : subject.slice(0, colon + 2);
+  lines[pos] = line.slice(0, tab + 1) + prefix + message;
+  try {
+    writeFileSync(file, lines.join("\n"));
+  } catch (e) {
+    return { ok: false, error: `could not rewrite the stash reflog: ${String(e)}` };
+  }
+  afterMutation(root);
+  return { ok: true, output: `renamed ${message}` };
+}
+
+/** Split a stash off onto its own branch: `git stash branch` checks out a new
+ *  branch at the stash's base, applies the stash onto it, and drops the stash
+ *  on success (on a conflict it keeps the stash and says so). */
+export function stashToBranch(rootIn: unknown, indexIn: unknown, branchIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const index = Number(indexIn);
+  if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
+  const branch = String(branchIn ?? "").trim();
+  if (!validRef(branch)) return { ok: false, error: "invalid branch name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).code === 0) {
+    return { ok: false, error: `a branch called ${branch} already exists` };
+  }
+  return run(root, ["stash", "branch", branch, `stash@{${index}}`]);
+}
+
+/** Stash only the given paths (with an optional keep-index). Untracked files
+ *  among them come along, matching the panel's "stash all" behavior. */
+export function stashPartial(rootIn: unknown, pathsIn: unknown, keepIndexIn?: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const v = validRels(root, pathsIn); if (!v || !v.length) return { ok: false, error: "no valid paths" };
+  const keep = keepIndexIn === true;
+  // "stash & keep" means the picked files stay in the working tree, staged and
+  // ready to commit. --keep-index only preserves changes that are in the
+  // index, so the picked paths are staged first.
+  if (keep) {
+    const r = run(root, ["add", "-A", "--", ...v]);
+    if (!r.ok) return r;
+  }
+  const args = ["stash", "push", "--include-untracked"];
+  if (keep) args.push("--keep-index");
+  args.push("--", ...v);
+  return run(root, args);
+}
+
+/** Apply a stash even when the working tree has moved on at the stashed paths:
+ *  delete the colliding working-tree versions first, then apply. The deleted
+ *  content is replaced by the stash's — which is why the panel confirms this
+ *  before calling it. */
+export function stashApplyOverwrite(rootIn: unknown, indexIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const index = Number(indexIn);
+  if (!Number.isInteger(index) || index < 0 || index > 999) return { ok: false, error: "invalid stash index" };
+  const sha = git(root, ["rev-parse", "--verify", "--quiet", `refs/stash@{${index}}`]).stdout.trim();
+  if (!sha) return { ok: false, error: `no stash@{${index}}` };
+  // Paths the working tree currently differs on, plus untracked files that the
+  // stash's tree contains (a plain apply dies on both with "already exists" /
+  // "local changes would be overwritten"). The stash's tree is tracked-only;
+  // its untracked files live in the third parent, which exists exactly when
+  // the stash was taken with --include-untracked.
+  const differ = git(root, ["diff", "--name-only", sha, "--", "."]).stdout.split("\n").filter(Boolean);
+  const inStash = new Set(git(root, ["ls-tree", "-r", "--name-only", sha]).stdout.split("\n").filter(Boolean));
+  const hasUntrackedParent = git(root, ["rev-parse", "--verify", "--quiet", `${sha}^3`]).code === 0;
+  if (hasUntrackedParent) {
+    for (const p of git(root, ["ls-tree", "-r", "--name-only", `${sha}^3`]).stdout.split("\n").filter(Boolean)) inStash.add(p);
+  }
+  const untracked = git(root, ["ls-files", "--others", "--exclude-standard"]).stdout.split("\n").filter(Boolean);
+  const doomed = [...new Set([...differ, ...untracked.filter((p) => inStash.has(p))])];
+  for (const p of doomed) {
+    const abs = inRepo(root, p);
+    if (abs) rmSync(abs, { force: true });
+  }
+  return run(root, ["stash", "apply", `stash@{${index}}`]);
+}
+
+// --- WIP snapshots ----------------------------------------------------------
+/**
+ * A named full-tree snapshot: `git stash create` makes a commit that touches
+ * NOTHING in the working tree, and `update-ref` hangs it off
+ * `refs/agx/wip/<timestamp>` where it is visible, listable and deletable
+ * without ever disturbing the working tree. Restore applies that commit's
+ * tree back — the same machinery a stash apply uses, without the stash stack
+ * bookkeeping.
+ *
+ * Cap at 30, pruning the oldest on create: a safety net that grows forever
+ * is a leak, and anything older than the 30 most recent is no longer a
+ * "quick undo" anyway.
+ */
+
+const WIP_CAP = 30;
+
+export type WipSnapshot = { sha: string; ref: string; time: string; label: string };
+
+/** `stash create` mangles its -m into "On <branch>: -m <label>", so the label
+ *  lives in the ref name instead: refs/agx/wip/<ts>-<label>. Sanitised so a
+ *  ref can never be smuggled in via a label. */
+function wipRef(ts: number, label: string): string {
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return `refs/agx/wip/${ts}${slug ? "-" + slug : ""}`;
+}
+function wipLabelFromRef(ref: string): string {
+  const m = /^refs\/agx\/wip\/\d+-(.+)$/.exec(ref);
+  return m ? m[1]!.replace(/-/g, " ") : "";
+}
+/** The timestamp a snapshot ref was created at — embedded in the name because
+ *  `for-each-ref`'s creatordate is the commit's committer date, which the
+ *  stash commits all share to the second. */
+function wipTs(ref: string): number {
+  const m = /^refs\/agx\/wip\/(\d+)/.exec(ref);
+  return m ? Number(m[1]) : 0;
+}
+
+/** All snapshots, newest first. */
+export function listSnapshots(rootIn: unknown): { ok: boolean; snapshots?: WipSnapshot[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, error: "not a git repository root" };
+  const fmt = `%(refname)${US}%(objectname)${US}%(creatordate:iso8601)`;
+  const r = git(root, ["for-each-ref", `--format=${fmt}`, "refs/agx/wip"]);
+  const snapshots: WipSnapshot[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [ref, sha, time] = line.split(US);
+    if (!ref || !sha) continue;
+    snapshots.push({ sha, ref, time: time || "", label: wipLabelFromRef(ref) });
+  }
+  snapshots.sort((a, b) => wipTs(b.ref) - wipTs(a.ref));
+  return { ok: true, snapshots };
+}
+
+/** Capture the working tree as a snapshot. Requires a dirty tree (a clean
+ *  snapshot is a nothing-burger), and label may be empty. */
+export function createSnapshot(rootIn: unknown, labelIn: unknown): GitActionResult & { sha?: string; ref?: string } {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (treeState(root) !== "clean") return { ok: false, error: `cannot snapshot while ${treeState(root)}` };
+  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
+  if (!dirty) return { ok: false, error: "the working tree is clean — nothing to snapshot" };
+  const label = typeof labelIn === "string" ? labelIn.trim().slice(0, 80) : "";
+  // Note: no -u. `git stash create` ignores it (it becomes part of the
+  // message) — snapshots capture tracked changes, which is what a safety net
+  // needs to guarantee; untracked files are already cheap to regenerate.
+  const made = git(root, ["stash", "create", "-m", label || "wip snapshot"]);
+  if (made.code !== 0 || !made.stdout.trim()) return { ok: false, error: "could not create a snapshot commit" };
+  const sha = made.stdout.trim();
+  if (!validHash(sha)) return { ok: false, error: "snapshot produced an unusable commit" };
+  const ref = wipRef(Date.now(), label);
+  const upd = run(root, ["update-ref", ref, sha]);
+  if (!upd.ok) return upd;
+  // Prune the oldest beyond the cap — the ts lives in the ref name.
+  const all = git(root, ["for-each-ref", "--format=%(refname)", "refs/agx/wip"]).stdout.trim().split("\n").filter(Boolean);
+  all.sort((a, b) => wipTs(b) - wipTs(a));
+  for (const old of all.slice(WIP_CAP)) run(root, ["update-ref", "-d", old]);
+  return { ok: true, output: upd.output, sha, ref };
+}
+
+/** Bring a snapshot's tree back. Applies the snapshot commit's tree onto the
+ *  current tree — the stash-apply machinery, which leaves the snapshot ref
+ *  in place (restore is not a one-shot ticket). */
+export function restoreSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const sha = typeof shaIn === "string" ? shaIn.trim() : "";
+  if (!validHash(sha)) return { ok: false, error: "invalid snapshot sha" };
+  return run(root, ["stash", "apply", sha]);
+}
+
+/** Delete a snapshot for good. */
+export function deleteSnapshot(rootIn: unknown, shaIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const sha = typeof shaIn === "string" ? shaIn.trim() : "";
+  if (!validHash(sha)) return { ok: false, error: "invalid snapshot sha" };
+  // The ref is `refs/agx/wip/<timestamp>`, not the sha — find the one that
+  // points at this snapshot.
+  const r = git(root, ["for-each-ref", `--format=%(refname)${US}%(objectname)`, "refs/agx/wip"]);
+  for (const line of r.stdout.split("\n")) {
+    const [ref, obj] = line.split(US);
+    if (obj === sha) return run(root, ["update-ref", "-d", ref || ""]);
+  }
+  return { ok: false, error: "no snapshot with that sha" };
+}
+
+/** Auto-stash wrapper for history surgery: if the tree is dirty, push the
+ *  changes (with untracked) first, run the op, then pop. If the op fails,
+ *  LEAVE the stash — the working tree is exactly as the failure left it, and
+ *  popping would smear the failure's partial state over the WIP. The error
+ *  names the stash index so the user can recover it. */
+export function withAutoStash(root: string, op: () => GitActionResult): GitActionResult {
+  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
+  if (!dirty) return op();
+  const pushed = git(root, ["stash", "push", "--include-untracked", "-m", "agx: auto-stash before surgery"]);
+  if (pushed.code !== 0) return { ok: false, error: "auto-stash failed — the operation was not started" };
+  const r = op();
+  if (!r.ok) return { ...r, error: `${r.error ?? "operation failed"} — your changes are safe in stash@{0} ("agx: auto-stash before surgery")` };
+  const popped = git(root, ["stash", "pop", "stash@{0}"]);
+  if (popped.code !== 0) {
+    // The op succeeded; the pop hit a conflict (the op touched the same files).
+    // Leaving the stash is the only honest option — the tree is NOT dirty by
+    // us, it is the op's result, and the WIP is intact on the stack.
+    return { ...r, error: `${r.error ?? "operation succeeded"}, but restoring your changes hit a conflict — they are safe in stash@{0} ("agx: auto-stash before surgery")` };
+  }
+  return r;
+}
 
 // --- interactive hunk staging (lazygit's signature) --------------------------
 function gitApplyStdin(root: string, args: string[], patch: string): { code: number; stderr: string } {

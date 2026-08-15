@@ -44,19 +44,30 @@ import { askBrowser, browserReadyCount, noteBrowserReady, parseAsk, setBrowserSi
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability, safeAbs as gitSafeAbs } from "./git.ts";
+import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
   workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
+  protectedBranches, setProtectedBranches,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
+  stashRename, stashToBranch, stashPartial, stashApplyOverwrite,
+  refs, listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
+  cherryPick, cherryPickContinue, cherryPickAbort,
+  revertCommit, amendCommit, squashCommits,
+  rebaseSteps, runRebase, compareRefs,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
+  submodules as gitSubmodules, submoduleAdd, submoduleUpdate, submoduleSync, submoduleDeinit, submoduleRemove,
+  blameFile, fileHistory,   bisectStatus, bisectStart, bisectMark, bisectReset,
+  searchCommits, grepWorkingTree, searchHistory,
+  createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
 } from "./gitwork.ts";
+import { repoStats, generateChangelog } from "./gitinsights.ts";
 import { saveShot } from "./shots.ts";
 import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
@@ -1653,6 +1664,13 @@ const server = Bun.serve<WsData>({
       const res = gitCommit(String(b.root || ""), Array.isArray(b.files) ? b.files : [], String(b.title || ""), String(b.body || ""));
       return json(res, res.ok ? 200 : 400);
     }
+    if (pathname === "/git/amend" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = gitAmend(String(b.root || ""), Array.isArray(b.files) ? b.files : [], String(b.title || ""), String(b.body || ""));
+      return json(res, res.ok ? 200 : 400);
+    }
 
     // --- live git panel (lazygit-style working tree) ---
     // Is git even installed? A plain read like the rest of /git/*, so the
@@ -1844,7 +1862,23 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/base-candidates") return json(baseCandidates(url.searchParams.get("root") || ""));
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
+    if (pathname === "/git/refs") return json(refs(url.searchParams.get("root") || ""));
+    if (pathname === "/git/snapshots") return json(listSnapshots(url.searchParams.get("root") || ""));
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
+    if (pathname === "/git/submodules") return json({ submodules: gitSubmodules(url.searchParams.get("root") || "") });
+    if (pathname === "/git/blame") return json(blameFile(url.searchParams.get("root") || "", url.searchParams.get("path") || "", url.searchParams.get("ref") || ""));
+    if (pathname === "/git/file-history") return json(fileHistory(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
+    if (pathname === "/git/bisect-status") return json(bisectStatus(url.searchParams.get("root") || ""));
+    if (pathname === "/git/search-commits") return json(searchCommits(url.searchParams.get("root") || "", url.searchParams.get("q") || "", url.searchParams.get("author") || undefined, url.searchParams.get("since") || undefined));
+    if (pathname === "/git/grep") {
+      const p = url.searchParams;
+      return json(grepWorkingTree(p.get("root") || "", p.get("q") || "", {
+        caseSensitive: p.get("caseSensitive") === "1",
+        wholeWord: p.get("wholeWord") === "1",
+        regex: p.get("regex") === "1",
+      }));
+    }
+    if (pathname === "/git/pickaxe") return json(searchHistory(url.searchParams.get("root") || "", url.searchParams.get("q") || "", url.searchParams.get("type") || "S"));
     // What has piled up in a checkout, and the command that would clear it.
     // Read-only by construction: the response carries commands as strings, and
     // there is deliberately no endpoint anywhere that runs one.
@@ -1868,6 +1902,9 @@ const server = Bun.serve<WsData>({
       return body(await whileRefsHoldAsync(`tags:${root}`, root, async () => ({ tags: await gitTags(root) })));
     }
     if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
+    // Repo analytics and the changelog — async log walks, never on the loop.
+    if (pathname === "/git/stats") return json(await repoStats(url.searchParams.get("root") || "", Number(url.searchParams.get("days") || 30)));
+    if (pathname === "/git/changelog") return json(await generateChangelog(url.searchParams.get("root") || "", url.searchParams.get("from") || "", url.searchParams.get("to") || ""));
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
     if (pathname === "/editor/capability") return json(editorCapability());
     if (pathname === "/theme/status") return json({ ...snippetStatus(), snippets: SNIPPETS });
@@ -1960,7 +1997,7 @@ const server = Bun.serve<WsData>({
         case "/git/unstage-all": res = unstageAll(root); break;
         case "/git/discard": res = discard(root, paths); break;
         case "/git/commit-staged": res = commitStaged(root, String(b.title || ""), String(b.body || "")); break;
-        case "/git/push": res = gitPush(root); break;
+        case "/git/push": res = gitPush(root, { force: b.force === true }); break;
         case "/git/pull": res = gitPull(root); break;
         case "/git/fetch": res = gitFetch(root); break;
         case "/git/checkout": res = gitCheckout(root, String(b.name || "")); break;
@@ -1970,11 +2007,15 @@ const server = Bun.serve<WsData>({
         case "/git/stash-apply": res = stashApply(root, Number(b.index)); break;
         case "/git/stash-pop": res = stashPop(root, Number(b.index)); break;
         case "/git/stash-drop": res = stashDrop(root, Number(b.index)); break;
+        case "/git/stash-rename": res = stashRename(root, b.index, b.message); break;
+        case "/git/stash-to-branch": res = stashToBranch(root, b.index, b.branch); break;
+        case "/git/stash-partial": res = stashPartial(root, b.paths, b.keepIndex === true); break;
+        case "/git/stash-apply-overwrite": res = stashApplyOverwrite(root, Number(b.index)); break;
         case "/git/apply-hunk": res = applyHunk(root, b.path, !!b.staged, b.action, b.hunk); break;
         case "/git/merge": res = mergeBranch(root, String(b.name || "")); break;
         case "/git/rebase": res = rebaseBranch(root, String(b.name || "")); break;
         case "/git/branch-rename": res = renameBranch(root, String(b.name || ""), String(b.to || "")); break;
-        case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode); break;
+        case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode, b.force === true); break;
         case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch, b.startPoint); break;
         // Bring a remote branch local. `switch` moves this checkout onto it;
         // without it the branch is created and nothing else moves.
@@ -1996,6 +2037,35 @@ const server = Bun.serve<WsData>({
         case "/git/merge-continue": res = mergeContinue(root, b.anyway); break;
         case "/git/reopen-conflict": res = reopenConflict(root, b.path, b.confirm); break;
         case "/git/undo-merge": res = await undoMerge(root); break;
+        case "/git/cherry-pick": res = cherryPick(root, b.hashes, b.noCommit); break;
+        case "/git/cherry-pick-continue": res = cherryPickContinue(root); break;
+        case "/git/cherry-pick-abort": res = cherryPickAbort(root); break;
+        case "/git/revert": res = revertCommit(root, b.hash); break;
+        case "/git/amend-staged": res = amendCommit(root, b.title, b.body); break;
+        case "/git/squash": res = squashCommits(root, b.oldest, b.newest); break;
+        case "/git/rebase-steps": res = rebaseSteps(root, b.base); break;
+        case "/git/rebase-run": res = runRebase(root, b.base, b.steps); break;
+        case "/git/compare": res = compareRefs(root, b.base, b.other); break;
+        case "/git/snapshot-create": res = createSnapshot(root, b.label); break;
+        case "/git/snapshot-restore": res = restoreSnapshot(root, b.sha); break;
+        case "/git/snapshot-delete": res = deleteSnapshot(root, b.sha); break;
+        case "/git/protected-branches": res = protectedBranches(root); break;
+        case "/git/protected-branches-set": res = setProtectedBranches(root, b.names); break;
+        case "/git/protected-branches": res = protectedBranches(root); break;
+        case "/git/protected-branches-set": res = setProtectedBranches(root, b.names); break;
+        case "/git/push": res = gitPush(root, { force: b.force === true }); break;
+        case "/git/submodule-add": res = submoduleAdd(root, b.url, b.path); break;
+        case "/git/submodule-update": res = await submoduleUpdate(root, b.path); break;
+        case "/git/submodule-sync": res = submoduleSync(root, b.path); break;
+        case "/git/submodule-deinit": res = submoduleDeinit(root, b.path); break;
+        case "/git/submodule-remove": res = submoduleRemove(root, b.path); break;
+        case "/git/bisect-start": res = bisectStart(root, b.bad, b.good); break;
+        case "/git/bisect-mark": res = bisectMark(root, b.mark); break;
+        case "/git/bisect-reset": res = bisectReset(root); break;
+        case "/git/tag-create": res = createTag(root, b.name, { annotated: b.annotated === true, message: b.message, signed: b.signed === true, target: b.target }); break;
+        case "/git/tag-delete": res = deleteTag(root, b.name); break;
+        case "/git/tag-push": res = pushTag(root, b.name, b.remote); break;
+        case "/git/tag-delete-remote": res = deleteRemoteTag(root, b.name, b.remote); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why
