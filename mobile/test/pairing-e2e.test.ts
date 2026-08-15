@@ -203,14 +203,33 @@ beforeAll(async () => {
       TMUX_TMPDIR: join(dbDir, "tmux"),
     },
     stdout: "ignore",
-    stderr: "ignore",
+    /*
+     * Piped, not ignored — and drained, so a chatty boot cannot fill the pipe
+     * and block the child. Ignoring it is what turned every boot failure into
+     * the same sentence, "the server never answered", with the reason thrown
+     * away: a port already held, a missing binary, a crash on the first line.
+     * On a runner, that sentence is all anybody gets.
+     */
+    stderr: "pipe",
   });
+
+  let said = "";
+  void (async () => {
+    try { for await (const c of server!.stderr as ReadableStream<Uint8Array>) said += new TextDecoder().decode(c); }
+    catch { /* the child went away; whatever was read is what we have */ }
+  })();
 
   for (let i = 0; i < 80; i++) {
     try { if ((await fetch(`${ORIGIN}/health`)).ok) return; } catch { /* not up yet */ }
     await Bun.sleep(250);
   }
-  throw new Error(`the server never answered ${ORIGIN}/health`);
+  // What the child said, and whether it is even alive — the two facts that tell
+  // "it crashed" from "it is running and cannot be reached from here".
+  const alive = server!.exitCode === null && server!.signalCode === null;
+  throw new Error(
+    `the server never answered ${ORIGIN}/health — child ${alive ? "still running" : `gone (exit ${server!.exitCode}, signal ${server!.signalCode})`}` +
+    (said.trim() ? `\n--- its stderr ---\n${said.trim().slice(-2000)}` : "\n(it printed nothing)"),
+  );
 }, 40_000);
 
 afterAll(async () => {
