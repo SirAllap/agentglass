@@ -11,32 +11,21 @@ import { describe, expect, test, afterAll } from "bun:test";
 /** The logic under test, as `probeServer` runs it. Kept parameterised by origin
  *  because the module reads its own at import time, and a test that can only
  *  ask about one origin cannot cover the interesting cases. */
-/* Temporary, for one CI run: this suite fails only on the runner and only for
-   the cases that expect a REAL answer, which says the fetch is not reaching the
-   socket this process opened. Print what it is actually talking to. */
-function why(tag: string, extra: Record<string, unknown> = {}): void {
-  if (!process.env.CI) return;
-  console.log(`[identify] ${tag} ${JSON.stringify({
-    fetchIsNative: /native code/.test(String(globalThis.fetch)),
-    http_proxy: process.env.http_proxy ?? process.env.HTTP_PROXY ?? null,
-    all_proxy: process.env.all_proxy ?? process.env.ALL_PROXY ?? null,
-    no_proxy: process.env.no_proxy ?? process.env.NO_PROXY ?? null,
-    ...extra,
-  })}`);
-}
-
 async function identify(origin: string, timeoutMs = 2500): Promise<string> {
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const r = await fetch(`${origin}/health`, { signal: ctl.signal });
-    why("answered", { origin, status: r.status, via: r.headers.get("via"), server: r.headers.get("server") });
     if (r.status === 401 || r.status === 403) return "ours";
     if (!r.ok) return "foreign";
     let j: { service?: unknown; ok?: unknown; clients?: unknown };
     try { j = await r.json(); } catch { return "foreign"; }
     return j.service === "agentglass" || (j.ok === true && typeof j.clients === "number") ? "ours" : "foreign";
   } catch (e) {
+    /* Named on CI, because the interesting failures here are network ones and
+       a bare "down" says nothing: this suite once spent three runs looking like
+       flakiness while every request was being sent to a proxy. */
+    if (process.env.CI) console.log(`[identify] ${origin} threw ${(e as Error)?.name}: ${(e as Error)?.message}`);
     return (e as Error)?.name === "AbortError" ? "foreign" : "down";
   } finally { clearTimeout(bail); }
 }

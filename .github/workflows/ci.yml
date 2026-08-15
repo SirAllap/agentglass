@@ -46,10 +46,20 @@ jobs:
         # it. This only raises the ceiling — it can't hide a real regression,
         # which fails on its assertion, not the clock.
         run: cd server && bun test --timeout 20000
+        env: &no_proxy_loopback
+          # Bun's fetch honours `http_proxy`, and it reads it once at startup —
+          # so on a runner that sets one, a test that serves on 127.0.0.1 and
+          # then fetches it talks to the proxy instead of to the socket it just
+          # opened. It does not time out: it comes back in milliseconds with
+          # somebody else's answer, or with a refusal. Loopback is never a
+          # proxy's business.
+          NO_PROXY: 127.0.0.1,localhost
+          no_proxy: 127.0.0.1,localhost
       # web/test/ was never run by CI, so the dashboard's own tests — diff
       # themes, the session-live rule, the file tree — could break on a PR and
       # nothing would say so.
       - name: Tests (web)
+        env: *no_proxy_loopback
         run: cd web && bun test
       - name: Build web
         run: cd web && bunx vite build
