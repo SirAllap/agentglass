@@ -10,14 +10,14 @@
 import { test, expect, beforeAll } from "bun:test";
 import type { DiffHunk } from "../../shared/types.ts";
 
-let rows: typeof import("../src/components/ChangesModal.tsx");
+let rows: typeof import("../src/components/diff/DiffLines.tsx");
 
 beforeAll(async () => {
-  // ChangesModal pulls in api.ts, which resolves the server address from these
+  // The module pulls in api.ts, which resolves the server address from these
   // at import time; nothing here touches a real DOM, the row builders are pure.
   (globalThis as any).localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
-  rows = await import("../src/components/ChangesModal.tsx");
+  rows = await import("../src/components/diff/DiffLines.tsx");
 });
 
 // A one-line change to a file with no trailing newline: git repeats the marker

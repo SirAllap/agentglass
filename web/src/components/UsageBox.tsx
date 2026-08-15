@@ -129,7 +129,7 @@ function Headline({ provider, window: w }: { provider: string; window: QuotaWind
         <span className="font-sans text-[30px] font-semibold leading-[1.2] tabular-nums" style={{ color }}>
           {w.usedPercent}%
         </span>
-        <div className="flex flex-col min-w-0 gap-0.5">
+        <div className="flex flex-col min-w-0 gap-1">
           <span className="text-[11px] truncate" style={{ color: "var(--text2)" }}>{provider} · {w.label}</span>
           {w.resetsAt && <span className="text-[10px] t-dim2 truncate">resets {resetLabel(w.resetsAt)}</span>}
         </div>

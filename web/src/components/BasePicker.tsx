@@ -140,7 +140,9 @@ export function BasePicker({
                   placeholder="filter branches…"
                   className="mx-1.5 mb-1 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                   style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
-                <div className="agx-scroll overflow-y-auto pb-1">
+                {/* Padded on both ends: bottom-only put the first branch
+                    against the filter field, where it read as part of it. */}
+                <div className="agx-scroll overflow-y-auto py-1.5">
                   {/* Clearing the override is how you get back to the app's own
                       answer, which is right far more often than not — without
                       it, one correction pins the branch to a hand-picked base

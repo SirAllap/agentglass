@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { SearchHit, FileHistoryEntry, GitGrepHit, FileChange } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { ChangesModal } from "./ChangesModal.tsx";
+import { PresetDiff } from "./diff/PresetDiff.tsx";
 import { api } from "../lib/api.ts";
 import { friendly } from "../lib/labels.ts";
 import { fmtTime, fmtUsd, fmtMs, agentKey } from "../lib/format.ts";
@@ -234,7 +234,7 @@ export function SearchModal({ open, onClose, onSelectApp }: { open: boolean; onC
                 </div>
               </motion.div>
             </div>
-            {diff && <ChangesModal open={!!diff} onClose={() => setDiff(null)} onBack={() => setDiff(null)} backLabel="Search" presetChanges={diff.changes} presetTitle={diff.title} />}
+            {diff && <PresetDiff open={!!diff} onClose={() => setDiff(null)} onBack={() => setDiff(null)} backLabel="Search" changes={diff.changes} title={diff.title} />}
           </>
         )}
       </AnimatePresence>

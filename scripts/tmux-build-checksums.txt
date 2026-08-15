@@ -7,4 +7,6 @@
 #
 # Format: "<sha256>  <name>"
 
-# placeholder — fill in on first networked build; the script fails loudly until then
+16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951  tmux-3.5a.tar.gz
+92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb  libevent-2.1.12-stable.tar.gz
+136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6  ncurses-6.5.tar.gz

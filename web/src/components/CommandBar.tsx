@@ -456,7 +456,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                 <div className="px-3 py-2 t-dim2">{cmds ? `No command matches “${query.trim()}”` : "Reading the project…"}</div>
               )}
             </div>
-            <div className="shrink-0 px-3 py-1.5 t-dim2 text-[9.5px] border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+            <div className="shrink-0 px-3 py-1.5 t-dim2 text-[10.5px] border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
               ☆ Pins a command to the bar — {pins.length} of {MAX_PINS} used, per repo
             </div>
           </div>

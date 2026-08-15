@@ -28,7 +28,7 @@ import { quickSkills, pinnedSkills, togglePinnedSkill } from "../lib/quickSkills
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
-import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
+import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { fmtAgo, fmtUsd, fmtTokens, modelLabelOf, modelColor } from "../lib/format.ts";
 import { sessionIsLive, resumableAgent } from "../lib/derive.ts";
 import { ctxLimitOf } from "../lib/contextWindow.ts";

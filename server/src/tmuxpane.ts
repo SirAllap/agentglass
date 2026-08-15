@@ -16,18 +16,17 @@
 // their sessions — which is also what makes `tmux -L agentglass attach` a safe
 // thing to hand them.
 import { tmpdir } from "node:os";
-import { resolveTmuxBin } from "./tmuxbin.ts";
+import { resolveTmuxBin, tmuxSocket } from "./tmuxbin.ts";
 import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
 
 /** Our socket name. Overridable so tests get a server of their own and never
  *  race, kill, or inherit the one a running app is using.
  *
- *  Read per call rather than pinned at import, for the same reason
- *  `projectsDirs()` in transcripts.ts is: `bun test` runs every file in one
- *  process, so a module-level constant would be decided by whichever test file
- *  imported this module first — and here that means a test's redirected socket
- *  silently reverting to the real one the running app is using. */
-export const tmuxSocket = (): string => process.env.AGENTGLASS_TMUX_SOCKET || "agentglass";
+ *  It is DEFINED in tmuxbin.ts, which has to ask the server on this socket
+ *  which binary can speak to it, and which this file imports — so the name
+ *  lives there and is re-exported here, where its callers have always found
+ *  it. */
+export { tmuxSocket };
 
 /**
  * One engine session per checkout, named after it.

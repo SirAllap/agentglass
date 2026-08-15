@@ -27,7 +27,7 @@ import { FilesView } from "../FilesPanel.tsx";
 import { TasksView } from "../TasksPanel.tsx";
 import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
 import { GitView } from "../GitPanel.tsx";
-import { DiffView } from "../ChangesModal.tsx";
+import { DiffPage } from "../diff/DiffPage.tsx";
 import { PrView } from "../PrPanel.tsx";
 import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
@@ -229,7 +229,7 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
     case "files": return <FilesView active={active} />;
     case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} cardJump={cardJump} issueJump={issueJump} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
-    case "diff": return <DiffView active={active} />;
+    case "diff": return <DiffPage active={active} />;
     case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />;
     case "docker": return <DockerView active={active} />;
     case "term": return <TermView active={active} />;

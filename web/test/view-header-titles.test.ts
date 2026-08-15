@@ -29,7 +29,7 @@ const VIEWS: Record<string, string> = {
   "Pull Requests": "PrPanel.tsx",
   "Docker": "DockerPanel.tsx",
   "Browser": "BrowserPanel.tsx",
-  "File changes": "ChangesModal.tsx",
+  "Diff": "diff/DiffPage.tsx",
 };
 
 /** The three that render the shared component instead of the raw markup; their

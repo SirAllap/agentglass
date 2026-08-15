@@ -16,6 +16,7 @@ import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
 import { claimFind, findChordIsOursToTake, openFind } from "./lib/findScope.ts";
 import { FindBar } from "./components/FindBar.tsx";
+import { AlarmCard } from "./components/AlarmCard.tsx";
 import { currentScale } from "./lib/uiScale.ts";
 import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
@@ -1016,6 +1017,12 @@ export default function App() {
           and what it searches is decided by the scope stack, not by where the
           bar happens to live. */}
       <FindBar />
+
+      {/* An alarm the user set, over everything. Mounted at the shell because it
+          has nothing to do with which view is open — that is the difference
+          between an alarm and a panel's own banner, and the banner in Tasks was
+          only ever seen by somebody already looking at Tasks. */}
+      <AlarmCard onOpenTasks={() => goView("tasks")} />
 
       {/* Find a file from anywhere. Mounted at the shell rather than in a view
           so the chord reaches it from the dashboard, a terminal or a diff — and

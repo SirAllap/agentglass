@@ -112,6 +112,9 @@ async function deliver(
    *  a phone cannot select a pane on this machine, and `notify-send` has
    *  nowhere to put it. */
   pane?: string,
+  /** What kind of thing this is, when it is not ordinary news. Travels on the
+   *  frame so the app can raise an alarm rather than another row. */
+  extra?: { kind: "reminder"; id: string },
 ) {
   if (WEBHOOK && !IS_TEST) {
     try {
@@ -155,7 +158,7 @@ async function deliver(
   // pings keeps `live > 0`, so this returns before `notify-send` exactly as it
   // always did.
   const { attached, live } = sink?.census() ?? { attached: 0, live: 0 };
-  if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}) });
+  if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}), ...(extra ?? {}) });
   if (live > 0) return;
   if (DESKTOP) {
     if (notifier) { notifier({ title, body, urgency }); return; }
@@ -215,8 +218,19 @@ export function pushGate(agent: string, tool: string, summary: string, pane?: st
  * Urgency 1, never 2. A reminder is news; 2 is for an agent that is stopped
  * until a person answers, and a phone shows the two differently.
  */
+/**
+ * An alarm the user set, delivered as one.
+ *
+ * Urgency 2 rather than 1, and marked as a reminder. Both matter and for
+ * different reasons: freedesktop keeps a CRITICAL notification on screen until
+ * it is dismissed instead of expiring it after a few seconds, which is the
+ * behaviour anybody setting an alarm is asking for — and the mark is what lets
+ * the app raise its own alarm rather than adding a seventeenth grey row to the
+ * list behind the bell. Reported exactly that way: "es una alarma que yo he
+ * programado, tiene que ser más invasiva".
+ */
 export function pushReminder(id: string, title: string, when: string) {
-  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 1);
+  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id });
 }
 
 /**

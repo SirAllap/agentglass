@@ -141,7 +141,7 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
       {/* One step per line. A textarea rather than a list of rows: these are
           lines of shell, and people write them the way they write shell. */}
       <label className="flex flex-col gap-1">
-        <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Steps — one per line, {"{{name}}"} for a parameter</span>
+        <span className="text-[10.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Steps — one per line, {"{{name}}"} for a parameter</span>
         <textarea value={r.steps.join("\n")} onChange={(e) => set({ steps: e.target.value.split("\n") })}
           rows={Math.max(3, r.steps.length + 1)} spellCheck={false}
           className={`${inp} font-mono`} style={{ ...style, resize: "vertical" }} />

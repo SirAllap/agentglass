@@ -254,6 +254,49 @@ const recent = new Map<string, number>();
 const openable = new Map<string, string>();
 
 /**
+ * Apps that can be opened by URI, for a notification that carried no link.
+ *
+ * Clicking a mirrored Slack message in agentglass used to do nothing, while
+ * clicking the desktop pop-up it was copied from opens Slack at that message —
+ * reported exactly that way. The reason is structural and stated at the top of
+ * this file: a notification's own default ACTION belongs to the app that posted
+ * it, and a bus monitor cannot invoke one. What is left is the app's URI scheme,
+ * which opens the app but not the message.
+ *
+ * That is worth doing and worth being honest about: the button says "Open
+ * Slack", not "Open the message". Slack lands you where you were, which is
+ * usually the conversation that just pinged you.
+ *
+ * Deliberately a short, closed table. This turns a notification into a launcher,
+ * so it launches only things whose scheme is a published, well-known one — and
+ * never a scheme taken from the notification's own text.
+ */
+const APP_SCHEME: Record<string, { uri: string; label: string }> = {
+  slack: { uri: "slack://open", label: "Slack" },
+  discord: { uri: "discord://", label: "Discord" },
+  telegram: { uri: "tg://", label: "Telegram" },
+  signal: { uri: "sgnl://", label: "Signal" },
+  spotify: { uri: "spotify://", label: "Spotify" },
+};
+
+/** Which app a note came from, for the fallback above. Same bound as
+ *  `openable`, and the same reason: this is a recent-notifications cache, not a
+ *  history. */
+const noteApp = new Map<string, string>();
+
+/** The app scheme for a notification's app name, or null. Exported so the UI can
+ *  offer the button only where pressing it will do something. */
+export function appSchemeFor(app: unknown): { uri: string; label: string } | null {
+  if (typeof app !== "string") return null;
+  /* The first WORD, not a prefix. A desktop app names itself variously —
+     "Slack", "Slack Desktop" — but "slackish" is a different app, and a prefix
+     test would launch Slack for it. On a path that spawns `xdg-open`, that
+     distinction is the whole of the safety. */
+  const first = app.trim().toLowerCase().split(/[\s\-_.]+/)[0] ?? "";
+  return APP_SCHEME[first] ?? null;
+}
+
+/**
  * Open a note's link in the user's normal browser.
  *
  * Keyed by note id rather than taking a URL, so the caller can only ever open
@@ -262,7 +305,9 @@ const openable = new Map<string, string>();
  * declines instead of guessing.
  */
 export function openNote(id: unknown): { ok: boolean; error?: string } {
-  const url = typeof id === "string" ? openable.get(id) : undefined;
+  const key = typeof id === "string" ? id : "";
+  // The link the message carried, and failing that the app it came from.
+  const url = openable.get(key) ?? appSchemeFor(noteApp.get(key))?.uri;
   if (!url) return { ok: false, error: "no such notification, or it has no link" };
   const cmd =
     process.platform === "darwin" ? ["open", url] :
@@ -377,6 +422,10 @@ async function pump(p: Subprocess<"ignore", "pipe", "pipe">) {
       if (note.url) {
         openable.set(note.id, note.url);
         if (openable.size > 100) openable.delete(openable.keys().next().value!);
+      }
+      if (note.app && appSchemeFor(note.app)) {
+        noteApp.set(note.id, note.app);
+        if (noteApp.size > 100) noteApp.delete(noteApp.keys().next().value!);
       }
       emit(note);
     }

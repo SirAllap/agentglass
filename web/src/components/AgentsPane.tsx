@@ -94,9 +94,9 @@ export function AgentsPane({ open }: { open: boolean }) {
               </span>
               {/* Where the change lands, named rather than implied. It is a
                   file in somebody's home directory. */}
-              {state !== "missing" && <span className="block t-mono truncate mt-0.5">{p.configPath}</span>}
+              {state !== "missing" && <span className="block t-mono truncate mt-1.5">{p.configPath}</span>}
               {note?.id === p.id && (
-                <span className="block whitespace-pre-wrap mt-0.5"
+                <span className="block whitespace-pre-wrap mt-1.5"
                   style={{ color: note.bad ? "var(--error)" : "var(--text3)" }}>{note.text}</span>
               )}
             </>}

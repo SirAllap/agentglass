@@ -50,7 +50,7 @@ const AXIS = String.raw`(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap
  * and not a rhythm. Rounding them to the scale would misalign the very column
  * they exist to line up with.
  */
-const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[22px]", "pl-[30px]", "pl-[50px]", "ml-[60px]"]);
+const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[30px]", "pl-[50px]", "ml-[60px]"]);
 
 describe("spacing goes through the scale", () => {
   test("no arbitrary pixel spacing except the indents that align to a glyph", () => {
@@ -94,6 +94,57 @@ describe("spacing goes through the scale", () => {
         const v = Number(m[2]);
         if (v === 0 || v % 2 === 0) continue;
         strays.push(`${f.replace(SRC, "web/src")}: ${m[0]} — odd pixels are off the 2px grid`);
+      }
+    }
+    expect(strays.join("\n") || null).toBeNull();
+  });
+
+  /**
+   * The stylesheet, which was exempt by accident.
+   *
+   * This suite scanned `.ts`/`.tsx` and nothing else, so every odd pixel that
+   * survived in the app had ended up in `index.css` — 5px, 7px, 9px, 11px, 15px,
+   * in six declarations. Not because anybody decided the stylesheet was
+   * different: because nothing looked there, which is the same reason the scale
+   * drifted in the first place.
+   *
+   * Only the spacing properties, and only whole pixels: `border: 1px` is a
+   * hairline rather than a measurement, and `13.5px` is type, which has its own
+   * ladder.
+   */
+  test("the stylesheet is on the same grid as everything else", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    const strays: string[] = [];
+    for (const m of css.matchAll(/\b(padding|margin|gap|inset)(?:-(?:top|bottom|left|right|block|inline))?:\s*([^;{}]+);/g)) {
+      for (const px of m[2]!.matchAll(/(\d+)px/g)) {
+        const v = Number(px[1]);
+        // 0 is a reset and 1 is a HAIRLINE — a rule drawn as a gap, which is
+        // what `gap: 1px` between two cards on a tinted ground is. Neither is a
+        // measurement, and demanding 2 would double every divider in the app.
+        if (v === 0 || v === 1 || v % 2 === 0) continue;
+        strays.push(`index.css: ${m[0]!.trim()} — ${v}px is off the 2px grid`);
+      }
+    }
+    expect(strays.join("\n") || null).toBeNull();
+  });
+
+  /**
+   * And a value hidden inside a string, which is the other blind spot.
+   *
+   * `style={{ padding: "13px 14px" }}` is a quoted CSS shorthand: the numeric
+   * scan above never sees it, and no class applies. The update toast sat 1px
+   * higher than every other card in the app for exactly this reason.
+   */
+  test("a quoted CSS value is on the grid too", () => {
+    const strays: string[] = [];
+    for (const { f, s } of FILES) {
+      for (const m of s.matchAll(/(padding|margin|gap|inset):\s*"([^"]+)"/g)) {
+        for (const px of m[2]!.matchAll(/(\d+)px/g)) {
+          const v = Number(px[1]);
+          // See above: 1px is a hairline.
+          if (v === 0 || v === 1 || v % 2 === 0) continue;
+          strays.push(`${f.replace(SRC, "web/src")}: ${m[0]} — ${v}px is off the 2px grid`);
+        }
       }
     }
     expect(strays.join("\n") || null).toBeNull();

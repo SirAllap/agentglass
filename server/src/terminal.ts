@@ -268,6 +268,13 @@ type Session = {
    *  directory behind every time it opens is a slow leak nobody notices until
    *  /tmp is full of them. */
   viewDir: string | null;
+  /** Reads OSC 133 out of the output stream — see shellparse.ts. Null when the
+   *  shell is one we have no snippet for, which is the silent-degrade case, and
+   *  null too when this session is not a plain shell at all: an editor, a tmux
+   *  attach or an agent CLI has no prompts of ours to report. */
+  markers: ShellMarkers | null;
+  /** Removes the shell-integration shim. Null when there was none. */
+  unshim: (() => void) | null;
   closed: boolean;
   exited: boolean;
   killTimer: ReturnType<typeof setTimeout> | null;
@@ -462,6 +469,9 @@ import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { agentArgv, claimAgentTicket } from "./agentticket.ts";
 
 import { applyThemeTo } from "./themesync.ts";
+import { install as installMarkers, shq } from "./shellmark.ts";
+import { ShellMarkers, commandName } from "./shellparse.ts";
+import { beginShellCommand, recordShellCommand } from "./shelllog.ts";
 
 const enc = new TextEncoder();
 
@@ -576,6 +586,30 @@ export function wantsDeskResume(
   return !chose.attach && !chose.agent && !chose.editor && !d.pane && !d.fresh;
 }
 
+/**
+ * What this session actually runs, and whether that is a shell of ours.
+ *
+ * The order is the priority the panel relies on: a pane attach beats an agent
+ * CLI, which beats a file viewer, which beats the engine or a resumed desk, and
+ * a plain shell is what is left. `ownShell` is the second answer, and it exists
+ * because shell integration may only touch that last case — see the shim rule
+ * at its call site. Pure, and exported, so that rule has a test: every other
+ * outcome is a process we merely host, and instrumenting it would put our
+ * variables inside a tmux server or hand `-il` to an editor.
+ */
+export function chooseRun(o: {
+  attachArgv: string[] | null;
+  agentRun: string[];
+  editorArgv: string[] | null;
+  engine: string[] | null;
+  resume: string[] | null;
+  shellArgv: string[];
+}): { run: string[]; ownShell: boolean } {
+  const run = o.attachArgv
+    ?? (o.agentRun.length ? o.agentRun : o.editorArgv ?? o.engine ?? o.resume ?? o.shellArgv);
+  return { run, ownShell: run === o.shellArgv };
+}
+
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) {
@@ -601,7 +635,25 @@ export function ptyOpen(ws: PtyWs) {
   const cols = clampCols(d.cols) || 80;
   const rows = clampRows(d.rows) || 24;
   const { shell, args } = pickShell();
+  /*
+   * Teach this shell to report itself, if we know how.
+   *
+   * See `chooseRun` for the other half of the rule: a session that turns out to
+   * be an editor, a tmux attach or an agent CLI is not a shell of ours, and the
+   * snippet installed here is thrown away rather than carried into it.
+   *
+   * Declining is the normal path for a shell we have no snippet for, and it
+   * costs nothing but the telemetry: `wired` being null means the shell is
+   * spawned exactly as it was before any of this existed. That is the
+   * "degrade silently" the feature is required to do — a terminal that refuses
+   * to open because an integration could not be installed would be a far worse
+   * trade than a missing chart.
+   */
+  const wired = installMarkers(shell);
+  // The shim's own variables are NOT here: they go on only when the thing being
+  // spawned turns out to be a plain shell (see `instrumented` below).
   const baseEnv = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" };
+  const shellArgv = wired ? wired.argv(shell) : [shell, ...args];
 
   /*
    * Opening a file rather than a shell.
@@ -746,23 +798,47 @@ export function ptyOpen(ws: PtyWs) {
     ? (() => { const seen = recall(); return seen ? deskAttachArgv(seen.socket, seen.session) : null; })()
     : null;
 
-  const run = attach
-    ? attach.argv
-    : agentRun.length ? agentRun
-    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : engine ?? resume ?? [shell, ...args];
+  const { run, ownShell } = chooseRun({
+    attachArgv: attach ? attach.argv : null,
+    agentRun,
+    editorArgv: editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : null,
+    engine,
+    resume,
+    shellArgv,
+  });
+
+  /*
+   * The shim goes on a SHELL, and only on a shell.
+   *
+   * Shell integration was written when this function had one other outcome, an
+   * editor; it now also attaches to tmux (the engine, the desk, a phone's pane)
+   * and runs agent CLIs. Those are not shells of ours: nvim would be handed
+   * `-il`, and a tmux attach would carry the shim's variables into every shell
+   * that server ever spawns — instrumenting sessions nobody asked about, from a
+   * scratch rc directory that disappears when this one session closes.
+   *
+   * So the snippet is installed to ask the question (which family, which argv),
+   * and thrown away here when the answer turns out not to be a plain shell. The
+   * markers are null on that path, which is the same silent degrade an unknown
+   * shell already takes.
+   */
+  const instrumented = !!wired && ownShell;
+  if (wired && !instrumented) wired.dispose();
 
   let argv: string[];
   let mode: Session["mode"] = "pty";
   let sizeDir: string | null = null;
-  let env: Record<string, string | undefined> = baseEnv;
+  let env: Record<string, string | undefined> = instrumented ? { ...baseEnv, ...wired!.env } : baseEnv;
   if (PYTHON) {
     sizeDir = mkdtempSync(join(tmpdir(), "agentglass-pty-"));
     writeSizeFile(sizeDir, rows, cols);
-    env = { ...baseEnv, AGENTGLASS_PTY_SIZE_FILE: join(sizeDir, "size") };
+    // Built on `env`, not on baseEnv: the shim's variables were folded in above
+    // and rebuilding from the base would silently drop them.
+    env = { ...env, AGENTGLASS_PTY_SIZE_FILE: join(sizeDir, "size") };
     argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, ...run];
   } else if (HAS_SCRIPT) {
-    env = { ...baseEnv, COLUMNS: String(cols), LINES: String(rows) };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${run.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")}`, "/dev/null"];
+    env = { ...env, COLUMNS: String(cols), LINES: String(rows) };
+    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${run.map(shq).join(" ")}`, "/dev/null"];
   } else {
     mode = "pipe";
     argv = [...(HAS_SETSID ? ["setsid"] : []), ...(editor ? run : [shell, "-i"])];
@@ -781,8 +857,27 @@ export function ptyOpen(ws: PtyWs) {
   // Only ours, and only the directory we made — never the file's own folder,
   // which for a working-tree peek is somebody's repository.
   const viewDir = editor ? viewTempDirOf(wanted!) : null;
+  /*
+   * One parser per shell, fed the same bytes the client gets — never instead of
+   * them. Nothing here rewrites the stream: xterm.js ignores an OSC it does not
+   * know, so the markers cost the display nothing, and a filter on this path
+   * would be one bug away from eating somebody's output.
+   */
+  const markers = instrumented
+    ? new ShellMarkers(
+        (c) => recordShellCommand({
+          id: c.id, command: c.command, name: commandName(c.command), exit: c.exit,
+          duration_ms: c.duration_ms, cwd: c.cwd ?? cwd, at: c.started_at,
+        }),
+        Date.now,
+        (c) => beginShellCommand({
+          id: c.id, command: c.command, name: commandName(c.command), cwd: c.cwd ?? cwd, at: c.at,
+        }),
+      )
+    : null;
   const session: Session = {
     proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null,
+    markers, unshim: instrumented ? wired!.dispose : null,
     onEngine: !!engine,
     phoneAttach: attach
       ? { socket: attach.socket, sessionId: attach.groupedWith, windowId: attach.windowId, paneId: String(d.pane), hadWindowSize: attach.hadWindowSize, fit: d.fit === true, zoomed: attach.zoomed, phoneSession: attach.session, seq: ++attachSeq }
@@ -1185,6 +1280,8 @@ export function ptyOpen(ws: PtyWs) {
         if (done) break;
         if (session.closed) break;
         if (value?.length) {
+          // Read before forwarding, and never in place of it.
+          session.markers?.feed(value);
           held.push(value);
           size += value.length;
           if (size >= BIG) flush();
@@ -1766,6 +1863,10 @@ function cleanup(ws: PtyWs, s: Session) {
   }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
   if (s.viewDir) { try { rmSync(s.viewDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.viewDir = null; }
+  // The shim lives as long as the shell does and no longer: it is a scratch
+  // copy of somebody's rc files, and leaving those around is both litter and a
+  // small disclosure.
+  if (s.unshim) { s.unshim(); s.unshim = null; }
 }
 
 /**

@@ -43,7 +43,8 @@ import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, forgetCard } from "../lib/prCardStore.ts";
-import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
+import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
+import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
@@ -4271,7 +4272,7 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
               <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
                 {d.state === "MERGED" ? "Merged" : "Closed without merging"}
               </span>
-              <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>
+              <span className="block text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
                 {d.state === "MERGED"
                   ? `${d.mergedBy ? `${d.mergedBy} merged ` : "Merged "}into ${d.baseRefName}${d.mergedAt ? ` ${ago(d.mergedAt)}` : ""}`
                   : `This branch was never merged into ${d.baseRefName}${d.closedAt ? ` · closed ${ago(d.closedAt)}` : ""}`}
@@ -4308,7 +4309,7 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
                 ? (isBehind ? "Behind the base branch" : "Merging is blocked")
                 : verdict.line}
             </span>
-            <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>
+            <span className="block text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
               {allClear ? "Nothing is standing in the way"
                 : canMerge ? standingLine(standing, undefined)
                 : isBehind ? `You can merge anyway — ${mergeBlockedWhy(d.mergeState, c).replace(/^The base branch has moved — /, "")}`
@@ -4918,7 +4919,7 @@ function MenuItem({ children, onClick, danger, kbd }: {
   );
 }
 
-const MenuSep = () => <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "3px 0" }} />;
+const MenuSep = () => <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "4px 0" }} />;
 
 const MenuHead = ({ children }: { children: React.ReactNode }) => (
   <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{children}</div>
@@ -5097,6 +5098,9 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
  * room for the two fields the header was missing. A cell is now as wide as
  * what it holds, capped only where a value can run away (people, labels, a
  * branch name), and the row wraps rather than stretching.
+ *
+ * Key and value are two kinds of text, so they get 6px between them: packed
+ * tight, BRANCH read as the first word of the branch name it labels.
  */
 function Field({ label, title, max, children }: {
   label: string;
@@ -5107,7 +5111,7 @@ function Field({ label, title, max, children }: {
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-w-0 flex flex-col leading-tight" style={max != null ? { maxWidth: max } : undefined} title={title}>
+    <div className="min-w-0 flex flex-col gap-1" style={max != null ? { maxWidth: max } : undefined} title={title}>
       <span className="text-[10px] uppercase tracking-[.1em]" style={{ color: "var(--text4)" }}>{label}</span>
       <span className="text-[11px] flex items-center gap-1 min-w-0" style={{ color: "var(--text2)" }}>{children}</span>
     </div>
@@ -9476,7 +9480,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
           <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
             {c.failure > 0 ? `${c.failure} check${c.failure === 1 ? "" : "s"} failing` : c.pending > 0 ? `${c.pending} still running` : "All checks have passed"}
           </span>
-          <span className="block text-[11px] mt-0.5 tabular-nums" style={{ color: "var(--text3)" }}>
+          <span className="block text-[11px] mt-1.5 tabular-nums" style={{ color: "var(--text3)" }}>
             {c.skipped} skipped · {c.success} successful · {c.failure} failing
           </span>
         </span>

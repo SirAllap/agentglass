@@ -4,7 +4,7 @@
 // from current source, never a stale dist.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSync, lstatSync, readlinkSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSync, lstatSync, readlinkSync, existsSync, chmodSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,6 +236,54 @@ if (provenanceOnly) {
     "build", "--compile", resolve(REPO, "server/src/index.ts"),
     "--outfile", resolve(HERE, "staging/agentglass-server"),
   ]);
+}
+
+/*
+ * The bundled tmux, when one has been built.
+ *
+ * The pane engine already looks for one beside the sidecar (`tmuxbin.ts`); this
+ * is what puts it there, so "no tmux on this machine" stops being a thing the
+ * terminal has to explain. Same rules as the Taskwarrior block below: optional,
+ * so a build machine without one still makes a working app, and matched on the
+ * exact target so it can never be the wrong architecture.
+ */
+const tmuxBuilt = resolve(REPO, "out", `tmux-${
+  process.env.TASK_TARGET
+  ?? `bun-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "x64"}`
+}`);
+if (existsSync(tmuxBuilt)) {
+  const dest = resolve(HERE, "staging/tmux");
+  copyFileSync(tmuxBuilt, dest);
+  chmodSync(dest, 0o755);
+  console.log("==> bundling tmux");
+} else {
+  console.log("==> no bundled tmux — the pane engine will use the system one");
+}
+
+/*
+ * The bundled Taskwarrior, when one has been built.
+ *
+ * Local tasks are an agentglass feature, so a packaged app should carry its own
+ * `task` rather than telling a fresh machine to go and install one — the same
+ * argument the pane engine makes for its static tmux. `scripts/build-task-static.sh`
+ * produces `out/task-<target>`; this only places it.
+ *
+ * Deliberately optional and deliberately quiet about it: a build machine that
+ * has not produced one still makes a working app, because the server falls back
+ * to whatever `task` is on PATH (see `taskBin`). What it must never do is ship a
+ * binary for the WRONG architecture, so the target is matched exactly and a
+ * generic `out/task` is not accepted.
+ */
+const taskTarget = process.env.TASK_TARGET
+  ?? `bun-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "x64"}`;
+const taskBuilt = resolve(REPO, "out", `task-${taskTarget}`);
+if (existsSync(taskBuilt)) {
+  const dest = resolve(HERE, "staging/task");
+  copyFileSync(taskBuilt, dest);
+  chmodSync(dest, 0o755);
+  console.log(`==> bundling taskwarrior (${taskTarget})`);
+} else {
+  console.log(`==> no bundled taskwarrior for ${taskTarget} — the app will use the system one`);
 }
 
 // Provenance, so the installed app knows what it was built from and can offer

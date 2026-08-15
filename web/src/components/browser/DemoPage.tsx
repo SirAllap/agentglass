@@ -52,10 +52,10 @@ function Storefront({ checkout }: { checkout: boolean }) {
           <tbody>
             {DEMO_BASKET.map((l) => (
               <tr key={l.name} style={{ borderTop: `1px solid ${LINE}` }}>
-                <td style={{ padding: "9px 0" }}>{l.name}</td>
-                <td style={{ padding: "9px 0", textAlign: "right" }}>{l.qty}</td>
-                <td style={{ padding: "9px 0", textAlign: "right", color: MUTED }}>{money(l.each)}</td>
-                <td style={{ padding: "9px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{money(l.qty * l.each)}</td>
+                <td style={{ padding: "8px 0" }}>{l.name}</td>
+                <td style={{ padding: "8px 0", textAlign: "right" }}>{l.qty}</td>
+                <td style={{ padding: "8px 0", textAlign: "right", color: MUTED }}>{money(l.each)}</td>
+                <td style={{ padding: "8px 0", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{money(l.qty * l.each)}</td>
               </tr>
             ))}
           </tbody>
@@ -63,14 +63,14 @@ function Storefront({ checkout }: { checkout: boolean }) {
 
         <div style={{ marginTop: 18, marginLeft: "auto", width: 260, fontSize: 13.5 }}>
           {[["Subtotal", money(subtotal())], ["Discount HARBOUR5", `−${money(DEMO_DISCOUNT)}`], ["Shipping", money(DEMO_SHIPPING)]].map(([k, v]) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", color: MUTED }}>
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", color: MUTED }}>
               <span>{k}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{v}</span>
             </div>
           ))}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 0", marginTop: 6, borderTop: `1px solid ${LINE}`, fontWeight: 600 }}>
             <span>Total</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{money(total())}</span>
           </div>
-          <button style={{ marginTop: 14, width: "100%", padding: "9px 0", border: "none", borderRadius: 6, background: BRAND, color: "#fff", fontSize: 13.5, fontWeight: 500 }}>
+          <button style={{ marginTop: 14, width: "100%", padding: "8px 0", border: "none", borderRadius: 6, background: BRAND, color: "#fff", fontSize: 13.5, fontWeight: 500 }}>
             {checkout ? "Pay " + money(total()) : "Checkout"}
           </button>
         </div>

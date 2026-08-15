@@ -71,8 +71,10 @@ export const ToolRow = memo(function ToolRow({ e, sub = [], nested = false }: To
         )}
       </div>
 
+      {/* Three different kinds of thing stacked — what it was for, what ran,
+          what came back — so 8px apart, not 4: packed, they read as one dump. */}
       {open && detail && (
-        <div className={`${indent} mt-0.5 pl-2 space-y-1`} style={{ borderLeft: RULE }}>
+        <div className={`${indent} mt-1 pl-2 space-y-2`} style={{ borderLeft: RULE }}>
           {/* The tool's own account of what it was for — a Bash `description`.
               Worth showing once you have asked, and never worth a line of its
               own on a row you are only skimming past. */}

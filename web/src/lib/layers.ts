@@ -74,4 +74,15 @@ export const LAYER = {
    * have buried every dropdown in it, which is the same bug one floor up.
    */
   menu: 10200,
+
+  /**
+   * An alarm the user set.
+   *
+   * The top rung, above the menus and the modals, and the only thing here that
+   * is not a surface you opened: everything below appears because you asked for
+   * it and can wait behind whatever you asked for next. An alarm is a promise
+   * made at a particular minute, and one that opens UNDER the settings dialog
+   * you happen to have open is a promise quietly broken.
+   */
+  alarm: 10300,
 } as const;

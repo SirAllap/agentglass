@@ -1,4 +1,4 @@
-import { SERVER, withToken, authHeaders } from "./api.ts";
+import { SERVER, withToken, authHeaders, api } from "./api.ts";
 
 /**
  * Desktop notifications, mirrored onto the notch.
@@ -100,6 +100,39 @@ export type NotifyCapability = {
 };
 
 import { gitDestination } from "./gitNote.ts";
+import { NOTIFY_VOICES, findVoice, playVoice } from "./sounds.ts";
+
+/* ---------------------------------------------------------------------------
+ * The sound a notification makes.
+ *
+ * One preference for both halves — this app's own alerts and the desktop's
+ * mirrored ones — because from where the user is sitting they are one stream of
+ * things arriving. What separates them is already there and is about
+ * INTERRUPTION rather than sound: `quiet` stops mirrored notes from taking the
+ * notch, and it stops them making a noise too, for the same reason.
+ * ------------------------------------------------------------------------- */
+const VOICE_KEY = "agentglass.notifyVoice";
+
+export const notifyVoiceId = (): string => {
+  try { return localStorage.getItem(VOICE_KEY) ?? NOTIFY_VOICES[0]!.id; } catch { return NOTIFY_VOICES[0]!.id; }
+};
+
+export function setNotifyVoice(id: string): void {
+  try { localStorage.setItem(VOICE_KEY, id); } catch { /* private mode */ }
+}
+
+/** Two notifications landing in the same second is one sound, not two: a burst
+ *  of five is what a chat app does, and five overlapping chimes is a noise
+ *  rather than five pieces of news. */
+let lastDing = 0;
+const DING_GAP_MS = 900;
+
+function ding(): void {
+  const now = Date.now();
+  if (now - lastDing < DING_GAP_MS) return;
+  lastDing = now;
+  playVoice(findVoice(NOTIFY_VOICES, notifyVoiceId()));
+}
 
 const KEY = "agentglass.sysNotify";
 /** The detail level to come back to when the switch is turned on again, so
@@ -550,11 +583,38 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
     at: Date.now(),
     ...(n.goto ? { goto: n.goto } : {}),
   };
-  history = [note, ...history].slice(0, HISTORY_MAX);
+  history = [note, ...supersede(history, note)].slice(0, HISTORY_MAX);
   unread++;
   historyChanged();
+  ding();
 }
 let localSeq = 0;
+
+/**
+ * The same news, said again, replaces itself.
+ *
+ * A checkout that is behind gets told about every time the branch is polled, so
+ * one repository produced "170 commits to pull on master", "158 commits to pull
+ * on master" and "156 commits to pull on master" as three separate rows — three
+ * ways of saying one thing, and the two older ones are not merely redundant,
+ * they are WRONG: the count moved.
+ *
+ * Keyed on the destination rather than on the words, because the words are what
+ * changes. Only for the kinds where "again" means "instead": a git checkout and
+ * a chat. A comment on a card and a tool error are separate events even when
+ * they name the same thing, and collapsing those would lose news.
+ */
+function supersede(list: SystemNote[], next: SystemNote): SystemNote[] {
+  const g = next.goto;
+  if (!g) return list;
+  if (g.kind === "git") {
+    return list.filter((n) => !(n.goto?.kind === "git" && n.goto.repo === g.repo && n.goto.branch === g.branch));
+  }
+  if (g.kind === "chat") {
+    return list.filter((n) => !(n.goto?.kind === "chat" && n.goto.id === g.id && n.summary === next.summary));
+  }
+  return list;
+}
 
 /** How the desktop names us. The notification is raised by the Electron shell,
  *  so this is what the freedesktop `app_name` comes back as — matched by prefix
@@ -668,6 +728,52 @@ function scheduleReopen() {
   retryTimer = setTimeout(() => { retryTimer = null; retune(); }, delay);
 }
 
+/**
+ * A ClickUp notification, pointed at the board in this app.
+ *
+ * ClickUp's desktop app posts the task's title and the sentence that happened to
+ * it — "Alejandro set the status to: READY FOR QA" — and nothing else: no id, no
+ * url, and a D-Bus monitor cannot invoke the notification's own action to ask.
+ * So these rows were the only ones behind the bell that could not be opened, and
+ * clicking the desktop pop-up went to ClickUp's website, which is the one place
+ * that is not this app.
+ *
+ * The title is enough, and the server can match it against the cards the ClickUp
+ * watcher already keeps on disk. Asked only for notes that could plausibly be
+ * one: ClickUp's own daemon posts with an EMPTY app name (which is also why
+ * these rows have no `CLICKUP` cap next to the time), and a note that already
+ * carries a link is about that link.
+ */
+const cardLookups = new Map<string, { id: string; label: string } | null>();
+
+async function attachCard(n: SystemNote): Promise<void> {
+  const app = n.app.trim().toLowerCase();
+  if (app && !app.includes("clickup")) return;
+  if (n.url) return;
+  const title = n.summary?.trim();
+  if (!title || title.length < 8) return;
+
+  // One question per distinct title. A card typically produces several
+  // notifications in a row — assigned, then moved, then commented on — and they
+  // all carry the same summary.
+  let card = cardLookups.get(title);
+  if (card === undefined) {
+    try { card = (await api.clickupCardForNote(title)).card; } catch { return; }
+    if (cardLookups.size > 200) cardLookups.clear();
+    cardLookups.set(title, card);
+  }
+  if (!card) return;
+
+  // Patched in place: the row is already on screen and the reader may have
+  // scrolled past it. Matched by id so a note dismissed in the meantime stays
+  // dismissed rather than coming back with a button on it.
+  const i = history.findIndex((h) => h.id === n.id);
+  if (i < 0 || history[i]!.goto) return;
+  history = [...history];
+  history[i] = { ...history[i]!, goto: { kind: "card", id: card.id, label: card.label } };
+  historyChanged();
+}
+
 function attach() {
   const sock = new WebSocket(withToken(SERVER.replace(/^http/, "ws") + "/notifications"));
   ws = sock;
@@ -688,13 +794,18 @@ function attach() {
     if (n.app && n.app.toLowerCase().startsWith(OUR_APP)) return;
     // A mirrored note cannot say where it points. Read it and see.
     if (!n.goto) { const g = gitDestination(n); if (g) n = { ...n, goto: g }; }
-    history = [n, ...history].slice(0, HISTORY_MAX);
+    history = [n, ...supersede(history, n)].slice(0, HISTORY_MAX);
     unread++;
     historyChanged();
+    // …and the one that has to be asked rather than read. Fires after the row
+    // is already on screen, because a card that resolves in 20ms is not worth
+    // holding the notification for, and one that never resolves must not hold
+    // it forever.
+    if (!n.goto) void attachCard(n);
     // Collected either way; only the interruption is optional. Quiet means the
     // notch does not morph open for someone else's message, not that agentglass
     // stopped listening -- the list behind the notch is still complete.
-    if (!notifyQuiet()) for (const fn of noteListeners) fn(n);
+    if (!notifyQuiet()) { ding(); for (const fn of noteListeners) fn(n); }
   };
   sock.onopen = () => { retry = 0; };
   sock.onclose = () => {

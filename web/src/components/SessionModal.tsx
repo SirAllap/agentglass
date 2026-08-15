@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { SessionDetail, TimelineEntry } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { ChangesModal } from "./ChangesModal.tsx";
+import { PresetDiff } from "./diff/PresetDiff.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Markdown } from "../lib/markdown.tsx";
@@ -353,7 +353,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
           </>
         )}
       </AnimatePresence>
-      {d && <ChangesModal open={diffOpen} onClose={() => { setDiffOpen(false); onClose(); }} onBack={() => setDiffOpen(false)} backLabel="Conversation" presetChanges={d.changes} presetTitle={key} presetPath={diffPath} />}
+      {d && <PresetDiff open={diffOpen} onClose={() => { setDiffOpen(false); onClose(); }} onBack={() => setDiffOpen(false)} backLabel="Conversation" changes={d.changes} title={key} path={diffPath} />}
     </Portal>
   );
 }

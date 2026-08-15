@@ -68,6 +68,7 @@ import {
   createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
 } from "./gitwork.ts";
+import { changeRows, fileDiff } from "./changerows.ts";
 import { repoStats, generateChangelog } from "./gitinsights.ts";
 import { saveShot } from "./shots.ts";
 import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
@@ -143,7 +144,7 @@ import { privateHost, resolvePeer, originOf } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller, type Origin } from "./auth.ts";
 import { activeDevices, markSeen, revokeDevice, devices, publicDevice, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
-import { startCardWatch } from "./clickupwatch.ts";
+import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
@@ -453,28 +454,19 @@ const treeCache = new Map<string, { at: number; data: WorkingTree }>();
 // through the same git-change hook the tree cache uses.
 const WORKTREES_TTL_MS = 2_500;
 const worktreesCache = new Map<string, { at: number; body: string }>();
-// The all-worktrees change list behind File changes, so it shows what each
-// checkout has actually changed (git), not only what an agent recorded. Keyed by
-// mode — "working" (the working tree) vs "committed" (each checkout's last
-// commit) — with a short TTL, cleared the instant git changes.
-const changesAllCache = new Map<string, { at: number; body: string }>();
-// Held a touch longer than the 4s File-changes poll so a poll reuses the last
-// answer instead of re-fanning git across every in-scope worktree each time —
-// which, at the old 2.5s, missed on every single poll. Safe to hold longer: the
-// git-change hook below clears it the instant anything is staged/committed/
-// discarded through the app, so this TTL only bounds how fast a change made
-// *outside* the app (an editor save, a raw `git` in the terminal) surfaces, and
-// a few seconds in a review panel is fine. backoff() stretches it while hot.
-const CHANGES_ALL_TTL_MS = 6_000;
-// Per-worktree cache of each checkout's last-commit diff — the committed-mode
-// analogue of treeCache. Without it, every committed-mode miss re-ran rev-list +
-// diff for every repo. Same short TTL, same hook clears it.
-const commitCache = new Map<string, { at: number; data: Awaited<ReturnType<typeof lastCommitChanges>> }>();
-// A hard ceiling on how many git rows File changes will take at once: a runaway
-// worktree (a giant last commit that slipped the no-merge filter, thousands of
-// uncommitted files) must never be able to freeze the view again.
-const CHANGES_ALL_MAX = 400;
-setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); changesAllCache.clear(); commitCache.clear(); broadcast({ type: "git" }); });
+// The rebuilt list (/git/changes-v2). Same shape of cache, one crucial
+// difference in what it holds: rows without diff text, so a hit is a few
+// kilobytes rather than the megabyte the old one served every four seconds.
+const rowsCache = new Map<string, { at: number; body: string }>();
+// Shorter than CHANGES_ALL_TTL_MS and NOT stretched by backoff. The old TTL
+// reached 24s under load, which is a review panel silently showing the state of
+// the repo before your last commit; this list is cheap enough to hold for two.
+const ROWS_TTL_MS = 2_000;
+// Only a ceiling against a runaway checkout — and, unlike the old one, the
+// answer says how many rows it left out instead of ending a worktree short in
+// silence.
+const ROWS_MAX = 2_000;
+setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); rowsCache.clear(); broadcast({ type: "git" }); });
 
 /**
  * The one thing the merged-branch sweep cannot do for itself.
@@ -1739,73 +1731,55 @@ const server = Bun.serve<WsData>({
         return JSON.stringify(data);
       }));
     }
-    if (pathname === "/git/changes-all") {
-      // What each in-scope worktree has changed, in one list for File changes.
-      // Two modes: "working" — the working tree (staged + unstaged + untracked),
-      // what is uncommitted right now; and "committed" — each checkout's LAST
-      // commit, so a change survives being committed instead of vanishing with
-      // the working tree. Deliberately not the branch-vs-base diff either way: on
-      // a branch that merged master that drags in every file the merge brought,
-      // work that is not yours. Cached per mode, single-flighted.
+    /*
+     * The rebuilt Diff view, in two halves.
+     *
+     * `/git/changes-v2` is the LIST: one row per changed file, with no diff text
+     * in it. That is the whole design — measured on this machine, the endpoint it
+     * replaces sent 1.1 MB every four seconds and 89% of it was the diff of files
+     * nobody had opened. Rows carry a stable key, the real time the file changed,
+     * and computed `ignored`/`outside` flags rather than asserted ones.
+     *
+     * `/git/file-diff` is the BODY: the diff of the one file the reader opened.
+     */
+    if (pathname === "/git/changes-v2") {
       const mode = url.searchParams.get("mode") === "committed" ? "committed" : "working";
-      return body(await singleFlight(`changes-all:${mode}`, async () => {
-        const cached = changesAllCache.get(mode);
-        if (cached && Date.now() - cached.at < CHANGES_ALL_TTL_MS * backoff()) return cached.body;
+      return body(await singleFlight(`rows:${mode}`, async () => {
+        const cached = rowsCache.get(mode);
+        if (cached && Date.now() - cached.at < ROWS_TTL_MS) return cached.body;
         const paths = getChanges(300).map((c) => c.file_path);
-        // Only your branches: the trunk checkout (master/main) is the base you
-        // cut from, not something you are working on, so it stays out of File
-        // changes entirely — and out of the cap below.
-        const repos = (await discoverRepos(paths, knownProjects().map((p) => p.path), {}))
-          .filter((r) => r.branch !== "master" && r.branch !== "main");
-        // A stable NEGATIVE id per (file, key): the recorded-edit list keys
-        // selection, review and dedup off the positive DB event id, so a git row
-        // must never collide with one — and must keep the same id across polls,
-        // or the selected file jumps and a review tick is lost every few seconds.
-        const sid = (s: string): number => {
-          let h = 5381;
-          for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-          return -Math.abs(h) - 1;
-        };
-        let changes: unknown[];
-        if (mode === "committed") {
-          // Same read-through-cache shape as working mode's treeCache below.
-          const commitOf = async (root: string) => {
-            const hit = commitCache.get(root);
-            if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.data;
-            const data = await lastCommitChanges(root);
-            if (commitCache.size > 40) commitCache.clear();
-            commitCache.set(root, { at: Date.now(), data });
-            return data;
-          };
-          const perRepo = await Promise.all(repos.map(async (r) => {
-            try {
-              const { subject, changes: cs } = await commitOf(r.root);
-              // session_id carries the commit subject so a Session grouping heads
-              // each worktree's rows with what the commit was.
-              return cs.map((c) => ({ ...c, session_id: subject || "last commit" }));
-            } catch { return []; }
-          }));
-          changes = perRepo.flat().map((c) => ({ ...c, id: sid(`${c.session_id}\0${c.file_path}`), ignored: false, outside: false }));
-        } else {
-          const trees = await Promise.all(repos.map(async (r) => {
-            const hit = treeCache.get(r.root);
-            if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.data;
-            try {
-              const data = await workingTree(r.root);
-              if (treeCache.size > 40) treeCache.clear();
-              treeCache.set(r.root, { at: Date.now(), data });
-              return data;
-            } catch { return null; }
-          }));
-          changes = trees.flatMap((t) =>
-            t && !t.error
-              ? [...t.staged, ...t.unstaged].map((c) => ({ ...c, id: sid(`${c.session_id}\0${c.file_path}`), ignored: false, outside: false }))
-              : []);
-        }
-        const out = JSON.stringify({ changes: changes.slice(0, CHANGES_ALL_MAX) });
-        changesAllCache.set(mode, { at: Date.now(), body: out });
+        /* Every in-scope checkout, INCLUDING one on main or master. The old
+           endpoint dropped those on the grounds that trunk is the base you cut
+           from — true of a branch-vs-base diff, false of "what have I changed
+           and not committed", and it left anyone whose project has a single
+           trunk checkout looking at a permanently empty view. */
+        const repos = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
+        const scope = workspaceRoot();
+        const out = JSON.stringify(await changeRows(repos, mode, scope, ROWS_MAX));
+        rowsCache.set(mode, { at: Date.now(), body: out });
         return out;
       }));
+    }
+    if (pathname === "/git/file-diff") {
+      const root = url.searchParams.get("root") || "";
+      const path = url.searchParams.get("path") || "";
+      const mode = url.searchParams.get("mode") === "committed" ? "committed" : "working";
+      if (!root || !path) return json({ error: "root and path are required" }, 400);
+      // The same scope gate every other git route uses: a root off the wire is
+      // not a licence to read any repo on the disk.
+      if (!inScope(root)) return json({ error: "out of scope" }, 403);
+      const d = await fileDiff(root, path, mode);
+      /* Keyed on content, so re-selecting a file the reader has already opened
+         costs a 304 rather than another diff. `sig` is mtime+size while
+         uncommitted and the commit hash once committed — never a timestamp of
+         the request, which is what made the old view's caching a coin toss. */
+      const tag = `"${d.sig}"`;
+      if (d.sig && req.headers.get("if-none-match") === tag) {
+        return new Response(null, { status: 304, headers: { ETag: tag, ...cors } });
+      }
+      return new Response(JSON.stringify(d), {
+        headers: { "content-type": "application/json", ...cors, ...(d.sig ? { ETag: tag, "Cache-Control": "no-cache" } : {}) },
+      });
     }
     if (pathname === "/git/branches") {
       const root = url.searchParams.get("root") || "";
@@ -2221,6 +2195,21 @@ const server = Bun.serve<WsData>({
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : 400);
+    }
+    /*
+     * Which card a mirrored ClickUp notification is about.
+     *
+     * ClickUp's desktop app posts the task's title and the sentence that
+     * happened to it — no id, no url — and a D-Bus monitor cannot invoke the
+     * notification's own action to ask. So the row behind the bell could only
+     * ever offer ClickUp's website, and the board this app already has was one
+     * click further away than the browser.
+     *
+     * Answered from the watcher's own file, so this costs no ClickUp call and
+     * cannot fail with a rate limit.
+     */
+    if (pathname === "/clickup/card-for-note") {
+      return json({ card: cardForTitle(url.searchParams.get("title") || "") });
     }
     if (pathname === "/clickup/views") {
       // `prefix` is what this workspace's ids look like, so a surface that has
