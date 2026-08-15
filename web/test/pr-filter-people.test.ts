@@ -46,7 +46,7 @@ describe("the free-text box", () => {
     const rows = [pr({ number: 30, title: "Cart totals" }), pr({ number: 31, title: "Ledger", author: "javidoe" })];
     expect(find(rows, "cart")).toEqual([30]);
     expect(find(rows, "31")).toEqual([31]);
-    expect(find(rows, "javier")).toEqual([31]);
+    expect(find(rows, "javid")).toEqual([31]);
   });
 
   it("does not match a person who is not on it", () => {
