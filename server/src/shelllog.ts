@@ -45,7 +45,11 @@ export interface ShellRecord {
  * would put commands somebody ran by hand into an agent's transcript and its
  * cost. One id per server run keeps the shell's work grouped and separate.
  */
-const SESSION = `shell-${Math.random().toString(36).slice(2, 10)}`;
+/* `crypto`, not `Math.random`: this id is not a secret — it groups one server
+   run's shell work — but two runs colliding would merge two people's commands
+   into one session, and a scanner is right that a PRNG is the wrong tool for an
+   identifier. The cost is the same one call. */
+const SESSION = `shell-${crypto.randomUUID().slice(0, 8)}`;
 
 const base = (id: string, name: string, cwd: string | null) => ({
   source_app: "terminal",
