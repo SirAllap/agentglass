@@ -6,6 +6,14 @@
 # this file, and every build after that verifies against it. A mismatch (the
 # version bumped, a mirror tampered) fails loudly. Idempotent: does nothing
 # once every pin exists, so CI can call it unconditionally.
+# `sha256sum` is GNU coreutils; macOS ships `shasum`. The release runners are
+# both, and the first tag cut after these scripts landed died on a macOS runner
+# with "sha256sum: command not found" — after downloading three tarballs.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,7 +30,7 @@ need() { # name url
   local tmp; tmp="$(mktemp /tmp/tmux-sha.XXXXXX)"
   trap 'rm -f "$tmp"' EXIT
   curl -fsSL -o "$tmp" "$url"
-  local sum; sum="$(sha256sum "$tmp" | awk '{print $1}')"
+  local sum; sum="$(sha256_of "$tmp")"
   printf '%s  %s\n' "$sum" "$name" >> "$CH"
   rm -f "$tmp"
   trap - EXIT

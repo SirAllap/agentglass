@@ -81,6 +81,18 @@ jobs:
       # so a machine without tmux still gets tabs, splits and persistence — the
       # engine runs its own tmux; the user's is never involved. Windows skips:
       # the pane engine is POSIX-only and stays an honest "off" there.
+      # zig is the C compiler the Linux target builds against — musl static,
+      # cross-compiled from the same script a developer runs. Without it
+      # `configure` gets no compiler and answers "C compiler cannot create
+      # executables", which is what the first tag cut after the vendored
+      # binaries landed died on.
+      - name: zig, for the musl target
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@v2
+        with:
+          # The version this repository's own builds are made with.
+          version: 0.16.0
+
       - name: Build bundled tmux
         if: runner.os != 'Windows'
         shell: bash

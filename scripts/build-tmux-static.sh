@@ -24,6 +24,14 @@
 # The result is statically linked (musl on Linux, full static on macOS) so the
 # bundled binary has no libevent/ncurses dependency on the host — that is what
 # makes "no tmux on the machine" irrelevant to the engine.
+# `sha256sum` is GNU coreutils; macOS ships `shasum`. The release runners are
+# both, and the first tag cut after these scripts landed died on a macOS runner
+# with "sha256sum: command not found" — after downloading three tarballs.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -89,7 +97,7 @@ verify() { # file name
     echo "no pinned checksum for $name in $CHECKSUMS — refusing to build unverified" >&2
     exit 1
   fi
-  local got; got="$(sha256sum "$file" | awk '{print $1}')"
+  local got; got="$(sha256_of "$file")"
   if [ "$got" != "$want" ]; then
     echo "checksum mismatch for $name: got $got, want $want" >&2
     exit 1

@@ -76,7 +76,10 @@ const EXEMPT: { file: string; match: string; why: string }[] = [
 /** Every `<button>` whose class list looks like a chip: rounded, with padding. */
 function chipButtons(src: string, exempt: string[] = []): { line: number; cls: string }[] {
   const out: { line: number; cls: string }[] = [];
-  for (const m of src.matchAll(/<button\b((?:[^>]|\n)*?)>/g)) {
+  // `[^>]` already matches a newline, so spelling the alternation out gave the
+  // engine two ways to consume one — which is the shape that backtracks
+  // exponentially on a tag that never closes.
+  for (const m of src.matchAll(/<button\b([^>]*?)>/g)) {
     const tag = m[1] ?? "";
     const cls = /className="([^"]*)"/.exec(tag)?.[1];
     // Every rounded shape, not only `rounded-lg`: the divergence that prompted
