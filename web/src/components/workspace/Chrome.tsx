@@ -28,6 +28,24 @@ import { HIT, ICON } from "../../lib/iconSize.ts";
 export const CHIP = "text-[11px] px-2 py-1 rounded-lg whitespace-nowrap transition-colors";
 
 /**
+ * The fill and hairline a control carries when it is not a toggle.
+ *
+ * A toolbar toggle is transparent until it is on — the tint IS the state. A
+ * control that is always available (the repo picker, the link to GitHub) has no
+ * on-state to show, and transparent turns it into grey text: "no parece otra
+ * cosa" was the report, about a header where two of them had become captions
+ * with arrows after them.
+ */
+export const CHIP_SURFACE = {
+  background: "color-mix(in srgb, var(--text) 5%, transparent)",
+  border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+  color: "var(--text)",
+} as const;
+
+/** The hover half of the same, which cannot be an inline style. */
+export const CHIP_SURFACE_CLS = "hover:brightness-125";
+
+/**
  * What a pressed control looks like.
  *
  * One tint, one weight. The variants that existed — a filled violet block, a
@@ -92,6 +110,80 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
       ))}
     </div>
   );
+}
+
+/**
+ * What a view is POINTED AT, in the top-left corner: a repository, a checkout, a
+ * branch, a remote.
+ *
+ * Five views had one and no two were the same object. Measured, left to right in
+ * each header:
+ *
+ *     Terminal   text-[11px] pl-2.5 pr-1.5 py-1 rounded-lg  + an 8.5px badge
+ *     Pull reqs  text-[10px] px-1.5 py-0.5  rounded-md
+ *     Git        text-[11px] px-3   py-1    rounded-full
+ *     Tasks      text-[11px] px-2.5 py-1    rounded-lg
+ *     Diff       the segmented chips
+ *
+ * Four shapes, three heights and three radii for one job — reported as "son
+ * todos diferentes", which they were. This is that control, once. It is the chip
+ * shape with two optional parts, because the differences between those five were
+ * never about the control and always about what it happened to carry:
+ *
+ *   · a KIND badge (`REPO`, `WT`) for the header that has to tell a checkout
+ *     from the repository it was cut from;
+ *   · a trailing mark — a caret when pressing it opens a picker, an arrow when
+ *     it leaves the app for a browser. Those are different promises and the
+ *     control should not make them look alike.
+ */
+export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, href, className = "" }: {
+  /** The thing itself: `orbit`, `orbit · main`, `acme/orbit`. */
+  label: ReactNode;
+  /** Two to four letters, when the view needs to say what KIND of thing this is. */
+  kind?: string;
+  /** `menu` draws a caret (this opens a picker), `external` an arrow (this
+   *  leaves the app), `none` neither. */
+  trailing?: "none" | "menu" | "external";
+  on?: boolean;
+  onClick?: () => void;
+  title?: string;
+  /** When it is a link rather than a button — the repository on GitHub. */
+  href?: string;
+  className?: string;
+}) {
+  const inner = (
+    <>
+      {kind && (
+        <span className="shrink-0 text-[9.5px] leading-none px-1 py-0.5 rounded"
+          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{kind}</span>
+      )}
+      <span className="truncate min-w-0">{label}</span>
+      {trailing === "menu" && (
+        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0" style={{ opacity: 0.7 }}>
+          <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      {trailing === "external" && <span aria-hidden className="shrink-0" style={{ opacity: 0.7 }}>↗</span>}
+    </>
+  );
+  const cls = `${CHIP} ${CHIP_SURFACE_CLS} inline-flex items-center gap-1.5 min-w-0 ${className}`.trim();
+  /*
+   * A SURFACE, not bare text.
+   *
+   * The first version of this took `chipTone(false)`, which is transparent —
+   * correct for a toolbar toggle, wrong here: the pull-request header turned
+   * into two grey words with arrows after them, and grey text with punctuation
+   * reads as a caption that happens to have an arrow, not as something you can
+   * press. Reported the moment it shipped: "usa ese chip que usas en los demás,
+   * así está en armonía y no parece otra cosa."
+   *
+   * The fill and the hairline are the Git panel's, which is the header that had
+   * this right — they are what say "this is a control".
+   */
+  const style = on ? chipTone(true) : CHIP_SURFACE;
+  return href
+    ? <a href={href} target="_blank" rel="noreferrer" title={title} className={cls} style={style}>{inner}</a>
+    : <button onClick={onClick} title={title} className={cls} style={style}>{inner}</button>;
 }
 
 /**

@@ -37,6 +37,11 @@ __pycache__/
 /DECISIONS.md
 /THEME_AUDIT.md
 
+# Behaviour specs written while building the browser out: contract notes a
+# session keeps for itself, not product documentation. The tests named after
+# each scenario are the part that ships.
+.specs/
+
 # Built vendor binaries (scripts/build-*-static.sh). Megabytes, and
 # reproducible from the pinned sources.
 out/

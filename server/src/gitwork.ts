@@ -1754,19 +1754,25 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
   const n = Math.max(1, Math.min(2000, limit | 0));
   // NUL can't go in an argv string (execve truncates at it), so use the same
   // \x1f unit-separator the branch code uses — safe in args, absent from commits.
-  const fmt = `${US}%h${US}%an${US}%ar${US}%s${US}%D`;
-  // Awaited: measured at 761ms on a large repo, and the cost is `--graph`'s
-  // topological walk rather than the row count — asking for 60 commits instead
-  // of 500 saves nothing (762ms vs 761ms). So the only thing that helps is not
-  // holding the loop while it runs.
-  const r = await gitAsync(root, ["-c", "core.quotePath=false", "log", "--graph", ...(scope === "all" ? ["--all"] : []), "--date=relative", `-n${n}`, `--format=${fmt}`]);
+  // `%p` — the parents — is the whole graph, and it is what the client draws
+  // lanes from. `--graph` itself is gone: its ASCII art was rendered as text in
+  // a monospace column, so a repository with twenty-seven live branches drew
+  // forty characters of `| | * | \ \` before the subject and truncated the
+  // message to "fix(pr-revi…". Dropping it also drops its cost — the 761ms this
+  // used to measure was `--graph`'s topological walk, not the row count.
+  const fmt = `${US}%h${US}%p${US}%an${US}%ar${US}%s${US}%D`;
+  const r = await gitAsync(root, ["-c", "core.quotePath=false", "log", ...(scope === "all" ? ["--all"] : []), "--date=relative", `-n${n}`, `--format=${fmt}`]);
   const lines: GitGraphLine[] = [];
   for (const raw of r.stdout.split("\n")) {
     if (!raw) continue;
     const i = raw.indexOf(US);
     if (i === -1) { lines.push({ graph: raw }); continue; }
-    const [hash, author, date, subject, refs] = raw.slice(i + 1).split(US);
-    lines.push({ graph: raw.slice(0, i), hash, author, date, subject, refs });
+    const [hash, parents, author, date, subject, refs] = raw.slice(i + 1).split(US);
+    lines.push({
+      graph: raw.slice(0, i), hash,
+      parents: (parents ?? "").split(" ").filter(Boolean),
+      author, date, subject, refs,
+    });
   }
   // Named so the pane can say whose history it is showing rather than leaving
   // the user to infer it from the commits.

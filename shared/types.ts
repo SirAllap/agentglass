@@ -1280,8 +1280,19 @@ export interface GitCommit {
 /** One rendered row of `git log --graph`: the graph glyphs, plus commit fields
  *  when the row is a commit (graph-only connector rows have no hash). */
 export interface GitGraphLine {
+  /**
+   * `git log --graph`'s own ASCII art, kept only for a row git gave us with no
+   * commit on it. The graph is DRAWN from `parents` now: on a repository with
+   * twenty-seven branches this string is forty characters of `| | * | \ \ |`
+   * that pushed the subject off the right-hand edge, which is what "se rompe
+   * todo" was.
+   */
   graph: string;
   hash?: string;
+  /** Abbreviated parent hashes, in git's order: the first is the commit this
+   *  one continues, the rest are what it merged. The whole shape of the graph
+   *  is in here, and the client draws lanes from it. */
+  parents?: string[];
   author?: string;
   date?: string;
   subject?: string;

@@ -466,7 +466,7 @@ function Resources() {
   /**
    * Ours, as a tree: project → checkout → process.
    *
-   * Grouping by the raw cwd produced rows called "serallap", "dist" and
+   * Grouping by the raw cwd produced rows called the home directory, "dist" and
    * "electron" — the directory a process happened to be started in, which is
    * not a thing anybody is looking for. The repo list turns those into the two
    * questions actually being asked: which PROJECT, and which CHECKOUT of it.

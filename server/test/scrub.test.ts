@@ -9,14 +9,14 @@ import { scrub, redactText, type SafeReport } from "../../shared/scrub.ts";
 // Everything here is a thing a real agentglass error could carry and that must
 // never leave the machine.
 const FORBIDDEN = [
-  "serallap", // the OS username, leaked by every /home/<user>/ path
+  "ada", // the OS username, leaked by every /home/<user>/ path
   "orbit", // a private project name, leaked by a repo path
   "ghp_" + "AbCdEf0123456789AbCdEf", // a GitHub token
   "sk-" + "abcdef0123456789abcdef", // an API key
   "eyJ" + "hbGciOiJIUzI1NiIsInR5cCI6", // a JWT prefix
   "write me a function that", // a prompt fragment
-  "/home/serallap", // a home path
-  "/Users/serallap", // a mac home path
+  "/home/ada", // a home path
+  "/Users/ada", // a mac home path
 ];
 
 function assertClean(report: SafeReport) {
@@ -29,11 +29,11 @@ describe("scrub — no user data survives", () => {
     const err = new Error("Cannot read properties of undefined (reading 'x')");
     err.stack = [
       "TypeError: Cannot read properties of undefined",
-      "    at derive (/home/serallap/code/agentglass/server/src/derive.ts:42:9)",
-      "    at handler (/home/serallap/code/orbit/private/secret-service.ts:7:3)",
-      "    at load (/home/serallap/.claude/plugins/thing.js:1:1)",
-      "    at run (/home/serallap/code/agentglass/node_modules/react-dom/index.js:9:9)",
-      "    at web (/home/serallap/code/agentglass/web/src/App.tsx:100:5)",
+      "    at derive (/home/ada/code/agentglass/server/src/derive.ts:42:9)",
+      "    at handler (/home/ada/code/orbit/private/secret-service.ts:7:3)",
+      "    at load (/home/ada/.claude/plugins/thing.js:1:1)",
+      "    at run (/home/ada/code/agentglass/node_modules/react-dom/index.js:9:9)",
+      "    at web (/home/ada/code/agentglass/web/src/App.tsx:100:5)",
     ].join("\n");
     const r = scrub({ error: err });
     assertClean(r);
@@ -55,14 +55,14 @@ describe("scrub — no user data survives", () => {
   });
 
   test("a token buried in a home path is caught and the path is dropped", () => {
-    const r = scrub({ error: "read /home/serallap/.claude/creds with sk-abcdef0123456789abcdef" });
+    const r = scrub({ error: "read /home/ada/.claude/creds with sk-abcdef0123456789abcdef" });
     assertClean(r);
   });
 
   test("extra properties the error carries (a prompt payload, a file slice) are dropped, not read", () => {
     const err = new Error("JSON parse error") as Error & Record<string, unknown>;
-    err.prompt = "write me a function that deletes /home/serallap/code/orbit";
-    err.userFile = "/home/serallap/code/orbit/secret.ts";
+    err.prompt = "write me a function that deletes /home/ada/code/orbit";
+    err.userFile = "/home/ada/code/orbit/secret.ts";
     err.env = { OPENAI_API_KEY: "sk-abcdef0123456789abcdef" };
     const r = scrub({ error: err });
     assertClean(r);
@@ -70,7 +70,7 @@ describe("scrub — no user data survives", () => {
   });
 
   test("windows home paths are redacted too", () => {
-    const r = scrub({ error: "ENOENT: C:\\Users\\serallap\\code\\orbit\\app.log not found" });
+    const r = scrub({ error: "ENOENT: C:\\Users\\ada\\code\\orbit\\app.log not found" });
     assertClean(r);
   });
 });
@@ -95,15 +95,15 @@ describe("scrub — the allowlist is exactly what it emits", () => {
   });
 
   test("a bare string error and a missing stack are handled", () => {
-    const r = scrub({ error: "GET /home/serallap/x failed" });
+    const r = scrub({ error: "GET /home/ada/x failed" });
     assertClean(r);
     expect(r.errorType).toBe("Error");
     expect(r.frames).toEqual([]);
   });
 
   test("redactText leaves app paths app-relative and drops the rest", () => {
-    expect(redactText("at /home/serallap/code/agentglass/server/src/db.ts:5")).toContain("server/src/db.ts");
-    expect(redactText("opened /home/serallap/code/orbit/x.ts")).not.toContain("orbit");
+    expect(redactText("at /home/ada/code/agentglass/server/src/db.ts:5")).toContain("server/src/db.ts");
+    expect(redactText("opened /home/ada/code/orbit/x.ts")).not.toContain("orbit");
     expect(redactText("read/write ratio is fine")).toBe("read/write ratio is fine"); // prose slash left alone
   });
 });

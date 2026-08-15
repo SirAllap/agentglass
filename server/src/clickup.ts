@@ -742,7 +742,7 @@ export const tokenLabel = (): string => fingerprint(secretFor("clickup") ?? "");
  *
  * The `kind` segment says what you pasted: `l` is a view, `li` a bare list, and
  * `b`, `gantt`, `cal` and friends are views too. A view id carries hyphens
- * (`6-901715483311-1`); the number in the middle of one is the LIST behind it,
+ * (`6-901700123456-1`); the number in the middle of one is the LIST behind it,
  * which is worth having because a list knows its own statuses and a view does
  * not. Verified against a real board: the full hyphenated string resolves,
  * the middle number alone 404s as a view and 200s as a list.
@@ -756,7 +756,7 @@ export interface ParsedViewUrl {
 
 const VIEW_PATH = /\/(\d+)\/v\//i;
 /** What an id actually looks like, so a stray path segment cannot be mistaken
- *  for one. A list is digits; a view is `6-901715483311-1`. */
+ *  for one. A list is digits; a view is `6-901700123456-1`. */
 const LIST_ID = /^\d{6,}$/;
 const VIEW_ID = /^\d+-\d{6,}-\d+$/;
 /**
@@ -775,7 +775,7 @@ export function parseViewUrl(raw: string): ParsedViewUrl | null {
   if (!text) return null;
 
   // A bare id, pasted on its own. Checked BEFORE the URL parse, because
-  // `new URL("https://6-901715483311-1")` is a perfectly valid URL whose host
+  // `new URL("https://6-901700123456-1")` is a perfectly valid URL whose host
   // is that string — so an id would be judged as coming from the wrong domain
   // and thrown away.
   if (!text.includes("/") && /^\d+-\d{6,}-\d+$/.test(text)) {
@@ -804,14 +804,14 @@ export function parseViewUrl(raw: string): ParsedViewUrl | null {
     /*
      * Walk to the id rather than assume it is the next segment.
      *
-     * Reported from a real paste: `/9000001/v/l/li/901715834894` — an `l` AND
+     * Reported from a real paste: `/9000001/v/l/li/901700654321` — an `l` AND
      * an `li`, two kind tokens in a row, which happens when somebody stitches an
      * address together from two of ClickUp's own forms. Taking "whatever follows
      * the kind" made the id the literal string `li`, and the panel then reported
      * "ClickUp answered 404" for an address whose real id was sitting one
      * segment further along, untouched.
      *
-     * So the id is RECOGNISED — digits for a list, `6-901715483311-1` for a view
+     * So the id is RECOGNISED — digits for a list, `6-901700123456-1` for a view
      * — and anything before it that is not one is treated as another kind token.
      * The last kind seen wins, because that is the one nearest the thing it
      * describes.
@@ -827,7 +827,7 @@ export function parseViewUrl(raw: string): ParsedViewUrl | null {
     }
     if (!id) return null;
     if (kind === "li") return { workspaceId, kind: "list", listId: id };
-    // A view id looks like `6-901715483311-1`; the middle segment is the list.
+    // A view id looks like `6-901700123456-1`; the middle segment is the list.
     const parts = id.split("-");
     const listId = parts.length >= 2 && LIST_ID.test(parts[1]!) ? parts[1] : undefined;
     // Digits alone under a view kind is a list id however it was labelled —

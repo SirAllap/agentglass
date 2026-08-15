@@ -28,6 +28,27 @@
      or the active tab's blue. */
   --phone: #e879f9;
   --shadow: rgba(1, 4, 9, 0.85);
+
+  /*
+   * The commit graph's lanes.
+   *
+   * Their own ramp, and NOT the state colours. `--error` red and `--success`
+   * green mean something everywhere else in this app — broken, good — and a
+   * branch is neither; a log drawn in them reads as a list of failures. These
+   * are eight hues at one lightness and one saturation, spaced far enough apart
+   * that two lines side by side are never in doubt, and mid-lightness so they
+   * hold on a light theme as well as a dark one. Eight because that is the
+   * number of lanes the column draws: with fewer, two lanes on screen at the
+   * same time could share a colour, which is the one thing the colour is for.
+   */
+  --graph-1: #6ea8fe;
+  --graph-2: #f78fb3;
+  --graph-3: #5fd4a4;
+  --graph-4: #e8b463;
+  --graph-5: #b39ddb;
+  --graph-6: #4fc3d9;
+  --graph-7: #f2937a;
+  --graph-8: #a3c76d;
 }
 
 @layer base {
@@ -1464,3 +1485,31 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    child with a definite height — see `flex-1 min-h-0` on it. */
 .agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }
 @media (max-width: 1179px) { .agx-tree3 { width: 200px; } }
+
+/* The git cards.
+   Hover raises the ground and the border one step — feedback that a list of
+   identical cards is under your hand rather than printed on the page — and the
+   selected one keeps its own, stronger treatment from the component. Selection
+   also shifts 2px, which is motion, small but motion, so it goes off with
+   everything else when the machine asks for less. Transitions rather than
+   animations: nothing loops here, so there is nothing to stop, only something
+   to make instant. */
+/*
+ * A row in a sequence, not a card.
+ *
+ * The log's rows carry no border and no gap — a commit is separated from its
+ * neighbour by being a different row — so hover is the only thing that says the
+ * list is under your hand. A ground change and nothing else: a lift or a border
+ * appearing would put back the boundary the line variant exists to remove.
+ */
+.git-line:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent) !important;
+}
+
+.git-card:hover {
+  background: color-mix(in srgb, var(--bg3) 52%, transparent);
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .git-card { transition: none !important; transform: none !important; }
+}

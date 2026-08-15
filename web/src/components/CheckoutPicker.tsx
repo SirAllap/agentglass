@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS } from "./workspace/Chrome.tsx";
 import type { GitRepoRef, GitBranch } from "../../../shared/types.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 
@@ -175,13 +176,14 @@ export function CheckoutPicker({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg shrink-0 whitespace-nowrap disabled:opacity-50"
-        style={{
-          maxWidth: triggerMaxWidth,
-          background: "color-mix(in srgb, var(--bg3) 50%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
-          color: "var(--text)",
-        }}
+        /* `CHIP`, the app's one control shape, rather than a pill of its own.
+           It is the FIRST control in the view, so its shape is the expectation
+           every header sets — and this one was a `rounded-full px-3` where the
+           Terminal's and the pull-request panel's were a rounded-lg and a
+           rounded-md at three different heights. Reported as "son todos
+           diferentes". */
+        className={`${CHIP} ${CHIP_SURFACE_CLS} flex items-center gap-1.5 shrink-0 disabled:opacity-50`}
+        style={{ maxWidth: triggerMaxWidth, ...CHIP_SURFACE }}
         title={title ?? (here ? `${here.name}\n${here.root}` : unlisted ? `${unlisted}\nnot in the current list` : undefined)}
       >
         <span className="font-medium truncate min-w-0" style={unlisted ? { color: "var(--warning)" } : undefined}>
