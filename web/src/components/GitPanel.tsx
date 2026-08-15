@@ -6,10 +6,16 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
+import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
+import { RebaseModal } from "./RebaseModal.tsx";
+import { CompareModal } from "./CompareModal.tsx";
+import { InsightsModal } from "./InsightsModal.tsx";
+import { BlameModal } from "./BlameModal.tsx";
+import { BisectModal } from "./BisectModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding } from "../../../shared/types.ts";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding, GitSubmodule } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { BasePicker } from "./BasePicker.tsx";
@@ -41,7 +47,7 @@ import type { PrBranchSummary } from "../../../shared/types.ts";
 
 const unifiedText = (c: GitFileChange) => c.hunks.map((h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${h.lines.join("\n")}`).join("\n");
 
-type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "stashes" | "worktrees" | "tidy";
+type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "stashes" | "worktrees" | "tidy" | "submodules";
 
 /**
  * Views, grouped the way lazygit groups its panels.
@@ -218,7 +224,7 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
 const VIEW_GROUPS: { label: string; views: View[] }[] = [
   { label: "Files", views: ["changes"] },
   { label: "History", views: ["log", "reflog"] },
-  { label: "Refs", views: ["branches", "remotes", "tags"] },
+  { label: "Refs", views: ["branches", "remotes", "tags", "submodules"] },
   { label: "Worktrees", views: ["worktrees"] },
   { label: "Stash", views: ["stashes"] },
   // Last, and it earns the place: this is the tab you open when the others
@@ -228,7 +234,7 @@ const VIEW_GROUPS: { label: string; views: View[] }[] = [
 const VIEW_LABEL: Record<View, string> = {
   changes: "Changes", log: "Log", reflog: "Reflog", branches: "Branches",
   remotes: "Remotes", tags: "Tags", stashes: "Stashes", worktrees: "Worktrees",
-  tidy: "Tidy",
+  tidy: "Tidy", submodules: "Submodules",
 };
 /** Left-to-right order — the order `[` / `]` walk, and the order the number
  *  keys index into. Derived from the groups so the two can't drift apart. */
@@ -318,7 +324,7 @@ function dirName(p: string, root: string) {
  */
 const VIEW_KEYS: Record<View, [string, string][]> = {
   changes: [["j/k", "file"], ["space", "stage"], ["x", "discard"], ["`", "tree/flat"], ["-/=", "fold"]],
-  log: [["j/k", "commit"]],
+  log: [["j/k", "commit"], ["c", "pick"], ["right-click", "menu"]],
   // Nothing to steer: the tab is a list of findings and a button per finding.
   tidy: [],
   reflog: [["j/k", "entry"]],
@@ -327,6 +333,7 @@ const VIEW_KEYS: Record<View, [string, string][]> = {
   // worktree both move something on disk and stay mouse-only.
   remotes: [["j/k", "branch"], ["space", "+ local"]],
   tags: [["j/k", "tag"]],
+  submodules: [["j/k", "submodule"]],
   stashes: [["j/k", "stash"], ["space", "apply"], ["d", "drop"]],
   worktrees: [["j/k", "worktree"], ["space", "open"], ["d", "remove"]],
 };
@@ -566,16 +573,18 @@ function DirRow({ name, depth, count, collapsed, onToggle }: {
   );
 }
 
-function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onAction, onDiscard, depth }: {
+function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onAction, onDiscard, onBlame, depth }: {
   c: GitFileChange; root: string; active: boolean; writeEnabled: boolean; desc?: string; onSelect: () => void;
   action: "stage" | "unstage"; onAction: () => void; onDiscard?: () => void;
+  /** Right-click a row for its file's blame — who wrote each line. */
+  onBlame?: () => void;
   /** Set in tree mode; the directory rows above carry the path, so the row
    *  indents instead of repeating it. Undefined means the old flat list. */
   depth?: number;
 }) {
   const dir = dirName(c.file_path, root);
   return (
-    <div onClick={onSelect} data-file={active ? "active" : undefined}
+    <div onClick={onSelect} data-file={active ? "active" : undefined} onContextMenu={onBlame ? (e) => { e.preventDefault(); onBlame(); } : undefined}
       className="group flex items-center gap-2 pr-1.5 py-1 rounded-md cursor-pointer"
       style={{ background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", paddingLeft: depth == null ? 8 : 8 + depth * 12 }}>
       <span className="w-3.5 text-center text-[10px] font-bold shrink-0 self-start mt-0.5" style={{ color: STATUS_TINT[c.status] }} title={c.status}>{STATUS_LETTER[c.status]}</span>
@@ -755,8 +764,32 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [newBranch, setNewBranch] = useState("");
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
+  /** The partial-stash picker: open, selected files, keep-index. Files are
+   *  picked from the working tree's unstaged set (the stash moves work off the
+   *  tree, so there is nothing to pick once it is gone). */
+  const [partialOpen, setPartialOpen] = useState(false);
+  const [partialSel, setPartialSel] = useState<ReadonlySet<string>>(new Set());
+  const [partialKeep, setPartialKeep] = useState(false);
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
   const [tidy, setTidy] = useState<TidyReport | null>(null);
+  /** The right-click menu on a commit row: what was clicked, where. */
+  const [commitMenu, setCommitMenu] = useState<{ hash: string; subject: string; x: number; y: number } | null>(null);
+  /** The base of the interactive rebase in flight, or null when closed. */
+  const [rebaseBase, setRebaseBase] = useState<string | null>(null);
+  /** The branch a compare dialog is open on, or null when closed. */
+  const [compareTarget, setCompareTarget] = useState<string | null>(null);
+  /** Whether the insights modal is open. */
+  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [bisectOpen, setBisectOpen] = useState(false);
+  /**
+   * Commits picked out of the log for a series cherry-pick — hashes, in the
+   * order the user picked them. Empty when nothing is picked.
+   *
+   * The selection is deliberately not the keyboard cursor: picking a spread of
+   * commits across a long history (or a `-n` staging pass) must survive moving
+   * around and re-reading the log.
+   */
+  const [pickSet, setPickSet] = useState<ReadonlySet<string>>(new Set());
   /** The rescue prompt, and the promise deleteHeldByWorktrees() is parked on
    *  while it is open. Null means no prompt; resolving with null is a cancel. */
   const [rescue, setRescue] = useState<{ reports: WorktreeLeftovers[]; resolve: (v: Map<string, string[]> | null) => void; progress?: string } | null>(null);
@@ -769,6 +802,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [remoteQuery, setRemoteQuery] = useState("");
   const [tags, setTags] = useState<GitTag[]>([]);
   const [reflog, setReflog] = useState<GitReflogEntry[]>([]);
+  const [submodules, setSubmodules] = useState<GitSubmodule[]>([]);
+  /** WIP snapshots — named checkpoints that never touch the tree. */
+  const [snapshots, setSnapshots] = useState<{ sha: string; ref: string; time: string; label: string }[]>([]);
+  const [snapshotLabel, setSnapshotLabel] = useState("");
   /**
    * Whose history the Log shows: this checkout's own, or every branch.
    *
@@ -935,6 +972,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [rowIdx, setRowIdx] = useState(0);
   const [newWtBranch, setNewWtBranch] = useState("");
   const [commitView, setCommitView] = useState<{ changes: FileChange[]; title: string } | null>(null);
+  const [blamePath, setBlamePath] = useState<{ path: string } | null>(null);
   const [walk, setWalk] = useState<WalkthroughResult | null>(null);
   const [walkLoading, setWalkLoading] = useState(false);
   const walkReqSig = useRef<string | null>(null);
@@ -1099,7 +1137,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       api.gitWorktrees(root).then((r) => { if (seq === viewSeq.current) setWorktrees(r.worktrees); }).catch(() => {});
     }
     else if (view === "log") track(api.gitGraph(root, 500, logScope), (r) => { setGraph(r.lines); setGraphBranch(r.branch); });
-    else if (view === "stashes") track(api.gitStashes(root), (r) => setStashes(r.stashes));
+    else if (view === "stashes") {
+      track(api.gitStashes(root), (r) => setStashes(r.stashes));
+      track(api.gitSnapshots(root), (r) => setSnapshots(r.snapshots ?? []));
+    }
     else if (view === "worktrees") track(api.gitWorktrees(root), (r) => setWorktrees(r.worktrees));
     else if (view === "tidy") track(api.gitTidy(root), setTidy);
     else if (view === "remotes") {
@@ -1116,6 +1157,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     }
     else if (view === "tags") track(api.gitTags(root), (r) => setTags(r.tags));
     else if (view === "reflog") track(api.gitReflog(root), (r) => setReflog(r.entries));
+    else if (view === "submodules") track(api.gitSubmodules(root), (r) => setSubmodules(r.submodules));
   }, [open, root, view, logScope, remoteSel]);
 
   /**
@@ -1686,6 +1728,59 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (mode === "hard" && !(await ask({ title: `Hard reset to ${hash}?`, body: "This DISCARDS working-tree changes.", danger: true, confirmLabel: "Reset --hard" }))) return;
     act(() => api.gitReset(root, hash, mode), `reset --${mode} ${hash}`).then((ok) => { if (ok) api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)); });
   };
+  /**
+   * The log's picks, ordered oldest-first as the server replays them.
+   *
+   * The log lists newest at the top, so the pick order (click / `c` order) is
+   * display order; the sequencer applies oldest first, which is the reverse.
+   */
+  const pickedHashes = () => [...pickSet].reverse();
+  const reloadGraph = () => api.gitGraph(root, 500, logScope).then((r) => { setGraph(r.lines); setGraphBranch(r.branch); }).catch(() => {});
+  /**
+   * Cherry-pick the picked commits as ONE sequencer run.
+   *
+   * One run is the point: a conflict pauses the series at the commit that
+   * fought, and continuing replays the rest — where per-commit cherry-picks
+   * would stop each at the same conflict forever. Oldest first, so a series
+   * "replays in order", which is how people read the list.
+   */
+  const runCherryPick = async (noCommit = false) => {
+    const hashes = pickedHashes();
+    if (!hashes.length) return;
+    const how = noCommit ? "staged" : "committed";
+    const ok = await act(() => api.gitCherryPick(root, hashes, noCommit),
+      `cherry-picked ${hashes.length} commit${hashes.length === 1 ? "" : "s"}`,
+      `pick:${hashes.length}`);
+    if (ok) {
+      setPickSet(new Set());
+      reloadGraph();
+    }
+  };
+  /** Right-click → "Cherry-pick" on a single row: same path as the series, with
+   *  a series of one. */
+  const cherryPickOne = async (hash: string, noCommit = false) => {
+    setPickSet(new Set([hash]));
+    setCommitMenu(null);
+    await runCherryPick(noCommit);
+  };
+  /**
+   * Revert one commit from the row menu: a new commit undoing it. A conflict
+   * pauses as `reverting`, which the existing conflict screen already handles
+   * (its continue/abort branch on that state).
+   */
+  const revertOne = async (hash: string) => {
+    setCommitMenu(null);
+    if (await act(() => api.gitRevert(root, hash), "reverted", "revert")) reloadGraph();
+  };
+  /** Fold the picked commits into one, tree preserved. Oldest..newest must run
+   *  to the tip — the server verifies; the panel just sends the span. */
+  const squashPicked = async () => {
+    const hashes = pickedHashes();
+    if (hashes.length < 2) { flash(false, "Pick two or more consecutive commits ending at the tip to squash"); return; }
+    const ok = await act(() => api.gitSquash(root, hashes[0], hashes[hashes.length - 1]),
+      `squashed ${hashes.length} commits`, "squash");
+    if (ok) { setPickSet(new Set()); reloadGraph(); }
+  };
   // base branch
   /** Fetched when a picker opens, not on mount. Depending on the Branches tab
    *  having been visited made the picker useless exactly when you reach for it
@@ -1770,6 +1865,80 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (op === "drop" && !(await ask({ title: "Drop this stash?", body: "The stashed changes are gone.", danger: true, confirmLabel: "Drop" }))) return;
     const fn = op === "apply" ? api.gitStashApply : op === "pop" ? api.gitStashPop : api.gitStashDrop;
     if (await act(() => fn(root, index), op + "ed")) reloadStashes();
+  };
+  const stashRename = async (index: number, message: string) => {
+    const to = await askText({ title: "Rename this stash", input: { label: "New label — the \"On <branch>: \" prefix is kept", initial: message }, confirmLabel: "Rename" });
+    if (to && to.trim() && to.trim() !== message) act(() => api.gitStashRename(root, index, to.trim()), "Renamed stash").then((ok) => { if (ok) reloadStashes(); });
+  };
+  const stashToBranch = async (index: number) => {
+    const name = await askText({ title: "Turn this stash into a branch", input: { label: "Branch name", initial: "wip-" + Date.now().toString(36) }, confirmLabel: "Branch it" });
+    if (name && name.trim()) act(() => api.gitStashToBranch(root, index, name.trim()), `Branched ${name.trim()}`).then((ok) => { if (ok) { reloadStashes(); reloadBranches(); } });
+  };
+  const stashOverwrite = async (index: number, message: string) => {
+    if (!(await ask({ title: "Apply this stash over your working tree?", body: `Anything you changed at the same paths is replaced by the stash's version of them (${message}).`, danger: true, confirmLabel: "Apply over" }))) return;
+    act(() => api.gitStashApplyOverwrite(root, index), "Applied over").then((ok) => { if (ok) reloadStashes(); });
+  };
+  const stashPartialNow = async () => {
+    const paths = [...partialSel];
+    if (!paths.length) return;
+    if (await act(() => api.gitStashPartial(root, paths, partialKeep), `Stashed ${paths.length} file${paths.length === 1 ? "" : "s"}`)) {
+      setPartialSel(new Set());
+      setPartialOpen(false);
+      reloadStashes();
+    }
+  };
+  // submodules
+  const reloadSubmodules = () => api.gitSubmodules(root).then((r) => setSubmodules(r.submodules)).catch(() => {});
+  const submoduleAddAsk = async () => {
+    const url = await askText({ title: "Add a submodule", input: { label: "Clone URL" }, confirmLabel: "Add" });
+    if (!url || !url.trim()) return;
+    const path = await askText({ title: "Where should it live?", input: { label: "Submodule path (e.g. vendor/lib)", initial: url.trim().split("/").pop()?.replace(/\.git$/, "") || "" }, confirmLabel: "Add" });
+    if (!path || !path.trim()) return;
+    if (await act(() => api.gitSubmoduleAdd(root, url.trim(), path.trim()), `Added ${path.trim()}`)) reloadSubmodules();
+  };
+  const submoduleOp = async (op: "update" | "sync", path: string, okMsg: string) => {
+    const fn = op === "update" ? api.gitSubmoduleUpdate : api.gitSubmoduleSync;
+    if (await act(() => fn(root, path), okMsg)) reloadSubmodules();
+  };
+  const submoduleDeinitAsk = async (path: string) => {
+    if (!(await ask({ title: `Deinit ${path}?`, body: "The checkout is removed; the gitlink and .gitmodules entry stay. Re-run update to bring it back.", confirmLabel: "Deinit" }))) return;
+    if (await act(() => api.gitSubmoduleDeinit(root, path), `Deinitialized ${path}`)) reloadSubmodules();
+  };
+  const submoduleRemoveAsk = async (path: string) => {
+    if (!(await ask({ title: `Remove ${path}?`, body: "The gitlink, its checkout and its .gitmodules section are all deleted.", danger: true, confirmLabel: "Remove" }))) return;
+    if (await act(() => api.gitSubmoduleRemove(root, path), `Removed ${path}`)) reloadSubmodules();
+  };
+  // tags
+  const reloadTags = () => api.gitTags(root).then((r) => setTags(r.tags)).catch(() => {});
+  const createTagAsk = async () => {
+    const name = await askText({ title: "New tag", input: { label: "Tag name (e.g. v1.2.3)", initial: "" }, confirmLabel: "Create" });
+    if (!name || !name.trim()) return;
+    const message = await askText({ title: `Tag ${name.trim()}`, input: { label: "Message — blank for a lightweight tag", initial: "" }, confirmLabel: "Create" });
+    if (message === null) return;
+    const annotated = message.trim().length > 0;
+    if (await act(() => api.gitTagCreate(root, name.trim(), { annotated, message }), `Tagged ${name.trim()}`)) reloadTags();
+  };
+  const tagDeleteAsk = async (name: string) => {
+    if (!(await ask({ title: `Delete tag ${name}?`, body: "Removes the local ref only — the remote copy (if any) is untouched.", danger: true, confirmLabel: "Delete" }))) return;
+    if (await act(() => api.gitTagDelete(root, name), `Deleted ${name}`)) reloadTags();
+  };
+  const tagPush = async (name: string) => {
+    if (await act(() => api.gitTagPush(root, name), `Pushed ${name}`)) reloadTags();
+  };
+  const tagDeleteRemoteAsk = async (name: string) => {
+    if (!(await ask({ title: `Delete ${name} on the remote?`, body: "Runs push <remote> :refs/tags/<name>. The local tag stays.", danger: true, confirmLabel: "Delete remotely" }))) return;
+    if (await act(() => api.gitTagDeleteRemote(root, name), `Deleted ${name} remotely`)) reloadTags();
+  };
+  /** Capture the tree as a named checkpoint — touches nothing, restore is
+   *  always possible, cap is 30. */
+  const snapshotNow = async () => {
+    const label = snapshotLabel.trim();
+    const ok = await act(() => api.gitSnapshotCreate(root, label || undefined), label ? `Snapshot "${label}"` : "Snapshot", "snapshot");
+    if (ok) {
+      setSnapshotLabel("");
+      api.gitSnapshots(root).then((r) => setSnapshots(r.snapshots ?? [])).catch(() => {});
+      api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
+    }
   };
 
   /** Repo-relative, which is what the tree nests on — the change list carries
@@ -1874,6 +2043,20 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         if (k === " ") { e.preventDefault(); rowAction("primary"); }
         else if (lower === "d") { e.preventDefault(); rowAction("delete"); }
       }
+      else if (view === "log") {
+        // `c` picks the commit under the cursor for a series cherry-pick —
+        // same toggle the mouse does. Nothing else in this view takes a key,
+        // so the bar's hints can claim it without competition.
+        if (lower === "c") {
+          e.preventDefault();
+          const l = graph[rowIdx];
+          if (l?.hash) setPickSet((prev) => {
+            const next = new Set(prev);
+            next.has(l.hash!) ? next.delete(l.hash!) : next.add(l.hash!);
+            return next;
+          });
+        }
+      }
       return;
     }
 
@@ -1953,6 +2136,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       <FileRow key={prefix + c.file_path} c={c} root={root} writeEnabled={writeEnabled} depth={depth}
         desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)}
         onSelect={() => setSelKey(keyOf(c))} action={action} onAction={() => onAction(c)}
+        onBlame={writeEnabled ? () => setBlamePath({ path: c.file_path }) : undefined}
         onDiscard={action === "stage" && writeEnabled ? () => discard(c) : undefined} />
     );
     if (!treeMode) return changes.map((c) => row(c));
@@ -2221,6 +2405,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         rather than leave the old branch's sync count sitting
                         there looking current. */}
                     {treeStale && <span className="animate-spin shrink-0 text-[12px]" style={{ color: "var(--text3)" }} title="Reading the branch you switched to…">⟳</span>}
+                    <button
+                      onClick={() => setInsightsOpen(true)}
+                      disabled={busy}
+                      className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
+                      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
+                      title="Repo insights — commit pace, contributors, churn, changelog"
+                    >☰ insights</button>
+                    {branch?.state === "bisecting" && (
+                      <button
+                        onClick={() => setBisectOpen(true)}
+                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
+                        style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}
+                        title="A bisect is in progress — mark the checked-out commit good or bad"
+                      >◉ bisect</button>
+                    )}
                     {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
                     {/* Offered only while undoing is exact: an unpushed merge
                         at the tip, on a clean tree. Once anything is committed
@@ -2666,18 +2865,55 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       </div>
                       <span className="ml-auto shrink-0 text-[9.5px] tabular-nums t-dim2">{graph.length ? `${graph.filter((l) => l.hash).length} commits` : ""}</span>
                     </div>
+                    {/* The series-cherry-pick action bar: appears when commits
+                        are picked, replaces the row it grew from, and carries
+                        the replay order in its own words — "oldest first" is
+                        the part people second-guess. The keys are what the
+                        picker itself advertised: `c` toggles a row. */}
+                    {pickSet.size > 0 && (
+                      <div className="shrink-0 mx-3 mb-2 px-2.5 py-1.5 rounded-lg flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)" }}>{pickSet.size}</span>
+                        <span className="min-w-0 flex-1 truncate text-[10.5px] t-dim2">cherry-pick: oldest first, one run</span>
+                        <button onClick={() => void runCherryPick()} disabled={busy || !writeEnabled}
+                          className="agx-btn text-[10.5px] px-2.5 py-1 rounded-md font-medium whitespace-nowrap"
+                          style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                          title="Replay the picked commits onto this branch in one run — a conflict pauses the series, and Continue finishes it">
+                          {pending === `pick:${pickSet.size}` ? "picking…" : `cherry-pick ${pickSet.size}`}
+                        </button>
+                        <button onClick={() => void runCherryPick(true)} disabled={busy || !writeEnabled}
+                          className="agx-btn text-[10.5px] px-2 py-1 rounded-md whitespace-nowrap"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                          title="Cherry-pick without committing — the changes land staged, so you can review or amend them first">
+                          stage only
+                        </button>
+                        {pickSet.size >= 2 && (
+                          <button onClick={() => void squashPicked()} disabled={busy || !writeEnabled}
+                            className="agx-btn text-[10.5px] px-2 py-1 rounded-md whitespace-nowrap"
+                            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                            title="Fold the picked commits into one, tree preserved. Must be a consecutive run ending at the tip of this branch.">
+                            squash {pickSet.size}
+                          </button>
+                        )}
+                        <CloseButton onClick={() => setPickSet(new Set())} disabled={busy} title="Clear the selection" className="rounded" style={{ color: "var(--text3)" }} />
+                      </div>
+                    )}
                   <div onScroll={incGraph.onScroll} className="agx-scroll flex-1 min-h-0 overflow-auto py-1 text-[11.5px]" style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}>
                     {incGraph.rows.map((l, i) => {
                       const isCommit = !!l.hash;
+                      const picked = isCommit && pickSet.has(l.hash!);
                       return (
-                        <div key={i} onClick={isCommit ? () => { setRowIdx(i); openCommit(l.hash!, l.subject || ""); } : undefined}
+                        <div key={i} onClick={isCommit ? () => {
+                          if (pickSet.size > 0 || picked) { setPickSet((prev) => { const next = new Set(prev); next.has(l.hash!) ? next.delete(l.hash!) : next.add(l.hash!); return next; }); return; }
+                          setRowIdx(i); openCommit(l.hash!, l.subject || "");
+                        } : undefined}
                           {...rowProps(i === rowIdx)}
                           className={`flex items-center gap-2 px-3 whitespace-pre ${isCommit ? "cursor-pointer hover:brightness-125" : ""}`}
-                          style={{ lineHeight: "1.55", ...(i === rowIdx ? rowProps(true).style : {}) }}
-                          title={isCommit ? "View this commit's diff" : undefined}
-                          onContextMenu={isCommit ? async (e) => { e.preventDefault(); const m = await askText({ title: `Reset current branch to ${l.hash}`, input: { label: "Mode — soft, mixed or hard", initial: "mixed" }, confirmLabel: "Reset" }); if (m === "soft" || m === "mixed" || m === "hard") resetTo(l.hash!, m); } : undefined}>
+                          style={{ lineHeight: "1.55", ...(i === rowIdx ? rowProps(true).style : {}), ...(picked ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : {}) }}
+                          title={isCommit ? (pickSet.size > 0 ? "Toggle this commit in the cherry-pick series" : "View this commit's diff") : undefined}
+                          onContextMenu={isCommit ? (e) => { e.preventDefault(); setRowIdx(i); setCommitMenu({ hash: l.hash!, subject: l.subject || "", x: e.clientX, y: e.clientY }); } : undefined}>
                           <span style={{ color: "color-mix(in srgb, var(--primary) 75%, var(--text3))" }}>{l.graph}</span>
                           {isCommit && <>
+                            <span className="shrink-0 tabular-nums" style={{ color: picked ? "var(--primary-hover)" : "var(--text3)" }}>{picked ? "●" : ""}</span>
                             <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)" }}>{l.hash}</span>
                             {l.refs && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{l.refs}</span>}
                             <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{l.subject}</span>
@@ -2819,6 +3055,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 : <button onClick={(e) => { e.stopPropagation(); checkout(b.name); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Switch this checkout to ${b.name}`}>⎇ Checkout</button>}
                               <button onClick={(e) => { e.stopPropagation(); openBranchOnWeb(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
                               <button onClick={(e) => { e.stopPropagation(); mergeBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
+                              <button onClick={(e) => { e.stopPropagation(); setCompareTarget(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Compare ${b.name} with another ref — how far apart they are`}>compare</button>
                               <button onClick={(e) => { e.stopPropagation(); rebaseBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
                               <button onClick={(e) => { e.stopPropagation(); renameBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
                               <button onClick={(e) => { e.stopPropagation(); deleteBranch(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
@@ -2832,16 +3069,80 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                 ) : view === "stashes" ? (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
                     {writeEnabled && <button onClick={stashPush} disabled={busy || tree?.clean} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }}>⇩ stash all changes</button>}
+                    {/* Snapshots: named checkpoints that never touch the tree.
+                        stash push MOVES work off the tree; a snapshot copies it
+                        and leaves the tree alone — so "before I try this" can
+                        restore even after the experiment goes sideways. */}
+                    {writeEnabled && (
+                      <div className="flex items-center gap-2 mb-2 max-w-lg">
+                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="flex-1 px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
+                        <button onClick={snapshotNow} disabled={busy || tree?.clean} className="text-[11px] px-3 py-1.5 rounded-lg font-medium whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime">⟳ snapshot now</button>
+                      </div>
+                    )}
+                    {snapshots.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">snapshots</div>
+                        <div className="space-y-0.5">
+                          {snapshots.map((s) => (
+                            <div key={s.ref} className="group px-2.5 py-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--info) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 18%, transparent)" }}>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9.5px] tabular-nums font-mono" style={{ color: "var(--info)" }}>{s.sha.slice(0, 7)}</span>
+                                <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--text)" }}>{s.label || "untitled snapshot"}</span>
+                                <span className="shrink-0 text-[9.5px] t-dim2">{s.time}</span>
+                                {writeEnabled && (
+                                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                                    <button onClick={() => act(() => api.gitSnapshotRestore(root, s.sha), "Restored snapshot")} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} title="Apply the snapshot's tree onto the current one">restore</button>
+                                    <button onClick={async () => { if (await ask({ title: "Delete this snapshot?", body: "The checkpoint is gone for good.", danger: true, confirmLabel: "Delete" })) act(() => api.gitSnapshotDelete(root, s.sha), "Deleted snapshot"); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>delete</button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {writeEnabled && (
+                      <div className="mb-2">
+                        <button onClick={() => { setPartialOpen(!partialOpen); }} className="text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", color: "var(--text)" }}>▣ stash some files…</button>
+                        {partialOpen && (
+                          <div className="mt-2 rounded-lg p-2.5 max-w-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                            <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">pick from the working tree</div>
+                            <div className="space-y-1 max-h-48 overflow-y-auto mb-2">
+                              {(tree?.unstaged ?? []).map((c) => {
+                                const p = relOf(c);
+                                return (
+                                  <label key={p} className="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" checked={partialSel.has(p)} onChange={(e) => { const n = new Set(partialSel); if (e.target.checked) n.add(p); else n.delete(p); setPartialSel(n); }} className="accent-[var(--primary)]" />
+                                    <span className="truncate text-[11px]" style={{ color: "var(--text)" }}>{p}</span>
+                                  </label>
+                                );
+                              })}
+                              {!tree?.unstaged.length && <div className="text-[10.5px] t-dim2">nothing to pick — the tree is clean</div>}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <label className="flex items-center gap-1.5 text-[10.5px] cursor-pointer" style={{ color: "var(--text2)" }}>
+                                <input type="checkbox" checked={partialKeep} onChange={(e) => setPartialKeep(e.target.checked)} className="accent-[var(--primary)]" />
+                                keep in working tree (stash & keep)
+                              </label>
+                              <button onClick={stashPartialNow} disabled={!partialSel.size} className="text-[11px] px-3 py-1 rounded-lg font-medium ml-auto" style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: partialSel.size ? 1 : 0.45 }}>stash {partialSel.size || ""} file{partialSel.size === 1 ? "" : "s"}</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
                     {shownStashes.map((s, i) => (
                       <div key={s.ref} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
-                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "10rem" : "0px" }}>
+                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "18rem" : "0px" }}>
                         <span className="text-[10px] tabular-nums t-dim2">{s.ref}</span>
                         <span className="min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={s.message}>{s.message}</span>
                         {writeEnabled ? (
                           <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
                             <button onClick={() => stashOp("apply", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>apply</button>
                             <button onClick={() => stashOp("pop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }}>pop</button>
+                            <button onClick={() => stashToBranch(s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Check out a new branch at the stash's base, apply onto it, drop the stash">branch</button>
+                            <button onClick={() => stashOverwrite(s.index, s.message)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }} title="Apply even where the working tree has moved on — replaces those paths">overwrite</button>
+                            <button onClick={() => stashRename(s.index, s.message.replace(/^[^:]*: /, ""))} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>rename</button>
                             <button onClick={() => stashOp("drop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>drop</button>
                           </div>
                         ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
@@ -2972,21 +3273,67 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : view === "tags" ? (
                   <div onScroll={incTags.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
+                    {writeEnabled && (
+                      <button onClick={() => void createTagAsk()} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ new tag</button>
+                    )}
                     <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search tags by name, commit or subject…"
                       sort={sort} onSort={(x) => { setSort(x); setRowIdx(0); }}
                       sorts={[{ key: "recent", label: "recent", title: "Newest tag first" }, { key: "name", label: "name", title: "Alphabetical" }]}
                       count={shownTags.length} total={tags.length} />
                     {incTags.rows.map((t, i) => (
-                      <div key={t.name} {...rowProps(i === rowIdx)} className="px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
+                      <div key={t.name} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
                         style={{ ...ROW_GRID, gridTemplateColumns: "minmax(0, 18rem) 5rem minmax(0, 1fr) auto", ...rowProps(i === rowIdx).style }}>
                         <span className="text-[11.5px] font-medium truncate min-w-0" style={{ color: "var(--text)" }} title={t.name}>{t.annotated ? "🏷" : "⚑"} {t.name}</span>
                         <span className="text-[9.5px] tabular-nums t-dim2">{t.hash}</span>
                         <span className="min-w-0 truncate text-[10px] t-dim2" title={t.subject}>{t.subject}</span>
-                        <span className="text-[9.5px] t-dim2 whitespace-nowrap text-right">{t.date}</span>
+                        <span className="flex items-center gap-1 whitespace-nowrap">
+                          <span className="text-[9.5px] t-dim2 text-right">{t.date}</span>
+                          {writeEnabled && (
+                            <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={(e) => { e.stopPropagation(); tagPush(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--info)" }} title="Push to the remote">⇡</button>
+                              <button onClick={(e) => { e.stopPropagation(); void tagDeleteRemoteAsk(t.name); }} className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--warning)" }} title="Delete on the remote">↷</button>
+                              <CloseButton onClick={(e) => { e.stopPropagation(); void tagDeleteAsk(t.name); }} className="rounded" style={{ color: "var(--error)" }} title="Delete locally" />
+                            </span>
+                          )}
+                        </span>
                       </div>
                     ))}
                     {!shownTags.length && <PaneEmpty busy={busyView === "tags"} what="tags" />}
                     <MoreRows shown={incTags.rows.length} total={shownTags.length} onAll={incTags.showAll} />
+                  </div>
+                ) : view === "submodules" ? (
+                  <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
+                    {writeEnabled && (
+                      <button onClick={submoduleAddAsk} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }}>+ add submodule</button>
+                    )}
+                    {submodules.length === 0 && !busy && <PaneEmpty busy={false} what="submodules" />}
+                    {submodules.map((s) => (
+                      <div key={s.path} className="group px-2.5 py-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", marginBottom: 6 }}>
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium" style={{ color: "var(--text)" }}>{s.path}</span>
+                          <span className="shrink-0 rounded px-1.5 py-px text-[9px] font-medium" style={{
+                            background: s.status === "clean" ? "color-mix(in srgb, var(--success) 16%, transparent)" : s.status === "modified" ? "color-mix(in srgb, var(--warning) 16%, transparent)" : s.status === "conflict" ? "color-mix(in srgb, var(--error) 16%, transparent)" : "color-mix(in srgb, var(--text3) 16%, transparent)",
+                            color: s.status === "clean" ? "var(--success)" : s.status === "modified" ? "var(--warning)" : s.status === "conflict" ? "var(--error)" : "var(--text2)",
+                            border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)",
+                          }}>
+                            {s.status === "clean" ? "clean" : s.status === "modified" ? "modified" : s.status === "conflict" ? "conflict" : "uninitialized"}
+                          </span>
+                          <span className="shrink-0 font-mono text-[9.5px] t-dim2">{s.sha.slice(0, 7)}</span>
+                          {writeEnabled && (
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                              <button onClick={() => submoduleOp("update", s.path, `Updated ${s.path}`)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="git submodule update --init --recursive">update</button>
+                              <button onClick={() => submoduleOp("sync", s.path, `Synced ${s.path}`)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Re-write URLs from .gitmodules into the checkout">sync</button>
+                              <button onClick={() => submoduleDeinitAsk(s.path)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>deinit</button>
+                              <button onClick={() => submoduleRemoveAsk(s.path)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>remove</button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 text-[9.5px] t-dim2">
+                          <span className="truncate">{s.url || "no url in .gitmodules"}</span>
+                          {s.branch && <span className="shrink-0">· {s.branch}</span>}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 ) : view === "reflog" ? (
                   <div onScroll={incReflog.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
@@ -2994,12 +3341,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         reset or rebase recoverable, which is why it earns a tab
                         of its own rather than living inside the log. */}
                     {incReflog.rows.map((e, i) => (
-                      <div key={e.ref} {...rowProps(i === rowIdx)} className="flex items-center gap-3 px-2.5 py-1 rounded-md" onClick={() => setRowIdx(i)}>
+                      <div key={e.ref} {...rowProps(i === rowIdx)} className="group flex items-center gap-3 px-2.5 py-1 rounded-md" onClick={() => setRowIdx(i)}>
                         <span className="shrink-0 text-[9.5px] tabular-nums t-dim2" style={{ minWidth: 68 }}>{e.ref}</span>
                         <span className="shrink-0 text-[9.5px] tabular-nums" style={{ color: "var(--primary-hover)" }}>{e.shortHash}</span>
                         <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ minWidth: 92, color: "var(--text2)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>{e.action}</span>
                         <span className="min-w-0 flex-1 truncate text-[11px]" style={{ color: "var(--text)" }}>{e.subject}</span>
                         <span className="shrink-0 text-[9.5px] t-dim2">{e.date}</span>
+                        <div className={`shrink-0 flex items-center gap-1 transition-opacity ${i === rowIdx ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                          <button onClick={(ev) => { ev.stopPropagation(); navigator.clipboard?.writeText(e.shortHash).catch(() => {}); }} className="agx-btn text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title="Copy the sha">copy</button>
+                          {/* The point of the reflog: whatever you did, the
+                              entry before it is where HEAD was. Reset here is
+                              the recovery move, and it is hard by default — the
+                              whole reason this list exists. The confirm below
+                              is the guard. */}
+                          <button onClick={(ev) => { ev.stopPropagation(); resetTo(e.shortHash, "hard"); }} className="agx-btn text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }} title={`Reset the current branch to this entry (${e.subject}) — hard, discarding working-tree changes`}>reset here</button>
+                        </div>
                       </div>
                     ))}
                     {!reflog.length && <PaneEmpty busy={busyView === "reflog"} what="reflog entries" />}
@@ -3111,6 +3467,46 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           to — the rail's views are the destinations, this is a detour. */}
       <PresetDiff open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" changes={commitView?.changes ?? []} title={commitView?.title} />
       {rescue && <RescueModal reports={rescue.reports} progress={rescue.progress} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
+      {rebaseBase && (
+        <RebaseModal root={root} base={rebaseBase} branch={currentBranchName || branch?.name || "HEAD"}
+          onClose={() => setRebaseBase(null)}
+          onDone={() => { setRebaseBase(null); reloadGraph(); }} />
+      )}
+      {compareTarget && (
+        <CompareModal root={root} initialBase={compareTarget} onClose={() => setCompareTarget(null)} />
+      )}
+      {insightsOpen && <InsightsModal root={root} onClose={() => setInsightsOpen(false)} />}
+      {blamePath && (
+        <BlameModal root={root} path={blamePath.path}
+          onClose={() => setBlamePath(null)}
+          onOpenCommit={(hash, subject) => { setBlamePath(null); void openCommit(hash, subject); }} />
+      )}
+      {bisectOpen && (
+        <BisectModal root={root} onClose={() => setBisectOpen(false)}
+          onReset={() => setBisectOpen(false)}
+          onOpenCommit={(hash, subject) => { setBisectOpen(false); void openCommit(hash, subject); }}
+          onChanged={() => { loadTree(root); void loadView(); }} />
+      )}
+      {/* The commit row's right-click menu. The reset it offers is the old
+          right-click, kept under its own heading so the cherry-pick actions
+          can sit above it without either reading as the other. */}
+      {commitMenu && (
+        <ContextMenu x={commitMenu.x} y={commitMenu.y} onClose={() => setCommitMenu(null)}>
+          <MenuItem onClick={() => { const m = commitMenu; setCommitMenu(null); openCommit(m.hash, m.subject); }}>View diff</MenuItem>
+          <MenuItem onClick={() => { navigator.clipboard?.writeText(commitMenu.hash).catch(() => {}); setCommitMenu(null); }}>Copy hash</MenuItem>
+          <MenuItem onClick={() => void cherryPickOne(commitMenu.hash)}>Cherry-pick onto this branch</MenuItem>
+          <MenuItem onClick={() => void cherryPickOne(commitMenu.hash, true)}>Cherry-pick, stage only</MenuItem>
+          <MenuItem onClick={() => void revertOne(commitMenu.hash)}>Revert (new commit undoing it)</MenuItem>
+          <MenuItem onClick={() => { const m = commitMenu; setCommitMenu(null); setRebaseBase(m.hash); }}>Rebase from here…</MenuItem>
+          <div className="my-0.5 h-px" style={{ background: "color-mix(in srgb, var(--border) 60%, transparent)" }} />
+          <MenuItem danger onClick={() => {
+            const m = commitMenu;
+            setCommitMenu(null);
+            void askText({ title: `Reset current branch to ${m.hash}`, input: { label: "Mode — soft, mixed or hard", initial: "mixed" }, confirmLabel: "Reset" })
+              .then((mode) => { if (mode === "soft" || mode === "mixed" || mode === "hard") resetTo(m.hash, mode); });
+          }}>Reset here…</MenuItem>
+        </ContextMenu>
+      )}
       {dialog}
     </div>
   );

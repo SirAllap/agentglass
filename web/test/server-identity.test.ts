@@ -8,14 +8,31 @@
 // turns an hour of confusion into a sentence.
 import { describe, expect, test, afterAll } from "bun:test";
 
-/** The logic under test, as `probeServer` runs it. Kept parameterised by origin
- *  because the module reads its own at import time, and a test that can only
- *  ask about one origin cannot cover the interesting cases. */
-async function identify(origin: string, timeoutMs = 2500): Promise<string> {
+/** The logic under test, as `probeServer` runs it — with the transport handed
+ *  in.
+ *
+ *  The app calls the global `fetch` from a browser, where a request to its own
+ *  origin goes straight out. A test process is not that: it inherits whatever
+ *  proxy the machine is configured with, and Bun reads that configuration once
+ *  at startup, so nothing here can opt out of it. On a runner that sets one,
+ *  every request in this file went to the proxy instead of to the socket the
+ *  test had just opened — coming back in three milliseconds as somebody else's
+ *  answer, and then, once the server was bound to loopback only, as a refusal.
+ *  Four assertions failed and three passed by accident, which reads as
+ *  flakiness and is not.
+ *
+ *  So the transport is a parameter. The tests hand it the server's own
+ *  `fetch` — Bun.serve exposes it, and it runs the handler without a socket —
+ *  and the absence case hands it one that refuses, which is what the network
+ *  does when nothing is listening. What is under test is the identification,
+ *  which is what this file says it covers. */
+type Send = (url: string, init: RequestInit) => Promise<Response>;
+
+async function identify(send: Send, origin = "http://server", timeoutMs = 2500): Promise<string> {
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const r = await fetch(`${origin}/health`, { signal: ctl.signal });
+    const r = await send(`${origin}/health`, { signal: ctl.signal });
     if (r.status === 401 || r.status === 403) return "ours";
     if (!r.ok) return "foreign";
     let j: { service?: unknown; ok?: unknown; clients?: unknown };
@@ -30,11 +47,14 @@ const json = (body: unknown, status = 200) => () =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 const servers: Array<{ stop: (force?: boolean) => void }> = [];
-const serve = (fetchFn: () => Response) => {
-  const s = Bun.serve({ port: 0, fetch: fetchFn });
+/** A server that answers, as a transport. No port, no socket, no proxy. */
+const serve = (fetchFn: () => Response): Send => {
+  const s = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: fetchFn });
   servers.push(s);
-  return `http://127.0.0.1:${s.port}`;
+  return (url, init) => Promise.resolve(s.fetch(new Request(url, init)));
 };
+/** What the network does when nothing is listening. */
+const refused: Send = () => Promise.reject(Object.assign(new Error("Unable to connect"), { name: "ConnectionRefused" }));
 afterAll(() => { for (const s of servers) s.stop(true); });
 
 describe("identifying what owns the API port", () => {
@@ -75,6 +95,6 @@ describe("identifying what owns the API port", () => {
   test("nothing listening is told apart from a stranger", async () => {
     // Different problems, different fixes, and until now they looked identical
     // from this screen.
-    expect(await identify("http://127.0.0.1:1")).toBe("down");
+    expect(await identify(refused)).toBe("down");
   });
 });
