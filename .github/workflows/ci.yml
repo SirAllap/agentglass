@@ -14,7 +14,7 @@ jobs:
         with:
           bun-version: latest
       - name: Install
-        run: bun install
+        run: bun install --frozen-lockfile
       # The mark lives in seven places — a standalone SVG, the favicon, a React
       # component, the boot splash and three inlines in the landing page. They
       # drifted once and a fix shipped to six of them while the seventh kept
@@ -52,7 +52,7 @@ jobs:
       - name: Tests (web)
         run: cd web && bun test
       - name: Build web
-        run: cd web && bunx vite build
+        run: cd web && bun run build
       # Pinned rather than the runner's preinstalled Chrome: the ubuntu-latest
       # image has dropped and re-added browsers before, and this also keeps the
       # step working on container or self-hosted runners that ship none.
@@ -149,7 +149,7 @@ jobs:
       # the only job that runs the server outside `build`.
       - name: Install (workspace — the server those two suites boot)
         if: steps.phone.outputs.there == 'yes'
-        run: bun install
+        run: bun install --frozen-lockfile
       # Both configs: the app against React Native, the suites against
       # bun-types. `types` replaces rather than adds, so one file cannot hold
       # both — see mobile/tsconfig.test.json.
