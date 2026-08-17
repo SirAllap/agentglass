@@ -59,6 +59,22 @@ case "$TARGET" in
   *) echo "unknown target $TARGET (expected bun-linux-{x64,arm64} or bun-darwin-{x64,arm64})" >&2; exit 1 ;;
 esac
 
+# Splitting terminfo out of ncurses is a Linux answer to a Linux problem, and
+# it does not survive the crossing. On the release runner both macOS jobs died
+# inside ncurses' own tree with "No rule to make target `../lib/libtinfo.a`":
+# with `--enable-widec` the archive it writes is `libtinfow.a`, and the rule
+# asking for the narrow name never gets an answer. Linux, cross-compiled with
+# zig against musl, does produce `libtinfo.a` — which is why this only ever
+# broke on one side.
+#
+# So the split, and the `-ltinfo` that goes with it, are asked for only where
+# they work. On darwin, ncurses keeps terminfo inside `libncursesw` and tmux
+# links that one library, which is what a native build there does anyway.
+case "$TARGET" in
+  *linux*)  NCURSES_TERMLIB="--with-termlib=tinfo"; TINFO_LDLIB="-ltinfo" ;;
+  *darwin*) NCURSES_TERMLIB="";                     TINFO_LDLIB=""        ;;
+esac
+
 WORK="$(mktemp -d /tmp/tmux-build.XXXXXX)"
 # KEEP_WORK=1 leaves the tree behind. A failing `configure` says "C compiler
 # cannot create executables" and puts the actual reason in config.log, which the
@@ -133,7 +149,7 @@ build_ncurses() {
     # (`-ltinfo`) even in a widec build. Without it everything compiles and the
     # final link is the only thing that fails, looking for a file ncurses was
     # never asked to make.
-    CC="$CC" CFLAGS="-O2" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --without-shared --without-progs --without-tests --without-manpages --without-ada --disable-db-install --enable-widec --with-termlib=tinfo >/dev/null
+    CC="$CC" CFLAGS="-O2" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --without-shared --without-progs --without-tests --without-manpages --without-ada --disable-db-install --enable-widec $NCURSES_TERMLIB >/dev/null
     make -s -j"$(jobs_n)" && make -s install )
 }
 
@@ -171,7 +187,7 @@ build_tmux() {
     CFLAGS="-O2 -I$WORK/prefix/include -I$WORK/prefix/include/ncursesw -DHAVE_PROC_PID" \
     CPPFLAGS="-I$WORK/prefix/include -I$WORK/prefix/include/ncursesw" \
     LDFLAGS="-L$WORK/prefix/lib -static -s" \
-    LIBS="-levent_core -levent -lncursesw -ltinfo -lm" \
+    LIBS="-levent_core -levent -lncursesw $TINFO_LDLIB -lm" \
     ./configure --host="$TRIPLE" --prefix="$WORK/prefix" >/dev/null
     make -s -j"$(jobs_n)" )
   file "$WORK/src/tmux-${TMUX_VERSION}/tmux"
