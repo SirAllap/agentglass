@@ -28,7 +28,7 @@ export function getInsights(): Insight[] {
        FROM events
        WHERE hook_event_type = 'PreToolUse' AND tool_name = 'Bash'
              AND cmd IS NOT NULL AND timestamp > ?${sc}
-       GROUP BY session_id, cmd
+       GROUP BY source_app, session_id, cmd
        HAVING n >= 6
        ORDER BY n DESC LIMIT 6`
     )
@@ -49,7 +49,7 @@ export function getInsights(): Insight[] {
   const spend = db
     .query<{ source_app: string; session_id: string; cost: number; last: number }, any[]>(
       `SELECT source_app, session_id, ROUND(SUM(cost_usd),2) cost, MAX(timestamp) last
-       FROM events WHERE timestamp > ?${sc} GROUP BY session_id
+       FROM events WHERE timestamp > ?${sc} GROUP BY source_app, session_id
        HAVING cost >= 15 ORDER BY cost DESC LIMIT 4`
     )
     .all(now - 15 * 60_000, ...sa);
@@ -77,7 +77,8 @@ export function getInsights(): Insight[] {
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END) errs,
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
               MAX(timestamp) last
-       FROM events WHERE timestamp > ?${sc} GROUP BY session_id
+       FROM events WHERE timestamp > ?${sc} GROUP BY source_app, session_id
+
        HAVING tools >= 4 AND errs * 1.0 / tools > 0.3
        ORDER BY errs DESC LIMIT 4`
     )
