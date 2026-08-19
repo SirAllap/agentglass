@@ -50,6 +50,46 @@ export const GIT_COMMANDS: ProjectCommand[] = [
 export const RECIPE = "recipe:";
 const MAX_PINS = 5;
 const PIN_KEY = "agentglass.commandPins";
+const CUSTOM_PIN = "custom:";
+
+/** A command the person typed themselves, rather than one discovered in the repo. */
+export type CustomPin = { label: string; cmd: string };
+
+/**
+ * Keep the old string[] storage format while giving custom pins their own
+ * display label. Existing command and recipe pins therefore survive the
+ * upgrade untouched, and a label containing spaces or punctuation is safe in
+ * localStorage too.
+ */
+export function encodeCustomPin(label: string, cmd: string): string {
+  const name = label.trim();
+  const command = cmd.trim();
+  if (!name || !command) return "";
+  return `${CUSTOM_PIN}${encodeURIComponent(JSON.stringify({ label: name, cmd: command }))}`;
+}
+
+export function decodeCustomPin(value: string): CustomPin | null {
+  if (!value.startsWith(CUSTOM_PIN)) return null;
+  try {
+    const parsed = JSON.parse(decodeURIComponent(value.slice(CUSTOM_PIN.length))) as Partial<CustomPin>;
+    if (typeof parsed.label !== "string" || typeof parsed.cmd !== "string") return null;
+    const label = parsed.label.trim();
+    const cmd = parsed.cmd.trim();
+    return label && cmd ? { label, cmd } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function addCustomPin(root: string, label: string, cmd: string): boolean {
+  const encoded = encodeCustomPin(label, cmd);
+  if (!encoded || !root) return false;
+  const cur = pinned[root] ?? EMPTY;
+  if (cur.includes(encoded)) return true;
+  if (cur.length >= MAX_PINS) return false;
+  write({ ...pinned, [root]: [...cur, encoded] });
+  return true;
+}
 
 /**
  * Pins are per repo, not global.
@@ -243,6 +283,10 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customLabel, setCustomLabel] = useState("");
+  const [customCmd, setCustomCmd] = useState("");
+  const [customError, setCustomError] = useState("");
   const wrap = useRef<HTMLDivElement>(null);
   const cmds = useCommands(root);
   /* Your own, alongside the ones we found. Fetched here rather than threaded in
@@ -298,7 +342,9 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
      this, dismissing the dropdown left `asking` set: the next time it opened —
      after switching branch, after anything — it came back showing a half-filled
      form for a command you had walked away from. */
-  const dismiss = useCallback(() => { setOpen(false); setQuery(""); setAsking(null); onClose?.(); }, [onClose]);
+  const dismiss = useCallback(() => {
+    setOpen(false); setQuery(""); setAsking(null); setCustomOpen(false); setCustomError(""); onClose?.();
+  }, [onClose]);
   useDismiss(open, wrap, dismiss);
 
   const n = (cmds?.make.length ?? 0) + (cmds?.scripts.length ?? 0);
@@ -306,6 +352,20 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
   // Selecting a command hands focus back through onRun (it types into the
   // shell), so it closes without going through `dismiss`'s own refocus.
   const run = (cmd: string) => { setOpen(false); setQuery(""); setAsking(null); onRun(cmd); };
+  const saveCustom = () => {
+    if (!customLabel.trim() || !customCmd.trim()) {
+      setCustomError("Add both a chip label and the command to run.");
+      return;
+    }
+    if (!addCustomPin(root, customLabel, customCmd)) {
+      setCustomError(`You already have ${MAX_PINS} pinned commands — unpin one first.`);
+      return;
+    }
+    setCustomLabel("");
+    setCustomCmd("");
+    setCustomError("");
+    setCustomOpen(false);
+  };
   /*
    * A saved command, from the menu.
    *
@@ -357,7 +417,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
       setChip({ r, x: at.left, y: at.top });
       return;
     }
-    onRun(cmd);
+    onRun(decodeCustomPin(cmd)?.cmd ?? cmd);
   };
 
   const groups: [string, ProjectCommand[]][] = [];
@@ -430,6 +490,25 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
               placeholder="filter commands…"
               className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
               style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+            <div className="px-2 pb-1.5 shrink-0">
+              <button type="button" onClick={() => { setCustomOpen((v) => !v); setCustomError(""); }} disabled={full}
+                className="text-[10.5px] px-2 py-1 rounded-md"
+                style={{ color: full ? "var(--text3)" : "var(--primary-hover)", border: "1px dashed color-mix(in srgb, var(--primary) 35%, transparent)", opacity: full ? 0.55 : 1 }}>
+                ＋ Pin a custom command{full ? " (limit reached)" : ""}
+              </button>
+              {customOpen && !full && (
+                <form onSubmit={(e) => { e.preventDefault(); saveCustom(); }} className="mt-1.5 grid grid-cols-[92px_minmax(0,1fr)_auto] gap-1.5 items-center">
+                  <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} autoFocus placeholder="chip label"
+                    aria-label="Custom command chip label" className="px-2 py-1 rounded outline-none min-w-0"
+                    style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                  <input value={customCmd} onChange={(e) => setCustomCmd(e.target.value)} placeholder="command, e.g. clear"
+                    aria-label="Custom command" className="px-2 py-1 rounded outline-none min-w-0"
+                    style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                  <button type="submit" className="px-2 py-1 rounded" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)" }}>Pin</button>
+                  {customError && <span className="col-span-3 text-[10px]" style={{ color: "var(--error)" }}>{customError}</span>}
+                </form>
+              )}
+            </div>
             <div className="agx-scroll overflow-y-auto py-1" style={{ minHeight: 0 }}>
               {!!gitMatches.length && (
                 <div>
@@ -482,12 +561,12 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
             <button onMouseDown={keepTermFocus} onClick={(e) => pinned(cmd, e.currentTarget.getBoundingClientRect())} disabled={disabled || !root || IS_DEMO}
               className="text-[10px] pl-2 pr-1 py-1 min-w-0 truncate"
               style={{ color: "var(--text2)", fontFamily: font, maxWidth: 180 }}
-              title={recipeOf(cmd) ? `Run ${recipeOf(cmd)!.name}` : `Run ${cmd}`}>{recipeOf(cmd)?.name ?? cmd}</button>
+              title={decodeCustomPin(cmd) ? `Run ${decodeCustomPin(cmd)!.cmd}` : recipeOf(cmd) ? `Run ${recipeOf(cmd)!.name}` : `Run ${cmd}`}>{decodeCustomPin(cmd)?.label ?? recipeOf(cmd)?.name ?? cmd}</button>
             {/* Unpin from inside the chip, in room the padding already holds:
                 hidden rather than absent, so revealing it cannot re-flow the
                 row and nothing can clip it. Going back to the dropdown to find
                 the row you pinned is the long way round. */}
-            <CloseButton onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)} style={{ color: "var(--text3)" }} title={`Unpin ${cmd}`} className="shrink-0 w-[15px] pr-1 opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100" />
+            <CloseButton onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)} style={{ color: "var(--text3)" }} title={`Unpin ${decodeCustomPin(cmd)?.label ?? cmd}`} className="shrink-0 w-[15px] pr-1 opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100" />
           </span>
         ))}
         {!pins.length && !!root && (
