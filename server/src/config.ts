@@ -9,8 +9,7 @@
 import type { Budget } from "../../shared/types.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, dirname, sep, delimiter, normalize } from "node:path";
-
+import { join, resolve, dirname, sep, delimiter } from "node:path";
 import { worktreeFamily } from "./worktree.ts";
 
 /**
@@ -371,13 +370,10 @@ export function workspaceRoot(): string | null {
  *  itself but never anything inside it there; every path in the project
  *  reads as out-of-scope. */
 export function isWithin(child: string, parent: string, s: string = sep): boolean {
-  const c = normalize(child);
-  const p = normalize(parent);
-  if (c === p) return true;
-  const prefix = p.endsWith(s) ? p : p + s;
-  return c.startsWith(prefix);
+  if (child === parent) return true;
+  const prefix = parent.endsWith(s) ? parent : parent + s;
+  return child.startsWith(prefix);
 }
-
 
 export function inScope(path: string | null | undefined, scope = workspaceRoot()): boolean {
   if (!scope) return true; // whole-machine: nothing to enforce
