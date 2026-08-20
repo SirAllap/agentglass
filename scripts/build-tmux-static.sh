@@ -75,6 +75,27 @@ case "$TARGET" in
   *darwin*) NCURSES_TERMLIB="";                     TINFO_LDLIB=""        ;;
 esac
 
+# How far "static" goes, and how the target is named — both differ on darwin,
+# and both were assumed to be the Linux answer.
+#
+#   -static: there is no static libSystem on macOS and the linker refuses to
+#     pretend otherwise, which reaches `configure` as the flat "C compiler
+#     cannot create executables". What the app actually needs is no dependency
+#     on a tmux, libevent or ncurses the user may not have — and those are
+#     already `.a` archives built right here, so they link in either way.
+#     libSystem stays dynamic, as it does for every binary on that platform.
+#   -s: a linker flag on GNU ld, obsolete on Apple's. `-Wl,-x` is the local
+#     symbol strip that means the same thing here.
+#   --host: tmux 3.5a's `config.sub` does not know `arm64-apple-darwin` and
+#     stops the build with "config.sub … failed". A native build does not need
+#     to be told what it is; `-arch` is what decides the slice, and it is the
+#     one thing the x64 job needs to say out loud on an arm64 runner.
+case "$TARGET" in
+  *linux*)          LDMODE="-static -s"; ARCHFLAG="";              HOSTFLAG="--host=$TRIPLE" ;;
+  bun-darwin-arm64) LDMODE="-Wl,-x";     ARCHFLAG="-arch arm64";   HOSTFLAG=""               ;;
+  bun-darwin-x64)   LDMODE="-Wl,-x";     ARCHFLAG="-arch x86_64";  HOSTFLAG=""               ;;
+esac
+
 WORK="$(mktemp -d /tmp/tmux-build.XXXXXX)"
 # KEEP_WORK=1 leaves the tree behind. A failing `configure` says "C compiler
 # cannot create executables" and puts the actual reason in config.log, which the
@@ -133,7 +154,7 @@ build_libevent() {
   verify "$t" "libevent-${LIBEVENT_VERSION}-stable.tar.gz"
   tar -xzf "$t" -C "$WORK/src"
   ( cd "$WORK/src/libevent-${LIBEVENT_VERSION}-stable"
-    CC="$CC" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --disable-shared --enable-static --disable-openssl --disable-samples --disable-libevent-regress >/dev/null
+    CC="$CC" ./configure $HOSTFLAG --prefix="$WORK/prefix" --disable-shared --enable-static --disable-openssl --disable-samples --disable-libevent-regress >/dev/null
     make -s -j"$(jobs_n)" && make -s install )
 }
 
@@ -149,7 +170,7 @@ build_ncurses() {
     # (`-ltinfo`) even in a widec build. Without it everything compiles and the
     # final link is the only thing that fails, looking for a file ncurses was
     # never asked to make.
-    CC="$CC" CFLAGS="-O2" ./configure --host="$TRIPLE" --prefix="$WORK/prefix" --without-shared --without-progs --without-tests --without-manpages --without-ada --disable-db-install --enable-widec $NCURSES_TERMLIB >/dev/null
+    CC="$CC" CFLAGS="-O2 $ARCHFLAG" LDFLAGS="$ARCHFLAG" ./configure $HOSTFLAG --prefix="$WORK/prefix" --without-shared --without-progs --without-tests --without-manpages --without-ada --disable-db-install --enable-widec $NCURSES_TERMLIB >/dev/null
     make -s -j"$(jobs_n)" && make -s install )
 }
 
@@ -184,11 +205,11 @@ build_tmux() {
     #     unstripped binary carries megabytes of DWARF into the app's download.
     ac_cv_search_forkpty="none required" \
     CC="$CC" \
-    CFLAGS="-O2 -I$WORK/prefix/include -I$WORK/prefix/include/ncursesw -DHAVE_PROC_PID" \
+    CFLAGS="-O2 $ARCHFLAG -I$WORK/prefix/include -I$WORK/prefix/include/ncursesw -DHAVE_PROC_PID" \
     CPPFLAGS="-I$WORK/prefix/include -I$WORK/prefix/include/ncursesw" \
-    LDFLAGS="-L$WORK/prefix/lib -static -s" \
+    LDFLAGS="-L$WORK/prefix/lib $ARCHFLAG $LDMODE" \
     LIBS="-levent_core -levent -lncursesw $TINFO_LDLIB -lm" \
-    ./configure --host="$TRIPLE" --prefix="$WORK/prefix" >/dev/null
+    ./configure $HOSTFLAG --prefix="$WORK/prefix" >/dev/null
     make -s -j"$(jobs_n)" )
   file "$WORK/src/tmux-${TMUX_VERSION}/tmux"
 }
