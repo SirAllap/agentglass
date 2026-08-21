@@ -55,25 +55,6 @@ export type IconProps = { color: ColorValue; size?: number };
 const box = (size: number): { width: number; height: number } => ({ width: size, height: size });
 
 /**
- * Four panes: the shape of a dashboard since the first one, and the rail's own
- * mark for the view this screen replaced Now with.
- *
- * A house was the obvious alternative and says the wrong thing. This screen is
- * not "where you started", it is what the machine is doing — the same claim the
- * desk's Dash makes with the same glyph.
- */
-export function HomeIcon({ color, size = 20 }: IconProps): React.ReactNode {
-  return (
-    <Svg {...line} {...box(size)} color={color}>
-      <Path d="M3 4.4a1.4 1.4 0 0 1 1.4-1.4h5.7a1.4 1.4 0 0 1 1.4 1.4v5.7a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 10.1z" />
-      <Path d="M13.5 4.4A1.4 1.4 0 0 1 14.9 3h4.7A1.4 1.4 0 0 1 21 4.4v2.7a1.4 1.4 0 0 1-1.4 1.4h-4.7a1.4 1.4 0 0 1-1.4-1.4z" />
-      <Path d="M13.5 11.9a1.4 1.4 0 0 1 1.4-1.4h4.7a1.4 1.4 0 0 1 1.4 1.4v7.7a1.4 1.4 0 0 1-1.4 1.4h-4.7a1.4 1.4 0 0 1-1.4-1.4z" />
-      <Path d="M3 14.9a1.4 1.4 0 0 1 1.4-1.4h5.7a1.4 1.4 0 0 1 1.4 1.4v4.7a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 19.6z" />
-    </Svg>
-  );
-}
-
-/**
  * A ring with its centre marked.
  *
  * Not a bell. The screen it opens argues at some length that it is a queue you
@@ -100,15 +81,6 @@ export function TerminalIcon({ color, size = 20 }: IconProps): React.ReactNode {
   );
 }
 
-/** The rail's own speech bubble. */
-export function ChatsIcon({ color, size = 20 }: IconProps): React.ReactNode {
-  return (
-    <Svg {...line} {...box(size)} color={color}>
-      <Path d="M20 4H4v12h5v4l5-4h6z" />
-    </Svg>
-  );
-}
-
 /** The rail's own, at Octicons' proportions: one line carries on, the other
  *  asks to come in, and the arrow is the ask. The circles are r=3, which at
  *  20px leaves a 3.2px hole — the desk draws the same shape at 15px, where the
@@ -126,21 +98,21 @@ export function PrsIcon({ color, size = 20 }: IconProps): React.ReactNode {
 }
 
 /**
- * An open tray, for the destination that is a pull request and a card at once.
+ * An open tray, for the screen that gathers what is waiting on you.
  *
- * The rail has no glyph for this, because the desk has no such destination —
- * it has room for both. So it is drawn here, and what it has to say is the
- * thing the two halves share: something arrived from outside and is waiting on
- * a decision. A tray says that; neither half's own mark does, and using one of
- * them would make the other invisible.
+ * Drawn for the Review destination, which held pull requests and cards behind
+ * one control; it now marks the Inbox, which is the same claim made about one
+ * more source. What it has to say is what all three share: something arrived
+ * from outside and is waiting on a decision. A tray says that, and no single
+ * source's own mark can without making the other two invisible.
  *
  * Open at the top, with the notch, and that is the whole of the drawing
- * decision. Two slots away sits a folder, and a closed box with a line across
- * it — which is what every stock "inbox" is — is a folder at 20px. This has no
- * top edge at all: its silhouette is a U with a bite out of the shoulders,
- * which nothing else in the bar shares.
+ * decision. A closed box with a line across it — which is what every stock
+ * "inbox" is — is a folder at 20px, and there is a folder two slots away in
+ * Settings. This has no top edge at all: its silhouette is a U with a bite out
+ * of the shoulders, which nothing else in the bar shares.
  */
-export function ReviewIcon({ color, size = 20 }: IconProps): React.ReactNode {
+export function InboxIcon({ color, size = 20 }: IconProps): React.ReactNode {
   return (
     <Svg {...line} {...box(size)} color={color}>
       <Path d="M3 13.4h5.2l1.7 2.8h4.2l1.7-2.8H21" />
@@ -162,6 +134,27 @@ export function ReposIcon({ color, size = 20 }: IconProps): React.ReactNode {
     <Svg {...line} {...box(size)} color={color}>
       <Path d="M3 6.6a2 2 0 0 1 2-2h3.5l2 2.6H19a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       <Path d="M3 9.7h18" />
+    </Svg>
+  );
+}
+
+/**
+ * GitHub's own issue mark: a ring with a solid centre.
+ *
+ * It shares its outline with NowIcon, and the fill is what separates them —
+ * deliberately, because they are never in the bar together. Now is off the bar
+ * and wears the ring in Settings; this one is a destination and wears the dot.
+ * A stroked inner circle at 20px is a 3.2px hole and a filled one is a 5.2px
+ * blob, which is the difference a thumb can see at arm's length.
+ *
+ * Not a bug, an exclamation mark or a speech bubble: an issue is not
+ * necessarily any of those, and this is the shape the site it comes from uses.
+ */
+export function IssuesIcon({ color, size = 20 }: IconProps): React.ReactNode {
+  return (
+    <Svg {...line} {...box(size)} color={color}>
+      <Circle cx="12" cy="12" r="8.4" />
+      <Circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
     </Svg>
   );
 }

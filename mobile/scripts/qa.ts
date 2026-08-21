@@ -50,12 +50,12 @@ const SHOTS = join(import.meta.dir, "..", ".qa-shots");
  *  `paneText` and the check in the loop: under `full` a green row there has to
  *  mean characters arrived from a live tmux pane, not that a bar mounted. */
 const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] = [
-  // Nine, where there were seven: the bar offers five and the other four are
-  // still routes. Both halves of Review are visited here as well as through
-  // it, because "reachable" is the claim the navigation rebuild has to keep.
-  { path: "/", name: "Home", expect: /On the machine|things want you|Nothing is waiting|Quiet/i },
+  // Eight: the bar offers five and the other three are still routes. Two names
+  // that were here are not any more, and neither drifted out — Chats was
+  // deleted with the conversation UI, and Review was dissolved into the two
+  // destinations it used to wrap. Both of those are visited on their own below.
+  { path: "/", name: "Inbox", expect: /On the machine|things want you|Nothing is waiting|Quiet/i },
   { path: "/now", name: "Now", expect: /waiting on you|Nothing is waiting|Empty/i },
-  { path: "/chats", name: "Chats", expect: /Live|Search these conversations|Nothing here/i },
   // Not "Esc". That is on the key bar whatever the terminal is doing, and
   // asserting it is how this screen passed three times while showing nothing —
   // the comment saying so has been sitting above the regex that does it. What
@@ -63,13 +63,13 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // it is in, and, under `full`, the pane itself.
   { path: "/terminal", name: "Terminal", pane: true,
     expect: /Attaching|Disconnected|Nothing open|Looking|·p\d|^\s*\d+ /im },
-  // Review draws the pull-request half by default, so its own chrome AND that
-  // half's have to be on the page — a segmented control over an empty box is
-  // the failure this asserts against.
-  { path: "/review", name: "Review", expect: /Pull requests[\s\S]*(My review|Nothing open|Cannot ask GitHub)/i },
   { path: "/prs", name: "PRs", expect: /My review|Nothing open|Cannot ask GitHub/i },
+  // The screen this app never had. `Mine` is its own filter row rather than a
+  // row of results, so it holds whether or not the repository has any issues —
+  // which is the point: the failure this catches is the screen not mounting.
+  { path: "/issues", name: "Issues", expect: /Mine|Nothing open|Cannot ask GitHub/i },
   { path: "/repos", name: "Repos", expect: /changed|Nothing changed/i },
-  { path: "/tasks", name: "Tasks", expect: /hiding done|Nothing here|Cannot read the board/i },
+  { path: "/tasks", name: "Cards", expect: /hiding done|Nothing here|Cannot read the board/i },
   { path: "/settings", name: "Settings", expect: /Paired with|This phone may/i },
 ];
 

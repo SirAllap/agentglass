@@ -12,7 +12,17 @@
  */
 import type { PendingGate, SessionRollup } from "../../../shared/types.ts";
 import { QUIET_MS, STALE_MS } from "./nowQueue.ts";
-import { scopeSessions } from "./chatList.ts";
+
+/**
+ * How recently a session has to have spoken to count as live.
+ *
+ * Two minutes, and it came here from `chatList.ts`, which was deleted with the
+ * conversation screen. It is not a new number and it is not a copy: it was that
+ * module's own `LIVE_MS`, and this file was the only caller of the rule it
+ * backed once the chat list was gone. The alternative was keeping a module for
+ * one constant that one function reads.
+ */
+const LIVE_MS = 120_000;
 
 /**
  * What an agent is up to, in the order of how much it wants a person.
@@ -75,10 +85,11 @@ export function runningAgents(
     if (!seen || gate.created < seen.created) held.set(gate.session_id, gate);
   }
 
-  // The app's one definition of "live", borrowed rather than restated — see
-  // chatList.ts. Anything outside it is quiet, and how quiet is what the
-  // states below turn on.
-  const live = new Set(scopeSessions(sessions, "live", now).map((s) => s.session_id));
+  // The app's one definition of "live". Anything outside it is quiet, and how
+  // quiet is what the states below turn on.
+  const live = new Set(
+    sessions.filter((s) => !s.ended_at && now - s.last_seen < LIVE_MS).map((s) => s.session_id),
+  );
 
   const out: RunningAgent[] = [];
   for (const session of sessions) {

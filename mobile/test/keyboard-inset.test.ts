@@ -60,7 +60,13 @@ describe("how a screen gets out of the keyboard's way", () => {
   test("there are screens doing it at all", () => {
     // If this ever reads zero the rest of the file is passing vacuously, which
     // is the way a lock like this dies quietly.
-    expect(using.length).toBeGreaterThanOrEqual(3);
+    //
+    // Two, not three. The third was app/chat/[id].tsx — the screen the bug in
+    // the header above was FOUND on — and it was deleted with the rest of the
+    // conversation UI. The floor moved down with it rather than the count being
+    // padded: what this guards is that the check has something to check, and
+    // the pairing form and the terminal both still take typing.
+    expect(using.length).toBeGreaterThanOrEqual(2);
   });
 
   test("none of them goes quiet on Android", () => {

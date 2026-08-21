@@ -33,7 +33,7 @@ import { Pressable, Text, View } from "react-native";
 import type { BottomTabBarProps } from "expo-router/build/react-navigation/bottom-tabs";
 import { BAR, type TabRoute } from "./bar.ts";
 import {
-  ChatsIcon, HomeIcon, ReposIcon, ReviewIcon, TerminalIcon, type IconProps,
+  InboxIcon, IssuesIcon, PrsIcon, TasksIcon, TerminalIcon, type IconProps,
 } from "./icons.tsx";
 import { waitingItems } from "../model/nowQueue.ts";
 import { useAgentglass } from "../state/host-context.tsx";
@@ -64,13 +64,13 @@ const LABEL_PX = 10;
 
 /** Only the five the bar draws — the compiler is what keeps this in step with
  *  BAR, so a destination added there without a mark does not build. */
-const ICONS: Record<Exclude<TabRoute, "now" | "prs" | "tasks" | "settings">,
+const ICONS: Record<Exclude<TabRoute, "now" | "repos" | "settings">,
   (props: IconProps) => React.ReactNode> = {
-    index: HomeIcon,
-    chats: ChatsIcon,
+    index: InboxIcon,
+    prs: PrsIcon,
     terminal: TerminalIcon,
-    review: ReviewIcon,
-    repos: ReposIcon,
+    issues: IssuesIcon,
+    tasks: TasksIcon,
   };
 
 /** The count on Home, which is the only badge in the app.

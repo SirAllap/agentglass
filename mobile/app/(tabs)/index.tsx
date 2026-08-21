@@ -120,10 +120,9 @@ function Band({ waiting, news, top, onOpen }: {
   );
 }
 
-function AgentRow({ agent, now, onOpen }: {
+function AgentRow({ agent, now }: {
   agent: RunningAgent;
   now: number;
-  onOpen: () => void;
 }): React.ReactNode {
   const looks = doingLooks(agent.doing);
   const where = agent.session.cwd_path ?? agent.session.project_path ?? "";
@@ -138,8 +137,21 @@ function AgentRow({ agent, now, onOpen }: {
    * knows that.
    */
   const clock = agent.gate ? now - agent.gate.created : agent.quiet;
+  /*
+   * Not pressable any more, and that is a hole rather than a decision.
+   *
+   * This row opened the conversation, and the conversation screen is gone —
+   * it listed sessions by a title most of them do not have, so on a real
+   * machine it was a list of `orbit:3f9c1a04`. Nothing replaces it here
+   * because nothing on THIS screen should: an agent is read in the terminal
+   * it is running in.
+   *
+   * The whole screen is replaced next, by an inbox of pull requests, issues
+   * and cards — no agents at all. Until then this stays as a readable summary
+   * that no longer promises a tap it cannot honour.
+   */
   return (
-    <Pressable onPress={onOpen} accessibilityRole="button">
+    <View>
       <Card style={{ gap: SPACE.sm, padding: SPACE.md }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
           {/* A dot in the state's colour, and the word beside it. Colour alone
@@ -186,7 +198,7 @@ function AgentRow({ agent, now, onOpen }: {
           {where ? baseName(where) : agent.session.source_app}
         </Text>
       </Card>
-    </Pressable>
+    </View>
   );
 }
 
@@ -402,15 +414,7 @@ export default function HomeScreen(): React.ReactNode {
           </Card>
         )
       }
-      renderItem={({ item }) => (
-        <AgentRow
-          agent={item}
-          now={now}
-          // The object form, not a built string: a session id is a uuid today
-          // and the path segment would need escaping the day it is not.
-          onOpen={() => router.push({ pathname: "/chat/[id]", params: { id: item.session.session_id } })}
-        />
-      )}
+      renderItem={({ item }) => <AgentRow agent={item} now={now} />}
     />
   );
 }
