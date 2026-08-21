@@ -12,15 +12,16 @@
  * are per-list and a workspace may have four words for "doing", so nothing may
  * branch on them.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Linking, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
+import { useNavigation } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { ProviderTask } from "../../../shared/providers.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Card, Label, Note } from "../../src/ui.tsx";
+import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow } from "../../src/ui.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
@@ -96,8 +97,10 @@ function Row({ task, prefix, onCopied }: {
 export default function TasksScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
+  const navigation = useNavigation();
   const [views, setViews] = useState<ViewsAnswer | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   const [tasks, setTasks] = useState<ProviderTask[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pulling, setPulling] = useState(false);
@@ -137,49 +140,55 @@ export default function TasksScreen(): React.ReactNode {
     void load().finally(() => setPulling(false));
   }, [load]);
 
+  const view = views?.views.find((v) => v.id === chosen) ?? null;
+
+  // The view is the title — see prs.tsx for why this is setOptions and not an
+  // inline options object.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitleAlign: "center",
+      headerTitle: () => (
+        <HeaderPick label={view?.name ?? "Cards"} onPress={() => setPicking(true)} />
+      ),
+    });
+  }, [navigation, view?.name]);
+
   if (!host) return null;
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <View style={{ borderBottomWidth: 1, borderBottomColor: C.border }}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: SPACE.sm, paddingVertical: SPACE.sm, gap: SPACE.xs }}
-        >
-          {(views?.views ?? []).map((view) => {
-            const on = view.id === chosen;
-            return (
-              <Pressable
-                key={view.id}
-                onPress={() => setChosen(view.id)}
-                style={{
-                  paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
-                  borderRadius: RADIUS.md,
-                  backgroundColor: on ? C.bg3 : "transparent",
-                  borderWidth: 1, borderColor: on ? C.border2 : "transparent",
-                }}
-              >
-                <Text style={{ color: on ? C.text : C.text3, fontSize: T.small, fontWeight: on ? "600" : "400" }}>
-                  {view.name}
-                </Text>
-              </Pressable>
-            );
-          })}
-          <Pressable
-            onPress={() => setOpenOnly((v) => !v)}
-            style={{
-              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
-              borderRadius: RADIUS.md, borderWidth: 1,
-              borderColor: openOnly ? "transparent" : C.border2,
-            }}
-          >
-            <Text style={{ color: openOnly ? C.text4 : C.text2, fontSize: T.small }}>
-              {openOnly ? "hiding done" : "showing all"}
-            </Text>
-          </Pressable>
-        </ScrollView>
+      {/* What was a chip at the end of a scrolling strip is a segment, because
+          it was never a filter among filters — it is the only two-state thing
+          on the screen, and a chip that toggles looks exactly like a chip that
+          selects. Two segments say which of two lists you are looking at. */}
+      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md }}>
+        <Segmented
+          value={openOnly ? "open" : "all"}
+          onChange={(id) => setOpenOnly(id === "open")}
+          options={[
+            { id: "open" as const, label: "Open" },
+            { id: "all" as const, label: "All" },
+          ]}
+        />
       </View>
+
+      <Sheet open={picking} onClose={() => setPicking(false)} title="View">
+        {(views?.views ?? []).map((view) => (
+          <SheetRow
+            key={view.id}
+            label={view.name}
+            sub={view.builtin ? "built in" : undefined}
+            on={view.id === chosen}
+            onPress={() => { setChosen(view.id); setPicking(false); }}
+          />
+        ))}
+        <View style={{ paddingTop: SPACE.md }}>
+          <Note>
+            These are the workspace&apos;s own saved views, in the order they were added on the
+            computer — so the board says the same thing in both places.
+          </Note>
+        </View>
+      </Sheet>
 
       {said ? (
         <View style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.xs, backgroundColor: C.bg2 }}>

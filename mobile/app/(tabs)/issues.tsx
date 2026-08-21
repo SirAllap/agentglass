@@ -11,28 +11,27 @@
  * will close it. An issue nobody has picked up is the one worth reading now;
  * one with a pull request against it is somebody else's afternoon.
  *
- * The strip and the filter row are `prs.tsx`'s, deliberately unchanged. They
- * are the wrong shape — two horizontal scrollers spend 150 points above the
- * first card — and they are wrong in the same way on three screens, so they
- * are worth fixing in one sweep rather than diverging here first.
+ * The repository is the header's title and the filters are one segmented
+ * control — the same shape the pull requests and the cards wear, because a
+ * thumb moving between the three should meet one gesture and not three.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
+import { useNavigation, useRouter } from "expo-router";
 import type { GitRepoRef, IssueRow, IssuesReport } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Card, Label, Note } from "../../src/ui.tsx";
+import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow } from "../../src/ui.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { since } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 type Filter = "mine" | "open" | "all";
 
+/** Yours first, for the same reason "My review" leads the pull requests: it is
+ *  the only one of the three that is about you. */
 const FILTERS: { id: Filter; label: string }[] = [
-  // Yours first, for the same reason "My review" leads the pull requests: it
-  // is the only one of the three that is about you.
   { id: "mine", label: "Mine" },
   { id: "open", label: "Open" },
   { id: "all", label: "All" },
@@ -113,8 +112,10 @@ export default function IssuesScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
   const router = useRouter();
+  const navigation = useNavigation();
   const [repos, setRepos] = useState<GitRepoRef[] | null>(null);
   const [root, setRoot] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   const [filter, setFilter] = useState<Filter>("mine");
   const [list, setList] = useState<IssuesReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -156,59 +157,38 @@ export default function IssuesScreen(): React.ReactNode {
 
   const issues = useMemo(() => (Array.isArray(list?.issues) ? list.issues : []), [list]);
   const now = Date.now();
+  const repo = repos?.find((r) => r.root === root) ?? null;
+
+  // The repository is the title — see prs.tsx for why this is setOptions and
+  // not an inline options object.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitleAlign: "center",
+      headerTitle: () => (
+        <HeaderPick label={repo?.name ?? "Issues"} onPress={() => setPicking(true)} />
+      ),
+    });
+  }, [navigation, repo?.name]);
 
   if (!host) return null;
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <View style={{ borderBottomWidth: 1, borderBottomColor: C.border }}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: SPACE.sm, paddingVertical: SPACE.sm, gap: SPACE.xs }}
-        >
-          {(repos ?? []).map((repo) => {
-            const on = repo.root === root;
-            return (
-              <Pressable
-                key={repo.root}
-                onPress={() => setRoot(repo.root)}
-                style={{
-                  paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
-                  borderRadius: RADIUS.md,
-                  backgroundColor: on ? C.bg3 : "transparent",
-                  borderWidth: 1, borderColor: on ? C.border2 : "transparent",
-                }}
-              >
-                <Text style={{ color: on ? C.text : C.text3, fontSize: T.small, fontWeight: on ? "600" : "400" }}>
-                  {repo.name}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md }}>
+        <Segmented value={filter} onChange={setFilter} options={FILTERS} />
       </View>
 
-      <View style={{
-        flexDirection: "row", gap: SPACE.xs, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm,
-        borderBottomWidth: 1, borderBottomColor: C.border,
-      }}>
-        {FILTERS.map((f) => {
-          const on = f.id === filter;
-          return (
-            <Pressable
-              key={f.id}
-              onPress={() => setFilter(f.id)}
-              style={{
-                paddingHorizontal: SPACE.md, minHeight: 36, justifyContent: "center",
-                borderRadius: RADIUS.sm, backgroundColor: on ? C.bg3 : "transparent",
-              }}
-            >
-              <Text style={{ color: on ? C.text : C.text4, fontSize: T.small }}>{f.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <Sheet open={picking} onClose={() => setPicking(false)} title="Repository">
+        {(repos ?? []).map((r) => (
+          <SheetRow
+            key={r.root}
+            label={r.name}
+            sub={r.branch}
+            on={r.root === root}
+            onPress={() => { setRoot(r.root); setPicking(false); }}
+          />
+        ))}
+      </Sheet>
 
       <FlatList
         data={issues}

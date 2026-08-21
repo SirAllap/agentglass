@@ -11,25 +11,27 @@
  * "no checks". Those are different claims and only one of them is true at that
  * moment.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Linking, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
+import { useNavigation } from "expo-router";
 import type { GitRepoRef, PrSummary } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Card, Label, Note } from "../../src/ui.tsx";
+import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow } from "../../src/ui.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { since } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 type Filter = "mine" | "review" | "all";
 
-const FILTERS: { id: Filter; label: string }[] = [
-  // "review" first is deliberate: somebody is blocked on you in that one.
-  { id: "review", label: "My review" },
-  { id: "mine", label: "Mine" },
-  { id: "all", label: "All" },
-];
+/** "review" first is deliberate: somebody is blocked on you in that one. */
+const FILTERS: Filter[] = ["review", "mine", "all"];
+const FILTER_LABEL: Record<Filter, string> = {
+  review: "My review",
+  mine: "Mine",
+  all: "All",
+};
 
 interface PrList {
   ok: boolean;
@@ -39,6 +41,15 @@ interface PrList {
   loading?: boolean;
   total?: number;
 }
+
+/** What `/prs/counts` answers with.
+ *
+ *  Declared here rather than imported, the same way `PrList` above is, because
+ *  the server's copy lives in `server/src/prs.ts` and not in `shared/types.ts`
+ *  — this app compiles against the shared wire types and nothing else. The one
+ *  field this screen reads is named after a filter, which is what keeps the two
+ *  in step: a rename on either side stops matching `FILTERS`. */
+interface PrViewCounts { review: number; mine: number; failing: number; ready: number; all: number }
 
 /** What CI is saying, in one chip. Null when there is genuinely nothing to say. */
 function checkChip(pr: PrSummary): { text: string; ink: string } | null {
@@ -110,10 +121,24 @@ function Row({ pr, now }: { pr: PrSummary; now: number }): React.ReactNode {
 export default function PrsScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
+  const navigation = useNavigation();
   const [repos, setRepos] = useState<GitRepoRef[] | null>(null);
   const [root, setRoot] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   const [filter, setFilter] = useState<Filter>("review");
   const [list, setList] = useState<PrList | null>(null);
+  /**
+   * The five numbers behind the segmented control.
+   *
+   * `/prs/counts` answers all of them in ONE GraphQL call and caches it, which
+   * is the whole reason the control can carry counts at all: the alternative
+   * was three list requests to label three segments.
+   *
+   * Null while it has not answered, and the control simply draws no numbers —
+   * a zero on "My review" that means "we have not asked" is the kind of lie
+   * this app spends comments avoiding elsewhere.
+   */
+  const [counts, setCounts] = useState<PrViewCounts | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pulling, setPulling] = useState(false);
 
@@ -155,6 +180,44 @@ export default function PrsScreen(): React.ReactNode {
 
   useEffect(() => { setList(null); void load(); }, [load]);
 
+  // Counts follow the repository and not the filter — they are the counts OF
+  // the filters, so re-asking when one is tapped would be asking the same
+  // question again.
+  useEffect(() => {
+    if (!host || !root) return;
+    let gone = false;
+    setCounts(null);
+    void (async () => {
+      const answer = await ask<{ ok: boolean; counts?: PrViewCounts }>(
+        host, `/prs/counts?root=${encodeURIComponent(root)}&state=open`,
+      );
+      if (gone || !answer.ok || !answer.value.ok) return;
+      setCounts(answer.value.counts ?? null);
+    })();
+    return () => { gone = true; };
+  }, [host, root]);
+
+  const repo = repos?.find((r) => r.root === root) ?? null;
+
+  /*
+   * The repository moved into the header, and the strip under it is gone.
+   *
+   * setOptions rather than an inline options prop, for the reason the old
+   * Review screen wrote down: that component's effect keys on the options
+   * OBJECT, so a literal is a fresh reference every render and calls
+   * setOptions on each one. This fires when the name changes and not
+   * otherwise. The closure reads the palette at header render time, so a theme
+   * change still repaints it.
+   */
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitleAlign: "center",
+      headerTitle: () => (
+        <HeaderPick label={repo?.name ?? "Pull requests"} onPress={() => setPicking(true)} />
+      ),
+    });
+  }, [navigation, repo?.name]);
+
   // The check rollup lands on a second pass, so one re-read a moment later is
   // the difference between "checks…" forever and the row settling.
   useEffect(() => {
@@ -175,57 +238,37 @@ export default function PrsScreen(): React.ReactNode {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <View style={{ borderBottomWidth: 1, borderBottomColor: C.border }}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: SPACE.sm, paddingVertical: SPACE.sm, gap: SPACE.xs }}
-        >
-          {(repos ?? []).map((repo) => {
-            const on = repo.root === root;
-            return (
-              <Pressable
-                key={repo.root}
-                onPress={() => setRoot(repo.root)}
-                style={{
-                  paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
-                  borderRadius: RADIUS.md,
-                  backgroundColor: on ? C.bg3 : "transparent",
-                  borderWidth: 1, borderColor: on ? C.border2 : "transparent",
-                }}
-              >
-                <Text style={{ color: on ? C.text : C.text3, fontSize: T.small, fontWeight: on ? "600" : "400" }}>
-                  {repo.name}
-                </Text>
-                <Text style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }} numberOfLines={1}>
-                  {repo.branch}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md }}>
+        <Segmented
+          value={filter}
+          onChange={setFilter}
+          options={FILTERS.map((id) => ({
+            id,
+            label: FILTER_LABEL[id],
+            count: counts ? counts[id] : undefined,
+          }))}
+        />
       </View>
 
-      <View style={{
-        flexDirection: "row", gap: SPACE.xs, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm,
-        borderBottomWidth: 1, borderBottomColor: C.border,
-      }}>
-        {FILTERS.map((f) => {
-          const on = f.id === filter;
-          return (
-            <Pressable
-              key={f.id}
-              onPress={() => setFilter(f.id)}
-              style={{
-                paddingHorizontal: SPACE.md, minHeight: 36, justifyContent: "center",
-                borderRadius: RADIUS.sm, backgroundColor: on ? C.bg3 : "transparent",
-              }}
-            >
-              <Text style={{ color: on ? C.text : C.text4, fontSize: T.small }}>{f.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <Sheet open={picking} onClose={() => setPicking(false)} title="Repository">
+        {(repos ?? []).map((r) => (
+          <SheetRow
+            key={r.root}
+            label={r.name}
+            sub={`${r.branch}${r.ahead ? ` · ${r.ahead} to push` : ""}${r.behind ? ` · ${r.behind} behind` : ""}`}
+            on={r.root === root}
+            onPress={() => { setRoot(r.root); setPicking(false); }}
+          />
+        ))}
+        {/* Said once, at the bottom, because a list of twenty-three that has
+            silently become nine needs to account for the fourteen. */}
+        <View style={{ paddingTop: SPACE.md }}>
+          <Note>
+            Worktrees are folded into the repository they belong to — several checkouts of one
+            repository answer with the same pull requests.
+          </Note>
+        </View>
+      </Sheet>
 
       <FlatList
         data={prs}
