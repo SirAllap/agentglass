@@ -58,6 +58,19 @@ const ALLOWED: { file: string; height: number; because: string }[] = [
       + "than one session and sits above the window tabs — a second row of "
       + "chrome over a screen whose whole point is the pane below it.",
   },
+  {
+    file: "app/pr/diff.tsx",
+    height: 22,
+    because:
+      "a line of the diff. This is the one exception with a real argument "
+      + "rather than a saving: a line of code is a line of code, and at 44 a "
+      + "twenty-line hunk is 880 points — longer than the screen — so a diff "
+      + "nobody can read would be the price of a target nobody misses. "
+      + "It is 393 wide, so the miss is always onto the line above or below, "
+      + "and the cost of that miss is bounded by design: the box that opens "
+      + "names the line it is for, so a wrong one is visible before a word is "
+      + "typed and Cancel is beside it.",
+  },
 ];
 
 function sources(dir: string): string[] {

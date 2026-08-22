@@ -78,6 +78,7 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // Both details walked with ids that exist nowhere, for the same reason as
   // the pull request's: what is asserted is that the screen mounts and says it
   // could not read it, rather than rendering a blank.
+  { path: "/pr/diff?number=0&root=%2Ftmp", name: "PR diff", expect: /Cannot read it|could not be read|out of scope|not a git repository|no GitHub remote/i },
   { path: "/issue/0?root=%2Ftmp", name: "Issue detail", expect: /Cannot read it|could not be read|out of scope|invalid request/i },
   { path: "/card/nope", name: "Card detail", expect: /Cannot read it|could not be read|not connected|no card/i },
   { path: "/settings", name: "Settings", expect: /Paired with|This phone may/i },

@@ -23,14 +23,15 @@
  * shape is load-bearing rather than incidental.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import type { PrCheck, PrDetail } from "../../../shared/types.ts";
+import type { PrCheck, PrDetail, ReviewRecipe, ReviewRecipesResponse } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { menuFor, situationOf } from "../../src/model/reviewMenu.ts";
+import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
+import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
 import { since } from "../../src/lib/dates.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
@@ -55,9 +56,15 @@ function decisionLook(pr: PrDetail): { word: string; ink: string } | null {
   return null;
 }
 
-function FileRow({ file }: { file: PrDetail["files"][number] }): React.ReactNode {
+function FileRow({ file, onOpen }: {
+  file: PrDetail["files"][number];
+  onOpen: () => void;
+}): React.ReactNode {
   return (
-    <View style={{
+    <Pressable
+      accessibilityRole="button"
+      onPress={onOpen}
+      style={{
       // At the floor even though nothing here is tappable. There is no
       // argument for 40 beyond saving four points, and test/tap-floor.test.ts
       // is deliberately blunt: a smaller row has to be worth explaining.
@@ -75,7 +82,7 @@ function FileRow({ file }: { file: PrDetail["files"][number] }): React.ReactNode
         {file.additions ? <Text style={{ color: C.success }}>+{file.additions} </Text> : null}
         {file.deletions ? <Text style={{ color: C.error }}>−{file.deletions}</Text> : null}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -114,12 +121,29 @@ export default function PrScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
   const router = useRouter();
-  const { number, root } = useLocalSearchParams<{ number: string; root: string }>();
+  const { number, root, review } = useLocalSearchParams<{
+    number: string; root: string; review?: string;
+  }>();
+  /* Submitting a review writes to GitHub. A phone paired to answer gates does
+     not get to, and the control is not drawn rather than drawn and refused —
+     the rule repos.tsx set. Reading the diff and handing it to Claude both
+     stay available, because neither writes anything. */
+  const mayWrite = host?.scope === "full";
 
   const [detail, setDetail] = useState<PrDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [handing, setHanding] = useState(false);
   const [allFiles, setAllFiles] = useState(false);
+  /** The menu, as the computer has it — built-ins with the user's own edits
+   *  merged in. Null until it answers, which is why the sheet says so rather
+   *  than drawing an empty list that reads as "no options". */
+  const [catalogue, setCatalogue] = useState<ReviewRecipe[] | null>(null);
+  /* Opened straight away when the diff sent you here with comments queued —
+     `review=1` on the route. Otherwise it is the second button below. */
+  const [reviewing, setReviewing] = useState(review === "1");
+  const [verdict, setVerdict] = useState<"approve" | "request_changes" | "comment" | null>(null);
+  const [summary, setSummary] = useState("");
+  const [sent, setSent] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     if (!host || !number || !root) return;
@@ -138,9 +162,25 @@ export default function PrScreen(): React.ReactNode {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Fetched beside the detail rather than after it: they are independent
+  // questions, and the sheet is not opened in the first instant anyway.
+  useEffect(() => {
+    if (!host) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<ReviewRecipesResponse>(host, RECIPES_PATH);
+      if (gone || !answer.ok || !answer.value.ok) return;
+      setCatalogue(answer.value.recipes ?? []);
+    })();
+    return () => { gone = true; };
+  }, [host]);
+
   /** The menu, and which entry sits on top. Held apart from the render so the
    *  sheet does not re-sort itself while it is open. */
-  const menu = useMemo(() => (detail ? menuFor(situationOf(detail)) : null), [detail]);
+  const menu = useMemo(
+    () => (detail && catalogue ? menuFor(situationOf(detail), catalogue) : null),
+    [detail, catalogue],
+  );
 
   /**
    * Leave the request and go to the terminal.
@@ -161,6 +201,35 @@ export default function PrScreen(): React.ReactNode {
     setHanding(false);
     router.push("/terminal");
   }, [detail, root, router]);
+
+  const key = `${root}#${number}`;
+  const notes = draft(key);
+
+  /**
+   * The verdict and every queued comment, in ONE call.
+   *
+   * `/prs/review-with` takes both together, which is what makes this atomic: a
+   * phone that loses signal cannot leave three remarks and no conclusion on
+   * somebody's pull request. The draft is cleared only on success — clearing
+   * it on a failure would throw away what somebody typed because a network
+   * dropped.
+   */
+  const send = useCallback(async (verb: "approve" | "request_changes" | "comment"): Promise<void> => {
+    if (!host || !detail || !root) return;
+    setVerdict(verb);
+    const answer = await ask<{ ok: boolean; error?: string }>(host, "/prs/review-with", {
+      method: "POST",
+      body: { root, number: detail.number, verb, body: summary.trim(), comments: forWire(notes) },
+    });
+    setVerdict(null);
+    if (!answer.ok) { setSent(answer.error); return; }
+    if (!answer.value.ok) { setSent(answer.value.error ?? "GitHub refused that review."); return; }
+    clearDraft(key);
+    setSummary("");
+    setReviewing(false);
+    setSent(null);
+    void load();
+  }, [host, detail, root, summary, notes, key, load]);
 
   const now = Date.now();
   const checks = detail ? checksLook(detail) : null;
@@ -263,7 +332,16 @@ export default function PrScreen(): React.ReactNode {
             <View style={{ gap: SPACE.sm }}>
               <Label text={`Files · ${files.length}`} />
               <Card style={{ gap: SPACE.xs, padding: SPACE.md }}>
-                {shownFiles.map((f) => <FileRow key={f.path} file={f} />)}
+                {shownFiles.map((f) => (
+                  <FileRow
+                    key={f.path}
+                    file={f}
+                    onOpen={() => router.push({
+                      pathname: "/pr/diff",
+                      params: { number: String(number), root: root ?? "", path: f.path },
+                    })}
+                  />
+                ))}
                 {files.length > shownFiles.length ? (
                   <Pressable onPress={() => setAllFiles(true)} style={{ minHeight: 44, justifyContent: "center" }}>
                     <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>
@@ -301,20 +379,98 @@ export default function PrScreen(): React.ReactNode {
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
         }}>
           <Btn
-            label="✦ Hand to Claude"
+            label="✦ Claude"
             tone="primary"
-            style={{ flex: 1 }}
+            style={{ flex: 1.2 }}
             onPress={() => setHanding(true)}
+          />
+          <Btn
+            label={notes.length ? `Review · ${notes.length}` : "Review"}
+            style={{ flex: 1 }}
+            // Not on your own pull request: GitHub will not let you review your
+            // own work, and neither should this.
+            disabled={!mayWrite || detail.viewerDidAuthor}
+            onPress={() => setReviewing(true)}
           />
         </View>
       ) : null}
 
+      <Sheet open={reviewing} onClose={() => setReviewing(false)} title="Send your review">
+        {notes.length ? (
+          <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
+            <Label text={`${notes.length} ${notes.length === 1 ? "comment" : "comments"} queued`} />
+            {notes.map((n) => (
+              <View key={`${n.path}:${n.line}`} style={{ paddingVertical: SPACE.xs }}>
+                <Text numberOfLines={1} style={{ color: C.text2, fontSize: T.small }}>{n.body}</Text>
+                <Text numberOfLines={1} style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
+                  {n.path}:{n.line}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={{ paddingBottom: SPACE.md }}>
+            <Note>No line comments. Open the files above to write one.</Note>
+          </View>
+        )}
+
+        <TextInput
+          value={summary}
+          onChangeText={setSummary}
+          placeholder="Summary — optional"
+          placeholderTextColor={C.text4}
+          multiline
+          style={{
+            minHeight: 72, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.md,
+            backgroundColor: C.bg, color: C.text, padding: SPACE.md, fontSize: T.body,
+          }}
+        />
+
+        <View style={{ gap: SPACE.sm, paddingTop: SPACE.md }}>
+          <Btn label="Approve" tone="good" busy={verdict === "approve"}
+            disabled={!!verdict} onPress={() => { void send("approve"); }} />
+          <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+            <Btn label="Request changes" tone="danger" style={{ flex: 1 }}
+              busy={verdict === "request_changes"} disabled={!!verdict}
+              onPress={() => { void send("request_changes"); }} />
+            <Btn label="Comment" style={{ flex: 1 }}
+              busy={verdict === "comment"} disabled={!!verdict}
+              onPress={() => { void send("comment"); }} />
+          </View>
+        </View>
+
+        {sent ? <View style={{ paddingTop: SPACE.sm }}><Note tone="bad">{sent}</Note></View> : null}
+
+        <View style={{ paddingTop: SPACE.md }}>
+          <Note>
+            {/* The property this whole queue exists for, said where it is
+                being relied on. */}
+            The verdict and every comment go in one call, so a dropped connection cannot leave half
+            a review on GitHub.
+          </Note>
+        </View>
+      </Sheet>
+
       <Sheet open={handing} onClose={() => setHanding(false)} title={`Hand #${number} to Claude`}>
+        {menu === null ? (
+          <Note>Reading the menu from the computer…</Note>
+        ) : null}
+        {menu?.recipes.length === 0 ? (
+          <Note>
+            Nothing in the catalogue applies to this pull request. The menu is edited on the
+            computer, in Settings then Review prompts.
+          </Note>
+        ) : null}
         {(menu?.recipes ?? []).map((recipe) => (
           <SheetRow
             key={recipe.id}
             label={recipe.title}
-            sub={recipe.id === menu?.suggested ? `${recipe.sub} · suggested` : recipe.sub}
+            // A skill line is what actually runs, and it is worth showing: it
+            // is the difference between prose and `/pr-resolve-reviews 482`.
+            sub={[
+              recipe.id === menu?.suggested ? "suggested" : "",
+              recipe.skill ? recipe.skill.trim().split(/\s/)[0] : "",
+            ].filter(Boolean).join(" · ") || undefined}
             on={recipe.id === menu?.suggested}
             onPress={() => hand(recipe.id)}
           />

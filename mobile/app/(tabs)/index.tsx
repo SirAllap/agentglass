@@ -169,9 +169,7 @@ export default function InboxScreen(): React.ReactNode {
       router.push({ pathname: "/issue/[number]", params: { number: item.open.id, root: item.open.root ?? "" } });
       return;
     }
-    // Cards have no detail screen yet. Marking it seen is still right — you
-    // looked at it here — and the Cards tab is where it is read for now.
-    router.push("/tasks");
+    router.push({ pathname: "/card/[id]", params: { id: item.open.id } });
   }, [inbox, router]);
 
   return (

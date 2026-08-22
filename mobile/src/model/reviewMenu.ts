@@ -1,87 +1,91 @@
 /*
  * What "hand this to Claude" offers, and which entry is on top.
  *
- * ── the ids are the contract, and the text is not ─────────────────────────
- * The socket carries an ID and never a prompt. `cmd: "review"` takes a number,
- * a directory and a recipe id; the server looks the id up in its own catalogue
- * (server/src/reviewRecipes.ts) and builds the text there. That is a security
- * property rather than a tidiness one — a socket reachable from the UI must not
- * be a way to choose what an agent is told — and it is why this file can carry
- * titles without carrying prompts.
+ * ── the catalogue is fetched, not copied ─────────────────────────────────
+ * `/pr-prompts` answers with the whole menu — `ReviewRecipe[]`, a shared wire
+ * type — and it is the MERGED list: the built-ins with the user's own edits
+ * and additions on top of them. So the phone offers exactly what the desktop
+ * offers, including a recipe somebody wrote yesterday, and a title cannot
+ * drift because there is only one of it.
  *
- * It also means an id this app does not recognise is harmless in both
- * directions. The server falls back to the recipe the pull request calls for
- * when it is handed one it has never heard of, so the worst a stale entry here
- * can do is offer a name that quietly resolves to the sensible default.
+ * This file used to carry a copy of the titles, on the belief that no route
+ * listed them. That was wrong, and the copy would have been wrong twice over:
+ * stale wording is the small half, and the big half is that a hand-edited
+ * catalogue would never have reached the phone at all.
  *
- * ── why the titles are copied rather than fetched ─────────────────────────
- * There is no route that lists them. The desktop reads the catalogue in
- * process, which a phone cannot, and adding a route to serve fifteen strings
- * that change about once a year is a route to keep in step for nothing.
+ * ── the ids are still the contract ───────────────────────────────────────
+ * The socket carries an id and never a prompt. `cmd: "review"` takes a number,
+ * a directory and a recipe id; the server looks the id up and builds the text
+ * there. A socket reachable from the UI must not be a way to choose what an
+ * agent is told, which is why this module deals in ids and ordering and never
+ * in bodies — `ReviewRecipe.body` arrives here and is deliberately not shown.
  *
- * The copy is the risk that buys, and it is bounded: a title that has drifted
- * shows the wrong WORDS for the right prompt, which is a cosmetic bug on a
- * sheet, not a wrong prompt. `test/review-menu.test.ts` reads the server's
- * catalogue off disk and fails when an id here has no counterpart there, so
- * the half that matters — the ids — cannot drift silently.
+ * ── what this file is actually for ───────────────────────────────────────
+ * Two rules the server does not apply, because the desktop applies them in its
+ * own menu component and a phone needs them somewhere testable:
  *
- * ── why not all fifteen ───────────────────────────────────────────────────
- * The desktop's menu has fifteen entries in four groups behind a `▾`. A phone
- * sheet is a list you scroll with a thumb, and fifteen of anything is a list
- * nobody reads to the bottom of. These are the ones that answer a question you
- * would ask standing up; the focused four (risk, tests, data, security) and the
- * two that write to GitHub are deliberately left at the desk.
+ *   which recipes are POSSIBLE on this pull request — a filter, and the only
+ *   hard one: "apply the review" edits a branch, so it cannot be offered on
+ *   somebody else's.
+ *
+ *   which is SUGGESTED — never a filter. `suggestRecipeId` lives in shared/
+ *   and its own header explains why it is only ever a tiebreak.
  */
+import type { ReviewRecipe } from "../../../shared/types.ts";
 export { suggestRecipeId, type ReviewSituation } from "../../../shared/reviewSuggest.ts";
 import { suggestRecipeId, type ReviewSituation } from "../../../shared/reviewSuggest.ts";
 
-export interface Recipe {
-  /** The id the socket carries. Must exist in the server's catalogue. */
-  id: string;
-  /** What the sheet calls it. The server's own title, copied. */
-  title: string;
-  /** One line under it, written for a phone: what you get, not how it works. */
-  sub: string;
-  /** Offered on a pull request you opened, on somebody else's, or on both.
-   *  GitHub will not let you review your own work and neither should this. */
-  when: "mine" | "theirs" | "any";
+/** The route, named once. A GET, so a phone paired for `read` can draw the
+ *  menu — which matters, because reviewing is a read and the hand-off writes
+ *  nothing to GitHub. */
+export const RECIPES_PATH = "/pr-prompts";
+
+/**
+ * Which side of a pull request a group belongs to.
+ *
+ * The server's four groups are `reviewing`, `focused`, `mine` and `telling`.
+ * Only `mine` is about work you opened; `telling` writes to GitHub (it asks
+ * somebody for a review, in chat) and is left at the desk — a phone that
+ * posted on your behalf from a sheet with no preview is not a thing this app
+ * should offer.
+ */
+function sideOf(recipe: ReviewRecipe): "mine" | "theirs" | null {
+  if (recipe.group === "mine") return "mine";
+  if (recipe.group === "reviewing" || recipe.group === "focused") return "theirs";
+  return null;
 }
-
-export const RECIPES: Recipe[] = [
-  // ── somebody else's ─────────────────────────────────────────────────────
-  { id: "understand", title: "What is this pull request?", sub: "Reads it and explains it. Changes nothing.", when: "theirs" },
-  { id: "review-full", title: "Review it properly", sub: "Goes through the diff and gives an opinion.", when: "theirs" },
-  { id: "re-review", title: "What changed since my review", sub: "Only the part you have not seen.", when: "theirs" },
-  { id: "verdict", title: "Can I approve it?", sub: "The short answer, for when you are deciding.", when: "theirs" },
-  { id: "others-said", title: "What the other reviews said", sub: "Catches you up on the conversation.", when: "theirs" },
-
-  // ── yours ───────────────────────────────────────────────────────────────
-  { id: "address", title: "Apply the review", sub: "Does what the comments asked for.", when: "mine" },
-  { id: "reply", title: "Draft my replies", sub: "Writes answers to the comments, unsent.", when: "mine" },
-  { id: "self-review", title: "Review it before I ask anyone", sub: "A pass over your own work.", when: "mine" },
-  { id: "unblock", title: "What is blocking the merge?", sub: "Failing checks, conflicts, missing reviews.", when: "mine" },
-];
 
 /**
  * The menu for one pull request, suggestion first.
  *
- * Sorted rather than filtered down to one: `suggestRecipeId` is explicit that
- * it is "a suggestion and never a filter", because the field it leans on —
- * `viewerRequested` — describes what somebody remembered to tick. The whole
- * feature exists for a pull request handed back a third time without the
- * reviewer being re-requested, where the suggestion is wrong and the menu has
- * to still contain the right answer.
- *
- * `mine`/`theirs` IS a filter, and a different kind: a recipe that applies a
- * review to somebody else's branch is not a worse choice, it is a thing that
- * cannot happen.
+ * Hidden recipes are dropped — that flag is somebody switching one off at the
+ * desk, and a phone that ignored it would be a second place the menu is
+ * decided. Order inside a group is the catalogue's own `order` when it has
+ * one, and its position otherwise, so the two products list them the same way.
  */
-export function menuFor(pr: ReviewSituation): { recipes: Recipe[]; suggested: string } {
+export function menuFor(pr: ReviewSituation, catalogue: ReviewRecipe[]): {
+  recipes: ReviewRecipe[];
+  suggested: string;
+} {
   const suggested = suggestRecipeId(pr);
   const side = pr.viewerDidAuthor ? "mine" : "theirs";
-  const usable = RECIPES.filter((r) => r.when === "any" || r.when === side);
-  // Stable otherwise: the order above is the order the desk lists them in, and
-  // a sheet that reshuffles between openings is one you have to read twice.
+
+  const usable = catalogue
+    .map((recipe, at) => ({ recipe, at }))
+    .filter(({ recipe }) => !recipe.hidden && sideOf(recipe) === side)
+    .sort((a, b) => {
+      const ao = a.recipe.rank ?? Number.MAX_SAFE_INTEGER;
+      const bo = b.recipe.rank ?? Number.MAX_SAFE_INTEGER;
+      // Falls back to the catalogue's own order, so a list with no `order` set
+      // anywhere comes out exactly as the server sent it rather than reversed
+      // by an unstable comparison.
+      return ao - bo || a.at - b.at;
+    })
+    .map(({ recipe }) => recipe);
+
+  // Sorted, not filtered: the situation the whole feature exists for is a pull
+  // request handed back a third time without the reviewer being re-requested,
+  // where the suggestion is wrong and the right answer must still be reachable.
   const top = usable.filter((r) => r.id === suggested);
   const rest = usable.filter((r) => r.id !== suggested);
   return { recipes: [...top, ...rest], suggested };
@@ -90,10 +94,9 @@ export function menuFor(pr: ReviewSituation): { recipes: Recipe[]; suggested: st
 /**
  * What this app knows about a pull request, from the detail it already has.
  *
- * Its own function so the two callers — the sheet and its test — build the
- * situation the same way. `movedSinceMyReview` is the one that cannot be read
- * off a single field: it is whether a review of MINE exists and the head has
- * moved since, which is what `forcePushedSinceReview` reports.
+ * Its own function so the sheet and its tests build the situation the same
+ * way. `movedSinceMyReview` is the one that cannot be read off a single field:
+ * it is whether a review of MINE exists and the head has moved since.
  */
 export function situationOf(pr: {
   viewerDidAuthor: boolean;
@@ -101,8 +104,7 @@ export function situationOf(pr: {
   viewerRequested: boolean;
   forcePushedSinceReview: boolean;
   /** `viewerDidAuthor` is optional on the wire — GitHub omits it on reviews it
-   *  will not attribute — and an absent one is "not mine", never "unknown".
-   *  Typed loosely here so `PrDetail` fits without a cast. */
+   *  will not attribute — and an absent one is "not mine", never "unknown". */
   reviews: { viewerDidAuthor?: boolean; state: string }[];
   checks: { failure: number };
   mergeable: string;
