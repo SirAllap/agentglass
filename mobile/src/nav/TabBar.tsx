@@ -24,7 +24,7 @@
  * ── the labels ───────────────────────────────────────────────────────────
  * Left to scale with the phone's text-size setting, at the same 10 points the
  * stock bar uses, and after the move to five there is room for it: 62dp of slot
- * on a 360dp phone against 31.88dp for "Review", the widest word left. See
+ * on a 360dp phone against 28.36dp for "Issues", the widest word left. See
  * src/nav/bar.ts for where those numbers come from and test/nav.test.ts for the
  * lock that keeps a longer one out.
  */
@@ -35,11 +35,8 @@ import { BAR, type TabRoute } from "./bar.ts";
 import {
   InboxIcon, IssuesIcon, PrsIcon, TasksIcon, TerminalIcon, type IconProps,
 } from "./icons.tsx";
-import { waitingItems } from "../model/nowQueue.ts";
-import { useAgentglass } from "../state/host-context.tsx";
 import { useKeyboardShown } from "../state/use-keyboard.ts";
 import { usePaletteTick } from "../state/use-palette.ts";
-import { useQueue } from "../state/use-queue.ts";
 import { C, ink } from "../theme.ts";
 
 /** The bar's own height, above the gesture inset. */
@@ -73,32 +70,28 @@ const ICONS: Record<Exclude<TabRoute, "now" | "repos" | "settings">,
     tasks: TasksIcon,
   };
 
-/** The count on Home, which is the only badge in the app.
+/*
+ * There is no badge on the bar, and its absence is a decision.
  *
- *  It counts what is WAITING, not what is in the list: "3" next to a tab has to
- *  mean three things want a decision, or it becomes a number people learn to
- *  ignore — and the one thing this app cannot afford is a badge nobody
- *  believes.
+ * There was one, and it counted `waitingItems` — the queue's agent rule, which
+ * calls a session waiting when it has been quiet between four minutes and
+ * twelve hours. The Inbox does not show agents at all now, so that number
+ * would have been counting something no screen in the app displays.
  *
- *  It rode the Now tab, and Now is not a tab any more. It follows the way IN to
- *  Now rather than staying with the list: the band at the top of Home is what
- *  the number is telling you to go and tap. */
-function Badge({ n }: { n: number }): React.ReactNode {
-  if (n <= 0) return null;
-  return (
-    <View style={{
-      position: "absolute", top: -2, right: -12, minWidth: 18, height: 18, paddingHorizontal: 4,
-      borderRadius: 9, backgroundColor: C.error, alignItems: "center", justifyContent: "center",
-    }}>
-      <Text style={{ color: ink(C.error), fontSize: 11, fontWeight: "700" }}>{n > 9 ? "9+" : n}</Text>
-    </View>
-  );
-}
+ * The obvious replacement is the Inbox's own `needs` count, and it is not free.
+ * Pull requests are already on the device (the store fetches them), but issues
+ * and cards are two more requests, and putting them in a component that mounts
+ * on every screen means making them on every screen. A badge built from the
+ * pull requests alone would be cheap and would UNDERCOUNT — silently, by
+ * exactly the rows it could not see — and the one thing this app cannot afford
+ * is a number nobody believes.
+ *
+ * So: no badge, until the Inbox's data lives somewhere the bar can read for
+ * nothing. The Inbox is the first tab and its three tiles are the count.
+ */
 
 export function TabBar({ state, navigation, insets }: BottomTabBarProps): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
-  const { fleet } = useAgentglass();
-  const waiting = waitingItems(useQueue(fleet)).length;
   const keyboard = useKeyboardShown();
 
   /** The stock bar's own press, kept: a screen may listen for `tabPress` and
@@ -182,10 +175,7 @@ export function TabBar({ state, navigation, insets }: BottomTabBarProps): React.
                 opacity: pressed ? 0.6 : 1,
               })}
             >
-              <View>
-                <Icon color={tint} />
-                {dest.route === "index" ? <Badge n={waiting} /> : null}
-              </View>
+              <Icon color={tint} />
               <Text
                 numberOfLines={1}
                 style={{

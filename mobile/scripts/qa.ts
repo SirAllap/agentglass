@@ -54,7 +54,7 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // that were here are not any more, and neither drifted out — Chats was
   // deleted with the conversation UI, and Review was dissolved into the two
   // destinations it used to wrap. Both of those are visited on their own below.
-  { path: "/", name: "Inbox", expect: /On the machine|things want you|Nothing is waiting|Quiet/i },
+  { path: "/", name: "Inbox", expect: /need you|ready to merge|Needs you|Clear|CI failing/i },
   { path: "/now", name: "Now", expect: /waiting on you|Nothing is waiting|Empty/i },
   // Not "Esc". That is on the key bar whatever the terminal is doing, and
   // asserting it is how this screen passed three times while showing nothing —

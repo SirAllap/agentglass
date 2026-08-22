@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Alert, AppState, Linking, Pressable, ScrollView, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import {
   alertsDeliverable, askForAlerts, notificationsSupported, raise,
@@ -182,6 +183,10 @@ export default function SettingsScreen(): React.ReactNode {
    */
   usePaletteTick();
   const { host, live, fleet, forget } = useAgentglass();
+  const router = useRouter();
+  /* Straight off the store: a pending gate is the fact, not an interpretation
+     of one. Same count the terminal's band draws. */
+  const held = fleet.gates.length;
   const [going, setGoing] = useState(false);
   /*
    * Whether an alert can actually be DELIVERED — not whether permission was
@@ -341,6 +346,30 @@ export default function SettingsScreen(): React.ReactNode {
             }}
           />
         ) : null}
+      </Card>
+
+      {/*
+        The three things the Inbox no longer carries.
+
+        Each left it for a reason and each is still one tap away. Repos was a
+        screen that said "Nothing changed here" most days on a machine that
+        works a worktree per pull request, and it was spending a fifth of the
+        bar on that. The queue and the plan are both about AGENTS, and the
+        Inbox is now only about pull requests, issues and cards.
+
+        The queue also has a louder door: a band appears at the bottom of the
+        terminal whenever something is actually held. This row is the one that
+        is always here, for when you want to go and look rather than be told.
+      */}
+      <Card>
+        <Label text="Elsewhere" />
+        <Row name="Held right now" value={held ? `${held} waiting` : "nothing"} />
+        <Btn label="Open the queue" onPress={() => router.push("/now")} />
+        <Btn label="Working tree" onPress={() => router.push("/repos")} />
+        <Note>
+          What an agent is doing is read in the terminal it is running in. The queue is where a
+          stopped one is answered.
+        </Note>
       </Card>
 
       <Look />

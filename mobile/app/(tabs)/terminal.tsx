@@ -35,7 +35,7 @@
 import { useCallback, useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Haptics from "expo-haptics";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
@@ -51,7 +51,8 @@ import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
 
 export default function TerminalScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
-  const { host } = useAgentglass();
+  const { host, fleet } = useAgentglass();
+  const router = useRouter();
   /*
    * The pane is painted by the COMPUTER, so when the computer says which palette
    * that is, the terminal wears it and only the chrome around it wears the
@@ -90,6 +91,11 @@ export default function TerminalScreen(): React.ReactNode {
   const paneColours = { ...paneBase, primary: C.primary, primaryHover: C.primaryHover };
   const insets = useSafeAreaInsets();
   const terminal = useRef<TerminalHandle>(null);
+  /* How many agents are stopped at a gate. Straight off the store's own list
+     rather than through the queue's rules: a pending gate IS the fact — the
+     hook's request is open and nothing proceeds until somebody answers — and
+     it needs no interpretation to be counted. */
+  const held = fleet.gates.length;
 
   /*
    * The strip itself, and not the pane list it came from.
@@ -1103,6 +1109,40 @@ export default function TerminalScreen(): React.ReactNode {
           </View>
         )}
       </View>
+
+      {/*
+        A held gate, and the way to answer it.
+
+        This is the door the Inbox gave up. Approving a command an agent is
+        stopped on is the reason this app exists — it is the only POST a
+        phone paired for "answer" may make — and when agents left the Inbox
+        it was left reachable only from Settings, which is not where anybody
+        would look for it.
+
+        Here, because this is where agents live now: the star is the one
+        surface that shows what an agent is doing, so it is the one that
+        should say when an agent has stopped and is waiting. It draws only
+        when something is actually held, which is what keeps it a signal —
+        the same rule the two strips below follow.
+      */}
+      {held > 0 ? (
+        <Pressable
+          onPress={() => router.push("/now")}
+          accessibilityRole="button"
+          accessibilityLabel={`${held} ${held === 1 ? "agent is" : "agents are"} waiting on you. Opens the queue.`}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: SPACE.sm,
+            paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm,
+            backgroundColor: C.bg2, borderTopWidth: 2, borderTopColor: C.error,
+          }}
+        >
+          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.error }} />
+          <Text style={{ color: C.text, fontSize: T.small, fontWeight: "700", flex: 1 }} numberOfLines={1}>
+            {held === 1 ? "An agent is stopped, waiting on you" : `${held} agents are stopped, waiting on you`}
+          </Text>
+          <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "700" }}>Answer</Text>
+        </Pressable>
+      ) : null}
 
       {/* Said quietly, and only when it is not fine: a status line that is
           always there is one nobody reads when it matters. */}
