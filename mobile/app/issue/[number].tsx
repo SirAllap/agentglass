@@ -18,11 +18,12 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
-import type { IssueDetail, IssuePr, IssuePrsReport } from "../../../shared/types.ts";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import type { IssueDetail, IssuePr, IssuePrsReport, IssueStartResult } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { since } from "../../src/lib/dates.ts";
 import { Btn, Card, Label, Note } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
@@ -48,11 +49,16 @@ function prTone(pr: IssuePr): { word: string; ink: string } {
 export default function IssueScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
+  const router = useRouter();
   const { number, root } = useLocalSearchParams<{ number: string; root: string }>();
+  /* Cutting a branch is a write. A phone paired to answer gates does not get
+     to do it, and the control is not drawn rather than drawn and refused. */
+  const mayWrite = host?.scope === "full";
 
   const [detail, setDetail] = useState<IssueDetail | null>(null);
   const [prs, setPrs] = useState<IssuePr[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
 
   const load = useCallback(async (): Promise<void> => {
     if (!host || !number || !root) return;
@@ -86,15 +92,55 @@ export default function IssueScreen(): React.ReactNode {
     return () => { gone = true; };
   }, [host, number, root]);
 
+  /**
+   * Cut the worktree, then leave the window request for the terminal.
+   *
+   * The prompt is the SERVER's — `startIssue` writes it from the issue it just
+   * read — so this sends back what it was handed rather than composing one. A
+   * phone that wrote its own would be a second place the wording lives.
+   */
+  const start = useCallback(async (): Promise<void> => {
+    if (!host || !detail || !root) return;
+    setStarting(true);
+    setError(null);
+    const answer = await ask<IssueStartResult>(host, "/issues/start", {
+      method: "POST",
+      // `worktree` and not `branch`: a branch switch is refused on a dirty
+      // checkout, and the checkout in question is the one somebody is working
+      // in right now. A worktree is its own directory and cannot disturb it.
+      body: { root, number: detail.number, mode: "worktree" },
+    });
+    setStarting(false);
+    if (!answer.ok) { setError(answer.error); return; }
+    if (!answer.value.ok || !answer.value.cwd) {
+      setError(answer.value.error || "That branch could not be cut.");
+      return;
+    }
+    requestHandoff({
+      t: "tmux",
+      cmd: "issue",
+      cwd: answer.value.cwd,
+      // A tmux window name is an id, findable in `tmux ls`, and the title is
+      // the sentence. They answer different questions and neither replaces the
+      // other — the same split the desktop's own hand-off makes.
+      name: `i${detail.number}`,
+      prompt: answer.value.prompt ?? "",
+      agent: true,
+      title: detail.title,
+    });
+    void load();
+    router.push("/terminal");
+  }, [host, detail, root, router, load]);
+
   const now = Date.now();
   const closed = (detail?.state ?? "").toLowerCase() === "closed";
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: C.bg }}
-      contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}
-    >
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
       <Stack.Screen options={{ title: `#${number}` }} />
+      <ScrollView
+        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}
+      >
 
       {error ? (
         <Card>
@@ -210,6 +256,47 @@ export default function IssueScreen(): React.ReactNode {
           ) : null}
         </>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+
+      {/*
+        The shortest path there is from reading a bug to working on it.
+
+        `/issues/start` cuts the worktree and the branch and hands back a
+        directory and a prompt; the letterbox then opens a tmux window with
+        the agent in it. Two steps rather than one because they are two
+        different failures — a branch that could not be cut is worth saying
+        out loud, and a terminal that has not attached yet is not a reason to
+        have not cut it.
+
+        Only with `full`. It writes to the repository, and a phone paired to
+        answer gates does not get to cut branches — the same rule repos.tsx
+        follows, and the control is not drawn rather than drawn and refused.
+      */}
+      {detail && !detail.work && mayWrite ? (
+        <View style={{
+          paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
+          borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
+        }}>
+          <Btn
+            label="✦ Start with Claude"
+            tone="primary"
+            busy={starting}
+            onPress={() => { void start(); }}
+          />
+        </View>
+      ) : null}
+
+      {detail?.work ? (
+        <View style={{
+          paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
+          borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
+        }}>
+          <Note>
+            Already started as <Text style={{ fontFamily: MONO, color: C.text2 }}>{detail.work.branch}</Text>.
+            Open it in the terminal.
+          </Note>
+        </View>
+      ) : null}
+    </View>
   );
 }

@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
-import { useNavigation } from "expo-router";
+import { useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { ProviderTask } from "../../../shared/providers.ts";
@@ -43,10 +43,11 @@ interface ViewTasks {
   truncated: boolean;
 }
 
-function Row({ task, prefix, onCopied }: {
+function Row({ task, prefix, onCopied, onOpen }: {
   task: ProviderTask;
   prefix: string;
   onCopied: (what: string) => void;
+  onOpen: () => void;
 }): React.ReactNode {
   const when = dueIn(task.due, new Date());
   // The workspace's colour, with a floor: some boards pick a status colour that
@@ -55,7 +56,7 @@ function Row({ task, prefix, onCopied }: {
 
   return (
     <Pressable
-      onPress={() => { if (task.url) void Linking.openURL(task.url); }}
+      onPress={onOpen}
       onLongPress={() => {
         // The id, because it is what every skill, branch name and commit
         // message here is written against — and it is the one thing you cannot
@@ -98,6 +99,7 @@ export default function TasksScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
   const navigation = useNavigation();
+  const router = useRouter();
   const [views, setViews] = useState<ViewsAnswer | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -216,12 +218,13 @@ export default function TasksScreen(): React.ReactNode {
             task={item}
             prefix={views?.prefix ?? ""}
             onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
+            onOpen={() => router.push({ pathname: "/card/[id]", params: { id: item.id } })}
           />
         )}
       />
 
       <View style={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}>
-        <Note>Tap opens the card. Hold copies its id.</Note>
+        <Note>Tap opens the card here. Hold copies its id.</Note>
       </View>
     </View>
   );
