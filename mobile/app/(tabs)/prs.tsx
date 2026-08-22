@@ -12,8 +12,8 @@
  * moment.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
-import { useNavigation } from "expo-router";
+import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
+import { useNavigation, useRouter } from "expo-router";
 import type { GitRepoRef, PrSummary } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
@@ -84,11 +84,15 @@ function Chip({ text, ink }: { text: string; ink: string }): React.ReactNode {
   );
 }
 
-function Row({ pr, now }: { pr: PrSummary; now: number }): React.ReactNode {
+function Row({ pr, now, onOpen }: {
+  pr: PrSummary;
+  now: number;
+  onOpen: () => void;
+}): React.ReactNode {
   const checks = checkChip(pr);
   const review = reviewChip(pr);
   return (
-    <Pressable onPress={() => { if (pr.url) void Linking.openURL(pr.url); }}>
+    <Pressable onPress={onOpen} accessibilityRole="button">
       <Card style={{ gap: SPACE.sm }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
           <Text style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>#{pr.number}</Text>
@@ -122,6 +126,7 @@ export default function PrsScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
   const navigation = useNavigation();
+  const router = useRouter();
   const [repos, setRepos] = useState<GitRepoRef[] | null>(null);
   const [root, setRoot] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -289,7 +294,18 @@ export default function PrsScreen(): React.ReactNode {
             </Card>
           )
         }
-        renderItem={({ item }) => <Row pr={item} now={now} />}
+        renderItem={({ item }) => (
+          <Row
+            pr={item}
+            now={now}
+            // The object form, not a built string: a checkout path is full of
+            // characters a URL segment has opinions about, and `root` is one.
+            onOpen={() => router.push({
+              pathname: "/pr/[number]",
+              params: { number: String(item.number), root: root ?? "" },
+            })}
+          />
+        )}
       />
     </View>
   );

@@ -43,6 +43,7 @@ import { useDeskPalette, usePaletteTick } from "../../src/state/use-palette.ts";
 import { TerminalView, type TerminalHandle, type TerminalState } from "../../src/terminal/TerminalView.tsx";
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
+import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { bestSession, readStrip, sessionsOf, type Tab } from "../../src/terminal/tabs.ts";
 import type { PanesResponse } from "../../../shared/types.ts";
 import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
@@ -577,9 +578,56 @@ export default function TerminalScreen(): React.ReactNode {
     terminal.current?.send(bytes);
   }, []);
 
+  /**
+   * Deliver whatever another screen left in the letterbox.
+   *
+   * Called from two places on purpose, because there are two orders these
+   * events arrive in and both happen. Press the button with the terminal
+   * already attached and the request is left AFTER the socket exists, so the
+   * subscription below is what delivers it; press it having never opened this
+   * tab and the socket comes up second, so `onState` going `live` is.
+   *
+   * `takeHandoff` empties the slot, so whichever of the two gets there first
+   * wins and the other finds nothing. That is the whole of the de-duplication:
+   * a window-opening frame sent twice is two windows.
+   */
+  const deliver = useCallback((): void => {
+    if (!terminal.current) return;
+    const frame = takeHandoff();
+    if (!frame) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setOpening(true);
+    setError(null);
+    terminal.current.command(frame);
+    /*
+     * The same deadline the `+` carries, and for the same reason written over
+     * it: the server can decline silently, and a spinner with no way out is
+     * worse than a refusal. Eight seconds is `new-window` on a local tmux plus
+     * a phone radio waking up.
+     */
+    if (openTimer.current) clearTimeout(openTimer.current);
+    openTimer.current = setTimeout(() => {
+      openTimer.current = null;
+      setOpening((waiting) => {
+        if (waiting) setError("The computer did not answer about that window.");
+        return false;
+      });
+    }, 8000);
+  }, []);
+
+  // A request left while this screen is already up. The socket may not be open
+  // yet — `deliver` reads the ref, and a frame sent into a closed socket is
+  // dropped by `command()`, so the guard is that this only fires on arrival and
+  // `onState` covers the other order.
+  useFocusEffect(useCallback(() => onHandoff(() => {
+    if (state === "live") deliver();
+  }), [deliver, state]));
+
   const onState = useCallback((next: TerminalState, detail?: string): void => {
     setState(next);
     setWhy(detail ?? null);
+    // A socket that has just come up is the moment a waiting request can go.
+    if (next === "live") deliver();
     /*
      * And the switch goes off with the socket that was holding it.
      *
@@ -603,7 +651,7 @@ export default function TerminalScreen(): React.ReactNode {
      * happens when somebody is looking rather than in a pocket.
      */
     if (next === "gone") setFit(false);
-  }, []);
+  }, [deliver]);
 
   /*
    * The pane's input line, as the page reads it off the screen.

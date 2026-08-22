@@ -64,6 +64,11 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   { path: "/terminal", name: "Terminal", pane: true,
     expect: /Attaching|Disconnected|Nothing open|Looking|·p\d|^\s*\d+ /im },
   { path: "/prs", name: "PRs", expect: /My review|Nothing open|Cannot ask GitHub/i },
+  // The detail is reached with two params and nothing else knows them, so this
+  // walks it directly. `#0` is not a pull request anywhere, which is the point:
+  // what is asserted is that the screen mounts and SAYS it could not read it,
+  // rather than rendering a blank on a number that does not exist.
+  { path: "/pr/0?root=%2Ftmp", name: "PR detail", expect: /Cannot read it|could not be read|out of scope|not a git repository/i },
   // The screen this app never had. `Mine` is its own filter row rather than a
   // row of results, so it holds whether or not the repository has any issues —
   // which is the point: the failure this catches is the screen not mounting.
