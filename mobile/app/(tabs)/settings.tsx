@@ -9,18 +9,23 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, AppState, Linking, Pressable, ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useAgentglass } from "../../src/state/host-context.tsx";
+import { useUsage } from "../../src/state/use-usage.ts";
+import {
+  ageLabel, planState, quotaTone, remainingOf, resetLabel, tightestWindow,
+} from "../../src/model/quota.ts";
 import {
   alertsDeliverable, askForAlerts, notificationsSupported, raise,
   type Blocked, type Delivery,
 } from "../../src/notifications/notify.ts";
 import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
+import { ChevronIcon, NowIcon, ReposIcon, type IconProps } from "../../src/nav/icons.tsx";
 import {
-  ACCENTS, C, MONO, RADIUS, SPACE, T, currentLook, ink, setLook,
+  ACCENTS, C, MONO, RADIUS, SPACE, T, currentLook, ink, setLook, toneColor,
   type AccentId, type ThemeMode,
 } from "../../src/theme.ts";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { accentFor } from "../../../shared/palettes.ts";
-import type { DeviceScope } from "../../../shared/types.ts";
+import type { DeviceScope, QuotaWindow } from "../../../shared/types.ts";
 
 /** The same three words the Remote pane uses, so the phone and the computer
  *  describe one grant the same way. */
@@ -68,6 +73,183 @@ function Row({ name, value }: { name: string; value: string }): React.ReactNode 
         {value}
       </Text>
     </View>
+  );
+}
+
+/** One window, as a bar of what is LEFT of it.
+ *
+ *  Left, not used, and the direction is the point: the question anybody has in
+ *  front of this number is "can I start a long one", and a bar that fills up as
+ *  you work answers the opposite one. A window with nothing left draws no bar at
+ *  all, because the single thing this must never do is overstate what is there. */
+function Meter({ label, window: w, now }: {
+  label: string;
+  window: QuotaWindow;
+  now: number;
+}): React.ReactNode {
+  const left = remainingOf(w);
+  const tint = toneColor(quotaTone(w.usedPercent));
+  const resets = resetLabel(w.resetsAt, now);
+  return (
+    <View
+      accessibilityRole="text"
+      accessibilityLabel={`${label}: ${left}% left${resets ? `, resets ${resets}` : ""}`}
+      style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
+    >
+      <Text style={{ color: C.text4, fontSize: T.eyebrow, width: 62 }} numberOfLines={1}>{label}</Text>
+      <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: C.bg, overflow: "hidden" }}>
+        {left > 0 ? (
+          <View style={{ width: `${left}%`, height: "100%", borderRadius: 3, backgroundColor: tint }} />
+        ) : null}
+      </View>
+      <Text style={{
+        color: tint, fontSize: T.small, fontWeight: "600", width: 42, textAlign: "right",
+      }}>{left}%</Text>
+    </View>
+  );
+}
+
+/**
+ * What is left of the plan.
+ *
+ * ── why it is here and not on the Inbox ──────────────────────────────────
+ * Because it is about AGENTS, and the Inbox is now only about pull requests,
+ * issues and cards. It is also not news: a five-hour window moves in percents
+ * per hour, so it has no business on a screen whose whole job is "what changed
+ * since you last looked". It is a thing you go and check before starting
+ * something long, which is what this screen is for.
+ *
+ * ── the headline ─────────────────────────────────────────────────────────
+ * The window closest to running out, across every provider, stated once at full
+ * size rather than left for the eye to find among the bars. That is what
+ * actually stops a long turn — the tightest window, not the average of them.
+ *
+ * ── four states, and none of them collapsed ──────────────────────────────
+ * The expensive one is "could not reach the computer", which must never be
+ * drawn as an empty bar: a phone off the network would otherwise report the
+ * plan as spent, and that is the one error that would change what you do.
+ * `planState` in model/quota.ts is what keeps the four apart.
+ *
+ * Its own component, holding its own hook, so the five-minute poll and the
+ * minute tick repaint this card and not the seven cards around it.
+ */
+function PlanCard(): React.ReactNode {
+  const { rows, loaded, error, reload } = useUsage();
+  /* A minute, because every label under this is minute-granular: "in 1h 44m"
+     and "12m old" are both wrong the moment the clock they were computed
+     against is. The usage poll is five minutes apart and cannot carry this —
+     it moves the numbers, not the reading of them. */
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const state = planState(loaded, rows);
+  // Nothing is more honest than nothing, for one poll.
+  if (state === "loading") return null;
+  const top = tightestWindow(rows);
+  /* Only worth naming the provider on each bar when more than one is
+     reporting. On a machine with Claude alone, "Claude 5h" on every row is one
+     word of signal and one of furniture. */
+  const providers = (rows ?? []).filter((r) => r.available).length;
+
+  return (
+    <Card>
+      <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <Label text="Plan left" />
+        <View style={{ flex: 1 }} />
+        {/* The age belongs beside the number it qualifies. The computer holds
+            an Anthropic reading for fifteen minutes and keeps serving the last
+            good one for up to a day while that endpoint rate-limits, so a stale
+            percentage looks exactly like a live one unless it says so. */}
+        {top ? (
+          <Text style={{ color: C.text4, fontSize: T.eyebrow }}>{ageLabel(top.observedAt, now)}</Text>
+        ) : null}
+      </View>
+
+      {state === "unreachable" ? (
+        <Note tone="bad">{error ?? "The computer did not answer about the plan."}</Note>
+      ) : null}
+      {state === "empty" ? (
+        <Note>No agent on this computer reports a plan quota.</Note>
+      ) : null}
+
+      {top ? (
+        <View style={{ flexDirection: "row", alignItems: "baseline", gap: SPACE.sm }}>
+          <Text style={{
+            color: toneColor(quotaTone(top.window.usedPercent)),
+            fontSize: 30, fontWeight: "700", lineHeight: 36,
+          }}>{remainingOf(top.window)}%</Text>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={{ color: C.text2, fontSize: T.small }} numberOfLines={1}>
+              left of {top.provider} · {top.window.label}
+            </Text>
+            {top.window.resetsAt ? (
+              <Text style={{ color: C.text4, fontSize: T.eyebrow }} numberOfLines={1}>
+                resets {resetLabel(top.window.resetsAt, now)}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
+      {(rows ?? []).filter((r) => r.available).map((row) => (
+        row.windows.map((w) => (
+          <Meter
+            key={`${row.provider}:${w.label}`}
+            label={providers > 1 ? `${row.label} ${w.label}` : w.label}
+            window={w}
+            now={now}
+          />
+        ))
+      ))}
+
+      {/* Only on the failure. The poll comes back by itself every five minutes
+          and again on the way into the app, so a button here is for the one
+          case where waiting five minutes to find out whether the wifi came
+          back is the wrong offer. */}
+      {state === "unreachable" ? <Btn label="Ask again" onPress={reload} /> : null}
+    </Card>
+  );
+}
+
+/**
+ * A row that goes somewhere, as against `Row`, which only says a number.
+ *
+ * It carries the destination's own mark. Now and Repos were tabs until the bar
+ * became pull requests, issues and cards; their icons were drawn for that bar
+ * and the arguments over them — a ring that is not a bell, a folder that shares
+ * its silhouette with nothing — are written in src/nav/icons.tsx. The screens
+ * did not stop existing when the bar stopped offering them, and a destination
+ * that keeps its mark is one you recognise on the way back to it.
+ *
+ * A chevron rather than a button, because these two are not actions: nothing
+ * here happens when you press it except arriving somewhere, which is what a row
+ * with an arrow on the end has always meant.
+ */
+function Go({ mark: Mark, name, value, onPress }: {
+  mark: (props: IconProps) => React.ReactNode;
+  name: string;
+  value?: string;
+  onPress: () => void;
+}): React.ReactNode {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexDirection: "row", alignItems: "center", gap: SPACE.md,
+        minHeight: TAP, opacity: pressed ? 0.6 : 1,
+      })}
+    >
+      <Mark color={C.text3} size={19} />
+      <Text style={{ color: C.text, fontSize: T.body, flex: 1 }}>{name}</Text>
+      {value ? (
+        <Text style={{ color: C.text3, fontSize: T.small, fontFamily: MONO }}>{value}</Text>
+      ) : null}
+      <ChevronIcon color={C.text4} size={17} />
+    </Pressable>
   );
 }
 
@@ -355,7 +537,8 @@ export default function SettingsScreen(): React.ReactNode {
         screen that said "Nothing changed here" most days on a machine that
         works a worktree per pull request, and it was spending a fifth of the
         bar on that. The queue and the plan are both about AGENTS, and the
-        Inbox is now only about pull requests, issues and cards.
+        Inbox is now only about pull requests, issues and cards — so the queue
+        is a row here and the plan is the card under this one.
 
         The queue also has a louder door: a band appears at the bottom of the
         terminal whenever something is actually held. This row is the one that
@@ -363,14 +546,24 @@ export default function SettingsScreen(): React.ReactNode {
       */}
       <Card>
         <Label text="Elsewhere" />
-        <Row name="Held right now" value={held ? `${held} waiting` : "nothing"} />
-        <Btn label="Open the queue" onPress={() => router.push("/now")} />
-        <Btn label="Working tree" onPress={() => router.push("/repos")} />
+        {/* The count is ON the row rather than above it. Two lines saying
+            "Held right now: 3 waiting" and then "Open the queue" are one
+            thought split in half, and the half with the number is the half
+            that decides whether you press the other one. */}
+        <Go
+          mark={NowIcon}
+          name="The queue"
+          value={held ? `${held} waiting` : "nothing"}
+          onPress={() => router.push("/now")}
+        />
+        <Go mark={ReposIcon} name="Working tree" onPress={() => router.push("/repos")} />
         <Note>
           What an agent is doing is read in the terminal it is running in. The queue is where a
           stopped one is answered.
         </Note>
       </Card>
+
+      <PlanCard />
 
       <Look />
 

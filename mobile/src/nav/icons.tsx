@@ -8,16 +8,19 @@
  * have no mark at all until you read the label under them.
  *
  * They are drawn in the desk rail's coordinate system — a 24-unit box, see
- * web/src/components/workspace/icons.tsx — and most of them are that rail's own
- * shapes, unaltered. A pull request should not be one thing on the computer and
- * a different one in your hand. Of the eight below, six are the rail's
- * (Home/DashIcon, Chats, Terminal, Prs, Repos/FilesIcon, Tasks/IssuesIcon) and
- * two are the phone's own, each for a reason written over it.
+ * web/src/components/workspace/icons.tsx — and several of them are that rail's
+ * own shapes, unaltered. A pull request should not be one thing on the computer
+ * and a different one in your hand. Of the ten below, four are the rail's
+ * (Terminal, Prs, Repos/FilesIcon, Tasks/IssuesIcon), one is GitHub's own
+ * (Issues), and the rest are the phone's, each for a reason written over it.
  *
- * They live here rather than in the tab layout because the bar stopped being
- * the only thing that draws them: Home's band wears the Now ring, Home's header
- * wears the faders, and Review's segmented control wears the pull request and
- * the checklist. Six of these eight are now used somewhere that is not a tab.
+ * They live here rather than in the tab layout because the bar is not what
+ * draws most of them. Exactly five of the ten are tabs — Inbox, Prs, Terminal,
+ * Issues, Tasks. The other five are somewhere else entirely: the faders and the
+ * way back are in the header the tab layout puts over a pushed screen, the
+ * chevron is on every Inbox row, and the ring and the folder are the two rows
+ * in Settings ▸ Elsewhere, which is where Now and Repos went when the bar
+ * became pull requests, issues and cards.
  */
 // Expo Go carries react-native-svg, which is the only reason it may be
 // imported at the top of a file the router reaches. See
@@ -59,8 +62,14 @@ const box = (size: number): { width: number; height: number } => ({ width: size,
  *
  * Not a bell. The screen it opens argues at some length that it is a queue you
  * can empty rather than a notifications inbox, and a bell would promise exactly
- * the thing the list refuses to be. A ring also carries the badge better than
- * any other shape here: the count sits in empty space.
+ * the thing the list refuses to be — and a bell with nothing on it is a bell
+ * that has already told you something, which is the one thing this must not
+ * say when the queue is empty.
+ *
+ * It is off the bar now and marks a row in Settings, where the count sits
+ * BESIDE it rather than on it. There is no badge anywhere in this app and its
+ * absence is argued in src/nav/TabBar.tsx: a number the bar cannot recompute on
+ * every screen is a number that goes stale on every screen but one.
  */
 export function NowIcon({ color, size = 20 }: IconProps): React.ReactNode {
   return (
