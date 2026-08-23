@@ -23,17 +23,20 @@
  * lives in the model (see canHide) and this screen simply does not draw the
  * switch.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { Stack } from "expo-router";
 import { usePaletteTick } from "../src/state/use-palette.ts";
 import { ACCESSORY_KEYS } from "../src/terminal/keys.ts";
 import { canHide, move, reset, rows, toggle } from "../src/terminal/keyLayout.ts";
 import {
-  COLUMNS, keyLayout, onTermPrefs, setKeyLayout, setTermAssist, setTermColumns, termAssist,
-  termColumns,
+  MAX_CUSTOM, add, bytesFor, mintId, problemWith, remove,
+} from "../src/terminal/customKeys.ts";
+import {
+  COLUMNS, customKeys, keyLayout, onTermPrefs, setCustomKeys, setKeyLayout, setTermAssist,
+  setTermColumns, termAssist, termColumns,
 } from "../src/terminal/termPrefs.ts";
-import { Btn, Note, Section, Segmented, TAP, Toggle, groupEdge } from "../src/ui.tsx";
+import { Btn, Field, Note, Section, Segmented, TAP, Toggle, groupEdge } from "../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../src/theme.ts";
 
 export default function TerminalSettingsScreen(): React.ReactNode {
@@ -44,8 +47,16 @@ export default function TerminalSettingsScreen(): React.ReactNode {
   const [layout, setLocal] = useState(keyLayout);
   const [cols, setCols] = useState(termColumns);
   const [assist, setAssist] = useState(termAssist);
+  /* The half-written key. Local to this screen: nothing is stored until it is
+     added, so leaving with a field half-filled loses a draft rather than
+     putting a broken key on somebody's bar. */
+  const [label, setLabel] = useState("");
+  const [text, setText] = useState("");
+  const [enter, setEnter] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => onTermPrefs(() => {
     setLocal(keyLayout()); setCols(termColumns()); setAssist(termAssist());
+    setMine(customKeys());
   }), []);
 
   const change = useCallback((next: ReturnType<typeof keyLayout>): void => {
@@ -53,7 +64,14 @@ export default function TerminalSettingsScreen(): React.ReactNode {
     setLocal(next);
   }, []);
 
-  const list = rows(layout, ACCESSORY_KEYS);
+  const [mine, setMine] = useState(customKeys);
+  /* The same catalogue the bar builds, so what is arranged here is what is
+     drawn there. */
+  const catalogue = useMemo(() => [
+    ...ACCESSORY_KEYS,
+    ...mine.map((k) => ({ id: k.id, label: k.label, bytes: bytesFor(k), spoken: k.label })),
+  ], [mine]);
+  const list = rows(layout, catalogue);
   const shownCount = list.filter((r) => r.shown).length;
 
   return (
@@ -103,7 +121,7 @@ export default function TerminalSettingsScreen(): React.ReactNode {
       <Section
         label="The key bar"
         note={
-          `${shownCount} of ${ACCESSORY_KEYS.length} keys are on the bar. About seven reach the fold `
+          `${shownCount} of ${catalogue.length} keys are on the bar. About seven reach the fold `
           + "on a 360dp phone; the rest are a drag away, so what is worth putting first is whatever "
           + "you reach for without looking."
         }
@@ -157,23 +175,23 @@ export default function TerminalSettingsScreen(): React.ReactNode {
                     label="Move earlier"
                     glyph="↑"
                     disabled={i === 0}
-                    onPress={() => change(move(layout, ACCESSORY_KEYS, row.key.id, -1))}
+                    onPress={() => change(move(layout, catalogue, row.key.id, -1))}
                   />
                   <Arrow
                     label="Move later"
                     glyph="↓"
                     disabled={i === shownCount - 1}
-                    onPress={() => change(move(layout, ACCESSORY_KEYS, row.key.id, 1))}
+                    onPress={() => change(move(layout, catalogue, row.key.id, 1))}
                   />
                 </>
               ) : null}
 
               <Pressable
-                onPress={() => change(toggle(layout, ACCESSORY_KEYS, row.key.id))}
+                onPress={() => change(toggle(layout, catalogue, row.key.id))}
                 // Not drawn as a dead switch: the last key on the bar is the
                 // one thing here that cannot be turned off, and a control that
                 // refuses silently teaches nothing.
-                disabled={row.shown && !canHide(layout, ACCESSORY_KEYS, row.key.id)}
+                disabled={row.shown && !canHide(layout, catalogue, row.key.id)}
                 accessibilityRole="switch"
                 accessibilityState={{ checked: row.shown }}
                 accessibilityLabel={`${row.key.spoken} on the bar`}
@@ -192,6 +210,93 @@ export default function TerminalSettingsScreen(): React.ReactNode {
             </View>
           );
         })}
+      </Section>
+
+      <Section
+        label="Your own keys"
+        note={
+          "A key that sends whatever you give it. Most of what is worth a button on a phone is not "
+          + "a control code — it is `git status`, `/clear`, or the one long command this project "
+          + "needs. Sending a Return after it is the difference between writing the command and "
+          + "running it."
+        }
+      >
+        {mine.length === 0 ? <Note>None yet.</Note> : null}
+        {mine.map((k) => (
+          <View
+            key={k.id}
+            style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, minHeight: TAP }}
+          >
+            <View style={{
+              minWidth: 46, height: 30, alignItems: "center", justifyContent: "center",
+              borderRadius: RADIUS.sm, backgroundColor: C.bg3,
+              borderWidth: 1, borderColor: C.border2, paddingHorizontal: SPACE.sm,
+            }}>
+              <Text style={{ color: C.text2, fontSize: T.small, fontFamily: MONO }}>{k.label}</Text>
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text numberOfLines={1} style={{ color: C.text2, fontSize: T.small, fontFamily: MONO }}>
+                {k.text}
+              </Text>
+              <Text style={{ color: C.text4, fontSize: T.eyebrow }}>
+                {k.enter ? "and runs it" : "puts it on the line"}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => { const next = remove(mine, k.id); setCustomKeys(next); setMine(next); }}
+              accessibilityRole="button"
+              accessibilityLabel={`Delete the ${k.label} key`}
+              style={({ pressed }) => ({
+                width: 40, height: TAP, alignItems: "center", justifyContent: "center",
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Text style={{ color: C.error, fontSize: T.body }}>×</Text>
+            </Pressable>
+          </View>
+        ))}
+
+        {mine.length < MAX_CUSTOM ? (
+          <View style={{ gap: SPACE.sm, paddingTop: SPACE.sm }}>
+            <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+              <Field
+                value={label}
+                onChangeText={setLabel}
+                placeholder="Key"
+                kind="code"
+                style={{ width: 92 }}
+              />
+              <Field
+                value={text}
+                onChangeText={setText}
+                placeholder="What it sends"
+                kind="code"
+                style={{ flex: 1 }}
+              />
+            </View>
+            <Toggle
+              on={enter}
+              label={enter ? "And press Return" : "Leave it on the line"}
+              onPress={() => setEnter((v) => !v)}
+            />
+            {problem ? <Note tone="bad">{problem}</Note> : null}
+            <Btn
+              label="Add it"
+              disabled={!label.trim() || !text}
+              onPress={() => {
+                const made = { id: mintId(Date.now(), Math.random()), label, text, enter };
+                const why = problemWith(made);
+                if (why) { setProblem(why); return; }
+                const next = add(mine, made);
+                setCustomKeys(next);
+                setMine(next);
+                setLabel(""); setText(""); setEnter(false); setProblem(null);
+              }}
+            />
+          </View>
+        ) : (
+          <Note>{MAX_CUSTOM} is the most. Past a dozen, scrolling the bar is the problem again.</Note>
+        )}
       </Section>
 
       <Section

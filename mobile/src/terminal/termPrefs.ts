@@ -20,6 +20,7 @@
  * preference could not be read — is a terminal you cannot type Escape into.
  */
 import { DEFAULT_LAYOUT, parse, serialise, type KeyLayout } from "./keyLayout.ts";
+import { parseCustom, type CustomKey } from "./customKeys.ts";
 
 const KEY = "agentglass.term.v1";
 
@@ -72,6 +73,10 @@ interface Prefs {
   layout: KeyLayout;
   columns: number;
   assist: boolean;
+  /** Keys somebody added. See customKeys.ts for the rules; this only stores
+   *  them, and reads them back through the same parser so a value written by
+   *  an older build cannot reach the bar malformed. */
+  custom: CustomKey[];
 }
 
 /** The one module read here, required lazily and by a literal name.
@@ -94,12 +99,13 @@ function keystore(): KeystoreModule | null {
   }
 }
 
-let prefs: Prefs = { layout: DEFAULT_LAYOUT, columns: DEFAULT_COLUMNS, assist: false };
+let prefs: Prefs = { layout: DEFAULT_LAYOUT, columns: DEFAULT_COLUMNS, assist: false, custom: [] };
 const listeners = new Set<() => void>();
 
 export const keyLayout = (): KeyLayout => prefs.layout;
 export const termColumns = (): number => prefs.columns;
 export const termAssist = (): boolean => prefs.assist;
+export const customKeys = (): CustomKey[] => prefs.custom;
 
 /** Told, rather than polled. The terminal and the settings screen are both on
  *  screen at different times and neither owns the value. */
@@ -124,6 +130,10 @@ export function setTermAssist(on: boolean): void {
   save({ ...prefs, assist: on });
 }
 
+export function setCustomKeys(next: CustomKey[]): void {
+  save({ ...prefs, custom: next });
+}
+
 function save(next: Prefs): void {
   prefs = next;
   for (const fn of [...listeners]) fn();
@@ -131,6 +141,7 @@ function save(next: Prefs): void {
     layout: JSON.parse(serialise(next.layout)) as unknown,
     columns: next.columns,
     assist: next.assist,
+    custom: next.custom,
   }))
     .catch(() => {
       // The choice stays live for this run. Refusing the change instead would
@@ -151,12 +162,14 @@ void (async () => {
   try {
     const raw = await keystore()?.getItemAsync(KEY);
     if (!raw) return;
-    const stored = JSON.parse(raw) as { layout?: unknown; columns?: unknown; assist?: unknown };
+    const stored = JSON.parse(raw) as {
+      layout?: unknown; columns?: unknown; assist?: unknown; custom?: unknown;
+    };
     const layout = parse(stored.layout ? JSON.stringify(stored.layout) : null);
     const columns = typeof stored.columns === "number"
       && COLUMNS.includes(stored.columns as typeof COLUMNS[number])
       ? stored.columns : DEFAULT_COLUMNS;
-    prefs = { layout, columns, assist: stored.assist === true };
+    prefs = { layout, columns, assist: stored.assist === true, custom: parseCustom(stored.custom) };
     for (const fn of [...listeners]) fn();
   } catch {
     // Left at the default, which is a working bar.

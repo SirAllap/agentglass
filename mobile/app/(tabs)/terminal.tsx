@@ -46,8 +46,9 @@ import { TerminalView, type TerminalHandle, type TerminalState } from "../../src
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
 import { apply as applyKeyLayout } from "../../src/terminal/keyLayout.ts";
 import {
-  keyLayout, onTermPrefs, setTermColumns, termAssist, termColumns,
+  customKeys, keyLayout, onTermPrefs, setTermColumns, termAssist, termColumns,
 } from "../../src/terminal/termPrefs.ts";
+import { bytesFor } from "../../src/terminal/customKeys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon } from "../../src/nav/icons.tsx";
@@ -422,8 +423,20 @@ export default function TerminalScreen(): React.ReactNode {
   const [past, setPast] = useState<AgentSessionRow[] | null>(null);
   useEffect(() => onTermPrefs(() => {
     setBar(keyLayout()); setColumns(termColumns()); setAssist(termAssist());
+    setMine(customKeys());
   }), []);
-  const keys = useMemo(() => applyKeyLayout(bar, ACCESSORY_KEYS), [bar]);
+  const [mine, setMine] = useState(customKeys);
+  /* Custom keys ride at the END of the catalogue rather than being merged into
+     it, so the layout's order still describes the built-ins it was written
+     against — and a key added today does not push somebody's arrangement
+     around. They are AccessoryKeys like any other from here on: same width,
+     same repeat rule (never), same bar. */
+  const keys = useMemo(() => applyKeyLayout(bar, [
+    ...ACCESSORY_KEYS,
+    ...mine.map((k) => ({
+      id: k.id, label: k.label, bytes: bytesFor(k), spoken: k.label,
+    })),
+  ]), [bar, mine]);
   /** The deadline on that spinner. A ref because it is cleared from a callback
    *  that must not re-run when it changes. */
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
