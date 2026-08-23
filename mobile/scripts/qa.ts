@@ -83,6 +83,10 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // The job list, which is a `read` route — so unlike every other write on the
   // detail screens, this one has to hold under the default pairing scope.
   { path: "/pr/checks?number=0&root=%2Ftmp", name: "PR checks", expect: /Cannot read them|could not be read|out of scope|No jobs|not a git repository/i },
+  // Walked at the workspace root rather than a nonsense one: this is a `read`
+  // screen whose whole job is to LIST, and an empty listing would pass a check
+  // that a broken one also passes. `bin` is in every checkout this repo has.
+  { path: "/files?root=%2Fhome%2Fuser%2Fagentglass", name: "Files", expect: /mobile|server|shared|Cannot read it|empty/i },
   { path: "/card/nope", name: "Card detail", expect: /Cannot read it|could not be read|not connected|no card/i },
   { path: "/settings", name: "Settings", expect: /Paired with|This phone may/i },
 ];

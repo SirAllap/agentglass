@@ -24,7 +24,7 @@ import type { GitCommit, GitFileStatus, GitRepoRef, PrBranchSummary, RepoStatus 
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Btn, Card, Label, Note, Segmented, groupEdge } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Segmented, TAP, groupEdge } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 import { useRouter } from "expo-router";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
@@ -269,6 +269,24 @@ export default function ReposScreen(): React.ReactNode {
             { id: "pr" as const, label: "Pull request" },
           ]}
         />
+        {/* Browsing the checkout, from the screen that already knows which one
+            you are in. It is not a fourth segment: the other three are views of
+            the same question — what has changed here — and a file browser is a
+            different errand that happens to start from the same place. */}
+        <Pressable
+          onPress={() => router.push({ pathname: "/files", params: { root: root ?? "" } })}
+          disabled={!root}
+          accessibilityRole="button"
+          style={({ pressed }) => ({
+            flexDirection: "row", alignItems: "center", gap: SPACE.sm,
+            minHeight: TAP, opacity: !root ? 0.4 : pressed ? 0.6 : 1,
+          })}
+        >
+          <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>
+            Browse the files
+          </Text>
+          <ChevronIcon color={C.primary} size={15} />
+        </Pressable>
       </View>
 
       {said ? (
