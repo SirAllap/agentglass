@@ -14,7 +14,7 @@
  * shell down with it.
  *
  * So bytes cross the bridge in both directions:
- *   RN → page   `AGX.write(<base64>)`, injected.
+ *   RN → page   `AGX.write(<base64>)` / `AGX.writeMany([<base64>…])`, injected.
  *   page → RN   `postMessage` with a small JSON envelope.
  *
  * Base64 and not text: a PTY frame is raw bytes, and decoding it as UTF-8 on
@@ -311,6 +311,45 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
   }
 
   term.open(document.getElementById('screen'));
+
+  /*
+   * The GPU renderer, and what happens when the phone takes it away.
+   *
+   * Without this xterm draws every cell as DOM. That is the slowest of its
+   * three renderers by a wide margin and it is the one this app shipped with:
+   * on a pane running a build, the cost of repainting the DOM was most of what
+   * made the terminal feel like it was struggling.
+   *
+   * Loaded AFTER open(), which is not a style choice — the addon needs the
+   * canvas that open() creates, and constructing it before there is one throws.
+   *
+   * ── the loss, which is the part that has to be handled ──────────────────
+   * A phone revokes WebGL contexts. Backgrounding the app, memory pressure, a
+   * second WebView asking for one: any of those can drop it, and a dropped
+   * context with nothing listening leaves a terminal that has stopped painting
+   * while still accepting bytes — the worst failure available here, because it
+   * looks exactly like a hung pane and it is not.
+   *
+   * So the loss is caught and the addon is disposed. xterm falls back to the
+   * DOM renderer on its own once that happens, which is slow and correct, and
+   * slow-and-correct beats fast-and-blank every time. It is not re-attached:
+   * a context that was taken once under memory pressure will be taken again,
+   * and a loop of losing and re-acquiring is worse than the fallback.
+   */
+  var gpu = null;
+  try {
+    gpu = new window.WebglAddon();
+    gpu.onContextLoss(function () {
+      try { gpu.dispose(); } catch (e) { /* already gone */ }
+      gpu = null;
+    });
+    term.loadAddon(gpu);
+  } catch (e) {
+    // No WebGL on this device, or the addon refused. The DOM renderer is what
+    // was here before this block existed, so this is the old behaviour rather
+    // than a failure — nothing is reported and nothing is retried.
+    gpu = null;
+  }
 
   // Everything typed on the device keyboard, plus everything the key bar sends
   // through AGX.send — one path out, so there is one place that can be wrong.
@@ -1315,6 +1354,25 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     // parser has taken the data in, which is the moment the typed line can have
     // changed — no paint required, and no finger.
     write: function (b64) { term.write(bytes(b64), arrived); },
+    /*
+     * Several frames, one crossing of the bridge.
+     *
+     * The app batches at about 20Hz — see src/terminal/writeCoalescer.ts for
+     * the window and the measurement. Each frame is still written on its own
+     * because base64 quanta cannot be concatenated and still decode; what is
+     * saved is the injection, which is the expensive half.
+     *
+     * The completion callback goes on the LAST one only. "arrived" re-reads the
+     * line, answers probes and re-dresses the chrome, and doing that once per
+     * frame in a batch of forty is the cost this was meant to remove.
+     */
+    writeMany: function (list) {
+      if (!list || !list.length) return;
+      for (var i = 0; i < list.length; i++) {
+        if (i === list.length - 1) term.write(bytes(list[i]), arrived);
+        else term.write(bytes(list[i]));
+      }
+    },
     /** The key bar. Goes through onData so the app cannot end up with two
      *  different ideas of what was sent. */
     send: function (text) { post({ t: 'in', d: text }); },

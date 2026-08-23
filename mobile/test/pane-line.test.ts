@@ -23,7 +23,29 @@ import { terminalDocument, terminalTheme } from "../src/terminal/terminal-html.t
 import { paletteFor } from "../../shared/palettes.ts";
 import { C } from "../src/theme.ts";
 
-const CHROME = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+/*
+ * Where to find a browser, in the order it is worth looking.
+ *
+ * `$CHROME` first, and that is the entry that matters: every one of the paths
+ * below is a DESKTOP install, and the machines this most needs to run on are
+ * containers — CI, and an agent's workspace — where the browser is wherever
+ * the image put it. Without an override the whole file skipped there, silently
+ * and in green, which is the worst way for the only tests that drive a real
+ * terminal to be absent. They were 34 skips on a machine that had a perfectly
+ * good Chromium a directory away.
+ *
+ * scripts/qa.ts reads the same variable for the same reason.
+ */
+const CHROME = [
+  process.env.CHROME,
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  // What Playwright's own installer lays down. Present in most CI images that
+  // do anything with a browser, and named rather than globbed: a guess that
+  // matches the wrong build is worse than not finding one.
+  "/opt/pw-browsers/chromium/chrome-linux/chrome",
+].filter((p): p is string => !!p)
   .find((p) => Bun.file(p).size !== 0 || Bun.which(p));
 const HAVE_CHROME = !!CHROME;
 const CDP = 9457;
@@ -411,6 +433,86 @@ describe.if(HAVE_CHROME)("what the page thinks is being typed", () => {
   });
 });
 
+
+describe.if(HAVE_CHROME)("bytes batched into one crossing", () => {
+  /*
+   * `writeMany` is what the app calls now: the app batches at about 20Hz (see
+   * src/terminal/writeCoalescer.ts, where the window and its unit tests live)
+   * and hands the page an array. This is the other half — that a batch leaves
+   * the terminal in the state the same frames would have produced one at a
+   * time.
+   *
+   * It has to run in a real engine. "The same state" means what xterm laid out
+   * after parsing, and the failure worth catching is a batch that mishandles a
+   * single escape sequence split across frames — which is ordinary on a socket
+   * and invisible to any string comparison on the app side.
+   *
+   * Read through the page's own line reports, the same way every test above
+   * does. Reaching into xterm would mean exposing it on `window` for the
+   * tests, and a global that only exists to be measured is a global that
+   * drifts from the thing it claims to measure.
+   */
+  const b64 = (text: string): string => Buffer.from(text, "utf8").toString("base64");
+
+  /** A batch, counted the way `feed` counts a single write so `reported` can
+   *  wait for a report that had not arrived yet. */
+  const feedMany = async (frames: string[]): Promise<void> => {
+    before = (await cdp!.value<number>(`${LINES}.length`)) ?? 0;
+    await cdp!.value(`window.AGX.writeMany(${JSON.stringify(frames.map(b64))}), 1`);
+  };
+
+  test("a batch reads the same as the frames sent one at a time", async () => {
+    await feed("\u001b[2J\u001b[H$ hola como vas");
+    const oneAtATime = await reported();
+    expect(oneAtATime).toBeTruthy();
+
+    await feedMany(["\u001b[2J\u001b[H", "$ hola ", "como ", "vas"]);
+    expect(await reported()).toBe(oneAtATime as string);
+  });
+
+  test("an escape sequence split across frames is still one sequence", async () => {
+    // `\u001b[2J` arriving as three frames is ordinary on a socket. A batch
+    // that reordered or dropped one would leave the screen uncleared, and the
+    // line report is what shows it: the old text would still be there.
+    await feedMany(["\u001b", "[2J\u001b[H", "$ limpio"]);
+    expect(await reported()).toBe("limpio");
+  });
+
+  test("an empty batch is not an error", async () => {
+    await cdp!.value(`window.AGX.writeMany([]), 1`);
+    expect(await cdp!.value<boolean>("!!window.AGX")).toBe(true);
+  });
+
+  test("the page survives a batch the size of a busy second", async () => {
+    // Forty frames is an ordinary second of a build. What this catches is a
+    // page that throws partway and leaves the bridge silent with a half-drawn
+    // screen — which on a phone reads as a hung pane.
+    const rows = Array.from({ length: 40 }, (_, i) => `linea ${i}\r\n`);
+    await feedMany(["\u001b[2J\u001b[H", ...rows, "$ despues de todo"]);
+    expect(await reported()).toBe("despues de todo");
+  });
+});
+
+describe.if(HAVE_CHROME)("the GPU renderer, and doing without it", () => {
+  /*
+   * This browser is launched with `--disable-gpu`, so there is no WebGL here —
+   * which makes this the FALLBACK test, and the fallback is the half worth
+   * proving. A phone revokes contexts under memory pressure, and a terminal
+   * that stopped painting while still accepting bytes would look exactly like
+   * a hung pane. That the addon itself draws is xterm's business.
+   */
+  test("the engine carries the addon", async () => {
+    expect(await cdp!.value<boolean>("typeof window.WebglAddon === 'function'")).toBe(true);
+  });
+
+  test("the terminal still draws with no WebGL to be had", async () => {
+    // Without the try/catch around the addon the page would have thrown during
+    // boot and never posted `ready`, so arriving here at all is most of the
+    // assertion. The feed is the rest: it is still parsing and reporting.
+    await feed("\u001b[2J\u001b[H$ sigo aqui");
+    expect(await reported()).toBe("sigo aqui");
+  });
+});
 
 describe.if(HAVE_CHROME)("dragging the pane with a finger", () => {
   /** Everything the page has sent up as keystrokes since it was last cleared. */
