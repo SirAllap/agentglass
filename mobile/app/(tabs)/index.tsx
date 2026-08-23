@@ -147,6 +147,10 @@ export default function InboxScreen(): React.ReactNode {
   }, [refresh, reload]);
 
   const now = fleet.at || Date.now();
+  /* What the heading counts. `needs` plus `ready` — the two groups whose rows
+     have something for a person to DO. `moved` is deliberately out: it is what
+     changed since you looked, which is worth a section and is not a job. */
+  const waiting = inbox.counts.needs + inbox.counts.ready;
 
   /** Rows with their headings folded in, so one FlatList draws the lot. A
    *  SectionList would be the obvious alternative and buys nothing here: there
@@ -202,27 +206,78 @@ export default function InboxScreen(): React.ReactNode {
       contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
       refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
       ListHeaderComponent={
-        <View style={{ gap: SPACE.md, paddingBottom: SPACE.md }}>
+        <View style={{ gap: SPACE.lg, paddingBottom: SPACE.md }}>
+          {/*
+            A title in the CONTENT, not only in the navigation bar.
+
+            The bar's own title is 17pt and shares its row with a gear; it says
+            which tab you are on and nothing else. A page has room to open with
+            a sentence, and the sentence people arrive for is not "Inbox" — it
+            is how much is waiting. So the heading answers that, and the count
+            under it is the same one the tiles add up to, said in words for the
+            two seconds before anybody parses three numbers.
+          */}
+          <View style={{ gap: 2 }}>
+            <Text style={{ color: C.text, fontSize: 30, fontWeight: "700", lineHeight: 36 }}>
+              {waiting === 0 ? "All clear" : waiting === 1 ? "One thing" : `${waiting} things`}
+            </Text>
+            <Text style={{ color: C.text3, fontSize: T.small }}>
+              {waiting === 0
+                ? "Nothing is waiting on you."
+                : `${waiting === 1 ? "is" : "are"} waiting on you.`}
+            </Text>
+          </View>
+
           <View style={{ flexDirection: "row", gap: SPACE.sm }}>
             <Tile n={inbox.counts.needs} label="need you" ink={C.error} loud />
             <Tile n={inbox.counts.failing} label="CI failing" ink={C.warning} />
             <Tile n={inbox.counts.ready} label="ready to merge" ink={C.success} loud />
           </View>
-          {/* Under the tiles on purpose. Every number above is a claim about
-              another computer, and one that has been offline for ten minutes
-              must not present the same screen as one that is connected. */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, paddingHorizontal: SPACE.xs }}>
-            <View style={{
-              width: 7, height: 7, borderRadius: 4,
-              backgroundColor: live === "open" ? C.success : live === "connecting" ? C.warning : C.text4,
-            }} />
-            <Text style={{ color: C.text3, fontSize: T.small, flexShrink: 1 }} numberOfLines={1}>
-              {fleet.error
-                ? fleet.error
-                : live === "open"
-                  ? host?.label ?? "Connected"
-                  : live === "connecting" ? "Reconnecting…" : "Offline"}
-            </Text>
+
+          {/*
+            The machine, as a row you can press rather than a line of text.
+
+            Every number above is a claim about another computer, and one that
+            has been offline for ten minutes must not present the same screen
+            as one that is connected — which is why this is under the tiles and
+            not over them. It is a row now because it had somewhere to go all
+            along: the address, the grant and the way to forget it are all in
+            Settings, and a status line that reports a problem while offering
+            no way to it is a dead end drawn in the calmest type on the screen.
+          */}
+          <View style={{ gap: SPACE.sm }}>
+            <Label text="Machine" />
+            <Pressable
+              onPress={() => router.push("/settings")}
+              accessibilityRole="button"
+              accessibilityLabel="This computer, and what this phone may do to it"
+              style={({ pressed }) => [
+                groupEdge(true, true),
+                {
+                  flexDirection: "row", alignItems: "center", gap: SPACE.md,
+                  paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
+                  opacity: pressed ? 0.6 : 1,
+                },
+              ]}
+            >
+              <View style={{
+                width: 8, height: 8, borderRadius: 4,
+                backgroundColor: live === "open" ? C.success : live === "connecting" ? C.warning : C.text4,
+              }} />
+              <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+                <Text numberOfLines={1} style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>
+                  {host?.label ?? "No computer"}
+                </Text>
+                <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>
+                  {fleet.error
+                    ? fleet.error
+                    : live === "open"
+                      ? "Connected"
+                      : live === "connecting" ? "Reconnecting…" : "Offline"}
+                </Text>
+              </View>
+              <ChevronIcon color={C.text4} size={17} />
+            </Pressable>
           </View>
         </View>
       }
@@ -253,7 +308,11 @@ export default function InboxScreen(): React.ReactNode {
       }
       renderItem={({ item: row, index }) =>
         "heading" in row ? (
-          <View style={{ paddingTop: index === 0 ? 0 : SPACE.md, paddingBottom: SPACE.xs }}>
+          /* The gap between groups is paid here, and it is bigger than it was.
+             With the rows now joined into one card, the only thing separating
+             two groups IS this space — before, every row had its own margin
+             and a heading only had to sit in the middle of it. */
+          <View style={{ paddingTop: index === 0 ? 0 : SPACE.xl, paddingBottom: SPACE.sm }}>
             <Label text={HEADING[row.heading]} />
           </View>
         ) : (
