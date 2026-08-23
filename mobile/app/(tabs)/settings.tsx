@@ -18,7 +18,7 @@ import {
   type Blocked, type Delivery,
 } from "../../src/notifications/notify.ts";
 import { Btn, Card, Label, Note, Section, TAP } from "../../src/ui.tsx";
-import { ChevronIcon, NowIcon, ReposIcon, type IconProps } from "../../src/nav/icons.tsx";
+import { ChevronIcon, NowIcon, ReposIcon, TerminalIcon, type IconProps } from "../../src/nav/icons.tsx";
 import {
   ACCENTS, C, MONO, RADIUS, SPACE, T, currentLook, ink, setLook, toneColor,
   type AccentId, type ThemeMode,
@@ -553,6 +553,11 @@ export default function SettingsScreen(): React.ReactNode {
           onPress={() => router.push("/now")}
         />
         <Go mark={ReposIcon} name="Working tree" onPress={() => router.push("/repos")} />
+        <Go
+          mark={TerminalIcon}
+          name="The key bar"
+          onPress={() => router.push("/terminal-settings")}
+        />
       </Section>
 
       <PlanCard />

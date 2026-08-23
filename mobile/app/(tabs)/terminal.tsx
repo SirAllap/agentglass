@@ -32,7 +32,7 @@
  * it, which is the bargain the agent's own prompt makes. `keys` mode is there
  * for the other half of a terminal, the program waiting on one keystroke.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
@@ -44,6 +44,8 @@ import { useAgentglass } from "../../src/state/host-context.tsx";
 import { useDeskPalette, usePaletteTick } from "../../src/state/use-palette.ts";
 import { TerminalView, type TerminalHandle, type TerminalState } from "../../src/terminal/TerminalView.tsx";
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
+import { apply as applyKeyLayout } from "../../src/terminal/keyLayout.ts";
+import { keyLayout, onKeyLayout } from "../../src/terminal/keyStore.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon } from "../../src/nav/icons.tsx";
@@ -396,6 +398,12 @@ export default function TerminalScreen(): React.ReactNode {
    *  the upload is the only part worth a spinner, so this is set after the
    *  picture has been chosen rather than before the gallery opens. */
   const [sending, setSending] = useState(false);
+  /* The bar somebody chose. A module singleton so this screen and the settings
+     screen see one value; the local mirror is only what makes this repaint
+     when the other one writes. See src/terminal/keyStore.ts. */
+  const [bar, setBar] = useState(keyLayout);
+  useEffect(() => onKeyLayout(() => setBar(keyLayout())), []);
+  const keys = useMemo(() => applyKeyLayout(bar, ACCESSORY_KEYS), [bar]);
   /** The deadline on that spinner. A ref because it is cleared from a callback
    *  that must not re-run when it changes. */
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1457,7 +1465,11 @@ export default function TerminalScreen(): React.ReactNode {
             {/* The prefix goes first, before Esc: on a tmux pane it is the key
                 that reaches the session itself — new window, next window,
                 detach — and everything else only reaches the program inside it. */}
-            {[...(prefix ? [prefix] : []), ...ACCESSORY_KEYS].map((key) => (
+            {/* The prefix is always first and is not part of the chosen set:
+                it is tmux's own key, it is what every window switch goes
+                through, and a bar somebody had hidden it from would be a bar
+                that cannot leave the window it is in. */}
+            {[...(prefix ? [prefix] : []), ...keys].map((key) => (
               <Pressable
                 key={key.id}
                 accessibilityRole="button"

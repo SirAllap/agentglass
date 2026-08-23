@@ -88,6 +88,9 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // that a broken one also passes. `bin` is in every checkout this repo has.
   { path: "/files?root=%2Fhome%2Fuser%2Fagentglass", name: "Files", expect: /mobile|server|shared|Cannot read it|empty/i },
   { path: "/card/nope", name: "Card detail", expect: /Cannot read it|could not be read|not connected|no card/i },
+  // Asserted on a key that is on the bar by default AND on the count line, so
+  // a screen that mounted with an empty list would not pass.
+  { path: "/terminal-settings", name: "Key bar", expect: /Interrupt|keys are on the bar/i },
   { path: "/settings", name: "Settings", expect: /Paired with|This phone may/i },
 ];
 
