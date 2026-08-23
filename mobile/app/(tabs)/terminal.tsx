@@ -33,7 +33,9 @@
  * for the other half of a terminal, the program waiting on one keystroke.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
+} from "react-native";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -44,7 +46,8 @@ import { TerminalView, type TerminalHandle, type TerminalState } from "../../src
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
-import { BackIcon } from "../../src/nav/icons.tsx";
+import { BackIcon, ImageIcon } from "../../src/nav/icons.tsx";
+import { fileFrom, pastePayload, type Uploaded } from "../../src/terminal/imagePaste.ts";
 
 /** One row of `/terminal/agents`. Declared here rather than in shared/ for the
  *  same reason PrViewCounts is: it is this route's answer shape and nothing
@@ -389,6 +392,10 @@ export default function TerminalScreen(): React.ReactNode {
    *  that reads as "none available". */
   const [picking, setPicking] = useState(false);
   const [agents, setAgents] = useState<AgentOffer[] | null>(null);
+  /** An attachment on its way up. The picker can be open for a long time and
+   *  the upload is the only part worth a spinner, so this is set after the
+   *  picture has been chosen rather than before the gallery opens. */
+  const [sending, setSending] = useState(false);
   /** The deadline on that spinner. A ref because it is cleared from a callback
    *  that must not re-run when it changes. */
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -432,6 +439,53 @@ export default function TerminalScreen(): React.ReactNode {
     })();
     return () => { gone = true; };
   }, [host]);
+
+  /**
+   * Attach a picture to whatever is running in the pane.
+   *
+   * `expo-image-picker` is required INSIDE the function and behind a try, which
+   * is the rule test/native-imports.test.ts holds: a native module imported at
+   * the top of a file the router reaches takes the whole route tree down on a
+   * build that does not carry it. This app has shipped a blank screen twice
+   * that way.
+   *
+   * The bytes go up, a path comes back, and the path is pasted — see
+   * src/terminal/imagePaste.ts for why a path and why bracketed paste.
+   */
+  const attach = useCallback(async (): Promise<void> => {
+    if (!host || !terminal.current) return;
+    let picker: typeof import("expo-image-picker");
+    try {
+      picker = require("expo-image-picker") as typeof import("expo-image-picker");
+    } catch {
+      setError("This build has no image picker.");
+      return;
+    }
+
+    const allowed = await picker.requestMediaLibraryPermissionsAsync();
+    if (!allowed.granted) { setError("The gallery is not allowed for this app."); return; }
+
+    // base64 asked for here rather than read from the uri afterwards: the file
+    // system module is a second native dependency, and this one already has
+    // the bytes.
+    const picked = await picker.launchImageLibraryAsync({ base64: true, quality: 0.8 });
+    if (picked.canceled || !picked.assets?.length) return;
+    const asset = picked.assets[0]!;
+    if (!asset.base64) { setError("That picture came back empty."); return; }
+
+    setSending(true);
+    setError(null);
+    const answer = await ask<Uploaded>(host, "/terminal/image", {
+      method: "POST",
+      body: { data: asset.base64, name: asset.fileName ?? asset.uri ?? "image.png" },
+    });
+    setSending(false);
+
+    const got = fileFrom(answer.ok ? answer.value : { ok: false, error: answer.error });
+    if ("error" in got) { setError(got.error); return; }
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    terminal.current.send(pastePayload(got.file));
+  }, [host, terminal]);
 
   const openAgent = useCallback((kind: string, yolo: boolean): void => {
     if (!terminal.current) return;
@@ -1506,6 +1560,37 @@ export default function TerminalScreen(): React.ReactNode {
             <Text style={{ color: raw ? C.primary : C.text3, fontSize: T.small, fontFamily: MONO }}>
               {raw ? "keys" : "line"}
             </Text>
+          </Pressable>
+          {/*
+            A picture, beside the field rather than behind a menu.
+
+            It sits here because this is the row where somebody is already
+            composing — the thing being attached is part of the sentence they
+            are writing, not a separate errand. Only while a pane is open: with
+            nothing attached there is nowhere for a path to be pasted, and a
+            button that opens a gallery to then say "no pane" is a trip to the
+            photo library for nothing.
+
+            No `full` gate. This writes a temporary file the server chose the
+            location of and then types into a pane the phone is already allowed
+            to type into — it buys no permission the keyboard above it does not
+            already have.
+          */}
+          <Pressable
+            onPress={() => { void attach(); }}
+            disabled={!open || sending}
+            accessibilityRole="button"
+            accessibilityLabel="Attach a picture to this pane"
+            style={({ pressed }) => ({
+              width: 44, height: TAP, alignItems: "center", justifyContent: "center",
+              borderRadius: RADIUS.sm, backgroundColor: C.bg3,
+              borderWidth: 1, borderColor: C.border2,
+              opacity: !open ? 0.4 : pressed ? 0.6 : 1,
+            })}
+          >
+            {sending
+              ? <ActivityIndicator color={C.text3} size="small" />
+              : <ImageIcon color={C.text3} size={19} />}
           </Pressable>
           <TextInput
             value={raw ? keyed : draft}

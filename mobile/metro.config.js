@@ -55,6 +55,7 @@ const WEB_SHIMS = {
   "expo-notifications": "./src/web-shims/notifications.ts",
   "expo-haptics": "./src/web-shims/haptics.ts",
   "expo-clipboard": "./src/web-shims/clipboard.ts",
+  "expo-image-picker": "./src/web-shims/image-picker.ts",
   "react-native-webview": "./src/web-shims/webview.tsx",
   "expo-camera": "./src/web-shims/camera.tsx",
 };
