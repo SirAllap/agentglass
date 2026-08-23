@@ -17,7 +17,7 @@ import {
   alertsDeliverable, askForAlerts, notificationsSupported, raise,
   type Blocked, type Delivery,
 } from "../../src/notifications/notify.ts";
-import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Section, TAP } from "../../src/ui.tsx";
 import { ChevronIcon, NowIcon, ReposIcon, type IconProps } from "../../src/nav/icons.tsx";
 import {
   ACCENTS, C, MONO, RADIUS, SPACE, T, currentLook, ink, setLook, toneColor,
@@ -266,8 +266,7 @@ function Look(): React.ReactNode {
   ];
 
   return (
-    <Card>
-      <Label text="Look" />
+    <Section label="Look">
       <View style={{ flexDirection: "row", gap: SPACE.sm }}>
         {MODES.map((m) => {
           const on = look.mode === m.id;
@@ -351,7 +350,7 @@ function Look(): React.ReactNode {
         The accent paints what reads as live — the terminal's cursor, the tab you are on, a button
         that does something. Neutral is the first one: no colour at all.
       </Note>
-    </Card>
+    </Section>
   );
 }
 
@@ -430,8 +429,7 @@ export default function SettingsScreen(): React.ReactNode {
 
   return (
     <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg }}>
-      <Card>
-        <Label text="Paired with" />
+      <Section label="Paired with">
         <Text style={{ color: C.text, fontSize: T.title, fontWeight: "600" }}>{host.label}</Text>
         <Row name="Address" value={host.origin} />
         <Row
@@ -442,22 +440,22 @@ export default function SettingsScreen(): React.ReactNode {
           name="Last answer"
           value={fleet.at ? new Date(fleet.at).toLocaleTimeString() : "never"}
         />
-      </Card>
+      </Section>
 
-      <Card>
-        <Label text="This phone may" />
+      <Section
+        label="This phone may"
+        note="Chosen at the computer while somebody was looking at the request. To change it, forget this phone there and pair again."
+      >
         <Text style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>
           {SCOPE[host.scope].name}
         </Text>
         <Note>{SCOPE[host.scope].what}</Note>
-        <Note>
-          Chosen at the computer while somebody was looking at the request. To change it, forget
-          this phone there and pair again.
-        </Note>
-      </Card>
+      </Section>
 
-      <Card>
-        <Label text="Alerts" />
+      <Section
+        label="Alerts"
+        note="A gate holding, a tool that failed, a run that stopped — the same notes the computer would put on its own screen, raised here instead."
+      >
         <Pressable
           // Still tappable when it is on: the thing that turns it off is a
           // switch in Android's settings, and the only way back was to
@@ -483,10 +481,6 @@ export default function SettingsScreen(): React.ReactNode {
               : "Let this phone buzz"}
           </Text>
         </Pressable>
-        <Note>
-          A gate holding, a tool that failed, a run that stopped — the same notes the computer
-          would put on its own screen, raised here instead.
-        </Note>
         {alerts && !alerts.ok ? (
           <Note tone="bad">
             {/* The reason, not a dead switch. Every one of these used to be
@@ -528,7 +522,7 @@ export default function SettingsScreen(): React.ReactNode {
             }}
           />
         ) : null}
-      </Card>
+      </Section>
 
       {/*
         The three things the Inbox no longer carries.
@@ -544,8 +538,10 @@ export default function SettingsScreen(): React.ReactNode {
         terminal whenever something is actually held. This row is the one that
         is always here, for when you want to go and look rather than be told.
       */}
-      <Card>
-        <Label text="Elsewhere" />
+      <Section
+        label="Elsewhere"
+        note="What an agent is doing is read in the terminal it is running in. The queue is where a stopped one is answered."
+      >
         {/* The count is ON the row rather than above it. Two lines saying
             "Held right now: 3 waiting" and then "Open the queue" are one
             thought split in half, and the half with the number is the half
@@ -557,20 +553,15 @@ export default function SettingsScreen(): React.ReactNode {
           onPress={() => router.push("/now")}
         />
         <Go mark={ReposIcon} name="Working tree" onPress={() => router.push("/repos")} />
-        <Note>
-          What an agent is doing is read in the terminal it is running in. The queue is where a
-          stopped one is answered.
-        </Note>
-      </Card>
+      </Section>
 
       <PlanCard />
 
       <Look />
 
-      <Card>
-        <Label text="This device" />
+      <Section label="This device">
         <Btn label="Forget this computer" tone="danger" busy={going} onPress={onForget} />
-      </Card>
+      </Section>
     </ScrollView>
   );
 }

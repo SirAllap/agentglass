@@ -145,6 +145,36 @@ export function Note({ children, tone = "quiet" }: {
 }
 
 /**
+ * A titled block: the label above the card, not inside it.
+ *
+ * Settings used to put its heading on the first line INSIDE each card, which
+ * makes the title one of the card's contents — the same weight as the switch
+ * under it, competing with it for the eye. Outside, in small caps and in the
+ * quiet colour, it stops being content and becomes what it is: the name of the
+ * group below.
+ *
+ * `note` is the half that makes a settings screen readable rather than merely
+ * tidy. It sits BETWEEN the label and the card, so the explanation is read on
+ * the way to the control rather than found underneath it after a wrong guess.
+ * The good ones say what the setting is for and what happens when it is off;
+ * this component has no opinion about that beyond giving it somewhere to live.
+ */
+export function Section({ label, note, children, style }: {
+  label: string;
+  note?: ReactNode;
+  children: ReactNode;
+  style?: StyleProp<ViewStyle>;
+}): ReactNode {
+  return (
+    <View style={{ gap: SPACE.sm }}>
+      <Label text={label} />
+      {note ? <Note>{note}</Note> : null}
+      <Card style={style}>{children}</Card>
+    </View>
+  );
+}
+
+/**
  * The border a row wears inside a grouped list.
  *
  * A list is ONE card with its rows divided, not a stack of cards with gaps
