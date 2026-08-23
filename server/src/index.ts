@@ -116,6 +116,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
+import { transcribe, transcriberOn } from "./dictate.ts";
 import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { listPanes, focusPaneAnywhere, activePane, sweepPinnedWindows, pinnedSockets } from "./tmuxctl.ts";
@@ -3000,6 +3001,26 @@ const server = Bun.serve<WsData>({
      * resolution with room over; past it the answer is a refusal rather than a
      * write, since the failure mode of no cap is a disk nobody is watching.
      */
+    /*
+     * Speech, turned into text where the computer is.
+     *
+     * The phone records and this transcribes, which is the same division as
+     * every other heavy thing here: a phone is good at capturing and bad at
+     * the rest, and Expo Go cannot carry a native recogniser at all.
+     *
+     * A refusal NAMES what is missing rather than failing vaguely — the whole
+     * feature depends on a binary this app does not install, and "nothing
+     * happened" would be indistinguishable from "you said nothing".
+     */
+    if (pathname === "/terminal/dictate" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { data?: unknown; name?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const said = await transcribe(b.data, b.name);
+      return json(said, said.ok ? 200 : 400);
+    }
+
     if (pathname === "/terminal/image" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);

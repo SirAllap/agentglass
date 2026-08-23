@@ -51,7 +51,7 @@ import {
 import { bytesFor } from "../../src/terminal/customKeys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
-import { BackIcon, ImageIcon } from "../../src/nav/icons.tsx";
+import { BackIcon, ImageIcon, MicIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
 import type { AgentSessionRow } from "../../../shared/types.ts";
 
@@ -60,6 +60,16 @@ import type { AgentSessionRow } from "../../../shared/types.ts";
 const leafOf = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
 
 import { fileFrom, pastePayload, type Uploaded } from "../../src/terminal/imagePaste.ts";
+import { joinDictated, nameFor, wordsFrom, type Said } from "../../src/terminal/dictation.ts";
+/* Imported at the top, unlike the image picker below it, and the difference is
+   the rule rather than an inconsistency: expo-audio ships IN the Expo Go
+   client, so it is not one of the modules test/native-imports.test.ts is about
+   — those are the ones that may be absent from a build. The web harness gets a
+   shim (see metro.config.js) because a browser has no microphone. */
+import {
+  RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder,
+} from "expo-audio";
+import { readAsStringAsync } from "expo-file-system";
 
 /** One row of `/terminal/agents`. Declared here rather than in shared/ for the
  *  same reason PrViewCounts is: it is this route's answer shape and nothing
@@ -412,6 +422,16 @@ export default function TerminalScreen(): React.ReactNode {
    *  the upload is the only part worth a spinner, so this is set after the
    *  picture has been chosen rather than before the gallery opens. */
   const [sending, setSending] = useState(false);
+  /** Recording, or transcribing. Two states because they feel different: one is
+   *  waiting for the person and the other is waiting for the computer, and a
+   *  single spinner for both would say "hold on" while it is the phone's turn
+   *  to hold on. */
+  const [hearing, setHearing] = useState<"listening" | "thinking" | null>(null);
+  /* The recorder has to be made in a render — `useAudioRecorder` is the only
+     entry point expo-audio exposes at runtime, the class behind it being a
+     type export. It is inert until `record()`, so holding one costs nothing on
+     a screen nobody dictates into. */
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   /* The bar somebody chose. A module singleton so this screen and the settings
      screen see one value; the local mirror is only what makes this repaint
      when the other one writes. See src/terminal/keyStore.ts. */
@@ -527,6 +547,72 @@ export default function TerminalScreen(): React.ReactNode {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     terminal.current.send(pastePayload(got.file));
   }, [host, terminal]);
+
+  /**
+   * Speak, and put the words in the field.
+   *
+   * ── the shape, which is Orca's ───────────────────────────────────────
+   * The phone records and the COMPUTER transcribes. That is not a workaround:
+   * reading their mobile app, their dictation calls `speech.models.list` on the
+   * desktop and fails with `voice_model_not_selected` — the models live on the
+   * machine there too. A phone is good at capturing and bad at the rest.
+   *
+   * Where this differs is the capture. Theirs streams chunks through a native
+   * package they wrote (`@orca/expo-two-way-audio`), which an app that ships
+   * its own build can do and one running in Expo Go cannot. So this records to
+   * a file with `expo-audio` — in the SDK, therefore in Expo Go — and sends it
+   * when the button is pressed again. Worse than streaming by the length of
+   * one sentence, and it works on the client this app actually runs in.
+   *
+   * ── inserted, never sent ─────────────────────────────────────────────
+   * Dictation is wrong often enough that a line submitting itself would be a
+   * question nobody read arriving at an agent. Inserting also makes it
+   * composable, which is how it gets used: say a sentence, type a path after
+   * it, send once.
+   */
+  const dictate = useCallback(async (): Promise<void> => {
+    if (!host) return;
+
+    // Second press: stop, upload, insert.
+    if (hearing === "listening") {
+      setHearing("thinking");
+      try {
+        await recorder.stop();
+        const uri = recorder.uri;
+        if (!uri) { setHearing(null); setError("That recording came back empty."); return; }
+        const data = await readAsStringAsync(uri, { encoding: "base64" });
+        const answer = await ask<Said>(host, "/terminal/dictate", {
+          method: "POST",
+          body: { data, name: nameFor(uri) },
+        });
+        setHearing(null);
+        const got = wordsFrom(answer.ok ? answer.value : { ok: false, error: answer.error });
+        if ("error" in got) { setError(got.error); return; }
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setError(null);
+        // Into the compose field, whatever is already there. `joinDictated`
+        // owns the spacing rule — see its tests for why that is not obvious.
+        setDraft((was) => joinDictated(was, got.text));
+      } catch (e) {
+        setHearing(null);
+        setError(`That recording could not be sent: ${String(e)}`);
+      }
+      return;
+    }
+
+    try {
+      const allowed = await requestRecordingPermissionsAsync();
+      if (!allowed.granted) { setError("The microphone is not allowed for this app."); return; }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setError(null);
+      setHearing("listening");
+    } catch (e) {
+      setHearing(null);
+      setError(`The microphone would not start: ${String(e)}`);
+    }
+  }, [host, hearing, recorder]);
 
   const openAgent = useCallback((kind: string, yolo: boolean): void => {
     if (!terminal.current) return;
@@ -1693,6 +1779,30 @@ export default function TerminalScreen(): React.ReactNode {
             {sending
               ? <ActivityIndicator color={C.text3} size="small" />
               : <ImageIcon color={C.text3} size={19} />}
+          </Pressable>
+          {/* The microphone, beside the picture, for the same reason: what is
+              being said is part of the line being written, not a separate
+              errand. Two states rather than one spinner — "listening" is
+              waiting for the PERSON and "thinking" is waiting for the
+              computer, and one indicator for both says "hold on" while it is
+              your turn to hold on. */}
+          <Pressable
+            onPress={() => { void dictate(); }}
+            disabled={!open || hearing === "thinking"}
+            accessibilityRole="button"
+            accessibilityLabel={hearing === "listening" ? "Stop and transcribe" : "Speak a line"}
+            style={({ pressed }) => ({
+              width: 44, height: TAP, alignItems: "center", justifyContent: "center",
+              borderRadius: RADIUS.sm,
+              backgroundColor: hearing === "listening" ? C.error : C.bg3,
+              borderWidth: 1,
+              borderColor: hearing === "listening" ? C.error : C.border2,
+              opacity: !open ? 0.4 : pressed ? 0.6 : 1,
+            })}
+          >
+            {hearing === "thinking"
+              ? <ActivityIndicator color={C.text3} size="small" />
+              : <MicIcon color={hearing === "listening" ? ink(C.error) : C.text3} size={19} />}
           </Pressable>
           <TextInput
             value={raw ? keyed : draft}

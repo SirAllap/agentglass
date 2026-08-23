@@ -34,6 +34,7 @@ export type DepPlatform = "linux" | "darwin" | "win32";
 
 export type DepId =
   | "git" | "claude" | "codex" | "agy" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
+  | "whisper"
   | "tailscale"
   | "setsid" | "script" | "ss" | "dbus-monitor" | "notify-send" | "opener" | "pkexec" | "bash";
 
@@ -180,6 +181,12 @@ export const DEPS: DepSpec[] = [
     url: "https://neovim.io",
     note: "With any other $EDITOR the app hands you the command to paste instead.",
     pkg: { apt: "neovim", dnf: "neovim", pacman: "neovim", zypper: "neovim", apk: "neovim", brew: "neovim" },
+  },
+  {
+    id: "whisper", bin: "whisper-cli", title: "Whisper (speech to text)", required: false,
+    what: "Turns a recording from the phone's microphone into text in the terminal's compose field. The phone records; this does the transcribing, because Expo Go carries no speech recogniser.",
+    url: "https://github.com/ggml-org/whisper.cpp",
+    note: "Either whisper.cpp (whisper-cli) or OpenAI's `whisper`. Missing simply means the microphone button says so instead of appearing to do nothing.",
   },
   {
     id: "codex", bin: "codex", title: "Codex CLI", required: false,

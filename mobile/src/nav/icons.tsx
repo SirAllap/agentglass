@@ -10,12 +10,12 @@
  * They are drawn in the desk rail's coordinate system — a 24-unit box, see
  * web/src/components/workspace/icons.tsx — and several of them are that rail's
  * own shapes, unaltered. A pull request should not be one thing on the computer
- * and a different one in your hand. Of the eleven below, four are the rail's
+ * and a different one in your hand. Of the twelve below, four are the rail's
  * (Terminal, Prs, Repos/FilesIcon, Tasks/IssuesIcon), one is GitHub's own
  * (Issues), and the rest are the phone's, each for a reason written over it.
  *
  * They live here rather than in the tab layout because the bar is not what
- * draws most of them. Five of the eleven are tabs — Inbox, Prs, Terminal,
+ * draws most of them. Five of the twelve were tabs — Inbox, Prs, Terminal,
  * Issues, Tasks. The other five are somewhere else entirely: the faders and the
  * way back are in the header the tab layout puts over a pushed screen, the
  * chevron is on every Inbox row, and the ring and the folder are the two rows
@@ -220,6 +220,24 @@ export function ImageIcon({ color, size = 20 }: IconProps): React.ReactNode {
       <Path d="M2.8 15.4 8 10.6l4.2 3.9" />
       <Path d="M13.2 13.2 16.4 10.4l4.6 4.2" />
       <Circle cx="15.6" cy="8.9" r="1.5" />
+    </Svg>
+  );
+}
+
+/**
+ * A microphone: the capsule, its cradle and the stand.
+ *
+ * The cradle is what makes it read as a microphone rather than a pill at
+ * 19px — a capsule alone is a rounded rectangle, and there are two of those
+ * on the same row already. The stand is one stroke because a foot as well
+ * costs a pixel of the cradle's gap, which is the part carrying the meaning.
+ */
+export function MicIcon({ color, size = 20 }: IconProps): React.ReactNode {
+  return (
+    <Svg {...line} {...box(size)} color={color}>
+      <Path d="M12 3.2a2.6 2.6 0 0 1 2.6 2.6v5.4a2.6 2.6 0 0 1-5.2 0V5.8A2.6 2.6 0 0 1 12 3.2z" />
+      <Path d="M6.2 10.6v.8a5.8 5.8 0 0 0 11.6 0v-.8" />
+      <Path d="M12 17.2v3.4" />
     </Svg>
   );
 }
