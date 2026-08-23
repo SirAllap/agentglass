@@ -49,6 +49,13 @@ import { keyLayout, onKeyLayout } from "../../src/terminal/keyStore.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon } from "../../src/nav/icons.tsx";
+import { since } from "../../src/lib/dates.ts";
+import type { AgentSessionRow } from "../../../shared/types.ts";
+
+/** The last segment of a path, which is what a person calls a checkout — the
+ *  same rule src/terminal/tabs.ts uses to name a window. */
+const leafOf = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
+
 import { fileFrom, pastePayload, type Uploaded } from "../../src/terminal/imagePaste.ts";
 
 /** One row of `/terminal/agents`. Declared here rather than in shared/ for the
@@ -402,6 +409,10 @@ export default function TerminalScreen(): React.ReactNode {
      screen see one value; the local mirror is only what makes this repaint
      when the other one writes. See src/terminal/keyStore.ts. */
   const [bar, setBar] = useState(keyLayout);
+  /** The overflow menu, and the past sessions it can offer. Null until asked —
+   *  it is a read per checkout and the menu is not opened on the way in. */
+  const [more, setMore] = useState(false);
+  const [past, setPast] = useState<AgentSessionRow[] | null>(null);
   useEffect(() => onKeyLayout(() => setBar(keyLayout())), []);
   const keys = useMemo(() => applyKeyLayout(bar, ACCESSORY_KEYS), [bar]);
   /** The deadline on that spinner. A ref because it is cleared from a callback
@@ -958,6 +969,41 @@ export default function TerminalScreen(): React.ReactNode {
   const sessions = sessionsOf(all);
   const tabs = all.filter((t) => !session || t.session === session);
   const open = tabs.find((t) => t.paneId === active) ?? null;
+
+  /* Asked when the menu opens rather than on the way into the screen: a list
+     of past sessions is not what anybody arrives for, and it is a read against
+     whatever checkout the attached pane is in — which is not known until one
+     is attached. */
+  useEffect(() => {
+    if (!host || !more || past !== null || !open?.where) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ ok: boolean; sessions?: AgentSessionRow[] }>(
+        host, `/agent/sessions?root=${encodeURIComponent(open.where)}`,
+      );
+      if (gone) return;
+      setPast(answer.ok && answer.value.ok ? answer.value.sessions ?? [] : []);
+    })();
+    return () => { gone = true; };
+  }, [host, more, past, open?.where]);
+
+  /** Bring a past session back, in a window of its own. */
+  /**
+   * Bring a past session back — or go to it, when it is already running.
+   *
+   * `openIn` is the server saying this transcript has a live pane. Resuming one
+   * of those is not a no-op: it starts a SECOND agent on the same conversation,
+   * two processes appending to one transcript. So the row switches to the pane
+   * instead, which is what somebody meant anyway.
+   */
+  const resume = useCallback((session: AgentSessionRow): void => {
+    if (!terminal.current) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setMore(false);
+    if (session.openIn) { setActive(session.openIn.paneId); setWhy(null); return; }
+    terminal.current.command({ t: "tmux", cmd: "resume", id: session.id, cwd: session.cwd });
+  }, [terminal]);
+
   // Something to send it to, and something to send — which in `keys` is the
   // return key, so the button is live there as soon as a pane is attached.
   const canSend = !!open && (raw || draft.length > 0);
@@ -1097,6 +1143,21 @@ export default function TerminalScreen(): React.ReactNode {
               color: !open || opening ? C.text4 : C.primary,
               fontSize: T.title, fontWeight: "700",
             }}>{opening ? "…" : "+"}</Text>
+          </Pressable>
+          {/* Everything this screen can reach that is not a key or a tab.
+              A menu rather than three more buttons: the header has room for
+              three controls and these are four, and they are all "go and look
+              at something" rather than "do something here". */}
+          <Pressable
+            onPress={() => setMore(true)}
+            accessibilityRole="button"
+            accessibilityLabel="More, for this checkout"
+            style={{
+              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
+              borderLeftWidth: 1, borderLeftColor: C.border,
+            }}
+          >
+            <Text style={{ color: C.text4, fontSize: T.title }}>···</Text>
           </Pressable>
           <Pressable
             onPress={() => { void load(); }}
@@ -1701,6 +1762,67 @@ export default function TerminalScreen(): React.ReactNode {
         them in one control is how somebody means to read the list and starts
         an agent instead.
       */}
+      {/*
+        What else there is, for the checkout the attached pane is in.
+
+        Every row here is a place rather than an action, which is why they are
+        together: the header's other controls DO something to this screen, and
+        mixing "open a new tab" with "go and read a file" in one row is how a
+        person presses the wrong one while looking at the pane.
+
+        Only with a pane attached — every row needs to know which checkout, and
+        the pane is what says. With none there is no answer that is not a guess
+        at the home directory, which is the wrong screen drawn convincingly.
+      */}
+      <Sheet open={more} onClose={() => setMore(false)} title={open ? leafOf(open.where) : "More"}>
+        {open ? (
+          <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
+            <SheetRow
+              label="Source control"
+              sub="What has changed, the commits, the pull request"
+              onPress={() => { setMore(false); router.push("/repos"); }}
+            />
+            <SheetRow
+              label="Files"
+              sub="Browse and read this checkout"
+              onPress={() => {
+                setMore(false);
+                router.push({ pathname: "/files", params: { root: open.where } });
+              }}
+            />
+
+            <Label text="Past sessions" />
+            {past === null ? (
+              <Note>Asking the computer…</Note>
+            ) : past.length === 0 ? (
+              <Note>No agent has run in this checkout yet.</Note>
+            ) : (
+              past.slice(0, 8).map((session) => (
+                <SheetRow
+                  key={session.id}
+                  /* The agent's own title, which is the first thing it was
+                     asked. Cut at a length rather than a word: these run to
+                     paragraphs and a row is one line. */
+                  label={session.title.trim().slice(0, 80) || session.id.slice(0, 8)}
+                  /* `at` is the timestamp; `last` is the last thing SAID. Read
+                     off the shared type rather than guessed, which is how this
+                     row first rendered an Invalid Date. */
+                  sub={session.openIn
+                    ? `open now in ${session.openIn.windowName}`
+                    : since(new Date(session.at).toISOString(), Date.now())}
+                  onPress={() => resume(session)}
+                />
+              ))
+            )}
+            {past && past.length > 8 ? (
+              <Note>{past.length - 8} older ones are on the computer.</Note>
+            ) : null}
+          </View>
+        ) : (
+          <Note>Attach to a pane first — these all need to know which checkout.</Note>
+        )}
+      </Sheet>
+
       <Sheet open={picking} onClose={() => setPicking(false)} title="New tab">
         {agents === null ? (
           <Note>Asking the computer which agents it has…</Note>
