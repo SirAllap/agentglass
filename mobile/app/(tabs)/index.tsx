@@ -31,9 +31,12 @@ import { useAgentglass } from "../../src/state/host-context.tsx";
 import { useInbox } from "../../src/state/use-inbox.ts";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import type { InboxGroup, InboxItem } from "../../src/model/inbox.ts";
-import { ChevronIcon, InboxIcon, IssuesIcon, PrsIcon, TasksIcon } from "../../src/nav/icons.tsx";
+import {
+  ChevronIcon, InboxIcon, IssuesIcon, PrsIcon, ReposIcon, TasksIcon, TerminalIcon,
+} from "../../src/nav/icons.tsx";
+import { BAR } from "../../src/nav/bar.ts";
 import { Card, Label, Note, TAP, groupEdge } from "../../src/ui.tsx";
-import { C, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /** "4m", "2h", "3d" — the age of a thing, in the least space that is honest. */
 function age(at: number, now: number): string {
@@ -125,6 +128,39 @@ function Tile({ n, label, ink, loud }: {
     </View>
   );
 }
+
+/**
+ * The destinations, from the one list that names them.
+ *
+ * `BAR` was the tab bar's contents and is still the statement of what this app
+ * is for — pull requests, issues, cards, and the terminal they are all handed
+ * to. The bar itself is retired (see src/nav/TabBar.tsx); the list outlived it,
+ * which is the point of it having been data rather than a component.
+ *
+ * The Inbox is dropped because it is the page this draws on. `repos` is added
+ * because source control is a destination somebody goes to from here and was
+ * only ever off the bar for want of a sixth slot.
+ */
+const DESTINATIONS = [
+  ...BAR.filter((d) => d.route !== "index"),
+  { route: "repos" as const, label: "Source control" },
+];
+
+const ICONS = {
+  prs: PrsIcon,
+  terminal: TerminalIcon,
+  issues: IssuesIcon,
+  tasks: TasksIcon,
+  repos: ReposIcon,
+};
+
+/** A number beside a destination, where the Inbox already knows one. Only
+ *  where it is the SAME question the destination answers — "how many pull
+ *  requests need you" is, "how many exist" is not, and this screen only has
+ *  the first. */
+const COUNTS: Record<string, ((c: { needs: number; failing: number; ready: number }) => number) | undefined> = {
+  prs: (c) => c.needs + c.ready,
+};
 
 type ListRow = { heading: InboxGroup } | { item: InboxItem };
 
@@ -278,6 +314,50 @@ export default function InboxScreen(): React.ReactNode {
               </View>
               <ChevronIcon color={C.text4} size={17} />
             </Pressable>
+          </View>
+
+          {/*
+            Where else there is, now that nothing draws a bar.
+
+            Read from BAR in src/nav/bar.ts rather than listed again here — it
+            is still the list of what this app is FOR, and two places naming
+            four destinations is how one of them ends up missing the fifth. The
+            Inbox itself is dropped: it is the page you are on.
+
+            Counts where there is one worth giving. A destination with a number
+            beside it is a reason to press it; a bare word is a menu.
+          */}
+          <View style={{ gap: SPACE.sm }}>
+            <Label text="Go to" />
+            {DESTINATIONS.map((dest, i) => {
+              const Icon = ICONS[dest.route as keyof typeof ICONS];
+              const count = COUNTS[dest.route]?.(inbox.counts);
+              return (
+                <Pressable
+                  key={dest.route}
+                  onPress={() => router.push(`/${dest.route === "index" ? "" : dest.route}`)}
+                  accessibilityRole="button"
+                  accessibilityLabel={dest.label ?? dest.route}
+                  style={({ pressed }) => [
+                    groupEdge(i === 0, i === DESTINATIONS.length - 1),
+                    {
+                      flexDirection: "row", alignItems: "center", gap: SPACE.md,
+                      paddingHorizontal: SPACE.lg, minHeight: TAP,
+                      opacity: pressed ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  {Icon ? <Icon color={C.text3} size={19} /> : null}
+                  <Text style={{ color: C.text, fontSize: T.body, flex: 1 }}>
+                    {dest.label ?? "Terminal"}
+                  </Text>
+                  {count ? (
+                    <Text style={{ color: C.text3, fontSize: T.small, fontFamily: MONO }}>{count}</Text>
+                  ) : null}
+                  <ChevronIcon color={C.text4} size={17} />
+                </Pressable>
+              );
+            })}
           </View>
         </View>
       }

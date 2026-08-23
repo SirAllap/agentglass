@@ -106,8 +106,20 @@ describe("the tab bar and the keyboard", () => {
    */
   const bar = code(readFileSync(join(root, "src/nav/TabBar.tsx"), "utf8"));
 
-  test("the bar stands down while somebody is typing", () => {
-    expect(bar).toContain("useKeyboardShown");
-    expect(bar).toMatch(/if \(keyboard\) return null;/);
+  test("the bar draws nothing at all", () => {
+    /*
+     * It used to stand down while somebody was typing. It stands down always
+     * now — the bar is retired, and every screen carries its own way back (see
+     * the note in src/nav/TabBar.tsx and app/(tabs)/_layout.tsx).
+     *
+     * The lock changes shape rather than going away, and this is the shape that
+     * matters: if anybody brings the bar back, this fails, and the thing they
+     * have to re-read is the paragraph below — which is the whole reason the
+     * keyboard rule existed. A bar restored without it was photographed twice,
+     * once riding up to mid-screen with the star over the list, once buried
+     * under the keys.
+     */
+    expect(bar).toMatch(/return null;\s*\}/);
+    expect(bar).not.toMatch(/<Pressable/);
   });
 });

@@ -88,14 +88,21 @@ export default function TabsLayout(): React.ReactNode {
           control, which was a saving made when the bar was full of screens
           that have since gone. They are two destinations now, and each keeps
           the screen it always had. */}
-      <Tabs.Screen name="prs" options={{ title: "Pull requests" }} />
+      {/*
+        Every one of these carries the way back, because none of them is drawn
+        in a bar any more. `back` in a tab navigator goes to the first route,
+        which is the Inbox — and the Inbox is now the only place any of them is
+        opened from, so it is also the right answer.
+      */}
+      <Tabs.Screen name="prs" options={{ title: "Pull requests", headerLeft: () => back }} />
+      {/* The terminal draws its own header — it is the one screen that gives
+          the pane every point it can, so the navigator's chrome would be
+          spending 56 of them on a title. Its back control is in that header. */}
       <Tabs.Screen name="terminal" options={{ title: "Terminal", headerShown: false }} />
-      <Tabs.Screen name="issues" options={{ title: "Issues" }} />
-      <Tabs.Screen name="tasks" options={{ title: "Cards" }} />
-
-      {/* ── the three the bar does not draw ─────────────────────────────── */}
+      <Tabs.Screen name="issues" options={{ title: "Issues", headerLeft: () => back }} />
+      <Tabs.Screen name="tasks" options={{ title: "Cards", headerLeft: () => back }} />
       <Tabs.Screen name="now" options={{ title: "Now", headerLeft: () => back }} />
-      <Tabs.Screen name="repos" options={{ title: "Repos", headerLeft: () => back }} />
+      <Tabs.Screen name="repos" options={{ title: "Source control", headerLeft: () => back }} />
       <Tabs.Screen name="settings" options={{ title: "Settings", headerLeft: () => back }} />
     </Tabs>
   );
