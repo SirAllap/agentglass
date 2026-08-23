@@ -247,12 +247,30 @@ function browser(): string {
   return found;
 }
 
+/**
+ * Chrome refuses to start as root unless its sandbox is off, and says so:
+ * "Running as root without --no-sandbox is not supported".
+ *
+ * Every container this can run in — CI, an agent's workspace — is root, and
+ * without this the harness died before opening a page, with the reason on
+ * Chrome's stderr, which is piped to /dev/null two lines below. So it was
+ * "chrome never opened a page" and nothing else, on the one machine where the
+ * fix is a flag.
+ *
+ * Only as root, deliberately. On a developer's laptop the sandbox stays on:
+ * this drives a page built from the working tree, and turning a browser
+ * protection off by default because a container needs it is how it ends up off
+ * everywhere.
+ */
+const asRoot = typeof process.getuid === "function" && process.getuid() === 0;
+
 const chrome = Bun.spawn([
   browser(), "--headless=new", "--disable-gpu", "--no-first-run",
   // The app talks to the agentglass server on another port. A browser calls
   // that cross-origin; a phone does not. This is a harness, and the thing under
   // test is the screens, not the browser's own rules.
   "--disable-web-security", `--user-data-dir=${profile}`,
+  ...(asRoot ? ["--no-sandbox"] : []),
   "--window-size=412,915", `--remote-debugging-port=${CDP_PORT}`, "about:blank",
 ], { stdout: "ignore", stderr: "ignore" });
 
