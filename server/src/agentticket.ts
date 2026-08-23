@@ -26,6 +26,7 @@
  * boolean, exactly as it already does over the tmux socket.
  */
 import { randomBytes } from "node:crypto";
+import { agentKind } from "../../shared/agentKinds.ts";
 
 export interface AgentRequest {
   /** The worktree to start in. Validated by the caller against the open
@@ -39,6 +40,29 @@ export interface AgentRequest {
   yolo: boolean;
   /** The session name, already through `sessionTitle`. */
   title: string;
+  /**
+   * Which CLI, as an id from shared/agentKinds.ts.
+   *
+   * Optional, and absent means Claude. Every caller that predates the phone's
+   * agent menu — the review hand-off, the issue start, the desktop's own new
+   * window — meant Claude and said nothing, and the default keeps them right
+   * rather than making them all pass a constant.
+   */
+  kind?: string;
+}
+
+/**
+ * The executable for a kind, or null when it is not on this machine.
+ *
+ * Claude goes through `claudeCode.bin()` at the call site, which knows about
+ * more than PATH — a version pinned in the config, a shim, an install the
+ * user pointed at. The rest are looked up plainly, and a null here is the
+ * whole reason the menu asks the machine what it HAS rather than offering
+ * four names and finding out afterwards.
+ */
+export function agentBinFor(kind: string): string | null {
+  const spec = agentKind(kind);
+  return spec ? Bun.which(spec.bin) : null;
 }
 
 /**
@@ -117,18 +141,41 @@ export function __clearAgentTickets(): void { pending.clear(); }
  */
 export function agentArgv(
   bin: string | null | undefined,
-  req: { prompt: string; yolo: boolean; title: string },
+  req: { prompt: string; yolo: boolean; title: string; kind?: string },
   canName: boolean,
 ): string[] {
   if (!bin) return [];
+  /*
+   * Which CLI's flags to build, and the default that keeps every existing
+   * caller working.
+   *
+   * `kind` is absent on every path that predates the phone's agent menu — the
+   * review hand-off, the issue start, the desktop's own new window — and all
+   * of them mean Claude, which is what they got when this function only knew
+   * how to build one command line.
+   */
+  const kind = agentKind(req.kind ?? "claude") ?? agentKind("claude")!;
+
   // `--name` is what `/rename` writes, set before the first turn rather than
   // typed into a program that may not have finished starting. The value is data
   // from the client and the flag is ours — the same division as the permission
-  // flag below.
-  const named = req.title && canName ? ["--name", req.title] : [];
-  const skip = req.yolo ? ["--dangerously-skip-permissions"] : [];
+  // flag below. Only where the CLI HAS such a flag: passing Claude's to Codex
+  // is an unknown option and an immediate exit.
+  const named = req.title && canName && kind.nameFlag ? [kind.nameFlag, req.title] : [];
+  const skip = req.yolo && kind.yoloFlag ? [kind.yoloFlag] : [];
+
   // The prompt is LAST and is one element. Never split, never through a shell:
   // a review brief contains quotes, newlines and backticks, and every one of
   // them is text.
+  //
+  // An empty prompt takes no slot at all. `claude ""` is a turn with nothing in
+  // it, which some of these answer and others sit on; a menu entry that opens a
+  // CLI to work in has no prompt by definition, and that has to mean "just
+  // start" rather than "start and say nothing".
+  if (!req.prompt) return [bin, ...named, ...skip];
+  if (kind.mode === "flag") return [bin, ...named, ...skip, "--prompt", req.prompt];
+  if (kind.mode === "flag-interactive") {
+    return [bin, ...named, ...skip, "--prompt-interactive", req.prompt];
+  }
   return [bin, ...named, ...skip, req.prompt];
 }

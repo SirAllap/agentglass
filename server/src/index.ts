@@ -114,7 +114,9 @@ import {
   prBranches, prsForBranch } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
-import { mintAgentTicket } from "./agentticket.ts";
+import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
+import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
+import { claudeCode } from "./agents/claudecode.ts";
 import { listPanes, focusPaneAnywhere, activePane, sweepPinnedWindows, pinnedSockets } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
@@ -2982,7 +2984,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/terminal/agent" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
-      let b: { cwd?: unknown; prompt?: unknown; yolo?: unknown; title?: unknown };
+      let b: { cwd?: unknown; prompt?: unknown; yolo?: unknown; title?: unknown; kind?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const cwd = gitSafeAbs(b.cwd);
       if (!cwd || !inScope(cwd) || !fsExists(cwd)) {
@@ -2992,7 +2994,13 @@ const server = Bun.serve<WsData>({
       // Bypass is a permission, not a parameter: the same gate the chat engines
       // go through, so a socket cannot buy the flag the config refuses.
       const yolo = b.yolo === true && chatBypassAllowed();
-      const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title) });
+      /* Validated against the table rather than passed through. `kind` decides
+         which executable runs, so an unrecognised one must not reach a lookup:
+         it is an id from shared/agentKinds.ts or it is Claude, never a string
+         off the wire. */
+      const wanted = typeof b.kind === "string" ? b.kind : "claude";
+      if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
+      const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title), kind: wanted });
       return json({ ok: true, ticket: id });
     }
 
@@ -3002,6 +3010,31 @@ const server = Bun.serve<WsData>({
     // ever sees. Every target id is validated against tmux's own shapes before
     // it reaches a command (see tmuxlayout.ts), and every write goes through
     // the same trusted-caller gate as the rest of the app.
+    /*
+     * Which agent CLIs are on this machine.
+     *
+     * The phone's new-tab menu asks before it draws. A menu listing four names
+     * where only two are installed fails AFTER the window has opened — a blank
+     * pane on somebody's computer rather than a sentence on their screen — and
+     * the phone has no other way to know.
+     */
+    if (pathname === "/terminal/agents") {
+      return json({
+        ok: true,
+        agents: AGENT_KINDS.map((a) => ({
+          id: a.id,
+          title: a.title,
+          what: a.what,
+          /* Claude answers through its own resolver, which knows about a
+             pinned version and a shim as well as PATH. */
+          installed: a.id === "claude" ? !!claudeCode.bin() : !!agentBinFor(a.id),
+          /* Whether "permissions off" is a thing this one HAS. A phone must
+             not draw a switch that buys no flag. */
+          canBypass: !!a.yoloFlag,
+        })),
+      });
+    }
+
     if (pathname === "/terminal/tmux-status") {
       const bin = tmuxBinStatus();
       const health = confHealth();

@@ -32,7 +32,7 @@
  * it, which is the bargain the agent's own prompt makes. `keys` mode is there
  * for the other half of a terminal, the program waiting on one keystroke.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -45,9 +45,23 @@ import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon } from "../../src/nav/icons.tsx";
+
+/** One row of `/terminal/agents`. Declared here rather than in shared/ for the
+ *  same reason PrViewCounts is: it is this route's answer shape and nothing
+ *  else reads it — see the note in app/(tabs)/prs.tsx. */
+interface AgentOffer {
+  id: string;
+  title: string;
+  what: string;
+  /** On THIS machine. A name with no binary behind it is drawn and refused,
+   *  never offered. */
+  installed: boolean;
+  /** Whether this CLI has a skip-permissions flag at all. */
+  canBypass: boolean;
+}
 import { bestSession, readStrip, sessionsOf, type Tab } from "../../src/terminal/tabs.ts";
 import type { PanesResponse } from "../../../shared/types.ts";
-import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
 
 export default function TerminalScreen(): React.ReactNode {
@@ -370,6 +384,11 @@ export default function TerminalScreen(): React.ReactNode {
    * happened", and the second press opens a second agent.
    */
   const [opening, setOpening] = useState(false);
+  /** The new-tab menu, and the agents the MACHINE reports. Null until it
+   *  answers, so the sheet says it is asking rather than drawing an empty list
+   *  that reads as "none available". */
+  const [picking, setPicking] = useState(false);
+  const [agents, setAgents] = useState<AgentOffer[] | null>(null);
   /** The deadline on that spinner. A ref because it is cleared from a callback
    *  that must not re-run when it changes. */
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -401,12 +420,26 @@ export default function TerminalScreen(): React.ReactNode {
    * its first tool call to ask a question there has done nothing at all. The
    * button says so in as many words rather than hiding it in a mode.
    */
-  const openAgent = useCallback((): void => {
+  /* Asked once per host rather than when the sheet opens: it is a small read
+     and a menu that spins on the way in is a menu people stop opening. */
+  useEffect(() => {
+    if (!host) { setAgents(null); return; }
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ ok: boolean; agents?: AgentOffer[] }>(host, "/terminal/agents");
+      if (gone || !answer.ok || !answer.value.ok) return;
+      setAgents(answer.value.agents ?? []);
+    })();
+    return () => { gone = true; };
+  }, [host]);
+
+  const openAgent = useCallback((kind: string, yolo: boolean): void => {
     if (!terminal.current) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setOpening(true);
     setError(null);
-    terminal.current.command({ t: "tmux", cmd: "agent", yolo: true });
+    setPicking(false);
+    terminal.current.command({ t: "tmux", cmd: "agent", kind, yolo });
     /*
      * And a deadline, because a spinner with no way out is worse than a
      * refusal.
@@ -989,10 +1022,10 @@ export default function TerminalScreen(): React.ReactNode {
             not the home directory, which is the wrong tab drawn convincingly.
           */}
           <Pressable
-            onPress={openAgent}
+            onPress={() => setPicking(true)}
             disabled={!open || opening}
             accessibilityRole="button"
-            accessibilityLabel="New tab running Claude in this project, with permission prompts off"
+            accessibilityLabel="New tab in this project"
             style={{
               paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
               borderLeftWidth: 1, borderLeftColor: C.border,
@@ -1552,6 +1585,68 @@ export default function TerminalScreen(): React.ReactNode {
           </Pressable>
         </View>
       </View>
+      {/*
+        The new tab, as a choice rather than a silent default.
+
+        `+` used to start Claude with permission prompts OFF, every time, with
+        the whole of that decision living in an accessibility label nobody
+        hears. That is the most consequential press on this screen — it is an
+        agent let loose in a checkout — and it was the one with no dialog.
+
+        The list is what the MACHINE reports, not what this app can imagine.
+        `/terminal/agents` answers with `installed` per row, so a CLI that is
+        not there is drawn greyed and says so, rather than being offered and
+        failing after the window has already opened — which on a phone is a
+        blank pane on a computer you are not sitting at.
+
+        Permissions are a second press, not a switch on the row. A row that
+        launches and a toggle that arms are two different gestures, and putting
+        them in one control is how somebody means to read the list and starts
+        an agent instead.
+      */}
+      <Sheet open={picking} onClose={() => setPicking(false)} title="New tab">
+        {agents === null ? (
+          <Note>Asking the computer which agents it has…</Note>
+        ) : (
+          <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
+            {agents.map((a) => (
+              <View key={a.id} style={{ gap: SPACE.xs, paddingVertical: SPACE.xs }}>
+                <SheetRow
+                  label={a.installed ? a.title : `${a.title} — not installed`}
+                  sub={a.what}
+                  onPress={() => { if (a.installed) openAgent(a.id, false); }}
+                />
+                {/* Only where the CLI HAS the flag, and only when it is there
+                    to run. A switch that buys nothing is a switch that teaches
+                    the wrong thing about what pressing it did. */}
+                {a.installed && a.canBypass ? (
+                  <Pressable
+                    onPress={() => openAgent(a.id, true)}
+                    accessibilityRole="button"
+                    style={({ pressed }) => ({
+                      minHeight: TAP, justifyContent: "center",
+                      paddingHorizontal: SPACE.lg, opacity: pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Text style={{ color: C.warning, fontSize: T.small }}>
+                      …and skip permission prompts
+                    </Text>
+                    <Text style={{ color: C.text4, fontSize: T.eyebrow }}>
+                      It will not stop to ask before running a command.
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ))}
+            {agents.every((a) => !a.installed) ? (
+              <Note tone="bad">
+                No agent CLI is installed on that computer. A new tab would be a plain shell.
+              </Note>
+            ) : null}
+          </View>
+        )}
+      </Sheet>
+
     </KeyboardAvoidingView>
   );
 }

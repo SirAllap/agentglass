@@ -466,7 +466,8 @@ import { focusPaneAnywhere, resolveClient, readFrame, runAction, setStatusLine, 
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
-import { agentArgv, claimAgentTicket } from "./agentticket.ts";
+import { agentArgv, agentBinFor, claimAgentTicket } from "./agentticket.ts";
+import { agentKind } from "../../shared/agentKinds.ts";
 
 import { applyThemeTo } from "./themesync.ts";
 import { install as installMarkers, shq } from "./shellmark.ts";
@@ -739,7 +740,14 @@ export function ptyOpen(ws: PtyWs) {
    * the right tree is still most of what was asked for.
    */
   const ticket = typeof d.agent === "string" && d.agent ? claimAgentTicket(d.agent) : null;
-  const agentBin = ticket ? claudeCode.bin() : null;
+  /* Claude keeps its own resolver, which knows about a pinned version and a
+     shim as well as PATH. Anything else is looked up by name — see
+     agentBinFor. A kind that is not installed resolves to null, and the
+     callers below already read that as "open a plain shell in the worktree",
+     which is the right answer rather than an empty pane. */
+  const agentBin = ticket
+    ? (!ticket.kind || ticket.kind === "claude" ? claudeCode.bin() : agentBinFor(ticket.kind))
+    : null;
   const agentRun = ticket ? agentArgv(agentBin, ticket, supportsSessionName(agentBin)) : [];
 
   /*
@@ -1587,7 +1595,18 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         ctl(ws, { t: "openfail", error: "that project is outside the workspace" });
         return;
       }
-      const bin = claudeCode.bin();
+      /* Which CLI, and it is checked against the table rather than trusted.
+         This socket is reachable from a browser and the value ends up choosing
+         an executable, so it is an id from shared/agentKinds.ts or it is
+         refused — the same rule the HTTP route follows. Absent means Claude,
+         which is what this command meant before the phone had a menu. */
+      const kind = typeof msg.kind === "string" ? msg.kind : "claude";
+      const spec = agentKind(kind);
+      if (!spec) {
+        ctl(ws, { t: "openfail", error: "no such agent" });
+        return;
+      }
+      const bin = kind === "claude" ? claudeCode.bin() : agentBinFor(kind);
       // The window is named after the checkout, which is what tells six of them
       // apart in a strip — `agentglass`, `width-toast`, `phone-new-tab`.
       const name = basename(root) || "agent";
@@ -1596,7 +1615,10 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
          message would be a poor trade. */
       void (async () => {
         const opened = await engineWindowRunning(root, name, bin
-          ? [bin, ...(msg.yolo === true ? ["--dangerously-skip-permissions"] : [])]
+          // The flag is the SPEC's, never the client's, and only where the CLI
+          // has one: passing Claude's to Codex is an unknown option and an
+          // immediate exit.
+          ? [bin, ...(msg.yolo === true && spec.yoloFlag ? [spec.yoloFlag] : [])]
           // No agent on this machine is not a reason to open nothing: a shell
           // in the right project is still most of what was asked for, and the
           // same answer `cmd:"issue"` gives.

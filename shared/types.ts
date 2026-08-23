@@ -610,7 +610,19 @@ export type PtyClientFrame =
    * `yolo` buys exactly one flag, the same division `cmd:"issue"` already
    * makes. It is a boolean rather than a string for that reason.
    */
-  | { t: "tmux"; cmd: "agent"; yolo?: boolean }
+  | {
+      t: "tmux"; cmd: "agent"; yolo?: boolean;
+      /**
+       * Which CLI, as an id from shared/agentKinds.ts.
+       *
+       * Absent means Claude, which is what this frame meant before the phone
+       * had a menu — so every caller that predates it stays right without
+       * passing a constant. Validated against the table on arrival: it decides
+       * which executable runs, so it is an id or it is refused, never a string
+       * that reaches a lookup.
+       */
+      kind?: string;
+    }
   /**
    * Bring a past session back — the picker's "open this one".
    *
