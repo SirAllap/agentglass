@@ -45,7 +45,9 @@ import { useDeskPalette, usePaletteTick } from "../../src/state/use-palette.ts";
 import { TerminalView, type TerminalHandle, type TerminalState } from "../../src/terminal/TerminalView.tsx";
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
 import { apply as applyKeyLayout } from "../../src/terminal/keyLayout.ts";
-import { keyLayout, onTermPrefs, setTermColumns, termColumns } from "../../src/terminal/termPrefs.ts";
+import {
+  keyLayout, onTermPrefs, setTermColumns, termAssist, termColumns,
+} from "../../src/terminal/termPrefs.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon } from "../../src/nav/icons.tsx";
@@ -413,11 +415,14 @@ export default function TerminalScreen(): React.ReactNode {
      screen see one value; the local mirror is only what makes this repaint
      when the other one writes. See src/terminal/keyStore.ts. */
   const [bar, setBar] = useState(keyLayout);
+  const [assist, setAssist] = useState(termAssist);
   /** The overflow menu, and the past sessions it can offer. Null until asked —
    *  it is a read per checkout and the menu is not opened on the way in. */
   const [more, setMore] = useState(false);
   const [past, setPast] = useState<AgentSessionRow[] | null>(null);
-  useEffect(() => onTermPrefs(() => { setBar(keyLayout()); setColumns(termColumns()); }), []);
+  useEffect(() => onTermPrefs(() => {
+    setBar(keyLayout()); setColumns(termColumns()); setAssist(termAssist());
+  }), []);
   const keys = useMemo(() => applyKeyLayout(bar, ACCESSORY_KEYS), [bar]);
   /** The deadline on that spinner. A ref because it is cleared from a callback
    *  that must not re-run when it changes. */
@@ -1698,9 +1703,12 @@ export default function TerminalScreen(): React.ReactNode {
             onBlur={() => { claimed.current = false; forgetKeys(); }}
             // A shell is case-sensitive and knows its own words. Every one of
             // these on is a keyboard rewriting a command into English.
+            // Off unless somebody asked for it: this field composes a command,
+            // and a keyboard that autocorrects rewrites flags and paths into
+            // English silently. See termPrefs.ts.
             autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
+            autoCorrect={assist}
+            spellCheck={assist}
             // The keyboard that does not predict, which in `keys` is not a
             // preference: prediction rewrites characters it has already given
             // up, and those have gone down the socket.

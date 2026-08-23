@@ -51,9 +51,27 @@ const KEY = "agentglass.term.v1";
 export const COLUMNS = [60, 80] as const;
 export const DEFAULT_COLUMNS = 80;
 
+/**
+ * Whether the phone's keyboard may help while composing a line.
+ *
+ * OFF, and that is the default rather than a preference with no opinion. The
+ * field composes a command: a keyboard that autocorrects rewrites flags, paths
+ * and branch names into English words, and it does it silently — `--no-verify`
+ * becomes `--no verify`, `src/ui.tsx` gains a capital, and the first anybody
+ * knows is a command that did not run or, worse, one that ran differently.
+ *
+ * It is offered at all because the same field is also where somebody types a
+ * sentence to an agent, and there the help is help. So it is a choice, made
+ * once, defaulting to the side where being wrong is cheap.
+ *
+ * Direct keys are unaffected either way: in `keys` mode a keystroke goes to
+ * the pane without passing through a composer, so there is nothing for a
+ * suggestion to act on.
+ */
 interface Prefs {
   layout: KeyLayout;
   columns: number;
+  assist: boolean;
 }
 
 /** The one module read here, required lazily and by a literal name.
@@ -76,11 +94,12 @@ function keystore(): KeystoreModule | null {
   }
 }
 
-let prefs: Prefs = { layout: DEFAULT_LAYOUT, columns: DEFAULT_COLUMNS };
+let prefs: Prefs = { layout: DEFAULT_LAYOUT, columns: DEFAULT_COLUMNS, assist: false };
 const listeners = new Set<() => void>();
 
 export const keyLayout = (): KeyLayout => prefs.layout;
 export const termColumns = (): number => prefs.columns;
+export const termAssist = (): boolean => prefs.assist;
 
 /** Told, rather than polled. The terminal and the settings screen are both on
  *  screen at different times and neither owns the value. */
@@ -101,12 +120,17 @@ export function setTermColumns(next: number): void {
   save({ ...prefs, columns: want });
 }
 
+export function setTermAssist(on: boolean): void {
+  save({ ...prefs, assist: on });
+}
+
 function save(next: Prefs): void {
   prefs = next;
   for (const fn of [...listeners]) fn();
   void keystore()?.setItemAsync(KEY, JSON.stringify({
     layout: JSON.parse(serialise(next.layout)) as unknown,
     columns: next.columns,
+    assist: next.assist,
   }))
     .catch(() => {
       // The choice stays live for this run. Refusing the change instead would
@@ -127,12 +151,12 @@ void (async () => {
   try {
     const raw = await keystore()?.getItemAsync(KEY);
     if (!raw) return;
-    const stored = JSON.parse(raw) as { layout?: unknown; columns?: unknown };
+    const stored = JSON.parse(raw) as { layout?: unknown; columns?: unknown; assist?: unknown };
     const layout = parse(stored.layout ? JSON.stringify(stored.layout) : null);
     const columns = typeof stored.columns === "number"
       && COLUMNS.includes(stored.columns as typeof COLUMNS[number])
       ? stored.columns : DEFAULT_COLUMNS;
-    prefs = { layout, columns };
+    prefs = { layout, columns, assist: stored.assist === true };
     for (const fn of [...listeners]) fn();
   } catch {
     // Left at the default, which is a working bar.

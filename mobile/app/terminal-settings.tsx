@@ -30,9 +30,10 @@ import { usePaletteTick } from "../src/state/use-palette.ts";
 import { ACCESSORY_KEYS } from "../src/terminal/keys.ts";
 import { canHide, move, reset, rows, toggle } from "../src/terminal/keyLayout.ts";
 import {
-  COLUMNS, keyLayout, onTermPrefs, setKeyLayout, setTermColumns, termColumns,
+  COLUMNS, keyLayout, onTermPrefs, setKeyLayout, setTermAssist, setTermColumns, termAssist,
+  termColumns,
 } from "../src/terminal/termPrefs.ts";
-import { Btn, Note, Section, Segmented, TAP, groupEdge } from "../src/ui.tsx";
+import { Btn, Note, Section, Segmented, TAP, Toggle, groupEdge } from "../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../src/theme.ts";
 
 export default function TerminalSettingsScreen(): React.ReactNode {
@@ -42,7 +43,10 @@ export default function TerminalSettingsScreen(): React.ReactNode {
      value. This is only the local mirror that makes the list repaint. */
   const [layout, setLocal] = useState(keyLayout);
   const [cols, setCols] = useState(termColumns);
-  useEffect(() => onTermPrefs(() => { setLocal(keyLayout()); setCols(termColumns()); }), []);
+  const [assist, setAssist] = useState(termAssist);
+  useEffect(() => onTermPrefs(() => {
+    setLocal(keyLayout()); setCols(termColumns()); setAssist(termAssist());
+  }), []);
 
   const change = useCallback((next: ReturnType<typeof keyLayout>): void => {
     setKeyLayout(next);
@@ -77,6 +81,23 @@ export default function TerminalSettingsScreen(): React.ReactNode {
           A pane wider than this is shown from its left-hand edge, and the terminal says so when
           that happens.
         </Note>
+      </Section>
+
+      <Section
+        label="Keyboard help"
+        note={
+          "Autocorrect and suggestions in the field that composes a line. Off by default because "
+          + "that field usually holds a command: a keyboard that helps rewrites flags, paths and "
+          + "branch names into English, silently, and the first you know is a command that did not "
+          + "run — or one that ran differently."
+        }
+      >
+        <Toggle
+          on={assist}
+          label={assist ? "The keyboard may help" : "The keyboard stays out of it"}
+          sub="Keys sent straight to the pane are never touched either way."
+          onPress={() => { setTermAssist(!assist); setAssist(!assist); }}
+        />
       </Section>
 
       <Section
