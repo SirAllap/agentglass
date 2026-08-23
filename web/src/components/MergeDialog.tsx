@@ -4,7 +4,7 @@ import { Portal } from "./Portal.tsx";
 import { Select } from "./Select.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
-import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../lib/mergeMethod.ts";
+import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
 import { LEAVE_ALONE, movesCard, statusColor, statusOptions, type CardMove } from "../lib/cardMove.ts";
 import { api } from "../lib/api.ts";
 import { MOD_KEY } from "../lib/format.ts";

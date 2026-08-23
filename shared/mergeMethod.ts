@@ -1,4 +1,4 @@
-import type { PrMergeMethod, PrMergePolicy } from "../../../shared/types.ts";
+import type { PrMergeMethod, PrMergePolicy } from "./types.ts";
 
 /**
  * Which way a pull request lands, and what to call it.

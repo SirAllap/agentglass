@@ -17,7 +17,9 @@
  * the same two-pass shape the pull request list already uses for its checks.
  */
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  ActivityIndicator, KeyboardAvoidingView, Linking, Pressable, ScrollView, Text, TextInput, View,
+} from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { IssueDetail, IssuePr, IssuePrsReport, IssueStartResult } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
@@ -26,6 +28,7 @@ import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { since } from "../../src/lib/dates.ts";
 import { Btn, Card, Label, Note } from "../../src/ui.tsx";
+import { RADIUS as R } from "../../src/theme.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /** A label in the colour the repository gave it, with a floor — the same rule
@@ -59,6 +62,12 @@ export default function IssueScreen(): React.ReactNode {
   const [prs, setPrs] = useState<IssuePr[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  /** One box, two buttons. `/issues/claim` takes an optional comment and posts
+   *  it in the same call as the assignment, so claiming with a note is one
+   *  request rather than two — and two would be two ways to half-fail. */
+  const [say, setSay] = useState("");
+  const [busy, setBusy] = useState<"comment" | "claim" | null>(null);
+  const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     if (!host || !number || !root) return;
@@ -133,10 +142,50 @@ export default function IssueScreen(): React.ReactNode {
   }, [host, detail, root, router, load]);
 
   const now = Date.now();
+  /**
+   * Say something, or take it — and taking it can carry what was typed.
+   *
+   * Both land on the issue and neither is undoable from here, which is why the
+   * result is reported rather than assumed: the server answers with its own
+   * sentence ("Assigned and commented", "Assigned, but the comment failed")
+   * and that half-failure is a real one worth reading. A screen that just
+   * cleared the box would report a comment nobody posted.
+   */
+  const act = useCallback(async (what: "comment" | "claim"): Promise<void> => {
+    if (!host || !detail || !root) return;
+    const text = say.trim();
+    if (what === "comment" && !text) return;
+    setBusy(what);
+    setSaid(null);
+    const answer = await ask<{ ok: boolean; error?: string; detail?: string }>(
+      host,
+      what === "claim" ? "/issues/claim" : "/issues/comment",
+      {
+        method: "POST",
+        body: what === "claim"
+          ? { root, number: detail.number, comment: text || undefined }
+          : { root, number: detail.number, body: text },
+      },
+    );
+    setBusy(null);
+    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
+    if (!answer.value.ok) {
+      setSaid({ ok: false, text: answer.value.error || "GitHub refused that." });
+      return;
+    }
+    setSay("");
+    setSaid({ ok: true, text: answer.value.detail || "Done." });
+    // Re-read, because both of these change what "Who has it" says.
+    void load();
+  }, [host, detail, root, say, load]);
+
   const closed = (detail?.state ?? "").toLowerCase() === "closed";
 
   return (
-    <View style={{ flex: 1, backgroundColor: C.bg }}>
+    /* `padding`, on both platforms, and never Platform-conditional — the rule
+       and the measurement behind it are in test/keyboard-inset.test.ts. This
+       screen takes typing now, so it is in scope for it. */
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }} behavior="padding">
       <Stack.Screen options={{ title: `#${number}` }} />
       <ScrollView
         contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}
@@ -219,6 +268,58 @@ export default function IssueScreen(): React.ReactNode {
             {detail.milestone ? <Note>Milestone: {detail.milestone}</Note> : null}
           </Card>
 
+          {/*
+            Saying something, and taking it.
+
+            Only with `full`, and not drawn otherwise — the rule repos.tsx set
+            and the same one the Start button above follows. A comment posted
+            under your name and an assignment are both writes to somebody
+            else's repository, and a phone paired to answer gates does not get
+            to make them.
+
+            Not offered on a closed issue. Commenting on one is a real thing
+            people do, but claiming it is not, and a box with one live button
+            beside one dead one is a worse answer than the sentence.
+          */}
+          {mayWrite && !closed ? (
+            <Card style={{ gap: SPACE.sm }}>
+              <Label text="Say something" />
+              <TextInput
+                value={say}
+                onChangeText={setSay}
+                placeholder="A note on the issue…"
+                placeholderTextColor={C.text4}
+                multiline
+                style={{
+                  minHeight: 72, borderWidth: 1, borderColor: C.border,
+                  borderRadius: R.sm, backgroundColor: C.bg,
+                  color: C.text, padding: SPACE.sm, fontSize: T.body,
+                }}
+              />
+              <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+                <Btn
+                  label="Comment"
+                  style={{ flex: 1 }}
+                  busy={busy === "comment"}
+                  disabled={!say.trim() || busy !== null}
+                  onPress={() => { void act("comment"); }}
+                />
+                <Btn
+                  // The label says what the box will do, because the box
+                  // changes what the button means: claiming with something
+                  // typed posts it too, in the same call.
+                  label={say.trim() ? "Claim it, and say that" : "Claim it"}
+                  tone="primary"
+                  style={{ flex: 1.4 }}
+                  busy={busy === "claim"}
+                  disabled={busy !== null}
+                  onPress={() => { void act("claim"); }}
+                />
+              </View>
+              {said ? <Note tone={said.ok ? "quiet" : "bad"}>{said.text}</Note> : null}
+            </Card>
+          ) : null}
+
           <View style={{ gap: SPACE.sm }}>
             <Label text="Pull requests" />
             {prs === null ? (
@@ -297,6 +398,6 @@ export default function IssueScreen(): React.ReactNode {
           </Note>
         </View>
       ) : null}
-    </View>
+    </KeyboardAvoidingView>
   );
 }

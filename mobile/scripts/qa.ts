@@ -80,6 +80,9 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // could not read it, rather than rendering a blank.
   { path: "/pr/diff?number=0&root=%2Ftmp", name: "PR diff", expect: /Cannot read it|could not be read|out of scope|not a git repository|no GitHub remote/i },
   { path: "/issue/0?root=%2Ftmp", name: "Issue detail", expect: /Cannot read it|could not be read|out of scope|invalid request/i },
+  // The job list, which is a `read` route — so unlike every other write on the
+  // detail screens, this one has to hold under the default pairing scope.
+  { path: "/pr/checks?number=0&root=%2Ftmp", name: "PR checks", expect: /Cannot read them|could not be read|out of scope|No jobs|not a git repository/i },
   { path: "/card/nope", name: "Card detail", expect: /Cannot read it|could not be read|not connected|no card/i },
   { path: "/settings", name: "Settings", expect: /Paired with|This phone may/i },
 ];

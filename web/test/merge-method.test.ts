@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { allowedMethods, mergeBody, mergeSubject, pickMergeMethod } from "../src/lib/mergeMethod.ts";
+import { allowedMethods, mergeBody, mergeSubject, pickMergeMethod } from "../../shared/mergeMethod.ts";
 import type { PrMergePolicy } from "../../shared/types.ts";
 
 const policy = (allowed: PrMergePolicy["allowed"], rest: Partial<PrMergePolicy> = {}): PrMergePolicy =>

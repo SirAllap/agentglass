@@ -145,6 +145,63 @@ export function Note({ children, tone = "quiet" }: {
 }
 
 /**
+ * A thing that is on or off, with the consequence of each written under it.
+ *
+ * Not a platform Switch. Three of the four of these decide something with no
+ * undo — a branch deleted, a merge armed to land while nobody is watching —
+ * and a control whose whole state is a small sliding dot puts the weight of
+ * that on a glance. This is a 44-point row with a box, a label and a line
+ * saying what happens, and the line is where the argument actually is: a
+ * repository that already deletes its own branches should be told that,
+ * because "Delete the branch after" reads as necessary otherwise.
+ *
+ * Disabled is drawn rather than hidden, for the same reason: "this repository
+ * does not allow auto-merge" is a fact about the repository worth knowing, and
+ * a row that vanished would leave somebody looking for it.
+ */
+export function Toggle({ on, label, sub, disabled, onPress }: {
+  on: boolean;
+  label: string;
+  sub?: string;
+  disabled?: boolean;
+  onPress: () => void;
+}): ReactNode {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: on, disabled: !!disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexDirection: "row", alignItems: "center", gap: SPACE.md,
+        minHeight: TAP, opacity: disabled ? 0.45 : pressed ? 0.7 : 1,
+      })}
+    >
+      <View style={{
+        width: 20, height: 20, borderRadius: 5,
+        alignItems: "center", justifyContent: "center",
+        borderWidth: 1, borderColor: on ? C.primary : C.border2,
+        backgroundColor: on ? C.primary : "transparent",
+      }}>
+        {/* A tick drawn as two rules rather than a glyph: the same reason
+            src/nav/icons.tsx exists at all — Android's font has no dependable
+            check mark and the fallback chain runs out at an empty box. */}
+        {on ? (
+          <View style={{
+            width: 9, height: 5, borderLeftWidth: 2, borderBottomWidth: 2,
+            borderColor: ink(C.primary), transform: [{ rotate: "-45deg" }], marginTop: -2,
+          }} />
+        ) : null}
+      </View>
+      <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+        <Text style={{ color: C.text, fontSize: T.body }}>{label}</Text>
+        {sub ? <Text style={{ color: C.text3, fontSize: T.small }}>{sub}</Text> : null}
+      </View>
+    </Pressable>
+  );
+}
+
+/**
  * One switch between a few views of the same list.
  *
  * There were three of these, none of them the same. The pull requests drew

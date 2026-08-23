@@ -22,7 +22,9 @@
  * looks exactly like the right one until it starts editing.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  ActivityIndicator, KeyboardAvoidingView, Linking, Pressable, ScrollView, Text, TextInput, View,
+} from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import type { ProviderTask } from "../../../shared/providers.ts";
@@ -33,7 +35,7 @@ import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { dueIn } from "../../src/lib/dates.ts";
-import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /** One status the card can be moved to, as the list defines it. */
@@ -68,6 +70,7 @@ export default function CardScreen(): React.ReactNode {
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [handing, setHanding] = useState(false);
+  const [say, setSay] = useState("");
 
   const load = useCallback(async (): Promise<void> => {
     if (!host || !id) return;
@@ -136,6 +139,67 @@ export default function CardScreen(): React.ReactNode {
     await load();
   }, [host, card, load]);
 
+  /**
+   * A note on the card's activity.
+   *
+   * No `updated` stamp is sent, and the server's own comment says why: a
+   * comment adds to the history rather than overwriting a field, so a card
+   * that moved underneath is not a reason to refuse this one. That is the
+   * opposite of `move` above, which sends the stamp because two people
+   * dragging one card to different columns must not both win.
+   */
+  const comment = useCallback(async (): Promise<void> => {
+    if (!host || !card || !say.trim()) return;
+    setBusy("comment");
+    const answer = await ask<{ ok: boolean; error?: string }>(host, "/clickup/comment", {
+      method: "POST",
+      body: { id: card.id, text: say.trim() },
+    });
+    setBusy(null);
+    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
+    if (!answer.value.ok) {
+      setSaid({ ok: false, text: answer.value.error ?? "The board refused that." });
+      return;
+    }
+    setSay("");
+    setSaid({ ok: true, text: "Posted to the card." });
+    await load();
+  }, [host, card, say, load]);
+
+  /**
+   * Take it, or put it down.
+   *
+   * `/clickup/assign` with no `user` is the self-assign toggle — the server
+   * chooses between `assignSelf` and `setAssignee` on that field alone, and a
+   * phone has no business naming somebody else: picking a colleague needs the
+   * member list, a picker and a reason, and none of those belong on the screen
+   * you open in a corridor.
+   */
+  const claim = useCallback(async (on: boolean): Promise<void> => {
+    if (!host || !card) return;
+    setBusy("assign");
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const answer = await ask<{ ok: boolean; error?: string; conflict?: boolean }>(host, "/clickup/assign", {
+      method: "POST",
+      body: { id: card.id, on, updated: card.updated },
+    });
+    setBusy(null);
+    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
+    if (!answer.value.ok) {
+      setSaid({
+        ok: false,
+        // The board distinguishes these and so does this: "somebody else
+        // changed it" is a reason to look, not a reason to try again.
+        text: answer.value.conflict
+          ? "The card moved on the board while this was open — reopen it and try again."
+          : answer.value.error ?? "The board refused that.",
+      });
+      return;
+    }
+    setSaid({ ok: true, text: on ? "Assigned to you." : "Taken off you." });
+    await load();
+  }, [host, card, load]);
+
   /** Leave the window request and go to the terminal. The text is the card —
    *  its id and its title — which is what the desktop's own row hand-off
    *  sends, and the id is the HUMAN one because that is what every skill,
@@ -162,7 +226,9 @@ export default function CardScreen(): React.ReactNode {
   const moves = statuses.filter((s) => s.status && s.status !== card?.status);
 
   return (
-    <View style={{ flex: 1, backgroundColor: C.bg }}>
+    /* `padding`, both platforms, never Platform-conditional — the measurement
+       is in test/keyboard-inset.test.ts. This screen takes typing now. */
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }} behavior="padding">
       <Stack.Screen options={{ title: card?.customId || card?.id || "Card" }} />
 
       <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}>
@@ -219,6 +285,52 @@ export default function CardScreen(): React.ReactNode {
                 <Note>{card.comments} {card.comments === 1 ? "comment" : "comments"} on the board.</Note>
               ) : null}
             </Card>
+
+            {/*
+              Taking it, and saying something.
+
+              Only with `full`, not drawn otherwise — the rule repos.tsx set
+              and the one every write in this app follows. Both of these are
+              writes to somebody else's workspace.
+
+              `mine` is the server's answer, not a search of `assignees` for a
+              name the phone would have to know. Its own comment says why:
+              "resolved server-side against the connected account, because the
+              client has no business knowing your user id".
+            */}
+            {mayWrite ? (
+              <Card style={{ gap: SPACE.sm }}>
+                <Toggle
+                  on={card.mine === true}
+                  label={card.mine ? "It is yours" : "Take it"}
+                  sub={
+                    card.mine
+                      ? "Turning this off takes you off the card."
+                      : "Puts you on the card, alongside anybody already there."
+                  }
+                  disabled={busy !== null}
+                  onPress={() => { void claim(card.mine !== true); }}
+                />
+                <TextInput
+                  value={say}
+                  onChangeText={setSay}
+                  placeholder="A note on the card…"
+                  placeholderTextColor={C.text4}
+                  multiline
+                  style={{
+                    minHeight: 72, borderWidth: 1, borderColor: C.border,
+                    borderRadius: RADIUS.sm, backgroundColor: C.bg,
+                    color: C.text, padding: SPACE.sm, fontSize: T.body,
+                  }}
+                />
+                <Btn
+                  label="Post it"
+                  busy={busy === "comment"}
+                  disabled={!say.trim() || busy !== null}
+                  onPress={() => { void comment(); }}
+                />
+              </Card>
+            ) : null}
 
             {mayWrite && moves.length ? (
               <View style={{ gap: SPACE.sm }}>
@@ -297,6 +409,6 @@ export default function CardScreen(): React.ReactNode {
           </Note>
         </View>
       </Sheet>
-    </View>
+    </KeyboardAvoidingView>
   );
 }

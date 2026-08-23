@@ -33,7 +33,13 @@ import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.t
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
 import { since } from "../../src/lib/dates.ts";
-import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
+import { mergeVerdict } from "../../../shared/mergeReason.ts";
+import {
+  MERGE_LABEL, MERGE_OPTION, allowedMethods, mergeSubject, pickMergeMethod,
+  type MergeMethod,
+} from "../../../shared/mergeMethod.ts";
+import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
+import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /** The rollup as one word and one colour. `pending` beats `failure` on purpose:
@@ -86,15 +92,25 @@ function FileRow({ file, onOpen }: {
   );
 }
 
-function CheckRow({ check }: { check: PrCheck }): React.ReactNode {
+function CheckRow({ check, onOpen }: {
+  check: PrCheck;
+  /** Absent when there is nowhere to go. The row is a row either way — a
+   *  control that is sometimes pressable and looks identical is worse than one
+   *  that never is, so the chevron is what marks the difference. */
+  onOpen?: () => void;
+}): React.ReactNode {
   const bad = check.state === "failure";
   // `done` is the server's own word for "will not change without a push or a
   // re-run", and it is not the same question as the state: a check can read
   // `failure` and still be re-running.
   const running = !check.done;
   const ink = bad ? C.error : running ? C.warning : C.success;
+  const Row = onOpen ? Pressable : View;
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, minHeight: TAP }}>
+    <Row
+      {...(onOpen ? { onPress: onOpen, accessibilityRole: "button" as const } : {})}
+      style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, minHeight: TAP }}
+    >
       {/* A dot AND a word. Colour alone is not a signal to rely on at 11px
           outdoors — the same rule the repos screen states for its file marks. */}
       <View style={{
@@ -113,7 +129,8 @@ function CheckRow({ check }: { check: PrCheck }): React.ReactNode {
       <Text style={{ color: ink, fontSize: T.eyebrow }}>
         {running ? "running" : bad ? "failed" : check.state}
       </Text>
-    </View>
+      {onOpen ? <ChevronIcon color={C.text4} size={16} /> : null}
+    </Row>
   );
 }
 
@@ -144,6 +161,19 @@ export default function PrScreen(): React.ReactNode {
   const [verdict, setVerdict] = useState<"approve" | "request_changes" | "comment" | null>(null);
   const [summary, setSummary] = useState("");
   const [sent, setSent] = useState<string | null>(null);
+
+  /* Merging. `method` is null until the detail lands, because the repository is
+     what decides which three are on offer and opening on a guess is the bug
+     shared/mergeMethod.ts was written to end. */
+  const [merging, setMerging] = useState(false);
+  const [method, setMethod] = useState<MergeMethod | null>(null);
+  /* Both default OFF, and neither is remembered. A phone is where somebody
+     merges one thing in a corridor, and a toggle that carried yesterday's
+     answer into today's branch deletion is not a convenience. */
+  const [deleteBranch, setDeleteBranch] = useState(false);
+  const [auto, setAuto] = useState(false);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeErr, setMergeErr] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     if (!host || !number || !root) return;
@@ -230,6 +260,70 @@ export default function PrScreen(): React.ReactNode {
     setSent(null);
     void load();
   }, [host, detail, root, summary, notes, key, load]);
+
+  /* Opened on what the repository would have checked, once — not on every
+     render, or a tap on "Rebase" would be undone by the next repaint. */
+  const methods = useMemo(() => allowedMethods(detail?.mergePolicy), [detail?.mergePolicy]);
+  useEffect(() => {
+    if (detail && method === null) setMethod(pickMergeMethod(undefined, detail.mergePolicy));
+  }, [detail, method]);
+
+  /**
+   * Will GitHub take it, and if not, why — from the same ladder the desktop
+   * uses.
+   *
+   * `mergeVerdict` is in shared/ rather than repeated here, and that is the
+   * whole point: its own comment records that this ladder existed twice in the
+   * web app and the two were a second opinion on two of three cases within the
+   * day. A phone that reached its own verdict would be the third.
+   */
+  const gate = useMemo(
+    () => (detail ? mergeVerdict(detail.mergeState, detail.checks) : null),
+    [detail],
+  );
+
+  /**
+   * The merge, with the commit it is allowed to land from.
+   *
+   * `headSha` is not optional caution. This screen may have been open for
+   * minutes and the author may have pushed in that time, so the checks that
+   * were read — and that the button was believed on the strength of — are
+   * about a commit that is no longer the head. `--match-head-commit` makes
+   * GitHub refuse rather than merge something nobody looked at. When the
+   * second pass has not landed there is no sha, and the server simply omits
+   * the flag: a merge with no guard is what the desktop does too, and refusing
+   * to merge at all would be a phone inventing a rule.
+   */
+  const doMerge = useCallback(async (): Promise<void> => {
+    if (!host || !detail || !root || !method) return;
+    setMergeBusy(true);
+    setMergeErr(null);
+    const answer = await ask<{ ok: boolean; error?: string; detail?: string }>(host, "/prs/merge", {
+      method: "POST",
+      body: {
+        root,
+        number: detail.number,
+        method,
+        deleteBranch,
+        auto,
+        headSha: detail.headSha,
+        // The subject GitHub itself would have written. Not editable here —
+        // a permanent commit message is not a thing to compose with a thumb,
+        // and the desktop's dialog is where that belongs.
+        subject: mergeSubject(method, detail),
+      },
+    });
+    setMergeBusy(false);
+    if (!answer.ok) { setMergeErr(answer.error); return; }
+    if (!answer.value.ok) {
+      setMergeErr(answer.value.error || answer.value.detail || "GitHub refused that merge.");
+      return;
+    }
+    setMerging(false);
+    // Re-read rather than assume. With `auto` the pull request is still open
+    // and now says so, and that is exactly the state somebody needs to see.
+    void load();
+  }, [host, detail, root, method, deleteBranch, auto, load]);
 
   const now = Date.now();
   const checks = detail ? checksLook(detail) : null;
@@ -324,7 +418,21 @@ export default function PrScreen(): React.ReactNode {
               <View style={{ gap: SPACE.sm }}>
                 <Label text={`Failing · ${failing.length}`} />
                 <Card style={{ gap: SPACE.xs, padding: SPACE.md }}>
-                  {failing.map((c) => <CheckRow key={c.name} check={c} />)}
+                  {/* Every one of them opens the same screen. The job list
+                      there is the whole run, not this check alone: a failing
+                      `test` is routinely a `build` that fell over first, and
+                      arriving filtered to the row you tapped hides the job
+                      that actually broke. */}
+                  {failing.map((c) => (
+                    <CheckRow
+                      key={c.name}
+                      check={c}
+                      onOpen={() => router.push({
+                        pathname: "/pr/checks",
+                        params: { number: String(number), root: root ?? "" },
+                      })}
+                    />
+                  ))}
                 </Card>
               </View>
             ) : null}
@@ -392,6 +500,28 @@ export default function PrScreen(): React.ReactNode {
             disabled={!mayWrite || detail.viewerDidAuthor}
             onPress={() => setReviewing(true)}
           />
+          {/*
+            Merge is here rather than at the top because the Inbox has a group
+            called "Ready to merge" and tapping a row in it arrived at a screen
+            that could not.
+
+            Drawn only with `full`, like every other write — the scope rule is
+            "not drawn rather than drawn and refused". But it IS drawn when
+            merging is blocked, greyed, because the reason is the useful part
+            and a control that vanishes teaches nothing. That is the same
+            argument PrMergeState carries in shared/types.ts: "a disabled
+            control that can't say why is the thing this panel exists to
+            replace" — so the sheet says why.
+          */}
+          {mayWrite ? (
+            <Btn
+              label="Merge"
+              tone={gate && !gate.blocked ? "good" : "plain"}
+              style={{ flex: 1 }}
+              disabled={detail.state !== "OPEN"}
+              onPress={() => { setMergeErr(null); setMerging(true); }}
+            />
+          ) : null}
         </View>
       ) : null}
 
@@ -449,6 +579,82 @@ export default function PrScreen(): React.ReactNode {
             a review on GitHub.
           </Note>
         </View>
+      </Sheet>
+
+      <Sheet open={merging} onClose={() => setMerging(false)} title={`Merge #${number}`}>
+        {detail ? (
+          <View style={{ gap: SPACE.md, paddingBottom: SPACE.md }}>
+            {/* The verdict first, in both directions. "Ready to merge" is worth
+                as much as the reason it is not: somebody who opened this sheet
+                has already decided to press the button, and this is the last
+                place to tell them the branch is behind. */}
+            <Note tone={gate?.blocked ? "bad" : "quiet"}>{gate?.line ?? ""}</Note>
+
+            {/* Only what the repository permits. A repository that forbids
+                squash used to be offered it anyway, which is a button that
+                fails after you have chosen. */}
+            {methods.map((m) => (
+              <SheetRow
+                key={m}
+                label={MERGE_OPTION[m].label}
+                sub={MERGE_OPTION[m].hint}
+                on={m === method}
+                onPress={() => setMethod(m)}
+              />
+            ))}
+
+            <Toggle
+              on={auto}
+              label="Merge when it goes green"
+              sub={
+                detail.mergePolicy && !detail.mergePolicy.auto
+                  ? "This repository does not allow auto-merge."
+                  : "GitHub holds it and lands it once the checks pass."
+              }
+              disabled={!!detail.mergePolicy && !detail.mergePolicy.auto}
+              onPress={() => setAuto((v) => !v)}
+            />
+            <Toggle
+              on={deleteBranch}
+              label="Delete the branch after"
+              sub={
+                detail.mergePolicy?.deletesBranch
+                  ? "This repository already does it — leave it off."
+                  : "The head branch goes with it."
+              }
+              onPress={() => setDeleteBranch((v) => !v)}
+            />
+
+            {detail.headSha ? (
+              <Note>
+                {/* Said out loud because it is the difference between a merge
+                    and a merge of something nobody read. */}
+                Merging {detail.headSha.slice(0, 7)} — the commit these checks are about. If the
+                author has pushed since, GitHub will refuse rather than land it.
+              </Note>
+            ) : (
+              <Note tone="bad">
+                The checks for this commit have not arrived, so there is nothing to hold the merge
+                to. It will land whatever the head is now.
+              </Note>
+            )}
+
+            {mergeErr ? <Note tone="bad">{mergeErr}</Note> : null}
+
+            <Btn
+              label={auto ? "Arm it" : method ? MERGE_LABEL[method] : "Merge"}
+              tone="good"
+              busy={mergeBusy}
+              // Blocked is not disabled. GitHub is the authority on whether it
+              // will take it, `mergeState` can be stale by minutes, and a
+              // BLOCKED that is really "a required reviewer approved thirty
+              // seconds ago" would leave the only way through on the desktop.
+              // It refuses on the server if it must, and the reason lands above.
+              disabled={!method || detail.state !== "OPEN"}
+              onPress={() => { void doMerge(); }}
+            />
+          </View>
+        ) : null}
       </Sheet>
 
       <Sheet open={handing} onClose={() => setHanding(false)} title={`Hand #${number} to Claude`}>
