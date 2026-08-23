@@ -145,6 +145,43 @@ export function Note({ children, tone = "quiet" }: {
 }
 
 /**
+ * The border a row wears inside a grouped list.
+ *
+ * A list is ONE card with its rows divided, not a stack of cards with gaps
+ * between them. Both draw the same rows; the difference is what the eye counts.
+ * Separate cards make eight pull requests eight objects, each with its own
+ * border and its own halo of space, and the heading above them is a label for a
+ * pile. One card makes them eight lines of one thing — which is what they are —
+ * and the gap between groups then means "a new group starts here" rather than
+ * "here is another item".
+ *
+ * A function rather than a component because the four screens that need it wrap
+ * different things: the Inbox has headings folded into its data and the three
+ * lists do not, so what varies is how `first` and `last` are worked out, and
+ * that is the caller's business. What must NOT vary is the shape, which is why
+ * it is here rather than four times over.
+ *
+ * The hairline lives on the BOTTOM of every row including the last, and the top
+ * only on the first. Drawing both would double every divider to two pixels on
+ * every seam but the ends — visible, and the kind of wrong that reads as a
+ * rendering fault rather than a decision.
+ */
+export function groupEdge(first: boolean, last: boolean): ViewStyle {
+  return {
+    backgroundColor: C.bg2,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: C.border,
+    borderTopWidth: first ? 1 : 0,
+    borderBottomWidth: 1,
+    borderTopLeftRadius: first ? RADIUS.lg : 0,
+    borderTopRightRadius: first ? RADIUS.lg : 0,
+    borderBottomLeftRadius: last ? RADIUS.lg : 0,
+    borderBottomRightRadius: last ? RADIUS.lg : 0,
+  };
+}
+
+/**
  * A thing that is on or off, with the consequence of each written under it.
  *
  * Not a platform Switch. Three of the four of these decide something with no

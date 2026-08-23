@@ -22,7 +22,7 @@ import type { GitRepoRef, IssueRow, IssuesReport } from "../../../shared/types.t
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow } from "../../src/ui.tsx";
+import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow, groupEdge } from "../../src/ui.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { since } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
@@ -56,7 +56,10 @@ function Row({ issue, now, onOpen }: {
   const closed = issue.state.toLowerCase() === "closed";
   return (
     <Pressable onPress={onOpen} accessibilityRole="button">
-      <Card style={{ gap: SPACE.sm }}>
+      {/* Padding, not a card. The surface and the border belong to the group
+          this row sits in — see groupEdge in src/ui.tsx — and a Card here
+          would draw a second one inside the first. */}
+      <View style={{ padding: SPACE.lg, gap: SPACE.sm }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
           {/* A ring for open, a filled one for closed. A letter would be
               wrong here — the state is binary and the shape carries it — but
@@ -103,7 +106,7 @@ function Row({ issue, now, onOpen }: {
             </Text>
           ) : null}
         </View>
-      </Card>
+      </View>
     </Pressable>
   );
 }
@@ -193,7 +196,9 @@ export default function IssuesScreen(): React.ReactNode {
       <FlatList
         data={issues}
         keyExtractor={(issue) => String(issue.number)}
-        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }}
+        /* No gap between rows: they are one card divided by hairlines, not a
+           stack of cards. See groupEdge in src/ui.tsx. */
+        contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
         ListEmptyComponent={
           list === null && !error ? null : (
@@ -209,8 +214,9 @@ export default function IssuesScreen(): React.ReactNode {
             </Card>
           )
         }
-        renderItem={({ item }) => (
-          <Row
+        renderItem={({ item, index }) => (
+          <View style={groupEdge(index === 0, index === issues.length - 1)}>
+            <Row
             issue={item}
             now={now}
             // The object form, not a built string: a checkout path is full of
@@ -220,6 +226,7 @@ export default function IssuesScreen(): React.ReactNode {
               params: { number: String(item.number), root: root ?? "" },
             })}
           />
+        </View>
         )}
       />
     </View>

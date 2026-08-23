@@ -32,7 +32,7 @@ import { useInbox } from "../../src/state/use-inbox.ts";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import type { InboxGroup, InboxItem } from "../../src/model/inbox.ts";
 import { ChevronIcon, InboxIcon, IssuesIcon, PrsIcon, TasksIcon } from "../../src/nav/icons.tsx";
-import { Card, Label, Note, TAP } from "../../src/ui.tsx";
+import { Card, Label, Note, TAP, groupEdge } from "../../src/ui.tsx";
 import { C, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /** "4m", "2h", "3d" — the age of a thing, in the least space that is honest. */
@@ -158,6 +158,26 @@ export default function InboxScreen(): React.ReactNode {
     if (item.group !== group) { group = item.group; rows.push({ heading: group }); }
     rows.push({ item });
   }
+  /*
+   * Where each card starts and stops.
+   *
+   * A section is ONE card with its rows divided, not a stack of cards with
+   * gaps between them. Both draw the same rows; the difference is what the eye
+   * counts. Separate cards make eight pull requests eight objects, each with
+   * its own border and its own shadow of space, and the heading above them is
+   * a label for a pile. One card makes them eight lines of one thing, which is
+   * what they are — and the gap then means what it should, which is "a new
+   * group starts here" rather than "here is another item".
+   *
+   * Computed here rather than asked per row inside the renderer, because
+   * `renderItem` gets an index and nothing else, and a row cannot see its
+   * neighbours from there.
+   */
+  const isItem = (r: ListRow | undefined): boolean => !!r && !("heading" in r);
+  const edges = rows.map((row, i) => ({
+    first: isItem(row) && !isItem(rows[i - 1]),
+    last: isItem(row) && !isItem(rows[i + 1]),
+  }));
 
   const open = useCallback((item: InboxItem): void => {
     inbox.markSeen(item);
@@ -176,7 +196,10 @@ export default function InboxScreen(): React.ReactNode {
     <FlatList
       data={rows}
       keyExtractor={(row) => ("heading" in row ? `h:${row.heading}` : row.item.id)}
-      contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.xs, paddingBottom: SPACE.xl }}
+      /* No gap. Rows inside a section are divided by their own hairline, and a
+         gap as well would draw the separation twice — see `edges`. The space
+         between sections is paid by the heading's own padding. */
+      contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
       refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
       ListHeaderComponent={
         <View style={{ gap: SPACE.md, paddingBottom: SPACE.md }}>
@@ -234,9 +257,7 @@ export default function InboxScreen(): React.ReactNode {
             <Label text={HEADING[row.heading]} />
           </View>
         ) : (
-          <View style={{
-            backgroundColor: C.bg2, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.lg,
-          }}>
+          <View style={groupEdge(edges[index]!.first, edges[index]!.last)}>
             <Row item={row.item} now={now} onOpen={() => open(row.item)} />
           </View>
         )}

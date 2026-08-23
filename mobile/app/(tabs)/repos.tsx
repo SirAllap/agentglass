@@ -24,7 +24,7 @@ import type { GitFileStatus, GitRepoRef, RepoStatus } from "../../../shared/type
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Btn, Note } from "../../src/ui.tsx";
+import { Btn, Note, groupEdge } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /** The glyph for what happened to a file. A letter as well as a colour: at
@@ -149,7 +149,9 @@ export default function ReposScreen(): React.ReactNode {
       <FlatList
         data={files}
         keyExtractor={(f) => f.path}
-        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.sm, paddingBottom: SPACE.xl }}
+        /* No gap: the changed files are one card divided by hairlines, the same
+           as every other list in the app. See groupEdge in src/ui.tsx. */
+        contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
         refreshControl={
           <RefreshControl
             refreshing={pulling}
@@ -176,9 +178,10 @@ export default function ReposScreen(): React.ReactNode {
         ListEmptyComponent={
           status === null ? <ActivityIndicator color={C.text3} /> : null
         }
-        renderItem={({ item }) => {
+        renderItem={({ item, index }) => {
           const m = mark(item);
           return (
+            <View style={groupEdge(index === 0, index === files.length - 1)}>
             <Pressable
               disabled={!mayWrite || !!busy}
               onPress={() => {
@@ -189,7 +192,10 @@ export default function ReposScreen(): React.ReactNode {
                   { root, paths: [item.path] },
                 );
               }}
-              style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, minHeight: 44 }}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: SPACE.md,
+                minHeight: 44, paddingHorizontal: SPACE.lg,
+              }}
             >
               <View style={{
                 width: 20, height: 20, borderRadius: 5,
@@ -207,6 +213,7 @@ export default function ReposScreen(): React.ReactNode {
                 {item.path}
               </Text>
             </Pressable>
+            </View>
           );
         }}
       />

@@ -21,7 +21,7 @@ import type { ProviderTask } from "../../../shared/providers.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow } from "../../src/ui.tsx";
+import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow, groupEdge } from "../../src/ui.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
@@ -67,7 +67,10 @@ function Row({ task, prefix, onCopied, onOpen }: {
         onCopied(id);
       }}
     >
-      <Card style={{ gap: SPACE.sm }}>
+      {/* Padding, not a card. The surface and the border belong to the group
+          this row sits in — see groupEdge in src/ui.tsx — and a Card here
+          would draw a second one inside the first. */}
+      <View style={{ padding: SPACE.lg, gap: SPACE.sm }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
           <Text style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
             {task.customId || task.id}
@@ -90,7 +93,7 @@ function Row({ task, prefix, onCopied, onOpen }: {
           {task.list ? <Text style={{ color: C.text4, fontSize: T.eyebrow }}>{task.list}</Text> : null}
           {task.sprint ? <Text style={{ color: C.text4, fontSize: T.eyebrow }}>· {task.sprint}</Text> : null}
         </View>
-      </Card>
+      </View>
     </Pressable>
   );
 }
@@ -201,7 +204,9 @@ export default function TasksScreen(): React.ReactNode {
       <FlatList
         data={shown}
         keyExtractor={(task) => task.id}
-        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }}
+        /* No gap between rows: they are one card divided by hairlines, not a
+           stack of cards. See groupEdge in src/ui.tsx. */
+        contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
         ListEmptyComponent={
           tasks === null ? null : (
@@ -213,13 +218,15 @@ export default function TasksScreen(): React.ReactNode {
             </Card>
           )
         }
-        renderItem={({ item }) => (
-          <Row
+        renderItem={({ item, index }) => (
+          <View style={groupEdge(index === 0, index === shown.length - 1)}>
+            <Row
             task={item}
             prefix={views?.prefix ?? ""}
             onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
             onOpen={() => router.push({ pathname: "/card/[id]", params: { id: item.id } })}
           />
+        </View>
         )}
       />
 
