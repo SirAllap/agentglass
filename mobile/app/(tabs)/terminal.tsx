@@ -44,6 +44,7 @@ import { TerminalView, type TerminalHandle, type TerminalState } from "../../src
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
+import { BackIcon } from "../../src/nav/icons.tsx";
 import { bestSession, readStrip, sessionsOf, type Tab } from "../../src/terminal/tabs.ts";
 import type { PanesResponse } from "../../../shared/types.ts";
 import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
@@ -917,98 +918,62 @@ export default function TerminalScreen(): React.ReactNode {
         backgroundColor: C.bg,
         borderBottomWidth: 1, borderBottomColor: C.border,
       }}>
-        {/* The session, when there is more than one. A machine running four
-            tmux sessions has four strips' worth of windows, and showing them
-            all at once is not a strip anybody reads — the desk has the same
-            problem and solves it with a session picker. */}
-        {sessions.length > 1 ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: SPACE.sm, gap: SPACE.xs, paddingBottom: SPACE.xs }}
-          >
-            {sessions.map((name) => {
-              const on = name === session;
-              return (
-                <Pressable
-                  key={name}
-                  onPress={() => {
-                    setSession(name);
-                    setActive(all.find((t) => t.session === name)?.paneId ?? null);
-                  }}
-                  style={{ paddingHorizontal: SPACE.sm, minHeight: 32, justifyContent: "center" }}
-                >
-                  {/* Cut, and cut in the MIDDLE. A session is named after the
-                      thing it is for, and on this machine that is a worktree:
-                      measured, `agentglass-mobile-feat-android-2026` took two
-                      thirds of the strip and pushed the third session off the
-                      right-hand edge — and the tail is where a name shaped like
-                      that says which one of them it is. */}
-                  <Text
-                    numberOfLines={1}
-                    ellipsizeMode="middle"
-                    style={{
-                      color: on ? C.primary : C.text4, fontSize: T.eyebrow, fontFamily: MONO,
-                      fontWeight: on ? "700" : "400", maxWidth: 130,
-                    }}
-                  >{name}</Text>
-                </Pressable>
-              );
+        {/*
+          Where you are, above what you are switching between.
+
+          This bar was empty — a `+` and a `⟳` floating over a strip of pills,
+          with nothing saying which checkout the pane in front of you belongs
+          to. On a phone that is the question you arrive with: there are six
+          windows called `2 AI00` and the only thing that tells them apart is
+          the directory, which was one screen further in.
+
+          The count beside it is not decoration either. A strip that has
+          scrolled shows three of eight, and "8 tabs" is how you know the other
+          five exist without dragging to find out.
+        */}
+        <View style={{
+          flexDirection: "row", alignItems: "center", gap: SPACE.sm,
+          paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs,
+        }}>
+          {/*
+            The way out, and it is load-bearing rather than decorative.
+
+            This screen is the one that does not draw the tab bar — see the
+            note in src/nav/TabBar.tsx for why it gives the pane those ninety
+            points. Which means this is the only control on it that leads
+            anywhere, and without it the way back would be Android's own
+            gesture, which on the first tab of a navigator closes the app
+            rather than going anywhere.
+          */}
+          <Pressable
+            onPress={() => router.replace("/")}
+            accessibilityRole="button"
+            accessibilityLabel="Back to the inbox"
+            style={({ pressed }) => ({
+              width: 40, minHeight: 44, alignItems: "center", justifyContent: "center",
+              opacity: pressed ? 0.6 : 1,
             })}
-          </ScrollView>
-        ) : null}
-        {/* Re-read pinned outside the scroller, not carried at the end of it.
-            It rode after the last tab, so where it sat depended on how many
-            tabs there were: with two it was on screen, with six it was off the
-            right-hand edge — and a stale list is long, so the moment the button
-            is needed is the moment it cannot be reached. */}
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingHorizontal: SPACE.sm, paddingVertical: SPACE.sm, gap: SPACE.xs }}
           >
-            {tabs.map((tab) => {
-              const on = tab.paneId === active;
-              return (
-                <Pressable
-                  key={tab.paneId}
-                  onPress={() => { setActive(tab.paneId); setWhy(null); }}
-                  style={{
-                    paddingHorizontal: SPACE.md,
-                    paddingVertical: SPACE.sm,
-                    borderRadius: RADIUS.md,
-                    backgroundColor: on ? C.bg3 : "transparent",
-                    borderWidth: 1,
-                    borderColor: on ? C.border2 : "transparent",
-                    minHeight: 44,
-                    justifyContent: "center",
-                    flexDirection: "row",
-                    alignItems: "center",
-                  }}
-                >
-                  {/* Cut at the tail: a window is named index-first, so the
-                      front of the label is what tells two of them apart. Six
-                      windows named after what they run made the strip four
-                      swipes long. */}
-                  <Text
-                    numberOfLines={1}
-                    style={{
-                      color: on ? C.text : C.text3, fontSize: T.small,
-                      fontWeight: on ? "600" : "400", maxWidth: 150,
-                    }}
-                  >{tab.label}</Text>
-                  {/* An agent running under this pane is the reason to open it,
-                      so it is on the tab rather than one screen further in. It
-                      sits outside the truncated label, because a dot that a
-                      long window name can ellipsise away is a dot that says
-                      "no agent here" on exactly the tabs that have one. */}
-                  {tab.agent ? <Text style={{ color: C.success, fontSize: T.small }}> ●</Text> : null}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+            <BackIcon color={C.text3} size={20} />
+          </Pressable>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="head"
+              style={{ color: C.text, fontSize: T.body, fontWeight: "700" }}
+            >
+              {/* The leaf, because that is what a person calls a checkout —
+                  the same rule tabs.ts uses for a window's name. The head is
+                  what gets cut when a path is long: the tail is the part that
+                  says which one. */}
+              {open ? (open.where.split("/").filter(Boolean).pop() ?? open.session) : "Terminal"}
+            </Text>
+            <Text numberOfLines={1} style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
+              {open
+                ? `${open.session}${tabs.length ? ` · ${tabs.length} ${tabs.length === 1 ? "tab" : "tabs"}` : ""}`
+                : "nothing attached"}
+            </Text>
+          </View>
           {/*
             A new tab, with an agent already running in it.
 
@@ -1050,6 +1015,114 @@ export default function TerminalScreen(): React.ReactNode {
             <Text style={{ color: C.text4, fontSize: T.title }}>⟳</Text>
           </Pressable>
         </View>
+        {/* The session, when there is more than one. A machine running four
+            tmux sessions has four strips' worth of windows, and showing them
+            all at once is not a strip anybody reads — the desk has the same
+            problem and solves it with a session picker. */}
+        {sessions.length > 1 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: SPACE.sm, gap: SPACE.xs, paddingBottom: SPACE.xs }}
+          >
+            {sessions.map((name) => {
+              const on = name === session;
+              return (
+                <Pressable
+                  key={name}
+                  onPress={() => {
+                    setSession(name);
+                    setActive(all.find((t) => t.session === name)?.paneId ?? null);
+                  }}
+                  style={{ paddingHorizontal: SPACE.sm, minHeight: 32, justifyContent: "center" }}
+                >
+                  {/* Cut, and cut in the MIDDLE. A session is named after the
+                      thing it is for, and on this machine that is a worktree:
+                      measured, `agentglass-mobile-feat-android-2026` took two
+                      thirds of the strip and pushed the third session off the
+                      right-hand edge — and the tail is where a name shaped like
+                      that says which one of them it is. */}
+                  <Text
+                    numberOfLines={1}
+                    ellipsizeMode="middle"
+                    style={{
+                      color: on ? C.primary : C.text4, fontSize: T.eyebrow, fontFamily: MONO,
+                      fontWeight: on ? "700" : "400", maxWidth: 130,
+                    }}
+                  >{name}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+        {/* Just the tabs. `+` and the re-read moved up to the header, which is
+            where the pair of them stop depending on how many tabs there are:
+            riding at the end of this scroller put them off the right-hand edge
+            at six windows, and six windows is exactly when somebody reaches for
+            a seventh or for the re-read.
+
+            Drawn only when there ARE tabs. An empty strip under the header was
+            a rule with nothing above it — a row of chrome whose whole content
+            was the absence of content. */}
+        {tabs.length ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            /* No vertical padding on the container: the underline is the bar's
+               own bottom edge, and padding under it would leave the mark
+               floating above the rule it is supposed to be part of. */
+            contentContainerStyle={{ paddingHorizontal: SPACE.xs, gap: 0 }}
+          >
+            {tabs.map((tab) => {
+              const on = tab.paneId === active;
+              return (
+                <Pressable
+                  key={tab.paneId}
+                  onPress={() => { setActive(tab.paneId); setWhy(null); }}
+                  /*
+                    An underline, not a pill.
+
+                    A pill is a button and reads like one — six of them in a row
+                    is six things to press, and the selected one is a seventh
+                    shade of grey among them. An underline is what a tab strip
+                    has always been: the row is the surface, the mark says which
+                    part of it you are looking at, and the text carries the rest.
+                    It also buys back the horizontal padding a border needs,
+                    which is what puts a fourth window on screen.
+                  */
+                  style={{
+                    paddingHorizontal: SPACE.md,
+                    paddingVertical: SPACE.sm,
+                    borderBottomWidth: 2,
+                    borderBottomColor: on ? C.primary : "transparent",
+                    minHeight: 44,
+                    justifyContent: "center",
+                    flexDirection: "row",
+                    alignItems: "center",
+                  }}
+                >
+                  {/* Cut at the tail: a window is named index-first, so the
+                      front of the label is what tells two of them apart. Six
+                      windows named after what they run made the strip four
+                      swipes long. */}
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      color: on ? C.text : C.text3, fontSize: T.small,
+                      fontWeight: on ? "600" : "400", maxWidth: 150,
+                    }}
+                  >{tab.label}</Text>
+                  {/* An agent running under this pane is the reason to open it,
+                      so it is on the tab rather than one screen further in. It
+                      sits outside the truncated label, because a dot that a
+                      long window name can ellipsise away is a dot that says
+                      "no agent here" on exactly the tabs that have one. */}
+                  {tab.agent ? <Text style={{ color: C.success, fontSize: T.small }}> ●</Text> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : null}
       </View>
 
       {/* ── the terminal ───────────────────────────────────────────────── */}

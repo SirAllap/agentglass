@@ -131,6 +131,25 @@ export function TabBar({ state, navigation, insets }: BottomTabBarProps): React.
    */
   if (keyboard) return null;
 
+  /*
+   * And it stands down on the terminal, for a different reason.
+   *
+   * The bar is 56 plus the home indicator — about 90 points on a modern phone,
+   * taken from the top of the pane on every screen. Everywhere else that is a
+   * fair trade for four destinations one thumb-reach away. On the terminal it
+   * is not: that screen is a fixed grid of rows, so 90 points is not whitespace
+   * being squeezed, it is FOUR ROWS of somebody's build output that do not fit.
+   * It is also the screen people sit on for twenty minutes rather than pass
+   * through, which is exactly when a permanent strip of navigation is furniture.
+   *
+   * Nothing is lost: the terminal is the star, so it is the one destination
+   * that is always one press from everywhere else, and every other screen still
+   * draws the bar to get back to. The way out is the same gesture Android has
+   * always had — and the header at the top of that screen now says where you
+   * are, which is what makes leaving it a decision rather than an escape.
+   */
+  if (at("terminal")?.focused) return null;
+
   return (
     <View
       pointerEvents="box-none"
