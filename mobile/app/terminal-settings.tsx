@@ -54,6 +54,8 @@ export default function TerminalSettingsScreen(): React.ReactNode {
   const [text, setText] = useState("");
   const [enter, setEnter] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [mine, setMine] = useState(customKeys);
+
   useEffect(() => onTermPrefs(() => {
     setLocal(keyLayout()); setCols(termColumns()); setAssist(termAssist());
     setMine(customKeys());
@@ -64,7 +66,6 @@ export default function TerminalSettingsScreen(): React.ReactNode {
     setLocal(next);
   }, []);
 
-  const [mine, setMine] = useState(customKeys);
   /* The same catalogue the bar builds, so what is arranged here is what is
      drawn there. */
   const catalogue = useMemo(() => [

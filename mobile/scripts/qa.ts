@@ -91,6 +91,9 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // Asserted on a key that is on the bar by default AND on the count line, so
   // a screen that mounted with an empty list would not pass.
   { path: "/terminal-settings", name: "Key bar", expect: /Interrupt|keys are on the bar/i },
+  // Asserted on a dependency this machine really reports, not on the chrome: a
+  // screen that mounted and listed nothing would pass a check for a heading.
+  { path: "/troubleshoot", name: "Troubleshoot", expect: /Git|Claude Code CLI|unreachable/i },
   { path: "/settings", name: "Settings", expect: /Paired with|This phone may/i },
 ];
 
