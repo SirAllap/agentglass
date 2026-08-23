@@ -20,12 +20,14 @@ import {
   ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import type { GitFileStatus, GitRepoRef, RepoStatus } from "../../../shared/types.ts";
+import type { GitCommit, GitFileStatus, GitRepoRef, PrBranchSummary, RepoStatus } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Btn, Note, groupEdge } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Segmented, groupEdge } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { useRouter } from "expo-router";
+import { ChevronIcon } from "../../src/nav/icons.tsx";
 
 /** The glyph for what happened to a file. A letter as well as a colour: at
  *  11px outdoors, colour alone is not a signal to rely on, and for a good
@@ -40,6 +42,70 @@ function mark(file: GitFileStatus): { glyph: string; ink: string } {
   }
 }
 
+/** One pull request, as a row that opens the detail this app already has.
+ *
+ *  A link out to GitHub was the alternative and it is the thing this whole
+ *  branch of work removed: the pull request screen reads the body, the checks,
+ *  the files and the threads, and arriving at it from the checkout you are
+ *  standing in is the shortest path there is. */
+function PrLine({ pr, root, router, first, last }: {
+  pr: PrBranchSummary;
+  root: string | null;
+  router: ReturnType<typeof useRouter>;
+  first: boolean;
+  last: boolean;
+}): React.ReactNode {
+  const tint = pr.isDraft ? C.text4
+    : pr.reviewDecision === "APPROVED" ? C.success
+    : pr.reviewDecision === "CHANGES_REQUESTED" ? C.error
+    : C.text3;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={() => router.push({
+        pathname: "/pr/[number]",
+        params: { number: String(pr.number), root: root ?? "" },
+      })}
+      style={({ pressed }) => [
+        groupEdge(first, last),
+        {
+          flexDirection: "row", alignItems: "center", gap: SPACE.md,
+          paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
+          opacity: pressed ? 0.6 : 1,
+        },
+      ]}
+    >
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text numberOfLines={2} style={{ color: C.text, fontSize: T.small }}>{pr.title}</Text>
+        <Text numberOfLines={1} style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
+          #{pr.number} · {pr.author} · {pr.headRefName} → {pr.baseRefName}
+        </Text>
+      </View>
+      <Text style={{ color: tint, fontSize: T.eyebrow }}>
+        {pr.isDraft ? "draft"
+          : pr.reviewDecision === "APPROVED" ? "approved"
+          : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes"
+          : pr.state.toLowerCase()}
+      </Text>
+      <ChevronIcon color={C.text4} size={17} />
+    </Pressable>
+  );
+}
+
+/** What `/prs/for-branch` answers with. Declared here rather than in shared/
+ *  for the same reason PrViewCounts is — it is one route's reply and nothing
+ *  else reads it. `needsAuth` is deliberately its own field: "gh is logged
+ *  out" and "there is no pull request for this branch" are different answers
+ *  and were once the same silence. */
+interface BranchPrs {
+  ok: boolean;
+  repo?: string;
+  from?: PrBranchSummary;
+  into: PrBranchSummary[];
+  needsAuth?: boolean;
+  error?: string;
+}
+
 export default function ReposScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
@@ -51,6 +117,16 @@ export default function ReposScreen(): React.ReactNode {
   const [busy, setBusy] = useState<string | null>(null);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   const [pulling, setPulling] = useState(false);
+  const router = useRouter();
+  /*
+   * Three views of one checkout, which is the shape a person already has in
+   * their head: what I have changed, what I have landed, and what is waiting
+   * to be reviewed. The server has answered all three the whole time —
+   * /git/status, /git/log and /prs/for-branch — and this screen asked one.
+   */
+  const [view, setView] = useState<"changes" | "commits" | "pr">("changes");
+  const [commits, setCommits] = useState<GitCommit[] | null>(null);
+  const [branchPrs, setBranchPrs] = useState<BranchPrs | null>(null);
 
   const mayWrite = host?.scope === "full";
 
@@ -80,6 +156,46 @@ export default function ReposScreen(): React.ReactNode {
   }, [host, root]);
 
   useEffect(() => { setStatus(null); setTitle(""); void load(); }, [load]);
+
+  /*
+   * The other two views, fetched only when they are LOOKED at.
+   *
+   * Both cost a round trip and neither is the view this screen opens on, so
+   * asking for all three up front would spend two requests per checkout switch
+   * to fill panels nobody has turned to. They are cleared when the checkout
+   * changes, because a commit list belonging to another worktree drawn under
+   * this one's name is the worst kind of wrong here: it is plausible.
+   */
+  useEffect(() => { setCommits(null); setBranchPrs(null); }, [root]);
+
+  useEffect(() => {
+    if (!host || !root || view !== "commits" || commits !== null) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ commits?: GitCommit[] }>(
+        host, `/git/log?root=${encodeURIComponent(root)}&limit=40`,
+      );
+      if (gone) return;
+      setCommits(answer.ok ? answer.value.commits ?? [] : []);
+    })();
+    return () => { gone = true; };
+  }, [host, root, view, commits]);
+
+  useEffect(() => {
+    if (!host || !root || view !== "pr" || branchPrs !== null) return;
+    const branch = status?.branch;
+    if (!branch) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<BranchPrs>(
+        host,
+        `/prs/for-branch?root=${encodeURIComponent(root)}&branch=${encodeURIComponent(branch)}`,
+      );
+      if (gone) return;
+      setBranchPrs(answer.ok ? answer.value : { ok: false, into: [], error: answer.error });
+    })();
+    return () => { gone = true; };
+  }, [host, root, view, branchPrs, status?.branch]);
 
   /** Every git write goes through here so there is one place that reports, one
    *  that re-reads, and one that cannot be pressed twice. */
@@ -140,12 +256,28 @@ export default function ReposScreen(): React.ReactNode {
         </ScrollView>
       </View>
 
+      {/* One control, full width, at the tap floor — the same `Segmented` the
+          pull requests and the cards use. Counts where there is one to give:
+          "Changes 6" is the reason to press it, and a bare word is not. */}
+      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md }}>
+        <Segmented
+          value={view}
+          onChange={setView}
+          options={[
+            { id: "changes" as const, label: "Changes", count: files.length || undefined },
+            { id: "commits" as const, label: "Commits" },
+            { id: "pr" as const, label: "Pull request" },
+          ]}
+        />
+      </View>
+
       {said ? (
         <View style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.xs, backgroundColor: C.bg2 }}>
           <Text style={{ color: said.ok ? C.success : C.error, fontSize: T.eyebrow }}>{said.text}</Text>
         </View>
       ) : null}
 
+      {view === "changes" ? (
       <FlatList
         data={files}
         keyExtractor={(f) => f.path}
@@ -217,8 +349,101 @@ export default function ReposScreen(): React.ReactNode {
           );
         }}
       />
+      ) : null}
 
-      {mayWrite && commitEnabled && files.length > 0 ? (
+      {/* ── the commits ────────────────────────────────────────────────── */}
+      {view === "commits" ? (
+        <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}>
+          {commits === null ? (
+            <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
+          ) : commits.length === 0 ? (
+            <Card><Note>No commits here yet.</Note></Card>
+          ) : (
+            commits.map((c, i) => (
+              <View
+                key={c.hash}
+                style={[
+                  groupEdge(i === 0, i === commits.length - 1),
+                  { paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md, gap: 2 },
+                ]}
+              >
+                <Text numberOfLines={2} style={{ color: C.text, fontSize: T.small }}>{c.subject}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+                  <Text style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>{c.shortHash}</Text>
+                  <Text numberOfLines={1} style={{ color: C.text4, fontSize: T.eyebrow, flex: 1 }}>
+                    {c.author} · {c.date}
+                  </Text>
+                </View>
+                {/* The decorations, when git gave any. A tag or a branch head on
+                    a commit is the thing that tells you WHERE you are in a log
+                    of forty otherwise identical lines. */}
+                {c.refs ? (
+                  <Text numberOfLines={1} style={{ color: C.primary, fontSize: T.eyebrow, fontFamily: MONO }}>
+                    {c.refs}
+                  </Text>
+                ) : null}
+              </View>
+            ))
+          )}
+        </ScrollView>
+      ) : null}
+
+      {/* ── the pull request for this branch ───────────────────────────── */}
+      {view === "pr" ? (
+        <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }}>
+          {branchPrs === null ? (
+            <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
+          ) : branchPrs.needsAuth ? (
+            /* Its own answer, not folded into "none". The two used to be the
+               same silence, and they need opposite things doing about them. */
+            <Card>
+              <Label text="Cannot ask GitHub" />
+              <Note tone="bad">The GitHub CLI is not signed in on that computer.</Note>
+            </Card>
+          ) : !branchPrs.ok ? (
+            <Card>
+              <Label text="Cannot ask GitHub" />
+              <Note tone="bad">{branchPrs.error ?? "That branch could not be looked up."}</Note>
+            </Card>
+          ) : (
+            <>
+              {/* FROM this branch — the one you opened. Named apart from the
+                  ones landing INTO it, because on a base branch the second
+                  list is long and the first is the answer. */}
+              {branchPrs.from ? (
+                <View style={{ gap: SPACE.sm }}>
+                  <Label text="From this branch" />
+                  <PrLine pr={branchPrs.from} root={root} router={router} first last />
+                </View>
+              ) : (
+                <Card>
+                  <Note>
+                    Nothing is open from {status?.branch ?? "this branch"} yet.
+                  </Note>
+                </Card>
+              )}
+
+              {branchPrs.into.length ? (
+                <View style={{ gap: SPACE.sm }}>
+                  <Label text={`Into it · ${branchPrs.into.length}`} />
+                  {branchPrs.into.map((pr, i) => (
+                    <PrLine
+                      key={pr.number}
+                      pr={pr}
+                      root={root}
+                      router={router}
+                      first={i === 0}
+                      last={i === branchPrs.into.length - 1}
+                    />
+                  ))}
+                </View>
+              ) : null}
+            </>
+          )}
+        </ScrollView>
+      ) : null}
+
+      {mayWrite && commitEnabled && view === "changes" && files.length > 0 ? (
         <View style={{
           gap: SPACE.sm, padding: SPACE.lg,
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
