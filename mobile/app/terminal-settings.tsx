@@ -29,8 +29,10 @@ import { Stack } from "expo-router";
 import { usePaletteTick } from "../src/state/use-palette.ts";
 import { ACCESSORY_KEYS } from "../src/terminal/keys.ts";
 import { canHide, move, reset, rows, toggle } from "../src/terminal/keyLayout.ts";
-import { keyLayout, onKeyLayout, setKeyLayout } from "../src/terminal/keyStore.ts";
-import { Btn, Label, Note, Section, TAP, Toggle, groupEdge } from "../src/ui.tsx";
+import {
+  COLUMNS, keyLayout, onTermPrefs, setKeyLayout, setTermColumns, termColumns,
+} from "../src/terminal/termPrefs.ts";
+import { Btn, Note, Section, Segmented, TAP, groupEdge } from "../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../src/theme.ts";
 
 export default function TerminalSettingsScreen(): React.ReactNode {
@@ -39,7 +41,8 @@ export default function TerminalSettingsScreen(): React.ReactNode {
   /* The layout is a module singleton so the terminal and this screen see one
      value. This is only the local mirror that makes the list repaint. */
   const [layout, setLocal] = useState(keyLayout);
-  useEffect(() => onKeyLayout(() => setLocal(keyLayout())), []);
+  const [cols, setCols] = useState(termColumns);
+  useEffect(() => onTermPrefs(() => { setLocal(keyLayout()); setCols(termColumns()); }), []);
 
   const change = useCallback((next: ReturnType<typeof keyLayout>): void => {
     setKeyLayout(next);
@@ -52,6 +55,29 @@ export default function TerminalSettingsScreen(): React.ReactNode {
   return (
     <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}>
       <Stack.Screen options={{ title: "Terminal" }} />
+
+      <Section
+        label="How wide"
+        note={
+          "How many columns the phone asks the pane for. 60 to read, 80 to work. There is no "
+          + "wider rung on purpose: measured on this screen, 120 columns clips each glyph inside "
+          + "its own cell and characters change identity — a seven loses its bar and reads as a "
+          + "slash, so a commit hash comes back wrong."
+        }
+      >
+        <Segmented
+          value={String(cols)}
+          onChange={(v) => { const n = Number(v); setTermColumns(n); setCols(n); }}
+          options={COLUMNS.map((n) => ({ id: String(n), label: `${n}c` }))}
+        />
+        <Note>
+          {/* The one thing worth saying out loud, because it is the surprise:
+              this is what the pane is RESIZED to while the phone is looking at
+              it, not a zoom applied on the glass. */}
+          A pane wider than this is shown from its left-hand edge, and the terminal says so when
+          that happens.
+        </Note>
+      </Section>
 
       <Section
         label="The key bar"

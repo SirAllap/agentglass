@@ -45,7 +45,7 @@ import { useDeskPalette, usePaletteTick } from "../../src/state/use-palette.ts";
 import { TerminalView, type TerminalHandle, type TerminalState } from "../../src/terminal/TerminalView.tsx";
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
 import { apply as applyKeyLayout } from "../../src/terminal/keyLayout.ts";
-import { keyLayout, onKeyLayout } from "../../src/terminal/keyStore.ts";
+import { keyLayout, onTermPrefs, setTermColumns, termColumns } from "../../src/terminal/termPrefs.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon } from "../../src/nav/icons.tsx";
@@ -192,7 +192,11 @@ export default function TerminalScreen(): React.ReactNode {
    * rung. The same pass also put 150 ROWS on the screen, and with nothing wider
    * attached that is the size the real window is given.
    */
-  const [columns, setColumns] = useState(80);
+  /* Started from what this phone chose last, not from a constant. See
+     src/terminal/termPrefs.ts — it is a property of the screen and the eyes in
+     front of it, so re-picking it on every attach was work nobody should have
+     to repeat. */
+  const [columns, setColumns] = useState(termColumns);
   /*
    * Whether the tmux window reflows to this phone.
    *
@@ -413,7 +417,7 @@ export default function TerminalScreen(): React.ReactNode {
    *  it is a read per checkout and the menu is not opened on the way in. */
   const [more, setMore] = useState(false);
   const [past, setPast] = useState<AgentSessionRow[] | null>(null);
-  useEffect(() => onKeyLayout(() => setBar(keyLayout())), []);
+  useEffect(() => onTermPrefs(() => { setBar(keyLayout()); setColumns(termColumns()); }), []);
   const keys = useMemo(() => applyKeyLayout(bar, ACCESSORY_KEYS), [bar]);
   /** The deadline on that spinner. A ref because it is cleared from a callback
    *  that must not re-run when it changes. */
@@ -1453,7 +1457,7 @@ export default function TerminalScreen(): React.ReactNode {
       */}
       {live && !fit && following && columns < 80 ? (
         <Pressable
-          onPress={() => setColumns(80)}
+          onPress={() => { setColumns(80); setTermColumns(80); }}
           style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm, backgroundColor: C.bg2 }}
         >
           <Text style={{ color: C.text3, fontSize: T.eyebrow }}>
@@ -1599,7 +1603,14 @@ export default function TerminalScreen(): React.ReactNode {
                 measurement is that at 120 the glyphs are clipped inside their
                 cells and characters change identity. */}
             <Pressable
-              onPress={() => setColumns((n) => (n >= 80 ? 60 : 80))}
+              onPress={() => {
+                const next = columns >= 80 ? 60 : 80;
+                setColumns(next);
+                // Through the store, or this tap and the settings screen would
+                // be two places holding the same number and disagreeing after
+                // the next cold start.
+                setTermColumns(next);
+              }}
               accessibilityLabel={`Terminal width, ${columns} columns. Tap to change.`}
               style={{ minWidth: 44, height: 40, alignItems: "center", justifyContent: "center",
                 borderRadius: RADIUS.sm, backgroundColor: C.bg3 }}
