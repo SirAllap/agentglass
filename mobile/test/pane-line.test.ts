@@ -908,11 +908,37 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), "agx-scroll-"));
     sock = join(dir, "server");
-    grid = await cdp!.value<typeof grid>(`(function () {
-      var rows = document.querySelectorAll('.xterm-rows > div');
-      var box = rows[0] ? rows[0].getBoundingClientRect() : null;
-      return { cols: 80, rows: rows.length, cell: box ? box.height : 10 };
-    })()`);
+    /*
+     * The grid, once the page has actually drawn one.
+     *
+     * This used to read the rows straight out of the document and fall back to
+     * `cell: 10` when there were none — and that fallback is what made this
+     * whole block fail on CI while passing on every desk. xterm paints its rows
+     * a frame or two after `ready`, so on a loaded runner the read lands on an
+     * empty `.xterm-rows` and invents a cell height. Every distance below is
+     * `rows * grid.cell`, so a made-up cell does not fail here: it fails four
+     * tests further down, as a drag that moved the wrong number of lines.
+     *
+     * So it waits for a row with a real height rather than for a moment in
+     * time, and gives up loudly. A geometry this file cannot read is a reason
+     * to stop, not a number to guess — the guess is the bug.
+     */
+    const gridDeadline = Date.now() + 15_000;
+    for (;;) {
+      grid = await cdp!.value<typeof grid>(`(function () {
+        var rows = document.querySelectorAll('.xterm-rows > div');
+        var box = rows[0] ? rows[0].getBoundingClientRect() : null;
+        return { cols: 80, rows: rows.length, cell: box ? box.height : 0 };
+      })()`);
+      if (grid && grid.rows > 0 && grid.cell > 0) break;
+      if (Date.now() > gridDeadline) {
+        throw new Error(
+          `the page never drew a row to measure — rows=${grid?.rows ?? "?"}, `
+          + `cell=${grid?.cell ?? "?"}. Every drag below is sized from this.`,
+        );
+      }
+      await Bun.sleep(50);
+    }
     // The session is the page's own geometry, so a wheel reported at row 40 of
     // the page is row 40 of a window that has one — tmux drops a mouse event
     // outside its window and the drag would measure nothing.
@@ -1079,11 +1105,46 @@ describe.if(HAVE_CHROME)("which colours the pane ends up wearing", () => {
   /** What a row is actually painted with, and what the frame around the grid
    *  is. Both come off the document rather than out of the page's own state. */
   const worn = async (): Promise<{ fg: string; frame: string }> => {
-    await Bun.sleep(700); // longer than the page's 400ms settle after bytes
-    return cdp!.value<{ fg: string; frame: string }>(`(function () {
-      var row = document.querySelector('.xterm-rows > div');
-      return { fg: row ? getComputedStyle(row).color : '', frame: document.body.style.background };
-    })()`);
+    /*
+     * Read once the colour has stopped moving, rather than after a period
+     * chosen to be "longer than the page's 400ms settle". That period was a bet
+     * that 700ms of wall clock outlasts a 400ms timer, which holds on a desk
+     * and does not on a busy runner — and when it loses, `row` is null, `fg` is
+     * the empty string, and the assertion reports a colour nobody chose.
+     *
+     * Two identical reads in a row is the condition: the settle repaints once,
+     * so a value that has repeated has been through it. The deadline returns
+     * whatever it has instead of throwing — the assertion below is what should
+     * report the mismatch, with the colour it actually found in the message.
+     */
+    const read = (): Promise<{ fg: string; frame: string }> =>
+      cdp!.value<{ fg: string; frame: string }>(`(function () {
+        var row = document.querySelector('.xterm-rows > div');
+        return { fg: row ? getComputedStyle(row).color : '', frame: document.body.style.background };
+      })()`);
+
+    // The 400ms settle still has to be waited out, and no signal marks it: the
+    // page posts nothing when it repaints, so there is nothing to wait FOR.
+    // Dropping this floor and polling for a stable value is what the first
+    // version of this did, and it read the colour from BEFORE the settle — an
+    // unchanged value is stable too, which is the trap in every "wait until it
+    // stops moving".
+    await Bun.sleep(700);
+
+    // Past the floor, keep looking until there is something to look at. This is
+    // the half the fixed sleep was missing: on a loaded runner the row can
+    // still be absent at 700ms, and `getComputedStyle(null)` is the empty
+    // string — an assertion that then reports a colour nobody chose.
+    const deadline = Date.now() + 8_000;
+    let last = await read();
+    for (;;) {
+      if (last.fg && Date.now() > deadline) return last;
+      await Bun.sleep(60);
+      const now = await read();
+      if (now.fg && now.fg === last.fg && now.frame === last.frame) return now;
+      last = now;
+      if (Date.now() > deadline) return now;
+    }
   };
 
   /*
