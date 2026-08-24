@@ -101,7 +101,45 @@ WORK="$(mktemp -d /tmp/tmux-build.XXXXXX)"
 # cannot create executables" and puts the actual reason in config.log, which the
 # trap was deleting a millisecond later — two builds were guessed at before
 # anybody could read one.
-[ "${KEEP_WORK:-0}" = "1" ] || trap 'rm -rf "$WORK"' EXIT
+#
+# KEEP_WORK only helps somebody standing at the machine, and nobody is: this
+# runs on a CI runner that is destroyed either way. So on a failing exit the
+# reason is PRINTED, at the very end of the output, before anything is removed.
+# That end is the part a log reader can reach — the GitHub API returns the tail
+# of a job and nothing else, so a reason buried in the middle of a 2000-line
+# build is a reason nobody outside the web UI can read. Two rounds of this were
+# spent asking a human to copy the error out of a browser.
+dump_reason() {
+  status=$?
+  [ "$status" = "0" ] && return 0
+  echo "" >&2
+  echo "=== build failed (exit $status) — the last configure that ran ===" >&2
+  # Newest config.log under the work tree: the one that just failed. `find`
+  # rather than a fixed path because it may be libevent's, ncurses' or tmux's.
+  log="$(find "$WORK" -name config.log -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -1)"
+  if [ -n "$log" ]; then
+    echo "--- $log ---" >&2
+    # The reason first, and by name. A config.log ENDS with the confdefs dump
+    # and `configure: exit 1`, so its tail is a list of HAVE_* defines and not
+    # the failure — printing forty lines of it says everything except why. The
+    # "configure: error:" line is where the failure actually is, and it sits in
+    # the middle, so go and get it with the lines that led up to it.
+    # `configure:1234: error: ...` — the line number sits in the middle, so the
+    # obvious pattern "configure: error" matches nothing. Found by testing this
+    # against a config.log shaped like a real one rather than by reading it.
+    if grep -qE "^configure:[0-9]+: error:" "$log"; then
+      grep -nE -B8 "^configure:[0-9]+: error:" "$log" | tail -30 >&2
+    else
+      echo "(no configure error line — the last 30 lines instead)" >&2
+      tail -30 "$log" >&2
+    fi
+  else
+    echo "(no config.log — it did not get as far as configure)" >&2
+  fi
+  echo "=== end of failure detail ===" >&2
+  return 0
+}
+[ "${KEEP_WORK:-0}" = "1" ] || trap 'dump_reason; rm -rf "$WORK"' EXIT
 echo "work dir: $WORK"
 mkdir -p "$WORK/src" "$WORK/prefix" "$WORK/bin"
 
