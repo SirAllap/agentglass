@@ -833,11 +833,12 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
 
   /** The rows as the page is DRAWING them: the DOM renderer writes one div per
    *  row, so this is the screen and not a model of it. */
-  const shown = async (): Promise<string[]> => cdp!.value<string[]>(`(function () {
-    return Array.prototype.map.call(document.querySelectorAll('.xterm-rows > div'), function (row) {
-      return (row.textContent || '').trim();
-    });
-  })()`);
+  /* The buffer, not the row elements. Same reason as the grid and the colours
+     above: '.xterm-rows' is empty under the WebGL renderer, so this returned an
+     empty list on any machine with software rendering — every CI runner — and
+     `firstLine` then answered -1 to every question about where the screen is. */
+  const shown = async (): Promise<string[]> => cdp!.value<string[]>(
+    `window.AGX.screen().map(function (row) { return row.trim(); })`);
 
   /** The first numbered line on screen. The whole measurement is this number
    *  before and after. */
@@ -926,6 +927,17 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
     const gridDeadline = Date.now() + 15_000;
     for (;;) {
       grid = await cdp!.value<typeof grid>(`(function () {
+        /* The render service, not the row elements. Under the WebGL renderer
+           there ARE no row elements — xterm paints the grid into a canvas and
+           stops maintaining '.xterm-rows' — so a DOM measurement reads zero on
+           any machine that has WebGL, which is every CI runner with software
+           rendering and not this desk. The dimensions are the same numbers the
+           page's own cellOf() trusts, and they exist under both renderers.
+           The DOM is kept as the fallback for the reverse case. */
+        var m = window.AGX && window.AGX.metrics && window.AGX.metrics();
+        if (m && m.rows > 0 && m.cell > 0) {
+          return { cols: m.cols, rows: m.rows, cell: m.cell };
+        }
         var rows = document.querySelectorAll('.xterm-rows > div');
         var box = rows[0] ? rows[0].getBoundingClientRect() : null;
         return { cols: 80, rows: rows.length, cell: box ? box.height : 0 };
@@ -1098,8 +1110,11 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
  * changes the theme, and the rigs above want a pane they put there themselves.
  */
 describe.if(HAVE_CHROME)("which colours the pane ends up wearing", () => {
-  const DARK_FG = "rgb(230, 237, 243)"; // the dark base's #e6edf3
-  const LIGHT_FG = "rgb(31, 35, 40)";   // the light base's #1f2328
+  // The palette's own values, which is what `options.theme` carries. They were
+  // the computed rgb() of a row element until that stopped existing under the
+  // WebGL renderer; same two colours, read where they survive.
+  const DARK_FG = "#e6edf3";  // the dark base
+  const LIGHT_FG = "#1f2328"; // the light base
   const DESK_BG = "rgb(30, 30, 30)";    // what this machine's synced tmux paints
 
   /** What a row is actually painted with, and what the frame around the grid
@@ -1117,10 +1132,34 @@ describe.if(HAVE_CHROME)("which colours the pane ends up wearing", () => {
      * whatever it has instead of throwing — the assertion below is what should
      * report the mismatch, with the colour it actually found in the message.
      */
+    /*
+     * The theme the page settled on, and the frame it painted around the grid.
+     *
+     * This used to read `getComputedStyle` off a row element, which measured
+     * the right thing for the wrong reason: it only works under the DOM
+     * renderer. With WebGL loaded — and it is loaded, on any machine that can
+     * give xterm a context — the rows are gone and every read is the empty
+     * string, which is how four of these went red on CI while passing on every
+     * desk that happens to lack software rendering.
+     *
+     * What these tests are actually about is the page's DECISION: a pane
+     * painting its own dark background wins the vote even under a Light phone.
+     * `options.theme` is that decision, applied. The frame stays a real DOM
+     * read because it is a real DOM property either way.
+     *
+     * The honest cost: this no longer proves the colour reached the glass, only
+     * that the terminal was told. Under a canvas renderer nothing in the
+     * document can prove the former, and asserting the decision beats asserting
+     * nothing — which is what the previous version did whenever a row was
+     * missing, silently comparing '' against a colour.
+     */
     const read = (): Promise<{ fg: string; frame: string }> =>
       cdp!.value<{ fg: string; frame: string }>(`(function () {
-        var row = document.querySelector('.xterm-rows > div');
-        return { fg: row ? getComputedStyle(row).color : '', frame: document.body.style.background };
+        var m = window.AGX && window.AGX.metrics && window.AGX.metrics();
+        return {
+          fg: m && m.foreground ? String(m.foreground).toLowerCase() : '',
+          frame: m ? m.frame : document.body.style.background,
+        };
       })()`);
 
     // The 400ms settle still has to be waited out, and no signal marks it: the
@@ -1197,7 +1236,10 @@ describe.if(HAVE_CHROME)("which colours the pane ends up wearing", () => {
      * "no background" loses the vote 37% to 63% and keeps the wrong set. Empty
      * cells abstain for exactly this.
      */
-    const rows = await cdp!.value<number>(`document.querySelectorAll('.xterm-rows > div').length`);
+    // term.rows, for the same reason as the grid above: the row elements do not
+    // exist under the WebGL renderer, and this assertion is about how tall the
+    // page's grid is, which the terminal knows regardless of who paints it.
+    const rows = await cdp!.value<number>(`window.AGX.metrics().rows`);
     expect(rows).toBeGreaterThan(30);
     await cdp!.value(`window.AGX.theme(${JSON.stringify(terminalTheme(paletteFor("light", "blue")))}), 1`);
     await feed(paintedPane(12, "30;30;30"));

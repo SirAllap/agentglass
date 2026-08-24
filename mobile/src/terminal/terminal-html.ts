@@ -1418,6 +1418,38 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
       document.body.style.background = next.background;
       dress();
     },
+    /*
+     * The numbers this page is drawing with, for something outside it to read.
+     *
+     * It exists because the two facts a measurement needs — how big a cell came
+     * out, and which of the two colour sets is on — stopped being legible from
+     * the document. Under the WebGL renderer there are no row elements to
+     * measure or to take a computed style from: the grid is a canvas. Anything
+     * reading '.xterm-rows' gets zero on a machine with WebGL and the right
+     * answer on one without, which is a difference between two machines and not
+     * between two behaviours.
+     *
+     * Read-only, and it hands back copies of numbers the page already keeps.
+     */
+    /* What the pane is showing, as text — the same sensor the drag logic reads,
+       taken from the buffer rather than from row elements. The buffer is what
+       xterm knows; the rows are only how one of its two renderers happens to
+       draw it, and under WebGL they are not there at all. */
+    screen: function () { return screenRows(); },
+
+    metrics: function () {
+      var cell = cellOf();
+      var theme = term.options.theme || {};
+      return {
+        cols: term.cols,
+        rows: term.rows,
+        cell: cell ? cell.height : 0,
+        cellWidth: cell ? cell.width : 0,
+        foreground: theme.foreground || '',
+        background: theme.background || '',
+        frame: document.body.style.background,
+      };
+    },
     fit: report
   };
 
