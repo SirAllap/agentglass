@@ -203,13 +203,26 @@ build_tmux() {
     #   -static on the linker line (not -static-libgcc): everything in, no
     #     dependency on the host's libc either. `-s` strips at link time — the
     #     unstripped binary carries megabytes of DWARF into the app's download.
+    #   --disable-utf8proc — darwin's configure refuses to guess and stops with
+    #     "must give --enable-utf8proc or --disable-utf8proc", which is where
+    #     both mac jobs of the v0.12.0 tag died once the ncurses fixes let them
+    #     reach it. Linux does not ask and settles on disabled anyway, so this
+    #     says out loud on every platform what one of them was already doing.
+    #     Enabling it would mean vendoring a third library.
+    #
+    #     It goes on the ./configure line and NOT here: every line in this block
+    #     ends in a backslash, so a comment placed among them is joined onto the
+    #     assignment above it and swallows the rest — configure then runs on its
+    #     own with none of these flags, finds neither libevent nor ncurses, and
+    #     the linux build that had been passing breaks. `bash -n` reads that as
+    #     valid, because it is; it is just not the command anybody wrote.
     ac_cv_search_forkpty="none required" \
     CC="$CC" \
     CFLAGS="-O2 $ARCHFLAG -I$WORK/prefix/include -I$WORK/prefix/include/ncursesw -DHAVE_PROC_PID" \
     CPPFLAGS="-I$WORK/prefix/include -I$WORK/prefix/include/ncursesw" \
     LDFLAGS="-L$WORK/prefix/lib $ARCHFLAG $LDMODE" \
     LIBS="-levent_core -levent -lncursesw $TINFO_LDLIB -lm" \
-    ./configure $HOSTFLAG --prefix="$WORK/prefix" >/dev/null
+    ./configure $HOSTFLAG --disable-utf8proc --prefix="$WORK/prefix" >/dev/null
     make -s -j"$(jobs_n)" )
   file "$WORK/src/tmux-${TMUX_VERSION}/tmux"
 }
