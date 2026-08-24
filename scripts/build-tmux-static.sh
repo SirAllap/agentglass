@@ -101,7 +101,45 @@ WORK="$(mktemp -d /tmp/tmux-build.XXXXXX)"
 # cannot create executables" and puts the actual reason in config.log, which the
 # trap was deleting a millisecond later — two builds were guessed at before
 # anybody could read one.
-[ "${KEEP_WORK:-0}" = "1" ] || trap 'rm -rf "$WORK"' EXIT
+#
+# KEEP_WORK only helps somebody standing at the machine, and nobody is: this
+# runs on a CI runner that is destroyed either way. So on a failing exit the
+# reason is PRINTED, at the very end of the output, before anything is removed.
+# That end is the part a log reader can reach — the GitHub API returns the tail
+# of a job and nothing else, so a reason buried in the middle of a 2000-line
+# build is a reason nobody outside the web UI can read. Two rounds of this were
+# spent asking a human to copy the error out of a browser.
+dump_reason() {
+  status=$?
+  [ "$status" = "0" ] && return 0
+  echo "" >&2
+  echo "=== build failed (exit $status) — the last configure that ran ===" >&2
+  # Newest config.log under the work tree: the one that just failed. `find`
+  # rather than a fixed path because it may be libevent's, ncurses' or tmux's.
+  log="$(find "$WORK" -name config.log -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -1)"
+  if [ -n "$log" ]; then
+    echo "--- $log ---" >&2
+    # The reason first, and by name. A config.log ENDS with the confdefs dump
+    # and `configure: exit 1`, so its tail is a list of HAVE_* defines and not
+    # the failure — printing forty lines of it says everything except why. The
+    # "configure: error:" line is where the failure actually is, and it sits in
+    # the middle, so go and get it with the lines that led up to it.
+    # `configure:1234: error: ...` — the line number sits in the middle, so the
+    # obvious pattern "configure: error" matches nothing. Found by testing this
+    # against a config.log shaped like a real one rather than by reading it.
+    if grep -qE "^configure:[0-9]+: error:" "$log"; then
+      grep -nE -B8 "^configure:[0-9]+: error:" "$log" | tail -30 >&2
+    else
+      echo "(no configure error line — the last 30 lines instead)" >&2
+      tail -30 "$log" >&2
+    fi
+  else
+    echo "(no config.log — it did not get as far as configure)" >&2
+  fi
+  echo "=== end of failure detail ===" >&2
+  return 0
+}
+[ "${KEEP_WORK:-0}" = "1" ] || trap 'dump_reason; rm -rf "$WORK"' EXIT
 echo "work dir: $WORK"
 mkdir -p "$WORK/src" "$WORK/prefix" "$WORK/bin"
 
@@ -149,12 +187,25 @@ verify() { # file name
   fi
 }
 
+# ARCHFLAG belongs here as much as it does to ncurses and tmux, and its absence
+# is what kept the x64 mac build red after everything else was fixed. That job
+# cross-builds for Intel on an arm64 runner: ncurses and tmux were told `-arch
+# x86_64` and libevent was not, so libevent came out arm64 while the tmux
+# linking against it came out x86_64. configure finds the header and then fails
+# the link test, and reports the confusing half of that:
+#
+#     configure:6014: checking for event2/event.h
+#     configure:6014: result: yes
+#     configure:6036: error: "libevent not found"
+#
+# The arm64 job never noticed, because there ARCHFLAG and the host agree and a
+# libevent built with no -arch at all comes out right by coincidence.
 build_libevent() {
   local t="$(fetch libevent.tar.gz "$LIBEVENT_URL")"
   verify "$t" "libevent-${LIBEVENT_VERSION}-stable.tar.gz"
   tar -xzf "$t" -C "$WORK/src"
   ( cd "$WORK/src/libevent-${LIBEVENT_VERSION}-stable"
-    CC="$CC" ./configure $HOSTFLAG --prefix="$WORK/prefix" --disable-shared --enable-static --disable-openssl --disable-samples --disable-libevent-regress >/dev/null
+    CC="$CC" CFLAGS="-O2 $ARCHFLAG" LDFLAGS="$ARCHFLAG" ./configure $HOSTFLAG --prefix="$WORK/prefix" --disable-shared --enable-static --disable-openssl --disable-samples --disable-libevent-regress >/dev/null
     make -s -j"$(jobs_n)" && make -s install )
 }
 
@@ -203,13 +254,26 @@ build_tmux() {
     #   -static on the linker line (not -static-libgcc): everything in, no
     #     dependency on the host's libc either. `-s` strips at link time — the
     #     unstripped binary carries megabytes of DWARF into the app's download.
+    #   --disable-utf8proc — darwin's configure refuses to guess and stops with
+    #     "must give --enable-utf8proc or --disable-utf8proc", which is where
+    #     both mac jobs of the v0.12.0 tag died once the ncurses fixes let them
+    #     reach it. Linux does not ask and settles on disabled anyway, so this
+    #     says out loud on every platform what one of them was already doing.
+    #     Enabling it would mean vendoring a third library.
+    #
+    #     It goes on the ./configure line and NOT here: every line in this block
+    #     ends in a backslash, so a comment placed among them is joined onto the
+    #     assignment above it and swallows the rest — configure then runs on its
+    #     own with none of these flags, finds neither libevent nor ncurses, and
+    #     the linux build that had been passing breaks. `bash -n` reads that as
+    #     valid, because it is; it is just not the command anybody wrote.
     ac_cv_search_forkpty="none required" \
     CC="$CC" \
     CFLAGS="-O2 $ARCHFLAG -I$WORK/prefix/include -I$WORK/prefix/include/ncursesw -DHAVE_PROC_PID" \
     CPPFLAGS="-I$WORK/prefix/include -I$WORK/prefix/include/ncursesw" \
     LDFLAGS="-L$WORK/prefix/lib $ARCHFLAG $LDMODE" \
     LIBS="-levent_core -levent -lncursesw $TINFO_LDLIB -lm" \
-    ./configure $HOSTFLAG --prefix="$WORK/prefix" >/dev/null
+    ./configure $HOSTFLAG --disable-utf8proc --prefix="$WORK/prefix" >/dev/null
     make -s -j"$(jobs_n)" )
   file "$WORK/src/tmux-${TMUX_VERSION}/tmux"
 }
@@ -234,8 +298,41 @@ else
   echo "  cross-built for $TARGET — not run here"
 fi
 file "out/tmux-$TARGET" | sed 's/^/  /'
-case "$(file -b "out/tmux-$TARGET")" in
-  *"statically linked"*) ;;
-  *) echo "NOT STATIC — this would depend on the host's libc" >&2; exit 1 ;;
+
+# What "static enough" means, which is not the same sentence on both platforms.
+#
+# The property this build actually needs is that the binary runs on a machine
+# that has no tmux, no libevent and no ncurses — those three are built here as
+# .a archives and linked in. It is NOT "depends on nothing at all".
+#
+#   linux  — `-static` really does take libc too, and `file` says so. The string
+#            is the proof, and it stays the check.
+#   darwin — there is no static libSystem and the linker refuses to pretend
+#            otherwise, which is why LDMODE drops `-static` there (see the case
+#            near the top, and #531). `file` therefore never says "statically
+#            linked" on a Mach-O, and this check demanded it anyway: the mac
+#            builds compiled a working tmux, ran it, printed `tmux 3.5a`, and
+#            then failed on their own verification. So ask otool what is
+#            actually linked and require all of it to be the system's.
+case "$TARGET" in
+  *darwin*)
+    deps="$(otool -L "out/tmux-$TARGET" | tail -n +2 | awk '{print $1}')"
+    echo "$deps" | sed 's/^/  links: /'
+    # Anything outside /usr/lib and /System is a library the user would have to
+    # already have — libevent and ncursesw are the ones this script builds, and
+    # seeing either here means the .a archives were not the thing that got used.
+    stray="$(echo "$deps" | grep -vE '^(/usr/lib/|/System/Library/)' || true)"
+    if [ -n "$stray" ]; then
+      echo "NOT SELF-CONTAINED — links libraries the user may not have:" >&2
+      echo "$stray" | sed 's/^/  /' >&2
+      exit 1
+    fi
+    ;;
+  *)
+    case "$(file -b "out/tmux-$TARGET")" in
+      *"statically linked"*) ;;
+      *) echo "NOT STATIC — this would depend on the host's libc" >&2; exit 1 ;;
+    esac
+    ;;
 esac
 echo "built out/tmux-$TARGET"
