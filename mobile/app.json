@@ -2,7 +2,7 @@
   "expo": {
     "name": "agentglass",
     "slug": "agentglass-mobile",
-    "version": "0.10.0",
+    "version": "0.12.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "agentglass",
@@ -11,7 +11,7 @@
     "newArchEnabled": true,
     "android": {
       "package": "app.agentglass.mobile",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f0a1a"
