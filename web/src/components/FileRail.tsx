@@ -19,7 +19,7 @@ import { useMemo } from "react";
 import type { PrDetail } from "../../../shared/types.ts";
 import { railScan, checksAbout, threadsAbout, queuedOn, heldOn, railAge,  railPreview, type RailDraft, type RailHeld, type RailMention } from "../lib/fileRail.ts";
 import { openExternal } from "../lib/externalUrl.ts";
-import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict } from "../lib/mergeReason.ts";
+import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict } from "../../../shared/mergeReason.ts";
 import { ICON } from "../lib/iconSize.ts";
 
 /** How your own last verdict reads back, and in what colour. Its own map so the

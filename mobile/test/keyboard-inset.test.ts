@@ -60,7 +60,13 @@ describe("how a screen gets out of the keyboard's way", () => {
   test("there are screens doing it at all", () => {
     // If this ever reads zero the rest of the file is passing vacuously, which
     // is the way a lock like this dies quietly.
-    expect(using.length).toBeGreaterThanOrEqual(3);
+    //
+    // Two, not three. The third was app/chat/[id].tsx — the screen the bug in
+    // the header above was FOUND on — and it was deleted with the rest of the
+    // conversation UI. The floor moved down with it rather than the count being
+    // padded: what this guards is that the check has something to check, and
+    // the pairing form and the terminal both still take typing.
+    expect(using.length).toBeGreaterThanOrEqual(2);
   });
 
   test("none of them goes quiet on Android", () => {
@@ -100,8 +106,20 @@ describe("the tab bar and the keyboard", () => {
    */
   const bar = code(readFileSync(join(root, "src/nav/TabBar.tsx"), "utf8"));
 
-  test("the bar stands down while somebody is typing", () => {
-    expect(bar).toContain("useKeyboardShown");
-    expect(bar).toMatch(/if \(keyboard\) return null;/);
+  test("the bar draws nothing at all", () => {
+    /*
+     * It used to stand down while somebody was typing. It stands down always
+     * now — the bar is retired, and every screen carries its own way back (see
+     * the note in src/nav/TabBar.tsx and app/(tabs)/_layout.tsx).
+     *
+     * The lock changes shape rather than going away, and this is the shape that
+     * matters: if anybody brings the bar back, this fails, and the thing they
+     * have to re-read is the paragraph below — which is the whole reason the
+     * keyboard rule existed. A bar restored without it was photographed twice,
+     * once riding up to mid-screen with the star over the list, once buried
+     * under the keys.
+     */
+    expect(bar).toMatch(/return null;\s*\}/);
+    expect(bar).not.toMatch(/<Pressable/);
   });
 });

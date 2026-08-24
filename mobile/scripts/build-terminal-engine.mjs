@@ -26,7 +26,7 @@ const require = createRequire(import.meta.url);
 const root = path.resolve(import.meta.dirname, "..");
 const out = path.join(root, "src", "terminal", "engine.generated.ts");
 const TARGET = "chrome74";
-const PACKAGES = ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-unicode11"];
+const PACKAGES = ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-unicode11", "@xterm/addon-webgl"];
 
 const version = async (name) => {
   const json = JSON.parse(await readFile(require.resolve(`${name}/package.json`), "utf8"));
@@ -43,6 +43,7 @@ async function buildJs() {
         import { Terminal } from '@xterm/xterm'
         import { FitAddon } from '@xterm/addon-fit'
         import { Unicode11Addon } from '@xterm/addon-unicode11'
+        import { WebglAddon } from '@xterm/addon-webgl'
 
         // WeakRef (Chrome 84+): xterm constructs one lazily while tracking its
         // window. Holding a strong reference is fine for a single-document
@@ -71,6 +72,7 @@ async function buildJs() {
         window.Terminal = Terminal
         window.FitAddon = FitAddon
         window.Unicode11Addon = Unicode11Addon
+        window.WebglAddon = WebglAddon
       `,
       resolveDir: root,
       sourcefile: "terminal-engine-entry.js",

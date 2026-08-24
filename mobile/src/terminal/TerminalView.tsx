@@ -24,6 +24,7 @@ import { b64Encode } from "../lib/b64.ts";
 import type { Host } from "../lib/host.ts";
 import { C, type Palette } from "../theme.ts";
 import { terminalDocument, terminalTheme } from "./terminal-html.ts";
+import { createCoalescer, type Coalescer } from "./writeCoalescer.ts";
 
 export type TerminalState = "connecting" | "live" | "gone";
 
@@ -192,10 +193,32 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     webview.current?.injectJavaScript(`${js};true;`);
   }, []);
 
+  /**
+   * Frames, batched into one crossing of the bridge.
+   *
+   * `writeMany` rather than a loop of `write` on this side: the expensive part
+   * is the injection, not the decode, so twelve frames in one array cost one
+   * trip. src/terminal/writeCoalescer.ts holds the rule and the reason for the
+   * window; what is here is only the delivery.
+   *
+   * A ref, and built once: the coalescer holds a timer and a buffer, and one
+   * rebuilt on a render would drop whatever it was holding on the floor.
+   */
+  const bytes = useRef<Coalescer | null>(null);
+  if (bytes.current === null) {
+    bytes.current = createCoalescer((chunks) => {
+      inject(`window.AGX.writeMany(${JSON.stringify(chunks)})`);
+    });
+  }
+
   const push = useCallback((b64: string): void => {
+    // Before the page says `ready` there is nothing to write TO, so those go on
+    // the queue the ready handler drains — a different problem from batching,
+    // and one the coalescer must not be handed or it would deliver into a
+    // document that does not exist yet.
     if (!ready.current) { pending.current.push(b64); return; }
-    inject(`window.AGX.write(${JSON.stringify(b64)})`);
-  }, [inject]);
+    bytes.current?.push(b64);
+  }, []);
 
   useImperativeHandle(ref, () => ({
     send: (bytes: string): void => {
@@ -319,6 +342,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       socket.current = null;
+      /* Whatever this pane's socket left in the batch is thrown away rather
+         than delivered. It belongs to a pane nobody is looking at any more,
+         and 48ms is easily enough time for the next one to have arrived —
+         which would put one pane's output into another's screen. */
+      bytes.current?.clear();
       // Closing the socket ends the grouped tmux session on the machine, which
       // is what should happen: leaving one behind per tab visited would fill
       // `tmux ls` with sessions nobody is in.
@@ -371,9 +399,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       // in the wrong ones: a WebView reload replays the document this component
       // was built with, whose palette is whatever was current at mount.
       if (painted.current !== baked.current) inject(`window.AGX.theme(${painted.current})`);
-      for (const frame of pending.current.splice(0)) {
-        inject(`window.AGX.write(${JSON.stringify(frame)})`);
-      }
+      const waiting = pending.current.splice(0);
+      // Everything held while the page booted, in one crossing. This is the
+      // biggest single batch the bridge ever carries — a pane with scrollback
+      // replays it all at `ready`.
+      if (waiting.length) inject(`window.AGX.writeMany(${JSON.stringify(waiting)})`);
       return;
     }
     if (message.t === "in" && typeof message.d === "string") {

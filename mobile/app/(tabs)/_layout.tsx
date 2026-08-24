@@ -1,13 +1,13 @@
 /*
- * The navigator: nine screens, five of them in the bar.
+ * The navigator: eight screens, five of them in the bar.
  *
  * What this file decides is what is a TAB, and the answer is "everything",
- * including the four the bar does not draw. Now and Settings could have been
- * pushed onto the root stack instead — that is what a pushed screen normally
- * is — and it would have hidden the bar for as long as you were in one, which
- * puts the terminal two taps away from the two screens people leave open. So
- * they are tabs with no tab: mounted here, reached from a band and a gear, and
- * the bar stays up the whole time.
+ * including the three the bar does not draw. Now, Repos and Settings could
+ * have been pushed onto the root stack instead — that is what a pushed screen
+ * normally is — and it would have hidden the bar for as long as you were in
+ * one, which puts the terminal two taps away from the screens people leave
+ * open. So they are tabs with no tab: mounted here, reached from a gear and
+ * the rows under it, and the bar stays up the whole time.
  *
  * The bar itself is src/nav/TabBar.tsx, and which destinations it offers is
  * src/nav/bar.ts. The reasoning about the seven that were here — and the
@@ -76,7 +76,7 @@ export default function TabsLayout(): React.ReactNode {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
+          title: "Inbox",
           headerRight: () => (
             <HeaderButton label="Settings" side="right" onPress={() => router.push("/settings")}>
               <SettingsIcon color={C.text} />
@@ -84,22 +84,26 @@ export default function TabsLayout(): React.ReactNode {
           ),
         }}
       />
-      <Tabs.Screen name="chats" options={{ title: "Chats" }} />
+      {/* Pull requests and cards were one destination behind a segmented
+          control, which was a saving made when the bar was full of screens
+          that have since gone. They are two destinations now, and each keeps
+          the screen it always had. */}
+      {/*
+        Every one of these carries the way back, because none of them is drawn
+        in a bar any more. `back` in a tab navigator goes to the first route,
+        which is the Inbox — and the Inbox is now the only place any of them is
+        opened from, so it is also the right answer.
+      */}
+      <Tabs.Screen name="prs" options={{ title: "Pull requests", headerLeft: () => back }} />
+      {/* The terminal draws its own header — it is the one screen that gives
+          the pane every point it can, so the navigator's chrome would be
+          spending 56 of them on a title. Its back control is in that header. */}
       <Tabs.Screen name="terminal" options={{ title: "Terminal", headerShown: false }} />
-      {/* Review sets its own header title — a segmented control — from inside
-          the screen, because only the screen knows which half is showing. */}
-      <Tabs.Screen name="review" options={{ title: "Review" }} />
-      <Tabs.Screen name="repos" options={{ title: "Repos" }} />
-
-      {/* ── the four the bar does not draw ──────────────────────────────── */}
+      <Tabs.Screen name="issues" options={{ title: "Issues", headerLeft: () => back }} />
+      <Tabs.Screen name="tasks" options={{ title: "Cards", headerLeft: () => back }} />
       <Tabs.Screen name="now" options={{ title: "Now", headerLeft: () => back }} />
+      <Tabs.Screen name="repos" options={{ title: "Source control", headerLeft: () => back }} />
       <Tabs.Screen name="settings" options={{ title: "Settings", headerLeft: () => back }} />
-      {/* Reachable at /prs and /tasks, and drawn inside Review. Neither needs a
-          way back of its own: nothing navigates to them, Review renders them
-          in place. They stay declared so the two paths keep working and so the
-          screens keep their own titles if anything ever does. */}
-      <Tabs.Screen name="prs" options={{ title: "PRs" }} />
-      <Tabs.Screen name="tasks" options={{ title: "Tasks" }} />
     </Tabs>
   );
 }

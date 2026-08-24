@@ -8,16 +8,19 @@
  * have no mark at all until you read the label under them.
  *
  * They are drawn in the desk rail's coordinate system — a 24-unit box, see
- * web/src/components/workspace/icons.tsx — and most of them are that rail's own
- * shapes, unaltered. A pull request should not be one thing on the computer and
- * a different one in your hand. Of the eight below, six are the rail's
- * (Home/DashIcon, Chats, Terminal, Prs, Repos/FilesIcon, Tasks/IssuesIcon) and
- * two are the phone's own, each for a reason written over it.
+ * web/src/components/workspace/icons.tsx — and several of them are that rail's
+ * own shapes, unaltered. A pull request should not be one thing on the computer
+ * and a different one in your hand. Of the twelve below, four are the rail's
+ * (Terminal, Prs, Repos/FilesIcon, Tasks/IssuesIcon), one is GitHub's own
+ * (Issues), and the rest are the phone's, each for a reason written over it.
  *
- * They live here rather than in the tab layout because the bar stopped being
- * the only thing that draws them: Home's band wears the Now ring, Home's header
- * wears the faders, and Review's segmented control wears the pull request and
- * the checklist. Six of these eight are now used somewhere that is not a tab.
+ * They live here rather than in the tab layout because the bar is not what
+ * draws most of them. Five of the twelve were tabs — Inbox, Prs, Terminal,
+ * Issues, Tasks. The other five are somewhere else entirely: the faders and the
+ * way back are in the header the tab layout puts over a pushed screen, the
+ * chevron is on every Inbox row, and the ring and the folder are the two rows
+ * in Settings ▸ Elsewhere, which is where Now and Repos went when the bar
+ * became pull requests, issues and cards.
  */
 // Expo Go carries react-native-svg, which is the only reason it may be
 // imported at the top of a file the router reaches. See
@@ -55,31 +58,18 @@ export type IconProps = { color: ColorValue; size?: number };
 const box = (size: number): { width: number; height: number } => ({ width: size, height: size });
 
 /**
- * Four panes: the shape of a dashboard since the first one, and the rail's own
- * mark for the view this screen replaced Now with.
- *
- * A house was the obvious alternative and says the wrong thing. This screen is
- * not "where you started", it is what the machine is doing — the same claim the
- * desk's Dash makes with the same glyph.
- */
-export function HomeIcon({ color, size = 20 }: IconProps): React.ReactNode {
-  return (
-    <Svg {...line} {...box(size)} color={color}>
-      <Path d="M3 4.4a1.4 1.4 0 0 1 1.4-1.4h5.7a1.4 1.4 0 0 1 1.4 1.4v5.7a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 10.1z" />
-      <Path d="M13.5 4.4A1.4 1.4 0 0 1 14.9 3h4.7A1.4 1.4 0 0 1 21 4.4v2.7a1.4 1.4 0 0 1-1.4 1.4h-4.7a1.4 1.4 0 0 1-1.4-1.4z" />
-      <Path d="M13.5 11.9a1.4 1.4 0 0 1 1.4-1.4h4.7a1.4 1.4 0 0 1 1.4 1.4v7.7a1.4 1.4 0 0 1-1.4 1.4h-4.7a1.4 1.4 0 0 1-1.4-1.4z" />
-      <Path d="M3 14.9a1.4 1.4 0 0 1 1.4-1.4h5.7a1.4 1.4 0 0 1 1.4 1.4v4.7a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 19.6z" />
-    </Svg>
-  );
-}
-
-/**
  * A ring with its centre marked.
  *
  * Not a bell. The screen it opens argues at some length that it is a queue you
  * can empty rather than a notifications inbox, and a bell would promise exactly
- * the thing the list refuses to be. A ring also carries the badge better than
- * any other shape here: the count sits in empty space.
+ * the thing the list refuses to be — and a bell with nothing on it is a bell
+ * that has already told you something, which is the one thing this must not
+ * say when the queue is empty.
+ *
+ * It is off the bar now and marks a row in Settings, where the count sits
+ * BESIDE it rather than on it. There is no badge anywhere in this app and its
+ * absence is argued in src/nav/TabBar.tsx: a number the bar cannot recompute on
+ * every screen is a number that goes stale on every screen but one.
  */
 export function NowIcon({ color, size = 20 }: IconProps): React.ReactNode {
   return (
@@ -96,15 +86,6 @@ export function TerminalIcon({ color, size = 20 }: IconProps): React.ReactNode {
     <Svg {...line} {...box(size)} color={color}>
       <Path d="M6 8l3.5 4L6 16" />
       <Path d="M12.5 16.5H18" />
-    </Svg>
-  );
-}
-
-/** The rail's own speech bubble. */
-export function ChatsIcon({ color, size = 20 }: IconProps): React.ReactNode {
-  return (
-    <Svg {...line} {...box(size)} color={color}>
-      <Path d="M20 4H4v12h5v4l5-4h6z" />
     </Svg>
   );
 }
@@ -126,21 +107,21 @@ export function PrsIcon({ color, size = 20 }: IconProps): React.ReactNode {
 }
 
 /**
- * An open tray, for the destination that is a pull request and a card at once.
+ * An open tray, for the screen that gathers what is waiting on you.
  *
- * The rail has no glyph for this, because the desk has no such destination —
- * it has room for both. So it is drawn here, and what it has to say is the
- * thing the two halves share: something arrived from outside and is waiting on
- * a decision. A tray says that; neither half's own mark does, and using one of
- * them would make the other invisible.
+ * Drawn for the Review destination, which held pull requests and cards behind
+ * one control; it now marks the Inbox, which is the same claim made about one
+ * more source. What it has to say is what all three share: something arrived
+ * from outside and is waiting on a decision. A tray says that, and no single
+ * source's own mark can without making the other two invisible.
  *
  * Open at the top, with the notch, and that is the whole of the drawing
- * decision. Two slots away sits a folder, and a closed box with a line across
- * it — which is what every stock "inbox" is — is a folder at 20px. This has no
- * top edge at all: its silhouette is a U with a bite out of the shoulders,
- * which nothing else in the bar shares.
+ * decision. A closed box with a line across it — which is what every stock
+ * "inbox" is — is a folder at 20px, and there is a folder two slots away in
+ * Settings. This has no top edge at all: its silhouette is a U with a bite out
+ * of the shoulders, which nothing else in the bar shares.
  */
-export function ReviewIcon({ color, size = 20 }: IconProps): React.ReactNode {
+export function InboxIcon({ color, size = 20 }: IconProps): React.ReactNode {
   return (
     <Svg {...line} {...box(size)} color={color}>
       <Path d="M3 13.4h5.2l1.7 2.8h4.2l1.7-2.8H21" />
@@ -162,6 +143,27 @@ export function ReposIcon({ color, size = 20 }: IconProps): React.ReactNode {
     <Svg {...line} {...box(size)} color={color}>
       <Path d="M3 6.6a2 2 0 0 1 2-2h3.5l2 2.6H19a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       <Path d="M3 9.7h18" />
+    </Svg>
+  );
+}
+
+/**
+ * GitHub's own issue mark: a ring with a solid centre.
+ *
+ * It shares its outline with NowIcon, and the fill is what separates them —
+ * deliberately, because they are never in the bar together. Now is off the bar
+ * and wears the ring in Settings; this one is a destination and wears the dot.
+ * A stroked inner circle at 20px is a 3.2px hole and a filled one is a 5.2px
+ * blob, which is the difference a thumb can see at arm's length.
+ *
+ * Not a bug, an exclamation mark or a speech bubble: an issue is not
+ * necessarily any of those, and this is the shape the site it comes from uses.
+ */
+export function IssuesIcon({ color, size = 20 }: IconProps): React.ReactNode {
+  return (
+    <Svg {...line} {...box(size)} color={color}>
+      <Circle cx="12" cy="12" r="8.4" />
+      <Circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
     </Svg>
   );
 }
@@ -195,6 +197,47 @@ export function SettingsIcon({ color, size = 20 }: IconProps): React.ReactNode {
       <Path d="M4 8.5h4" />
       <Path d="M10 14.5h4" />
       <Path d="M16 7h4" />
+    </Svg>
+  );
+}
+
+/**
+ * A picture: the frame, a horizon and a sun.
+ *
+ * Not a paperclip. A clip means "a file" and this button takes one thing —
+ * an image — which the composer beside it then pastes a path to. The
+ * distinction matters on a row where the other control is a keyboard toggle:
+ * two marks that both mean "attach something" would be one mark drawn twice.
+ *
+ * The mountain is deliberately off-centre and the sun sits in the free corner,
+ * which is what keeps it readable at 19px — a symmetric version of this shape
+ * collapses into a filled box.
+ */
+export function ImageIcon({ color, size = 20 }: IconProps): React.ReactNode {
+  return (
+    <Svg {...line} {...box(size)} color={color}>
+      <Path d="M4 5.5h16a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 17V7A1.5 1.5 0 0 1 4 5.5z" />
+      <Path d="M2.8 15.4 8 10.6l4.2 3.9" />
+      <Path d="M13.2 13.2 16.4 10.4l4.6 4.2" />
+      <Circle cx="15.6" cy="8.9" r="1.5" />
+    </Svg>
+  );
+}
+
+/**
+ * A microphone: the capsule, its cradle and the stand.
+ *
+ * The cradle is what makes it read as a microphone rather than a pill at
+ * 19px — a capsule alone is a rounded rectangle, and there are two of those
+ * on the same row already. The stand is one stroke because a foot as well
+ * costs a pixel of the cradle's gap, which is the part carrying the meaning.
+ */
+export function MicIcon({ color, size = 20 }: IconProps): React.ReactNode {
+  return (
+    <Svg {...line} {...box(size)} color={color}>
+      <Path d="M12 3.2a2.6 2.6 0 0 1 2.6 2.6v5.4a2.6 2.6 0 0 1-5.2 0V5.8A2.6 2.6 0 0 1 12 3.2z" />
+      <Path d="M6.2 10.6v.8a5.8 5.8 0 0 0 11.6 0v-.8" />
+      <Path d="M12 17.2v3.4" />
     </Svg>
   );
 }

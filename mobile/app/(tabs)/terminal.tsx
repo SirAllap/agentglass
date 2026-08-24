@@ -32,25 +32,67 @@
  * it, which is the bargain the agent's own prompt makes. `keys` mode is there
  * for the other half of a terminal, the program waiting on one keystroke.
  */
-import { useCallback, useRef, useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
+} from "react-native";
 import * as Haptics from "expo-haptics";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { useDeskPalette, usePaletteTick } from "../../src/state/use-palette.ts";
 import { TerminalView, type TerminalHandle, type TerminalState } from "../../src/terminal/TerminalView.tsx";
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
+import { apply as applyKeyLayout } from "../../src/terminal/keyLayout.ts";
+import {
+  customKeys, keyLayout, onTermPrefs, setTermColumns, termAssist, termColumns,
+} from "../../src/terminal/termPrefs.ts";
+import { bytesFor } from "../../src/terminal/customKeys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
+import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
+import { BackIcon, ImageIcon, MicIcon } from "../../src/nav/icons.tsx";
+import { since } from "../../src/lib/dates.ts";
+import type { AgentSessionRow } from "../../../shared/types.ts";
+
+/** The last segment of a path, which is what a person calls a checkout — the
+ *  same rule src/terminal/tabs.ts uses to name a window. */
+const leafOf = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
+
+import { fileFrom, pastePayload, type Uploaded } from "../../src/terminal/imagePaste.ts";
+import { joinDictated, nameFor, wordsFrom, type Said } from "../../src/terminal/dictation.ts";
+/* Imported at the top, unlike the image picker below it, and the difference is
+   the rule rather than an inconsistency: expo-audio ships IN the Expo Go
+   client, so it is not one of the modules test/native-imports.test.ts is about
+   — those are the ones that may be absent from a build. The web harness gets a
+   shim (see metro.config.js) because a browser has no microphone. */
+import {
+  RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder,
+} from "expo-audio";
+import { readAsStringAsync } from "expo-file-system";
+
+/** One row of `/terminal/agents`. Declared here rather than in shared/ for the
+ *  same reason PrViewCounts is: it is this route's answer shape and nothing
+ *  else reads it — see the note in app/(tabs)/prs.tsx. */
+interface AgentOffer {
+  id: string;
+  title: string;
+  what: string;
+  /** On THIS machine. A name with no binary behind it is drawn and refused,
+   *  never offered. */
+  installed: boolean;
+  /** Whether this CLI has a skip-permissions flag at all. */
+  canBypass: boolean;
+}
 import { bestSession, readStrip, sessionsOf, type Tab } from "../../src/terminal/tabs.ts";
 import type { PanesResponse } from "../../../shared/types.ts";
-import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
 
 export default function TerminalScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
-  const { host } = useAgentglass();
+  const { host, fleet } = useAgentglass();
+  const router = useRouter();
   /*
    * The pane is painted by the COMPUTER, so when the computer says which palette
    * that is, the terminal wears it and only the chrome around it wears the
@@ -89,6 +131,11 @@ export default function TerminalScreen(): React.ReactNode {
   const paneColours = { ...paneBase, primary: C.primary, primaryHover: C.primaryHover };
   const insets = useSafeAreaInsets();
   const terminal = useRef<TerminalHandle>(null);
+  /* How many agents are stopped at a gate. Straight off the store's own list
+     rather than through the queue's rules: a pending gate IS the fact — the
+     hook's request is open and nothing proceeds until somebody answers — and
+     it needs no interpretation to be counted. */
+  const held = fleet.gates.length;
 
   /*
    * The strip itself, and not the pane list it came from.
@@ -158,7 +205,11 @@ export default function TerminalScreen(): React.ReactNode {
    * rung. The same pass also put 150 ROWS on the screen, and with nothing wider
    * attached that is the size the real window is given.
    */
-  const [columns, setColumns] = useState(80);
+  /* Started from what this phone chose last, not from a constant. See
+     src/terminal/termPrefs.ts — it is a property of the screen and the eyes in
+     front of it, so re-picking it on every attach was work nobody should have
+     to repeat. */
+  const [columns, setColumns] = useState(termColumns);
   /*
    * Whether the tmux window reflows to this phone.
    *
@@ -362,6 +413,50 @@ export default function TerminalScreen(): React.ReactNode {
    * happened", and the second press opens a second agent.
    */
   const [opening, setOpening] = useState(false);
+  /** The new-tab menu, and the agents the MACHINE reports. Null until it
+   *  answers, so the sheet says it is asking rather than drawing an empty list
+   *  that reads as "none available". */
+  const [picking, setPicking] = useState(false);
+  const [agents, setAgents] = useState<AgentOffer[] | null>(null);
+  /** An attachment on its way up. The picker can be open for a long time and
+   *  the upload is the only part worth a spinner, so this is set after the
+   *  picture has been chosen rather than before the gallery opens. */
+  const [sending, setSending] = useState(false);
+  /** Recording, or transcribing. Two states because they feel different: one is
+   *  waiting for the person and the other is waiting for the computer, and a
+   *  single spinner for both would say "hold on" while it is the phone's turn
+   *  to hold on. */
+  const [hearing, setHearing] = useState<"listening" | "thinking" | null>(null);
+  /* The recorder has to be made in a render — `useAudioRecorder` is the only
+     entry point expo-audio exposes at runtime, the class behind it being a
+     type export. It is inert until `record()`, so holding one costs nothing on
+     a screen nobody dictates into. */
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  /* The bar somebody chose. A module singleton so this screen and the settings
+     screen see one value; the local mirror is only what makes this repaint
+     when the other one writes. See src/terminal/keyStore.ts. */
+  const [bar, setBar] = useState(keyLayout);
+  const [assist, setAssist] = useState(termAssist);
+  /** The overflow menu, and the past sessions it can offer. Null until asked —
+   *  it is a read per checkout and the menu is not opened on the way in. */
+  const [more, setMore] = useState(false);
+  const [past, setPast] = useState<AgentSessionRow[] | null>(null);
+  useEffect(() => onTermPrefs(() => {
+    setBar(keyLayout()); setColumns(termColumns()); setAssist(termAssist());
+    setMine(customKeys());
+  }), []);
+  const [mine, setMine] = useState(customKeys);
+  /* Custom keys ride at the END of the catalogue rather than being merged into
+     it, so the layout's order still describes the built-ins it was written
+     against — and a key added today does not push somebody's arrangement
+     around. They are AccessoryKeys like any other from here on: same width,
+     same repeat rule (never), same bar. */
+  const keys = useMemo(() => applyKeyLayout(bar, [
+    ...ACCESSORY_KEYS,
+    ...mine.map((k) => ({
+      id: k.id, label: k.label, bytes: bytesFor(k), spoken: k.label,
+    })),
+  ]), [bar, mine]);
   /** The deadline on that spinner. A ref because it is cleared from a callback
    *  that must not re-run when it changes. */
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -393,12 +488,139 @@ export default function TerminalScreen(): React.ReactNode {
    * its first tool call to ask a question there has done nothing at all. The
    * button says so in as many words rather than hiding it in a mode.
    */
-  const openAgent = useCallback((): void => {
+  /* Asked once per host rather than when the sheet opens: it is a small read
+     and a menu that spins on the way in is a menu people stop opening. */
+  useEffect(() => {
+    if (!host) { setAgents(null); return; }
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ ok: boolean; agents?: AgentOffer[] }>(host, "/terminal/agents");
+      if (gone || !answer.ok || !answer.value.ok) return;
+      setAgents(answer.value.agents ?? []);
+    })();
+    return () => { gone = true; };
+  }, [host]);
+
+  /**
+   * Attach a picture to whatever is running in the pane.
+   *
+   * `expo-image-picker` is required INSIDE the function and behind a try, which
+   * is the rule test/native-imports.test.ts holds: a native module imported at
+   * the top of a file the router reaches takes the whole route tree down on a
+   * build that does not carry it. This app has shipped a blank screen twice
+   * that way.
+   *
+   * The bytes go up, a path comes back, and the path is pasted — see
+   * src/terminal/imagePaste.ts for why a path and why bracketed paste.
+   */
+  const attach = useCallback(async (): Promise<void> => {
+    if (!host || !terminal.current) return;
+    let picker: typeof import("expo-image-picker");
+    try {
+      picker = require("expo-image-picker") as typeof import("expo-image-picker");
+    } catch {
+      setError("This build has no image picker.");
+      return;
+    }
+
+    const allowed = await picker.requestMediaLibraryPermissionsAsync();
+    if (!allowed.granted) { setError("The gallery is not allowed for this app."); return; }
+
+    // base64 asked for here rather than read from the uri afterwards: the file
+    // system module is a second native dependency, and this one already has
+    // the bytes.
+    const picked = await picker.launchImageLibraryAsync({ base64: true, quality: 0.8 });
+    if (picked.canceled || !picked.assets?.length) return;
+    const asset = picked.assets[0]!;
+    if (!asset.base64) { setError("That picture came back empty."); return; }
+
+    setSending(true);
+    setError(null);
+    const answer = await ask<Uploaded>(host, "/terminal/image", {
+      method: "POST",
+      body: { data: asset.base64, name: asset.fileName ?? asset.uri ?? "image.png" },
+    });
+    setSending(false);
+
+    const got = fileFrom(answer.ok ? answer.value : { ok: false, error: answer.error });
+    if ("error" in got) { setError(got.error); return; }
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    terminal.current.send(pastePayload(got.file));
+  }, [host, terminal]);
+
+  /**
+   * Speak, and put the words in the field.
+   *
+   * ── the shape, which is Orca's ───────────────────────────────────────
+   * The phone records and the COMPUTER transcribes. That is not a workaround:
+   * reading their mobile app, their dictation calls `speech.models.list` on the
+   * desktop and fails with `voice_model_not_selected` — the models live on the
+   * machine there too. A phone is good at capturing and bad at the rest.
+   *
+   * Where this differs is the capture. Theirs streams chunks through a native
+   * package they wrote (`@orca/expo-two-way-audio`), which an app that ships
+   * its own build can do and one running in Expo Go cannot. So this records to
+   * a file with `expo-audio` — in the SDK, therefore in Expo Go — and sends it
+   * when the button is pressed again. Worse than streaming by the length of
+   * one sentence, and it works on the client this app actually runs in.
+   *
+   * ── inserted, never sent ─────────────────────────────────────────────
+   * Dictation is wrong often enough that a line submitting itself would be a
+   * question nobody read arriving at an agent. Inserting also makes it
+   * composable, which is how it gets used: say a sentence, type a path after
+   * it, send once.
+   */
+  const dictate = useCallback(async (): Promise<void> => {
+    if (!host) return;
+
+    // Second press: stop, upload, insert.
+    if (hearing === "listening") {
+      setHearing("thinking");
+      try {
+        await recorder.stop();
+        const uri = recorder.uri;
+        if (!uri) { setHearing(null); setError("That recording came back empty."); return; }
+        const data = await readAsStringAsync(uri, { encoding: "base64" });
+        const answer = await ask<Said>(host, "/terminal/dictate", {
+          method: "POST",
+          body: { data, name: nameFor(uri) },
+        });
+        setHearing(null);
+        const got = wordsFrom(answer.ok ? answer.value : { ok: false, error: answer.error });
+        if ("error" in got) { setError(got.error); return; }
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setError(null);
+        // Into the compose field, whatever is already there. `joinDictated`
+        // owns the spacing rule — see its tests for why that is not obvious.
+        setDraft((was) => joinDictated(was, got.text));
+      } catch (e) {
+        setHearing(null);
+        setError(`That recording could not be sent: ${String(e)}`);
+      }
+      return;
+    }
+
+    try {
+      const allowed = await requestRecordingPermissionsAsync();
+      if (!allowed.granted) { setError("The microphone is not allowed for this app."); return; }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setError(null);
+      setHearing("listening");
+    } catch (e) {
+      setHearing(null);
+      setError(`The microphone would not start: ${String(e)}`);
+    }
+  }, [host, hearing, recorder]);
+
+  const openAgent = useCallback((kind: string, yolo: boolean): void => {
     if (!terminal.current) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setOpening(true);
     setError(null);
-    terminal.current.command({ t: "tmux", cmd: "agent", yolo: true });
+    setPicking(false);
+    terminal.current.command({ t: "tmux", cmd: "agent", kind, yolo });
     /*
      * And a deadline, because a spinner with no way out is worse than a
      * refusal.
@@ -577,9 +799,56 @@ export default function TerminalScreen(): React.ReactNode {
     terminal.current?.send(bytes);
   }, []);
 
+  /**
+   * Deliver whatever another screen left in the letterbox.
+   *
+   * Called from two places on purpose, because there are two orders these
+   * events arrive in and both happen. Press the button with the terminal
+   * already attached and the request is left AFTER the socket exists, so the
+   * subscription below is what delivers it; press it having never opened this
+   * tab and the socket comes up second, so `onState` going `live` is.
+   *
+   * `takeHandoff` empties the slot, so whichever of the two gets there first
+   * wins and the other finds nothing. That is the whole of the de-duplication:
+   * a window-opening frame sent twice is two windows.
+   */
+  const deliver = useCallback((): void => {
+    if (!terminal.current) return;
+    const frame = takeHandoff();
+    if (!frame) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setOpening(true);
+    setError(null);
+    terminal.current.command(frame);
+    /*
+     * The same deadline the `+` carries, and for the same reason written over
+     * it: the server can decline silently, and a spinner with no way out is
+     * worse than a refusal. Eight seconds is `new-window` on a local tmux plus
+     * a phone radio waking up.
+     */
+    if (openTimer.current) clearTimeout(openTimer.current);
+    openTimer.current = setTimeout(() => {
+      openTimer.current = null;
+      setOpening((waiting) => {
+        if (waiting) setError("The computer did not answer about that window.");
+        return false;
+      });
+    }, 8000);
+  }, []);
+
+  // A request left while this screen is already up. The socket may not be open
+  // yet — `deliver` reads the ref, and a frame sent into a closed socket is
+  // dropped by `command()`, so the guard is that this only fires on arrival and
+  // `onState` covers the other order.
+  useFocusEffect(useCallback(() => onHandoff(() => {
+    if (state === "live") deliver();
+  }), [deliver, state]));
+
   const onState = useCallback((next: TerminalState, detail?: string): void => {
     setState(next);
     setWhy(detail ?? null);
+    // A socket that has just come up is the moment a waiting request can go.
+    if (next === "live") deliver();
     /*
      * And the switch goes off with the socket that was holding it.
      *
@@ -603,7 +872,7 @@ export default function TerminalScreen(): React.ReactNode {
      * happens when somebody is looking rather than in a pocket.
      */
     if (next === "gone") setFit(false);
-  }, []);
+  }, [deliver]);
 
   /*
    * The pane's input line, as the page reads it off the screen.
@@ -808,6 +1077,41 @@ export default function TerminalScreen(): React.ReactNode {
   const sessions = sessionsOf(all);
   const tabs = all.filter((t) => !session || t.session === session);
   const open = tabs.find((t) => t.paneId === active) ?? null;
+
+  /* Asked when the menu opens rather than on the way into the screen: a list
+     of past sessions is not what anybody arrives for, and it is a read against
+     whatever checkout the attached pane is in — which is not known until one
+     is attached. */
+  useEffect(() => {
+    if (!host || !more || past !== null || !open?.where) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ ok: boolean; sessions?: AgentSessionRow[] }>(
+        host, `/agent/sessions?root=${encodeURIComponent(open.where)}`,
+      );
+      if (gone) return;
+      setPast(answer.ok && answer.value.ok ? answer.value.sessions ?? [] : []);
+    })();
+    return () => { gone = true; };
+  }, [host, more, past, open?.where]);
+
+  /** Bring a past session back, in a window of its own. */
+  /**
+   * Bring a past session back — or go to it, when it is already running.
+   *
+   * `openIn` is the server saying this transcript has a live pane. Resuming one
+   * of those is not a no-op: it starts a SECOND agent on the same conversation,
+   * two processes appending to one transcript. So the row switches to the pane
+   * instead, which is what somebody meant anyway.
+   */
+  const resume = useCallback((session: AgentSessionRow): void => {
+    if (!terminal.current) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setMore(false);
+    if (session.openIn) { setActive(session.openIn.paneId); setWhy(null); return; }
+    terminal.current.command({ t: "tmux", cmd: "resume", id: session.id, cwd: session.cwd });
+  }, [terminal]);
+
   // Something to send it to, and something to send — which in `keys` is the
   // return key, so the button is live there as soon as a pane is attached.
   const canSend = !!open && (raw || draft.length > 0);
@@ -863,6 +1167,118 @@ export default function TerminalScreen(): React.ReactNode {
         backgroundColor: C.bg,
         borderBottomWidth: 1, borderBottomColor: C.border,
       }}>
+        {/*
+          Where you are, above what you are switching between.
+
+          This bar was empty — a `+` and a `⟳` floating over a strip of pills,
+          with nothing saying which checkout the pane in front of you belongs
+          to. On a phone that is the question you arrive with: there are six
+          windows called `2 AI00` and the only thing that tells them apart is
+          the directory, which was one screen further in.
+
+          The count beside it is not decoration either. A strip that has
+          scrolled shows three of eight, and "8 tabs" is how you know the other
+          five exist without dragging to find out.
+        */}
+        <View style={{
+          flexDirection: "row", alignItems: "center", gap: SPACE.sm,
+          paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs,
+        }}>
+          {/*
+            The way out, and it is load-bearing rather than decorative.
+
+            This screen is the one that does not draw the tab bar — see the
+            note in src/nav/TabBar.tsx for why it gives the pane those ninety
+            points. Which means this is the only control on it that leads
+            anywhere, and without it the way back would be Android's own
+            gesture, which on the first tab of a navigator closes the app
+            rather than going anywhere.
+          */}
+          <Pressable
+            onPress={() => router.replace("/")}
+            accessibilityRole="button"
+            accessibilityLabel="Back to the inbox"
+            style={({ pressed }) => ({
+              width: 40, minHeight: 44, alignItems: "center", justifyContent: "center",
+              opacity: pressed ? 0.6 : 1,
+            })}
+          >
+            <BackIcon color={C.text3} size={20} />
+          </Pressable>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="head"
+              style={{ color: C.text, fontSize: T.body, fontWeight: "700" }}
+            >
+              {/* The leaf, because that is what a person calls a checkout —
+                  the same rule tabs.ts uses for a window's name. The head is
+                  what gets cut when a path is long: the tail is the part that
+                  says which one. */}
+              {open ? (open.where.split("/").filter(Boolean).pop() ?? open.session) : "Terminal"}
+            </Text>
+            <Text numberOfLines={1} style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
+              {open
+                ? `${open.session}${tabs.length ? ` · ${tabs.length} ${tabs.length === 1 ? "tab" : "tabs"}` : ""}`
+                : "nothing attached"}
+            </Text>
+          </View>
+          {/*
+            A new tab, with an agent already running in it.
+
+            Pinned beside the re-read rather than carried at the end of the
+            scroller, and for the reason written on that button: where a control
+            riding after the last tab SITS depends on how many tabs there are,
+            so with six windows the `+` is off the right-hand edge — and the
+            moment somebody wants a seventh is the moment there are six.
+
+            Live only while a pane is attached, because the pane is what says
+            WHERE: the server reads this pane's own directory to decide which
+            project the window opens in. Without one there is no answer that is
+            not the home directory, which is the wrong tab drawn convincingly.
+          */}
+          <Pressable
+            onPress={() => setPicking(true)}
+            disabled={!open || opening}
+            accessibilityRole="button"
+            accessibilityLabel="New tab in this project"
+            style={{
+              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
+              borderLeftWidth: 1, borderLeftColor: C.border,
+            }}
+          >
+            <Text style={{
+              color: !open || opening ? C.text4 : C.primary,
+              fontSize: T.title, fontWeight: "700",
+            }}>{opening ? "…" : "+"}</Text>
+          </Pressable>
+          {/* Everything this screen can reach that is not a key or a tab.
+              A menu rather than three more buttons: the header has room for
+              three controls and these are four, and they are all "go and look
+              at something" rather than "do something here". */}
+          <Pressable
+            onPress={() => setMore(true)}
+            accessibilityRole="button"
+            accessibilityLabel="More, for this checkout"
+            style={{
+              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
+              borderLeftWidth: 1, borderLeftColor: C.border,
+            }}
+          >
+            <Text style={{ color: C.text4, fontSize: T.title }}>···</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => { void load(); }}
+            accessibilityRole="button"
+            accessibilityLabel="Read the machine's panes again"
+            style={{
+              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
+              borderLeftWidth: 1, borderLeftColor: C.border,
+            }}
+          >
+            <Text style={{ color: C.text4, fontSize: T.title }}>⟳</Text>
+          </Pressable>
+        </View>
         {/* The session, when there is more than one. A machine running four
             tmux sessions has four strips' worth of windows, and showing them
             all at once is not a strip anybody reads — the desk has the same
@@ -903,17 +1319,23 @@ export default function TerminalScreen(): React.ReactNode {
             })}
           </ScrollView>
         ) : null}
-        {/* Re-read pinned outside the scroller, not carried at the end of it.
-            It rode after the last tab, so where it sat depended on how many
-            tabs there were: with two it was on screen, with six it was off the
-            right-hand edge — and a stale list is long, so the moment the button
-            is needed is the moment it cannot be reached. */}
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
+        {/* Just the tabs. `+` and the re-read moved up to the header, which is
+            where the pair of them stop depending on how many tabs there are:
+            riding at the end of this scroller put them off the right-hand edge
+            at six windows, and six windows is exactly when somebody reaches for
+            a seventh or for the re-read.
+
+            Drawn only when there ARE tabs. An empty strip under the header was
+            a rule with nothing above it — a row of chrome whose whole content
+            was the absence of content. */}
+        {tabs.length ? (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingHorizontal: SPACE.sm, paddingVertical: SPACE.sm, gap: SPACE.xs }}
+            /* No vertical padding on the container: the underline is the bar's
+               own bottom edge, and padding under it would leave the mark
+               floating above the rule it is supposed to be part of. */
+            contentContainerStyle={{ paddingHorizontal: SPACE.xs, gap: 0 }}
           >
             {tabs.map((tab) => {
               const on = tab.paneId === active;
@@ -921,13 +1343,22 @@ export default function TerminalScreen(): React.ReactNode {
                 <Pressable
                   key={tab.paneId}
                   onPress={() => { setActive(tab.paneId); setWhy(null); }}
+                  /*
+                    An underline, not a pill.
+
+                    A pill is a button and reads like one — six of them in a row
+                    is six things to press, and the selected one is a seventh
+                    shade of grey among them. An underline is what a tab strip
+                    has always been: the row is the surface, the mark says which
+                    part of it you are looking at, and the text carries the rest.
+                    It also buys back the horizontal padding a border needs,
+                    which is what puts a fourth window on screen.
+                  */
                   style={{
                     paddingHorizontal: SPACE.md,
                     paddingVertical: SPACE.sm,
-                    borderRadius: RADIUS.md,
-                    backgroundColor: on ? C.bg3 : "transparent",
-                    borderWidth: 1,
-                    borderColor: on ? C.border2 : "transparent",
+                    borderBottomWidth: 2,
+                    borderBottomColor: on ? C.primary : "transparent",
                     minHeight: 44,
                     justifyContent: "center",
                     flexDirection: "row",
@@ -955,47 +1386,7 @@ export default function TerminalScreen(): React.ReactNode {
               );
             })}
           </ScrollView>
-          {/*
-            A new tab, with an agent already running in it.
-
-            Pinned beside the re-read rather than carried at the end of the
-            scroller, and for the reason written on that button: where a control
-            riding after the last tab SITS depends on how many tabs there are,
-            so with six windows the `+` is off the right-hand edge — and the
-            moment somebody wants a seventh is the moment there are six.
-
-            Live only while a pane is attached, because the pane is what says
-            WHERE: the server reads this pane's own directory to decide which
-            project the window opens in. Without one there is no answer that is
-            not the home directory, which is the wrong tab drawn convincingly.
-          */}
-          <Pressable
-            onPress={openAgent}
-            disabled={!open || opening}
-            accessibilityRole="button"
-            accessibilityLabel="New tab running Claude in this project, with permission prompts off"
-            style={{
-              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
-              borderLeftWidth: 1, borderLeftColor: C.border,
-            }}
-          >
-            <Text style={{
-              color: !open || opening ? C.text4 : C.primary,
-              fontSize: T.title, fontWeight: "700",
-            }}>{opening ? "…" : "+"}</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => { void load(); }}
-            accessibilityRole="button"
-            accessibilityLabel="Read the machine's panes again"
-            style={{
-              paddingHorizontal: SPACE.md, minHeight: 44, justifyContent: "center",
-              borderLeftWidth: 1, borderLeftColor: C.border,
-            }}
-          >
-            <Text style={{ color: C.text4, fontSize: T.title }}>⟳</Text>
-          </Pressable>
-        </View>
+        ) : null}
       </View>
 
       {/* ── the terminal ───────────────────────────────────────────────── */}
@@ -1055,6 +1446,40 @@ export default function TerminalScreen(): React.ReactNode {
           </View>
         )}
       </View>
+
+      {/*
+        A held gate, and the way to answer it.
+
+        This is the door the Inbox gave up. Approving a command an agent is
+        stopped on is the reason this app exists — it is the only POST a
+        phone paired for "answer" may make — and when agents left the Inbox
+        it was left reachable only from Settings, which is not where anybody
+        would look for it.
+
+        Here, because this is where agents live now: the star is the one
+        surface that shows what an agent is doing, so it is the one that
+        should say when an agent has stopped and is waiting. It draws only
+        when something is actually held, which is what keeps it a signal —
+        the same rule the two strips below follow.
+      */}
+      {held > 0 ? (
+        <Pressable
+          onPress={() => router.push("/now")}
+          accessibilityRole="button"
+          accessibilityLabel={`${held} ${held === 1 ? "agent is" : "agents are"} waiting on you. Opens the queue.`}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: SPACE.sm,
+            paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm,
+            backgroundColor: C.bg2, borderTopWidth: 2, borderTopColor: C.error,
+          }}
+        >
+          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.error }} />
+          <Text style={{ color: C.text, fontSize: T.small, fontWeight: "700", flex: 1 }} numberOfLines={1}>
+            {held === 1 ? "An agent is stopped, waiting on you" : `${held} agents are stopped, waiting on you`}
+          </Text>
+          <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "700" }}>Answer</Text>
+        </Pressable>
+      ) : null}
 
       {/* Said quietly, and only when it is not fine: a status line that is
           always there is one nobody reads when it matters. */}
@@ -1136,7 +1561,7 @@ export default function TerminalScreen(): React.ReactNode {
       */}
       {live && !fit && following && columns < 80 ? (
         <Pressable
-          onPress={() => setColumns(80)}
+          onPress={() => { setColumns(80); setTermColumns(80); }}
           style={{ paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm, backgroundColor: C.bg2 }}
         >
           <Text style={{ color: C.text3, fontSize: T.eyebrow }}>
@@ -1209,7 +1634,11 @@ export default function TerminalScreen(): React.ReactNode {
             {/* The prefix goes first, before Esc: on a tmux pane it is the key
                 that reaches the session itself — new window, next window,
                 detach — and everything else only reaches the program inside it. */}
-            {[...(prefix ? [prefix] : []), ...ACCESSORY_KEYS].map((key) => (
+            {/* The prefix is always first and is not part of the chosen set:
+                it is tmux's own key, it is what every window switch goes
+                through, and a bar somebody had hidden it from would be a bar
+                that cannot leave the window it is in. */}
+            {[...(prefix ? [prefix] : []), ...keys].map((key) => (
               <Pressable
                 key={key.id}
                 accessibilityRole="button"
@@ -1278,7 +1707,14 @@ export default function TerminalScreen(): React.ReactNode {
                 measurement is that at 120 the glyphs are clipped inside their
                 cells and characters change identity. */}
             <Pressable
-              onPress={() => setColumns((n) => (n >= 80 ? 60 : 80))}
+              onPress={() => {
+                const next = columns >= 80 ? 60 : 80;
+                setColumns(next);
+                // Through the store, or this tap and the settings screen would
+                // be two places holding the same number and disagreeing after
+                // the next cold start.
+                setTermColumns(next);
+              }}
               accessibilityLabel={`Terminal width, ${columns} columns. Tap to change.`}
               style={{ minWidth: 44, height: 40, alignItems: "center", justifyContent: "center",
                 borderRadius: RADIUS.sm, backgroundColor: C.bg3 }}
@@ -1313,6 +1749,61 @@ export default function TerminalScreen(): React.ReactNode {
               {raw ? "keys" : "line"}
             </Text>
           </Pressable>
+          {/*
+            A picture, beside the field rather than behind a menu.
+
+            It sits here because this is the row where somebody is already
+            composing — the thing being attached is part of the sentence they
+            are writing, not a separate errand. Only while a pane is open: with
+            nothing attached there is nowhere for a path to be pasted, and a
+            button that opens a gallery to then say "no pane" is a trip to the
+            photo library for nothing.
+
+            No `full` gate. This writes a temporary file the server chose the
+            location of and then types into a pane the phone is already allowed
+            to type into — it buys no permission the keyboard above it does not
+            already have.
+          */}
+          <Pressable
+            onPress={() => { void attach(); }}
+            disabled={!open || sending}
+            accessibilityRole="button"
+            accessibilityLabel="Attach a picture to this pane"
+            style={({ pressed }) => ({
+              width: 44, height: TAP, alignItems: "center", justifyContent: "center",
+              borderRadius: RADIUS.sm, backgroundColor: C.bg3,
+              borderWidth: 1, borderColor: C.border2,
+              opacity: !open ? 0.4 : pressed ? 0.6 : 1,
+            })}
+          >
+            {sending
+              ? <ActivityIndicator color={C.text3} size="small" />
+              : <ImageIcon color={C.text3} size={19} />}
+          </Pressable>
+          {/* The microphone, beside the picture, for the same reason: what is
+              being said is part of the line being written, not a separate
+              errand. Two states rather than one spinner — "listening" is
+              waiting for the PERSON and "thinking" is waiting for the
+              computer, and one indicator for both says "hold on" while it is
+              your turn to hold on. */}
+          <Pressable
+            onPress={() => { void dictate(); }}
+            disabled={!open || hearing === "thinking"}
+            accessibilityRole="button"
+            accessibilityLabel={hearing === "listening" ? "Stop and transcribe" : "Speak a line"}
+            style={({ pressed }) => ({
+              width: 44, height: TAP, alignItems: "center", justifyContent: "center",
+              borderRadius: RADIUS.sm,
+              backgroundColor: hearing === "listening" ? C.error : C.bg3,
+              borderWidth: 1,
+              borderColor: hearing === "listening" ? C.error : C.border2,
+              opacity: !open ? 0.4 : pressed ? 0.6 : 1,
+            })}
+          >
+            {hearing === "thinking"
+              ? <ActivityIndicator color={C.text3} size="small" />
+              : <MicIcon color={hearing === "listening" ? ink(C.error) : C.text3} size={19} />}
+          </Pressable>
           <TextInput
             value={raw ? keyed : draft}
             onChangeText={typed}
@@ -1335,9 +1826,12 @@ export default function TerminalScreen(): React.ReactNode {
             onBlur={() => { claimed.current = false; forgetKeys(); }}
             // A shell is case-sensitive and knows its own words. Every one of
             // these on is a keyboard rewriting a command into English.
+            // Off unless somebody asked for it: this field composes a command,
+            // and a keyboard that autocorrects rewrites flags and paths into
+            // English silently. See termPrefs.ts.
             autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
+            autoCorrect={assist}
+            spellCheck={assist}
             // The keyboard that does not predict, which in `keys` is not a
             // preference: prediction rewrites characters it has already given
             // up, and those have gone down the socket.
@@ -1391,6 +1885,129 @@ export default function TerminalScreen(): React.ReactNode {
           </Pressable>
         </View>
       </View>
+      {/*
+        The new tab, as a choice rather than a silent default.
+
+        `+` used to start Claude with permission prompts OFF, every time, with
+        the whole of that decision living in an accessibility label nobody
+        hears. That is the most consequential press on this screen — it is an
+        agent let loose in a checkout — and it was the one with no dialog.
+
+        The list is what the MACHINE reports, not what this app can imagine.
+        `/terminal/agents` answers with `installed` per row, so a CLI that is
+        not there is drawn greyed and says so, rather than being offered and
+        failing after the window has already opened — which on a phone is a
+        blank pane on a computer you are not sitting at.
+
+        Permissions are a second press, not a switch on the row. A row that
+        launches and a toggle that arms are two different gestures, and putting
+        them in one control is how somebody means to read the list and starts
+        an agent instead.
+      */}
+      {/*
+        What else there is, for the checkout the attached pane is in.
+
+        Every row here is a place rather than an action, which is why they are
+        together: the header's other controls DO something to this screen, and
+        mixing "open a new tab" with "go and read a file" in one row is how a
+        person presses the wrong one while looking at the pane.
+
+        Only with a pane attached — every row needs to know which checkout, and
+        the pane is what says. With none there is no answer that is not a guess
+        at the home directory, which is the wrong screen drawn convincingly.
+      */}
+      <Sheet open={more} onClose={() => setMore(false)} title={open ? leafOf(open.where) : "More"}>
+        {open ? (
+          <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
+            <SheetRow
+              label="Source control"
+              sub="What has changed, the commits, the pull request"
+              onPress={() => { setMore(false); router.push("/repos"); }}
+            />
+            <SheetRow
+              label="Files"
+              sub="Browse and read this checkout"
+              onPress={() => {
+                setMore(false);
+                router.push({ pathname: "/files", params: { root: open.where } });
+              }}
+            />
+
+            <Label text="Past sessions" />
+            {past === null ? (
+              <Note>Asking the computer…</Note>
+            ) : past.length === 0 ? (
+              <Note>No agent has run in this checkout yet.</Note>
+            ) : (
+              past.slice(0, 8).map((session) => (
+                <SheetRow
+                  key={session.id}
+                  /* The agent's own title, which is the first thing it was
+                     asked. Cut at a length rather than a word: these run to
+                     paragraphs and a row is one line. */
+                  label={session.title.trim().slice(0, 80) || session.id.slice(0, 8)}
+                  /* `at` is the timestamp; `last` is the last thing SAID. Read
+                     off the shared type rather than guessed, which is how this
+                     row first rendered an Invalid Date. */
+                  sub={session.openIn
+                    ? `open now in ${session.openIn.windowName}`
+                    : since(new Date(session.at).toISOString(), Date.now())}
+                  onPress={() => resume(session)}
+                />
+              ))
+            )}
+            {past && past.length > 8 ? (
+              <Note>{past.length - 8} older ones are on the computer.</Note>
+            ) : null}
+          </View>
+        ) : (
+          <Note>Attach to a pane first — these all need to know which checkout.</Note>
+        )}
+      </Sheet>
+
+      <Sheet open={picking} onClose={() => setPicking(false)} title="New tab">
+        {agents === null ? (
+          <Note>Asking the computer which agents it has…</Note>
+        ) : (
+          <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
+            {agents.map((a) => (
+              <View key={a.id} style={{ gap: SPACE.xs, paddingVertical: SPACE.xs }}>
+                <SheetRow
+                  label={a.installed ? a.title : `${a.title} — not installed`}
+                  sub={a.what}
+                  onPress={() => { if (a.installed) openAgent(a.id, false); }}
+                />
+                {/* Only where the CLI HAS the flag, and only when it is there
+                    to run. A switch that buys nothing is a switch that teaches
+                    the wrong thing about what pressing it did. */}
+                {a.installed && a.canBypass ? (
+                  <Pressable
+                    onPress={() => openAgent(a.id, true)}
+                    accessibilityRole="button"
+                    style={({ pressed }) => ({
+                      minHeight: TAP, justifyContent: "center",
+                      paddingHorizontal: SPACE.lg, opacity: pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Text style={{ color: C.warning, fontSize: T.small }}>
+                      …and skip permission prompts
+                    </Text>
+                    <Text style={{ color: C.text4, fontSize: T.eyebrow }}>
+                      It will not stop to ask before running a command.
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ))}
+            {agents.every((a) => !a.installed) ? (
+              <Note tone="bad">
+                No agent CLI is installed on that computer. A new tab would be a plain shell.
+              </Note>
+            ) : null}
+          </View>
+        )}
+      </Sheet>
+
     </KeyboardAvoidingView>
   );
 }

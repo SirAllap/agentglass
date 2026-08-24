@@ -13,7 +13,7 @@
  * half that sends you to the browser.
  */
 import { describe, expect, it } from "bun:test";
-import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict } from "../src/lib/mergeReason.ts";
+import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict } from "../../shared/mergeReason.ts";
 import type { PrCheckRollup, PrCheck } from "../../shared/types.ts";
 
 const check = (name: string): PrCheck =>

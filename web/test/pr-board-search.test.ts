@@ -327,7 +327,7 @@ describe("the strip, at the mockup's wording", () => {
      * its total, so a repository with path-filtered jobs read "45 passed" in
      * green when forty had run.
      */
-    const { checksShort, checksLine } = await import("../src/lib/mergeReason.ts");
+    const { checksShort, checksLine } = await import("../../shared/mergeReason.ts");
     const c = { total: 45, success: 40, failure: 0, skipped: 5, pending: 0, allDone: true, verdict: "green", failing: [] } as never;
     expect(checksShort(c)).toBe("40 passed · 5 skipped");
     // And the cell's own tooltip must not disagree with the cell. It did, by
@@ -338,7 +338,7 @@ describe("the strip, at the mockup's wording", () => {
   });
 
   it("never presents a capped page as the whole story", async () => {
-    const { checksShort, checksLine } = await import("../src/lib/mergeReason.ts");
+    const { checksShort, checksLine } = await import("../../shared/mergeReason.ts");
     const c = { total: 130, success: 100, failure: 0, skipped: 30, pending: 0, allDone: true, verdict: "green", failing: [] } as never;
     expect(checksShort(c, true)).toContain("of the page returned");
     expect(checksLine(c, undefined, true)).toContain("of the page GitHub returned");

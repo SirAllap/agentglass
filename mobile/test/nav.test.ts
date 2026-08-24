@@ -38,6 +38,28 @@ const DP_AT_10PX: Record<string, number> = {
   Terminal: 39.30,
   Review: 31.88,
   Repos: 28.09,
+  // ── the four below are BOUNDS, not readings, and the difference matters ──
+  //
+  // The bar changed on a machine with no Android image and no Roboto on it, so
+  // the method above could not be run. What was done instead, because a guess
+  // is exactly what this table exists to refuse:
+  //
+  //   DejaVu Sans (the one real face present) was parsed for its `hmtx`
+  //   advances and each of the five measured words laid out in it. The
+  //   Roboto/DejaVu ratio came out between 0.8824 ("Review") and 0.9127
+  //   ("Repos") — a 3% spread over five words, which is what makes the
+  //   calibration worth anything. Each new word is its DejaVu width times the
+  //   WIDEST of those ratios, so every number here is an over-estimate.
+  //
+  // They are marked because the next person should replace them with real
+  // readings rather than inherit them. Nothing rests on their precision: the
+  // tightest, "Issues", ellipsises at 219% on a 360dp phone against the 194%
+  // that "Review" already survives on, so the bar has more headroom than the
+  // one this replaced, not less.
+  Inbox: 25.26,
+  PRs: 16.60,
+  Issues: 28.36,
+  Cards: 26.27,
 };
 
 /** The narrowest phone worth designing for, and the emulator this was looked
@@ -135,11 +157,32 @@ describe("nothing was deleted to get to five", () => {
     .map((f) => f.replace(/\.tsx$/, "") as TabRoute)
     .sort();
 
-  test("the seven screens this app had are all still there", () => {
-    // By file name, because a screen that was quietly folded into another one
-    // is exactly the failure this whole task was told not to commit.
-    for (const was of ["now", "chats", "terminal", "prs", "repos", "tasks", "settings"]) {
+  test("the screens that survived the cut are all still there", () => {
+    // By file name, because a screen quietly folded into another one is the
+    // failure this lock was written to catch.
+    //
+    // Two names left this list, and both left on purpose rather than by
+    // drifting out of it:
+    //
+    //   `chats` was DELETED, screen and model and tests. It listed sessions by
+    //   `sessionTitle`, which falls back to `source_app:id.slice(0,8)` when
+    //   there is no title — and hook-only sessions never have one, so on a
+    //   real machine it was a list of hex. An agent is read in the terminal it
+    //   runs in.
+    //
+    //   `review` was DISSOLVED, not folded: it was a wrapper that drew `prs`
+    //   and `tasks` behind a segmented control, and both of those are now
+    //   destinations in their own right. Nothing it showed is gone.
+    for (const was of ["now", "terminal", "prs", "repos", "tasks", "settings", "issues"]) {
       expect(routes, `${was} is gone`).toContain(was as TabRoute);
+    }
+  });
+
+  test("the two that were removed are really gone, not orphaned", () => {
+    // The other direction of the same lock: a deleted screen must not linger
+    // as a file nothing points at.
+    for (const gone of ["chats", "review"]) {
+      expect(routes, `${gone} is still on disk`).not.toContain(gone as TabRoute);
     }
   });
 
@@ -158,9 +201,11 @@ describe("nothing was deleted to get to five", () => {
       expect(off.from, `${off.route} has no way in`).toMatch(/\S/);
       expect(off.title, `${off.route} has no title`).toMatch(/\S/);
     }
-    // Now and Settings are entered and left; the other two are drawn in place
-    // by Review and are never navigated to, so they need no way back.
-    expect([...PUSHED].sort()).toEqual(["now", "settings"]);
+    // All three off-bar routes are entered and left now. `prs` and `tasks`
+    // used to be here as screens Review drew in place and nothing navigated
+    // to; they are destinations with their own tabs, so the bar returns you
+    // from them and they need no way back of their own.
+    expect([...PUSHED].sort()).toEqual(["now", "repos", "settings"]);
   });
 
   test("the two that are entered draw a way back", () => {

@@ -23,7 +23,29 @@ import { terminalDocument, terminalTheme } from "../src/terminal/terminal-html.t
 import { paletteFor } from "../../shared/palettes.ts";
 import { C } from "../src/theme.ts";
 
-const CHROME = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+/*
+ * Where to find a browser, in the order it is worth looking.
+ *
+ * `$CHROME` first, and that is the entry that matters: every one of the paths
+ * below is a DESKTOP install, and the machines this most needs to run on are
+ * containers — CI, and an agent's workspace — where the browser is wherever
+ * the image put it. Without an override the whole file skipped there, silently
+ * and in green, which is the worst way for the only tests that drive a real
+ * terminal to be absent. They were 34 skips on a machine that had a perfectly
+ * good Chromium a directory away.
+ *
+ * scripts/qa.ts reads the same variable for the same reason.
+ */
+const CHROME = [
+  process.env.CHROME,
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  // What Playwright's own installer lays down. Present in most CI images that
+  // do anything with a browser, and named rather than globbed: a guess that
+  // matches the wrong build is worse than not finding one.
+  "/opt/pw-browsers/chromium/chrome-linux/chrome",
+].filter((p): p is string => !!p)
   .find((p) => Bun.file(p).size !== 0 || Bun.which(p));
 const HAVE_CHROME = !!CHROME;
 const CDP = 9457;
@@ -412,6 +434,86 @@ describe.if(HAVE_CHROME)("what the page thinks is being typed", () => {
 });
 
 
+describe.if(HAVE_CHROME)("bytes batched into one crossing", () => {
+  /*
+   * `writeMany` is what the app calls now: the app batches at about 20Hz (see
+   * src/terminal/writeCoalescer.ts, where the window and its unit tests live)
+   * and hands the page an array. This is the other half — that a batch leaves
+   * the terminal in the state the same frames would have produced one at a
+   * time.
+   *
+   * It has to run in a real engine. "The same state" means what xterm laid out
+   * after parsing, and the failure worth catching is a batch that mishandles a
+   * single escape sequence split across frames — which is ordinary on a socket
+   * and invisible to any string comparison on the app side.
+   *
+   * Read through the page's own line reports, the same way every test above
+   * does. Reaching into xterm would mean exposing it on `window` for the
+   * tests, and a global that only exists to be measured is a global that
+   * drifts from the thing it claims to measure.
+   */
+  const b64 = (text: string): string => Buffer.from(text, "utf8").toString("base64");
+
+  /** A batch, counted the way `feed` counts a single write so `reported` can
+   *  wait for a report that had not arrived yet. */
+  const feedMany = async (frames: string[]): Promise<void> => {
+    before = (await cdp!.value<number>(`${LINES}.length`)) ?? 0;
+    await cdp!.value(`window.AGX.writeMany(${JSON.stringify(frames.map(b64))}), 1`);
+  };
+
+  test("a batch reads the same as the frames sent one at a time", async () => {
+    await feed("\u001b[2J\u001b[H$ hola como vas");
+    const oneAtATime = await reported();
+    expect(oneAtATime).toBeTruthy();
+
+    await feedMany(["\u001b[2J\u001b[H", "$ hola ", "como ", "vas"]);
+    expect(await reported()).toBe(oneAtATime as string);
+  });
+
+  test("an escape sequence split across frames is still one sequence", async () => {
+    // `\u001b[2J` arriving as three frames is ordinary on a socket. A batch
+    // that reordered or dropped one would leave the screen uncleared, and the
+    // line report is what shows it: the old text would still be there.
+    await feedMany(["\u001b", "[2J\u001b[H", "$ limpio"]);
+    expect(await reported()).toBe("limpio");
+  });
+
+  test("an empty batch is not an error", async () => {
+    await cdp!.value(`window.AGX.writeMany([]), 1`);
+    expect(await cdp!.value<boolean>("!!window.AGX")).toBe(true);
+  });
+
+  test("the page survives a batch the size of a busy second", async () => {
+    // Forty frames is an ordinary second of a build. What this catches is a
+    // page that throws partway and leaves the bridge silent with a half-drawn
+    // screen — which on a phone reads as a hung pane.
+    const rows = Array.from({ length: 40 }, (_, i) => `linea ${i}\r\n`);
+    await feedMany(["\u001b[2J\u001b[H", ...rows, "$ despues de todo"]);
+    expect(await reported()).toBe("despues de todo");
+  });
+});
+
+describe.if(HAVE_CHROME)("the GPU renderer, and doing without it", () => {
+  /*
+   * This browser is launched with `--disable-gpu`, so there is no WebGL here —
+   * which makes this the FALLBACK test, and the fallback is the half worth
+   * proving. A phone revokes contexts under memory pressure, and a terminal
+   * that stopped painting while still accepting bytes would look exactly like
+   * a hung pane. That the addon itself draws is xterm's business.
+   */
+  test("the engine carries the addon", async () => {
+    expect(await cdp!.value<boolean>("typeof window.WebglAddon === 'function'")).toBe(true);
+  });
+
+  test("the terminal still draws with no WebGL to be had", async () => {
+    // Without the try/catch around the addon the page would have thrown during
+    // boot and never posted `ready`, so arriving here at all is most of the
+    // assertion. The feed is the rest: it is still parsing and reporting.
+    await feed("\u001b[2J\u001b[H$ sigo aqui");
+    expect(await reported()).toBe("sigo aqui");
+  });
+});
+
 describe.if(HAVE_CHROME)("dragging the pane with a finger", () => {
   /** Everything the page has sent up as keystrokes since it was last cleared. */
   const sent = async (): Promise<string[]> => cdp!.value<string[]>(`(function () {
@@ -731,11 +833,12 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
 
   /** The rows as the page is DRAWING them: the DOM renderer writes one div per
    *  row, so this is the screen and not a model of it. */
-  const shown = async (): Promise<string[]> => cdp!.value<string[]>(`(function () {
-    return Array.prototype.map.call(document.querySelectorAll('.xterm-rows > div'), function (row) {
-      return (row.textContent || '').trim();
-    });
-  })()`);
+  /* The buffer, not the row elements. Same reason as the grid and the colours
+     above: '.xterm-rows' is empty under the WebGL renderer, so this returned an
+     empty list on any machine with software rendering — every CI runner — and
+     `firstLine` then answered -1 to every question about where the screen is. */
+  const shown = async (): Promise<string[]> => cdp!.value<string[]>(
+    `window.AGX.screen().map(function (row) { return row.trim(); })`);
 
   /** The first numbered line on screen. The whole measurement is this number
    *  before and after. */
@@ -806,11 +909,48 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), "agx-scroll-"));
     sock = join(dir, "server");
-    grid = await cdp!.value<typeof grid>(`(function () {
-      var rows = document.querySelectorAll('.xterm-rows > div');
-      var box = rows[0] ? rows[0].getBoundingClientRect() : null;
-      return { cols: 80, rows: rows.length, cell: box ? box.height : 10 };
-    })()`);
+    /*
+     * The grid, once the page has actually drawn one.
+     *
+     * This used to read the rows straight out of the document and fall back to
+     * `cell: 10` when there were none — and that fallback is what made this
+     * whole block fail on CI while passing on every desk. xterm paints its rows
+     * a frame or two after `ready`, so on a loaded runner the read lands on an
+     * empty `.xterm-rows` and invents a cell height. Every distance below is
+     * `rows * grid.cell`, so a made-up cell does not fail here: it fails four
+     * tests further down, as a drag that moved the wrong number of lines.
+     *
+     * So it waits for a row with a real height rather than for a moment in
+     * time, and gives up loudly. A geometry this file cannot read is a reason
+     * to stop, not a number to guess — the guess is the bug.
+     */
+    const gridDeadline = Date.now() + 15_000;
+    for (;;) {
+      grid = await cdp!.value<typeof grid>(`(function () {
+        /* The render service, not the row elements. Under the WebGL renderer
+           there ARE no row elements — xterm paints the grid into a canvas and
+           stops maintaining '.xterm-rows' — so a DOM measurement reads zero on
+           any machine that has WebGL, which is every CI runner with software
+           rendering and not this desk. The dimensions are the same numbers the
+           page's own cellOf() trusts, and they exist under both renderers.
+           The DOM is kept as the fallback for the reverse case. */
+        var m = window.AGX && window.AGX.metrics && window.AGX.metrics();
+        if (m && m.rows > 0 && m.cell > 0) {
+          return { cols: m.cols, rows: m.rows, cell: m.cell };
+        }
+        var rows = document.querySelectorAll('.xterm-rows > div');
+        var box = rows[0] ? rows[0].getBoundingClientRect() : null;
+        return { cols: 80, rows: rows.length, cell: box ? box.height : 0 };
+      })()`);
+      if (grid && grid.rows > 0 && grid.cell > 0) break;
+      if (Date.now() > gridDeadline) {
+        throw new Error(
+          `the page never drew a row to measure — rows=${grid?.rows ?? "?"}, `
+          + `cell=${grid?.cell ?? "?"}. Every drag below is sized from this.`,
+        );
+      }
+      await Bun.sleep(50);
+    }
     // The session is the page's own geometry, so a wheel reported at row 40 of
     // the page is row 40 of a window that has one — tmux drops a mouse event
     // outside its window and the drag would measure nothing.
@@ -970,18 +1110,80 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
  * changes the theme, and the rigs above want a pane they put there themselves.
  */
 describe.if(HAVE_CHROME)("which colours the pane ends up wearing", () => {
-  const DARK_FG = "rgb(230, 237, 243)"; // the dark base's #e6edf3
-  const LIGHT_FG = "rgb(31, 35, 40)";   // the light base's #1f2328
+  // The palette's own values, which is what `options.theme` carries. They were
+  // the computed rgb() of a row element until that stopped existing under the
+  // WebGL renderer; same two colours, read where they survive.
+  const DARK_FG = "#e6edf3";  // the dark base
+  const LIGHT_FG = "#1f2328"; // the light base
   const DESK_BG = "rgb(30, 30, 30)";    // what this machine's synced tmux paints
 
   /** What a row is actually painted with, and what the frame around the grid
    *  is. Both come off the document rather than out of the page's own state. */
   const worn = async (): Promise<{ fg: string; frame: string }> => {
-    await Bun.sleep(700); // longer than the page's 400ms settle after bytes
-    return cdp!.value<{ fg: string; frame: string }>(`(function () {
-      var row = document.querySelector('.xterm-rows > div');
-      return { fg: row ? getComputedStyle(row).color : '', frame: document.body.style.background };
-    })()`);
+    /*
+     * Read once the colour has stopped moving, rather than after a period
+     * chosen to be "longer than the page's 400ms settle". That period was a bet
+     * that 700ms of wall clock outlasts a 400ms timer, which holds on a desk
+     * and does not on a busy runner — and when it loses, `row` is null, `fg` is
+     * the empty string, and the assertion reports a colour nobody chose.
+     *
+     * Two identical reads in a row is the condition: the settle repaints once,
+     * so a value that has repeated has been through it. The deadline returns
+     * whatever it has instead of throwing — the assertion below is what should
+     * report the mismatch, with the colour it actually found in the message.
+     */
+    /*
+     * The theme the page settled on, and the frame it painted around the grid.
+     *
+     * This used to read `getComputedStyle` off a row element, which measured
+     * the right thing for the wrong reason: it only works under the DOM
+     * renderer. With WebGL loaded — and it is loaded, on any machine that can
+     * give xterm a context — the rows are gone and every read is the empty
+     * string, which is how four of these went red on CI while passing on every
+     * desk that happens to lack software rendering.
+     *
+     * What these tests are actually about is the page's DECISION: a pane
+     * painting its own dark background wins the vote even under a Light phone.
+     * `options.theme` is that decision, applied. The frame stays a real DOM
+     * read because it is a real DOM property either way.
+     *
+     * The honest cost: this no longer proves the colour reached the glass, only
+     * that the terminal was told. Under a canvas renderer nothing in the
+     * document can prove the former, and asserting the decision beats asserting
+     * nothing — which is what the previous version did whenever a row was
+     * missing, silently comparing '' against a colour.
+     */
+    const read = (): Promise<{ fg: string; frame: string }> =>
+      cdp!.value<{ fg: string; frame: string }>(`(function () {
+        var m = window.AGX && window.AGX.metrics && window.AGX.metrics();
+        return {
+          fg: m && m.foreground ? String(m.foreground).toLowerCase() : '',
+          frame: m ? m.frame : document.body.style.background,
+        };
+      })()`);
+
+    // The 400ms settle still has to be waited out, and no signal marks it: the
+    // page posts nothing when it repaints, so there is nothing to wait FOR.
+    // Dropping this floor and polling for a stable value is what the first
+    // version of this did, and it read the colour from BEFORE the settle — an
+    // unchanged value is stable too, which is the trap in every "wait until it
+    // stops moving".
+    await Bun.sleep(700);
+
+    // Past the floor, keep looking until there is something to look at. This is
+    // the half the fixed sleep was missing: on a loaded runner the row can
+    // still be absent at 700ms, and `getComputedStyle(null)` is the empty
+    // string — an assertion that then reports a colour nobody chose.
+    const deadline = Date.now() + 8_000;
+    let last = await read();
+    for (;;) {
+      if (last.fg && Date.now() > deadline) return last;
+      await Bun.sleep(60);
+      const now = await read();
+      if (now.fg && now.fg === last.fg && now.frame === last.frame) return now;
+      last = now;
+      if (Date.now() > deadline) return now;
+    }
   };
 
   /*
@@ -1034,7 +1236,10 @@ describe.if(HAVE_CHROME)("which colours the pane ends up wearing", () => {
      * "no background" loses the vote 37% to 63% and keeps the wrong set. Empty
      * cells abstain for exactly this.
      */
-    const rows = await cdp!.value<number>(`document.querySelectorAll('.xterm-rows > div').length`);
+    // term.rows, for the same reason as the grid above: the row elements do not
+    // exist under the WebGL renderer, and this assertion is about how tall the
+    // page's grid is, which the terminal knows regardless of who paints it.
+    const rows = await cdp!.value<number>(`window.AGX.metrics().rows`);
     expect(rows).toBeGreaterThan(30);
     await cdp!.value(`window.AGX.theme(${JSON.stringify(terminalTheme(paletteFor("light", "blue")))}), 1`);
     await feed(paintedPane(12, "30;30;30"));

@@ -29,6 +29,16 @@ const KINDS = {
   pr: "agentglass-pr-",
   /** A branch's file, for anything the viewer does not render — see fileToTemp. */
   ref: "agentglass-ref-",
+  /** A picture from a phone, on its way into a pane's prompt — see
+   *  /terminal/image. Same treatment as the two above and for the same reason:
+   *  a stray file inside a checkout turns up in somebody's `git status` an
+   *  hour later, and this one arrives while they are looking at something
+   *  else entirely. */
+  image: "agentglass-image-",
+  /** A recording on its way to being words — see dictate.ts. Deleted the moment
+   *  the transcript is read, failure included: it is somebody's voice, and that
+   *  is fine sitting in a temp directory right up until the day it is not. */
+  audio: "agentglass-audio-",
 } as const;
 
 export type ViewTempKind = keyof typeof KINDS;

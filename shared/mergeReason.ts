@@ -15,7 +15,7 @@
 // tab renders — which is why that tab said "0 failing" while the header said
 // the opposite.
 
-import type { PrCheckRollup } from "../../../shared/types.ts";
+import type { PrCheckRollup } from "./types.ts";
 
 /** The generic sentence for each state, used when the checks cannot say more. */
 export const MERGE_WHY: Record<string, string> = {

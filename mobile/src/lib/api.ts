@@ -120,51 +120,6 @@ export async function ask<T>(
   }
 }
 
-/**
- * Start a turn, and do not wait for it to finish.
- *
- * `/chat/send` answers with NDJSON as the agent works, and React Native's fetch
- * cannot read a response body incrementally — it is XHR underneath, and `body`
- * is not a stream. So the phone does not try: it posts, checks that the turn
- * was ACCEPTED, and then reads the transcript back like everything else. The
- * conversation lives on the server, which is the property that makes this fine.
- *
- * The deadline is separate and long because a turn is not a request: fifteen
- * seconds is right for asking a question and absurd for an agent that is
- * editing files. What is being waited on here is only the server saying yes.
- */
-export async function startTurn(
-  host: Host,
-  payload: { cwd: string; message: string; model: string; mode: string; resumeId: string },
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const controller = new AbortController();
-  // Long enough for a cold agent to spawn, short enough that a dead network
-  // does not leave the composer disabled for ever.
-  const timer = setTimeout(() => controller.abort(), 60_000);
-  try {
-    const response = await fetch(host.origin + "/chat/send", {
-      method: "POST",
-      headers: { authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    // A refusal — chat disabled, out of scope, a directory that is not a repo —
-    // comes back as plain text with a 4xx rather than as NDJSON. Read as text,
-    // because parsing it as JSON is how a real explanation becomes silence.
-    if (!response.ok) {
-      const said = (await response.text().catch(() => "")).trim();
-      return { ok: false, error: said.slice(0, 300) || `The computer answered ${response.status}` };
-    }
-    // The body is the turn itself and is deliberately left unread: the reply
-    // will be in the transcript, and holding this open on a phone keeps a
-    // socket alive through a screen lock for nothing.
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: describeFailure(e) };
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 /**
  * Is anything at this address, and is it us?

@@ -114,7 +114,11 @@ import {
   prBranches, prsForBranch } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
-import { mintAgentTicket } from "./agentticket.ts";
+import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
+import { makeViewTempDir } from "./viewtemp.ts";
+import { transcribe, transcriberOn } from "./dictate.ts";
+import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
+import { claudeCode } from "./agents/claudecode.ts";
 import { listPanes, focusPaneAnywhere, activePane, sweepPinnedWindows, pinnedSockets } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
@@ -2979,10 +2983,72 @@ const server = Bun.serve<WsData>({
      * cannot be used is better refused at the press, where there is something
      * on screen to say so, than at the socket, where there is a blank pane.
      */
+    /*
+     * A picture from a phone, put on disk so a pane can be pointed at it.
+     *
+     * The phone cannot hand a TUI an image. What every agent CLI does accept is
+     * a PATH, which is what a desktop paste of an image actually delivers — the
+     * file is written somewhere and its name goes into the prompt. So the phone
+     * uploads the bytes here, gets a path back, and pastes that.
+     *
+     * Written under the same temp root as the other read-only copies, and never
+     * inside a checkout: a stray file in a repository turns up in somebody's
+     * `git status` an hour later, and this one arrives while they are looking
+     * at something else entirely.
+     *
+     * A cap, because this is the one route on the server that takes a payload
+     * whose size the client chooses. Eight megabytes is a phone photo at full
+     * resolution with room over; past it the answer is a refusal rather than a
+     * write, since the failure mode of no cap is a disk nobody is watching.
+     */
+    /*
+     * Speech, turned into text where the computer is.
+     *
+     * The phone records and this transcribes, which is the same division as
+     * every other heavy thing here: a phone is good at capturing and bad at
+     * the rest, and Expo Go cannot carry a native recogniser at all.
+     *
+     * A refusal NAMES what is missing rather than failing vaguely — the whole
+     * feature depends on a binary this app does not install, and "nothing
+     * happened" would be indistinguishable from "you said nothing".
+     */
+    if (pathname === "/terminal/dictate" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { data?: unknown; name?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const said = await transcribe(b.data, b.name);
+      return json(said, said.ok ? 200 : 400);
+    }
+
+    if (pathname === "/terminal/image" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { data?: unknown; name?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const data = typeof b.data === "string" ? b.data : "";
+      if (!data) return json({ ok: false, error: "no image" }, 400);
+      let bytes: Buffer;
+      try { bytes = Buffer.from(data, "base64"); } catch { return json({ ok: false, error: "not base64" }, 400); }
+      if (!bytes.length) return json({ ok: false, error: "empty image" }, 400);
+      if (bytes.length > 8 * 1024 * 1024) return json({ ok: false, error: "that image is over 8MB" }, 413);
+      /* The name is the CLIENT's and only its extension is kept, lowercased and
+         from a fixed set. A filename off the wire reaches a path here, and the
+         basename is the whole of what is worth carrying anyway — what the agent
+         is told is a path this server chose. */
+      const asked = typeof b.name === "string" ? b.name.toLowerCase() : "";
+      const ext = /\.(png|jpe?g|gif|webp|heic)$/.exec(asked)?.[0] ?? ".png";
+      const file = joinPath(makeViewTempDir("image"), `image${ext}`);
+      try { fsWrite(file, bytes); } catch (e) {
+        return json({ ok: false, error: `could not write it: ${String(e)}` }, 500);
+      }
+      return json({ ok: true, file });
+    }
+
     if (pathname === "/terminal/agent" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
-      let b: { cwd?: unknown; prompt?: unknown; yolo?: unknown; title?: unknown };
+      let b: { cwd?: unknown; prompt?: unknown; yolo?: unknown; title?: unknown; kind?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const cwd = gitSafeAbs(b.cwd);
       if (!cwd || !inScope(cwd) || !fsExists(cwd)) {
@@ -2992,7 +3058,13 @@ const server = Bun.serve<WsData>({
       // Bypass is a permission, not a parameter: the same gate the chat engines
       // go through, so a socket cannot buy the flag the config refuses.
       const yolo = b.yolo === true && chatBypassAllowed();
-      const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title) });
+      /* Validated against the table rather than passed through. `kind` decides
+         which executable runs, so an unrecognised one must not reach a lookup:
+         it is an id from shared/agentKinds.ts or it is Claude, never a string
+         off the wire. */
+      const wanted = typeof b.kind === "string" ? b.kind : "claude";
+      if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
+      const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title), kind: wanted });
       return json({ ok: true, ticket: id });
     }
 
@@ -3002,6 +3074,31 @@ const server = Bun.serve<WsData>({
     // ever sees. Every target id is validated against tmux's own shapes before
     // it reaches a command (see tmuxlayout.ts), and every write goes through
     // the same trusted-caller gate as the rest of the app.
+    /*
+     * Which agent CLIs are on this machine.
+     *
+     * The phone's new-tab menu asks before it draws. A menu listing four names
+     * where only two are installed fails AFTER the window has opened — a blank
+     * pane on somebody's computer rather than a sentence on their screen — and
+     * the phone has no other way to know.
+     */
+    if (pathname === "/terminal/agents") {
+      return json({
+        ok: true,
+        agents: AGENT_KINDS.map((a) => ({
+          id: a.id,
+          title: a.title,
+          what: a.what,
+          /* Claude answers through its own resolver, which knows about a
+             pinned version and a shim as well as PATH. */
+          installed: a.id === "claude" ? !!claudeCode.bin() : !!agentBinFor(a.id),
+          /* Whether "permissions off" is a thing this one HAS. A phone must
+             not draw a switch that buys no flag. */
+          canBypass: !!a.yoloFlag,
+        })),
+      });
+    }
+
     if (pathname === "/terminal/tmux-status") {
       const bin = tmuxBinStatus();
       const health = confHealth();
