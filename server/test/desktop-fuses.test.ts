@@ -51,11 +51,36 @@ const pkg = JSON.parse(readFileSync(resolve(ELECTRON_DIR, "package.json"), "utf8
 
 describe("electron fuses", () => {
   it("shuts the three doors that turn the app into a Node runtime", () => {
-    expect(pkg.build.electronFuses).toEqual({
+    // The signing directive below is not a door and is checked on its own; what
+    // is asserted here is that the doors are exactly these three and all shut,
+    // so a FOURTH one appearing still fails rather than passing unnoticed.
+    const { resetAdHocDarwinSignature: _resign, ...doors } = pkg.build.electronFuses;
+    expect(doors).toEqual({
       runAsNode: false,
       enableNodeCliInspectArguments: false,
       enableNodeOptionsEnvironmentVariable: false,
     });
+  });
+
+  it("re-signs the app after flipping them, or macOS arm64 will not start it", () => {
+    /*
+     * Shutting the doors is what BROKE the app on Apple Silicon for four
+     * releases (#517). Flipping a fuse rewrites bytes inside the Electron
+     * Framework, which invalidates the signature covering that page; Apple
+     * Silicon validates pages as they are first read, and the kernel kills the
+     * process. The crash was in `electron::fuses::IsRunAsNodeEnabled()` — it
+     * died reading the very fuse this file exists to set, before main.js ran.
+     *
+     * electron-builder signs after flipping, but skips signing entirely when
+     * there is no identity, and this project has none. This flag is what makes
+     * @electron/fuses re-apply an ad-hoc signature itself, and unset it does
+     * nothing at all.
+     *
+     * Pinned for the same reason as the fuses: it is invisible. Nothing about
+     * the config looks wrong without it, and the only symptom is on hardware
+     * neither CI nor most contributors have.
+     */
+    expect(pkg.build.electronFuses.resetAdHocDarwinSignature).toBe(true);
   });
 
   it("is built by a toolchain that understands the key", () => {
