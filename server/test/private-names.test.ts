@@ -131,6 +131,29 @@ function words(text: string): Set<string> {
 
 const files = tracked();
 
+/**
+ * Digests already worked out, kept across files.
+ *
+ * A repository's words repeat far more than they differ — `const`, `return`,
+ * `the`, every identifier in every import — so without this the scan hashes the
+ * same token thousands of times and spends its whole budget on SHA-256. It went
+ * in because the scan timed out on a cold run at five seconds while passing at
+ * two on a warm one, and a guard that goes red on the clock rather than on the
+ * tree is one people learn to ignore.
+ */
+const judged = new Map<string, string | null>();
+
+/** What this token is, if it is anything. `null` is a real answer and is
+ *  cached: the tokens that are fine are the overwhelming majority, and they are
+ *  the ones worth not hashing twice. */
+function verdictOn(token: string, banned: Map<string, string>): string | null {
+  const known = judged.get(token);
+  if (known !== undefined) return known;
+  const what = banned.get(sha(token)) ?? null;
+  judged.set(token, what);
+  return what;
+}
+
 describe("no private names in the tree", () => {
   test("there is a tree to scan at all", () => {
     // A scan that reads nothing passes forever. This is the only thing
@@ -160,6 +183,12 @@ describe("no private names in the tree", () => {
     }
   });
 
+  /* A minute, not the default five seconds. What bounds this test is the size
+     of the tree, which grows, and on a cold filesystem the reads alone have
+     already come within a whisker of the default. A timeout here is a guard
+     against hanging, not a performance assertion — and a guard that fails
+     intermittently on timing is worse than no guard, because the next red one
+     gets waved through. */
   test("no tracked file contains one", () => {
     const banned = new Map(FORBIDDEN.map((f) => [f.hash, f.what]));
     const hits: string[] = [];
@@ -177,7 +206,7 @@ describe("no private names in the tree", () => {
       // The path counts too: a file NAMED after a client leaks it from the
       // directory listing, without anybody opening it.
       for (const token of words(`${path} ${text}`)) {
-        const what = banned.get(sha(token));
+        const what = verdictOn(token, banned);
         if (what) { hits.push(`${path} — ${what}`); break; }
       }
     }
@@ -189,5 +218,5 @@ describe("no private names in the tree", () => {
       + "invented one — the repository already has a cast (acme/shop-api, "
       + "orbit, atlas, /w/…, /home/me) — rather than adding an exception here.",
     ).toEqual([]);
-  });
+  }, 60_000);
 });
