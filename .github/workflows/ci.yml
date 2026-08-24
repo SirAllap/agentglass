@@ -10,9 +10,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Pinned, and this is the line that decides whether CI is measuring the
+      # tree or the week. `latest` resolved to bun 1.4.0 the moment it shipped
+      # — 2026-08-20 14:14 UTC — and main went red at 16:08 the same day, on a
+      # merge that had passed on its own branch. Nothing in the repository had
+      # changed: re-running the CI of a commit from the 17th, untouched, fails
+      # today and passed then.
+      #
+      # What breaks under 1.4.0 is nine tests in two files, all of them
+      # timeouts rather than wrong answers, and both files spawn child
+      # processes and share one `bun test` process between suites. That is a
+      # real thing to fix and it is not this change: this one stops the floor
+      # moving so the fix can be measured against something.
+      #
+      # 1.3.14 is not a guess. It is what `latest` meant on the 17th, which is
+      # the last run of this workflow that was green.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
       - name: Install
         run: bun install --frozen-lockfile
       # The mark lives in seven places — a standalone SVG, the favicon, a React
@@ -124,9 +139,13 @@ jobs:
       # An action tag guessed wrong fails the job before a single step runs,
       # which is a worse trade than trusting the image for a version floor
       # nothing here is near.
+      # Pinned for the reason the build job above is, and to the same version.
+      # This job passes under 1.4.0 today, which is exactly why it is pinned:
+      # two jobs on two different bun versions is a difference nobody chose and
+      # nobody would think to look for.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
       # `npm ci` and not `npm install`: the lockfile is the point. Its
       # postinstall runs scripts/build-terminal-engine.mjs and
       # build-terminal-font.mjs, which write src/terminal/engine.generated.ts
