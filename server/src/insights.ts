@@ -7,6 +7,12 @@ import { equivalentTokens } from "./pricing.ts";
 import { budgetStatus, budgetScopeLabel, periodLabel } from "./budget.ts";
 
 const key = (app: string, sid: string) => `${app}:${sid.slice(0, 8)}`;
+// The row identity the session-scoped queries group by. `key` is the label the
+// card shows: it shortens the session id to fit, and two rows are allowed to
+// render the same one. An id is a React key, so it carries the pair in full —
+// and escapes it, because an app `a:b` in session `c` and an app `a` in session
+// `b:c` are different rows that a plain join hands the same string.
+const rowId = (app: string, sid: string) => `${encodeURIComponent(app)}:${encodeURIComponent(sid)}`;
 const trim = (s: string, n = 64) => (s.length > n ? s.slice(0, n) + "…" : s);
 
 export function getInsights(): Insight[] {
@@ -28,14 +34,14 @@ export function getInsights(): Insight[] {
        FROM events
        WHERE hook_event_type = 'PreToolUse' AND tool_name = 'Bash'
              AND cmd IS NOT NULL AND timestamp > ?${sc}
-       GROUP BY session_id, cmd
+       GROUP BY source_app, session_id, cmd
        HAVING n >= 6
        ORDER BY n DESC LIMIT 6`
     )
     .all(now - 30 * 60_000, ...sa);
   for (const l of loops) {
     out.push({
-      id: `loop:${l.session_id}:${l.cmd}`,
+      id: `loop:${rowId(l.source_app, l.session_id)}:${l.cmd}`,
       severity: l.n >= 15 ? "bad" : "warn",
       kind: "loop",
       title: `Possible loop · ${l.n}× identical command`,
@@ -49,13 +55,13 @@ export function getInsights(): Insight[] {
   const spend = db
     .query<{ source_app: string; session_id: string; cost: number; last: number }, any[]>(
       `SELECT source_app, session_id, ROUND(SUM(cost_usd),2) cost, MAX(timestamp) last
-       FROM events WHERE timestamp > ?${sc} GROUP BY session_id
+       FROM events WHERE timestamp > ?${sc} GROUP BY source_app, session_id
        HAVING cost >= 15 ORDER BY cost DESC LIMIT 4`
     )
     .all(now - 15 * 60_000, ...sa);
   for (const s of spend) {
     out.push({
-      id: `spend:${s.session_id}`,
+      id: `spend:${rowId(s.source_app, s.session_id)}`,
       severity: s.cost >= 40 ? "bad" : "warn",
       kind: "spend",
       title: `Burning fast · $${s.cost.toFixed(2)} in 15m`,
@@ -77,7 +83,7 @@ export function getInsights(): Insight[] {
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END) errs,
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
               MAX(timestamp) last
-       FROM events WHERE timestamp > ?${sc} GROUP BY session_id
+       FROM events WHERE timestamp > ?${sc} GROUP BY source_app, session_id
        HAVING tools >= 4 AND errs * 1.0 / tools > 0.3
        ORDER BY errs DESC LIMIT 4`
     )
@@ -85,7 +91,7 @@ export function getInsights(): Insight[] {
   for (const f of fails) {
     const pct = Math.round((f.errs / f.tools) * 100);
     out.push({
-      id: `errors:${f.session_id}`,
+      id: `errors:${rowId(f.source_app, f.session_id)}`,
       severity: pct >= 50 ? "bad" : "warn",
       kind: "errors",
       title: `High failure rate · ${pct}%`,
