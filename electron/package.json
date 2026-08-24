@@ -29,6 +29,7 @@
       "output": "dist-app"
     },
     "electronFuses": {
+      "resetAdHocDarwinSignature": true,
       "runAsNode": false,
       "enableNodeCliInspectArguments": false,
       "enableNodeOptionsEnvironmentVariable": false
