@@ -53,6 +53,35 @@ describe("build scripts", () => {
     });
   }
 
+  test("every vendored library is built for the target architecture", () => {
+    /*
+     * The mac x64 job cross-builds for Intel on an arm64 runner, so each
+     * dependency has to be told `-arch x86_64` or it comes out as the host's.
+     * ncurses and tmux were told; libevent was not, so it built arm64 while the
+     * tmux linking against it built x86_64. What configure reports for that is
+     * the confusing half — the header is found and the link test fails:
+     *
+     *     checking for event2/event.h ... yes
+     *     error: "libevent not found"
+     *
+     * The arm64 job cannot catch this: there the host and the target agree, so
+     * a library built with no -arch at all is right by coincidence. Only the
+     * cross-build notices, and only at the link, three functions later.
+     */
+    const sh = readFileSync(join(ROOT, "scripts/build-tmux-static.sh"), "utf8");
+    const missing: string[] = [];
+    for (const line of sh.split("\n")) {
+      if (!/^\s*(CC=|CFLAGS=).*\.\/configure/.test(line)) continue;
+      if (!line.includes("$ARCHFLAG")) missing.push(line.trim().slice(0, 70));
+    }
+    expect(
+      missing,
+      "this configure runs without $ARCHFLAG, so on a cross-build it produces "
+      + "a library for the wrong architecture and the failure surfaces later, "
+      + "as a link error in something else.",
+    ).toEqual([]);
+  });
+
   test("the tmux configure still carries the flags it needs", () => {
     // The failure above is invisible in the diff but very visible here: if the
     // assignments stop reaching configure, these are what go missing.

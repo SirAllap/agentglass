@@ -187,12 +187,25 @@ verify() { # file name
   fi
 }
 
+# ARCHFLAG belongs here as much as it does to ncurses and tmux, and its absence
+# is what kept the x64 mac build red after everything else was fixed. That job
+# cross-builds for Intel on an arm64 runner: ncurses and tmux were told `-arch
+# x86_64` and libevent was not, so libevent came out arm64 while the tmux
+# linking against it came out x86_64. configure finds the header and then fails
+# the link test, and reports the confusing half of that:
+#
+#     configure:6014: checking for event2/event.h
+#     configure:6014: result: yes
+#     configure:6036: error: "libevent not found"
+#
+# The arm64 job never noticed, because there ARCHFLAG and the host agree and a
+# libevent built with no -arch at all comes out right by coincidence.
 build_libevent() {
   local t="$(fetch libevent.tar.gz "$LIBEVENT_URL")"
   verify "$t" "libevent-${LIBEVENT_VERSION}-stable.tar.gz"
   tar -xzf "$t" -C "$WORK/src"
   ( cd "$WORK/src/libevent-${LIBEVENT_VERSION}-stable"
-    CC="$CC" ./configure $HOSTFLAG --prefix="$WORK/prefix" --disable-shared --enable-static --disable-openssl --disable-samples --disable-libevent-regress >/dev/null
+    CC="$CC" CFLAGS="-O2 $ARCHFLAG" LDFLAGS="$ARCHFLAG" ./configure $HOSTFLAG --prefix="$WORK/prefix" --disable-shared --enable-static --disable-openssl --disable-samples --disable-libevent-regress >/dev/null
     make -s -j"$(jobs_n)" && make -s install )
 }
 
