@@ -247,8 +247,41 @@ else
   echo "  cross-built for $TARGET — not run here"
 fi
 file "out/tmux-$TARGET" | sed 's/^/  /'
-case "$(file -b "out/tmux-$TARGET")" in
-  *"statically linked"*) ;;
-  *) echo "NOT STATIC — this would depend on the host's libc" >&2; exit 1 ;;
+
+# What "static enough" means, which is not the same sentence on both platforms.
+#
+# The property this build actually needs is that the binary runs on a machine
+# that has no tmux, no libevent and no ncurses — those three are built here as
+# .a archives and linked in. It is NOT "depends on nothing at all".
+#
+#   linux  — `-static` really does take libc too, and `file` says so. The string
+#            is the proof, and it stays the check.
+#   darwin — there is no static libSystem and the linker refuses to pretend
+#            otherwise, which is why LDMODE drops `-static` there (see the case
+#            near the top, and #531). `file` therefore never says "statically
+#            linked" on a Mach-O, and this check demanded it anyway: the mac
+#            builds compiled a working tmux, ran it, printed `tmux 3.5a`, and
+#            then failed on their own verification. So ask otool what is
+#            actually linked and require all of it to be the system's.
+case "$TARGET" in
+  *darwin*)
+    deps="$(otool -L "out/tmux-$TARGET" | tail -n +2 | awk '{print $1}')"
+    echo "$deps" | sed 's/^/  links: /'
+    # Anything outside /usr/lib and /System is a library the user would have to
+    # already have — libevent and ncursesw are the ones this script builds, and
+    # seeing either here means the .a archives were not the thing that got used.
+    stray="$(echo "$deps" | grep -vE '^(/usr/lib/|/System/Library/)' || true)"
+    if [ -n "$stray" ]; then
+      echo "NOT SELF-CONTAINED — links libraries the user may not have:" >&2
+      echo "$stray" | sed 's/^/  /' >&2
+      exit 1
+    fi
+    ;;
+  *)
+    case "$(file -b "out/tmux-$TARGET")" in
+      *"statically linked"*) ;;
+      *) echo "NOT STATIC — this would depend on the host's libc" >&2; exit 1 ;;
+    esac
+    ;;
 esac
 echo "built out/tmux-$TARGET"
