@@ -154,6 +154,34 @@ desktop-dist-linux: ## Package Linux binaries (AppImage + deb)
 task-static: ## Build the static Taskwarrior this app bundles (TARGET=bun-linux-x64 for a shipping one)
 	./scripts/build-task-static.sh
 
+# Everything lands in .flatpak-out/: flatpak-builder refuses to run when its
+# state dir and its target repo sit on different filesystems, and its default
+# state dir would otherwise be a stray .flatpak-builder/ in the checkout.
+#
+# One trap worth knowing, because it costs an hour to diagnose: the sidecar must
+# run against the Flatpak RUNTIME, not this machine. A distro-packaged bun (the
+# Arch `bun` package, say) is dynamically linked to the system ICU and stamps
+# that dependency onto everything it compiles, so the sidecar dies inside the
+# sandbox with `libicui18n.so.NN: cannot open shared object file`. The official
+# bun from bun.sh links no ICU at all and is what CI uses. If this target builds
+# an app whose server will not start, check `ldd electron/staging/agentglass-server`
+# before suspecting the manifest.
+flatpak: ## Build the Flatpak into .flatpak-out/repo (needs flatpak-builder; see the ICU note above)
+	cd web && bun run build
+	mkdir -p electron/staging
+	bun build --compile --target=bun-linux-x64 server/src/index.ts --outfile electron/staging/agentglass-server
+	cp shared/claude-models.json electron/staging/claude-models.json
+	node electron/build.mjs --provenance-only
+	cd electron && bunx electron-builder --linux dir --publish never
+	bun packaging/flatpak/hostbin.ts packaging/flatpak/hostbin
+	flatpak-builder --user --disable-rofiles-fuse --state-dir=.flatpak-out/state \
+		--repo=.flatpak-out/repo --force-clean .flatpak-out/build-dir \
+		packaging/flatpak/app.agentglass.desktop.yml
+
+flatpak-install: flatpak ## Install the locally built Flatpak for this user
+	flatpak remote-add --user --if-not-exists --no-gpg-verify ag-local "file://$(CURDIR)/.flatpak-out/repo"
+	flatpak install --user -y --noninteractive ag-local app.agentglass.desktop
+
 desktop-install: ## Install the built app for this user (no root)
 	electron/install-local.sh
 

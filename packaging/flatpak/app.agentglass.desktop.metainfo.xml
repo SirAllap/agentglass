@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.agentglass.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>agentglass</name>
+  <summary>Every AI coding agent on your machine, on one screen</summary>
+
+  <description>
+    <p>
+      agentglass watches the AI coding agents already running on your machine
+      and puts them on one screen: live cost, token use and tool calls across
+      every provider, with a hold on anything dangerous until you say go.
+    </p>
+    <p>
+      It supervises the agent CLIs you have installed rather than replacing
+      them, so Claude Code, Codex and Antigravity keep working exactly as they
+      did.
+    </p>
+    <p>
+      This Flatpak is packaging, not confinement. Supervising the tools on your
+      machine means reaching them, so it is granted host filesystem access and
+      permission to run host processes. Anything it can do, it can do outside
+      the sandbox.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">app.agentglass.desktop.desktop</launchable>
+
+  <url type="homepage">https://github.com/SirAllap/agentglass</url>
+  <url type="bugtracker">https://github.com/SirAllap/agentglass/issues</url>
+
+  <developer id="app.agentglass">
+    <name>SirAllap</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.12.0" date="2026-08-25"/>
+  </releases>
+</component>

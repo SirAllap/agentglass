@@ -44,6 +44,27 @@ jobs:
           cp -r landing/. site/
           cp -r web/dist/. site/demo/
           touch site/.nojekyll
+      # The Flatpak channel. flatpak.yml accumulates an OSTree repo on the orphan
+      # `flatpak-repo` branch and this is what serves it, because a repository
+      # gets one Pages source and deploy-pages replaces the whole site each run —
+      # so every deploy has to carry the repo or the remote 404s between releases.
+      #
+      # A no-op until the first tagged Flatpak build creates the branch, and
+      # never fatal: the landing page is worth publishing even if the channel is
+      # briefly unavailable. .nojekyll above is load-bearing here — an OSTree repo
+      # has to be served byte-for-byte, and Jekyll skips files it thinks are
+      # special.
+      - name: Lay the Flatpak repo under /flatpak/, if there is one
+        run: |
+          if git clone --depth 1 --branch flatpak-repo \
+              "https://github.com/${GITHUB_REPOSITORY}.git" /tmp/flatpak-repo 2>/dev/null; then
+            rm -rf /tmp/flatpak-repo/.git
+            mkdir -p site/flatpak
+            cp -r /tmp/flatpak-repo/. site/flatpak/
+            du -sh site/flatpak | awk '{print "Flatpak channel: " $1}'
+          else
+            echo "No flatpak-repo branch yet — skipping the Flatpak channel."
+          fi
       # Fills in the version and the per-OS download links. Never fatal: the
       # page ships with copy that is true without it, so a missing release or an
       # API hiccup costs precision, not correctness.
