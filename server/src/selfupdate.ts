@@ -240,6 +240,19 @@ export function windowsUpdateBlock(platform: string = process.platform): string 
     : null;
 }
 
+/**
+ * A Flatpak install updates through Flatpak, and cannot update itself: /app is
+ * mounted read-only, so self-update.sh would fetch a release and then fail on
+ * the first write. Same shape as windowsUpdateBlock, and gated for the same
+ * reason — an update button that breaks the install is worse than no button.
+ *
+ * The id comes from the environment rather than a constant so the message stays
+ * true if the app is ever published under a different one.
+ */
+export function flatpakUpdateBlock(id: string | undefined = process.env.FLATPAK_ID): string | null {
+  return id ? `this is a Flatpak install — update it with \`flatpak update ${id}\`` : null;
+}
+
 export async function updateStatus(): Promise<UpdateStatus> {
   const info = buildInfo();
   const base: UpdateStatus = {
@@ -250,6 +263,11 @@ export async function updateStatus(): Promise<UpdateStatus> {
   // with the real reason the button does nothing.
   const winBlock = windowsUpdateBlock();
   if (winBlock) return { ...base, blocked: winBlock };
+  // Also before the origin check, and for the same reason: a Flatpak carries
+  // provenance but can never act on it, so "reinstall from source" would be
+  // both wrong and impossible to follow.
+  const flatpakBlock = flatpakUpdateBlock();
+  if (flatpakBlock) return { ...base, blocked: flatpakBlock };
   if (!info.origin) {
     return { ...base, blocked: "this build records no origin — reinstall from source once to enable updates" };
   }

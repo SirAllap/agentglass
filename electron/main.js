@@ -1244,7 +1244,14 @@ function setAutostart(on) {
   if (process.platform === "linux") {
     if (on) {
       fs.mkdirSync(path.dirname(LINUX_AUTOSTART), { recursive: true });
-      const exec = app.isPackaged ? process.execPath : `${process.execPath} ${REPO}/electron`;
+      // The session that runs this file is the HOST's, so execPath is wrong
+      // under Flatpak: /app/… exists only inside the sandbox, and the entry
+      // would silently never start. `flatpak run` is the host-side name for the
+      // same app. HOME is the real home either way, so the file itself lands in
+      // the right place without help.
+      const exec = process.env.FLATPAK_ID
+        ? `flatpak run ${process.env.FLATPAK_ID}`
+        : app.isPackaged ? process.execPath : `${process.execPath} ${REPO}/electron`;
       fs.writeFileSync(
         LINUX_AUTOSTART,
         `[Desktop Entry]\nType=Application\nName=agentglass\nExec=${exec}\nX-GNOME-Autostart-enabled=true\n`
