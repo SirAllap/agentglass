@@ -195,7 +195,7 @@ export default function DiffScreen(): React.ReactNode {
       // line numbers on screen belong to.
       side: "RIGHT", from: String(want.from), to: String(want.to),
     }).toString();
-    const answer = await ask<{ ok: boolean; lines?: string[]; binary?: boolean; error?: string }>(
+    const answer = await ask<{ ok: boolean; lines?: string[]; start?: number; binary?: boolean; error?: string }>(
       host, `/prs/file-slice?${query}`,
     );
     setFetching(null);
@@ -208,12 +208,18 @@ export default function DiffScreen(): React.ReactNode {
        end" arrives. Trusting `want.to` here would draw blank numbered rows past
        the end of the file. */
     if (!got.length) { setSlipped({ key, text: "That is the end of the file." }); return; }
+    /* And where it started is the SERVER's answer, not the number we asked
+       with. It clamps that too, and the two differing by one puts real lines
+       under wrong numbers — which on this screen is not a cosmetic fault: the
+       numbers beside expanded context are what a reader uses to say where
+       something is. */
+    const first = Number.isInteger(answer.value.start) ? (answer.value.start as number) : want.from;
     setShown((was) => {
       const before = was[key];
-      if (!before) return { ...was, [key]: { from: want.from, to: want.from + got.length - 1, lines: got } };
+      if (!before) return { ...was, [key]: { from: first, to: first + got.length - 1, lines: got } };
       return dir === "up"
-        ? { ...was, [key]: { from: want.from, to: before.to, lines: [...got, ...before.lines] } }
-        : { ...was, [key]: { from: before.from, to: want.from + got.length - 1, lines: [...before.lines, ...got] } };
+        ? { ...was, [key]: { from: first, to: before.to, lines: [...got, ...before.lines] } }
+        : { ...was, [key]: { from: before.from, to: first + got.length - 1, lines: [...before.lines, ...got] } };
     });
   }, [host, file, number, root, shown]);
 

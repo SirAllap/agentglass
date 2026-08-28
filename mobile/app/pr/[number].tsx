@@ -261,6 +261,11 @@ export default function PrScreen(): React.ReactNode {
    *  it, and starts nothing. */
   const look = useCallback(async (recipe: ReviewRecipe): Promise<void> => {
     if (!host || !detail || !root) return;
+    /* The menu closes as this opens. `Sheet` is a react-native `Modal`, and two
+       visible at once is not a layout choice — presenting the second over the
+       first is unreliable on iOS and flickers on Android. Back from the preview
+       puts the menu back, so it still reads as a step rather than a jump. */
+    setHanding(false);
     setPreview({ recipe: recipe.id, title: recipe.title, state: "asking" });
     const answer = await ask<{ ok: boolean; prompt?: string; cwd?: string; error?: string }>(
       host, "/prs/review-prompt",
@@ -903,7 +908,11 @@ export default function PrScreen(): React.ReactNode {
       {/* What it would say, over the menu it was chosen from. A second sheet
           rather than a replaced one, so Back lands on the list and not on the
           pull request. */}
-      <Sheet open={!!preview} onClose={() => setPreview(null)} title={preview?.title ?? ""}>
+      <Sheet
+        open={!!preview}
+        onClose={() => { setPreview(null); setHanding(true); }}
+        title={preview?.title ?? ""}
+      >
         {preview?.state === "asking" ? (
           <Note>Building it on the computer…</Note>
         ) : null}
@@ -920,12 +929,13 @@ export default function PrScreen(): React.ReactNode {
 
         {preview?.state === "read" ? (
           <View style={{ gap: SPACE.md }}>
-            <ScrollView style={{ maxHeight: 320 }}>
-              <Text style={{
-                color: C.text2, fontSize: T.small, fontFamily: MONO, lineHeight: 18,
-                backgroundColor: C.bg, padding: SPACE.md, borderRadius: RADIUS.md,
-              }}>{preview.prompt}</Text>
-            </ScrollView>
+            {/* No ScrollView of its own. The sheet already scrolls and is
+                already capped at 75% of the screen; a second one nested inside
+                it is the arrangement react-native does not reliably scroll. */}
+            <Text style={{
+              color: C.text2, fontSize: T.small, fontFamily: MONO, lineHeight: 18,
+              backgroundColor: C.bg, padding: SPACE.md, borderRadius: RADIUS.md,
+            }}>{preview.prompt}</Text>
             {preview.cwd ? (
               <Text numberOfLines={1} ellipsizeMode="head" style={{
                 color: C.text4, fontSize: T.eyebrow, fontFamily: MONO,
