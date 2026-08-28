@@ -601,7 +601,7 @@ a terminal, no port to open in a browser.
 
 | Linux | macOS |
 | --- | --- |
-| `.AppImage` (chmod +x, run it) or `.deb` | `.dmg`, Apple Silicon and Intel |
+| `.AppImage` (chmod +x, run it), `.deb`, or [Flatpak](#linux-flatpak) | `.dmg`, Apple Silicon and Intel |
 
 That alone already shows you everything: the built-in **transcript scanner**
 reads `~/.claude/projects`, so every Claude Code session on the machine is
@@ -788,7 +788,44 @@ composites on the GPU.
 Installers for every release are published on
 [**Releases**](https://github.com/SirAllap/agentglass/releases/latest):
 `.AppImage` and `.deb` for Linux, `.dmg` for macOS (Apple Silicon and Intel).
-That is the way to install it.
+That is the way to install it. There is also a [Flatpak
+channel](#linux-flatpak).
+
+### Linux: Flatpak
+
+There is a Flatpak channel too, if you would rather have `flatpak update` than a
+fresh download every release:
+
+```bash
+flatpak remote-add --if-not-exists --no-gpg-verify \
+  agentglass https://sirallap.github.io/agentglass/flatpak/repo/
+flatpak install agentglass app.agentglass.desktop
+```
+
+Single-file `.flatpak` bundles are attached to each
+[release](https://github.com/SirAllap/agentglass/releases/latest) as well, for
+installing without adding a remote.
+
+**Two things worth knowing first.**
+
+`--no-gpg-verify` is not decoration. The repository is unsigned, so nothing
+proves a download came from this project rather than from whoever could write to
+the hosting. If that is not a trade you want to make, take the `.deb` or the
+`.AppImage` from Releases instead.
+
+**And the sandbox does not confine this app.** agentglass supervises the agent
+CLIs on your machine: it runs `claude`, reads your repositories with `git`,
+drives `docker` and `gh`, and opens your login shell. Reaching any of that needs
+`--filesystem=host` and permission to start host processes, and the second is a
+full sandbox escape — anything the app can do, it can do outside the sandbox.
+It is the same hole VS Code's Flatpak carries, for the same reason. So the
+Flatpak is a packaging convenience and an update channel, not a security
+boundary. `flatpak override` narrows it afterwards, and the app stays honest
+about the result: **Settings ▸ Dependencies** names whatever it can no longer
+reach.
+
+Self-update is off in the Flatpak by design. `/app` is read-only, so rather than
+offer a button that cannot work, the app points you at `flatpak update`.
 
 ### macOS: "agentglass is damaged and can't be opened"
 

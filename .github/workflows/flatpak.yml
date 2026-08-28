@@ -1,0 +1,425 @@
+name: Flatpak
+
+# Builds the Flatpak and publishes an OSTree repository users can subscribe to,
+# so `flatpak update` works instead of every version being a fresh download.
+#
+# --- Self-contained on purpose ---
+#
+# No signing key, no second repository, no personal access token, no third-party
+# action that is not already used elsewhere in this directory. `github.token` and
+# nothing else. Whoever merges this has nothing to provision and no repository
+# setting to change. That constraint is why the repo is unsigned; see the
+# install docs, which say plainly what that costs.
+#
+# --- Why an orphan branch and not gh-pages ---
+#
+# An OSTree repo has to ACCUMULATE: `flatpak update` computes a delta against the
+# commit a user already has, so older commits must stay reachable. But this
+# project's Pages source is "GitHub Actions" (pages.yml uses deploy-pages), a
+# repository gets exactly one Pages source, and a deploy-pages run replaces the
+# published site wholesale -- which would strand every existing install on a repo
+# whose history had vanished.
+#
+# So the repo accumulates on the orphan `flatpak-repo` branch, pages.yml lays it
+# under site/flatpak/, and this workflow asks pages.yml to redeploy afterwards.
+# OSTree keeps its own history inside the repo, while the branch is force-pushed
+# as a single orphan commit so git history does not grow without bound as pruned
+# objects pile up.
+#
+# --- Why two jobs ---
+#
+# `build` runs on pull requests, which means it runs code from the pull request:
+# hostbin.ts, build-tmux-static.sh, and every install script bun executes. It
+# therefore holds a READ-ONLY token. Everything that can write -- the branch
+# force-push, the Pages trigger, the release upload -- lives in `publish`, which
+# never runs on a pull request. Merging the two would hand a write token to
+# whatever a contributor put in a build script.
+#
+# --- Why the build steps are duplicated from desktop-binaries.yml ---
+#
+# Same reason android-apk.yml duplicates them: each workflow owns its build, and
+# a new packaging format must not be able to strand a release binary. The cost is
+# real -- a change to how the sidecar is compiled has to be made in both places.
+
+on:
+  pull_request:
+    paths:
+      - "electron/**"
+      - "web/**"
+      - "server/**"
+      - "shared/**"
+      - "packaging/flatpak/**"
+      - "scripts/build-tmux-static.sh"
+      - ".github/workflows/flatpak.yml"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to the Flatpak repo (not just build and smoke it)"
+        type: boolean
+        default: false
+
+# Read-only by default; `publish` opts itself up.
+permissions:
+  contents: read
+
+# Never two publishes at once: they would race on the same force-pushed branch
+# and the loser's build would vanish from the repo.
+concurrency:
+  group: flatpak
+  cancel-in-progress: false
+
+env:
+  APP_ID: app.agentglass.desktop
+  # 25.08 is current and carries python3, setsid, script, bash and a
+  # portal-backed xdg-open, which is what lets those four stay INSIDE the sandbox
+  # rather than needing a host shim. Verified against the runtime, not assumed.
+  RUNTIME_VERSION: "25.08"
+
+jobs:
+  build:
+    # ubuntu-latest rather than the 22.04 desktop-binaries.yml pins for glibc:
+    # nothing here runs on the host. The sidecar runs inside the 25.08 runtime,
+    # whose glibc is NEWER than the runner's, and glibc is forward-compatible, so
+    # the older-runner trick buys nothing and costs a current flatpak-builder.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Same reason as desktop-binaries.yml: build.mjs runs `git describe`
+          # and a shallow checkout has no tag object to describe.
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder ostree desktop-file-utils appstream
+
+      # Ahead of the ~1 GB runtime download, so a typo in the metadata fails in
+      # seconds instead of after the expensive step.
+      #
+      # appstreamcli comes from the runner's own `appstream` package rather than
+      # from inside the SDK. Reaching into the SDK meant `flatpak run --command=`,
+      # which takes its options BEFORE the ref -- put after it, flatpak hands the
+      # flag to the app and /bin/sh answers "invalid option". Getting that right
+      # would then still leave sharing the workspace into the sandbox so the tool
+      # can read the file it is validating, all for a binary apt already ships.
+      - name: Validate the desktop entry and AppStream metadata
+        run: |
+          desktop-file-validate "packaging/flatpak/${APP_ID}.desktop"
+          appstreamcli validate --no-net "packaging/flatpak/${APP_ID}.metainfo.xml"
+
+      # --user throughout: the runner's user owns everything, and a system
+      # install would need sudo for every later flatpak call.
+      - name: Install the runtime, SDK and Electron base app
+        run: |
+          flatpak remote-add --user --if-not-exists \
+            flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          # Flathub is occasionally flaky and this is ~1 GB; a single transient
+          # failure should not cost the whole run.
+          for attempt in 1 2 3; do
+            if flatpak install --user -y flathub \
+                "org.freedesktop.Platform//${RUNTIME_VERSION}" \
+                "org.freedesktop.Sdk//${RUNTIME_VERSION}" \
+                "org.electronjs.Electron2.BaseApp//${RUNTIME_VERSION}"; then
+              break
+            fi
+            echo "::warning::flatpak install attempt $attempt failed; retrying"
+            [ "$attempt" = 3 ] && exit 1
+          done
+
+      # --frozen-lockfile for the same reason desktop-binaries.yml uses it: a
+      # published artefact has to be the committed lockfile's build, and an
+      # install that rewrites bun.lock would put +dirty on the build stamp.
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build web
+        run: cd web && bun run build
+
+      - name: Compile server sidecar
+        run: |
+          mkdir -p electron/staging
+          bun build --compile --target=bun-linux-x64 server/src/index.ts \
+            --outfile electron/staging/agentglass-server
+          # Read from disk at runtime rather than imported, so --compile does not
+          # carry it. Same placement rule as the desktop build.
+          cp shared/claude-models.json electron/staging/claude-models.json
+
+      - name: zig, for the musl target
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # The runtime has no tmux, so without this the pane engine has nothing to
+      # run and tabs, splits and persistence are all quietly off.
+      - name: Build bundled tmux
+        run: |
+          if grep -q placeholder scripts/tmux-build-checksums.txt; then
+            ./scripts/tmux-fill-checksums.sh
+          fi
+          TARGET=bun-linux-x64 ./scripts/build-tmux-static.sh
+          cp out/tmux-bun-linux-x64 electron/staging/tmux
+          ./out/tmux-bun-linux-x64 -V
+
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "PKG_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Stamp provenance (build-info.json + self-update.sh)
+        run: node electron/build.mjs --provenance-only
+
+      # `dir`, not AppImage: the Flatpak manifest packages this tree directly, so
+      # the Flatpak and the AppImage are the same build of the same app.
+      - name: Package (unpacked)
+        working-directory: electron
+        run: |
+          ver=()
+          if [ -n "${PKG_VERSION:-}" ]; then ver=(-c.extraMetadata.version="$PKG_VERSION"); fi
+          bunx electron-builder --linux dir "${ver[@]}" --publish never
+
+      - name: Check the stamp still describes the tree
+        run: node electron/build.mjs --check-stamp electron/staging/build-info.json
+
+      # Derived from shared/deps.ts rather than checked in, so a new agent CLI
+      # cannot land in DEPS and be silently unreachable from the Flatpak.
+      - name: Generate host shims
+        run: bun packaging/flatpak/hostbin.ts packaging/flatpak/hostbin
+
+      # Build tree, state dir and exported repo all under .flatpak-out/, because
+      # flatpak-builder refuses to run when its state dir and its target repo are
+      # on different filesystems -- and its default state dir is .flatpak-builder
+      # in the working directory, which also means a developer running this by
+      # hand would otherwise leave one in their checkout.
+      - name: Build and export to a local OSTree repo
+        run: |
+          flatpak-builder --user --disable-rofiles-fuse \
+            --state-dir=.flatpak-out/state \
+            --repo=.flatpak-out/repo --force-clean \
+            .flatpak-out/build-dir "packaging/flatpak/${APP_ID}.yml"
+
+      # Structural, and deliberately not a GUI launch: a headless Electron start
+      # under xvfb tests the runner's display stack as much as the package. These
+      # assertions are the ones that actually fail when the manifest is wrong.
+      - name: Smoke test the built app
+        run: |
+          set -eu
+          # Via a named remote, not `flatpak install <path>`: flatpak reads a
+          # bare argument as a REMOTE NAME, and a name may not begin with a
+          # period, so `.flatpak-out/repo` comes back as "not a valid name".
+          # A file:// remote is also what a user adding this channel will do.
+          flatpak remote-add --user --if-not-exists --no-gpg-verify \
+            smoke "file://${PWD}/.flatpak-out/repo"
+          flatpak install --user -y --noninteractive smoke "${APP_ID}"
+          run() { flatpak run --user --command=sh "${APP_ID}" -c "$1"; }
+
+          echo "--- the launcher and the app binary are where the manifest says"
+          run 'test -x /app/bin/agentglass && test -x /app/agentglass/agentglass'
+
+          echo "--- the bundled tmux runs against this runtime"
+          run '/app/agentglass/resources/tmux -V'
+
+          echo "--- host shims exist, are executable, and route through the portal"
+          run 'test -x /app/hostbin/git && grep -q "flatpak-spawn --host git" /app/hostbin/git'
+          run 'test -x /app/hostbin/claude && test -x /app/hostbin/hostshell'
+
+          echo "--- the tools that must stay in-sandbox were NOT shimmed"
+          run '! test -e /app/hostbin/python3 && ! test -e /app/hostbin/tmux'
+
+          echo "--- the runtime really does provide those in-sandbox tools"
+          run 'command -v python3 && command -v setsid && command -v script'
+
+          echo "--- the compiled sidecar runs against the runtime's glibc and answers"
+          run '
+            set -eu
+            export AGENTGLASS_PORT=4123 AGENTGLASS_DB=/tmp/smoke.db AGENTGLASS_SCAN_DISABLED=1
+            /app/agentglass/resources/agentglass-server &
+            pid=$!
+            # Poll rather than sleep: a fixed wait is either flaky or slow, and
+            # this also fails loudly if the sidecar dies instead of binding.
+            for _ in $(seq 1 40); do
+              if wget -qO- http://localhost:4123/health >/dev/null 2>&1; then
+                echo "sidecar healthy"; kill $pid; exit 0
+              fi
+              kill -0 $pid 2>/dev/null || { echo "sidecar exited before binding"; exit 1; }
+              sleep 0.5
+            done
+            echo "sidecar never answered /health"; kill $pid; exit 1
+          '
+
+      - name: Build the single-file bundle
+        run: |
+          flatpak build-bundle --arch=x86_64 .flatpak-out/repo agentglass-x86_64.flatpak "${APP_ID}" \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+
+      # Plain tar, not tar.gz: an archive-z2 OSTree repo is already compressed,
+      # and the artifact upload would only be re-deflating incompressible data.
+      - name: Hand the OSTree repo to the publish job
+        run: tar -cf repo.tar -C .flatpak-out repo
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agentglass-flatpak-x86_64
+          path: |
+            repo.tar
+            agentglass-x86_64.flatpak
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    # Never on a pull request. This job holds the write token, and `build` above
+    # has already run pull-request-authored code on the same commit.
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # force-push flatpak-repo, attach the bundle to a release
+      actions: write # ask pages.yml to redeploy once the repo has moved
+    steps:
+      - name: Install flatpak and ostree
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: agentglass-flatpak-x86_64
+
+      - name: Unpack the built repo
+        run: tar -xf repo.tar
+
+      - name: Restore the published repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if git clone --depth 1 --branch flatpak-repo \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" published; then
+            rm -rf published/.git
+            echo "Restored the existing published repo."
+          else
+            rm -rf published
+            mkdir -p published
+            echo "No flatpak-repo branch yet - starting a fresh repo."
+          fi
+
+          # git cannot represent an empty directory, so every OSTree scratch
+          # directory that was empty at publish time is missing from the clone.
+          # This is not cosmetic: without it the SECOND publish onto a restored
+          # repo dies with `Listing refs: opendir(refs/remotes): No such file or
+          # directory` -- the first update would be the one that broke.
+          if [ -d published/repo ]; then
+            mkdir -p published/repo/tmp/cache published/repo/state \
+                     published/repo/extensions published/repo/refs/heads \
+                     published/repo/refs/mirrors published/repo/refs/remotes
+            ostree --repo=published/repo fsck --quiet \
+              || echo "::warning::restored repo failed fsck; build-update-repo may repair it"
+          fi
+
+      - name: Merge this build into the published repo
+        run: |
+          set -eu
+          mkdir -p published/repo
+          # No-op against a restored repo; on the very first publish there is no
+          # branch to restore and build-commit-from cannot create one itself.
+          ostree --repo=published/repo init --mode=archive-z2
+
+          # The manifest sets no-debuginfo, because flatpak-builder's stripping
+          # destroys the bun sidecar's appended payload -- the note in the
+          # manifest has the detail. So this build produces no .Debug ref at all,
+          # and the loop below is a cleanup path for any an earlier build
+          # published: deleting the refs is what actually reclaims the space,
+          # since skipping only the new ones would keep the old objects alive
+          # against --prune forever. A no-op on every run after the first.
+          for ref in $(ostree --repo=published/repo refs | grep '\.Debug/' || true); do
+            ostree --repo=published/repo refs --delete "$ref"
+            echo "retired $ref"
+          done
+
+          # `case`, not `grep -v`: a grep that filters every line exits 1, and
+          # inside $(...) that yields an empty list rather than an error -- the
+          # build would silently not be published.
+          for ref in $(ostree --repo=repo refs); do
+            case "$ref" in
+              *.Debug/*) echo "skipped $ref (debuginfo is not published)"; continue ;;
+            esac
+            flatpak build-commit-from --src-repo=repo --no-update-summary \
+              published/repo "$ref"
+            echo "committed $ref"
+          done
+
+          # --generate-static-deltas is what makes `flatpak update` fetch a diff
+          # rather than the whole app. --prune-depth bounds how many old commits
+          # stay resolvable, and is the site-size control knob.
+          flatpak build-update-repo \
+            --title="agentglass" \
+            --generate-static-deltas \
+            --prune --prune-depth=3 \
+            published/repo
+
+      - name: Write the .flatpakrepo
+        env:
+          OWNER: ${{ github.repository_owner }}
+          NAME: ${{ github.event.repository.name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          # Derived, never hardcoded, so this whole pipeline behaves identically
+          # on a fork -- which is how it gets proven before it is proposed.
+          owner=$(echo "$OWNER" | tr 'A-Z' 'a-z')
+          url="https://${owner}.github.io/${NAME}/flatpak/repo/"
+
+          {
+            echo "[Flatpak Repo]"
+            echo "Title=agentglass"
+            echo "Url=${url}"
+            echo "Homepage=https://github.com/${REPOSITORY}"
+            echo "Comment=Every AI coding agent on your machine, on one screen"
+            echo "Description=Self-hosted Flatpak channel for agentglass. Unsigned: add it with --no-gpg-verify."
+          } > published/agentglass.flatpakrepo
+
+          echo "REPO_URL=${url}" >> "$GITHUB_ENV"
+
+      - name: Publish to the flatpak-repo branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cd published
+          git init -q -b flatpak-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Publish ${GITHUB_SHA}"
+          # Force-push a single orphan commit: OSTree keeps its own history, so
+          # git history here would only accumulate pruned objects.
+          git push -f \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            flatpak-repo
+          du -sh . | awk '{print "Published repo size: " $1 " (GitHub Pages caps at 1 GB)"}'
+
+      # pages.yml is what actually serves this, and it only rebuilds on a push to
+      # main. Without this the new version sits on the branch, unreachable, until
+      # somebody happens to land an unrelated commit.
+      - name: Ask Pages to redeploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run pages.yml --repo "${GITHUB_REPOSITORY}" --ref main \
+            || echo "::warning::could not trigger pages.yml; the repo will go live on the next deploy"
+          echo "Flatpak repo published to ${REPO_URL}"
+
+      - name: Attach the bundle to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" agentglass-x86_64.flatpak \
+            --clobber --repo "$GITHUB_REPOSITORY"

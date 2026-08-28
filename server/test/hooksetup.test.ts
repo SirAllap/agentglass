@@ -206,6 +206,49 @@ describe("applyHooks / hookStatus (on disk)", () => {
     expect(hooksDir()).not.toBeNull();
     expect(hookStatus().bundled).toBe(true);
   });
+
+  // The path hookCommand() writes goes into the HOST's ~/.claude/settings.json
+  // and is run by the HOST's Claude Code, so it has to mean something outside
+  // this process. Under Flatpak the bundled copy is at /app/…, which exists for
+  // the sidecar and for nobody else; the launcher stages hooks where both sides
+  // can see them and points this at it.
+  function withHooksEnv(value: string | undefined, fn: () => void) {
+    const prev = process.env.AGENTGLASS_HOOKS_DIR;
+    try {
+      if (value === undefined) delete process.env.AGENTGLASS_HOOKS_DIR;
+      else process.env.AGENTGLASS_HOOKS_DIR = value;
+      fn();
+    } finally {
+      if (prev === undefined) delete process.env.AGENTGLASS_HOOKS_DIR;
+      else process.env.AGENTGLASS_HOOKS_DIR = prev;
+    }
+  }
+
+  test("AGENTGLASS_HOOKS_DIR wins over the bundled location", () => {
+    const staged = mkdtempSync(join(tmpdir(), "ag-hooks-"));
+    writeFileSync(join(staged, "send_event.py"), "# staged\n");
+    try {
+      withHooksEnv(staged, () => expect(hooksDir()).toBe(staged));
+    } finally {
+      rmSync(staged, { recursive: true, force: true });
+    }
+  });
+
+  // Presence is proven by send_event.py, not by the variable being set. An
+  // override pointing somewhere the forwarder isn't must fall through rather
+  // than win — otherwise one bad export turns streaming off with no way to see
+  // why, which is the failure this whole mechanism exists to avoid.
+  test("an override without send_event.py falls through to the bundled hooks", () => {
+    const empty = mkdtempSync(join(tmpdir(), "ag-hooks-empty-"));
+    try {
+      withHooksEnv(empty, () => {
+        expect(hooksDir()).not.toBe(empty);
+        expect(hooksDir()).not.toBeNull();
+      });
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
 });
 
 // The strongest check: run the real Python installer against the same input and

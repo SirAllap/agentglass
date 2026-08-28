@@ -60,9 +60,18 @@ function settingsPath(): string {
  * and self-update.sh. Dev/checkout: the repo's own hooks/, relative to this
  * source file, with cwd as a last resort. Presence is proven by send_event.py,
  * the one file the install actually references.
+ *
+ * `AGENTGLASS_HOOKS_DIR` overrides all of it, for a packaging that cannot be
+ * read from the host. The path written by hookCommand() ends up in the HOST's
+ * ~/.claude/settings.json and is run by the HOST's Claude Code, so it has to
+ * mean something outside this process — and under Flatpak the resources dir is
+ * /app/…, which exists for the sidecar and for nobody else. The launcher stages
+ * hooks/ somewhere both sides can see and points this at it. Nothing sets it in
+ * an ordinary install, where the path beside the sidecar is already host-visible.
  */
 export function hooksDir(): string | null {
   const candidates = [
+    ...(process.env.AGENTGLASS_HOOKS_DIR ? [process.env.AGENTGLASS_HOOKS_DIR] : []),
     join(dirname(process.execPath), "hooks"),
     resolve(import.meta.dir, "../../hooks"),
     resolve(process.cwd(), "hooks"),

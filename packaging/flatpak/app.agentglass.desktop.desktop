@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=agentglass
+Comment=Every AI coding agent on your machine, on one screen
+Exec=agentglass %U
+Icon=app.agentglass.desktop
+Terminal=false
+Categories=Development;
+StartupWMClass=agentglass
+Keywords=agent;claude;codex;ai;coding;terminal;
