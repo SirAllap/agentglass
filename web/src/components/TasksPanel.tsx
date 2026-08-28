@@ -37,7 +37,7 @@ import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { LAYER } from "../lib/layers.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
-import { cardSkills, skillCommand, windowName, skillModes, namedForIt, shortName } from "../lib/cardSkills.ts";
+import { cardSkills, skillCommand, windowName, skillModes, namedForIt, shortName } from "../../../shared/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, stamp, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
@@ -3496,7 +3496,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   repos: GitRepoRef[]; here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   onAsk: (p: Pending) => void;
-  /** Only the skills that take a card — see lib/cardSkills.ts. */
+  /** Only the skills that take a card — see ../shared/cardSkills.ts. */
   skills: SkillInfo[];
   onNote: (text: string) => void;
   wide: boolean;

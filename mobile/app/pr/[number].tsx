@@ -155,6 +155,27 @@ export default function PrScreen(): React.ReactNode {
    *  merged in. Null until it answers, which is why the sheet says so rather
    *  than drawing an empty list that reads as "no options". */
   const [catalogue, setCatalogue] = useState<ReviewRecipe[] | null>(null);
+  /*
+   * The prompt a recipe would send, read back before it is sent.
+   *
+   * ── this does NOT change what the socket carries ─────────────────────────
+   * `cmd: "review"` still carries a number, a directory and a recipe ID, and
+   * the words are still built on the computer from its own catalogue — the
+   * property src/model/reviewMenu.ts describes as load-bearing, which it is: a
+   * socket reachable from the UI must not be a way to choose what an agent is
+   * told. This is a separate, read-only call to `/prs/review-prompt`, which
+   * writes nothing and starts nothing. It answers "what am I about to ask" and
+   * the answer is not editable here, deliberately — an editable preview would
+   * be that socket by another route, and whether the phone should be allowed
+   * to send words of its own is a decision about what this app is, not a
+   * detail of a preview.
+   */
+  const [preview, setPreview] = useState<
+    | { recipe: string; title: string; state: "asking" }
+    | { recipe: string; title: string; state: "read"; prompt: string; cwd: string }
+    | { recipe: string; title: string; state: "failed"; error: string }
+    | null
+  >(null);
   /* Opened straight away when the diff sent you here with comments queued —
      `review=1` on the route. Otherwise it is the second button below. */
   const [reviewing, setReviewing] = useState(review === "1");
@@ -233,6 +254,33 @@ export default function PrScreen(): React.ReactNode {
     [detail, catalogue],
   );
 
+  /** Ask the computer what it would say, without asking it to say it. A GET in
+   *  everything but method: `prepareReviewPrompt` builds the text and returns
+   *  it, and starts nothing. */
+  const look = useCallback(async (recipe: ReviewRecipe): Promise<void> => {
+    if (!host || !detail || !root) return;
+    setPreview({ recipe: recipe.id, title: recipe.title, state: "asking" });
+    const answer = await ask<{ ok: boolean; prompt?: string; cwd?: string; error?: string }>(
+      host, "/prs/review-prompt",
+      { method: "POST", body: { root, number: detail.number, recipe: recipe.id } },
+    );
+    if (!answer.ok) {
+      setPreview({ recipe: recipe.id, title: recipe.title, state: "failed", error: answer.error });
+      return;
+    }
+    if (!answer.value.ok || !answer.value.prompt) {
+      setPreview({
+        recipe: recipe.id, title: recipe.title, state: "failed",
+        error: answer.value.error ?? "The computer could not build that prompt.",
+      });
+      return;
+    }
+    setPreview({
+      recipe: recipe.id, title: recipe.title, state: "read",
+      prompt: answer.value.prompt, cwd: answer.value.cwd ?? "",
+    });
+  }, [host, detail, root]);
+
   /**
    * Leave the request and go to the terminal.
    *
@@ -250,6 +298,7 @@ export default function PrScreen(): React.ReactNode {
       recipe,
     });
     setHanding(false);
+    setPreview(null);
     router.push("/terminal");
   }, [detail, root, router]);
 
@@ -823,21 +872,64 @@ export default function PrScreen(): React.ReactNode {
               recipe.skill ? recipe.skill.trim().split(/\s/)[0] : "",
             ].filter(Boolean).join(" · ") || undefined}
             on={recipe.id === menu?.suggested}
-            onPress={() => hand(recipe.id)}
+            onPress={() => { void look(recipe); }}
           />
         ))}
         <View style={{ paddingTop: SPACE.md, gap: SPACE.xs }}>
           <Note>
             Opens a tmux window on the computer with the agent already running, and takes you to it.
           </Note>
-          {/* Said out loud because it is the one thing that is not visible from
-              here: the words that reach the agent are the computer's, chosen by
-              the name above. This phone sends a number and an id. */}
+          {/* Still true, and now checkable: the words are the computer's, and
+              the next screen shows you which words before anything runs. */}
           <Note>
             The phone sends the number and which question to ask. The prompt itself is written on
-            the computer.
+            the computer — you see it before it goes.
           </Note>
         </View>
+      </Sheet>
+
+      {/* What it would say, over the menu it was chosen from. A second sheet
+          rather than a replaced one, so Back lands on the list and not on the
+          pull request. */}
+      <Sheet open={!!preview} onClose={() => setPreview(null)} title={preview?.title ?? ""}>
+        {preview?.state === "asking" ? (
+          <Note>Building it on the computer…</Note>
+        ) : null}
+
+        {preview?.state === "failed" ? (
+          <View style={{ gap: SPACE.sm }}>
+            <Note tone="bad">{preview.error}</Note>
+            <Note>
+              Nothing was started. The window opens only when you press Send below, and there is
+              nothing to send until this reads.
+            </Note>
+          </View>
+        ) : null}
+
+        {preview?.state === "read" ? (
+          <View style={{ gap: SPACE.md }}>
+            <ScrollView style={{ maxHeight: 320 }}>
+              <Text style={{
+                color: C.text2, fontSize: T.small, fontFamily: MONO, lineHeight: 18,
+                backgroundColor: C.bg, padding: SPACE.md, borderRadius: RADIUS.md,
+              }}>{preview.prompt}</Text>
+            </ScrollView>
+            {preview.cwd ? (
+              <Text numberOfLines={1} ellipsizeMode="head" style={{
+                color: C.text4, fontSize: T.eyebrow, fontFamily: MONO,
+              }}>in {preview.cwd}</Text>
+            ) : null}
+            <Btn label="Send it" tone="primary" onPress={() => hand(preview.recipe)} />
+            {/* The one thing a preview cannot show, said rather than implied:
+                what travels is the id above it, and the computer builds these
+                words again for itself. So this is a faithful reading of what
+                will be asked, not a copy that gets sent. */}
+            <Note>
+              Read from the computer, which writes it again when the window opens. The phone sends
+              the pull request number and the name of the question — never these words.
+            </Note>
+          </View>
+        ) : null}
       </Sheet>
     </View>
   );

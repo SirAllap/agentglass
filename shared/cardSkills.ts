@@ -11,8 +11,16 @@
  * specs, another sweeps a report stream — and both say in their own description
  * that they take a card. Matching only the name would hide exactly the two you
  * would never think to look for.
+ *
+ * ── in shared/ because two products ask the same question ────────────────
+ * It began in `web/src/lib/`, when the desk was the only place a card could be
+ * handed over. The phone now offers the same menu, and a second copy of this
+ * would be a second answer to "which skills take a card" — the menus would
+ * agree on the day they were written and drift from there. The regex, the
+ * grouping and the invocation line are one thing, in one file, and both
+ * products import it.
  */
-import type { SkillInfo } from "../../../shared/types.ts";
+import type { SkillInfo } from "./types.ts";
 
 /** `cu` on its own is a word in too many places; as a hyphenated part of a
  *  skill's name it is unambiguous, and that is how the ones here spell it. */

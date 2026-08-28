@@ -14,6 +14,14 @@
  * answer gates does not get either. The controls are not drawn rather than
  * drawn and refused, which is the rule repos.tsx set.
  *
+ * ── the hand-off asks two things, and this is the second ─────────────────
+ * WHAT first, then WHERE. A card handed over used to carry one prompt — its id
+ * and its title — which is the right default and is not what you want most of
+ * the time: you have skills that take a card, and naming one is the difference
+ * between "here is a card" and "fix this card". They are matched rather than
+ * listed, in shared/cardSkills.ts, because a hand-kept list is wrong the first
+ * time somebody writes another one.
+ *
  * ── why the hand-off asks which checkout ─────────────────────────────────
  * A card is not a checkout. The desktop maps a ClickUp list to a local
  * repository with `rootForTask`, using where the panel is open as a hint —
@@ -28,12 +36,13 @@ import {
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import type { ProviderTask } from "../../../shared/providers.ts";
-import type { GitRepoRef } from "../../../shared/types.ts";
+import type { GitRepoRef, SkillInfo } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { mainCheckouts } from "../../src/model/prRows.ts";
+import { cardSkills, namedForIt, skillCommand, skillModes, windowName } from "../../../shared/cardSkills.ts";
 import { dueIn } from "../../src/lib/dates.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
@@ -48,13 +57,6 @@ function statusInk(color?: string): string {
   return color && color !== "#ffffff" ? color : C.text3;
 }
 
-/** A tmux window name that says which card it is and survives `tmux ls`.
- *  tmux treats a dot as a pane separator in target strings, so a window named
- *  with one cannot be selected by name later. */
-function windowName(card: ProviderTask): string {
-  const raw = (card.customId || card.id).toLowerCase();
-  return raw.replace(/[^a-z0-9-]/g, "").slice(0, 24) || "card";
-}
 
 export default function CardScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
@@ -70,6 +72,19 @@ export default function CardScreen(): React.ReactNode {
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [handing, setHanding] = useState(false);
+  /*
+   * The skills that take a card, and which one was picked.
+   *
+   * Null until `/skills` answers; an empty array is a real answer and means
+   * this machine has none that mention a card, which is worth saying rather
+   * than showing an empty list. `picked` null means the old behaviour — the
+   * card's id and title as the prompt — and it stays the first row, because it
+   * is the right thing to send when you have not decided what to do yet.
+   */
+  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<{ skill: SkillInfo; mode?: string } | null>(null);
+  const [find, setFind] = useState("");
   const [say, setSay] = useState("");
 
   const load = useCallback(async (): Promise<void> => {
@@ -200,25 +215,73 @@ export default function CardScreen(): React.ReactNode {
     await load();
   }, [host, card, load]);
 
-  /** Leave the window request and go to the terminal. The text is the card —
-   *  its id and its title — which is what the desktop's own row hand-off
-   *  sends, and the id is the HUMAN one because that is what every skill,
-   *  branch name and commit message here is written against. */
+  /* Asked once the card is on screen, not on opening the sheet: the list is a
+     hundred-odd entries on a real machine and filtering it is instant, but
+     fetching it while somebody watches a sheet appear is a sheet that appears
+     empty. A failure leaves it null and the sheet says so — the plain hand-off
+     does not depend on this and stays available either way. */
+  useEffect(() => {
+    if (!host || !card) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ skills?: SkillInfo[] }>(host, "/skills");
+      if (gone) return;
+      setSkills(answer.ok ? cardSkills(answer.value.skills ?? []) : null);
+    })();
+    return () => { gone = true; };
+  }, [host, card]);
+
+  /**
+   * Leave the window request and go to the terminal.
+   *
+   * The text is either the card — its id and its title, which is what the
+   * desktop's own row hand-off sends — or a skill invoked on it. The id is the
+   * HUMAN one in both cases, because that is what every skill, branch name and
+   * commit message here is written against, and handing over the internal id
+   * instead fails in the least useful way there is: the card exists and the
+   * tool cannot find it.
+   *
+   * `skillCommand` is shared with the desk rather than spelled again here. The
+   * shape of that line — `/name ID`, and a mode after it — is what the skills
+   * were written against and what their own descriptions quote.
+   */
   const hand = useCallback((repo: GitRepoRef): void => {
     if (!card) return;
     const label = card.customId || card.id;
+    const command = picked
+      ? `${skillCommand(picked.skill.name, card)}${picked.mode ? ` ${picked.mode}` : ""}`
+      : `${label} — ${card.title}`;
     requestHandoff({
       t: "tmux",
       cmd: "issue",
       cwd: repo.root,
       name: windowName(card),
-      prompt: `${label} — ${card.title}`,
+      prompt: command,
       agent: true,
       title: card.title,
     });
     setHanding(false);
+    setPicking(false);
     router.push("/terminal");
-  }, [card, router]);
+  }, [card, picked, router]);
+
+  /* The search, over name and description both — the same two fields the
+     matcher itself reads, so a skill found by its description is findable by
+     the same words here. */
+  const shownSkills = useMemo(() => {
+    const q = find.trim().toLowerCase();
+    if (!q) return skills ?? [];
+    return (skills ?? []).filter(
+      (s) => s.name.toLowerCase().includes(q) || (s.description ?? "").toLowerCase().includes(q),
+    );
+  }, [skills, find]);
+
+  /** The gears the picked skill advertises, if any. Read from its own
+   *  invocation line rather than from a list kept here — see cardSkills.ts. */
+  const pickedModes = useMemo(
+    () => (picked ? skillModes(picked.skill.argument_hint) : []),
+    [picked],
+  );
 
   const when = useMemo(() => (card ? dueIn(card.due, new Date()) : null), [card]);
   // A card is never moved to the status it is already in — the picker offers
@@ -386,9 +449,101 @@ export default function CardScreen(): React.ReactNode {
           paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
         }}>
-          <Btn label="✦ Hand to Claude" tone="primary" onPress={() => setHanding(true)} />
+          <Btn
+            label="✦ Hand to Claude"
+            tone="primary"
+            onPress={() => { setFind(""); setPicking(true); }}
+          />
         </View>
       ) : null}
+
+      {/* WHAT, before WHERE. The order is the point: the checkout is a detail of
+          running it and the instruction is the decision. */}
+      <Sheet open={picking} onClose={() => setPicking(false)} title="What should it do?">
+        <SheetRow
+          label="Just hand it the card"
+          sub={card ? `${card.customId || card.id} — ${card.title}` : undefined}
+          on={picked === null}
+          onPress={() => { setPicked(null); setPicking(false); setHanding(true); }}
+        />
+
+        {skills === null ? (
+          <View style={{ paddingTop: SPACE.md }}>
+            <Note>Reading your skills from the computer…</Note>
+          </View>
+        ) : null}
+
+        {skills?.length === 0 ? (
+          <View style={{ paddingTop: SPACE.md }}>
+            <Note>
+              No skill on that computer mentions a card. The row above still works, and so does
+              writing the instruction yourself once the window is open.
+            </Note>
+          </View>
+        ) : null}
+
+        {skills?.length ? (
+          <>
+            <View style={{ paddingTop: SPACE.md, paddingBottom: SPACE.sm }}>
+              <TextInput
+                value={find}
+                onChangeText={setFind}
+                placeholder={`Search ${skills.length} skills`}
+                placeholderTextColor={C.text4}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={{
+                  minHeight: TAP, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.md,
+                  backgroundColor: C.bg, color: C.text, paddingHorizontal: SPACE.md, fontSize: T.body,
+                }}
+              />
+            </View>
+            {shownSkills.map((skill) => (
+              <SheetRow
+                key={skill.name}
+                label={`/${skill.name}`}
+                /* The description, because a name is not enough to choose by —
+                   and the group, because "named for a card" and "mentions one"
+                   are different levels of confidence and the menu should not
+                   pretend otherwise. */
+                sub={[namedForIt(skill) ? "takes a card" : "mentions cards", skill.description]
+                  .filter(Boolean).join(" · ")}
+                on={picked?.skill.name === skill.name}
+                onPress={() => {
+                  const modes = skillModes(skill.argument_hint);
+                  setPicked({ skill });
+                  // A skill with gears asks which one; one without goes
+                  // straight on to the checkout.
+                  if (!modes.length) { setPicking(false); setHanding(true); }
+                }}
+              />
+            ))}
+            {shownSkills.length === 0 ? (
+              <View style={{ paddingTop: SPACE.md }}><Note>Nothing matches that.</Note></View>
+            ) : null}
+          </>
+        ) : null}
+
+        {/* The gears a skill advertises, from its own invocation line. Shown
+            only once one is picked, because they belong to it. */}
+        {pickedModes.length ? (
+          <View style={{ paddingTop: SPACE.lg, gap: SPACE.xs }}>
+            <Label text={`How should /${picked!.skill.name} run?`} />
+            {["", ...pickedModes].map((mode) => (
+              <SheetRow
+                key={mode || "default"}
+                label={mode || "as it comes"}
+                on={(picked!.mode ?? "") === mode}
+                onPress={() => {
+                  setPicked({ skill: picked!.skill, mode: mode || undefined });
+                  setPicking(false);
+                  setHanding(true);
+                }}
+              />
+            ))}
+          </View>
+        ) : null}
+      </Sheet>
 
       <Sheet open={handing} onClose={() => setHanding(false)} title="Which checkout?">
         {repos.map((repo) => (
@@ -404,8 +559,13 @@ export default function CardScreen(): React.ReactNode {
             {/* Said out loud because a wrong answer here is expensive and looks
                 right: an agent opened in the wrong project is indistinguishable
                 from one opened in the right one until it edits something. */}
-            A card is not a checkout, so this has to be asked. The window opens in the one you pick,
-            with the card&apos;s id and title as the prompt.
+            A card is not a checkout, so this has to be asked. The window opens in the one you
+            pick, running{" "}
+            <Text style={{ fontFamily: MONO, color: C.text2 }}>
+              {card ? (picked
+                ? `${skillCommand(picked.skill.name, card)}${picked.mode ? ` ${picked.mode}` : ""}`
+                : `${card.customId || card.id} — ${card.title}`) : ""}
+            </Text>.
           </Note>
         </View>
       </Sheet>
