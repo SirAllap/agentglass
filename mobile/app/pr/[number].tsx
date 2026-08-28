@@ -161,6 +161,27 @@ export default function PrScreen(): React.ReactNode {
   const [verdict, setVerdict] = useState<"approve" | "request_changes" | "comment" | null>(null);
   const [summary, setSummary] = useState("");
   const [sent, setSent] = useState<string | null>(null);
+  /*
+   * The review GitHub is already holding for you.
+   *
+   * A review can be STARTED anywhere — on github.com, at the desk, in an
+   * editor — and until it is submitted its line comments sit on GitHub,
+   * pending, visible to nobody. The phone could not see them, so the sheet
+   * said "no line comments" while three were queued, and sending a verdict
+   * from here submitted them along with it without ever having shown them.
+   *
+   * Null means "not asked yet", which is not the same as an empty list, and
+   * the sheet says which of the two it is.
+   */
+  const [pending, setPending] = useState<{ path: string; line: number | null; body: string }[] | null>(null);
+
+  /* A comment on the conversation, which is not a review and not a reply. It
+     is the only thing you can say on your OWN pull request — GitHub refuses a
+     review there, so the Review button is off and this is what is left. */
+  const [commenting, setCommenting] = useState(false);
+  const [comment, setComment] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [commentErr, setCommentErr] = useState<string | null>(null);
 
   /* Merging. `method` is null until the detail lands, because the repository is
      what decides which three are on offer and opening on a guess is the bug
@@ -235,6 +256,26 @@ export default function PrScreen(): React.ReactNode {
   const key = `${root}#${number}`;
   const notes = draft(key);
 
+  /* Asked when the sheet opens rather than beside the detail: it is one more
+     round trip to GitHub for a question nobody has while they are reading the
+     files, and the answer is only ever looked at here. Re-asked on every
+     opening, because a review can be started elsewhere between two of them. */
+  useEffect(() => {
+    if (!host || !reviewing || !root || !number) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ ok: boolean; comments?: { path: string; line: number | null; body: string }[] }>(
+        host, "/prs/pending-review", { method: "POST", body: { root, number: Number(number) } },
+      );
+      if (gone) return;
+      // A failure leaves it null — "could not ask" reads as "not asked", which
+      // is honest. Claiming zero would be the app inventing an answer about
+      // somebody else's queued comments.
+      setPending(answer.ok && answer.value.ok ? answer.value.comments ?? [] : null);
+    })();
+    return () => { gone = true; };
+  }, [host, reviewing, root, number]);
+
   /**
    * The verdict and every queued comment, in ONE call.
    *
@@ -258,8 +299,30 @@ export default function PrScreen(): React.ReactNode {
     setSummary("");
     setReviewing(false);
     setSent(null);
+    // Submitting takes the pending comments with it — that is what makes them
+    // pending — so what is held next time is a fresh question.
+    setPending(null);
     void load();
   }, [host, detail, root, summary, notes, key, load]);
+
+  /** One comment on the conversation. Posted on its own, because that is what
+   *  it is: not a verdict, not a remark about a line, and nothing GitHub
+   *  batches. */
+  const saySomething = useCallback(async (): Promise<void> => {
+    if (!host || !detail || !root || !comment.trim()) return;
+    setCommentBusy(true);
+    setCommentErr(null);
+    const answer = await ask<{ ok: boolean; error?: string }>(host, "/prs/comment", {
+      method: "POST",
+      body: { root, number: detail.number, body: comment.trim() },
+    });
+    setCommentBusy(false);
+    if (!answer.ok) { setCommentErr(answer.error); return; }
+    if (!answer.value.ok) { setCommentErr(answer.value.error ?? "GitHub refused that."); return; }
+    setComment("");
+    setCommenting(false);
+    void load();
+  }, [host, detail, root, comment, load]);
 
   /* Opened on what the repository would have checked, once — not on every
      render, or a tap on "Rebase" would be undone by the next repaint. */
@@ -461,16 +524,41 @@ export default function PrScreen(): React.ReactNode {
               </Card>
             </View>
 
-            {openThreads ? (
+            {(detail.threads ?? []).length ? (
               <View style={{ gap: SPACE.sm }}>
-                <Label text={`Open threads · ${openThreads}`} />
+                <Label text={`Threads · ${openThreads} open`} />
                 <Card>
-                  <Note>
-                    {openThreads === 1 ? "One conversation is" : `${openThreads} conversations are`}
-                    {" "}still unresolved. Reading them is on GitHub for now.
-                  </Note>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => router.push({
+                      pathname: "/pr/threads",
+                      params: { number: String(number), root: root ?? "" },
+                    })}
+                    style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, minHeight: TAP }}
+                  >
+                    <Text style={{ color: C.text2, fontSize: T.body, flex: 1 }}>
+                      {openThreads === 0
+                        ? "Every conversation is resolved"
+                        : openThreads === 1
+                          ? "One conversation is waiting on somebody"
+                          : `${openThreads} conversations are waiting on somebody`}
+                    </Text>
+                    <ChevronIcon color={C.text4} size={17} />
+                  </Pressable>
                 </Card>
               </View>
+            ) : null}
+
+            {/* Not in the pinned bar. The bar holds the three things you open a
+                pull request on a phone to DO — hand it over, review it, merge
+                it — and a fourth button there would be a fourth button in the
+                way of those. This is the thing you do on your own pull
+                request, where the other three are off. */}
+            {mayWrite ? (
+              <Btn
+                label="Comment on it"
+                onPress={() => { setCommentErr(null); setCommenting(true); }}
+              />
             ) : null}
 
             <Btn label="Open on GitHub" onPress={() => { void Linking.openURL(detail.url); }} />
@@ -526,6 +614,30 @@ export default function PrScreen(): React.ReactNode {
       ) : null}
 
       <Sheet open={reviewing} onClose={() => setReviewing(false)} title="Send your review">
+        {/* What GitHub is already holding, first — because it is the half you
+            did not write on this phone and would otherwise submit unseen. */}
+        {pending === null ? (
+          <View style={{ paddingBottom: SPACE.md }}>
+            <Note>Asking GitHub whether a review is already started…</Note>
+          </View>
+        ) : pending.length ? (
+          <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
+            <Label text={`${pending.length} already on GitHub`} />
+            {pending.map((c, i) => (
+              <View key={`${c.path}:${c.line}:${i}`} style={{ paddingVertical: SPACE.xs }}>
+                <Text numberOfLines={2} style={{ color: C.text2, fontSize: T.small }}>{c.body}</Text>
+                <Text numberOfLines={1} style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
+                  {c.path}{c.line === null ? "" : `:${c.line}`}
+                </Text>
+              </View>
+            ))}
+            <Note>
+              Started somewhere else and never sent. Whichever verdict you press below submits
+              these too.
+            </Note>
+          </View>
+        ) : null}
+
         {notes.length ? (
           <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
             <Label text={`${notes.length} ${notes.length === 1 ? "comment" : "comments"} queued`} />
@@ -540,7 +652,11 @@ export default function PrScreen(): React.ReactNode {
           </View>
         ) : (
           <View style={{ paddingBottom: SPACE.md }}>
-            <Note>No line comments. Open the files above to write one.</Note>
+            <Note>
+              {pending?.length
+                ? "Nothing written on this phone. Open the files above to add to it."
+                : "No line comments. Open the files above to write one."}
+            </Note>
           </View>
         )}
 
@@ -577,6 +693,35 @@ export default function PrScreen(): React.ReactNode {
                 being relied on. */}
             The verdict and every comment go in one call, so a dropped connection cannot leave half
             a review on GitHub.
+          </Note>
+        </View>
+      </Sheet>
+
+      <Sheet open={commenting} onClose={() => setCommenting(false)} title={`Comment on #${number}`}>
+        <TextInput
+          value={comment}
+          onChangeText={setComment}
+          placeholder="What do you want to say?"
+          placeholderTextColor={C.text4}
+          multiline
+          style={{
+            minHeight: 96, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.md,
+            backgroundColor: C.bg, color: C.text, padding: SPACE.md, fontSize: T.body,
+          }}
+        />
+        <View style={{ paddingTop: SPACE.md, gap: SPACE.sm }}>
+          <Btn
+            label="Post it"
+            tone="primary"
+            busy={commentBusy}
+            disabled={!comment.trim() || commentBusy}
+            onPress={() => { void saySomething(); }}
+          />
+          {commentErr ? <Note tone="bad">{commentErr}</Note> : null}
+          {/* The distinction, said once and where it is being made. */}
+          <Note>
+            Goes on the conversation, on its own. A remark about a LINE belongs in the diff, where
+            it waits for a verdict and goes with it.
           </Note>
         </View>
       </Sheet>

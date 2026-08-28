@@ -16,6 +16,15 @@
  * It is also the shape GitHub actually wants: a review IS a verdict plus its
  * comments, and posting them one at a time makes a thread per remark.
  *
+ * ── the lines the hunk cut off ───────────────────────────────────────────
+ * A hunk shows three lines of context and the question you have is usually
+ * about the twentieth. At a desk that is answered by the editor next to the
+ * browser; here there was no editor, so the answer was "open GitHub". The
+ * expanders between hunks fetch the real file from `/prs/file-slice`, one
+ * screen at a time. Those lines are context and cannot be commented on —
+ * GitHub only accepts a comment on a line the diff touches, and drawing them
+ * as pressable would be offering something that fails on send.
+ *
  * ── the whole diff arrives as one string ─────────────────────────────────
  * `/prs/diff` answers with the output of `gh pr diff`. Parsing it is
  * src/model/diffLines.ts, which is where the line-number arithmetic and its
@@ -34,6 +43,7 @@ import { usePaletteTick } from "../../src/state/use-palette.ts";
 import {
   commentableLine, fileLabel, parseDiff, type DiffFile, type DiffLine,
 } from "../../src/model/diffLines.ts";
+import { gapLabel, gapsIn, nextSlice, type Gap } from "../../src/model/expand.ts";
 import { draftCount, takeDraft, type LineNote } from "../../src/model/reviewDraft.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
@@ -48,6 +58,51 @@ function lineFace(kind: DiffLine["kind"]): { bg: string; mark: string; ink: stri
   if (kind === "add") return { bg: "rgba(63,185,80,0.14)", mark: "+", ink: C.success };
   if (kind === "del") return { bg: "rgba(248,81,73,0.14)", mark: "−", ink: C.error };
   return { bg: "transparent", mark: " ", ink: C.text4 };
+}
+
+/** The lines fetched into a gap, drawn as context — no marker, no tint, and
+ *  deliberately not pressable: GitHub takes a comment only on a line the diff
+ *  touches, so a row that invited one here would fail on send. */
+function Context({ from, lines }: { from: number; lines: string[] }): React.ReactNode {
+  return (
+    <>
+      {lines.map((line, i) => (
+        <View key={from + i} style={{ flexDirection: "row", minHeight: 22 }}>
+          <Text style={{
+            width: 38, textAlign: "right", paddingRight: SPACE.sm,
+            color: C.text4, fontSize: 10.5, fontFamily: MONO, lineHeight: 20,
+          }}>{from + i}</Text>
+          <Text style={{ width: 10, fontSize: 10.5, fontFamily: MONO, lineHeight: 20 }}> </Text>
+          <Text style={{
+            flex: 1, color: C.text3, fontSize: 10.5, fontFamily: MONO,
+            lineHeight: 20, paddingRight: SPACE.sm,
+          }}>{line || " "}</Text>
+        </View>
+      ))}
+    </>
+  );
+}
+
+/** The bar that offers more, in the diff's own grey. Reads as part of the
+ *  file rather than as a control laid over it, which is what it is. */
+function Expander({ label, busy, onPress }: {
+  label: string; busy: boolean; onPress: () => void;
+}): React.ReactNode {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      disabled={busy}
+      style={{
+        backgroundColor: C.bg3, minHeight: TAP, justifyContent: "center",
+        paddingHorizontal: SPACE.md, borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.border,
+      }}
+    >
+      <Text style={{ color: busy ? C.text4 : C.primary, fontSize: T.eyebrow, fontFamily: MONO }}>
+        {busy ? "…" : `⤢  ${label}`}
+      </Text>
+    </Pressable>
+  );
 }
 
 export default function DiffScreen(): React.ReactNode {
@@ -101,6 +156,72 @@ export default function DiffScreen(): React.ReactNode {
 
   const file: DiffFile | undefined = files[at];
 
+  /*
+   * The context fetched around this file's hunks, one entry per gap.
+   *
+   * Keyed by file path and gap, so moving between files does not carry one
+   * file's expansion onto another's line numbers — the fastest way to show
+   * somebody the wrong code. Each gap grows in ONE direction and stays a single
+   * contiguous run: the gap above the first hunk grows UPWARD from its bottom,
+   * and every other gap grows DOWNWARD from its top. Both start at the edge
+   * nearest the code that was being read, which is what the question is
+   * usually about.
+   */
+  const [shown, setShown] = useState<Record<string, { from: number; to: number; lines: string[] }>>({});
+  const [fetching, setFetching] = useState<string | null>(null);
+  const [slipped, setSlipped] = useState<{ key: string; text: string } | null>(null);
+
+  const gaps = useMemo(() => (file ? gapsIn(file) : []), [file]);
+
+  /** Which way a gap grows. Stated once, because the renderer and the fetcher
+   *  must agree — a gap drawn as growing up and fetched downward would append
+   *  lines to the wrong end of what is on screen. */
+  const dirOf = (gap: Gap): "up" | "down" => (gap.before === 0 ? "up" : "down");
+
+  const expand = useCallback(async (gap: Gap): Promise<void> => {
+    if (!host || !file || !number || !root) return;
+    const key = `${file.path}#${gap.before}`;
+    const have = shown[key];
+    const dir = dirOf(gap);
+    const edge = have ? (dir === "up" ? have.from : have.to) : null;
+    const want = nextSlice(gap, dir, edge);
+    if (!want) return;
+
+    setFetching(key);
+    setSlipped(null);
+    const query = new URLSearchParams({
+      root: String(root), number: String(number), path: file.path,
+      // RIGHT: the file as this pull request leaves it, which is the side the
+      // line numbers on screen belong to.
+      side: "RIGHT", from: String(want.from), to: String(want.to),
+    }).toString();
+    const answer = await ask<{ ok: boolean; lines?: string[]; binary?: boolean; error?: string }>(
+      host, `/prs/file-slice?${query}`,
+    );
+    setFetching(null);
+    if (!answer.ok) { setSlipped({ key, text: answer.error }); return; }
+    if (!answer.value.ok) { setSlipped({ key, text: answer.value.error || "Those lines could not be read." }); return; }
+    if (answer.value.binary) { setSlipped({ key, text: "That file is binary." }); return; }
+    const got = answer.value.lines ?? [];
+    /* The server clamps to the end of the file, so the tail gap can answer with
+       fewer lines than were asked for — or none, which is how "that was the
+       end" arrives. Trusting `want.to` here would draw blank numbered rows past
+       the end of the file. */
+    if (!got.length) { setSlipped({ key, text: "That is the end of the file." }); return; }
+    setShown((was) => {
+      const before = was[key];
+      if (!before) return { ...was, [key]: { from: want.from, to: want.from + got.length - 1, lines: got } };
+      return dir === "up"
+        ? { ...was, [key]: { from: want.from, to: before.to, lines: [...got, ...before.lines] } }
+        : { ...was, [key]: { from: before.from, to: want.from + got.length - 1, lines: [...before.lines, ...got] } };
+    });
+  }, [host, file, number, root, shown]);
+
+  /* Everything fetched belongs to the file it was fetched from. Kept as a
+     wholesale clear rather than a per-file map trim: it is one request to get
+     it back, and a stale entry here is wrong code under a right line number. */
+  useEffect(() => { setShown({}); setSlipped(null); }, [file?.path]);
+
   const add = useCallback((): void => {
     if (!writing || !writing.body.trim()) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -112,6 +233,37 @@ export default function DiffScreen(): React.ReactNode {
     setQueued(takeDraft(key, (was) => [...was.filter((n) => !(n.path === note.path && n.line === note.line)), note]).length);
     setWriting(null);
   }, [writing, file, key]);
+
+  /** One gap: what has already been fetched into it, and the offer to fetch
+   *  more. Nothing at all when the file has no such gap, which is the ordinary
+   *  case for two hunks that touch. */
+  const gapBefore = (before: number): React.ReactNode => {
+    const gap = gaps.find((g) => g.before === before);
+    if (!gap || !file) return null;
+    const key = `${file.path}#${before}`;
+    const have = shown[key];
+    const dir = dirOf(gap);
+    const more = nextSlice(gap, dir, have ? (dir === "up" ? have.from : have.to) : null);
+    const label = gapLabel(gap, more);
+    const failed = slipped?.key === key ? slipped.text : null;
+    // Up-growing gaps put the offer ABOVE what they have already shown, so the
+    // control stays at the edge the next lines will appear at.
+    const bar = label ? (
+      <Expander label={label} busy={fetching === key} onPress={() => { void expand(gap); }} />
+    ) : null;
+    return (
+      <>
+        {dir === "up" ? bar : null}
+        {have ? <Context from={have.from} lines={have.lines} /> : null}
+        {dir === "down" ? bar : null}
+        {failed ? (
+          <Text style={{
+            color: C.text4, fontSize: T.eyebrow, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+          }}>{failed}</Text>
+        ) : null}
+      </>
+    );
+  };
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }} behavior="padding">
@@ -161,6 +313,7 @@ export default function DiffScreen(): React.ReactNode {
 
         {file?.hunks.map((hunk, h) => (
           <View key={`${hunk.header}-${h}`}>
+            {gapBefore(h)}
             {/* The header verbatim, including gh's trailing context — usually
                 the enclosing function, which is the most useful thing on
                 screen for saying where you are. */}
@@ -239,6 +392,11 @@ export default function DiffScreen(): React.ReactNode {
             })}
           </View>
         ))}
+
+        {/* The tail of the file, below the last hunk. Rendered outside the map
+            because it belongs to no hunk — `gapsIn` numbers it `hunks.length`
+            for exactly this. */}
+        {file && !file.binary ? gapBefore(file.hunks.length) : null}
 
         {file && !file.binary && file.hunks.length === 0 ? (
           <View style={{ padding: SPACE.lg }}>

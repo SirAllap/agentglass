@@ -83,6 +83,10 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // The job list, which is a `read` route — so unlike every other write on the
   // detail screens, this one has to hold under the default pairing scope.
   { path: "/pr/checks?number=0&root=%2Ftmp", name: "PR checks", expect: /Cannot read them|could not be read|out of scope|No jobs|not a git repository/i },
+  // Threads. Like the checks list it reads, so it must hold under the default
+  // pairing scope — the writes on it (reply, resolve, apply) are what needs
+  // `full`, and each is gated on its own.
+  { path: "/pr/threads?number=0&root=%2Ftmp", name: "PR threads", expect: /Cannot read them|could not be read|out of scope|not a git repository|commented on a line/i },
   // Walked at the workspace root rather than a nonsense one: this is a `read`
   // screen whose whole job is to LIST, and an empty listing would pass a check
   // that a broken one also passes. `bin` is in every checkout this repo has.
