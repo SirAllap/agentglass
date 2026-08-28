@@ -74,7 +74,10 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // which is the point: the failure this catches is the screen not mounting.
   { path: "/issues", name: "Issues", expect: /Mine|Nothing open|Cannot ask GitHub/i },
   { path: "/repos", name: "Repos", expect: /changed|Nothing changed/i },
-  { path: "/tasks", name: "Cards", expect: /hiding done|Nothing here|Cannot read the board/i },
+  /* Four things it may honestly say, and the third is the one this machine
+     shows: no tracker is connected here, so there is no board rather than an
+     empty one. The distinction is the point of the state existing. */
+  { path: "/tasks", name: "Cards", expect: /hiding done|Nothing here|No board here|Cannot read the board/i },
   // Both details walked with ids that exist nowhere, for the same reason as
   // the pull request's: what is asserted is that the screen mounts and says it
   // could not read it, rather than rendering a blank.

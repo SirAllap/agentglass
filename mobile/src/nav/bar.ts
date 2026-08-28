@@ -70,6 +70,38 @@ export const BAR: Destination[] = [
 ];
 
 /**
+ * The destinations the Inbox offers, given what this machine tracks work in.
+ *
+ * `BAR` is the claim about what this app is for and stays whole — it is the
+ * list, the test's subject, and the thing `index.tsx` draws from. This is the
+ * one question laid over it: a machine that tracks work NOWHERE has no cards,
+ * and a row that opens a screen which can only say "nothing is connected" is a
+ * row that costs a tap to learn nothing.
+ *
+ * ── why this removes rather than replaces ────────────────────────────────
+ * There is nothing to replace it with. When these five were a bottom bar the
+ * count had to stay odd or the star was not centred, and losing one meant
+ * promoting another; that bar is retired (src/nav/TabBar.tsx) and the Inbox
+ * draws a LIST, which has no such arithmetic. Source control was added to the
+ * list the moment the slot stopped existing, so the destination that would
+ * have been promoted is already here.
+ *
+ * ── unknown draws it ─────────────────────────────────────────────────────
+ * `null` is not "no". The same choice `visibleTaskSources` makes at the desk,
+ * and for the same reason: a spare row is recoverable by ignoring it, and a
+ * row that is missing because an answer never arrived is not recoverable at
+ * all from the device looking at the screen.
+ *
+ * ── a broken provider keeps its row ──────────────────────────────────────
+ * Decided in model/taskProviders.ts, which counts `error` as set up. "ClickUp
+ * refused this token" is not "you do not use ClickUp", and the row is the only
+ * surface that was going to say so.
+ */
+export function taskDestinations(all: Destination[], tracksWork: boolean | null): Destination[] {
+  return tracksWork === false ? all.filter((d) => d.route !== "tasks") : all;
+}
+
+/**
  * The routes that are still routes and are no longer tabs.
  *
  * Every one of them is a whole screen, mounted in the same navigator as the

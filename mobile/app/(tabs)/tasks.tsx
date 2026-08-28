@@ -21,6 +21,7 @@ import type { ProviderTask } from "../../../shared/providers.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow, groupEdge } from "../../src/ui.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
@@ -111,6 +112,10 @@ export default function TasksScreen(): React.ReactNode {
   const [pulling, setPulling] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const [openOnly, setOpenOnly] = useState(true);
+  /* Whether this machine tracks work anywhere. The Inbox uses the same answer
+     to decide whether to offer this screen at all; here it decides which of
+     three things an empty list means. */
+  const tracking = useTracksWork(host);
 
   useEffect(() => {
     if (!host) return;
@@ -211,9 +216,24 @@ export default function TasksScreen(): React.ReactNode {
         ListEmptyComponent={
           tasks === null ? null : (
             <Card>
-              <Label text={error ? "Cannot read the board" : "Nothing here"} />
+              {/*
+                Three states, where there were two.
+
+                "No board is connected" used to be drawn as "this view has no
+                cards that are still open", which asserts two things that are
+                both false on a machine with no tracker: that there is a board,
+                and that it is empty. Somebody reading it would go looking for
+                a filter.
+              */}
+              <Label
+                text={error ? "Cannot read the board" : tracking === false ? "No board here" : "Nothing here"}
+              />
               <Note tone={error ? "bad" : "quiet"}>
-                {error ?? "This view has no cards that are still open. The switch above shows the rest."}
+                {error
+                  ?? (tracking === false
+                    ? "This computer is not connected to a task tracker, so there are no cards to show. "
+                      + "It is connected at the computer, in Settings, not from here."
+                    : "This view has no cards that are still open. The switch above shows the rest.")}
               </Note>
             </Card>
           )
