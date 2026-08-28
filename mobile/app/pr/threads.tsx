@@ -42,41 +42,19 @@ import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { since } from "../../src/lib/dates.ts";
+import { hunkTail, ordered, replyAnchor, whereOf } from "../../src/model/threads.ts";
 import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
-
-/** Threads worth showing first: unresolved before resolved, and within each,
- *  the file order the detail already sorted them into. Outdated ones sink —
- *  they are about code that no longer exists and are usually safe to skip,
- *  which is GitHub's own word for them. */
-function ordered(threads: PrThread[]): PrThread[] {
-  const rank = (t: PrThread): number => (t.isResolved ? 2 : t.isOutdated ? 1 : 0);
-  return [...threads].map((t, at) => ({ t, at }))
-    .sort((a, b) => rank(a.t) - rank(b.t) || a.at - b.at)
-    .map(({ t }) => t);
-}
-
-/** Where a thread is, in the shortest form that still identifies it. */
-function whereOf(thread: PrThread): string {
-  const line = thread.line ?? thread.originalLine;
-  const at = thread.startLine && line && thread.startLine !== line
-    ? `${thread.startLine}-${line}`
-    : line ?? "";
-  return at ? `${thread.path}:${at}` : thread.path;
-}
 
 /** The diff hunk GitHub kept with the comment, trimmed to what fits.
  *  Kept because a reply written without seeing the code it is about is a reply
  *  about the wrong thing — and on an outdated thread this is the ONLY copy of
  *  those lines left anywhere in the app. */
 function Hunk({ text }: { text: string }): React.ReactNode {
-  const lines = text.split("\n").filter((l) => l.length);
-  // The tail, not the head: the last line of a hunk is the one the comment is
-  // anchored to, and the head is context leading up to it.
-  const shown = lines.slice(-8);
+  const { lines: shown, clipped } = hunkTail(text);
   return (
     <View style={{ backgroundColor: C.bg, borderRadius: RADIUS.sm, paddingVertical: SPACE.xs }}>
-      {lines.length > shown.length ? (
+      {clipped ? (
         <Text style={{ color: C.text4, fontSize: 10, fontFamily: MONO, paddingHorizontal: SPACE.sm }}>⋯</Text>
       ) : null}
       {shown.map((line, i) => {
@@ -170,8 +148,8 @@ export default function ThreadsScreen(): React.ReactNode {
      * interchangeable, which the shared type says out loud. Without a
      * databaseId there is nothing to reply to, so the box is not offered.
      */
-    const anchor = thread.comments.find((c) => typeof c.databaseId === "number")?.databaseId;
-    if (typeof anchor !== "number") {
+    const anchor = replyAnchor(thread);
+    if (anchor === null) {
       setSaid({ id: thread.id, bad: true, text: "That thread carries no id to reply to." });
       return;
     }
@@ -242,7 +220,7 @@ export default function ThreadsScreen(): React.ReactNode {
             .flatMap((c) => suggestionsIn(c.body))
             .at(0);
           const canApply = mayWrite && !!suggestion && !!range && !thread.isResolved;
-          const canReply = mayWrite && thread.comments.some((c) => typeof c.databaseId === "number");
+          const canReply = mayWrite && replyAnchor(thread) !== null;
           const note = said?.id === thread.id ? said : null;
           const working = busy === thread.id;
 
