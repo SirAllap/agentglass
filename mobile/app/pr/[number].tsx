@@ -155,12 +155,56 @@ export default function PrScreen(): React.ReactNode {
    *  merged in. Null until it answers, which is why the sheet says so rather
    *  than drawing an empty list that reads as "no options". */
   const [catalogue, setCatalogue] = useState<ReviewRecipe[] | null>(null);
+  /*
+   * The prompt a recipe would send, read back before it is sent.
+   *
+   * ── this does NOT change what the socket carries ─────────────────────────
+   * `cmd: "review"` still carries a number, a directory and a recipe ID, and
+   * the words are still built on the computer from its own catalogue — the
+   * property src/model/reviewMenu.ts describes as load-bearing, which it is: a
+   * socket reachable from the UI must not be a way to choose what an agent is
+   * told. This is a separate, read-only call to `/prs/review-prompt`, which
+   * writes nothing and starts nothing. It answers "what am I about to ask" and
+   * the answer is not editable here, deliberately — an editable preview would
+   * be that socket by another route, and whether the phone should be allowed
+   * to send words of its own is a decision about what this app is, not a
+   * detail of a preview.
+   */
+  const [preview, setPreview] = useState<
+    | { recipe: string; title: string; state: "asking" }
+    | { recipe: string; title: string; state: "read"; prompt: string; cwd: string }
+    | { recipe: string; title: string; state: "failed"; error: string }
+    | null
+  >(null);
   /* Opened straight away when the diff sent you here with comments queued —
      `review=1` on the route. Otherwise it is the second button below. */
   const [reviewing, setReviewing] = useState(review === "1");
   const [verdict, setVerdict] = useState<"approve" | "request_changes" | "comment" | null>(null);
   const [summary, setSummary] = useState("");
   const [sent, setSent] = useState<string | null>(null);
+  /*
+   * The review GitHub is already holding for you.
+   *
+   * A review can be STARTED anywhere — on github.com, at the desk, in an
+   * editor — and until it is submitted its line comments sit on GitHub,
+   * pending, visible to nobody. The phone could not see them, so the sheet
+   * said "no line comments" while three were queued, and sending a verdict
+   * from here submitted them along with it without ever having shown them.
+   *
+   * Null means "not asked yet", which is not the same as an empty list, and
+   * the sheet says which of the two it is.
+   */
+  const [pending, setPending] = useState<
+    { path: string; line: number | null; body: string }[] | "asking" | "unknown"
+  >("unknown");
+
+  /* A comment on the conversation, which is not a review and not a reply. It
+     is the only thing you can say on your OWN pull request — GitHub refuses a
+     review there, so the Review button is off and this is what is left. */
+  const [commenting, setCommenting] = useState(false);
+  const [comment, setComment] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [commentErr, setCommentErr] = useState<string | null>(null);
 
   /* Merging. `method` is null until the detail lands, because the repository is
      what decides which three are on offer and opening on a guess is the bug
@@ -212,6 +256,38 @@ export default function PrScreen(): React.ReactNode {
     [detail, catalogue],
   );
 
+  /** Ask the computer what it would say, without asking it to say it. A GET in
+   *  everything but method: `prepareReviewPrompt` builds the text and returns
+   *  it, and starts nothing. */
+  const look = useCallback(async (recipe: ReviewRecipe): Promise<void> => {
+    if (!host || !detail || !root) return;
+    /* The menu closes as this opens. `Sheet` is a react-native `Modal`, and two
+       visible at once is not a layout choice — presenting the second over the
+       first is unreliable on iOS and flickers on Android. Back from the preview
+       puts the menu back, so it still reads as a step rather than a jump. */
+    setHanding(false);
+    setPreview({ recipe: recipe.id, title: recipe.title, state: "asking" });
+    const answer = await ask<{ ok: boolean; prompt?: string; cwd?: string; error?: string }>(
+      host, "/prs/review-prompt",
+      { method: "POST", body: { root, number: detail.number, recipe: recipe.id } },
+    );
+    if (!answer.ok) {
+      setPreview({ recipe: recipe.id, title: recipe.title, state: "failed", error: answer.error });
+      return;
+    }
+    if (!answer.value.ok || !answer.value.prompt) {
+      setPreview({
+        recipe: recipe.id, title: recipe.title, state: "failed",
+        error: answer.value.error ?? "The computer could not build that prompt.",
+      });
+      return;
+    }
+    setPreview({
+      recipe: recipe.id, title: recipe.title, state: "read",
+      prompt: answer.value.prompt, cwd: answer.value.cwd ?? "",
+    });
+  }, [host, detail, root]);
+
   /**
    * Leave the request and go to the terminal.
    *
@@ -229,11 +305,35 @@ export default function PrScreen(): React.ReactNode {
       recipe,
     });
     setHanding(false);
+    setPreview(null);
     router.push("/terminal");
   }, [detail, root, router]);
 
   const key = `${root}#${number}`;
   const notes = draft(key);
+
+  /* Asked when the sheet opens rather than beside the detail: it is one more
+     round trip to GitHub for a question nobody has while they are reading the
+     files, and the answer is only ever looked at here. Re-asked on every
+     opening, because a review can be started elsewhere between two of them. */
+  useEffect(() => {
+    if (!host || !reviewing || !root || !number) return;
+    let gone = false;
+    setPending("asking");
+    void (async () => {
+      const answer = await ask<{ ok: boolean; comments?: { path: string; line: number | null; body: string }[] }>(
+        host, "/prs/pending-review", { method: "POST", body: { root, number: Number(number) } },
+      );
+      if (gone) return;
+      /* A failure ends at "unknown" and NOT at "asking". Leaving it on the
+         asking state was a spinner that never resolves — a screen saying it is
+         still working when it has stopped, which is the one thing a status
+         line must never do. Claiming zero would be worse still: the app
+         inventing an answer about somebody else's queued comments. */
+      setPending(answer.ok && answer.value.ok ? answer.value.comments ?? [] : "unknown");
+    })();
+    return () => { gone = true; };
+  }, [host, reviewing, root, number]);
 
   /**
    * The verdict and every queued comment, in ONE call.
@@ -258,8 +358,30 @@ export default function PrScreen(): React.ReactNode {
     setSummary("");
     setReviewing(false);
     setSent(null);
+    // Submitting takes the pending comments with it — that is what makes them
+    // pending — so what is held next time is a fresh question.
+    setPending("unknown");
     void load();
   }, [host, detail, root, summary, notes, key, load]);
+
+  /** One comment on the conversation. Posted on its own, because that is what
+   *  it is: not a verdict, not a remark about a line, and nothing GitHub
+   *  batches. */
+  const saySomething = useCallback(async (): Promise<void> => {
+    if (!host || !detail || !root || !comment.trim()) return;
+    setCommentBusy(true);
+    setCommentErr(null);
+    const answer = await ask<{ ok: boolean; error?: string }>(host, "/prs/comment", {
+      method: "POST",
+      body: { root, number: detail.number, body: comment.trim() },
+    });
+    setCommentBusy(false);
+    if (!answer.ok) { setCommentErr(answer.error); return; }
+    if (!answer.value.ok) { setCommentErr(answer.value.error ?? "GitHub refused that."); return; }
+    setComment("");
+    setCommenting(false);
+    void load();
+  }, [host, detail, root, comment, load]);
 
   /* Opened on what the repository would have checked, once — not on every
      render, or a tap on "Rebase" would be undone by the next repaint. */
@@ -461,16 +583,41 @@ export default function PrScreen(): React.ReactNode {
               </Card>
             </View>
 
-            {openThreads ? (
+            {(detail.threads ?? []).length ? (
               <View style={{ gap: SPACE.sm }}>
-                <Label text={`Open threads · ${openThreads}`} />
+                <Label text={`Threads · ${openThreads} open`} />
                 <Card>
-                  <Note>
-                    {openThreads === 1 ? "One conversation is" : `${openThreads} conversations are`}
-                    {" "}still unresolved. Reading them is on GitHub for now.
-                  </Note>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => router.push({
+                      pathname: "/pr/threads",
+                      params: { number: String(number), root: root ?? "" },
+                    })}
+                    style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, minHeight: TAP }}
+                  >
+                    <Text style={{ color: C.text2, fontSize: T.body, flex: 1 }}>
+                      {openThreads === 0
+                        ? "Every conversation is resolved"
+                        : openThreads === 1
+                          ? "One conversation is waiting on somebody"
+                          : `${openThreads} conversations are waiting on somebody`}
+                    </Text>
+                    <ChevronIcon color={C.text4} size={17} />
+                  </Pressable>
                 </Card>
               </View>
+            ) : null}
+
+            {/* Not in the pinned bar. The bar holds the three things you open a
+                pull request on a phone to DO — hand it over, review it, merge
+                it — and a fourth button there would be a fourth button in the
+                way of those. This is the thing you do on your own pull
+                request, where the other three are off. */}
+            {mayWrite ? (
+              <Btn
+                label="Comment on it"
+                onPress={() => { setCommentErr(null); setCommenting(true); }}
+              />
             ) : null}
 
             <Btn label="Open on GitHub" onPress={() => { void Linking.openURL(detail.url); }} />
@@ -526,6 +673,37 @@ export default function PrScreen(): React.ReactNode {
       ) : null}
 
       <Sheet open={reviewing} onClose={() => setReviewing(false)} title="Send your review">
+        {/* What GitHub is already holding, first — because it is the half you
+            did not write on this phone and would otherwise submit unseen. */}
+        {pending === "asking" ? (
+          <View style={{ paddingBottom: SPACE.md }}>
+            <Note>Asking GitHub whether a review is already started…</Note>
+          </View>
+        ) : pending === "unknown" ? (
+          <View style={{ paddingBottom: SPACE.md }}>
+            <Note>
+              Could not ask GitHub whether a review is already started here. If one is, whichever
+              verdict you press below submits it too.
+            </Note>
+          </View>
+        ) : pending.length ? (
+          <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
+            <Label text={`${pending.length} already on GitHub`} />
+            {pending.map((c, i) => (
+              <View key={`${c.path}:${c.line}:${i}`} style={{ paddingVertical: SPACE.xs }}>
+                <Text numberOfLines={2} style={{ color: C.text2, fontSize: T.small }}>{c.body}</Text>
+                <Text numberOfLines={1} style={{ color: C.text4, fontSize: T.eyebrow, fontFamily: MONO }}>
+                  {c.path}{c.line === null ? "" : `:${c.line}`}
+                </Text>
+              </View>
+            ))}
+            <Note>
+              Started somewhere else and never sent. Whichever verdict you press below submits
+              these too.
+            </Note>
+          </View>
+        ) : null}
+
         {notes.length ? (
           <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
             <Label text={`${notes.length} ${notes.length === 1 ? "comment" : "comments"} queued`} />
@@ -540,7 +718,11 @@ export default function PrScreen(): React.ReactNode {
           </View>
         ) : (
           <View style={{ paddingBottom: SPACE.md }}>
-            <Note>No line comments. Open the files above to write one.</Note>
+            <Note>
+              {Array.isArray(pending) && pending.length
+                ? "Nothing written on this phone. Open the files above to add to it."
+                : "No line comments. Open the files above to write one."}
+            </Note>
           </View>
         )}
 
@@ -577,6 +759,35 @@ export default function PrScreen(): React.ReactNode {
                 being relied on. */}
             The verdict and every comment go in one call, so a dropped connection cannot leave half
             a review on GitHub.
+          </Note>
+        </View>
+      </Sheet>
+
+      <Sheet open={commenting} onClose={() => setCommenting(false)} title={`Comment on #${number}`}>
+        <TextInput
+          value={comment}
+          onChangeText={setComment}
+          placeholder="What do you want to say?"
+          placeholderTextColor={C.text4}
+          multiline
+          style={{
+            minHeight: 96, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.md,
+            backgroundColor: C.bg, color: C.text, padding: SPACE.md, fontSize: T.body,
+          }}
+        />
+        <View style={{ paddingTop: SPACE.md, gap: SPACE.sm }}>
+          <Btn
+            label="Post it"
+            tone="primary"
+            busy={commentBusy}
+            disabled={!comment.trim() || commentBusy}
+            onPress={() => { void saySomething(); }}
+          />
+          {commentErr ? <Note tone="bad">{commentErr}</Note> : null}
+          {/* The distinction, said once and where it is being made. */}
+          <Note>
+            Goes on the conversation, on its own. A remark about a LINE belongs in the diff, where
+            it waits for a verdict and goes with it.
           </Note>
         </View>
       </Sheet>
@@ -678,21 +889,69 @@ export default function PrScreen(): React.ReactNode {
               recipe.skill ? recipe.skill.trim().split(/\s/)[0] : "",
             ].filter(Boolean).join(" · ") || undefined}
             on={recipe.id === menu?.suggested}
-            onPress={() => hand(recipe.id)}
+            onPress={() => { void look(recipe); }}
           />
         ))}
         <View style={{ paddingTop: SPACE.md, gap: SPACE.xs }}>
           <Note>
             Opens a tmux window on the computer with the agent already running, and takes you to it.
           </Note>
-          {/* Said out loud because it is the one thing that is not visible from
-              here: the words that reach the agent are the computer's, chosen by
-              the name above. This phone sends a number and an id. */}
+          {/* Still true, and now checkable: the words are the computer's, and
+              the next screen shows you which words before anything runs. */}
           <Note>
             The phone sends the number and which question to ask. The prompt itself is written on
-            the computer.
+            the computer — you see it before it goes.
           </Note>
         </View>
+      </Sheet>
+
+      {/* What it would say, over the menu it was chosen from. A second sheet
+          rather than a replaced one, so Back lands on the list and not on the
+          pull request. */}
+      <Sheet
+        open={!!preview}
+        onClose={() => { setPreview(null); setHanding(true); }}
+        title={preview?.title ?? ""}
+      >
+        {preview?.state === "asking" ? (
+          <Note>Building it on the computer…</Note>
+        ) : null}
+
+        {preview?.state === "failed" ? (
+          <View style={{ gap: SPACE.sm }}>
+            <Note tone="bad">{preview.error}</Note>
+            <Note>
+              Nothing was started. The window opens only when you press Send below, and there is
+              nothing to send until this reads.
+            </Note>
+          </View>
+        ) : null}
+
+        {preview?.state === "read" ? (
+          <View style={{ gap: SPACE.md }}>
+            {/* No ScrollView of its own. The sheet already scrolls and is
+                already capped at 75% of the screen; a second one nested inside
+                it is the arrangement react-native does not reliably scroll. */}
+            <Text style={{
+              color: C.text2, fontSize: T.small, fontFamily: MONO, lineHeight: 18,
+              backgroundColor: C.bg, padding: SPACE.md, borderRadius: RADIUS.md,
+            }}>{preview.prompt}</Text>
+            {preview.cwd ? (
+              <Text numberOfLines={1} ellipsizeMode="head" style={{
+                color: C.text4, fontSize: T.eyebrow, fontFamily: MONO,
+              }}>in {preview.cwd}</Text>
+            ) : null}
+            <Btn label="Send it" tone="primary" onPress={() => hand(preview.recipe)} />
+            {/* The one thing a preview cannot show, said rather than implied:
+                what travels is the id above it, and the computer builds these
+                words again for itself. So this is a faithful reading of what
+                will be asked, not a copy that gets sent. */}
+            <Note>
+              Read from the computer, which writes it again when the window opens. The phone sends
+              the pull request number and the name of the question — never these words.
+            </Note>
+          </View>
+        ) : null}
       </Sheet>
     </View>
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cardSkills, skillCommand, windowName, skillModes } from "../src/lib/cardSkills.ts";
+import { cardSkills, skillCommand, windowName, skillModes } from "../../shared/cardSkills.ts";
 import type { SkillInfo } from "../../shared/types.ts";
 
 const mk = (name: string, description = ""): SkillInfo => ({
@@ -103,7 +103,7 @@ describe("the modes a skill advertises", () => {
 });
 
 describe("the short name a team uses", () => {
-  const { shortName } = require("../src/lib/cardSkills.ts") as typeof import("../src/lib/cardSkills.ts");
+  const { shortName } = require("../../shared/cardSkills.ts") as typeof import("../../shared/cardSkills.ts");
 
   it("takes the prefix the title already carries", () => {
     // "waiting on T2" is something to act on; "waiting on ABC-21016" is a

@@ -38,12 +38,29 @@ export function dueIn(
   return { text: `in ${days}d`, late: false };
 }
 
-/** "3h", "2d" — how long since something last moved. Takes an ISO instant,
- *  which is what GitHub answers with, and is a genuine elapsed time rather than
- *  a calendar distance. */
-export function since(iso: string, now: number): string {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return "";
+/**
+ * "3h", "2d" — how long since something last moved.
+ *
+ * A genuine elapsed time rather than a calendar distance, which is why it does
+ * not share `dueIn`'s machinery: a due date is a day somebody planned around
+ * and this is a duration.
+ *
+ * Two spellings of an instant, because the two services answer differently and
+ * neither is worth converting at the call site. GitHub sends an ISO string;
+ * ClickUp sends epoch milliseconds, which reach here as a number.
+ *
+ * Measured rather than assumed, because the obvious worry turned out to be the
+ * wrong one: `Date.parse("1787914800000")` is NaN, not a date in the year 1755
+ * — only a bare four-digit string reads as a year. So the failure this union
+ * prevents is not a wildly wrong duration, it is a SILENT one: every timestamp
+ * on the card screen quietly blank, which reads as "this app does not show
+ * those" rather than as a fault.
+ */
+export function since(when: string | number, now: number): string {
+  const at = typeof when === "number" ? when : Date.parse(when);
+  // Zero is ClickUp's "no date", not 1970. Both are useless to a reader and
+  // the empty string is what the screens already draw for "unknown".
+  if (!Number.isFinite(at) || at <= 0) return "";
   const minutes = Math.max(0, Math.round((now - at) / 60_000));
   if (minutes < 60) return `${minutes}m`;
   if (minutes < 1440) return `${Math.round(minutes / 60)}h`;

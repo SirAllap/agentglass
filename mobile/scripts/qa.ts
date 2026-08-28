@@ -74,7 +74,10 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // which is the point: the failure this catches is the screen not mounting.
   { path: "/issues", name: "Issues", expect: /Mine|Nothing open|Cannot ask GitHub/i },
   { path: "/repos", name: "Repos", expect: /changed|Nothing changed/i },
-  { path: "/tasks", name: "Cards", expect: /hiding done|Nothing here|Cannot read the board/i },
+  /* Four things it may honestly say, and the third is the one this machine
+     shows: no tracker is connected here, so there is no board rather than an
+     empty one. The distinction is the point of the state existing. */
+  { path: "/tasks", name: "Cards", expect: /hiding done|Nothing here|No board here|Cannot read the board/i },
   // Both details walked with ids that exist nowhere, for the same reason as
   // the pull request's: what is asserted is that the screen mounts and says it
   // could not read it, rather than rendering a blank.
@@ -83,6 +86,10 @@ const ROUTES: { path: string; name: string; expect: RegExp; pane?: boolean }[] =
   // The job list, which is a `read` route — so unlike every other write on the
   // detail screens, this one has to hold under the default pairing scope.
   { path: "/pr/checks?number=0&root=%2Ftmp", name: "PR checks", expect: /Cannot read them|could not be read|out of scope|No jobs|not a git repository/i },
+  // Threads. Like the checks list it reads, so it must hold under the default
+  // pairing scope — the writes on it (reply, resolve, apply) are what needs
+  // `full`, and each is gated on its own.
+  { path: "/pr/threads?number=0&root=%2Ftmp", name: "PR threads", expect: /Cannot read them|could not be read|out of scope|not a git repository|commented on a line/i },
   // Walked at the workspace root rather than a nonsense one: this is a `read`
   // screen whose whole job is to LIST, and an empty listing would pass a check
   // that a broken one also passes. `bin` is in every checkout this repo has.

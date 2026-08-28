@@ -34,7 +34,8 @@ import type { InboxGroup, InboxItem } from "../../src/model/inbox.ts";
 import {
   ChevronIcon, InboxIcon, IssuesIcon, PrsIcon, ReposIcon, TasksIcon, TerminalIcon,
 } from "../../src/nav/icons.tsx";
-import { BAR } from "../../src/nav/bar.ts";
+import { BAR, taskDestinations } from "../../src/nav/bar.ts";
+import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { Card, Label, Note, TAP, groupEdge } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
@@ -146,6 +147,11 @@ const DESTINATIONS = [
   { route: "repos" as const, label: "Source control" },
 ];
 
+/* Cards is dropped on a machine that tracks work nowhere — see
+   `taskDestinations` in src/nav/bar.ts for what "nowhere" means and why
+   unknown is not it. Nothing takes its place: this is a list, not the
+   five-slot bar it came from. */
+
 const ICONS = {
   prs: PrsIcon,
   terminal: TerminalIcon,
@@ -170,6 +176,10 @@ export default function InboxScreen(): React.ReactNode {
   const router = useRouter();
   const inbox = useInbox();
   const [pulling, setPulling] = useState(false);
+  /* Asked once per machine and held for a minute — the hook's own file says
+     why it is not a fetch inside this component. Null while it is unknown,
+     which draws every destination. */
+  const destinations = taskDestinations(DESTINATIONS, useTracksWork(host));
 
   const reload = inbox.reload;
   const onRefresh = useCallback((): void => {
@@ -329,7 +339,7 @@ export default function InboxScreen(): React.ReactNode {
           */}
           <View style={{ gap: SPACE.sm }}>
             <Label text="Go to" />
-            {DESTINATIONS.map((dest, i) => {
+            {destinations.map((dest, i) => {
               const Icon = ICONS[dest.route as keyof typeof ICONS];
               const count = COUNTS[dest.route]?.(inbox.counts);
               return (
@@ -339,7 +349,7 @@ export default function InboxScreen(): React.ReactNode {
                   accessibilityRole="button"
                   accessibilityLabel={dest.label ?? dest.route}
                   style={({ pressed }) => [
-                    groupEdge(i === 0, i === DESTINATIONS.length - 1),
+                    groupEdge(i === 0, i === destinations.length - 1),
                     {
                       flexDirection: "row", alignItems: "center", gap: SPACE.md,
                       paddingHorizontal: SPACE.lg, minHeight: TAP,
@@ -370,8 +380,13 @@ export default function InboxScreen(): React.ReactNode {
           <Card>
             <Label text="Clear" />
             <Note>
-              No pull request, issue or card is waiting on you. Anything an agent is doing is in
-              the terminal.
+              {/* The list of what was checked has to match what was actually
+                  checked. On a machine with no tracker there are no cards to
+                  have looked at, and naming them here is the same false
+                  reassurance the Cards screen used to give — it says something
+                  was searched that never existed. */}
+              No pull request{destinations.some((d) => d.route === "tasks") ? ", issue or card" : " or issue"} is
+              waiting on you. Anything an agent is doing is in the terminal.
             </Note>
           </Card>
         )
