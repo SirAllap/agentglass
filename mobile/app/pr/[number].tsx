@@ -194,7 +194,9 @@ export default function PrScreen(): React.ReactNode {
    * Null means "not asked yet", which is not the same as an empty list, and
    * the sheet says which of the two it is.
    */
-  const [pending, setPending] = useState<{ path: string; line: number | null; body: string }[] | null>(null);
+  const [pending, setPending] = useState<
+    { path: string; line: number | null; body: string }[] | "asking" | "unknown"
+  >("unknown");
 
   /* A comment on the conversation, which is not a review and not a reply. It
      is the only thing you can say on your OWN pull request — GitHub refuses a
@@ -312,15 +314,18 @@ export default function PrScreen(): React.ReactNode {
   useEffect(() => {
     if (!host || !reviewing || !root || !number) return;
     let gone = false;
+    setPending("asking");
     void (async () => {
       const answer = await ask<{ ok: boolean; comments?: { path: string; line: number | null; body: string }[] }>(
         host, "/prs/pending-review", { method: "POST", body: { root, number: Number(number) } },
       );
       if (gone) return;
-      // A failure leaves it null — "could not ask" reads as "not asked", which
-      // is honest. Claiming zero would be the app inventing an answer about
-      // somebody else's queued comments.
-      setPending(answer.ok && answer.value.ok ? answer.value.comments ?? [] : null);
+      /* A failure ends at "unknown" and NOT at "asking". Leaving it on the
+         asking state was a spinner that never resolves — a screen saying it is
+         still working when it has stopped, which is the one thing a status
+         line must never do. Claiming zero would be worse still: the app
+         inventing an answer about somebody else's queued comments. */
+      setPending(answer.ok && answer.value.ok ? answer.value.comments ?? [] : "unknown");
     })();
     return () => { gone = true; };
   }, [host, reviewing, root, number]);
@@ -350,7 +355,7 @@ export default function PrScreen(): React.ReactNode {
     setSent(null);
     // Submitting takes the pending comments with it — that is what makes them
     // pending — so what is held next time is a fresh question.
-    setPending(null);
+    setPending("unknown");
     void load();
   }, [host, detail, root, summary, notes, key, load]);
 
@@ -665,9 +670,16 @@ export default function PrScreen(): React.ReactNode {
       <Sheet open={reviewing} onClose={() => setReviewing(false)} title="Send your review">
         {/* What GitHub is already holding, first — because it is the half you
             did not write on this phone and would otherwise submit unseen. */}
-        {pending === null ? (
+        {pending === "asking" ? (
           <View style={{ paddingBottom: SPACE.md }}>
             <Note>Asking GitHub whether a review is already started…</Note>
+          </View>
+        ) : pending === "unknown" ? (
+          <View style={{ paddingBottom: SPACE.md }}>
+            <Note>
+              Could not ask GitHub whether a review is already started here. If one is, whichever
+              verdict you press below submits it too.
+            </Note>
           </View>
         ) : pending.length ? (
           <View style={{ gap: SPACE.xs, paddingBottom: SPACE.md }}>
@@ -702,7 +714,7 @@ export default function PrScreen(): React.ReactNode {
         ) : (
           <View style={{ paddingBottom: SPACE.md }}>
             <Note>
-              {pending?.length
+              {Array.isArray(pending) && pending.length
                 ? "Nothing written on this phone. Open the files above to add to it."
                 : "No line comments. Open the files above to write one."}
             </Note>
