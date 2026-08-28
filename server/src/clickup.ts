@@ -20,7 +20,7 @@ import { singleFlight } from "./singleflight.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
 import type {
-  ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail } from "../../shared/providers.ts";
+  ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail, CardPr } from "../../shared/providers.ts";
 
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 
@@ -1831,16 +1831,7 @@ export async function findCard(text: string, knownPrefix: string): Promise<CallR
  * request in another repository will never be found by searching this one.
  * Union of the two, the field first.
  */
-export interface CardPr {
-  number: number;
-  title: string;
-  /** OPEN | MERGED | CLOSED, as GitHub spells it. */
-  state: string;
-  draft?: boolean;
-  url: string;
-  /** True when it came from the card's own field rather than from a search. */
-  stated?: boolean;
-}
+export type { CardPr };
 
 /** A pull-request number out of a GitHub URL, and nothing else out of anything
  *  else. A bare number in that field would be ambiguous — issue or PR — so it

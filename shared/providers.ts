@@ -551,6 +551,29 @@ export interface TaskDetail {
   }[];
 }
 
+/**
+ * A pull request that belongs to a card.
+ *
+ * Two ways one is found and they are not equally trustworthy, which is what
+ * `stated` records: the card's own field NAMES a pull request, and a search of
+ * GitHub for the card's id GUESSES at the rest — the id turns up in a branch
+ * name, a title or a commit, and which of those is not ours to assume. A stated
+ * one is right by construction; a found one is a good bet.
+ *
+ * Beside TaskDetail rather than inside the ClickUp module, because it is a wire
+ * type: it leaves the server on `/clickup/prs` and both clients draw it.
+ */
+export interface CardPr {
+  number: number;
+  title: string;
+  /** OPEN | MERGED | CLOSED, as GitHub spells it. */
+  state: string;
+  draft?: boolean;
+  url: string;
+  /** True when it came from the card's own field rather than from a search. */
+  stated?: boolean;
+}
+
 /** One reply in a comment thread. */
 export interface TaskReply {
   id: string;
