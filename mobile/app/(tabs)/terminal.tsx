@@ -86,7 +86,7 @@ interface AgentOffer {
 }
 import { bestSession, readStrip, sessionsOf, type Tab } from "../../src/terminal/tabs.ts";
 import type { PanesResponse } from "../../../shared/types.ts";
-import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
 
 export default function TerminalScreen(): React.ReactNode {
@@ -1671,139 +1671,56 @@ export default function TerminalScreen(): React.ReactNode {
             ))}
           </ScrollView>
 
-          {/* How the pane is drawn, pinned to the end of the key row rather
-              than given a row of its own. With the keyboard up the terminal
-              has something like two hundred points left, and a row of controls
-              is fifty of them — a quarter of what there is to read, spent on
-              two switches. The key bar scrolls, so lending it the width costs
-              scrolling and nothing else. */}
-          <View style={{
-            flexDirection: "row", gap: SPACE.xs, alignItems: "center",
-            // Four points each side rather than eight: at eight the seventh key
-            // came out cut down the middle of its own glyph, which reads as a
-            // fault rather than as "the row scrolls".
-            paddingHorizontal: SPACE.xs,
-            borderLeftWidth: 1, borderLeftColor: C.border,
-          }}>
-            <Pressable
-              // Either way round this is now the person's own doing, so the
-              // computer stops being credited for it.
-              onPress={() => { setFit((v) => !v); setTookBack(null); }}
-              accessibilityLabel={fit ? "The window fits this phone. Tap to keep the desk's size." : "The window keeps the desk's size. Tap to fit this phone."}
-              // 40 rather than 52, and the width control 44 rather than 56:
-              // these two are pinned, so every point they take is a point the
-              // scrolling keys never get back, and neither label wants more.
-              style={{ minWidth: 40, height: 40, alignItems: "center", justifyContent: "center",
-                borderRadius: RADIUS.sm, backgroundColor: C.bg3,
-                borderWidth: 1, borderColor: fit ? C.primary : "transparent" }}
-            >
-              <Text style={{ color: fit ? C.primary : C.text4, fontSize: T.small, fontFamily: MONO }}>fit</Text>
-            </Pressable>
-            {/* Width in columns, cycled rather than typed. 60 is a comfortable
-                read and 80 is what every TUI is written against. Which you want
-                depends on whether you are reading or driving, and it changes
-                several times in a session — so it is one tap, not a settings
-                screen. The rung above 80 is gone: see `columns`, where the
-                measurement is that at 120 the glyphs are clipped inside their
-                cells and characters change identity. */}
-            <Pressable
-              onPress={() => {
-                const next = columns >= 80 ? 60 : 80;
-                setColumns(next);
-                // Through the store, or this tap and the settings screen would
-                // be two places holding the same number and disagreeing after
-                // the next cold start.
-                setTermColumns(next);
-              }}
-              accessibilityLabel={`Terminal width, ${columns} columns. Tap to change.`}
-              style={{ minWidth: 44, height: 40, alignItems: "center", justifyContent: "center",
-                borderRadius: RADIUS.sm, backgroundColor: C.bg3 }}
-            >
-              <Text style={{ color: C.text2, fontSize: T.small, fontFamily: MONO }}>{columns}c</Text>
-            </Pressable>
-          </View>
+          {/*
+              Nothing is pinned to the end of this row any more, and the two
+              that were are the point of the change.
+
+              `80c` cycled the width between 60 and 80 — the same number the
+              terminal's own settings screen already owns, so the bar was a
+              second place holding it, and two places holding one number is how
+              they come to disagree. It is gone from here, not moved: settings
+              had it first.
+
+              `fit` is not a width and never was a preference: it resizes the
+              REAL tmux window on the computer, which is a claim on somebody
+              else's screen. It is in the ··· sheet now, beside the other things
+              that act on THIS pane, where it can afford the sentence it needs.
+
+              What is left is one row of keys, all the same size and weight, and
+              the hairline that used to fence off those two went with them.
+          */}
         </View>
 
-        <View style={{
-          flexDirection: "row", gap: SPACE.xs, alignItems: "flex-end",
-          paddingHorizontal: SPACE.sm, paddingBottom: SPACE.sm,
-        }}>
-          <Pressable
-            // The transcript is emptied on the way past, in both directions: it
-            // belongs to `keys`, and a deliberate tap is a moment when nothing
-            // is being typed.
-            onPress={() => { setRaw((v) => !v); forgetKeys(); }}
-            accessibilityRole="button"
-            accessibilityLabel={raw
-              ? "Every key goes straight to the pane. Tap to compose a line instead."
-              : "The field composes a line. Tap to send every key straight to the pane."}
-            // Bordered in BOTH states. Unbordered and grey it read as a label
-            // on the field rather than a switch — "line" is a plausible thing
-            // for a text box to be called, so there was nothing on screen to
-            // suggest the other half of this screen's behaviour exists.
-            style={{ minWidth: 52, height: TAP, alignItems: "center", justifyContent: "center",
-              borderRadius: RADIUS.sm, backgroundColor: C.bg3,
-              borderWidth: 1, borderColor: raw ? C.primary : C.border2 }}
-          >
-            <Text style={{ color: raw ? C.primary : C.text3, fontSize: T.small, fontFamily: MONO }}>
-              {raw ? "keys" : "line"}
-            </Text>
-          </Pressable>
-          {/*
-            A picture, beside the field rather than behind a menu.
+        {/*
+          One field, with the three things you do to a line inside it.
 
-            It sits here because this is the row where somebody is already
-            composing — the thing being attached is part of the sentence they
-            are writing, not a separate errand. Only while a pane is open: with
-            nothing attached there is nowhere for a path to be pasted, and a
-            button that opens a gallery to then say "no pane" is a trip to the
-            photo library for nothing.
+          It was five siblings in a row — a mode switch, a picture, a
+          microphone, the field, and send — each its own box with its own
+          border, and the field wearing the same border as the buttons. So the
+          place you type looked like a fourth button rather than like the place
+          you type. They are one control now: the field IS the container, and
+          the icons sit inside it.
 
-            No `full` gate. This writes a temporary file the server chose the
-            location of and then types into a pane the phone is already allowed
-            to type into — it buys no permission the keyboard above it does not
-            already have.
-          */}
-          <Pressable
-            onPress={() => { void attach(); }}
-            disabled={!open || sending}
-            accessibilityRole="button"
-            accessibilityLabel="Attach a picture to this pane"
-            style={({ pressed }) => ({
-              width: 44, height: TAP, alignItems: "center", justifyContent: "center",
-              borderRadius: RADIUS.sm, backgroundColor: C.bg3,
-              borderWidth: 1, borderColor: C.border2,
-              opacity: !open ? 0.4 : pressed ? 0.6 : 1,
-            })}
-          >
-            {sending
-              ? <ActivityIndicator color={C.text3} size="small" />
-              : <ImageIcon color={C.text3} size={19} />}
-          </Pressable>
-          {/* The microphone, beside the picture, for the same reason: what is
-              being said is part of the line being written, not a separate
-              errand. Two states rather than one spinner — "listening" is
-              waiting for the PERSON and "thinking" is waiting for the
-              computer, and one indicator for both says "hold on" while it is
-              your turn to hold on. */}
-          <Pressable
-            onPress={() => { void dictate(); }}
-            disabled={!open || hearing === "thinking"}
-            accessibilityRole="button"
-            accessibilityLabel={hearing === "listening" ? "Stop and transcribe" : "Speak a line"}
-            style={({ pressed }) => ({
-              width: 44, height: TAP, alignItems: "center", justifyContent: "center",
-              borderRadius: RADIUS.sm,
-              backgroundColor: hearing === "listening" ? C.error : C.bg3,
-              borderWidth: 1,
-              borderColor: hearing === "listening" ? C.error : C.border2,
-              opacity: !open ? 0.4 : pressed ? 0.6 : 1,
-            })}
-          >
-            {hearing === "thinking"
-              ? <ActivityIndicator color={C.text3} size="small" />
-              : <MicIcon color={hearing === "listening" ? ink(C.error) : C.text3} size={19} />}
-          </Pressable>
+          The `line`/`keys` switch is not here any more. What it did was send
+          every keystroke straight through instead of composing a line — which
+          is what the key row above already does, key by key, with the four that
+          matter. Two ways to do one thing, and the one nobody could name was
+          holding 52 points beside the field. It is in the ··· sheet now.
+
+          `raw` itself is untouched: the mode still exists, the field still
+          behaves both ways, and everything below still reads it.
+        */}
+        <View style={{ paddingHorizontal: SPACE.sm, paddingBottom: SPACE.sm }}>
+          <View style={{
+            flexDirection: "row", alignItems: "flex-end", gap: 2,
+            backgroundColor: C.bg2, borderWidth: 1,
+            // The one border on this row, and it is the field's. In `keys` it
+            // takes the accent, because the field behaving differently is the
+            // thing that switch used to have to say out loud.
+            borderColor: raw ? C.primary : C.border,
+            borderRadius: RADIUS.lg, paddingLeft: SPACE.md, paddingRight: 3,
+            paddingVertical: 3,
+          }}>
           <TextInput
             value={raw ? keyed : draft}
             onChangeText={typed}
@@ -1858,14 +1775,79 @@ export default function TerminalScreen(): React.ReactNode {
              * of ours in front of it.
              */
             onSubmitEditing={onReturn}
+            // No border and no fill of its own: the pill around it is the
+            // field's edge now, so drawing a second one inside it was the
+            // box-within-a-box that made this row read as five controls.
             style={{
+              // TAP, not 40. The key bar's 40 is argued in tap-floor.test.ts and
+              // the argument is about KEYS reaching the fold; borrowing that
+              // number for a field would pass the test on somebody else's
+              // reason. It costs nothing here — the icons beside it are 44, so
+              // the pill is the same height either way.
               flex: 1, minHeight: TAP, maxHeight: 120,
-              borderRadius: RADIUS.md, backgroundColor: C.bg,
-              borderWidth: 1, borderColor: C.border, color: C.text,
-              paddingHorizontal: SPACE.md, paddingTop: SPACE.sm, paddingBottom: SPACE.sm,
+              backgroundColor: "transparent", color: C.text,
+              paddingTop: SPACE.sm, paddingBottom: SPACE.sm, paddingRight: SPACE.xs,
               fontSize: T.body, fontFamily: MONO,
             }}
           />
+          {/*
+            A picture, beside the field rather than behind a menu.
+
+            It sits here because this is the row where somebody is already
+            composing — the thing being attached is part of the sentence they
+            are writing, not a separate errand. Only while a pane is open: with
+            nothing attached there is nowhere for a path to be pasted, and a
+            button that opens a gallery to then say "no pane" is a trip to the
+            photo library for nothing.
+
+            No `full` gate. This writes a temporary file the server chose the
+            location of and then types into a pane the phone is already allowed
+            to type into — it buys no permission the keyboard above it does not
+            already have.
+          */}
+          <Pressable
+            onPress={() => { void attach(); }}
+            disabled={!open || sending}
+            accessibilityRole="button"
+            accessibilityLabel="Attach a picture to this pane"
+            // 40 wide rather than 44, and the eight points that buys across
+            // the two icons are what keep the field readable at this width. The
+            // HEIGHT stays at the 44 floor, which is the axis a thumb misses on.
+            style={({ pressed }) => ({
+              width: 40, height: TAP, alignItems: "center", justifyContent: "center",
+              borderRadius: RADIUS.md,
+              opacity: !open ? 0.4 : pressed ? 0.5 : 1,
+            })}
+          >
+            {sending
+              ? <ActivityIndicator color={C.text3} size="small" />
+              : <ImageIcon color={C.text3} size={19} />}
+          </Pressable>
+          {/* The microphone, beside the picture, for the same reason: what is
+              being said is part of the line being written, not a separate
+              errand. Two states rather than one spinner — "listening" is
+              waiting for the PERSON and "thinking" is waiting for the
+              computer, and one indicator for both says "hold on" while it is
+              your turn to hold on. */}
+          <Pressable
+            onPress={() => { void dictate(); }}
+            disabled={!open || hearing === "thinking"}
+            accessibilityRole="button"
+            accessibilityLabel={hearing === "listening" ? "Stop and transcribe" : "Speak a line"}
+            style={({ pressed }) => ({
+              width: 40, height: TAP, alignItems: "center", justifyContent: "center",
+              borderRadius: RADIUS.md,
+              // Filled only while it is listening. Inside the pill an idle fill
+              // would be a button drawn on top of a field; a live one is the
+              // one state on this row that has to be unmissable.
+              backgroundColor: hearing === "listening" ? C.error : "transparent",
+              opacity: !open ? 0.4 : pressed ? 0.5 : 1,
+            })}
+          >
+            {hearing === "thinking"
+              ? <ActivityIndicator color={C.text3} size="small" />
+              : <MicIcon color={hearing === "listening" ? ink(C.error) : C.text3} size={19} />}
+          </Pressable>
           {/* Send, or Enter — the same thing the return key does, put where a
               thumb already is. */}
           <Pressable
@@ -1874,15 +1856,18 @@ export default function TerminalScreen(): React.ReactNode {
             accessibilityLabel={raw ? "Enter" : "Send this line to the pane"}
             disabled={!canSend}
             style={{
-              width: TAP, height: TAP, borderRadius: RADIUS.md,
+              width: 40, height: TAP, borderRadius: RADIUS.md,
               alignItems: "center", justifyContent: "center",
-              backgroundColor: canSend ? C.primary : C.bg3,
+              // The only filled thing inside the pill, because it is the only
+              // one that DOES something to what has been typed.
+              backgroundColor: canSend ? C.primary : "transparent",
             }}
           >
             <Text style={{ color: canSend ? ink(C.primary) : C.text4, fontSize: T.title }}>
               {raw ? "⏎" : "↑"}
             </Text>
           </Pressable>
+          </View>
         </View>
       </View>
       {/*
@@ -1931,6 +1916,41 @@ export default function TerminalScreen(): React.ReactNode {
                 setMore(false);
                 router.push({ pathname: "/files", params: { root: open.where } });
               }}
+            />
+
+            {/*
+              The two switches that used to live on the key bar.
+
+              Both are about THIS pane rather than about the app, which is why
+              they are here and not in the terminal's settings screen: settings
+              holds preferences, and neither of these is one. `fit` reaches out
+              and resizes a window on somebody's computer; `keys` changes what
+              the next thing you type does. A row can afford the sentence that
+              makes that plain, and a 40-point button on a crowded bar could
+              not — which is exactly why one of them was pressed without being
+              understood and the other was pressed and found useless.
+            */}
+            <Label text="This pane" />
+            <Toggle
+              on={fit}
+              label="Fit the window to this phone"
+              sub={fit
+                ? "The tmux window is this phone's size — including on the computer's own screen."
+                : "The window keeps the size the computer gave it, so you see it as the desk does."}
+              // Either way round this is now the person's own doing, so the
+              // computer stops being credited for it.
+              onPress={() => { setFit((v) => !v); setTookBack(null); }}
+            />
+            <Toggle
+              on={raw}
+              label="Send every key straight through"
+              sub={raw
+                ? "What you type reaches the pane as you type it. Return is Enter."
+                : "You compose a whole line and Return sends it. The keys above still go straight through."}
+              // The transcript is emptied on the way past, in both directions:
+              // it belongs to `keys`, and a deliberate tap is a moment when
+              // nothing is being typed.
+              onPress={() => { setRaw((v) => !v); forgetKeys(); }}
             />
 
             <Label text="Past sessions" />
