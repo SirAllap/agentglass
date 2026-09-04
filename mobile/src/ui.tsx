@@ -14,7 +14,7 @@ import {
   type StyleProp, type TextStyle, type ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { C, RADIUS, SPACE, T, ink } from "./theme.ts";
+import { C, RADIUS, SCRIM, SPACE, T, ink } from "./theme.ts";
 
 /**
  * The floor for anything you tap.
@@ -418,14 +418,16 @@ export function Sheet({ open, onClose, title, children }: {
         accessibilityRole="button"
         accessibilityLabel={`Close ${title}`}
         onPress={onClose}
-        style={{ flex: 1, backgroundColor: "rgba(1,4,9,0.55)" }}
+        style={{ flex: 1, backgroundColor: SCRIM }}
       />
       <View style={{
         backgroundColor: C.bg2,
         borderTopWidth: 1,
         borderTopColor: C.border2,
-        borderTopLeftRadius: RADIUS.lg + 6,
-        borderTopRightRadius: RADIUS.lg + 6,
+        // The capsule radius, because a sheet's top edge IS the round thing on
+        // the screen it covers — same reason and same number as the composer.
+        borderTopLeftRadius: RADIUS.pill,
+        borderTopRightRadius: RADIUS.pill,
         paddingTop: SPACE.md,
         // The gesture bar, paid once. Nothing else in the sheet knows about it.
         paddingBottom: insets.bottom + SPACE.md,
