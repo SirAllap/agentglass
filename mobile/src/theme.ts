@@ -228,11 +228,21 @@ export function toneColor(tone: "crit" | "bad" | "good" | "plain"): string {
  * arm's length on a 27-inch monitor. Outdoors, in one hand, it does not.
  */
 export const T = {
+  /* Pane's ladder asks for 10.5 here and it does not get it. The rule above is
+     older and it wins: this is read outdoors, in one hand, by somebody deciding
+     whether a check failed. What makes an eyebrow an eyebrow is the tracking
+     and the caps, and Label already carries both — see ui.tsx. */
   eyebrow: 11,
   small: 12,
   body: 14,
-  title: 16,
+  title: 17,
   head: 20,
+  /* One line per screen, and only the line that says what the screen is FOR:
+     "3 things want you". It is not a title — a title names a thing and this
+     states a count, which is why the only place it appears is the top of Now.
+     A PR's own title is prose and stays at `head`, because 26pt of somebody
+     else's sentence is four lines before the screen has said anything. */
+  display: 26,
 } as const;
 
 export const SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 } as const;
