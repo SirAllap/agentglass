@@ -46,6 +46,19 @@ for (const d of [PKG, OTHER]) mkdirSync(d, { recursive: true });
  * point of the two scoping tests below.
  */
 Bun.spawnSync(["git", "init", "-q", ROOT], { stdout: "ignore", stderr: "ignore" });
+/* TEMPORARY, and it comes out again the moment it has answered.
+ * This suite fails only on the CI runner and passes in every environment that
+ * can be built to imitate one, so the facts it depends on have to be read from
+ * the machine that disagrees. bun prints assertion detail inline, and the log
+ * API returns only the tail, which the detail has scrolled off — but the tail
+ * always carries the failing test NAMES. So the facts ride in the names. */
+const DIAG = (() => {
+  const top = Bun.spawnSync(["git", "-C", PKG, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "pipe" });
+  let real = "?";
+  try { real = require("node:fs").realpathSync(ROOT); } catch { real = "THREW"; }
+  return `tmp=${tmpdir()} root=${ROOT} real=${real} top=${top.exitCode === 0 ? top.stdout.toString().trim() : `exit${top.exitCode}`}`;
+})();
+
 process.env.AGENTGLASS_DB = join(dir, "seam.db");
 process.env.AGENTGLASS_ROOT = ROOT;
 process.env.XDG_CONFIG_HOME = dir;
@@ -127,7 +140,7 @@ beforeAll(async () => {
   db.insertEvent(event({ timestamp: Date.now() - 60_000, session_id: "seam-live" }) as any);
 });
 
-describe("one continuous series across the retention boundary", () => {
+describe(`one continuous series across the retention boundary ${DIAG}`, () => {
   test("days from both sides are present, in order", () => {
     const days = db.dailyUsage();
     expect(days.map((d) => d.day)).toEqual([OLD, SPLIT, LIVE]);
