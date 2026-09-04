@@ -1718,7 +1718,10 @@ export default function TerminalScreen(): React.ReactNode {
             // takes the accent, because the field behaving differently is the
             // thing that switch used to have to say out loud.
             borderColor: raw ? C.primary : C.border,
-            borderRadius: RADIUS.lg, paddingLeft: SPACE.md, paddingRight: 3,
+            // The capsule, and the only one on this screen. Pane allows exactly
+            // one round thing per screen against everything else being nearly
+            // rectangular, and on the terminal this is it: the place you type.
+            borderRadius: RADIUS.pill, paddingLeft: SPACE.md, paddingRight: 3,
             paddingVertical: 3,
           }}>
           <TextInput
