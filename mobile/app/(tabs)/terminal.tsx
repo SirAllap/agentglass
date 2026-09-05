@@ -42,6 +42,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { useDeskPalette, usePaletteTick } from "../../src/state/use-palette.ts";
+import { useKeyboardShown } from "../../src/state/use-keyboard.ts";
 import { TerminalView, type TerminalHandle, type TerminalState } from "../../src/terminal/TerminalView.tsx";
 import { ACCESSORY_KEYS, prefixKey, type AccessoryKey } from "../../src/terminal/keys.ts";
 import { apply as applyKeyLayout } from "../../src/terminal/keyLayout.ts";
@@ -50,6 +51,9 @@ import {
 } from "../../src/terminal/termPrefs.ts";
 import { bytesFor } from "../../src/terminal/customKeys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
+import {
+  clearFocusTimer, focusCapture, liveDetail, scheduleFocus, type FocusTimer,
+} from "../../src/terminal/liveFocus.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon, MicIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
@@ -1133,6 +1137,54 @@ export default function TerminalScreen(): React.ReactNode {
   // Something to send it to, and something to send — which in `keys` is the
   // return key, so the button is live there as soon as a pane is attached.
   const canSend = !!open && (raw || draft.length > 0);
+
+  /*
+   * `keys` mode stops drawing a field at all.
+   *
+   * What it draws is a button that reports the line, and behind it a 1×1
+   * transparent TextInput that actually holds the keyboard. Every keystroke
+   * still goes down as bytes exactly as it did — `typed`, `editFor` and
+   * `keyed` are untouched — but nothing on this row can grow any more, because
+   * the thing the text is in is not the thing being measured.
+   *
+   * The reason it is a button and not a smaller field: a field grows with what
+   * is in it, and a terminal line has no length limit. This was reported from
+   * a phone as the row rearranging itself under the thumb using it, and a
+   * one-line field with a ceiling only moves where the breakage happens.
+   *
+   * See liveFocus.ts for the two ways asking for a keyboard fails quietly.
+   */
+  const capture = useRef<TextInput | null>(null);
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null) as FocusTimer;
+  const keyboardShown = useKeyboardShown();
+  // Read through a ref so the callbacks below do not need rebuilding on every
+  // keyboard event — and so a scheduled focus reads the state at the moment it
+  // FIRES rather than the moment it was queued, which is the whole point of
+  // deferring it.
+  const liveNow = useRef({ canSend, raw, keyboardShown });
+  liveNow.current = { canSend, raw, keyboardShown };
+
+  const focusLive = useCallback(function focusLive(): void {
+    const now = liveNow.current;
+    if (!now.canSend || !now.raw) return;
+    focusCapture(capture.current, {
+      keyboardShown: now.keyboardShown,
+      retry: () => scheduleFocus(focusTimer, focusLive),
+    });
+  }, []);
+
+  /* A tap on the pane opens the keyboard, which is the gesture this mode is
+     for: the terminal is the thing you are looking at, so it is the thing you
+     should be able to type into. Deferred, because the WebView still owns the
+     keyboard while it is reporting the touch. */
+  const tapPane = useCallback(() => {
+    if (!liveNow.current.raw) return;
+    scheduleFocus(focusTimer, focusLive);
+  }, [focusLive]);
+
+  // A retained route must not carry a pending focus across a navigation, and a
+  // capture left focused behind another screen is a keyboard nobody asked for.
+  useEffect(() => () => { clearFocusTimer(focusTimer); capture.current?.blur(); }, []);
   /*
    * Whether this phone is the widest thing looking at the window — see `grid`.
    *
@@ -1742,7 +1794,45 @@ export default function TerminalScreen(): React.ReactNode {
             borderRadius: RADIUS.pill, paddingLeft: SPACE.md, paddingRight: 3,
             paddingVertical: 3,
           }}>
+          {raw ? (
+            /*
+             * `keys` mode: a button, and the keyboard lives behind it.
+             *
+             * Everything typed goes to the pane as bytes the moment it is
+             * typed, so there is nothing here to edit and nothing to submit —
+             * which is exactly why a field was the wrong shape. What somebody
+             * needs from this row is a way to get the keyboard back and a
+             * reading of what has gone down the wire, and both fit on one line
+             * that cannot grow.
+             */
+            <Pressable
+              onPress={focusLive}
+              disabled={!canSend}
+              accessibilityRole="button"
+              accessibilityLabel="Show the keyboard for this pane"
+              accessibilityHint="What you type is sent to the pane as you type it"
+              style={({ pressed }) => ({
+                flex: 1, height: TAP, justifyContent: "center",
+                paddingRight: SPACE.xs, opacity: !canSend ? 0.45 : pressed ? 0.6 : 1,
+              })}
+            >
+              <Text
+                numberOfLines={1}
+                /* From the HEAD, so a long line shows its END. The other way
+                   round hides the cursor's own neighbourhood, which is the only
+                   part of a line anybody is reading. */
+                ellipsizeMode="head"
+                style={{
+                  color: keyed.length > 0 ? C.text : C.text4,
+                  fontSize: T.body, fontFamily: MONO,
+                }}
+              >
+                {open ? liveDetail(keyed) : "Nothing is open"}
+              </Text>
+            </Pressable>
+          ) : null}
           <TextInput
+            ref={capture}
             value={raw ? keyed : draft}
             onChangeText={typed}
             placeholder={open
@@ -1813,20 +1903,32 @@ export default function TerminalScreen(): React.ReactNode {
             // No border and no fill of its own: the pill around it is the
             // field's edge now, so drawing a second one inside it was the
             // box-within-a-box that made this row read as five controls.
-            style={{
-              // TAP, not 40. The key bar's 40 is argued in tap-floor.test.ts and
-              // the argument is about KEYS reaching the fold; borrowing that
-              // number for a field would pass the test on somebody else's
-              // reason. It costs nothing here — the icons beside it are 44, so
-              // the pill is the same height either way.
-              // A fixed height rather than a floor and a ceiling: `minHeight`
-              // with `multiline` is what let this grow. TAP is still the number,
-              // for the same reason as before — the icons beside it are 44.
-              flex: 1, height: TAP,
-              backgroundColor: "transparent", color: C.text,
-              paddingVertical: 0, paddingRight: SPACE.xs,
-              fontSize: T.body, fontFamily: MONO,
-            }}
+            style={raw
+              ? {
+                  /*
+                   * In `keys` this is the capture: 1×1 and transparent, behind
+                   * the button above, holding the keyboard and nothing else.
+                   * Not `display: none` and not unmounted — a field that is not
+                   * laid out cannot take focus, and taking focus is its whole
+                   * job. Absolute so its one point does not sit in the row.
+                   */
+                  position: "absolute", opacity: 0, width: 1, height: 1,
+                  color: C.text,
+                }
+              : {
+                  // TAP, not 40. The key bar's 40 is argued in tap-floor.test.ts
+                  // and the argument is about KEYS reaching the fold; borrowing
+                  // that number for a field would pass the test on somebody
+                  // else's reason. It costs nothing here — the icons beside it
+                  // are 44, so the pill is the same height either way.
+                  //
+                  // A fixed height rather than a floor and a ceiling:
+                  // `minHeight` with `multiline` is what let this grow.
+                  flex: 1, height: TAP,
+                  backgroundColor: "transparent", color: C.text,
+                  paddingVertical: 0, paddingRight: SPACE.xs,
+                  fontSize: T.body, fontFamily: MONO,
+                }}
           />
           {/*
             A picture, beside the field rather than behind a menu.
