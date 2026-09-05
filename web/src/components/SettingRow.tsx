@@ -28,6 +28,16 @@ import { createContext, isValidElement, useContext, useState } from "react";
  *     rather than as a search that went wide.
  *   - a banner says filtering is on. A page silently missing half its rows is
  *     how somebody concludes a setting was removed.
+ *
+ * Considered and dropped: landing on the matching row instead of hiding the
+ * rest — scroll to it, mark it, leave its neighbours standing. It teaches
+ * more on a first visit, but it loses the one thing hiding is good for: on a
+ * page with forty rows, "is it here at all" answered by a glance rather than
+ * a scan. This app's settings pages run that long — Notifications, Rail,
+ * Shortcuts — and a search that exists to answer that question fast is
+ * worth more here than one that also teaches geography. The banner already
+ * names the page, so a second search for the same thing is a click away,
+ * not a re-read of the whole list.
  */
 export const Filter = createContext<{ on: boolean; q: string; seen: (matched: boolean) => void }>(
   { on: false, q: "", seen: () => { /* no filtering outside the dialog */ } },
@@ -108,6 +118,28 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
  * control column so the control column stays what it is everywhere else: the
  * place where the thing you operate lives.
  */
+/** The on/off pill every toggle row draws. The track is a bare `<span>`,
+ *  which defaults to `display: inline` — an inline element ignores its own
+ *  `width`/`height`, so without `inline-block` the 34×19 track collapses to
+ *  the size of its content (nothing, since the knob is `position: absolute`
+ *  and out of flow) and only the 15px knob paints. That read as a plain dot
+ *  rather than a switch, which is the whole reason this is a named export
+ *  instead of a copy pasted per pane. */
+export function Switch({ on, busy }: { on: boolean; busy?: boolean }) {
+  return (
+    <span className="inline-block shrink-0 relative rounded-full transition-colors" style={{
+      width: 34, height: 19, opacity: busy ? 0.5 : 1,
+      background: on ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)",
+    }}>
+      <span className="absolute rounded-full transition-transform" style={{
+        width: 15, height: 15, top: 2, left: 2,
+        transform: on ? "translateX(15px)" : "translateX(0)",
+        background: on ? "var(--primary-hover)" : "var(--text3)",
+      }} />
+    </span>
+  );
+}
+
 export function Fold({ label, hint, children, defaultOpen }: {
   label: React.ReactNode;
   hint?: React.ReactNode;

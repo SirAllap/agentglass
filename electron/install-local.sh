@@ -6,6 +6,25 @@
 # baked in, then installs it under ~/.local — the desktop spec picks it up.
 set -euo pipefail
 
+# Everything below is the Linux install: electron-builder's `linux-unpacked`,
+# ~/.local/share, a .desktop file, symlinks into ~/.local/bin. There is no macOS
+# half, and on a Mac the script used to spend the packaging minutes first and
+# then stop at `[ -x "$SRC/agentglass" ]` with a line about electron-builder
+# not producing the binary — the wrong diagnosis for a build that was fine and
+# a layout that was another OS's. Say so before doing anything, and say what a
+# Mac does instead: the .dmg, per architecture, named as the release job names
+# it (see .github/workflows/desktop-binaries.yml).
+case "$(uname -s)" in
+  Darwin)
+    cat >&2 <<'MSG'
+install-local.sh installs the Linux layout (~/.local/share + a .desktop file) and has no macOS half.
+On a Mac, install from the .dmg on the latest release: https://github.com/SirAllap/agentglass/releases/latest
+  Apple silicon: agentglass_<version>_arm64.dmg      Intel: agentglass_<version>_x64.dmg
+To build one from this checkout instead: (cd electron && node build.mjs && bunx electron-builder --mac dmg)
+MSG
+    exit 2 ;;
+esac
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$HOME/.local/share/agentglass-desktop"
 BIN="$HOME/.local/bin"
@@ -81,6 +100,18 @@ for exe in "$SRC/agentglass" "$SRC/resources/agentglass-server"; do
   esac
 done
 
+# THE DEPUTY IS MID-RUN? THEN NOT NOW.
+#
+# The check itself lives in appctl.sh, next to the other things this script
+# asks about the machine, because it is driven by tests: the version that lived
+# here counted with a `grep -o` pipeline, and grep's "matched nothing" exit
+# aborted the install under `set -e` whenever no run was going — the refusal
+# fired when it was safe and stayed quiet when it did.
+#
+# shellcheck source=appctl.sh
+. "$HERE/appctl.sh"
+refuse_if_deputy_busy || exit 1
+
 # A running instance holds these files open, and `rm -rf` under it leaves the
 # app alive on deleted inodes — it keeps running the old code and its sidecar
 # keeps :4000, so the next launch adopts a stale server. Stop it first.
@@ -99,8 +130,6 @@ done
 # `agentglass --ozone-platform=wayland` or `--no-sandbox` is an ordinary way to
 # start this app. A stop step that silently matches nothing is the original bug
 # with extra steps: the script would sail past it into rm -rf. See appctl.sh.
-# shellcheck source=appctl.sh
-. "$HERE/appctl.sh"
 if ! stop_app; then
   echo "refusing to install over a running app: $(app_pids | tr '\n' ' ')survived SIGKILL" >&2
   exit 1
@@ -195,6 +224,18 @@ echo "==> verified: the installed renderer is the one just built ($bundle)"
 if [ -f "$APP/resources/bin/agentglass-browser" ]; then
   chmod +x "$APP/resources/bin/agentglass-browser" 2>/dev/null || true
   ln -sf "$APP/resources/bin/agentglass-browser" "$BIN/agentglass-browser"
+  # The same browser as an MCP server, for clients that would rather have tools
+  # with schemas than a command whose output they must parse back.
+  if [ -f "$APP/resources/bin/agentglass-browser-mcp" ]; then
+    chmod +x "$APP/resources/bin/agentglass-browser-mcp" 2>/dev/null || true
+    ln -sf "$APP/resources/bin/agentglass-browser-mcp" "$BIN/agentglass-browser-mcp"
+  fi
+fi
+# The named-agent CLI: a script's launcher and liveness for unattended agents
+# on the engine. Same home as the browser CLI, for the same reason.
+if [ -f "$APP/resources/bin/agentglass-agent" ]; then
+  chmod +x "$APP/resources/bin/agentglass-agent" 2>/dev/null || true
+  ln -sf "$APP/resources/bin/agentglass-agent" "$BIN/agentglass-agent"
 fi
 
 # The skill that tells an agent the CLI exists.
@@ -259,6 +300,7 @@ echo "  app      $APP/agentglass"
 echo "  stamp    $STAMP"
 echo "  command  agentglass"
 [ -L "$BIN/agentglass-browser" ] && echo "  agent cli agentglass-browser (drives the built-in browser)"
+[ -L "$BIN/agentglass-browser-mcp" ] && echo "  mcp      claude mcp add agentglass-browser -- agentglass-browser-mcp"
 [ -f "$HOME/.claude/skills/browser-use/SKILL.md" ] && echo "  skill    ~/.claude/skills/browser-use (so agents know it is there)"
 echo "  launcher $DESKTOP/agentglass.desktop"
 

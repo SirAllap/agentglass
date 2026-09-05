@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { MIN_BOX } from "../lib/iconSize.ts";
 // The column beside the diff, scoped to the file under the cursor.
 //
 // Everything here was already in the pull request and in another tab. What it
@@ -65,8 +66,12 @@ const QUOTE_CODE = {
  * four of them stacked, and a 26px square would make the provenance line taller
  * than the quote it belongs to. 20 clears the 14px glyph with room and keeps the
  * entry's shape.
+ *
+ * The number itself moved to `iconSize.ts` as `MIN_BOX`, where the rest of this
+ * question already lived — it was declared here, alone, and the file that owns
+ * the floor had never heard of it.
  */
-const JUMP_BOX = 20;
+const JUMP_BOX = MIN_BOX;
 
 /** Past this the list stops being readable at 300px and the Conversation tab is
  *  the better place to be. */

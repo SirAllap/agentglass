@@ -27,6 +27,18 @@ jobs:
       # the last run of this workflow that was green.
       - uses: oven-sh/setup-bun@v2
         with:
+          # A version, not `latest`, for the same reason `bunx tsc` is banned two
+          # steps down: a toolchain the registry picks is a toolchain nobody in
+          # this repository chose. `latest` means a Bun released this morning can
+          # redden — or, worse, quietly change the output of — a commit that
+          # touched nothing, and the desktop workflow compiles the server sidecar
+          # with `bun build --compile`, so there the runner's Bun ends up INSIDE
+          # the binary people download.
+          # Pinned to what main chose. Several files still record behaviour
+          # "measured on Bun 1.3.9" — server/src/tmuxctl.ts, tmuxsnapshot.ts,
+          # alerts.ts and six test files — and those measurements are the reason
+          # a few of them are written the way they are. Bumping this is a real
+          # change, and the suites that carry those notes are the ones to re-run.
           bun-version: 1.3.14
       - name: Install
         run: bun install --frozen-lockfile
@@ -49,10 +61,24 @@ jobs:
       # web's script checks tsconfig.json AND tsconfig.test.json — web/test/'s
       # 122 suites are run here by `bun test`, which strips types without
       # checking them, so until that second config existed nothing read them.
+      # Cheapest thing in the job and the one most likely to catch an outside
+      # contributor's slip, so it runs before the compilers. Correctness rules
+      # only — see .oxlintrc.json, which explains at length what is demoted,
+      # where, and why a linter that reformatted this codebase's hand-written
+      # style would have been the wrong tool.
+      - name: Lint (correctness)
+        run: bun run lint
       - name: Typecheck web (app and tests)
         run: cd web && bun run typecheck
       - name: Typecheck server
         run: cd server && bun run typecheck
+      # electron/ is hand-written .js, and for years that meant this job checked
+      # every line of the app except the ~2,400 that mint the auth token, decide
+      # what a <webview> may be, and register every IPC channel the renderer can
+      # reach. `// @ts-check` at the top of main.js and preload.js is what makes
+      # `tsc` read them; this is what makes CI read them.
+      - name: Typecheck desktop shell
+        run: cd electron && bun run typecheck
       - name: Tests (server)
         # Generous per-test timeout, not bun's 5s default: several server tests
         # do real git/spawn/settle work that finishes in ~seconds on a dev box
@@ -145,7 +171,7 @@ jobs:
       # nobody would think to look for.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.3.14 # pinned — see the note above
       # `npm ci` and not `npm install`: the lockfile is the point. Its
       # postinstall runs scripts/build-terminal-engine.mjs and
       # build-terminal-font.mjs, which write src/terminal/engine.generated.ts

@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import type { GitLogEntry } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { usePoll } from "../lib/usePoll.ts";
 
 const time = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour12: false });
 
@@ -27,23 +28,18 @@ export function CommandLog({ open, onClose }: { open: boolean; onClose: () => vo
   // want to stay there, so new output must not yank you back down.
   const stuck = useRef(true);
 
-  useEffect(() => {
-    if (!open) return;
-    let alive = true;
-    const tick = () =>
-      api.gitCommandLog(since.current)
-        .then(({ entries: fresh }) => {
-          if (!alive || !fresh.length) return;
-          since.current = fresh[fresh.length - 1].id;
-          // Bounded here as well as on the server: a long session would
-          // otherwise grow this array without limit.
-          setEntries((prev) => [...prev, ...fresh].slice(-500));
-        })
-        .catch(() => {});
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => { alive = false; clearInterval(id); };
-  }, [open]);
+  const tick = () =>
+    api.gitCommandLog(since.current)
+      .then(({ entries: fresh }) => {
+        if (!fresh.length) return;
+        since.current = fresh[fresh.length - 1].id;
+        // Bounded here as well as on the server: a long session would
+        // otherwise grow this array without limit.
+        setEntries((prev) => [...prev, ...fresh].slice(-500));
+      })
+      .catch(() => {});
+  useEffect(() => { if (open) tick(); }, [open]);
+  usePoll(open, tick, 1000);
 
   const shown = writesOnly ? entries.filter((e) => e.write) : entries;
 

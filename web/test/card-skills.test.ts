@@ -9,8 +9,8 @@ const mk = (name: string, description = ""): SkillInfo => ({
 
 describe("which skills take a card", () => {
   it("finds the ones named for it", () => {
-    const got = cardSkills([mk("clickup-fix-card"), mk("deploy"), mk("clickup-track-time")]).map((s) => s.name);
-    expect(got).toEqual(["clickup-fix-card", "clickup-track-time"]);
+    const got = cardSkills([mk("clickup-card-fix"), mk("deploy"), mk("clickup-time-log")]).map((s) => s.name);
+    expect(got).toEqual(["clickup-card-fix", "clickup-time-log"]);
   });
 
   it("finds the ones that only SAY they take a card", () => {
@@ -46,22 +46,22 @@ describe("the line handed to the agent", () => {
   it("uses the id a person would recognise, not the internal one", () => {
     // A skill asking for the human id and given the internal one fails in the
     // least useful way available: the card exists, the tool cannot find it.
-    expect(skillCommand("clickup-fix-card", { id: "86e2gw40g", customId: "ABC-1234" }))
-      .toBe("/clickup-fix-card ABC-1234");
+    expect(skillCommand("clickup-card-fix", { id: "86xabc001", customId: "ABC-1234" }))
+      .toBe("/clickup-card-fix ABC-1234");
   });
 
   it("falls back to the internal id when the workspace has no custom ones", () => {
-    expect(skillCommand("clickup-fix-card", { id: "86e2gw40g" })).toBe("/clickup-fix-card 86e2gw40g");
+    expect(skillCommand("clickup-card-fix", { id: "86xabc001" })).toBe("/clickup-card-fix 86xabc001");
   });
 
   it("does not double the slash a skill name may already carry", () => {
-    expect(skillCommand("/clickup-fix-card", { id: "x" })).toBe("/clickup-fix-card x");
+    expect(skillCommand("/clickup-card-fix", { id: "x" })).toBe("/clickup-card-fix x");
   });
 });
 
 describe("the tmux window it opens", () => {
   it("is named after the card, so `tmux ls` is readable", () => {
-    expect(windowName({ id: "86e2gw40g", customId: "ABC-1234" })).toBe("abc-1234");
+    expect(windowName({ id: "86xabc001", customId: "ABC-1234" })).toBe("abc-1234");
   });
 
   it("strips what tmux would read as a target separator", () => {

@@ -302,8 +302,20 @@ export function ViewRail({
       onDrop={commit}
       className="w-[52px] shrink-0 flex flex-col gap-1 p-2 overflow-visible"
       style={{
-        borderRight: "1px solid color-mix(in srgb, var(--primary) 14%, transparent)",
-        background: "color-mix(in srgb, var(--bg) 55%, transparent)",
+        /* THE RAIL IS CHROME, and it was painting the content's own colour.
+         *
+         * Measured across the whole window: 98.4% of every pixel this app
+         * paints was one tone — `--bg` — because the rail's fill was
+         * `color-mix(--bg 55%, transparent)`, which is --bg blended with the
+         * --bg behind it and therefore --bg. A navigation strip that is
+         * literally the same colour as the pane beside it is not a strip, and
+         * "it all looks like the same view" is the accurate reading of that.
+         *
+         * --surface-nav is the same token the settings navigation uses, and it
+         * leans toward --bg2 rather than away from it, so it lifts on a dark
+         * palette and sinks on a light one without a second value. */
+        borderRight: "1px solid var(--surface-line)",
+        background: "var(--surface-nav)",
       }}
     >
       {/* flex-1 so the empty run below the last icon still belongs to this

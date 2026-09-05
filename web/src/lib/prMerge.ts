@@ -29,8 +29,32 @@ import type { PrSummary } from "../../../shared/types.ts";
  * approved-and-green cards still jumped lanes for a second and a half after
  * this merge was written.
  */
+/*
+ * `talk` is on this list because it was reported missing from a card that looked
+ * complete: the pull request said "2 new" in its own conversation and the board
+ * card beside it wore no badge at all. Everything else on the card was right —
+ * the checks, the stats, the reviewers — because they were all being carried over
+ * from the previous answer by this very function, and the conversation was the
+ * one field it did not know to carry. So the row was whole to look at and had no
+ * opinion about what had been said.
+ */
+/*
+ * EVERY FIELD THE SECOND PASS FILLS, and the list has to stay complete.
+ *
+ * A row arrives twice: the bare row first, the rest a moment later. This is
+ * what gets carried across so a refresh does not blank a card back to its first
+ * pass — and a field added to the second pass but forgotten HERE disappears on
+ * every refresh and comes back a second later, which is precisely what he saw:
+ * "the cards stay like that… and when I hit refresh they stay like that again
+ * until they load".
+ *
+ * `humanReview` and `card` were exactly that: shipped in the second pass, never
+ * added to this list, so the board lost its verdict header and its tracker line
+ * on every single poll. The lock beside this file derives the list from
+ * `SecondPass` in prs.ts rather than trusting anybody to remember.
+ */
 const SECOND_PASS = ["checks", "checksLoaded", "additions", "deletions", "changedFiles",
-  "reviewDecision", "mergeable", "reviewers"] as const;
+  "reviewDecision", "humanReview", "card", "mergeable", "reviewers", "headSha", "talk", "openThreads"] as const;
 
 export function keepLoadedChecks(prev: PrSummary[], next: PrSummary[]): PrSummary[] {
   if (!prev.length || !next.length) return next;

@@ -4,7 +4,7 @@ import type { ConnState } from "../lib/useLive.ts";
 import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
 import { MOD_KEY } from "../lib/format.ts";
-import { IS_MAC_DESKTOP } from "../lib/desktop.ts";
+import { IS_MAC_DESKTOP, powerStatus, setPowerMode, type PowerMode, type PowerStatus } from "../lib/desktop.ts";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
@@ -46,6 +46,62 @@ function IconBtn({ title, active, onClick, children }: { title: string; active?:
       }}
     >
       {children}
+    </button>
+  );
+}
+
+/** A moon becoming a sun-with-rays as it wakes — the ladder On/Agent/Off draws. */
+function PowerIcon({ size = ICON.sm }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="4.2" />
+      <path d="M12 2.5v2.4M12 19.1v2.4M4.7 4.7l1.7 1.7M17.6 17.6l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.7 19.3l1.7-1.7M17.6 6.4l1.7-1.7" />
+    </svg>
+  );
+}
+
+const POWER_LABEL: Record<PowerMode, string> = { on: "On", agent: "Agent", off: "Off" };
+const POWER_NEXT: Record<PowerMode, PowerMode> = { on: "agent", agent: "off", off: "on" };
+
+/**
+ * The machine's own sleep, three ways: always awake, awake only while an
+ * agent is working, or left to sleep normally. Absent (renders nothing) in a
+ * browser tab or on a shell built before it existed — `powerStatus` answers
+ * null in both cases, and there is nothing honest to show for either.
+ *
+ * Lives beside the other machine controls rather than inside Settings on
+ * purpose: a mode that silently stopped keeping the machine awake is a
+ * shift that silently stopped, and that has to be readable at a glance.
+ */
+function PowerModeButton() {
+  const [status, setStatus] = useState<PowerStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const poll = () => { void powerStatus().then((s) => { if (alive) setStatus(s); }); };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  if (!status) return null;
+  const color = status.mode !== "off" && status.awake ? "var(--success)" : "var(--text3)";
+  const title = status.mode === "agent"
+    ? `Agent mode — ${status.awake ? "awake, an agent is working" : "idle, nothing is working"}. Click for Off.`
+    : status.mode === "on"
+      ? "Always awake. Click for Agent mode."
+      : "Normal sleep. Click for always awake.";
+  return (
+    <button
+      onClick={() => { void setPowerMode(POWER_NEXT[status.mode]).then((s) => s && setStatus(s)); }}
+      title={title}
+      className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold transition-colors"
+      style={{
+        color,
+        border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`,
+        background: `color-mix(in srgb, ${color} ${status.awake ? 18 : 8}%, transparent)`,
+      }}
+    >
+      <PowerIcon />
+      <span className="hidden sm:inline">{POWER_LABEL[status.mode]}</span>
     </button>
   );
 }
@@ -325,6 +381,7 @@ export function Header({
               style={{ background: "color-mix(in srgb, var(--success) 30%, transparent)" }}>{waiting}</span>
           )}
         </button>
+        <PowerModeButton />
         {/* Skills demoted to a plain icon */}
         <IconBtn title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></IconBtn>
         {/* Ports and resources sit next to settings, and the workspace rail

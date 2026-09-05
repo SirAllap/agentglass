@@ -57,6 +57,9 @@ export interface LaunchSpec {
   mode: string;
   /** No transcript yet, so this session has never produced a turn. */
   fresh: boolean;
+  /** Nobody is watching this one. Changes what the CLI is allowed to do — see
+   *  the note beside `--disallowed-tools` in agents/claudecode.ts. */
+  unattended?: boolean;
 }
 
 export interface PaneAgent {
@@ -80,7 +83,7 @@ export interface PaneAgent {
    * brand-new session has no file until it answers something, and the turn has
    * to know where to watch before it sends anything.
    */
-  transcriptFor(cwd: string, sessionId: string): string;
+  transcriptFor(cwd: string, sessionId: string, home?: string): string;
 
   /** The command that starts the CLI in the pane. */
   argv(spec: LaunchSpec): string[];

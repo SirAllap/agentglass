@@ -105,6 +105,22 @@ function applyGuestGuard(webPreferences, params) {
   webPreferences.webSecurity = true;
   webPreferences.allowRunningInsecureContent = false;
   webPreferences.enableBlinkFeatures = "";
+  /* `allowpopups` is deliberately NOT stripped. A guest may ASK for a window;
+     what happens to the request is decided by the window-open handler in
+     main.js, which turns a link into a tab and gives a sign-in popup a real
+     window. Refusing it here would put that decision back in Chromium's hands,
+     where the answer is always null — and a null is what breaks every OAuth
+     flow. */
+  // Every tab but the frontmost one sits behind `visibility: hidden` in
+  // BrowserPanel — on purpose, that is how a background tab keeps existing
+  // without painting. Left at Chromium's default, that same hidden state
+  // throttles the guest's timers, which is where a page's WebSocket client
+  // usually lives: measured against a real softphone-style tab, a push
+  // notification that had already arrived over the wire sat undelivered to
+  // page JS until the tab was brought to the front. A guest a person is
+  // knowingly leaving in the background to keep receiving pushes is the
+  // whole reason tabs exist here, so it never gets to opt in.
+  webPreferences.backgroundThrottling = false;
   webPreferences.partition = partition;
   return true;
 }

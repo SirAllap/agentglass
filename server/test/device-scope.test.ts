@@ -213,6 +213,7 @@ describe("the pairing routes themselves", () => {
       "/otlp/v1/traces": "append-only OTel sink, same reason",
       "/v1/logs": "append-only OTel sink, same reason",
       "/otlp/v1/logs": "append-only OTel sink, same reason",
+      "/agents/status": "a hooked session saying what it works on, asked for by the Lantern reminder — it has no secret to carry, and this replaces one row and raises nothing",
     };
     const FROM_ANYWHERE: Record<string, string> = {
       "/health": "answers a fixed shape, so a shell — or a phone that is not paired yet — can find which server owns the port",

@@ -78,6 +78,11 @@ export function Kpis({
   const t = stats?.totals;
   const working = agents.filter((a) => a.status === "working").length;
   const waiting = agents.filter((a) => a.status === "waiting").length;
+  // Counted separately rather than folded into `working`, and said out loud
+  // under that number. A stalled session is running — it holds a pane, a
+  // process and a bill — but calling it working is the claim this whole state
+  // exists to stop the cockpit making.
+  const stalled = agents.filter((a) => a.status === "stalled").length;
   const failed = t?.errors ?? 0;
   const tools = t?.tool_calls ?? 0;
   // Health is a *tool* failure rate, so its numerator has to be tool failures.
@@ -159,7 +164,7 @@ export function Kpis({
       {/* pulse — the live tempo, grouped */}
       <motion.div {...enter} transition={{ delay: 0.05, type: "spring", stiffness: 300, damping: 26 }} className="panel">
         <div className="grid grid-cols-3 h-full" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", gap: "1px" }}>
-          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u="Live agents" accent="var(--success)" /></div>
+          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u={stalled > 0 ? `${stalled} stalled` : "Live agents"} accent="var(--success)" /></div>
           <div style={{ background: CELL_BG }}><PulseCell k="Events / min" v={epm} u="Throughput" accent="var(--info)" /></div>
           <div style={{ background: CELL_BG }}><PulseCell k="Tools run" v={tools} u={`${(t?.events ?? 0).toLocaleString()} events`} /></div>
         </div>

@@ -20,6 +20,61 @@ import { basename } from "node:path";
 export interface ActorSource {
   kind: "machine" | "device";
   device?: { id: string; label: string };
+  /**
+   * Whether this request came from one of the app's own pages — the desktop
+   * shell's renderer or the dashboard in a browser — as opposed to a bare
+   * client holding the same token: a hook, the CLI, an MCP client, an agent's
+   * `curl`. The route decides it, because the evidence is the Origin header and
+   * only the route has the request.
+   *
+   * Three states, and the third is the point. `true` and `false` are answers;
+   * *absent* means the caller never looked, and then this module keeps saying
+   * what it has always said. A missing flag read as `false` would relabel every
+   * press a person makes as a bare client on every route that has not been
+   * taught to set it, and a log that calls the human a machine is worse than
+   * one that calls the machine a human — the first is wrong on nearly every
+   * row, the second on the rare one.
+   *
+   * What it is not: proof. Origin is unforgeable for a *browser*, which is what
+   * makes it worth checking against a page on the web; a local process holding
+   * the token can put whatever it likes in a header. This separates the honest
+   * cases, which is what a log is for. What stops the held party releasing its
+   * own hold is the route refusing the credential, not this field.
+   */
+  fromPage?: boolean;
+}
+
+/**
+ * The name for this machine's own token, presented by something that is not one
+ * of the app's pages.
+ *
+ * "local" was the only answer here, and it is what a person pressing the button
+ * in the desktop app produces — so an audit line could not tell the desk apart
+ * from a script, a hook, or the very agent whose call was being held. For every
+ * other write that ambiguity is a nuisance; for a gate it voids the record,
+ * because "who approved that" is the whole question the log exists to answer
+ * and both possible answers looked identical.
+ *
+ * The words are chosen for the reader months later rather than for precision:
+ * it says what was presented, which is all that is actually known. The token is
+ * shared by the whole machine, so no name can be invented for its holder — but
+ * "not the person at the desk, and not a paired device" is a fact, and it is
+ * the one that changes what the line means.
+ */
+export const MACHINE_ACTOR = "machine token";
+
+/**
+ * Whether an actor string is the shared token rather than a person.
+ *
+ * Exported because the audit line is not the only place the distinction has to
+ * land: gate.ts tells a stopped model who released it, and the actor string is
+ * the only thing the decision path carries. It asks this function instead of
+ * matching a literal of its own, for the reason typedReason() compares against
+ * defaultReason() rather than a copy of its text — two spellings of the same
+ * fact drift, and the day they do, the model is told a human decided again.
+ */
+export function isMachineActor(actor: string | null | undefined): boolean {
+  return typeof actor === "string" && (actor === MACHINE_ACTOR || actor.startsWith(`${MACHINE_ACTOR} · `));
 }
 
 /**
@@ -36,32 +91,51 @@ export interface ActorSource {
  * The id is part of the stored string rather than resolved at read time on
  * purpose: forgetting a phone must not erase who used it, and a log that turns
  * into unresolvable ids the moment you revoke a device is exactly wrong.
+ *
+ * The label is also the one piece of this vocabulary an outsider writes, so it
+ * is the one place the vocabulary can be borrowed: a phone paired as "machine
+ * token" would produce a line that reads as the shared credential, and gate.ts
+ * would then tell a stopped model no human had decided when one had. Such a
+ * label is dropped rather than trusted — the same reason the id rides along at
+ * all, applied to the other thing this string must not be mistaken for.
  */
 export function deviceActor(d: { id: string; label: string }): string {
   const short = String(d.id).replace(/[^0-9a-z]/gi, "").slice(0, 6) || "unknown";
-  const label = String(d.label || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  const raw = String(d.label || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  const label = raw.toLowerCase() === MACHINE_ACTOR ? "" : raw;
   return label ? `${label} · ${short}` : `device · ${short}`;
 }
 
 /**
  * Who did it, as far as the server can honestly tell.
  *
- * Two answers, and which one applies is a question of what the caller proved.
+ * Three answers, and which one applies is a question of what the caller proved.
  *
  * A *paired device* has its own credential and the name somebody accepted when
  * they paired it (devices.ts), so here a name is a fact rather than a fiction —
  * this is the part the shared token could never support, and the reason the
  * question in #299 has a real answer now instead of an address.
  *
+ * The *machine token presented by something that is not a page* is the answer
+ * this function used to fold into the one below it. A hook, the CLI and an
+ * agent's `curl` all hold that token — it is in the agent's own environment and
+ * readable on disk — so a line saying `local` covered both the person at the
+ * desk and the process the line was about. They are now different strings; see
+ * MACHINE_ACTOR for the wording and for what this does not claim.
+ *
  * Everything else falls back to where the request arrived from: `local` for a
  * loopback caller — the dashboard on this machine — and the address otherwise,
- * which is all the machine token can honestly assert, since it is shared.
+ * which is all a shared token can honestly assert about a caller who did not
+ * say how it arrived.
  */
 export function actorOf(ip: string | null | undefined, caller?: ActorSource | null): string {
   const dev = caller?.kind === "device" ? caller.device : null;
   if (dev) return deviceActor(dev);
-  if (!ip) return "local";
-  return isLoopback(ip) ? "local" : ip.replace(/^::ffff:/, "");
+  const where = !ip || isLoopback(ip) ? "local" : ip.replace(/^::ffff:/, "");
+  // `=== false` and not `!caller.fromPage`: absent is "the route never looked",
+  // and the address on its own is what it has always meant. See ActorSource.
+  if (caller?.kind === "machine" && caller.fromPage === false) return `${MACHINE_ACTOR} · ${where}`;
+  return where;
 }
 
 /** Longest a target may be. A commit message or a review body belongs in the

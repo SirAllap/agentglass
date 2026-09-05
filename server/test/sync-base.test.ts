@@ -33,7 +33,7 @@ beforeAll(async () => {
   };
   commit("a.txt", "one\n", "first");
 
-  // A card branch, checked out in its own worktree — David's actual shape.
+  // A card branch, checked out in its own worktree — the maintainer's actual shape.
   wt = `${repo}-CARD-1`;
   run(repo, "worktree", "add", "-q", "-b", "CARD-1", wt);
 

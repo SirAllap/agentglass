@@ -16,7 +16,7 @@
  *
  * What this deliberately cannot say is WHO did it — the query answers with
  * cards, not with an activity feed — so it never claims to. "Assigned to you"
- * is true; "David assigned this to you" would be a guess.
+ * is true; "Ada assigned this to you" would be a guess.
  *
  * The state is on disk. Without it a restart re-reads a day of changes and
  * announces all of them, which is how a notification feature teaches people to
@@ -50,7 +50,13 @@ import type { ProviderTask } from "../../shared/providers.ts";
  */
 export type CardReader = (sinceMs: number) => Promise<{
   ok: boolean;
-  data?: { tasks: ProviderTask[] };
+  data?: {
+    tasks: ProviderTask[];
+    /** The read ran out of pages before it ran out of changes. Optional so a
+     *  stand-in in a test that does not care can leave it out; absent means
+     *  "not short", which is the answer a hand-written fixture wants. */
+    truncated?: boolean;
+  };
   /** For the person, never a raw body. */
   error?: string;
   /** The one failure that means "reconnect" rather than "try later". */
@@ -321,7 +327,33 @@ export async function pollCards(now = Date.now()): Promise<CardNote[]> {
     }
   }
 
-  save({ seen, at: now, told: [...told].slice(-TOLD_MAX) });
+  /*
+   * A TRUNCATED READ MUST NOT MOVE THE HIGH-WATER MARK EITHER.
+   *
+   * The rule was already here for a FAILED read — "the changes it did not see
+   * are still changes" — and a read that came back short is the same fact
+   * wearing a success. ClickUp answers 100 rows a page and says nothing about
+   * how many there are, so `changedForMe`/`changedOnLists` now walk up to four
+   * pages and report whether they ran out of room.
+   *
+   * Measured on the real workspace, over the 17 lists behind his saved boards:
+   * 32 cards changed in a day, 178 in a week. The window here is "since I last
+   * looked", so a day is comfortable and a weekend away is not — and before
+   * this, the poll read the first 100 of those 178, advanced the mark past all
+   * of them, and the other 78 were never reported. Silently, and permanently:
+   * nothing ever looks at that window again.
+   *
+   * Leaving `at` where it was means the next poll asks for the same window and
+   * sees the rest. The cards already handled are in `seen` and in `told`, so
+   * nothing is announced twice — the cost of not advancing is one repeated
+   * read, and the cost of advancing is a change nobody hears about.
+   */
+  const short = r.data.truncated === true || (board.ok && board.data?.truncated === true);
+  /* Not `noteTrouble`. That banner is for a failure somebody has to act on — a
+     401, a token to reconnect — and this is a poll that will catch up on its
+     own within minutes. Raising it here would be the same cry-wolf that made
+     the old error notifications unreadable. */
+  save({ seen, at: short ? s.at : now, told: [...told].slice(-TOLD_MAX) });
   // Newest first when there are too many: if only eight of a hundred can be
   // said, they should be the eight that just happened.
   return notes.length > MAX_NOTES ? notes.slice(-MAX_NOTES) : notes;

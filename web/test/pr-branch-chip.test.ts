@@ -62,12 +62,17 @@ describe("the chip opens rather than searches", () => {
   it("hands over repository and number, and never reaches the search", async () => {
     const mod = await import("../src/lib/openPrs.ts");
     const searched: unknown[] = [];
-    const opened: { repo: string; number: number }[] = [];
+    const opened: { repo: string; number: number; mention?: boolean; n?: number }[] = [];
     const offSearch = mod.onOpenPrs((j) => searched.push(j));
     const offOpen = mod.onOpenPr((j) => opened.push(j));
     try {
       mod.openPr("acme/widgets", 17375);
-      expect(opened).toEqual([{ repo: "acme/widgets", number: 17375 }]);
+      expect(opened).toHaveLength(1);
+      expect(opened[0]).toMatchObject({ repo: "acme/widgets", number: 17375 });
+      // `n` rises per request so the same pull request can be asked for twice —
+      // pressing the same inbox row again has to jump again.
+      mod.openPr("acme/widgets", 17375);
+      expect(opened[1]!.n).toBeGreaterThan(opened[0]!.n!);
       expect(searched).toEqual([]);
     } finally { offOpen(); offSearch(); }
   });

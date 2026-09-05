@@ -103,7 +103,9 @@ describe("what the panel is handed", () => {
   const SS = [
     "State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process",
     `LISTEN 0      512    0.0.0.0:4000        0.0.0.0:*         users:(("agentglass-serv",pid=${process.pid},fd=24))`,
-    'LISTEN 0      4096   127.0.0.1:7437      0.0.0.0:*         users:(("engram",pid=5366,fd=3))',
+    // A second daemon, invented: a fixture copies a real process name off the
+    // machine it was written on, and this repository is public.
+    'LISTEN 0      4096   127.0.0.1:7437      0.0.0.0:*         users:(("notekeeper",pid=5366,fd=3))',
   ].join("\n");
 
   test("every row carries the two new facts", () => {

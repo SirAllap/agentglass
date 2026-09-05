@@ -34,15 +34,15 @@ function watching(seen: Record<string, { status: string; customId?: string; titl
 }
 
 const CARDS = {
-  "86e2aaa11": { status: "READY FOR QA", customId: "ORBIT-1042", title: "Incarcerated calls skip the Free Plan pause that stops every other call" },
-  "86e2bbb22": { status: "IN PROGRESS", customId: "ORBIT-1043", title: "Usage counter resets to zero after a plan change" },
+  "86xaaa011": { status: "READY FOR QA", customId: "ORBIT-1042", title: "Scheduled exports skip the quiet-hours pause that stops every other job" },
+  "86xbbb022": { status: "IN PROGRESS", customId: "ORBIT-1043", title: "Usage counter resets to zero after a plan change" },
 };
 
 describe("which card a notification is about", () => {
   it("finds it by the exact title the notification carried", () => {
     watching(CARDS);
-    expect(cardForTitle("Incarcerated calls skip the Free Plan pause that stops every other call"))
-      .toEqual({ id: "86e2aaa11", label: "ORBIT-1042" });
+    expect(cardForTitle("Scheduled exports skip the quiet-hours pause that stops every other job"))
+      .toEqual({ id: "86xaaa011", label: "ORBIT-1042" });
   });
 
   it("finds it when the notification daemon truncated the title", () => {
@@ -50,8 +50,8 @@ describe("which card a notification is about", () => {
        that is the form this receives. Matching only on equality would have made
        the feature work in a test and never once on the machine. */
     watching(CARDS);
-    expect(cardForTitle("Incarcerated calls skip the Free Pla…")).toMatchObject({ label: "ORBIT-1042" });
-    expect(cardForTitle("Incarcerated calls skip the Free Pla...")).toMatchObject({ label: "ORBIT-1042" });
+    expect(cardForTitle("Scheduled exports skip the quiet-hou…")).toMatchObject({ label: "ORBIT-1042" });
+    expect(cardForTitle("Scheduled exports skip the quiet-hou...")).toMatchObject({ label: "ORBIT-1042" });
   });
 
   it("ignores case and stray whitespace", () => {
@@ -82,8 +82,8 @@ describe("which card a notification is about", () => {
   });
 
   it("falls back to the ClickUp id when a card has no readable label", () => {
-    watching({ "86e2ccc33": { status: "OPEN", title: "A card with no custom id at all" } });
-    expect(cardForTitle("A card with no custom id at all")).toEqual({ id: "86e2ccc33", label: "86e2ccc33" });
+    watching({ "86xccc033": { status: "OPEN", title: "A card with no custom id at all" } });
+    expect(cardForTitle("A card with no custom id at all")).toEqual({ id: "86xccc033", label: "86xccc033" });
   });
 
   it("answers nothing rather than throwing on rubbish input", () => {

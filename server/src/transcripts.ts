@@ -536,6 +536,134 @@ interface Tail {
   touched: number;
 }
 const tails = new Map<string, Tail>();
+
+/**
+ * Transcripts this workspace has already decided are somebody else's.
+ *
+ * MEASURED, on the machine this was written for: a cockpit scoped to one repo,
+ * with agent sessions running in ANOTHER repo at the same time, was re-reading
+ * those other transcripts WHOLE on every three-second sweep — 6.5 GB a minute,
+ * 17% of a core, for files whose every byte it then threw away.
+ *
+ * The reason is the interaction of two correct decisions. A file that grew is
+ * not skipped (it might have new lines); and a file the scope refuses is
+ * deliberately NOT stamped into `transcript_files` (so widening the workspace
+ * later can still pick it up whole — see the `skipped` branch in the sweep). A
+ * live session outside the scope grows every second, so it was re-read every
+ * sweep, for ever.
+ *
+ * The verdict is what gets remembered instead of the progress: which scope
+ * refused it, and the cwd it was refused for. Nothing durable is written, so
+ * widening the workspace still re-reads the file exactly once — the entry is
+ * keyed BY SCOPE, so a different workspace does not match it.
+ */
+const refused = new Map<string, { scope: string; size: number; mtime: number; at: number }>();
+
+/** The scope refused this file, at this size and this mtime. Kept in memory
+ *  only — see `refused`. Size and mtime are what let a REWRITE be noticed: a
+ *  file that got shorter, or that changed without growing, is not the file that
+ *  was judged. */
+function noteRefused(path: string, scope: string, size: number, mtime: number): void {
+  // Delete first: `Map.set` on a key that is already there does NOT move it, so
+  // without this the eviction below — which reads insertion order — would throw
+  // away the entry being refused most often and keep the cold ones.
+  refused.delete(path);
+  refused.set(path, { scope, size, mtime, at: Date.now() });
+  // Bounded like the tail cache: a machine with hundreds of old transcripts
+  // should not grow a map for ever. Cheap to lose — losing one costs one read.
+  if (refused.size > MAX_REFUSED) {
+    for (const k of [...refused.keys()].slice(0, refused.size - MAX_REFUSED)) refused.delete(k);
+  }
+}
+
+/**
+ * Does this file still belong to somebody else?
+ *
+ * Growing does not change the answer — that is the whole point, since a live
+ * session elsewhere grows every second. Getting SHORTER does: the file was
+ * rewritten, so the content that was judged is gone, and it is read and judged
+ * again. `transcript_files` holds nothing for a refused file (deliberately), so
+ * the size to compare against is the one kept with the verdict.
+ */
+function stillRefused(path: string, scope: string | null, rewritten: boolean, size: number, mtime: number): "yes" | "stale" | "no" {
+  if (!scope || rewritten) return "no";
+  const seen = refused.get(path);
+  if (!seen || seen.scope !== scope) return "no";
+  // Shorter, or changed without growing: the content that was judged is gone.
+  if (size < seen.size || (size === seen.size && mtime !== seen.mtime)) { refused.delete(path); return "no"; }
+  // And it expires, because the verdict is only as good as the answer `inScope`
+  // could give at the time. That answer goes through `worktreeFamily`, whose
+  // own cache holds for 5 seconds ON PURPOSE — "adding a worktree shows up
+  // everywhere at the same time" — and through `listWorktrees`, which returns
+  // no family at all for a missing git, a non-repo directory, or a repo caught
+  // mid-rebase. Without an expiry, a file judged during one of those moments
+  // stays somebody else's until it shrinks or the server restarts, and the five
+  // seconds that were promised quietly become for ever. The cost of re-asking
+  // is a bounded head read — see `judgeByHead`.
+  //
+  // "stale" rather than "no": the entry stays, because the caller re-asks the
+  // cheap way and usually gets the same answer back.
+  if (Date.now() - seen.at > REFUSED_TTL_MS) return "stale";
+  return "yes";
+}
+
+/**
+ * Re-ask the scope question without re-reading the file.
+ *
+ * What the question needs is the first `cwd` in the transcript, and that is
+ * near the top: measured across 90 real transcripts, 84 carry it inside the
+ * first 64 KB. So a revalidation reads a bounded head instead of a whole file
+ * that can be hundreds of megabytes.
+ *
+ * Null means "could not tell from the head" — 6 of those 90 carry their first
+ * cwd further in (119,103 bytes was the worst) and one has none at all in the
+ * first 256 KB. That answer must fall back to the full read, not to a guess:
+ * `ingestFile` treats an empty cwd as "no scope test to make" and INGESTS the
+ * file, so a head that came up empty and was believed would quietly pull in the
+ * sessions this whole mechanism exists to keep out.
+ *
+ * Only ever used to REFRESH an existing verdict. The first judgement still
+ * comes from the full read, which is the same pass that ingests the file when
+ * the answer is yes — a head-first cold path would read every in-scope file
+ * twice.
+ */
+async function judgeByHead(path: string, scope: string): Promise<boolean | null> {
+  let head: string;
+  try { head = await Bun.file(path).slice(0, JUDGE_HEAD_BYTES).text(); } catch { return null; }
+  // Drop the trailing partial line: the slice cut wherever it landed.
+  const nl = head.lastIndexOf("\n");
+  if (nl < 0) return null;
+  const MAX_LINE = maxLineBytes();
+  for (const line of head.slice(0, nl).split("\n")) {
+    if (!line || !line.includes('"cwd"')) continue;
+    if (Buffer.byteLength(line, "utf8") > MAX_LINE) continue;
+    let cwd = "";
+    try { cwd = str((JSON.parse(line) as Record<string, unknown>).cwd) ?? ""; } catch { continue; }
+    if (!cwd) continue;
+    // The same pair of tests the full path makes, and for the same reasons —
+    // see the block in `ingestFile` that first refused this file.
+    return !inScope(cwd, scope) && !inScope(resolvedRoot(cwd), scope);
+  }
+  return null;
+}
+
+/** The file's mtime, or 0 when it cannot be read. Only ever compared against
+ *  another reading of the same thing, so 0 simply means "assume it changed". */
+function mtimeOf(path: string): number {
+  try { return statSync(path).mtimeMs; } catch { return 0; }
+}
+
+/** Room for a machine that has run a lot of sessions elsewhere. Each entry is
+ *  one short string and three numbers. */
+const MAX_REFUSED = 4096;
+/** How long a refusal is trusted before it is asked again — see `stillRefused`
+ *  for why it has to expire at all, and `judgeByHead` for what re-asking costs.
+ *  A minute against a 3-second sweep is 1 read in 20 for a file that is still
+ *  somebody else's, and it bounds how long a workspace-visible mistake lasts. */
+const REFUSED_TTL_MS = 60_000;
+/** How much of a transcript a revalidation reads. 256 KB covers 84 of 90 real
+ *  transcripts measured; the rest fall back to the full read. */
+const JUDGE_HEAD_BYTES = 256 * 1024;
 /** A transcript nobody has appended to in this long is finished, or close
  *  enough; its cached tool inputs can be megabytes, so let them go. Dropping an
  *  entry is always safe — the next sweep just re-reads the file whole. */
@@ -558,6 +686,13 @@ const MAX_TAILS = 64;
  *  eviction can only cost time, never correctness. */
 export function __dropTailCache(): void {
   tails.clear();
+  refused.clear();
+}
+
+/** Age every refusal past its TTL, so a test can watch the revalidation without
+ *  waiting a minute for it. Test-only, like `__dropTailCache`. */
+export function __expireRefusals(): void {
+  for (const e of refused.values()) e.at = 0;
 }
 function evictTails(now: number): void {
   for (const [path, t] of tails) if (now - t.touched > TAIL_IDLE_MS) tails.delete(path);
@@ -719,9 +854,16 @@ async function ingestFile(
   // linked worktrees directly, which covers a cockpit opened *on* a worktree.
   if (scope && cwd) {
     if (!inScope(cwd, scope) && !inScope(resolvedRoot(cwd), scope)) {
+      /* Remembered, so the next sweep does not read the whole thing again to
+         reach this same answer — see `refused`. The verdict is a fact about
+         this file's cwd and this scope, and both are in the key. */
+      noteRefused(path, scope, file.size, mtimeOf(path));
       return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true, expect: expectLines };
     }
   }
+  // It is ours after all (the workspace widened, or the cwd moved into scope):
+  // forget any older refusal so a later narrowing is judged fresh.
+  if (refused.has(path)) refused.delete(path);
   if (cwd) projectPaths.set(source_app, project_path);
 
   const ctx = { source_app, project_path, cwd, session_id, toolCalls, seenUsage };
@@ -976,6 +1118,25 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Prom
           // saved offset now points into different content. Re-read it whole
           // rather than skipping past records that no longer exist.
           const rewritten = !!prev && st.size < prev.size;
+          /* Already judged somebody else's, by THIS workspace: skip it without
+             opening it. This is the whole fix for the 6.5 GB/min — a live
+             session in another repo grows every second, and every one of those
+             growths used to buy a full re-read of a file whose bytes we then
+             threw away. */
+          const verdict = stillRefused(path, scope, rewritten, st.size, st.mtimeMs);
+          if (verdict === "yes") continue;
+          /* The verdict has aged out, but this file was somebody else's a
+             minute ago. Ask the cheap way before falling back to reading a live
+             multi-hundred-megabyte transcript whole. */
+          if (verdict === "stale" && scope) {
+            const again = await judgeByHead(path, scope);
+            if (again === true) { noteRefused(path, scope, st.size, st.mtimeMs); continue; }
+            // false, or "the head could not say": both go the long way. false
+            // because the file has come into scope and now has to be INGESTED,
+            // and null because a head that found no cwd must never be believed —
+            // `ingestFile` reads an empty cwd as "no scope test to make".
+            refused.delete(path);
+          }
           // This read is outside any transaction and is only a *hint* by the time
           // the batch below writes — see putFileIfUnmoved. `from` and the marker
           // are different numbers on the rewrite path, so both travel.

@@ -96,6 +96,21 @@ describe("the requirements catalogue matches what the app actually runs", () => 
     ps: "POSIX; present anywhere this runs, and the fallback when /proc is absent",
     // Probed as the older alias beside `python3`, which IS catalogued.
     python: "tried alongside python3, which has the row",
+    /*
+     * The runtime this server is already executing in.
+     *
+     * The work loop runs the person's own test command inside the worktree it
+     * cut, and that command is `bun test` — his, not a guess at one, because
+     * "compiling is not evidence" and only his suite decides whether a run
+     * actually finished. A requirements row telling somebody to install the
+     * thing currently interpreting that page would be furniture.
+     */
+    bun: "the runtime this server runs in; the work loop runs his own `bun test`",
+    // Handing a file to the desktop's own viewer. Every desktop has one of
+    // these and the finder says which it used; with none, the preview pane
+    // says so and the file simply stays where it is — nothing else changes.
+    open: "the macOS opener; the finder falls back to saying it cannot",
+    gio: "the GNOME opener, tried beside xdg-open, which has the row",
   };
 
   test("every binary the app runs is catalogued, or exempt with a reason", () => {

@@ -45,3 +45,6 @@ __pycache__/
 # Built vendor binaries (scripts/build-*-static.sh). Megabytes, and
 # reproducible from the pinned sources.
 out/
+
+# scripts/eyes.ts's default screenshot output.
+/.agx-eyes.png

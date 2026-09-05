@@ -193,3 +193,82 @@ describe("sessions nobody is looking at", () => {
     expect(paneTabs([{ ...base, session: "work", paneId: "%1" }])).toHaveLength(1);
   });
 });
+
+/*
+ * A session on somebody else's tmux server is not in this list.
+ *
+ * `listPanes` walks the socket directory and answers for every server that has
+ * a client, so a tmux the test suite left running — or another agent's —
+ * arrives beside the one you work in. On a desk that is a row to scroll past;
+ * on a phone the strip IS the screen.
+ *
+ * Reproduced on a rig with two isolated servers, each with a client, through
+ * the real `/terminal/panes`:
+ *
+ *     canAttach: true   panes: 2
+ *       agx-probe-9f2  win 0 sh      pane %0  attached true   <- a test's
+ *       work           win 0 editor  pane %0  attached true   <- the real one
+ *
+ * and the strip that came out of it:
+ *
+ *     before ->  0 sh (agx-probe-9f2)  |  0 editor (work)
+ *     after  ->  0 editor (work)
+ *
+ * NOTHING ELSE ON THAT WIRE TOLD THEM APART, which is why the fix is a new
+ * field rather than a cleverer read of the old ones. `attached` was true for
+ * both. The pane ids were BOTH `%0` — ids are per server, so they cannot
+ * separate servers and cannot even identify a pane across them. And the name
+ * is not a rule: three servers on this machine each held a session called
+ * `agentglass-understudy`, so a prefix test would have been a guess wearing a
+ * rule's clothes.
+ *
+ * The server has the socket and says only whether it is its own, so the path
+ * still stays on its side of the wire.
+ */
+describe("servers that are not ours", () => {
+  const base = pane({ attached: true });
+
+  test("a session on another tmux server is dropped", () => {
+    const tabs = paneTabs([
+      { ...base, session: "work", paneId: "%1", own: true },
+      { ...base, session: "agx-probe-9f2", sessionId: "$2", paneId: "%2", own: false },
+    ]);
+    expect(tabs.map((t) => t.session)).toEqual(["work"]);
+  });
+
+  test("even when an agent is running in it", () => {
+    // The exception `attached` makes does NOT extend here. An agent in a test's
+    // tmux is a test's agent, and opening its pane on a phone is a coin flip
+    // between two servers that both answer to that id.
+    const tabs = paneTabs([
+      { ...base, session: "work", paneId: "%1", own: true },
+      { ...base, session: "agx-probe-9f2", sessionId: "$2", paneId: "%2", own: false,
+        agentCwds: ["/tmp/agx-probe"] },
+    ]);
+    expect(tabs.map((t) => t.session)).toEqual(["work"]);
+  });
+
+  test("but a server too old to say keeps everything", () => {
+    // Absent is a third answer, the same as it is for `attached`. It is also
+    // what a server answers when this app has never attached anything and has
+    // no server of its own to compare against — and emptying the strip there
+    // would be a phone that shows nothing on a fresh profile.
+    const tabs = paneTabs([
+      { ...base, session: "work", paneId: "%1" },
+      { ...base, session: "other", sessionId: "$2", paneId: "%2" },
+    ]);
+    expect(tabs.map((t) => t.session)).toEqual(["other", "work"]);
+  });
+
+  test("and `own` never revives a session the other rules dropped", () => {
+    // Ours, and still detached with nothing running in it. One filter saying
+    // yes is not the others saying yes.
+    const tabs = paneTabs([
+      { ...base, session: "work", paneId: "%1", own: true },
+      { ...base, session: "leftover", sessionId: "$2", paneId: "%2", own: true, attached: false },
+      { ...base, session: "popup", sessionId: "$3", paneId: "%3", own: true, popup: true },
+      { ...base, session: "agx-phone-%9-abc", sessionId: "$4", paneId: "%4", own: true },
+    ]);
+    expect(tabs.map((t) => t.session)).toEqual(["work"]);
+  });
+});

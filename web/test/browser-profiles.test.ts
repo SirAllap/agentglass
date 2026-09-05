@@ -49,13 +49,22 @@ describe("which partition a tab attaches on", () => {
     }
   });
 
-  test("an id that is not one of ours falls back to the default partition", () => {
-    // Belt and braces against a hand-edited localStorage. Falling back is the
-    // safe direction: the worst case is a tab in the default profile, where the
-    // alternative would be a partition string nobody validated.
-    expect(partitionFor(BASE, "../../app")).toBe(BASE);
-    expect(partitionFor(BASE, "persist:agentglass")).toBe(BASE);
-    expect(partitionFor(BASE, "UPPER")).toBe(BASE);
+  test("an id that is not one of ours gets a jar of its own, never the default", () => {
+    /*
+     * This used to fall back to BASE, and the reasoning was that the worst
+     * case is a tab in the default profile. Measured, that worst case is the
+     * bug: `newtab --profile review-pr-540` handed an agent the person's own
+     * cookies while `tabs` reported the isolated identity it had asked for.
+     *
+     * The value is still never trusted as written — it is slugged to the same
+     * alphabet a minted id uses, so no caller can compose a partition string —
+     * it is simply never the shared one.
+     */
+    for (const bad of ["../../app", "persist:agentglass", "UPPER", "review-pr-540"]) {
+      const p = partitionFor(BASE, bad);
+      expect(p, bad).not.toBe(BASE);
+      expect(MAIN_ALLOWS.test(p), `${bad} → ${p}`).toBe(true);
+    }
   });
 
   test("no partition stem means no partition", () => {
@@ -254,9 +263,11 @@ describe("which partitions a sweep has to cover", () => {
   });
 
   test("an id outside the family cannot widen the sweep", () => {
-    // It collapses to the default rather than becoming a partition nobody
-    // validated — and the main process would refuse it in any case.
+    /* Skipped rather than collapsed. This list comes from the profile menu, so
+       a value that is not a minted id is a hand-edited file — and a sweep is
+       the one place where widening on a bad value costs somebody data. */
     expect(partitionsFor(BASE, ["../../app"])).toEqual([BASE]);
+    expect(partitionsFor(BASE, ["review-pr-540"])).toEqual([BASE]);
   });
 
   test("no stem means nothing to sweep", () => {
@@ -286,5 +297,34 @@ describe("the sweep in the main process", () => {
 
   test("it sweeps the default whether or not it was asked to", () => {
     expect(main).toContain("[...new Set([BROWSER_PARTITION, ...asked])]");
+  });
+});
+
+/*
+ * AN IDENTITY WE CANNOT READ NEVER GETS THE PERSON'S COOKIES.
+ *
+ * `partitionFor` fell through to the base partition for anything that was not
+ * a minted id, and the base partition is the default profile — the person's
+ * own session. A tab asking for `review-pr-540`, the name the skill's own
+ * example uses, attached there: labelled with the profile it asked for,
+ * carrying the session of the one it did not. Nothing failed, and `tabs`
+ * reported the isolated identity the whole time.
+ */
+describe("a partition for a name that is not an id", () => {
+  test("is its own jar, never the shared one", () => {
+    for (const asked of ["review-pr-540", "pol-proj9175", "agent_1", "Agent One"]) {
+      const p = partitionFor("persist:agx", asked);
+      expect(p, asked).not.toBe("persist:agx");
+      expect(p.startsWith("persist:agx-"), asked).toBe(true);
+    }
+  });
+
+  test("still gives the default profile the base partition, which is what keeps logins working", () => {
+    expect(partitionFor("persist:agx", "")).toBe("persist:agx");
+  });
+
+  test("and two different names do not collide on one jar", () => {
+    expect(partitionFor("persist:agx", "review-pr-540"))
+      .not.toBe(partitionFor("persist:agx", "review-pr-541"));
   });
 });

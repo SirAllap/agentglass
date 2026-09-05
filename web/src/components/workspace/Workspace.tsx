@@ -18,10 +18,12 @@
 // opened does not exist yet. On a fresh window that is one view rather than
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { hiddenOnly } from "./hiddenOnly.ts";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { pushScope } from "../../lib/findScope.ts";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
+import { ViewBoundary } from "./ViewBoundary.tsx";
 import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, seedChat, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { FilesView } from "../FilesPanel.tsx";
 import { TasksView } from "../TasksPanel.tsx";
@@ -33,6 +35,9 @@ import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
+import { UnderstudyView } from "../understudy/UnderstudyPanel.tsx";
+import { LanternView } from "../LanternView.tsx";
+import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
 import { requestTermReview } from "../../lib/termReview.ts";
 
 /**
@@ -44,7 +49,18 @@ import { requestTermReview } from "../../lib/termReview.ts";
  * either would kill a session nobody asked to end. The cost is real, and it is
  * the price of them being sessions rather than screens.
  */
-const KEEP_RUNNING = new Set<ViewId>(["term", "chat"]);
+/*
+ * Mounted whether or not anybody has been there.
+ *
+ * The terminal and the chat because they hold a live session. The BROWSER for a
+ * different reason: it is the only view an AGENT drives, and until its panel is
+ * mounted nothing can answer one — so the first `agentglass-browser` call of a
+ * session was answered with "the view is not open", which the CLI fixes by
+ * opening it, which takes the screen off whoever was typing. Mounting it costs
+ * nothing until it is looked at: its tabs come back asleep, and a sleeping tab
+ * is a name and an address with no guest behind it.
+ */
+const KEEP_RUNNING = new Set<ViewId>(["term", "chat", "browser"]);
 
 /*
  * There is no fleet column here, and there was one for about an hour.
@@ -78,6 +94,11 @@ export function Workspace({
   issueJump?: import("../../lib/openIssue.ts").IssueJump | null;
 }) {
   const openChat = useCallback(() => onView("chat"), [onView]);
+  /* Held, not inlined. The hidden views are behind a memo that compares props
+     by identity, and a fresh arrow on every render of this component makes that
+     comparison fail for all seven of them — which is the memo doing nothing at
+     all. Same shape as `openChat` above for the same reason. */
+  const openBrowser = useCallback(() => onView("browser"), [onView]);
 
   /**
    * Start a chat already pointed at a directory, with a prompt waiting.
@@ -106,9 +127,13 @@ export function Workspace({
   const chatWaiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
   const firedReminders = useSyncExternalStore(subscribeReminders, firedCount, firedCount);
+  const lanternWaiting = useSyncExternalStore(subscribeLantern, lanternNeed, lanternNeed);
 
   const pips: Partial<Record<ViewId, RailPip>> = {
     chat: chatWaiting > 0 ? { count: chatWaiting } : {},
+    // The lantern lights: how many agents are stopped on a person right now.
+    // Not how many agents there are — twenty working is a normal afternoon.
+    lantern: lanternWaiting > 0 ? { count: lanternWaiting } : {},
     term: shells > 0 ? { dot: true } : {},
     // The count of things shouting at you, not the size of your backlog: a
     // hundred open tasks is a normal Tuesday, and a badge that said so would
@@ -164,10 +189,19 @@ export function Workspace({
               // hidden view on top would swallow clicks meant for the active one
               // beneath it. `visibility: hidden` does not.
             >
-              {v.id === "dash"
-                ? dashboard(active)
-                : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prJump={prJump}
-                    cardJump={cardJump} issueJump={issueJump} reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
+              {/* One boundary per view, INSIDE the box rather than around the
+                  map: a throw in Git leaves the rail, the terminal's sockets
+                  and every other view exactly where they were. Without it the
+                  whole tree unmounts and the window goes black — measured
+                  twice in a month, and the second time nothing on screen said
+                  which view had done it. */}
+              <ViewBoundary label={v.label}>
+                {v.id === "dash"
+                  ? dashboard(active)
+                  : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prJump={prJump}
+                      openBrowser={openBrowser}
+                      cardJump={cardJump} issueJump={issueJump} reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
+              </ViewBoundary>
             </ViewBox>
           );
         })}
@@ -207,6 +241,10 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
       className="absolute inset-0 flex flex-col min-h-0"
       style={{ visibility: active ? "visible" : "hidden" }}
       aria-hidden={!active}
+      /* Findable from outside React: a screenshot of a pane nobody is looking
+         at has to make that pane paint for a moment, and the thing it flips is
+         this box's visibility. See panePainting.ts. */
+      data-agx-viewbox=""
     >
       {children}
     </div>
@@ -215,9 +253,13 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId, prJump, cardJump, issueJump }: {
+function BodyImpl({ id, active, openChat, openChatWith, openBrowser, reviewInTerminal, chatFocusId, prJump, cardJump, issueJump }: {
   id: ViewId; active: boolean;
   openChat: () => void;
+  /** Bring the browser view forward — the Docker panel asks for it when you
+   *  open a container's port, so a dev server lands in a tab of this app
+   *  instead of somewhere else. */
+  openBrowser: () => void;
   openChatWith: (cwd: string, prompt: string, title: string) => void;
   reviewInTerminal: (root: string, number: number, recipe?: string, card?: string) => void;
   chatFocusId?: string | null;
@@ -231,10 +273,20 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
     case "git": return <GitView active={active} onOpenChat={openChat} />;
     case "diff": return <DiffPage active={active} />;
     case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />;
-    case "docker": return <DockerView active={active} />;
+    case "docker": return <DockerView active={active} onOpenBrowser={openBrowser} />;
     case "term": return <TermView active={active} />;
     case "chat": return <ChatView active={active} focusId={chatFocusId} />;
     case "browser": return <BrowserView active={active} />;
+    /* Nothing is passed but `active`, and that is the shape of the whole
+       feature rather than an oversight: the clone reads a scorecard off
+       the socket and has nothing to hand to another view — no chat to seed, no
+       pull request to jump to. A view that only watches needs no errands. */
+    case "understudy": return <UnderstudyView active={active} />;
+    /* Its chat is a tab on the floating bench, not a seeded Chat view — see
+       lanternAsk.ts. Nothing to hand it. */
+    case "lantern": return <LanternView active={active} />;
     default: return null;
   }
 }
+
+const Body = memo(BodyImpl, hiddenOnly);

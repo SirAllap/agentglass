@@ -59,3 +59,24 @@ export type IconSize = (typeof ICON)[keyof typeof ICON];
  * largest square the layout has room for, which is the honest trade.
  */
 export const HIT = 26;
+
+/**
+ * The smallest square a control may be squeezed into, when `HIT` will not fit.
+ *
+ * This number existed already and lived somewhere nothing could find it:
+ * `FileRail.tsx` declared `const JUMP_BOX = 20` with fifteen lines justifying
+ * it, and this file — the one that owns the question — had never heard of it.
+ * Two floors, two files, neither aware of the other, and an audit that read one
+ * of them produced findings the other file argues against.
+ *
+ * The reasoning is the rail's, kept because it is measured: `HIT` is 26 and
+ * "drops to a row's height where a header has none to spare; never below the
+ * glyph plus its padding". A 9.5px meta line four rows deep in a 320px column
+ * is exactly that case — a 26px square would make the line taller than the
+ * quote it belongs to. 20 clears a 14px glyph with room either side.
+ *
+ * So: `HIT` first, `MIN_BOX` where the layout genuinely cannot carry it, and
+ * nothing below that. A glyph may be `ICON.xs`; the square it lives in may not
+ * shrink to match.
+ */
+export const MIN_BOX = 20;

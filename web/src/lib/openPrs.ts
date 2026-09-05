@@ -52,15 +52,23 @@ export function openPrs(query: string, scope: PrScope = "open"): void {
  * So a caller that knows both the repository and the number says so, and the
  * shell turns that into the panel's own jump — which selects and opens.
  */
-let exact: ((j: { repo: string; number: number }) => void) | null = null;
+/** What a caller can ask for beyond "open it". `mention` says: once it is open,
+ *  go to the place somebody named me and flash it — the inbox knows THAT you
+ *  were mentioned and nothing about where, which is the half that made a
+ *  mention notification end at the top of a forty-entry conversation. */
+export interface PrOpen { repo: string; number: number; mention?: boolean; n?: number }
 
-export function onOpenPr(fn: ((j: { repo: string; number: number }) => void) | null): () => void {
+let exact: ((j: PrOpen) => void) | null = null;
+
+export function onOpenPr(fn: ((j: PrOpen) => void) | null): () => void {
   exact = fn;
   return () => { if (exact === fn) exact = null; };
 }
 
-export function openPr(repo: string, number: number): void {
-  exact?.({ repo, number });
+export function openPr(repo: string, number: number, opts: { mention?: boolean } = {}): void {
+  // `n` rises so asking for the same pull request twice arrives twice: pressing
+  // the same inbox row again should jump to the mention again.
+  exact?.({ repo, number, ...opts, n: ++seq });
 }
 
 /**

@@ -24,7 +24,7 @@ import { commitRows, List } from "../src/components/git/Lists.tsx";
 
 const LINES = [
   { hash: "aaa1111", parents: ["bbb2222"], subject: "fix(ci): defend the budget floor", author: "Ana", date: "2 days ago", graph: "" },
-  { hash: "bbb2222", parents: ["ccc3333", "ddd4444"], subject: "Merge pull request #17561 from acme/ORBIT-1042-record", author: "Ana", date: "2 days ago", graph: "" },
+  { hash: "bbb2222", parents: ["ccc3333", "ddd4444"], subject: "Merge pull request #561 from acme/ORBIT-1042-record", author: "Ana", date: "2 days ago", graph: "" },
   { hash: "ccc3333", parents: [], subject: "chore: the first one", author: "Ana", date: "3 days ago", graph: "" },
 ];
 

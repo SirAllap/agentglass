@@ -74,6 +74,9 @@ const server = spawn({
     AGENTGLASS_PORT: String(port), AGENTGLASS_ROOT: repo,
     AGENTGLASS_DB: join(home, "soak.db"),
     XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"), XDG_CACHE_HOME: join(home, "cache"),
+    // The engine's generated tmux.conf lives in the STATE dir: isolate it too,
+    // or a throwaway run rewrites the conf the real engine is running on.
+    AGENTGLASS_STATE_DIR: join(home, "state"),
     // Its own tmux socket directory, beside the config/data/cache above and
     // for the same reason: this child is a SERVER, and a server with no
     // TMUX_TMPDIR sweeps and lists /tmp/tmux-<uid> — the sessions the user is

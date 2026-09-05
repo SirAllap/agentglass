@@ -47,8 +47,27 @@ export function subscribeSidebarWidth(fn: () => void): () => void {
 }
 
 /** The width, live. Every pane using this resizes together, which is the point. */
-export function useSidebarWidth(): number {
-  return useSyncExternalStore(subscribeSidebarWidth, sidebarWidth, () => DEFAULT);
+/**
+ * The shared width, with a floor a panel can raise for itself.
+ *
+ * 180 is right for a list of branches or files, where a name truncating is the
+ * worst that happens. It is wrong for a row that is a GRID — Docker's is a
+ * dot, a name, a project chip, CPU, MEM, a port and two buttons — because
+ * below a certain width those columns stop fitting and start overlapping,
+ * which is what "the layout breaks" looks like: a project chip printed
+ * straight across a percentage.
+ *
+ * Reported by dragging the handle: the columns did not scroll and did not
+ * truncate, they collided. Hiding the horizontal overflow (the fix before
+ * this one) removed the scrollbar and left the collision, which is worse — a
+ * scrollbar at least admits something did not fit.
+ *
+ * So the handle stays, and the panel that needs room says how much. `min`
+ * only ever raises the floor; it can never lower it below the shared one.
+ */
+export function useSidebarWidth(min = SIDEBAR_MIN): number {
+  const w = useSyncExternalStore(subscribeSidebarWidth, sidebarWidth, () => DEFAULT);
+  return Math.max(w, Math.max(SIDEBAR_MIN, min));
 }
 
 /**

@@ -154,7 +154,7 @@ export function DashboardView({
           </div>
           <div className="xl:col-span-3 min-w-0 min-h-0 grid grid-rows-[3fr_2fr] gap-3 h-[420px] xl:h-[520px] tall:h-auto">
             <Radar agents={agents} onSelect={(a) => onFilter({ ...filter, app: a.source_app })} />
-            <Alerts alerts={alerts} agents={agents} onSelectApp={(app) => onFilter({ ...filter, app })} />
+            <Alerts alerts={alerts} agents={agents} active={active} onSelectApp={(app) => onFilter({ ...filter, app })} />
           </div>
         </div>
 
@@ -176,7 +176,7 @@ export function DashboardView({
               Usage cell above is allowed to ask for more. */}
           <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><CostByModel stats={stats} /></div>
           <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><Latency stats={stats} /></div>
-          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><Sessions provider={filter.provider} /></div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><Sessions provider={filter.provider} active={active} /></div>
           <div className="xl:col-span-9 min-w-0 min-h-0 h-[140px] xl:h-[140px]"><MissionTimeline stats={stats} /></div>
         </div>
       </div>

@@ -10,7 +10,14 @@ import type { ControlCmd, ViewId } from "../../shared/types.ts";
 // earns its place for a further reason: an agent driving the built-in browser
 // (browserdrive.ts) needs that view mounted before anything can answer it, and
 // the alternative was telling the agent to ask a human to click a tab.
-const VIEW_IDS: readonly ViewId[] = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files"];
+//
+// `understudy` is on the list for the ORDINARY reason rather than a special
+// one, and it is worth saying so out loud because the view sounds like it
+// should be an exception: it is a scorecard of decisions a stand-in would have
+// made, it acts on nothing, and everything it shows already rides the same
+// read-only socket. A view the keyboard reaches with one key and /control
+// answers 400 for is the drift this duplicated list exists to make visible.
+const VIEW_IDS: readonly ViewId[] = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "understudy", "lantern"];
 type OpenWhat = Extract<ControlCmd, { cmd: "open" }>["what"];
 const OPEN_WHAT: readonly OpenWhat[] = ["stats", "skills", "search", "help", "palette"];
 type ChatDo = Extract<ControlCmd, { cmd: "chat" }>["do"];

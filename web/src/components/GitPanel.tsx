@@ -50,6 +50,8 @@ import { primaryAction, groupByPrefix, bulkDeletable, type GitKind, type GitRowS
 import { openPrs, openPr } from "../lib/openPrs.ts";
 import { isScratchBranch, scratchNote } from "../lib/scratchBranch.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
+import { openPeek } from "../lib/openPeek.ts";
+import { groupHunks } from "../lib/changeGroups.ts";
 import type { PrBranchSummary } from "../../../shared/types.ts";
 
 const unifiedText = (c: GitFileChange) => c.hunks.map((h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${h.lines.join("\n")}`).join("\n");
@@ -444,7 +446,7 @@ function ListToolbar({ q, onQ, placeholder, sort, onSort, sorts, count, total, c
    * It sits IN this strip rather than in one of its own above it. Every tab had
    * two rows of controls doing one job, which cost a row of height on each of
    * six tabs and made the panel read as two toolbars stacked. Reported as
-   * "puede ser todo en una misma línea", and it can.
+   * "it can all go on one single line", and it can.
    */
   lead?: ReactNode;
 }) {
@@ -576,10 +578,12 @@ function HelpSheet({ view, onClose }: { view: View; onClose: () => void }) {
 }
 
 function ShortcutBar({ view, logOpen, onToggleLog, editorName }: { view: View; logOpen: boolean; onToggleLog: () => void; editorName?: string | null }) {
-  // Only advertised where it works: on a machine with no editor at all, `e`
-  // does nothing, and a bar that claims otherwise is the bar lying.
+  /* Advertised whenever there is a file to open: it opens the app's own editor
+     pane now rather than shouting at an nvim somewhere else, so it no longer
+     depends on this machine having one running. `editorName` still gates it —
+     a machine with no editor at all has nothing to open the pane with. */
   const keys: [string, string][] = view === "changes" && editorName
-    ? [...VIEW_KEYS.changes.slice(0, 2), ["e", `edit in ${editorName}`], ...VIEW_KEYS.changes.slice(2)]
+    ? [...VIEW_KEYS.changes.slice(0, 2), ["e", "open it here"], ...VIEW_KEYS.changes.slice(2)]
     : VIEW_KEYS[view];
   return (
     <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
@@ -946,8 +950,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * `loadTree` is async and records the root it answered for in `treeFor`. The
    * conflict screen keys off this value, so between switching worktree and the
    * new tree arriving, a conflict belonging to the checkout you LEFT was drawn
-   * over the one you opened — reported as the resolver appearing "para todos
-   * los wt/branches", with the file list beside it reading "nothing to commit,
+   * over the one you opened — reported as the resolver appearing "for every
+   * worktree/branch", with the file list beside it reading "nothing to commit,
    * working tree clean" because that half had already caught up.
    *
    * A tree from somewhere else is not evidence about here, so it reads clean
@@ -977,7 +981,28 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   useEffect(() => {
     // `treeFor` for the same reason as `mergeState` above: asking the server
     // about a root whose tree has not arrived yet answers about the wrong one.
-    if (!open || !root || treeFor !== root || mergeState === "clean") { setConflicts([]); setMerge(null); return; }
+    if (!open || !root || treeFor !== root || mergeState === "clean") {
+      setConflicts([]);
+      setMerge(null);
+      /*
+       * AND CLOSE THE EDITOR, because the conflict it is editing is gone.
+       *
+       * `blockFile` was only ever cleared by its own close button or by
+       * applying — so a merge that ended UNDERNEATH it (an abort, a branch
+       * change, somebody resolving it in a terminal) left the three-way editor
+       * open over a file that no longer conflicts. Reported plainly: "it stays
+       * sort of stuck… no matter which branch I switch to".
+       *
+       * It is a real stuck state, not a cosmetic one: the editor is drawn
+       * instead of the changes list, so the panel stops being usable for
+       * anything else until the tab is reloaded.
+       */
+      setBlockFile(null);
+      setBlocks(null);
+      setPicks({});
+      setBlockErr(null);
+      return;
+    }
     api.gitConflicts(root).then((r) => setConflicts(r.files ?? [])).catch(() => {});
     api.gitMergeInfo(root).then((r) => setMerge(r.ok ? r : null)).catch(() => {});
   }, [open, root, treeFor, mergeState, tree]);
@@ -1153,36 +1178,31 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * file you opened *because* of a diff means scrolling back to where you
    * already were.
    */
-  const editFile = async (c: GitFileChange | null, hunkIdx = 0) => {
+  /**
+   * Open the selected file in the editor, HERE.
+   *
+   * It used to hand the file to whatever nvim happened to be running, and on a
+   * machine with none it copied a command to the clipboard and called that an
+   * answer. His words: "that should no longer work that way, it is old — now we
+   * always open a floating modal with nvim". So `e` and the button do the same
+   * thing the pull request does, and the file opens at the change you were
+   * reading with the rest of them down the right.
+   */
+  const editFile = (c: GitFileChange | null, hunkIdx = 0) => {
     if (!c) return;
-    const line = c.hunks[hunkIdx]?.newStart ?? c.hunks[0]?.newStart ?? 1;
-    try {
-      const r = await api.editorOpen(c.file_path, line);
-      if (!r.ok) return flash(false, r.error || "Could not open the editor");
-      if (r.how === "remote") {
-        // It landed in a window that may be behind this one, so say so —
-        // otherwise pressing `e` looks like it did nothing at all. And when it
-        // went to a sibling checkout of the same project rather than this one,
-        // name it: the file opens in the nvim you have, which is the point, but
-        // you should not have to work out which window it appeared in.
-        flash(true, r.viaFamily
-          ? `Sent to your nvim in ${r.viaFamily.split("/").pop()} · ${baseName(c.file_path)}:${line}`
-          : `Sent to your open nvim · ${baseName(c.file_path)}:${line}`);
-      } else if (r.command) {
-        // Nothing reachable for *this* file. Saying "no nvim running" when one
-        // is open two panes away sends you looking for a bug; naming the repo
-        // it's in explains the refusal in one line.
-        // Three different situations, three different things to do about them.
-        const elsewhere = r.otherCwds?.length
-          ? `nvim is open in ${r.otherCwds.map((p) => p.split("/").pop()).join(", ")}, not this repo — copied: ${r.command}`
-          : r.stuck
-          ? `An nvim is running but not answering (${r.stuck} stale socket${r.stuck === 1 ? "" : "s"}) — copied: ${r.command}`
-          : `No nvim running — copied: ${r.command}`;
-        flash(true, elsewhere);
-        navigator.clipboard?.writeText(r.command).catch(() => { /* no clipboard permission */ });
-      }
-    } catch (e) { flash(false, String(e)); }
+    const groups = groupHunks(c.hunks);
+    openPeek({
+      root,
+      path: c.file_path,
+      label: rel(c),
+      edit: true,
+      branch: tree?.branch?.name || undefined,
+      line: groups[hunkIdx]?.from ?? groups[0]?.from ?? 1,
+      groups,
+    });
   };
+
+
   const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path);
   const writeEnabled = tree?.writeEnabled ?? false;
   const flash = (ok: boolean, msg: string) => { setToast({ ok, msg }); setTimeout(() => setToast(null), 2600); };
@@ -2406,7 +2426,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     else if (lower === "x" && selected && writeEnabled && !selected.staged) { e.preventDefault(); discard(selected); }
     // lazygit's `e`. Lowercase only: `E` stays free for an "edit in a new
     // instance" variant if that ever turns out to be wanted.
-    else if (k === "e" && selected && editor?.editor) { e.preventDefault(); void editFile(selected); }
+    // `e`, as lazygit has it — but it opens the editor HERE rather than
+    // shouting at one somewhere else, so it no longer depends on there being an
+    // nvim already running.
+    else if (k === "e" && selected) { e.preventDefault(); editFile(selected); }
   };
 
   // Which tab each group was last left on, so 1–5 returns you where you were.
@@ -3045,7 +3068,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   <TidyView report={tidy} root={root} busy={busyView === "tidy"} />
                 ) : view === "changes" ? (
                   <div className="flex-1 min-h-0 flex">
-                    <div className="shrink-0 flex flex-col min-h-0" style={{ width: sidebarW }}>
+                    <div className="shrink-0 flex flex-col min-h-0 agx-sidelist" style={{ width: sidebarW }}>
                       {!tree?.clean && (
                         <div className="shrink-0 px-2.5 py-2 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                           <button onClick={() => explain(!!walk)} disabled={walkLoading} className="text-[11px] px-2.5 py-1 rounded-lg w-full" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--info) 13%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 28%, transparent)", opacity: walkLoading ? 0.6 : 1 }}>
@@ -3199,6 +3222,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               {selected.deletions > 0 && <span style={{ color: "var(--error)" }}>−{selected.deletions}</span>}
                             </span>
                             <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                              {/* `e` has always done this; the button is for the
+                                  hands that are on the mouse. It opens at the
+                                  first changed line rather than at the top —
+                                  scrolling back to where you already were is
+                                  the whole reason people stay in the diff. */}
+                              {/* Opens HERE, the way the pull request does —
+                                  the modal with an editor in it, at the first
+                                  changed line, with the rest down its right.
+                                  `e` still sends the file to an nvim you
+                                  already have open; the two are different
+                                  intentions and both are worth having. */}
+                              <Toggle onClick={() => editFile(selected)}
+                                title={`Open ${rel(selected)} here, at its first change`}>⧉ open</Toggle>
                               {writeEnabled && (selected.staged ? <Toggle onClick={() => unstage(selected)} title="Unstage this file">－ unstage</Toggle> : <Toggle onClick={() => stage(selected)} title="Stage this file">＋ stage</Toggle>)}
                               <Toggle on={split} onClick={() => setSplit((s) => !s)} title="Split / unified">{split ? "split" : "unified"}</Toggle>
                               <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap">wrap</Toggle>
@@ -3206,8 +3242,31 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">bold</Toggle>
                             </div>
                           </div>
-                          <div className="flex-1 min-h-0 flex relative" style={{ background: "var(--bg)" }}>
-                            {selected.binary ? <div className="flex-1 grid place-items-center t-dim2 text-[12px]">binary file — no textual diff</div>
+                          {/*
+                            * The column that scrolls.
+                            *
+                            * The diff panes deliberately do not: `overflow-x:
+                            * auto` computes `overflow-y: auto` unless the other
+                            * axis is pinned, and two nested vertical scrollers
+                            * is the double-scroll this app already fixed once
+                            * (see DiffLines.tsx). The pull-request view gives
+                            * them an outer scroller; this one did not, so in
+                            * split+wrap nothing scrolled at all and the file
+                            * was simply cut off at the bottom of the pane.
+                            *
+                            * And a BLOCK, not a flex row — which is the half
+                            * that took two goes. As a flex row this container
+                            * stretches its children to its own height, and a
+                            * child with `overflow-y: hidden` then CLIPS its
+                            * content instead of growing past it: the scrollbar
+                            * appears and scrolls nothing, because as far as the
+                            * container is concerned there is nothing below.
+                            * Block lets the diff be as tall as the file and
+                            * this column scroll it, which is what the panes
+                            * mean by "inside whatever scrolls the page".
+                            */}
+                          <div className="agx-scroll flex-1 min-h-0 relative overflow-y-auto" data-diff-scroller style={{ background: "var(--bg)" }}>
+                            {selected.binary ? <div className="h-full grid place-items-center t-dim2 text-[12px]">binary file — no textual diff</div>
                               : <HiliteCtx.Provider value={selected.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000 ? { ...hilite, theme: null } : hilite}>{split ? <SplitDiff c={selected} wrap={wrap} /> : <UnifiedDiff c={selected} wrap={wrap} hunkAction={hunkActionFn} />}</HiliteCtx.Provider>}
                           </div>
                         </>

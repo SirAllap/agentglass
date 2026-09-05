@@ -24,7 +24,17 @@
 import { describe, expect, test } from "bun:test";
 import { PANE, PHONE_ACCENTS, paletteFor, type AccentId, type Polarity } from "../../shared/palettes.ts";
 import { deriveAnsi } from "../../shared/termPalette.ts";
-import { counterTheme, terminalDocument, terminalTheme } from "../src/terminal/terminal-html.ts";
+import { announce, built } from "./generated-artifacts.ts";
+
+announce("term-ansi.test.ts");
+
+const { counterTheme, terminalDocument, terminalTheme } = built
+  ? await import("../src/terminal/terminal-html.ts")
+  : {
+      counterTheme: (() => ({})) as unknown as typeof import("../src/terminal/terminal-html.ts")["counterTheme"],
+      terminalDocument: (() => "") as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalDocument"],
+      terminalTheme: (() => ({})) as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalTheme"],
+    };
 
 const channel = (v: number): number => {
   const c = v / 255;
@@ -57,7 +67,7 @@ const POLARITIES: Polarity[] = ["dark", "light"];
 const phone = (polarity: Polarity, accent: AccentId): ReturnType<typeof paletteFor> =>
   paletteFor(polarity, accent, PANE);
 
-describe("every ANSI colour is readable on the surface it is painted on", () => {
+describe.skipIf(!built)("every ANSI colour is readable on the surface it is painted on", () => {
   for (const polarity of POLARITIES) {
     for (const accent of PHONE_ACCENTS) {
       test(`${polarity} + ${accent.id}`, () => {
@@ -87,7 +97,7 @@ describe("every ANSI colour is readable on the surface it is painted on", () => 
   }
 });
 
-describe("sixteen slots hold sixteen colours", () => {
+describe.skipIf(!built)("sixteen slots hold sixteen colours", () => {
   for (const polarity of POLARITIES) {
     for (const accent of PHONE_ACCENTS) {
       test(`${polarity} + ${accent.id}`, () => {
@@ -112,7 +122,7 @@ describe("sixteen slots hold sixteen colours", () => {
   });
 });
 
-describe("one derivation, not a second copy of it", () => {
+describe.skipIf(!built)("one derivation, not a second copy of it", () => {
   test("the theme's sixteen are exactly what shared/ answers", () => {
     /*
      * The phone may not have its own idea of what red means in a terminal: the
@@ -129,7 +139,7 @@ describe("one derivation, not a second copy of it", () => {
   });
 });
 
-describe("the other surface, carried in the page beside this one", () => {
+describe.skipIf(!built)("the other surface, carried in the page beside this one", () => {
   test("the counter set is the opposite polarity wearing the same accent", () => {
     for (const polarity of POLARITIES) {
       const p = phone(polarity, "amber");

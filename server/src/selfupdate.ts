@@ -240,6 +240,48 @@ export function windowsUpdateBlock(platform: string = process.platform): string 
     : null;
 }
 
+/**
+ * The installer a Mac of this architecture updates from, named exactly as
+ * desktop-binaries.yml publishes it: electron-builder's
+ * `agentglass_${version}_${arch}.${ext}`, with `arch` as `arm64` on Apple
+ * silicon and `x64` on Intel (that job cross-builds `--x64` from the arm64
+ * runner, so both exist on every release).
+ */
+export function macDmgAsset(tag: string, arch: string = process.arch): string {
+  return `agentglass_${tag.replace(/^v/, "")}_${arch === "arm64" ? "arm64" : "x64"}.dmg`;
+}
+
+/** The release page a tag's assets hang off, from whatever spelling of the
+ *  origin this build recorded — `https://…/repo.git`, `git@github.com:o/r.git`. */
+export function releasePage(origin: string, tag: string): string {
+  const repo = origin.trim()
+    .replace(/^git@github\.com:/, "https://github.com/")
+    .replace(/^ssh:\/\/git@github\.com\//, "https://github.com/")
+    .replace(/\.git$/, "")
+    .replace(/\/+$/, "");
+  return `${repo}/releases/tag/${tag}`;
+}
+
+/**
+ * Why the Mac's About pane has no update button, said with the link instead.
+ *
+ * The updater rebuilds from source through self-update.sh → install-local.sh,
+ * and that chain is Linux end to end: it unpacks `linux-unpacked`, installs to
+ * `~/.local/share`, writes a .desktop file. Nothing in it produces an .app, so
+ * on a Mac the button would have run to the first `[ -x "$SRC/agentglass" ]`
+ * and stopped with a message about electron-builder. Rather than a button
+ * that fails in the middle, the pane says what a Mac actually does — download
+ * the .dmg for this architecture — and names the file and the page.
+ *
+ * Only when there is something to update to: with no newer tag the pane says
+ * "up to date" like everywhere else. `platform` and `arch` are parameters for
+ * the suite, which runs on Linux.
+ */
+export function macUpdateBlock(tag: string, origin: string, platform: string = process.platform, arch: string = process.arch): string | null {
+  if (platform !== "darwin") return null;
+  return `${tag} is out — on macOS the app updates from the .dmg: download ${macDmgAsset(tag, arch)} from ${releasePage(origin, tag)} and drag it over the app`;
+}
+
 export async function updateStatus(): Promise<UpdateStatus> {
   const info = buildInfo();
   const base: UpdateStatus = {
@@ -282,6 +324,11 @@ export async function updateStatus(): Promise<UpdateStatus> {
   const newer = tags.filter((t) => cmpTag(t, current) > 0);
   out.behind = newer.length;
   out.incoming = newer.map((t) => ({ sha: t, subject: "" }));
+  // After the comparison, not before like the Windows gate: a Mac that is up to
+  // date should read "up to date", and only a Mac with a release to move to is
+  // told how a Mac moves.
+  const macBlock = macUpdateBlock(latest, info.origin);
+  if (macBlock) out.blocked = macBlock;
   return out;
 }
 

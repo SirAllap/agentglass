@@ -45,7 +45,7 @@ const TASK = {
   id: "abc", name: "A card", url: "https://example.invalid/t/abc",
   status: { status: "in development", type: "custom", orderindex: 5 },
   date_updated: "1754300000000", list: { id: "901700000001", name: "A list" },
-  assignees: [{ id: 7, username: "David" }],
+  assignees: [{ id: 7, username: "Ada" }],
 };
 
 const VIEW_ID = "6-901700000001-1";
@@ -199,5 +199,60 @@ describe("Refresh", () => {
     const r = await P.readView(VIEW_ID, true);
     expect(hits.some((p) => /\/view\/[^/]+\/task$/.test(p))).toBe(true);
     expect(r.tasks.length).toBe(1);
+  });
+});
+
+/*
+ * Refresh has to actually try.
+ *
+ * Reported as a board that "never updates": the strip says nothing has been
+ * read since yesterday, you press Refresh, you wait, and it says the same
+ * thing again. The reason was the dedupe above — right for two windows asking
+ * the same question, wrong when one of them is a person pressing a button to
+ * get past a failure. A forced read that joins a background read in the air
+ * inherits that read's answer, so it can never be the fresh attempt it was
+ * pressed for.
+ *
+ * The built-in board is where it bites: its read takes twelve seconds and the
+ * panel's settle loop asks every one and a half, so there is nearly always one
+ * in the air to inherit.
+ */
+describe("pressing Refresh while a background read is in the air", () => {
+  it("makes its own request instead of inheriting the one already running", async () => {
+    ageCacheBy(90_000);
+    /* The background read: slow, and it fails — the shape of the twelve-second
+       workspace read timing out. */
+    const gate: { release: (() => void) | null } = { release: null };
+    reply = () => {
+      const p = new Promise<void>((r) => { gate.release = r; });
+      return new Response(new ReadableStream({
+        async start(c) { await p; c.enqueue(new TextEncoder().encode("{\"err\":\"nope\"}")); c.close(); },
+      }), { status: 500, headers: { "content-type": "application/json", "x-ratelimit-remaining": "99" } });
+    };
+    const background = P.readView(VIEW_ID);              // not forced: the poll
+    for (let i = 0; i < 50 && !gate.release; i++) await new Promise((r) => setTimeout(r, 10));
+
+    // Now the workspace answers again, and somebody presses Refresh.
+    reply = answerEverything();
+    const before = hits.filter((p) => /\/view\/[^/]+\/task$/.test(p)).length;
+    const forced = await P.readView(VIEW_ID, true);
+
+    expect(hits.filter((p) => /\/view\/[^/]+\/task$/.test(p)).length,
+      "Refresh must ask ClickUp itself").toBeGreaterThan(before);
+    expect(forced.error, "and must not report the other read's failure").toBeUndefined();
+    expect(forced.tasks.length).toBe(1);
+
+    gate.release?.();
+    await background;
+    await settle();
+  });
+
+  it("but a second press still joins the first — that IS the fresh attempt", async () => {
+    ageCacheBy(90_000);
+    const [a, b] = await Promise.all([P.readView(VIEW_ID, true), P.readView(VIEW_ID, true)]);
+    await settle();
+    expect(hits.filter((p) => /\/view\/[^/]+\/task$/.test(p)).length).toBe(1);
+    expect(a.tasks.length).toBe(1);
+    expect(b.tasks.length).toBe(1);
   });
 });

@@ -151,8 +151,10 @@ describe("the diff pane scrolls sideways and nothing else", () => {
     /* Four panes: unified, split-wrapped, and the split pair. The split's LEFT
        column was written this way from the start — its vertical scroll was
        always the right column's job — which is the shape the other three have
-       now adopted. */
-    expect((src.match(/overflowX: "auto", overflowY: "hidden"/g) ?? []).length).toBe(4);
+       now adopted. The fifth is the sticky rail that stands in for a pane's own
+       scrollbar (see diff-hrail.test.ts): a proxy for a horizontal scroller is
+       a horizontal scroller, and the same rule applies to it. */
+    expect((src.match(/overflowX: "auto", overflowY: "hidden"/g) ?? []).length).toBe(5);
     // `overflow-auto` on a pane is the shape this replaced: it is both axes.
     expect(src).not.toContain("min-w-0 overflow-auto text-[12px]");
   });

@@ -52,7 +52,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TICKET_TTL_MS, leftOnTicket, makeKeys, unseal } from "../src/lib/pairing.ts";
+import { announce, installed, pairing } from "./npm-deps.ts";
+
+announce("pairing-e2e.test.ts");
+
+const { TICKET_TTL_MS, leftOnTicket, makeKeys, unseal } = pairing;
 
 // Not 4000: a developer running the cockpit while the tests run would otherwise
 // have this suite talk to their own machine's real server and pair with it.
@@ -65,11 +69,27 @@ let dbDir = "";
 
 const json = async <T,>(response: Response): Promise<T> => (await response.json()) as T;
 
+/*
+ * THE DESK IS A BROWSER, and it has to send an Origin to prove it.
+ *
+ * `desk` sent a bare machine token, which is what a bare machine token used to
+ * be enough for. It is not any more, and deliberately: an agent running as the
+ * user can read that token off disk, so with it alone it could ask for a
+ * pairing ticket, accept its OWN ticket, and mint a device with any label it
+ * liked — then release its own held calls through the device branch, needing
+ * no Origin at all, with the audit line reading as a phone somebody had once
+ * approved. See mayReleaseAHold in server/src/index.ts.
+ *
+ * So accepting a pairing is the HUMAN half, and the human half is a browser on
+ * this machine. This suite was still testing the door as it was before that
+ * fix, and had been failing on `/pair/accept` ever since.
+ */
 const desk = (path: string, body?: unknown): Promise<Response> =>
   fetch(ORIGIN + path, {
     method: body === undefined ? "GET" : "POST",
     headers: {
       authorization: `Bearer ${MACHINE_TOKEN}`,
+      origin: ORIGIN,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -177,7 +197,7 @@ beforeAll(async () => {
        *
        *   * Without it the suite appends fake devices to the developer's real
        *     `~/.config/agentglass/devices.json`. That happened while this file
-       *     was being written, and two "David's phone" rows with working
+       *     was being written, and two "Ada's phone" rows with working
        *     credentials had to be picked back out by hand.
        *   * `devices.ts` knows about this and refuses any path outside the
        *     scratch directory under NODE_ENV=test — so the server the child
@@ -238,7 +258,7 @@ afterAll(async () => {
   if (dbDir) rmSync(dbDir, { recursive: true, force: true });
 });
 
-describe("a phone pairing with a real server", () => {
+describe.skipIf(!installed)("a phone pairing with a real server", () => {
   test("the whole handshake, and then the socket", async () => {
     const ticket = await json<{ ok: boolean; id: string; code: string }>(await desk("/pair/ticket", {}));
     expect(ticket.ok).toBe(true);

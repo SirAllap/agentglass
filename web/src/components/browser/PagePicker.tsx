@@ -10,7 +10,7 @@
 // has to, and what it costs. This side installs it, polls for the answer, and
 // does whatever the answer says.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { installPick, readPick, removePick, hidePickChrome, showPickChrome } from "../../lib/pagePickScript.ts";
+import { installPick, readPick, removePick, hidePickChrome, showPickChrome, type PickMode } from "../../lib/pagePickScript.ts";
 import { elementForClipboard, feedbackWindowName, pageFeedbackPrompt, parsePick, type Intent, type PickedElement } from "../../lib/pageRef.ts";
 import { requestTermIssue } from "../../lib/termIssue.ts";
 import { seedChat } from "../../lib/chatStore.ts";
@@ -21,6 +21,10 @@ import { CheckoutPicker } from "../CheckoutPicker.tsx";
 type Guest = {
   executeJavaScript(code: string): Promise<unknown>;
   capturePage(rect?: { x: number; y: number; width: number; height: number }): Promise<{ toDataURL(): string }>;
+  /** The page's own zoom. A rectangle read inside the page is in the page's CSS
+   *  pixels; `capturePage` wants the view's, and at 164% those are not the same
+   *  number — which is why a shot of an element used to come back cropped. */
+  getZoomFactor?(): number;
 } | null;
 
 /** The desktop shell's clipboard bridge — a MAIN-process copy that works while
@@ -49,15 +53,16 @@ async function copyImageDataUrl(dataUrl: string): Promise<boolean> {
   } catch { return false; }
 }
 
-export function PagePicker({ view, url, title, feedback, onNote, onDone }: {
+export function PagePicker({ view, url, title, mode, onNote, onDone }: {
   view: Guest;
   url: string;
   title: string;
-  /** Clicking selects and opens the ask, instead of C/S doing something. */
-  feedback: boolean;
+  /** `feedback` opens the ask on a click; `shoot` is the screenshot tool. */
+  mode: PickMode;
   onNote: (msg: string) => void;
   onDone: () => void;
 }) {
+  const feedback = mode === "feedback";
   const [picked, setPicked] = useState<PickedElement | null>(null);
   const [ask, setAsk] = useState("");
   const [intent, setIntent] = useState<Intent>("change");
@@ -82,14 +87,14 @@ export function PagePicker({ view, url, title, feedback, onNote, onDone }: {
   useEffect(() => {
     if (!view) { onNote("There is no page to point at"); onDone(); return; }
     let dead = false;
-    void view.executeJavaScript(installPick(feedback)).catch(() => {
+    void view.executeJavaScript(installPick(mode)).catch(() => {
       if (!dead) { onNote("This page will not allow the picker — some sites block injected script"); onDone(); }
     });
     return () => {
       dead = true;
       void view.executeJavaScript(removePick).catch(() => {});
     };
-  }, [view, feedback, onNote, onDone]);
+  }, [view, mode, onNote, onDone]);
 
   const shoot = useCallback(async (p: PickedElement) => {
     if (!view) return;
@@ -99,11 +104,20 @@ export function PagePicker({ view, url, title, feedback, onNote, onDone }: {
       await view.executeJavaScript(hidePickChrome).catch(() => {});
       // A frame, so the hide has actually painted before the capture.
       await new Promise((r) => requestAnimationFrame(() => r(null)));
-      const img = await view.capturePage(p.rect);
+      /* Into the VIEW's pixels. The rectangle came from inside the page, where
+         a CSS pixel is the page's; `capturePage` measures the view, where one
+         is the page's times the zoom. At 164% the two are a third apart, which
+         is a screenshot of the wrong third of what was pointed at. */
+      const z = (() => { try { return view.getZoomFactor?.() || 1; } catch { return 1; } })();
+      const at = z === 1 ? p.rect : {
+        x: Math.round(p.rect.x * z), y: Math.round(p.rect.y * z),
+        width: Math.round(p.rect.width * z), height: Math.round(p.rect.height * z),
+      };
+      const img = await view.capturePage(at);
       await view.executeJavaScript(showPickChrome).catch(() => {});
       const ok = await copyImageDataUrl(img.toDataURL());
       onNote(ok
-        ? `Screenshot of that ${p.tag} copied — ${p.rect.width}×${p.rect.height}`
+        ? `That ${p.tag} copied — ${p.rect.width}×${p.rect.height}`
         : "Captured it, but the clipboard refused the image");
     } catch {
       await view.executeJavaScript(showPickChrome).catch(() => {});

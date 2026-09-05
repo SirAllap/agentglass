@@ -1,0 +1,5 @@
+# Every suite here opens scratch directories under /tmp and almost none of them
+# remove one. See test/tmpsweep.ts for what that cost and why the cleanup lives
+# in a preload rather than in 182 `afterAll`s.
+[test]
+preload = ["./test/tmpsweep.ts"]

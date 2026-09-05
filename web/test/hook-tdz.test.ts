@@ -183,3 +183,69 @@ export function P() {
     expect(report).toBe("");
   });
 });
+
+/*
+ * The other way a panel goes black: a hook under a conditional return.
+ *
+ * React keeps its hooks in a list, by order of call. A `useState` that runs on
+ * some renders and not others shifts everything after it, and what you get is
+ * not an error at the line that did it — it is the whole window painting
+ * nothing, three components away.
+ *
+ * The rule is old and the mistake is easy: a panel grows an early return ("this
+ * shell has no browser"), somebody adds a `useCallback` at the bottom of the
+ * body months later, and it lands below it. This reads the same shape the TDZ
+ * check above does — top-level lines of a component — and refuses it.
+ */
+export function findLateHooks(src: string, file = ""): { file: string; name: string; line: number; after: number }[] {
+  const lines = src.split("\n");
+  const hits: { file: string; name: string; line: number; after: number }[] = [];
+  /** Where the current component's early return was, if it has had one. Reset
+   *  at every top-level declaration, because the next component starts clean. */
+  let bailedAt = 0;
+  lines.forEach((raw, i) => {
+    if (/^(export )?(function|const|class) /.test(raw)) { bailedAt = 0; return; }
+    // Only the component's OWN top level: two spaces of indent. A return inside
+    // a callback or a nested block is not a conditional return of the render.
+    if (/^ {2}if \(.*\) return[ ;]/.test(raw) || /^ {2}return null;/.test(raw)) { bailedAt = i + 1; return; }
+    if (!bailedAt) return;
+    const m = /^ {2}(?:const|let)?\s*[\w{[\], ]*=?\s*(use[A-Z]\w*)\(/.exec(raw) ?? /^ {2}(use[A-Z]\w*)\(/.exec(raw);
+    if (m) hits.push({ file, name: m[1]!, line: i + 1, after: bailedAt });
+  });
+  return hits;
+}
+
+describe("a hook cannot run on only some renders", () => {
+  it("catches one added below an early return", () => {
+    const bad = `
+export function P({ on }: { on: boolean }) {
+  const [a, setA] = useState(0);
+  if (!on) return null;
+  const b = useCallback(() => a, [a]);
+  return <div>{b()}</div>;
+}`;
+    const hit = findLateHooks(bad);
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.name).toBe("useCallback");
+  });
+
+  it("starts clean at the next component in the same file", () => {
+    const fine = `
+export function A({ on }: { on: boolean }) {
+  if (!on) return null;
+  return <i />;
+}
+
+export function B() {
+  const [x, setX] = useState(0);
+  return <i>{x}</i>;
+}`;
+    expect(findLateHooks(fine)).toEqual([]);
+  });
+
+  it("no component in the app does it", () => {
+    const hits = walk(SRC).flatMap((f) => findLateHooks(readFileSync(f, "utf8"), f.slice(SRC.length + 1)));
+    const report = hits.map((h) => `  ${h.file}: ${h.name} at line ${h.line}, below the return at ${h.after}`).join("\n");
+    expect(report).toBe("");
+  });
+});

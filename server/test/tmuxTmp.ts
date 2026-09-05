@@ -18,16 +18,17 @@
  * whatever the suite before this one left behind). So those children need to be
  * told, and `tmux-test-isolation.test.ts` fails the build if one is not.
  *
- * One fixed directory rather than one per suite: it is empty, it stays empty,
- * and a suite that puts a server in it names its own socket. Fixed also means a
- * crashed run leaves nothing to accumulate. Created here so a spawn can use it
- * without each caller remembering to mkdir.
+ * One fixed directory rather than one per suite: a suite that puts a server in
+ * it names its own socket, so they cannot collide. Created here so a spawn can
+ * use it without each caller remembering to mkdir — and swept here, see below,
+ * because a fixed directory is exactly the one that accumulates.
  *
  * This is the same defence `TMUX_ISOLATED` (`-f /dev/null`) makes one layer
  * down: that one stops a test's tmux from loading the developer's config, this
  * one stops a test's server from finding the developer's tmux.
  */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 export const TMUX_TEST_TMPDIR = "/tmp/agx-test-tmux";
 
@@ -73,3 +74,65 @@ try {
     { cause: e },
   );
 }
+
+/**
+ * Sockets of servers that are gone, removed.
+ *
+ * `kill-server` does NOT delete the socket file — measured on tmux 3.6a: a
+ * server started and killed cleanly leaves its socket behind exactly as a
+ * SIGKILLed one does. So this directory gains one file per suite run, forever,
+ * and it had 323 of them when somebody finally counted: 297 from one test file
+ * alone. Harmless individually; a directory nobody ever looks in that only
+ * grows is the shape of the thing you find at 40,000.
+ *
+ * TWO CONDITIONS, because either alone is wrong:
+ *
+ *   old enough   A socket a second suite created moments ago belongs to a
+ *                server that may still be starting, and a `list-sessions`
+ *                against a server mid-boot can fail. An hour is far past any
+ *                suite's own setup and far short of how long these pile up.
+ *   and dead     An hour-old socket can still be a long-running server. Asked
+ *                rather than assumed, and asked ONLY of what passed the first
+ *                condition, so this costs one spawn per genuinely stale file
+ *                rather than one per file in the directory.
+ *
+ * Never recursive and never the directory itself: the sweep is handed a
+ * directory precisely so a test can give it one of its own instead.
+ *
+ * And the directory is NOT `TMUX_TEST_TMPDIR`. tmux puts its sockets in
+ * `$TMUX_TMPDIR/tmux-<uid>`, one level down — the first draft of this swept the
+ * parent, found nothing but that subdirectory, removed zero and looked exactly
+ * like a sweep that had nothing to do.
+ */
+export function sweepDeadSockets(
+  dir: string,
+  o: { now?: number; minAgeMs?: number } = {},
+): { removed: number; kept: number } {
+  const now = o.now ?? Date.now();
+  const minAgeMs = o.minAgeMs ?? 60 * 60_000;
+  let removed = 0, kept = 0;
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return { removed: 0, kept: 0 }; }
+  for (const name of names) {
+    const path = join(dir, name);
+    try {
+      const st = statSync(path);
+      if (!st.isSocket() || now - st.mtimeMs < minAgeMs) { kept++; continue; }
+      const alive = Bun.spawnSync(["tmux", "-f", "/dev/null", "-S", path, "list-sessions"],
+        { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+      if (alive) { kept++; continue; }
+      rmSync(path);
+      removed++;
+    } catch { kept++; /* vanished under us, or unreadable: not ours to force */ }
+  }
+  return { removed, kept };
+}
+
+/** Where tmux actually puts the sockets under a given TMUX_TMPDIR. */
+export const socketDirUnder = (tmpdir: string): string =>
+  join(tmpdir, `tmux-${typeof process.getuid === "function" ? process.getuid() : 0}`);
+
+/* Swept at import, which is once per `bun test` process however many files ask
+   for the path. Never throws: a directory that cannot be tidied is not a reason
+   to fail a suite, unlike one that cannot be CREATED — see above. */
+try { sweepDeadSockets(socketDirUnder(TMUX_TEST_TMPDIR)); } catch { /* best-effort */ }

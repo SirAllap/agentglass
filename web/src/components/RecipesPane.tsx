@@ -115,7 +115,15 @@ export function RecipesPane({ open }: { open: boolean }) {
  *  so the settings column's one padding rule reaches this page. Written out
  *  rather than imported because SettingsModal imports this file. */
 function Wrap({ children }: { children: React.ReactNode }) {
-  return <div className="pb-5 agx-settings-section"><div className="agx-settings-rows">{children}</div></div>;
+  return (
+    <div className="agx-settings-section">
+      <div className="agx-settings-head">
+        <div className="agx-settings-head-t">Project commands</div>
+        <div className="agx-settings-head-d">Ready-to-run commands for the project that is open, and the five you pinned.</div>
+      </div>
+      <div className="agx-settings-rows">{children}</div>
+    </div>
+  );
 }
 
 function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {

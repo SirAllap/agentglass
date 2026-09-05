@@ -148,7 +148,7 @@ describe("tokenOk", () => {
 });
 
 describe("auth exemption vs intake", () => {
-  const SINKS = ["/ingest", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs"];
+  const SINKS = ["/ingest", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs", "/agents/status"];
 
   test("append-only telemetry sinks are tokenless from this machine", () => {
     // A hook or an OTel exporter on this box has no way to carry a secret, and

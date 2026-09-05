@@ -16,11 +16,14 @@ import { useEffect, useRef } from "react";
  * Run `fn` on an interval while `active`, and immediately whenever the window
  * regains focus.
  *
- * Paused while the document is hidden: each tick shells out to `git`, and a
- * panel left open on a background desktop should not keep spawning processes
- * for output nobody is looking at. Coming back to the window refreshes at once,
- * so the pause is invisible — that is also the moment the state is most likely
- * to have changed underneath you.
+ * Gated on focus, not just `document.hidden`: a desktop window has no tab to
+ * background, so `hidden` stays false for its entire life, and a panel left
+ * open on a second monitor all day — visible, untouched — polled at full rate
+ * forever for nobody. `document.hasFocus()` is the signal that also catches
+ * that case, the same test TasksPanel's own poll already uses for the same
+ * reason. Coming back to the window refreshes at once, so the pause is
+ * invisible — that is also the moment the state is most likely to have
+ * changed underneath you.
  */
 export function usePoll(active: boolean, fn: () => void, ms = 2500) {
   // Held in a ref so a caller can pass an inline closure without the interval
@@ -30,9 +33,10 @@ export function usePoll(active: boolean, fn: () => void, ms = 2500) {
 
   useEffect(() => {
     if (!active) return;
-    const tick = () => { if (!document.hidden) saved.current(); };
+    const looking = () => !document.hidden && document.hasFocus();
+    const tick = () => { if (looking()) saved.current(); };
     const id = setInterval(tick, ms);
-    const onVisible = () => { if (!document.hidden) saved.current(); };
+    const onVisible = () => { if (looking()) saved.current(); };
     window.addEventListener("focus", onVisible);
     document.addEventListener("visibilitychange", onVisible);
     return () => {

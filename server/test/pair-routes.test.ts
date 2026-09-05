@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { INFO } from "../src/pairing.ts";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 const TOKEN = "test-machine-token-not-a-real-one";
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -52,6 +53,9 @@ beforeAll(async () => {
       TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       HOME: process.env.HOME ?? "",
       XDG_CONFIG_HOME: dir,
+      // State (audit log, ledgers, engine conf) jailed too: without this a booted
+      // server writes into the developer's real ~/.local/state/agentglass.
+      AGENTGLASS_STATE_DIR: `${dir}/state`,
       AGENTGLASS_ROOT: dir,
       AGENTGLASS_DB: join(dir, "f.db"),
       AGENTGLASS_SCAN_DISABLED: "1",
@@ -67,7 +71,7 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
   throw new Error("the server did not come up: " + (await new Response(proc.stderr as ReadableStream).text()).slice(0, 400));
-});
+}, SERVER_BOOT_MS);
 
 afterAll(() => {
   try { proc?.kill(); } catch { /* already gone */ }
@@ -79,12 +83,26 @@ afterAll(() => {
 type Json = Record<string, any>;
 const jsonOf = (r: Response): Promise<Json> => r.json() as Promise<Json>;
 
-const post = (path: string, body: unknown, token?: string) =>
+const post = (path: string, body: unknown, token?: string, origin?: string) =>
   fetch(base + path, {
     method: "POST",
-    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(origin ? { origin } : {}),
+    },
     body: JSON.stringify(body),
   });
+
+/* The Origin the desktop renderer sends, which /pair/accept now requires.
+ *
+ * Accepting a device is the human half of pairing, and a bare machine token is
+ * not proof of one: the token file is readable by anything running as the user,
+ * so an agent could otherwise ask for a ticket, accept its own ticket, and mint
+ * a device with any label — then release its own held call through the device
+ * branch, with the audit line reading as a phone somebody had approved.
+ * These tests are the desk, so they send what the desk sends. */
+const DESK = "agentglass://app";
 const get = (path: string, token?: string) =>
   fetch(base + path, { headers: token ? { authorization: `Bearer ${token}` } : {} });
 
@@ -94,7 +112,7 @@ async function pair(scope: "read" | "answer" | "full", label = "iPhone") {
   const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
   const claimed = await jsonOf(await post("/pair/claim", { ticket: t.id, code: t.code, label, pub: p.pub }));
   expect(claimed.ok).toBe(true);
-  const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope }, TOKEN));
+  const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope }, TOKEN, DESK));
   expect(acc.ok).toBe(true);
   const got = await jsonOf(await get(`/pair/collect?ticket=${t.id}&secret=${encodeURIComponent(claimed.secret)}`));
   expect(got.state).toBe("accepted");
@@ -186,7 +204,7 @@ describe("what a paired phone can do", () => {
     const p = phone();
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
     const c = await jsonOf(await post("/pair/claim", { ticket: t.id, code: t.code, label: "typo", pub: p.pub }));
-    const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope: "administrator" }, TOKEN));
+    const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope: "administrator" }, TOKEN, DESK));
     expect(acc.device.scope).toBe("answer");
     const got = await jsonOf(await get(`/pair/collect?ticket=${t.id}&secret=${encodeURIComponent(c.secret)}`));
     const token = p.open(got.wrapped, t.id);
@@ -276,7 +294,7 @@ describe("what the machine sees", () => {
     const p = phone();
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
     await post("/pair/claim", { ticket: t.id, code: t.code, label: "a fresh phone", pub: p.pub });
-    const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope: "answer" }, TOKEN));
+    const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope: "answer" }, TOKEN, DESK));
     expect(acc.device.id).toBeString();
     expect(acc.device.hash).toBeUndefined();
     expect(JSON.stringify(acc)).not.toContain("hash");
@@ -302,4 +320,40 @@ describe("the status pane no longer serves a key", () => {
     expect(body).not.toContain(TOKEN);
     expect(body).not.toContain("?token=");
   });
+
+describe("the ceremony a machine token cannot complete on its own", () => {
+  /*
+   * This is the door that made the gate fix worse than the bug.
+   *
+   * An agent runs as the user, so it holds the machine token — the file is
+   * 0600 and it is already that user. Before this, it could ask for a ticket,
+   * accept its own ticket, and mint a paired device with any label it chose.
+   * It then released its own held tool call through the device branch, which
+   * needs no Origin at all, and the audit line read as a named phone somebody
+   * had once approved. An audit log that invents a human is worse than one
+   * that merely cannot tell you which machine it was.
+   *
+   * Refusing here does not make this a security boundary — a process running
+   * as you can still append a row to devices.json, and SECURITY.md says so.
+   * What it removes is the accident: the helpful agent, and the injected one
+   * following an instruction it read in a pull request.
+   */
+  test("a bare machine token cannot accept a pairing ticket", async () => {
+    const ph = phone();
+    const t = await jsonOf(await post("/pair/ticket", {}, TOKEN, DESK));
+    const claimed = await jsonOf(await post("/pair/claim", { ticket: t.id, code: t.code, label: "Not a phone", pub: ph.pub }));
+    expect(claimed.ok).toBe(true);
+
+    // No Origin: a shell, holding the token it can read off the disk.
+    const refused = await post("/pair/accept", { ticket: t.id, scope: "answer" }, TOKEN);
+    expect(refused.status).toBe(403);
+
+    // The desk, one header apart, still completes the SAME ticket — the guard
+    // answers before the ticket is spent, so a refusal costs the person nothing.
+    // This half matters more than the refusal: breaking pairing would be worse
+    // than the bug being closed.
+    const ok = await jsonOf(await post("/pair/accept", { ticket: t.id, scope: "answer" }, TOKEN, DESK));
+    expect(ok.ok).toBe(true);
+  });
+});
 });

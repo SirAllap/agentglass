@@ -169,6 +169,34 @@ export function ChatIcon({ size = ICON.md }: P) {
   return <svg {...svg} viewBox="1.16 1.16 21.69 21.69" strokeWidth={1.81} width={size} height={size}><path d="M20 4H4v12h5v4l5-4h6z" /></svg>;
 }
 
+/**
+ * Two of you, and the second one is drawn as a dotted line.
+ *
+ * The view is a scorecard of what a stand-in WOULD have done, so the glyph has
+ * to say two things at once: that there is a second actor, and that it is not
+ * real yet. A single figure says neither. Two solid figures say "a team", which
+ * is the users icon every app already has and is exactly the wrong promise —
+ * nothing here acts.
+ *
+ * The dashes carry that whole distinction, which is why they are 2.4 long
+ * rather than the 1px ticks a dotted border would use: at the rail's 26px a
+ * finer dash closes up into a solid stroke, and the icon quietly becomes the
+ * one it was drawn not to be. The understudy stands behind and to the side, as
+ * one does.
+ */
+export function UnderstudyIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <g strokeDasharray="2.4 2.2">
+        <circle cx="16.6" cy="6.6" r="3" />
+        <path d="M11.6 17.6v-1a3.6 3.6 0 0 1 3.6-3.6h2.8a3.6 3.6 0 0 1 3.6 3.6v1" />
+      </g>
+      <circle cx="8.8" cy="9.2" r="3.6" />
+      <path d="M2.5 20.5v-1.2a4.3 4.3 0 0 1 4.3-4.3h4a4.3 4.3 0 0 1 4.3 4.3v1.2" />
+    </svg>
+  );
+}
+
 /** The single header button that replaced the five. A pane split off a frame. */
 export function WorkspaceIcon({ size = ICON.md }: P) {
   return <svg {...svg} width={size} height={size}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>;
@@ -187,4 +215,22 @@ export function SkillsIcon({ size = ICON.md }: P) {
 
 export function CloseIcon({ size = ICON.md }: P) {
   return <svg {...svg} width={size} height={size}><path d="M6 6l12 12M18 6L6 18" /></svg>;
+}
+
+
+
+/** A lantern: it lights when somebody needs you. The flame is the one filled
+ *  shape on the rail — everything else here is strokes — because a flame
+ *  drawn as an outline is a leaf. */
+export function LanternIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M9 3.5h6" />
+      <path d="M12 3.5v2" />
+      <path d="M7.5 5.5h9l1 3h-11z" />
+      <path d="M8.5 8.5v8.5a1.5 1.5 0 0 0 1.5 1.5h4a1.5 1.5 0 0 0 1.5-1.5V8.5" />
+      <path d="M8.5 18.5h7" />
+      <path d="M12 15.6c-1.3 0-2-.9-2-1.9 0-1.2 1.1-1.8 1.4-3 .5 1 .6 1.5 1.1 1.8.3-.4.4-.7.4-1 .8.7 1.1 1.4 1.1 2.2 0 1-.7 1.9-2 1.9z" fill="currentColor" stroke="none" />
+    </svg>
+  );
 }

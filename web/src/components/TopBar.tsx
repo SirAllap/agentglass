@@ -15,12 +15,15 @@
 // rather than on the near-black the notch needed to read as "carved out of the
 // screen". That is what makes it belong to the theme instead of floating over it.
 import type { SystemNote } from "../lib/sysNotify.ts";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { ProviderUsage } from "../../../shared/types.ts";
+import { Portal } from "./Portal.tsx";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
-import { subscribeProviderUsage, usageOf, busiestOf, providerUsage } from "../lib/usageStore.ts";
+import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, resetShort, resetLabel, usedColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
+import { metersMustHide } from "../lib/topbarFit.ts";
 import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../lib/chatStore.ts";
 import type { AgentKind } from "../lib/agents.ts";
 import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
@@ -62,15 +65,46 @@ const NO_DRAG = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 function WindowControls({ max }: { max: boolean }) {
   if (!WINDOW_CONTROLS || IS_MAC_DESKTOP) return null;
 
+  /*
+   * A window button must not keep the keyboard.
+   *
+   * Chromium focuses a <button> when it is clicked, and a focused button is
+   * activated again by Enter or Space — so pressing the maximise button once
+   * arms every later Enter to un-maximise the window, from wherever the person
+   * happens to be typing. Reported three times as a window that "se minimiza
+   * sola", twice while pasting and once with no paste at all, and the log
+   * agreed each time: `asked=yes` — this app asked for it, through this button,
+   * with no pointer involved.
+   *
+   * Blurring after the action costs nothing: the control is a title-bar
+   * affordance you point at, and Tab still reaches it for anyone who navigates
+   * that way. Close is the one that matters most — the same stale focus on it
+   * would quit the app on an Enter meant for a prompt.
+   *
+   * `why` rides along to the window log so the next occurrence, if there is
+   * one, names its own cause: a real click, a keyboard activation, or a click
+   * nobody made.
+   */
+  const how = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const el = document.activeElement as HTMLElement | null;
+    const focus = el ? `${el.tagName.toLowerCase()}${el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : ""}` : "none";
+    return `detail=${e.detail} trusted=${e.isTrusted} focus=${focus}`;
+  };
+  const run = (fn: (why: string) => void) => (e: React.MouseEvent<HTMLButtonElement>) => {
+    const why = how(e);
+    e.currentTarget.blur();
+    fn(why);
+  };
+
   const btn = "grid place-items-center rounded transition-colors";
   const box = { width: 26, height: 20, color: "var(--text3)", ...NO_DRAG } as React.CSSProperties;
   return (
     <span className="flex items-center gap-0.5 shrink-0 ml-1 -mr-1.5">
-      <button onClick={WINDOW_CONTROLS.minimize} aria-label="Minimise" title="Minimise"
+      <button onClick={run(() => WINDOW_CONTROLS!.minimize())} aria-label="Minimise" title="Minimise"
         className={`${btn} hover:bg-white/10 hover:text-[var(--text)]`} style={box}>
         <svg viewBox="0 0 12 12" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor" strokeWidth={1.1}><path d="M2.5 6h7" /></svg>
       </button>
-      <button onClick={WINDOW_CONTROLS.toggleMaximize} aria-label={max ? "Restore" : "Maximise"} title={max ? "Restore" : "Maximise"}
+      <button onClick={run((why) => WINDOW_CONTROLS!.toggleMaximize(why))} aria-label={max ? "Restore" : "Maximise"} title={max ? "Restore" : "Maximise"}
         className={`${btn} hover:bg-white/10 hover:text-[var(--text)]`} style={box}>
         {max ? (
           // Two offset squares: the window comes back OUT of full width, which
@@ -84,7 +118,7 @@ function WindowControls({ max }: { max: boolean }) {
           </svg>
         )}
       </button>
-      <button onClick={WINDOW_CONTROLS.close} aria-label="Close" title="Close"
+      <button onClick={run(() => WINDOW_CONTROLS!.close())} aria-label="Close" title="Close"
         className={`${btn} hover:text-white`} style={box}
         onMouseEnter={(e) => { e.currentTarget.style.background = "var(--error)"; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
@@ -113,7 +147,21 @@ function useMinuteClock(): string {
   }, []);
   const h = now.getHours();
   const hh = h24 ? String(h).padStart(2, "0") : String(h % 12 || 12);
-  return `${hh}:${String(now.getMinutes()).padStart(2, "0")}`;
+  /*
+   * THE DATE, ahead of the time, the way the desktop's own clock writes it.
+   *
+   * This strip IS the title bar — the window is frameless, so in fullscreen it
+   * is the only clock on screen and the system tray is not there to answer
+   * "what day is it". A bare `13:05` was the whole of what it said.
+   *
+   * `Intl` with no locale of its own, so it follows the machine: on his it
+   * reads `ago 24`, on an English one `Aug 24`, and neither is a string this
+   * file has to know. Month-then-day for the same reason — the order comes
+   * from the locale rather than from a guess, which is how 01/02 ends up
+   * meaning two different days to two different readers.
+   */
+  const day = now.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${day} ${hh}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
 /**
@@ -205,6 +253,145 @@ function Meter({ pct, tint }: { pct: number; tint: string }) {
 }
 
 /**
+ * THE PLAN STRIP: "18% used 48m · 77% used 2d 1h · 17% used Fable".
+ *
+ * It was `5H ▬ 17%  WEEKLY ▬ 76%  FABLE ▬ 17%` — a caption, a bar and a number
+ * for every window, three times over. That is three of everything and it still
+ * did not answer the question you actually have when you look up here, which is
+ * not "how much is gone" but "how long until I get it back".
+ *
+ * So each window is one phrase, and the phrase ends with the thing that was
+ * missing. One bar, for the tightest window, because a bar is a shape you read
+ * without counting and three of them side by side is a chart nobody asked for.
+ *
+ * The suffix is the RESET TIME, unless another window already showed that same
+ * time — then it is the window's own name. Two windows that come back together
+ * are usually a weekly bucket and a per-model bucket inside it, and printing
+ * "2d 1h" twice says nothing the first one did not; the name says which of the
+ * two you are looking at, which is the part in doubt.
+ */
+/**
+ * The panel behind the strip: every window, spelled out.
+ *
+ * The strip answers "how much, and how long" in one line and cannot answer
+ * anything else — which window is which, when each one actually comes back,
+ * whether the reading is current. Those are the questions you have exactly
+ * once, at the moment you are deciding whether to keep going, and they were
+ * unanswerable without opening Stats.
+ *
+ * A bar per window, full width, because here there IS room and a row of three
+ * short bars is a chart. `resetLabel` rather than the strip's compact form:
+ * with the space for it, "Wed 3:00 PM" is more use than "2d 1h" when you are
+ * deciding whether to wait.
+ */
+function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
+  u: ProviderUsage; age: string | null; at: { top: number; right: number };
+  onClose: () => void; onRefresh: () => void; busy: boolean;
+}) {
+  const windows = [...u.windows].sort((a, b) => a.minutes - b.minutes);
+  return (
+    <Portal z={10050}>
+      {/* The scrim is what closes it. A panel this small does not deserve a
+          key handler of its own and a click anywhere else is what everybody
+          already tries. */}
+      <div className="fixed inset-0" onClick={onClose} style={{ background: "transparent" }} />
+      <div className="fixed flex flex-col rounded-xl overflow-hidden"
+        style={{
+          top: at.top, right: at.right, width: 300,
+          background: "var(--bg2)",
+          border: "1px solid var(--border)",
+          boxShadow: "0 22px 48px -20px var(--shadow)",
+        }}>
+        <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
+          <span className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>{u.label}</span>
+          {u.plan && <span className="chip text-[10px] t-dim">{u.plan}</span>}
+          <span className="ml-auto text-[10px]" style={{ color: age ? "var(--warning)" : "var(--text4)" }}>
+            {age ? `last read ${age} ago` : ageLabel(u.observedAt)}
+          </span>
+          <button onClick={onRefresh} disabled={busy} title="Read the plan again"
+            className="shrink-0 grid place-items-center rounded hover:bg-white/10 disabled:opacity-40"
+            style={{ width: 20, height: 20, color: "var(--text3)" }}>
+            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}
+              strokeLinecap="round" strokeLinejoin="round"
+              style={busy ? { animation: "agx-spin 1s linear infinite" } : undefined}>
+              <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-3 px-3 py-3">
+          {windows.map((w) => {
+            const reset = resetLabel(w.resetsAt);
+            return (
+              <div key={w.label}>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{w.label}</span>
+                  <span className="ml-auto text-[11px] tabular-nums"
+                    style={{ color: usedColor(w.usedPercent) }}>{w.usedPercent}% used</span>
+                </div>
+                <span className="block rounded-full mt-1.5" style={{ height: 4, background: "color-mix(in srgb, var(--text) 14%, transparent)" }}>
+                  <span className="block h-full rounded-full" style={{
+                    width: `${Math.max(2, Math.min(100, w.usedPercent))}%`,
+                    background: usedColor(w.usedPercent),
+                  }} />
+                </span>
+                {reset && (
+                  <span className="block text-[10px] mt-1" style={{ color: "var(--text4)" }}>
+                    Resets {reset}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          {!windows.length && (
+            <span className="text-[11.5px]" style={{ color: "var(--text4)" }}>This provider reports no windows.</span>
+          )}
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+function PlanStrip({ u, age, dim, onOpen, btn }: {
+  u: ProviderUsage; age: string | null; dim?: boolean;
+  onOpen: () => void; btn: React.MutableRefObject<HTMLButtonElement | null>;
+}) {
+  const windows = [...u.windows].sort((a, b) => a.minutes - b.minutes);
+  if (!windows.length) return null;
+  const worst = windows.reduce((w, x) => (x.usedPercent > w.usedPercent ? x : w), windows[0]!);
+
+  const seen = new Set<string>();
+  const parts = windows.map((w) => {
+    const reset = resetShort(w.resetsAt);
+    /* The name wins when the time is a repeat — see the note above. */
+    const suffix = reset && !seen.has(reset) ? reset : w.label;
+    if (reset) seen.add(reset);
+    return { key: w.label, pct: w.usedPercent, suffix, hot: w.usedPercent >= 80 };
+  });
+
+  return (
+    <button ref={btn} onClick={onOpen}
+      className="flex items-center gap-2 shrink-0 rounded hover:bg-white/5"
+      style={{ opacity: dim ? 0.45 : 1, transition: "opacity .15s", paddingInline: 4, height: 20, ...NO_DRAG }}
+      title={age ? `could not refresh — last read ${age} ago` : `${u.label} plan usage — open for every window`}>
+      <Meter pct={worst.usedPercent} tint={worst.usedPercent >= 80 ? "var(--error)" : "var(--warning)"} />
+      {parts.map((p, i) => (
+        <Fragment key={p.key}>
+          {i > 0 && <span className="text-[9.5px] hidden md:inline" style={{ color: "var(--text4)" }}>·</span>}
+          <span className={`text-[9.5px] tabular-nums whitespace-nowrap ${i === 0 ? "" : "hidden md:inline"}`}
+            style={{ color: "var(--text3)", opacity: age ? 0.55 : 1 }}>
+            <b style={{ color: p.hot ? "var(--error)" : "var(--text2)" }}>{p.pct}%</b> used {p.suffix}
+          </span>
+        </Fragment>
+      ))}
+      {/* The refresh lives in the panel now rather than here: a button inside
+          a button cannot be pressed without pressing both, and the strip had
+          to become the trigger for the panel to exist at all. */}
+    </button>
+  );
+}
+
+/**
  * One plan window: how much of it is gone.
  *
  * `age` is set only once the reading has stopped refreshing. It takes over the
@@ -278,6 +465,66 @@ export function TopBar({
   const chip = useRef<HTMLButtonElement>(null);
   const [needsOpen, setNeedsOpen] = useState(false);
 
+  /*
+   * The meters stand down while the middle of the bar is in use.
+   *
+   * The centred slot is positioned on the WINDOW and the group on the right is
+   * laid out from the right edge, so the two are not in the same flow and
+   * nothing stops them meeting: on a narrow window a notification runs straight
+   * under the plan meters and neither can be read. Reported with a screenshot
+   * of exactly that, and with the right question — "is that possible? knowing
+   * exactly when there is a collision?".
+   *
+   * It is, and it is measured rather than guessed at a breakpoint: two
+   * `getBoundingClientRect`s and the arithmetic in topbarFit. A breakpoint
+   * would be wrong twice — a short message on a narrow window hides meters that
+   * fit, and a long one on a wide window still collides.
+   *
+   * `metersWide` remembers what they measured while they were showing, because
+   * hiding them moves the right group's edge by their own width: feeding the
+   * moved edge back in would say there is room, bring them back, and collide
+   * again. The decision is fed the geometry as if they were there.
+   */
+  const barRef = useRef<HTMLDivElement>(null);
+  const slotRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
+  const metersRef = useRef<HTMLSpanElement>(null);
+  const metersWide = useRef(0);
+  const [metersHidden, setMetersHidden] = useState(false);
+  useLayoutEffect(() => {
+    const slot = slotRef.current, right = rightRef.current, bar = barRef.current;
+    if (!slot || !right || !bar) return;
+    const measure = () => {
+      const s = slot.getBoundingClientRect();
+      const r = right.getBoundingClientRect();
+      const m = metersRef.current?.getBoundingClientRect().width ?? 0;
+      if (m > 0) metersWide.current = m;
+      setMetersHidden((hidden) => metersMustHide({
+        slotRight: s.right,
+        // As if they were showing — see metersWide above.
+        rightEdge: r.left - (hidden ? metersWide.current : 0),
+        occupied: s.width > 0,
+        hidden,
+      }));
+    };
+    measure();
+    /*
+     * Observed rather than polled — and the BAR is observed too, which is the
+     * half a first pass missed. Measured in Chrome on a replica of this strip:
+     * narrowing the window from 1280 to 860 changed the size of neither the
+     * slot (its cap is `min(46vw, 460px)`, and 46vw is still over 460) nor the
+     * right group, so a ResizeObserver on those two never fired and the
+     * message sat under the meters at 1100, 980 and 860 with the arithmetic
+     * saying `hide` and nobody asking it. A ResizeObserver reports SIZE, not
+     * position; the bar is the box whose size does change with the window.
+     */
+    const ro = new ResizeObserver(measure);
+    ro.observe(slot);
+    ro.observe(right);
+    ro.observe(bar);
+    return () => ro.disconnect();
+  });
+
   // One gauge, for the provider in context — the agent whose chat is focused,
   // or failing that whatever the dashboard is filtered to. The strip is a
   // glance, so three providers' meters here would be two too many; the
@@ -292,6 +539,24 @@ export function TopBar({
   const focusedAgent: AgentKind | null = getChat(activeId)?.agent ?? null;
   const [, bumpUsage] = useState(0);
   useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshUsage = useCallback(() => {
+    setRefreshing(true);
+    void refreshProviderUsage().finally(() => setRefreshing(false));
+  }, []);
+  /* Anchored off the button's own rect rather than positioned with CSS: the
+     strip is inside a flex row whose width changes with the plan text, so a
+     panel pinned to it in the layout would move every time a percentage did.
+     Same trick the notification panel uses, and for the same reason. */
+  const planBtn = useRef<HTMLButtonElement | null>(null);
+  const [planAt, setPlanAt] = useState<{ top: number; right: number } | null>(null);
+  const openPlan = useCallback(() => {
+    setPlanAt((was) => {
+      if (was) return null;
+      const r = planBtn.current?.getBoundingClientRect();
+      return r ? { top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) } : null;
+    });
+  }, []);
   const ctx = providerInContext(focusedAgent, filterProvider);
   /* No context is not "no quota". `providerInContext` answers null whenever no
      chat is focused and the filter names no provider — on the dashboard, in the
@@ -316,6 +581,7 @@ export function TopBar({
 
   return (
     <div
+      ref={barRef}
       className="flex flex-nowrap items-center gap-2.5 px-2.5 shrink-0 relative select-none overflow-hidden whitespace-nowrap"
       style={{
         height: TOP_BAR_H,
@@ -408,7 +674,7 @@ export function TopBar({
           passing message over the standing block would be the wrong way round,
           and showing both would put two things in the one place the bar keeps
           empty so that it has somewhere to put the one thing that matters. */}
-      <div className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
+      <div ref={slotRef} data-topbar-slot className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
         {alarm ? (
           <button ref={chip} onClick={() => setNeedsOpen((v) => !v)}
             aria-label="What needs you" aria-expanded={needsOpen}
@@ -459,12 +725,18 @@ export function TopBar({
       />
 
       {/* ── the plan, the clock, the way in ───────────────────────── */}
-      <div className="flex items-center gap-2.5 shrink-0">
+      <div ref={rightRef} data-topbar-right className="flex items-center gap-2.5 shrink-0">
         {/* No reading is worth saying out loud: a meter that silently stops
             moving reads as "you have used nothing", which is the opposite. The
             word is short because the strip is narrow; the sentence explaining
             which failure it was rides in the tooltip, and both the dashboard
             box and Stats print it in full. */}
+        {/* One box, so what stands down for a notification is exactly the
+            reading and its rule — never the clock, the bell or the window
+            buttons, which are furniture you navigate by. Out of the layout
+            rather than faded: half the point is the room it frees. */}
+        <span ref={metersRef} data-topbar-meters className="flex items-center gap-2.5"
+          style={{ display: metersHidden ? "none" : undefined }}>
         {unread ? (
           <Item cap="plan" title={u?.note ?? `No plan reading for ${u?.label ?? "this agent"} right now`}>
             <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>no reading</span>
@@ -478,16 +750,16 @@ export function TopBar({
                 week, and a bar that only knows last quarter's models quietly
                 stops mentioning your limits. The longest window is the last to
                 go on a narrow screen, being the one that matters at a glance. */}
-            {u?.windows.map((w) => (
-              <PlanMeter key={w.label} tag={w.label} pct={w.usedPercent} age={age} dim={quiet}
-                hideUnder={w.label === WEEKLY ? "sm" : "md"} />
-            ))}
+            {u && <PlanStrip u={u} age={age} dim={quiet} btn={planBtn} onOpen={openPlan} />}
           </>
         )}
         <span className="shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
-        <button onClick={onOpenPalette} title="Search anything (⌘K)"
-          className="hidden sm:block text-[9.5px] px-1.5 py-px rounded shrink-0"
-          style={{ color: "var(--text3)", border: edge(16), ...NO_DRAG }}>⌘K</button>
+        </span>
+        {/* The ⌘K badge that stood here is gone. It was a label for a
+            shortcut, not a control anybody pressed — the palette opens on the
+            key it names, and the one person who does not know the key is not
+            going to learn it from a 9.5px pill. The strip is 30px tall and
+            every millimetre of it is contested. */}
         {/*
           * Find a file — shaped like the thing it opens, not like a chip.
           *
@@ -502,18 +774,26 @@ export function TopBar({
           * It collapses to the glyph on a narrow window, where the meters and
           * the clock have the better claim on the space.
           */}
+        {/* SIZED TO THE BAR. Measured at 189x27.5 inside a strip 30 tall —
+            near enough the full height, and a fifth of the width, for a
+            control that is not the subject of the bar. 20 tall leaves five
+            either side, which is what everything else up here sits in.
+          *
+            And the chord is gone from inside it, for the same reason the ⌘K
+            badge beside it is gone: a printed shortcut is a label, not a
+            control. Ctrl+Shift+P was eleven characters of monospace and the
+            widest part of the button by some way, and somebody reading the
+            placeholder is looking for the box rather than for the key. It is
+            still on the tooltip, where a label belongs. */}
         <button onClick={onOpenFiles} title={`Find a file (${chordLabel(appChordFor("files.palette"))})`}
-          className="agx-topbar-find group flex items-center gap-2 shrink-0 rounded-md px-2 py-1"
-          style={NO_DRAG}>
-          {/* 14, not 11. A glyph standing in for a whole control is the one
-              thing on a bar that cannot be read at the size of a label. */}
+          className="agx-topbar-find group flex items-center gap-1.5 shrink-0 rounded"
+          style={{ height: 20, paddingInline: 6, ...NO_DRAG }}>
+          {/* 14, not 11. On a narrow window this collapses to the glyph alone,
+              and a glyph standing in for a whole control is the one thing on a
+              bar that cannot be read at the size of a label. */}
           <span className="leading-none" style={{ color: "var(--primary)", fontSize: 14 }}>⌕</span>
-          <span className="hidden md:block text-[10.5px] whitespace-nowrap" style={{ color: "var(--text3)" }}>
+          <span className="hidden md:block text-[10px] whitespace-nowrap leading-none" style={{ color: "var(--text3)" }}>
             Find a file…
-          </span>
-          <span className="hidden md:block text-[9px] px-1 py-px rounded shrink-0 tabular-nums"
-            style={{ color: "var(--text4)", border: edge(16) }}>
-            {chordLabel(appChordFor("files.palette"))}
           </span>
         </button>
         {/* Only in fullscreen. Windowed, the desktop already has a clock two
@@ -527,6 +807,10 @@ export function TopBar({
         {/* What you missed. The bar interrupts for one thing at a time in its
             middle; everything else it ever said is still in here. */}
         <NotifyBell noDrag={NO_DRAG} onGoto={onNoteGoto} />
+        {u && planAt && (
+          <PlanPanel u={u} age={age} at={planAt} busy={refreshing}
+            onRefresh={refreshUsage} onClose={() => setPlanAt(null)} />
+        )}
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}
         {updateAvailable() && (

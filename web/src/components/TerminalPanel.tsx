@@ -4,19 +4,23 @@
 // tab-completion, colors, vim/htop/lazygit. Shell sessions are kept alive in a
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
-import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { usePoll } from "../lib/usePoll.ts";
+import { ContextMenu } from "./ContextMenu.tsx";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
-import { useDismiss } from "../lib/useDismiss.ts";
 import { dirName } from "../lib/worktree.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
+import { ICON } from "../lib/iconSize.ts";
+import { nextSeen, type PaneSeen, readPaneSeen, writePaneSeen } from "../lib/paneWorktree.ts";
+import { readBranchPrs, writeBranchPrs, readCardPrios, writeCardPrios, type RememberedPr, type RememberedPrio } from "../lib/paneFacts.ts";
+import { lanternRows } from "../lib/lanternStore.ts";
+import { askOnBench } from "../lib/lanternAsk.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { focusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover } from "../lib/termFocusPref.ts";
 import { cellAt, paneAt } from "../lib/tmuxHover.ts";
-import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { CHIP } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -32,14 +36,17 @@ import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
 import { openCard } from "../lib/openCard.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
+import { PaneBar, BAR_MIN_H, BAR_MIN_W, SEAM_ZONE } from "./terminal/PaneBar.tsx";
+import { paneFoot } from "../lib/paneBox.ts";
+import { paneActionsMode, subscribePaneActions } from "../lib/paneActionsPref.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
-import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
+import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt, whenServerUp } from "../lib/api.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { ResumeSessions } from "./ResumeSessions.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
 import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
-import { isFindChord, isAppChord } from "../lib/termKeys.ts";
+import { isPluckChord, isFindChord, isAppChord } from "../lib/termKeys.ts";
 import { registerClaim } from "../lib/findScope.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
 import { THEMES } from "../lib/themes.ts";
@@ -49,6 +56,8 @@ import { useModernWidths } from "../lib/termUnicode.ts";
 import { dragHold } from "../lib/dragHold.ts";
 import { mouseModeGuard, type MouseModeGuard } from "../lib/mouseModeGuard.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { FindArrow } from "./FindBar.tsx";
+import { PluckPalette } from "./terminal/PluckPalette.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -147,6 +156,22 @@ type Sess = {
   shell: string;
   canResize: boolean;
   opened: boolean;
+  /**
+   * The 2D canvas renderer, held only while this shell is on screen.
+   *
+   * It allocates four full-size canvases — measured at 44 MB for one pane on
+   * this machine's display — and it used to hold them for the life of the
+   * session whether or not anybody could see it. Six shells open and one
+   * visible meant a quarter of a gigabyte of texture for five terminals nobody
+   * was looking at. `dispose()` gives all of it back.
+   *
+   * Null while parked. See `attachRenderer` / `parkRenderer`.
+   */
+  canvasAddon?: CanvasAddon | null;
+  /** The pending `parkRenderer` timer, so a pane being MOVED between slots —
+   *  which unmounts and remounts within the same frame — never actually loses
+   *  its renderer. */
+  parkTimer?: ReturnType<typeof setTimeout> | null;
   /** A tmux client is running in this shell — the panel hides its own tabs and
    *  split while that's true, since tmux owns those. */
   tmux: boolean;
@@ -173,9 +198,14 @@ type Sess = {
    *  the strip belongs to the app rather than to whatever .tmux.conf this
    *  machine carries; tmux still decides what is in it and which is active. */
   tmuxWindows: TmuxWindow[];
+  /** Every session on this socket with a window in it — what the strip offers
+   *  when somebody wants to go somewhere else. */
+  tmuxSessions: { id: string; name: string; windows: number; locked?: boolean }[];
   /** This shell is on agentglass's own tmux, not the machine's. The strip hides
    *  "Use tmux's bar" there: that server's status line is off by design. */
   tmuxEngine?: boolean;
+  /** A tmux popup — the scratch — is drawn over this terminal right now. */
+  tmuxPopup?: boolean;
   /** The panes of the tmux window on screen, when it has more than one. Empty
    *  otherwise — see the server's sweep. */
   tmuxPanes: TmuxPane[];
@@ -242,6 +272,22 @@ const sessionsFor = (root: string) => [...sessions.values()].filter((s) => s.roo
  *  you open the terminal. The console strip keeps using sessionsFor to find it. */
 const termSessionsFor = (root: string) => sessionsFor(root).filter((s) => s.title !== CONSOLE_TITLE);
 const notify = (s: Sess) => { s.subs.forEach((fn) => fn()); rosterChanged(); };
+
+/**
+ * Tell every open session's server half whether this tab can be seen.
+ *
+ * Sessions outlive the panel on purpose (see the module comment above), which
+ * means the server's 500ms tab-strip sweep has no idea the browser tab holding
+ * it got backgrounded — it just keeps spawning `tmux` twice a second for a
+ * strip nobody can see. One listener here, at module scope rather than per
+ * panel, because a session is not tied to any one mounted component either.
+ */
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    const hidden = document.hidden;
+    for (const s of sessions.values()) s.ws?.send(ptyFrame({ t: "visible", hidden }));
+  });
+}
 
 /**
  * Fits owed to terminals the user is currently dragging inside.
@@ -336,6 +382,60 @@ let panelClose: () => void = () => {};
  * would take a chord away from the program running in it and give nothing back.
  */
 let panelFind: () => boolean = () => false;
+/** The pluck palette, from the keyboard over the focused pane — see lib/pluck.ts. */
+let panelPluck: () => boolean = () => false;
+
+/**
+ * Open the pull request of the pane with the keyboard.
+ *
+ * The twin of the button that pane draws in its corner, and the only way in
+ * when the block is folded away or switched off. Set by the mounted panel like
+ * `panelFind`; false everywhere else, so the chord falls through to whatever
+ * else wants it rather than being swallowed by a view that is not on screen.
+ *
+ * It answers about the FOCUSED pane, which is the one the keyboard is going to
+ * — the same pane the strip at the top is describing, for the same reason.
+ */
+let paneDoor: (which: PaneDoor) => boolean = () => false;
+/** Copy the branch of the pane with the keyboard — the ⧉ beside it, as a
+ *  chord. False when there is no branch to copy, so the key falls through. */
+let copyPaneBranch: () => boolean = () => false;
+
+/*
+ * THE SELECTION, AS A FACT THE BAR CAN READ.
+ *
+ * "Note down the terminal selection and send it to the agent": a traceback or a
+ * table you want to ask about has to be copied, pasted somewhere else and
+ * explained. xterm knows the selection; the bar that floats over the pane
+ * did not. A one-line store — the text of the focused pane's selection —
+ * that xterm's own selection event writes and the bar subscribes to, so the
+ * "Ask about this" button appears the moment there is something to ask about
+ * and goes the moment there is not.
+ */
+let paneSelection = "";
+const selectionListeners = new Set<() => void>();
+function noteSelection(text: string): void {
+  if (text === paneSelection) return;
+  paneSelection = text;
+  for (const l of selectionListeners) l();
+}
+export const subscribeSelection = (l: () => void): (() => void) => { selectionListeners.add(l); return () => { selectionListeners.delete(l); }; };
+export const currentSelection = (): string => paneSelection;
+
+/**
+ * The selection, quoted, with the note in front — what goes to the agent in
+ * the pane. Quoted as Markdown so the agent reads it as material, not as an
+ * instruction; trimmed of the blank tail a drag leaves; capped, because a
+ * whole scrollback pasted into a prompt is not a question.
+ */
+export function askAboutText(selection: string, note: string): string {
+  const body = selection.replace(/\s+$/, "").split("\n").slice(0, 120).map((l) => `> ${l}`).join("\n");
+  return `${note.trim() || "About this:"}\n\n${body}\n`;
+}
+/** The four doors of the pane with the keyboard — the twins of the buttons it
+ *  draws in its corner. */
+export type PaneDoor = "git" | "diff" | "pr" | "card";
+export function openFocusedPaneDoor(which: PaneDoor): boolean { return paneDoor(which); }
 
 /**
  * Tell the docked console that a command aimed at it was refused.
@@ -513,9 +613,15 @@ function connect(s: Sess) {
       for (const d of s.pending.splice(0)) ws.send(ptyFrame({ t: "in", d }));
       // the fit that ran while connecting may not have reached the server
       ws.send(ptyFrame({ t: "resize", cols: s.term.cols, rows: s.term.rows }));
+      // A reconnect can land while the tab is backgrounded (the socket drops
+      // and comes back on its own — see below); tell the server where it
+      // stands rather than leaving its 500ms sweep running at full tilt for a
+      // tab strip nobody can see until the next visibilitychange.
+      ws.send(ptyFrame({ t: "visible", hidden: document.hidden }));
       notify(s);
     } else if (f.t === "tmux") {
       s.tmuxEngine = f.engine === true;
+      s.tmuxPopup = f.popup === true;
       // tmux brings its own tabs, splits and status line. The panel's split and
       // its own shell tabs stand down while it runs, since two pane models is
       // how you get a split inside a split you didn't ask for. The *window*
@@ -524,6 +630,8 @@ function connect(s: Sess) {
       // file the app has never seen.
       s.tmux = f.active === true;
       s.tmuxWindows = Array.isArray(f.windows) ? f.windows : [];
+      /* The other sessions on this socket, for the strip's picker. */
+      s.tmuxSessions = Array.isArray(f.sessions) ? f.sessions : [];
       s.tmuxPanes = Array.isArray(f.panes) ? f.panes : [];
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
       s.tmuxClient = f.client ?? null;
@@ -686,20 +794,32 @@ function createSession(root: string, agentTicket?: string): Sess {
       gl.onContextLoss(() => { fallBackToCanvas(); try { gl.dispose(); } catch { /* already gone */ } });
       term.loadAddon(gl);
     } catch { /* no WebGL2 here — canvas below, or the DOM renderer */ }
-  } else if (wantsCanvas()) {
-    // Not a consolation prize for missing a GPU: this is the renderer that
-    // draws box-drawing characters itself, so `│` between two tmux panes is a
-    // line rather than whatever the machine's fallback font happens to have.
-    // The DOM renderer cannot do that, and which font you had chosen decided
-    // whether your rules were solid. Failure here is not worth a word to the
-    // user — the DOM renderer takes over and the shell never noticed.
-    try { term.loadAddon(new CanvasAddon()); } catch { /* the DOM renderer stays */ }
   }
+  // The canvas renderer is NOT loaded here. It is loaded when the shell is put
+  // on screen and disposed a few seconds after it leaves — see attachRenderer.
+  // A session created and never shown, or shown and then parked behind another
+  // view, holds no canvases at all.
+
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
     if (e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
+    /*
+     * Ctrl+Shift+C copies the branch — when there is nothing selected.
+     *
+     * Asked for as "have it copy / trigger the worktree copy, that branch copy thing":
+     * the same thing the ⧉ beside the branch does, from the keyboard, without
+     * reaching for the block.
+     *
+     * A SELECTION still wins, and that is not a compromise: Ctrl+Shift+C is
+     * every terminal's copy, and taking it from a person who has just dragged
+     * over an error message to copy it would be a bad trade for a convenience.
+     * With nothing selected that chord does nothing at all today, which is the
+     * gap this fills.
+     */
+    if (e.ctrlKey && e.shiftKey && !e.altKey && (e.key === "C" || e.key === "c") && !term.hasSelection() && copyPaneBranch()) return false;
     if (isFindChord(e) && panelFind()) return false;
+    if (isPluckChord(e) && panelPluck()) return false;
     // The app's own chords — today the file palette. Returning false keeps the
     // keystroke out of the PTY; the window listener in App still sees it, so
     // the palette opens and the shell never hears about it.
@@ -713,10 +833,11 @@ function createSession(root: string, agentTicket?: string): Sess {
   // may fail mid-drag if the document is momentarily unfocused; the settled
   // selection on mouse-up lands, and the failures are silent.
   term.onSelectionChange(() => {
+    const sel = term.getSelection();
+    noteSelection(sel.trim() ? sel : "");
     // Read at selection time rather than captured here: the switch has to take
     // effect on the next drag, not on the next shell.
     if (!copyOnSelect()) return;
-    const sel = term.getSelection();
     if (sel) navigator.clipboard?.writeText(sel).catch(() => { /* no clipboard permission */ });
   });
   const holder = document.createElement("div");
@@ -749,7 +870,7 @@ function createSession(root: string, agentTicket?: string): Sess {
       .catch(() => { /* no clipboard permission — the menu stayed shut, nothing pasted */ });
   });
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, openFail: null, agentTicket: agentTicket ?? null, tmuxWindows: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, openFail: null, agentTicket: agentTicket ?? null, tmuxWindows: [], tmuxSessions: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     /*
@@ -800,6 +921,71 @@ type TermCore = {
 };
 
 /**
+ * Give this shell its renderer back, because it is on screen again.
+ *
+ * The canvas renderer allocates four full-size canvases — measured at 44 MB for
+ * one pane on this display — and it used to hold them for the life of the
+ * session, on screen or not. Six shells open with one visible is a quarter of a
+ * gigabyte of texture for terminals nobody can see.
+ *
+ * Called from the mount effects, immediately after the holder is attached and
+ * before the first fit. Attached matters: the addon only defers its own setup
+ * when `terminal.element` is missing, and here the terminal was opened long ago
+ * — a detached element would have it measure a zero-size screen.
+ *
+ * Only the canvas renderer. WebGL is left exactly as it was: its context is
+ * created once and a machine that has one is not the machine this was measured
+ * on, and cycling GL contexts per view switch is a different risk for a saving
+ * nobody has measured.
+ */
+export function attachRenderer(s: Sess): void {
+  if (s.parkTimer) { clearTimeout(s.parkTimer); s.parkTimer = null; }
+  if (s.canvasAddon || wantsWebgl() || !wantsCanvas()) return;
+  try {
+    const addon = new CanvasAddon();
+    s.term.loadAddon(addon);
+    s.canvasAddon = addon;
+  } catch {
+    // The DOM renderer takes over and the shell never noticed — the same
+    // fallback this had when the addon was loaded at creation time.
+    s.canvasAddon = null;
+  }
+}
+
+/**
+ * Take it away again, a few seconds after the shell leaves the screen.
+ *
+ * The delay is not a heuristic about idleness — it is because the panel MOVES a
+ * holder between slots when the split changes, which unmounts and remounts
+ * inside the same frame. Disposing immediately would thrash the texture atlas
+ * on every layout change, and `attachRenderer` cancels this timer, so a move
+ * costs nothing at all.
+ *
+ * `dispose()` puts xterm back on the DOM renderer rather than on nothing, which
+ * is why the swap back has to happen in the same tick as the reattach and
+ * before the first frame: otherwise the catch-up repaint is drawn by the
+ * renderer that cannot draw box-drawing characters, and the seams this app
+ * chose canvas to remove would flash for a frame.
+ *
+ * Nothing about the shell changes. It keeps running, its scrollback is intact,
+ * and xterm pauses an off-screen terminal's rendering anyway — so the output
+ * that arrives while it is parked costs nothing either.
+ */
+export function parkRenderer(s: Sess): void {
+  if (s.parkTimer) clearTimeout(s.parkTimer);
+  s.parkTimer = setTimeout(() => {
+    s.parkTimer = null;
+    const addon = s.canvasAddon;
+    s.canvasAddon = null;
+    try { addon?.dispose(); } catch { /* already gone with the terminal */ }
+  }, PARK_RENDERER_MS);
+}
+
+/** Long enough that switching views and coming straight back keeps the
+ *  renderer, short enough that leaving for a minute gives the memory back. */
+export const PARK_RENDERER_MS = 3000;
+
+/**
  * Size a terminal to its slot. Ours, not `FitAddon.fit()`.
  *
  * The addon subtracts a flat 14px from the width whenever scrollback is on —
@@ -807,6 +993,7 @@ type TermCore = {
  * of anything, so hiding the scrollbar in CSS cannot win it back, and asking
  * for `{ width: 0 }` lands on 14 again because 0 is falsy. At this font size
  * it costs two whole columns, and they show up as a dead strip down the right
+
  * of anything that draws edge to edge: nano's title bar, vim's status line,
  * tmux's border. Nothing is reserved here — the viewport's scrollbar is an
  * overlay (see the style block below) and takes no layout width.
@@ -833,6 +1020,23 @@ function fitTerm(s: Sess) {
   if (cols === s.term.cols && rows === s.term.rows) return;
   core?._renderService?.clear?.(); // as the addon does — drop the old grid before reflowing
   s.term.resize(cols, rows);
+  /*
+   * And back to the bottom, every time.
+   *
+   * A resize keeps xterm's viewport where it was in the SCROLLBACK, not at the
+   * end of it — so a terminal that grows by a row comes back one line up, and
+   * under tmux that is unmistakable: tmux repaints its whole frame into the
+   * grid, the frame's last row lands in the line above the fold, and what you
+   * see at the TOP of the pane is the bottom line of the window. Reported
+   * exactly that way, twice, with the second screenshot showing Claude Code's
+   * footer sitting under the tab bar: "notice that the missing line of text
+   * is at the top".
+   *
+   * Measured on the live server while it was happening: tmux's client and its
+   * window were both 249x62 and agreed with each other, so nothing was the
+   * wrong SIZE — the grid was simply being read from one row too high.
+   */
+  try { s.term.scrollToBottom(); } catch { /* disposed mid-fit */ }
 }
 
 /** Close a shell and drop it: its socket, its terminal and its pending retry. */
@@ -852,9 +1056,15 @@ function killSession(s: Sess) {
 /**
  * Find in scrollback, for whichever pane has the focus.
  *
- * Lives in the header rather than floating over the terminal: the shell below
- * is a fixed grid of cells, and an overlay would cover output while you are
- * reading it looking for the very thing you searched for.
+ * Top right, over the shell, wearing the same face as the app's own find (see
+ * FindBar.tsx): the icon, the count, the two arrows, the close. It searches a
+ * canvas rather than the document so it cannot share that one's logic — but a
+ * screen where the same chord opens two different-looking boxes is a screen you
+ * have to learn twice.
+ *
+ * The header keeps nothing of it — no button, no slot. It used to live up there
+ * so an overlay could never cover output, and the price was a permanent control
+ * for something that is a chord and is open for ten seconds at a time.
  *
  * The highlight colours are the app's own tokens rather than xterm's defaults,
  * which are a fixed yellow that disappears on the light themes.
@@ -874,13 +1084,38 @@ function FindBar({ sess, onClose }: { sess: Sess | undefined; onClose: () => voi
     return () => { sub.dispose(); };
   }, [sess]);
 
+  /*
+   * The decorations, and the one that was wrong.
+   *
+   * `matchBackground` was `#00000000` — fully transparent — so every match but
+   * the current one was drawn with a thin border and nothing else, and on a
+   * screen of code that is invisible: "I can't tell where the match is". They
+   * are filled now. Eight-digit hex because that is what xterm's colour parser
+   * takes; a `color-mix()` from a CSS variable is a string it cannot read, and
+   * it fails by drawing nothing rather than by complaining.
+   */
+  /* The same two colours the rest of the app finds with — `--find-hit` and
+     `--find-on`, the amber and the loud magenta of `::highlight()` in
+     index.css. His words about the terminal's old pair: it should be "a louder
+     shade, a loud pink", and the app already had that colour. One search
+     that looks the same everywhere beats two that each have to be learned.
+
+     Alpha on the fills because xterm draws these as a layer and the shell's own
+     text has to stay readable through it; the borders go on at full strength,
+     which is what makes a match findable at a glance across a wide window. */
+  const hit = readVar(rootStyle(), "--find-hit", "#ffd23f");
+  const on = readVar(rootStyle(), "--find-on", "#ff2bd1");
   const opts = {
     decorations: {
-      matchBackground: "#00000000",
-      matchOverviewRuler: readVar(rootStyle(), "--warning", "#fbbf24"),
-      activeMatchBackground: readVar(rootStyle(), "--primary", "#a78bfa"),
-      activeMatchColorOverviewRuler: readVar(rootStyle(), "--primary", "#a78bfa"),
-      matchBorder: readVar(rootStyle(), "--warning", "#fbbf24"),
+      matchBackground: `${hit}66`,
+      matchBorder: hit,
+      matchOverviewRuler: hit,
+      // The one you are on, told apart by HUE rather than by brightness: the
+      // same colour at double strength reads as "bigger" on a dark ground
+      // rather than as "this one".
+      activeMatchBackground: `${on}cc`,
+      activeMatchBorder: on,
+      activeMatchColorOverviewRuler: on,
     },
   };
 
@@ -900,27 +1135,44 @@ function FindBar({ sess, onClose }: { sess: Sess | undefined; onClose: () => voi
 
   const close = () => { try { sess?.search.clearDecorations(); } catch { /* disposed */ } onClose(); };
 
+  const nothing = !!q && !at?.count;
   return (
-    <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
+    <div
+      className="absolute z-30 flex items-center gap-1.5 rounded-lg px-2 py-1.5 agx-menu"
+      /* Top right, where every find bar in this app and in every browser lives.
+         Inside the panel rather than fixed to the window, so it lands in the
+         terminal's own corner and never sits on top of the app-wide find. */
+      style={{ top: 8, right: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
+      role="search" aria-label="Find in the scrollback"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <span aria-hidden className="text-[11px]" style={{ color: "var(--text3)" }}>⌕</span>
       <input
         ref={inputRef}
         value={q}
+        spellCheck={false}
+        autoComplete="off"
         onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") { e.preventDefault(); step(e.shiftKey); }
-          if (e.key === "Escape") { e.preventDefault(); close(); }
+          // The bar owns its own arrows, or the shell behind it scrolls instead.
+          else if (e.key === "ArrowDown") { e.preventDefault(); step(false); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); step(true); }
+          else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
         }}
-        placeholder="Find in scrollback…"
-        aria-label="Find in scrollback"
-        className="px-2 py-1 rounded-md text-[11px] outline-none"
-        style={{ width: 190, background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
+        placeholder="Find in the scrollback"
+        aria-label="Find"
+        className="bg-transparent outline-none text-[11.5px] min-w-[180px]"
+        style={{ color: nothing ? "var(--error)" : "var(--text)", caretColor: "var(--primary)" }}
       />
-      <span className="text-[10px] tabular-nums t-dim2" style={{ minWidth: 46 }}>
-        {q ? (at?.count ? `${at.index}/${at.count}` : "none") : ""}
+      {/* `0/0` rather than blank while you type: an empty counter reads as
+          "still thinking". Same shape as the app's own. */}
+      <span className="tabular-nums text-[10px] shrink-0" style={{ color: nothing ? "var(--error)" : "var(--text4)" }}>
+        {at?.count ? `${at.index}/${at.count}` : q ? "0/0" : ""}
       </span>
-      <button onClick={() => step(true)} disabled={!q} title="Previous match (Shift+Enter)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↑</button>
-      <button onClick={() => step(false)} disabled={!q} title="Next match (Enter)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↓</button>
-      <CloseButton onClick={close} title="Close find (Esc)" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
+      <FindArrow dir={-1} disabled={!at?.count} onClick={() => step(true)} />
+      <FindArrow dir={1} disabled={!at?.count} onClick={() => step(false)} />
+      <CloseButton onClick={close} title="Close (Esc)" className="rounded hover:bg-white/10 shrink-0" style={{ color: "var(--text3)" }} />
     </div>
   );
 }
@@ -1143,6 +1395,9 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     if (!s || !el) return;
     el.appendChild(s.holder);
     if (!s.opened) { s.term.open(s.holder); s.opened = true; }
+    // On screen: it gets its canvases. Before the fit below, so the first
+    // measurement is the one the renderer that will draw it makes.
+    attachRenderer(s);
     s.term.options.theme = themeFromCss();
     const unTheme = applyThemeLive(s);
     s.subs.add(redraw);
@@ -1154,7 +1409,19 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
     const fitSoon = () => { if (fitTimer) clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 100); };
     doFit();
-    if (s.status === "idle") connect(s);
+    /* The first shell waits for a server; nothing else here does.
+       A pty socket opened before the sidecar is listening is a refused
+       connection, and Chromium logs it whether or not the reconnect picks it
+       up — the same reason the fetch layer and the live socket stopped asking
+       early. `connect` keeps its own `s.ws` guard and its onmessage still
+       checks identity, so this only delays the FIRST attempt; the status is
+       re-read after the wait because a session connected meanwhile must not be
+       connected twice. `then(go, go)`: a latch that rejected still opens the
+       shell rather than leaving a dead panel. */
+    if (s.status === "idle") {
+      const go = () => { if (s.status === "idle") connect(s); };
+      void whenServerUp().then(go, go);
+    }
     // Opening a shell is asking to type in it. The strip mounted focused on
     // nothing, so every open cost a click on the black area before the first
     // keystroke landed — and a click that does nothing visible is a click you
@@ -1169,8 +1436,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
       unTheme();
       s.subs.delete(redraw);
       // Detached, never killed: the shell and its scrollback outlive the strip
-      // being closed, so reopening lands you back in the same session.
+      // being closed, so reopening lands you back in the same session. What it
+      // does give back is the renderer's memory — see parkRenderer.
       if (s.holder.parentElement === el) el.removeChild(s.holder);
+      parkRenderer(s);
     };
   }, [open, sid]);
 
@@ -1311,22 +1580,97 @@ function detectPaneWorktree(term: Terminal | undefined, worktrees: GitRepoRef[])
  * this machine cannot resolve — see `chipAction`. A dead pill in permanent
  * residence would be worse than no pill.
  */
-function WtCardChip({ branch, onDown }: { branch: string; onDown?: (e: React.MouseEvent) => void }) {
+
+
+
+/**
+ * The bar for one pane: the facts it needs, and where they come from.
+ *
+ * Split out of the panel for the same reason the card chip was: the ClickUp
+ * lookup is a HOOK, and a hook called inside the panel's own JSX is a hook that
+ * stops running the day that branch takes an early return.
+ */
+function PaneBarFor({ foot, near, blocked, flash, at, pr, onDown, onGit, onDiff, onPr, onCopy, selection, onAsk }: {
+  foot: { left: number; top: number; width: number };
+  near: boolean;
+  blocked: boolean;
+  flash: number;
+  at: GitRepoRef;
+  pr: { repo: string; pr: PrBranchSummary } | null;
+  onDown: (e: React.MouseEvent) => void;
+  onGit: () => void;
+  onDiff: () => void;
+  onPr: () => void;
+  onCopy: () => void;
+  /** The focused pane's selection, when there is one — the bar offers to ask about it. */
+  selection?: string;
+  onAsk?: () => void;
+}) {
   const setup = useClickupSetup();
-  const ref = useMemo(() => cardRef({ headRefName: branch }), [branch]);
+  const branch = at.worktreeOf ? at.branch : at.name;
+  const ref = useMemo(() => cardRef({ headRefName: at.branch }), [at.branch]);
   const go = chipAction(ref, setup);
-  if (!ref || !go) return null;
-  const inApp = go.in === "tasks";
+  /* The card's priority, from the module-level memory the pane's own reads
+     fill. Asked here only when nobody has asked yet: a priority changes about
+     as often as a card is triaged, and the bar redraws on every hover. */
+  const [prio, setPrio] = useState<string | null>(null);
+  useEffect(() => {
+    /* Nothing to ask when no tracker is connected: without the gate every
+       pane bar on a machine that never set one up sent a lookup per hover,
+       each answered with the same "not connected". */
+    if (!ref || !setup?.connected) { setPrio(null); return; }
+    const key = ref.query;
+    const seen = cardPrioCache.get(key);
+    if (seen) { setPrio(seen.priority); return; }
+    let live = true;
+    void api.clickupFind(key)
+      .then((r) => {
+        const got = r.ok ? (r.task?.priority ?? null) : null;
+        rememberPrio(key, got);
+        if (live) setPrio(got);
+      })
+      .catch(() => { /* the card does without a colour */ });
+    return () => { live = false; };
+  }, [ref, setup?.connected]);
   return (
-    <button
-      onMouseDown={onDown}
-      onClick={() => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); }}
-      title={inApp ? `Open ${ref.label} in Tasks — the card this branch came from` : `Open ${ref.label} in ClickUp`}
-      className="agx-btn shrink-0 flex items-center gap-1 px-2 py-px rounded leading-none tabular-nums"
-      style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)" }}
-    >{ref.label} <span className="t-dim2 text-[10px]">↗</span></button>
+    <PaneBar
+      foot={foot}
+      near={near}
+      blocked={blocked}
+      flash={flash}
+      branch={branch}
+      dirty={at.dirty}
+      onDown={onDown}
+      onGit={onGit}
+      onDiff={onDiff}
+      onCopy={onCopy}
+      ask={selection && onAsk ? { lines: selection.split("\n").length, onAsk } : null}
+      pr={pr ? { number: pr.pr.number, title: pr.pr.title, changes: pr.pr.reviewDecision === "CHANGES_REQUESTED" } : null}
+      onPr={pr ? onPr : undefined}
+      card={ref && go ? { label: ref.label, prio: prio ? prio.toLowerCase() : null, inApp: go.in === "tasks" } : null}
+      onCard={ref && go ? () => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); } : undefined}
+    />
   );
 }
+
+/** Priority → the colour the chip wears. The same four the card panel uses, and
+ *  `--info` for a card nobody has ranked, which is what the chip always was. */
+const CARD_PRIO: Record<string, string> = {
+  urgent: "var(--error)",
+  high: "var(--warning)",
+  normal: "var(--info)",
+  low: "var(--text3)",
+};
+
+/** Card id → its priority, or null for a card that has none. Module level, so
+ *  it survives the panel closing — and written down, so it survives the app
+ *  closing: a card's priority changes about as often as somebody says so out
+ *  loud, and asking ClickUp for it costs 450 ms per card. See lib/paneFacts. */
+const cardPrioCache = new Map<string, RememberedPrio>(readCardPrios());
+const rememberPrio = (key: string, priority: string | null) => {
+  cardPrioCache.set(key, { priority, at: Date.now() });
+  writeCardPrios(cardPrioCache);
+};
 
 /**
  * The pull request out of a branch, remembered for a minute.
@@ -1340,7 +1684,23 @@ function WtCardChip({ branch, onDown }: { branch: string; onDown?: (e: React.Mou
  * Module-level, so it survives the panel being closed and reopened. Keyed by
  * root AND branch: the same branch name in two checkouts is two branches.
  */
-const branchPrCache = new Map<string, { at: number; repo: string | null; pr: PrBranchSummary | null }>();
+const branchPrCache = new Map<string, { at: number; repo: string | null; pr: PrBranchSummary | null }>(
+  readBranchPrs() as [string, { at: number; repo: string | null; pr: PrBranchSummary | null }][]);
+const rememberBranchPr = (key: string, v: { at: number; repo: string | null; pr: PrBranchSummary | null }) => {
+  branchPrCache.set(key, v);
+  writeBranchPrs(branchPrCache as unknown as Map<string, RememberedPr>);
+};
+/*
+ * A minute before it is asked again — and a remembered answer is still DRAWN
+ * while that happens.
+ *
+ * The two are different questions. "How old before I re-ask" is a minute,
+ * because a pull request can appear at any time. "How old before I refuse to
+ * draw it" is a day (see FACTS_MAX_AGE): the number and title of a branch's
+ * pull request are the same tomorrow, and showing them instantly while the
+ * answer is on its way is the difference between a block that is there and one
+ * that arrives a second later, per pane, every launch.
+ */
 const BRANCH_PR_TTL = 60_000;
 
 export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
@@ -1350,8 +1710,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    *  the terminal you are looking at rather than at the next reload. */
   const ffm = useSyncExternalStore(subscribeFocusFollowsMouse, focusFollowsMouse, () => false);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
-  const { ask, dialog } = useDialogs();
+  const { ask, askText, dialog } = useDialogs();
   const [root, setRoot] = useState<string>(() => { try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; } });
+  /* The focused pane's selection, for the bar's "Ask about this". */
+  const selection = useSyncExternalStore(subscribeSelection, currentSelection, () => "");
   /** The row for the directory we are standing in — what "here" means, by name,
    *  what it currently holds, and whether it has uncommitted work in it.
    *
@@ -1373,9 +1735,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // top, which is a question the server answers (see panewt.ts) rather than one
   // this end guesses from the pane's own directory: that is the parent repo for
   // every agent in a fleet, which is what made it look unanswerable.
-  const [wtOpen, setWtOpen] = useState(false);
-  const [wtQuery, setWtQuery] = useState("");
-  const [wtShowAll, setWtShowAll] = useState(false);
   /** The worktree the focused pane's agent is working in — shown compact in the
    *  status bar and pinned atop the picker. */
   const [detectedWt, setDetectedWt] = useState<GitRepoRef | null>(null);
@@ -1384,15 +1743,42 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    *  it a tab switch either kept the previous tab's worktree on screen or fell
    *  back to the panel's own checkout, and both are confident wrong answers. */
   const [wtDetecting, setWtDetecting] = useState(false);
+  /** Where the pane says it is, when that is somewhere this app has no repo for.
+   *  A pane in a checkout nobody scanned is not "no checkout": it is a place,
+   *  and saying the place is both true and useful. */
+  const [paneDir, setPaneDir] = useState<string | null>(null);
   /** The tmux window+pane the current detection belongs to, so a read that comes
    *  up empty keeps the last worktree (an agent between turns names nothing)
    *  rather than flickering it away — but moving the focus starts fresh. */
   const detectedWinRef = useRef("");
-  /** Focus key → the worktree root last read there. Coming back to a tab you
-   *  have already been in answers from this instantly, so the "reading" state
-   *  is only ever paid once per pane. */
-  const wtSeen = useRef(new Map<string, string>());
-  const wtRef = useRef<HTMLDivElement>(null);
+  /** Focus key → the worktree last read there, AND the agent that named it.
+   *  Coming back to a tab you have already been in answers from this instantly,
+   *  so the "reading" state is only ever paid once per pane; the agent is what
+   *  says whether that answer is still somebody's — see paneWorktree.ts. */
+  /*
+   * What each pane was last seen working in.
+   *
+   * Kept across RESTARTS now, which is the half that was missing: the memory
+   * lived in this component, so every relaunch started with six unknown panes
+   * and each one had to be discovered again as the pointer reached it —
+   * "it takes ages… especially after a restart… it gets stuck on Reading
+   * this pane". The answer is keyed by pane AND by the agent that gave it, so a
+   * `/clear` or a new session still throws it away (see nextSeen); a stale
+   * entry cannot survive that check, which is what makes writing it to disk
+   * safe.
+   */
+  const wtSeen = useRef(new Map<string, PaneSeen>(readPaneSeen()));
+  const rememberSeen = useCallback(() => { writePaneSeen(wtSeen.current); }, []);
+  /*
+   * And the whole window's panes, asked for once instead of one per hover.
+   *
+   * The detection below needs the dirs of the pane under the pointer, and the
+   * route answers about the pane tmux has SELECTED — so it could only be asked
+   * after selecting, once per pane, as the pointer wandered. `all=1` brings the
+   * lot back in one request off one `list-panes`, in the background, so the
+   * first hover of every pane is already answered.
+   */
+  const paneBook = useRef(new Map<string, { dirs: string[]; agent: string }>());
   const containerRef = useRef<HTMLDivElement>(null);
   // The value is used, not just the dispatch: a session is MUTATED in place
   // and notified through `subs`, so an effect watching `sess.openFail` has no
@@ -1450,6 +1836,37 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   useEffect(() => { setOnScreenSessions(paneIds); }, [paneIds]);
   const [focusIdx, setFocusIdx] = useState(0);
   const paneRefs = useRef<(HTMLDivElement | null)[]>([]);
+  /*
+   * The four buttons drawn ON a pane — see components/terminal/PaneActions.
+   *
+   * Two pieces of state and no new data: WHICH slot the pointer is in, and
+   * where the block goes inside it. Everything the buttons open is already
+   * resolved for the bar at the top (chipWt, chipPr, the card off the branch),
+   * because the pane under the pointer is the pane tmux has just been told to
+   * select — the same one the bar is describing.
+   *
+   * The box is measured rather than laid out: tmux panes are rectangles of
+   * character cells painted into one xterm canvas, so there is no element to
+   * hang a corner off. See lib/paneBox.ts.
+   */
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [actionsIdx, setActionsIdx] = useState<number | null>(null);
+  const [footBox, setFootBox] = useState<{ left: number; top: number; width: number } | null>(null);
+  /* The pointer is in the seam's zone. Kept here rather than in the bar because
+     the seam takes no pointer events at all — the terminal's bottom rows keep
+     every click — so the pane slot, which is already watching the pointer for
+     tmux, is what reports it. */
+  const [seamNear, setSeamNear] = useState(false);
+  /* A stamp rather than a boolean: two copies in a row are two answers, and a
+     boolean that is already true has nothing to say the second time. */
+  const [copyFlash, setCopyFlash] = useState(0);
+  const footRef = useRef<{ left: number; top: number; width: number } | null>(null);
+  const wrapRect = useRef<{ left: number; top: number } | null>(null);
+  const [actionsMode, setActionsMode] = useState(paneActionsMode);
+  useEffect(() => subscribePaneActions(() => setActionsMode(paneActionsMode())), []);
+  /** Bumped by anything that can move a pane under the pointer: a split, a
+   *  resize, tmux redrawing its layout. */
+  const [actionsTick, setActionsTick] = useState(0);
 
   /** Put the cursor back in the pane you were in. Called when a menu that had
    *  to borrow the focus for its own input — the repo filter, the commands
@@ -1460,10 +1877,41 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     const s = sessions.get(paneIds[focusIdx] ?? "");
     if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
   }, [paneIds, focusIdx]);
-  // The repo picker's filter takes focus off the shell while it is open, so
-  // dismissing it (Escape, an outside click) has to give the shell its cursor
-  // back — see focusTerm.
-  useDismiss(wtOpen, wtRef, () => { setWtOpen(false); setWtQuery(""); setWtShowAll(false); focusTerm(); });
+  /**
+   * ASK THE AGENT IN THIS PANE ABOUT WHAT IS SELECTED.
+   *
+   * A note is asked for (Enter with none sends "About this:"), then the note
+   * and the quoted selection go into the pane through the same pty the keys
+   * do — bracketed, so a CLI with an input box takes it as one paste, then
+   * Enter. The agent that lives in the pane reads it as its next message; a
+   * shell would read it as commands, which is why the button only stands when
+   * the pane's worktree is one the board knows an agent in — see PaneBarFor.
+   */
+  const askAboutSelection = useCallback(async () => {
+    const s = sessions.get(paneIds[focusIdx] ?? "");
+    const sel = currentSelection();
+    if (!s || !sel.trim()) return;
+    /* Is there an agent in THIS pane? The board knows the panes agents fire
+       hooks from; a pane it does not know is a shell, and a quoted traceback
+       typed into a shell is a row of `>` redirects creating files. So: an
+       agent's pane takes the message directly; anything else gets a fresh
+       chat on the bench with the same message, in this checkout. */
+    const paneId = s.tmuxPanes.find((p) => p.active)?.id ?? (s.tmuxPanes.length === 1 ? s.tmuxPanes[0]?.id : undefined);
+    const agentHere = !!paneId && (lanternRows() ?? []).some((r) => r.paneId === paneId && r.role !== "lantern");
+    const note = await askText({
+      title: agentHere ? "Ask the agent in this pane" : "Ask about this in a new chat",
+      body: sel.split("\n").slice(0, 6).join("\n").slice(0, 400) + (sel.length > 400 ? "\n…" : ""),
+      input: { label: "Your note (what you want to know about it)", placeholder: "why does this fail?" }, confirmLabel: "Send",
+    });
+    if (note === null) return;
+    const text = askAboutText(sel, note);
+    try { s.term.clearSelection(); } catch { /* fine */ }
+    if (!agentHere) { void askOnBench(s.root, text, "ask"); return; }
+    if (s.status !== "live" || s.ws?.readyState !== WebSocket.OPEN) return;
+    s.ws.send(ptyFrame({ t: "in", d: `\x1b[200~${text}\x1b[201~` }));
+    setTimeout(() => { if (s.ws?.readyState === WebSocket.OPEN) s.ws.send(ptyFrame({ t: "in", d: "\r" })); }, 120);
+  }, [paneIds, focusIdx, askText]);
+
   // Keep the focused pane's worktree fresh.
   //
   // The server answers first, from the agent's own working directory and the
@@ -1506,18 +1954,39 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
      */
     if (focusKey !== detectedWinRef.current) {
       detectedWinRef.current = focusKey;
-      const remembered = focusKey ? wtSeen.current.get(focusKey) : "";
-      const known = remembered ? cands.find((r) => r.root === remembered) ?? null : null;
+      const remembered = focusKey ? wtSeen.current.get(focusKey) : undefined;
+      const known = remembered ? cands.find((r) => r.root === remembered.root) ?? null : null;
       setDetectedWt(known);
       setWtDetecting(!known);
     }
     let stopped = false;
+    /* Whatever happens in here, the spinner comes down.
+       It is a read with two halves — the server's answer and a scan of the
+       pane's own buffer — and only the first was inside a try. A throw in the
+       second (a terminal disposed mid-scan is the one that has happened) left
+       `wtDetecting` true, and nothing else ever sets it false: the bar said
+       "Reading this pane…" for twenty minutes, on a pane that had been read
+       long before. */
     const run = async () => {
+      try { await readOnce(); } finally { if (!stopped) setWtDetecting(false); }
+    };
+    const readOnce = async () => {
       const s = sessions.get(paneIds[focusIdx] ?? "");
       let d: GitRepoRef | null = null;
+      /** Which agent answered. "" is a pane with nobody working in it, and it
+       *  is what ends the memory below rather than a gap in it. */
+      let agent = "";
       if (focusWin) {
         try {
-          const { dirs } = await api.paneDirs(focusWin);
+          /* The book first: it holds every pane of this window and is filled
+             while nobody is waiting. A hover that finds its pane there costs
+             nothing at all; one that does not falls back to the single-pane
+             call, which is the case for a pane that appeared since. */
+          const booked = focusPane ? paneBook.current.get(focusPane) : undefined;
+          const { dirs, agent: who } = booked ?? await api.paneDirs(focusWin);
+          agent = who ?? "";
+          // Newest first, so this is where the pane is working right now.
+          setPaneDir(dirs[0] ?? null);
           // In the order the server gave them: newest first, so an agent that
           // has moved between worktrees answers with the one it is in now.
           for (const p of dirs) {
@@ -1529,17 +1998,26 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       if (stopped) return;
       if (!d) d = detectPaneWorktree(s?.term, cands);
       if (stopped) return;
-      // Read, whatever it said. A pane with no worktree is an answer too, and
-      // leaving the spinner up for it would be a chip that never settles.
-      setWtDetecting(false);
-      // Sticky WITHIN one pane: a worktree does not vanish because the agent
-      // stopped naming it between turns, so only a fresh detection replaces it.
-      // Across a switch it is not sticky at all — that is the reset above.
+      /*
+       * Sticky while the SAME agent is in the pane, and not a moment longer.
+       *
+       * A worktree does not vanish because the agent stopped naming it between
+       * turns — that is what the memory is for. But `/clear` starts a new
+       * session with a new transcript, and the chip went on naming the branch
+       * of a conversation that no longer existed until you switched panes.
+       * Measured: after a clear the pane's transcript had zero tool calls, the
+       * server answered with nothing, and nothing here dropped the old answer.
+       * See paneWorktree.ts. Across a switch it is not sticky at all — that is
+       * the reset above.
+       */
       const found = d;
-      if (found) {
-        if (focusKey) wtSeen.current.set(focusKey, found.root);
-        setDetectedWt((prev) => (prev?.root === found.root ? prev : found));
+      const keep = nextSeen(focusKey ? wtSeen.current.get(focusKey) : undefined, found?.root ?? null, agent);
+      if (focusKey) {
+        if (keep) wtSeen.current.set(focusKey, keep); else wtSeen.current.delete(focusKey);
+        rememberSeen();
       }
+      const now = keep ? cands.find((r) => r.root === keep.root) ?? found : null;
+      setDetectedWt((prev) => (prev?.root === now?.root ? prev : now ?? null));
     };
     void run();
     const id = setInterval(() => { void run(); }, 4000);
@@ -1554,7 +2032,36 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * `wtDetecting`. Falling back mid-switch made the chip flash the parent repo
    * between two worktrees, which reads as the app having lost the answer.
    */
+  /* Filled for the whole window as soon as there is one, and again when its
+     panes change — a split, a new agent, a pane that went. Cheap: one request,
+     one `list-panes`, and it runs while the pointer is somewhere else. */
+  useEffect(() => {
+    if (!open || !focusWin) return;
+    let live = true;
+    const fill = () => {
+      void api.paneDirsAll(focusWin).then((r) => {
+        if (!live || !r?.ok) return;
+        for (const p of r.panes ?? []) paneBook.current.set(p.pane, { dirs: p.dirs ?? [], agent: p.agent ?? "" });
+      }).catch(() => { /* the per-pane call still answers */ });
+    };
+    fill();
+    const id = setInterval(fill, 4000);
+    return () => { live = false; clearInterval(id); };
+  }, [open, focusWin, paneIds.length]);
+
   const chipWt = detectedWt ?? (wtDetecting ? null : here) ?? null;
+  useEffect(() => { wtRef.current = chipWt; }, [chipWt]);
+  /* The card behind the focused pane's branch, resolved the way the chip beside
+     it resolves one: the same `cardRef` + `chipAction` pair, so the key and the
+     chip cannot disagree about where a card lives. */
+  const cuSetup = useClickupSetup();
+  useEffect(() => {
+    const ref = chipWt?.branch ? cardRef({ headRefName: chipWt.branch }) : null;
+    const go = ref ? chipAction(ref, cuSetup) : null;
+    cardGoRef.current = ref && go
+      ? () => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); }
+      : null;
+  }, [chipWt?.branch, cuSetup]);
   /**
    * The pull request out of the chip's branch, when there is one.
    *
@@ -1563,6 +2070,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * search box instead of the pull request" bug was fixed once already.
    */
   const [chipPr, setChipPr] = useState<{ repo: string; pr: PrBranchSummary } | null>(null);
+  /** The same answers, readable from outside React — see `paneDoor`. */
+  const prRef = useRef<{ repo: string; pr: PrBranchSummary } | null>(null);
+  useEffect(() => { prRef.current = chipPr; }, [chipPr]);
+  const wtRef = useRef<GitRepoRef | null>(null);
+  /** Not `cardRef` — that name is the lib function this file already uses to
+   *  turn a branch into a card reference. */
+  const cardGoRef = useRef<(() => void) | null>(null);
   const prRoot = chipWt?.root ?? "";
   const prBranch = chipWt?.branch ?? "";
   useEffect(() => {
@@ -1624,6 +2138,33 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   /** The find bar is open over the focused pane. Reset when the repo changes:
    *  a search is about one shell's scrollback, not about the panel. */
   const [findOpen, setFindOpen] = useState(false);
+  /* The pluck palette: the screen's rows are read when it opens, not tracked
+     — a palette over a running shell that re-lettered itself as lines
+     scrolled would move the key from under your finger. */
+  const [pluckOpen, setPluckOpen] = useState(false);
+  const [pluckRows, setPluckRows] = useState<{ text: string; wrapped: boolean }[]>([]);
+  useEffect(() => {
+    if (!pluckOpen) return;
+    const s = sessions.get(paneIds[focusIdx] ?? "");
+    if (!s) { setPluckOpen(false); return; }
+    const buf = s.term.buffer.active;
+    const rows: { text: string; wrapped: boolean }[] = [];
+    for (let y = 0; y < s.term.rows; y++) {
+      const line = buf.getLine(buf.viewportY + y);
+      if (!line) continue;
+      rows.push({ text: line.translateToString(true), wrapped: line.isWrapped });
+    }
+    setPluckRows(rows);
+  }, [pluckOpen, paneIds, focusIdx]);
+  const pluckPaste = useCallback((token: string) => {
+    const s = sessions.get(paneIds[focusIdx] ?? "");
+    if (!s || s.status !== "live" || s.ws?.readyState !== WebSocket.OPEN) return;
+    s.ws.send(ptyFrame({ t: "in", d: `\x1b[200~${token}\x1b[201~` }));
+  }, [paneIds, focusIdx]);
+  const pluckCopy = useCallback((token: string) => {
+    void navigator.clipboard?.writeText(token).catch(() => { /* no permission */ });
+    setCopyFlash(Date.now());
+  }, []);
   useEffect(() => { setFindOpen(false); }, [root]);
 
   /**
@@ -1639,15 +2180,80 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * declared further down the component is a temporal dead zone — which in this
    * app means a white window rather than a warning.
    */
+  /* Measured after paint, and only for one slot: one getBoundingClientRect per
+     hover rather than per mousemove.
+     The slot is the one the pointer is in, or — when the pointer is somewhere
+     else entirely — the focused one. The seam is a 3px line a pane wears the
+     way it wears a border, and measuring only under the pointer meant taking
+     the pointer to the sidebar took the whole feature off the screen, with
+     nothing left to say the pane still had a bar. */
+  useLayoutEffect(() => {
+    const clear = () => { footRef.current = null; setFootBox(null); };
+    const idx = actionsIdx ?? focusIdx;
+    if (actionsMode === "off" || idx == null || !paneIds[idx]) { clear(); return; }
+    const wrap = wrapRef.current;
+    const s = sessions.get(paneIds[idx] ?? "");
+    const screenEl = (s?.term.element?.querySelector(".xterm-screen") ?? s?.term.element) as HTMLElement | null;
+    if (!wrap || !s || !screenEl) { clear(); return; }
+    const w = wrap.getBoundingClientRect();
+    const sc = screenEl.getBoundingClientRect();
+    const rect = (r: DOMRect) => ({ left: r.left, top: r.top, width: r.width, height: r.height });
+    // The pane tmux says is current — which, with focus-follows-mouse, is the
+    // one under the pointer. Null covers the cases where there is no rectangle
+    // to speak of: one pane, a zoomed pane, a shell with no tmux at all.
+    const pane = s.tmuxPanes.length > 1 ? (s.tmuxPanes.find((x) => x.active) ?? null) : null;
+    const cells = pane ? { left: pane.left, top: pane.top, right: pane.right, bottom: pane.bottom } : null;
+    /* The pane's own bottom edge, which is NOT where its last row ends: xterm
+       draws whole rows only, so the slot is a few pixels taller than a whole
+       number of them, and that strip is where the seam goes. Measured on the
+       slot rather than on the grid — the grid's bottom is the pane BELOW this
+       one when the terminal is split. */
+    const slotEl = paneRefs.current[idx];
+    const edge = slotEl ? slotEl.getBoundingClientRect().bottom - w.top : undefined;
+    const foot = paneFoot({ screen: rect(sc), slot: rect(w), cols: s.term.cols, rows: s.term.rows, pane: cells, edge });
+    /* A pane too small to give the bar room is left alone: the keyboard chords
+       do the same job without covering the prompt the bar is describing. */
+    const cellH = s.term.rows > 0 ? sc.height / s.term.rows : 0;
+    const tall = cells ? (cells.bottom - cells.top + 1) * cellH : sc.height;
+    if (foot.width < BAR_MIN_W || tall < BAR_MIN_H) { clear(); return; }
+    /* The pointer is compared against this in the slot's own mousemove, which
+       is why the wrapper's own position is kept with it: the alternative is a
+       getBoundingClientRect on every mouse event, on a panel that already
+       repaints a terminal. */
+    wrapRect.current = { left: w.left, top: w.top };
+    footRef.current = foot;
+    setFootBox((prev) => (prev && prev.left === foot.left && prev.top === foot.top && prev.width === foot.width ? prev : foot));
+  }, [actionsIdx, focusIdx, actionsMode, actionsTick, paneIds, sessTick]);
+
+  /* Is the pointer on the seam? Arithmetic against the rectangle measured
+     above — no DOM reads — so this can run on every mousemove. */
+  const nearFoot = useCallback((e: { clientX: number; clientY: number }) => {
+    const w = wrapRect.current, f = footRef.current;
+    if (!w || !f) { setSeamNear(false); return; }
+    const x = e.clientX - w.left, y = e.clientY - w.top;
+    const on = y >= f.top - SEAM_ZONE && y <= f.top + 2 && x >= f.left && x <= f.left + f.width;
+    setSeamNear((cur) => (cur === on ? cur : on));
+  }, []);
+
+  /* A split, a resize or a tmux redraw all move the corner the block sits in.
+     Observed rather than polled — the wrapper is one element. */
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const ro = new ResizeObserver(() => setActionsTick((n) => n + 1));
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, []);
+
   const hoverFocus = useCallback((i: number, buttons: number) => {
-    if (!shouldFocusOnHover({ enabled: ffm, buttons, typing: wtOpen || findOpen, visible: active && open })) return;
+    if (!shouldFocusOnHover({ enabled: ffm, buttons, typing: findOpen, visible: active && open })) return;
     const s = sessions.get(paneIds[i] ?? "");
     if (!s) return;
     // Only when it moves. Re-entering the pane you are already in would re-run
     // the mount effect below, which detaches and re-attaches a live terminal.
     setFocusIdx((cur) => (cur === i ? cur : i));
     requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
-  }, [ffm, wtOpen, findOpen, active, open, paneIds]);
+  }, [ffm, findOpen, active, open, paneIds]);
 
   /** The tmux pane last asked for, so a pointer resting inside one does not
    *  re-send for every mousemove in the half-second before the sweep reports
@@ -1669,7 +2275,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * so crossing a divider is one command and sitting in a pane is none.
    */
   const hoverTmuxPane = useCallback((i: number, e: { clientX: number; clientY: number; buttons: number }) => {
-    if (!shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: wtOpen || findOpen, visible: active && open })) return;
+    if (!shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: findOpen, visible: active && open })) return;
     const s = sessions.get(paneIds[i] ?? "");
     // Fewer than two panes and there is nothing to choose between — the server
     // sends an empty list for exactly that case.
@@ -1687,14 +2293,49 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (!pane || pane.active || askedPane.current === pane.id) return;
     askedPane.current = pane.id;
     s.ws.send(ptyFrame({ t: "tmux", cmd: "selectpane", pane: pane.id }));
-  }, [ffm, wtOpen, findOpen, active, open, paneIds]);
+  }, [ffm, findOpen, active, open, paneIds]);
 
   useEffect(() => {
     if (!open) return;
     panelClose = () => closeRef.current();
+    /* Reads the refs rather than closing over them: this is set once on mount,
+       and what is behind the focused pane changes several times a minute. */
+    copyPaneBranch = () => {
+      const wt = wtRef.current;
+      if (!wt) return false;
+      const name = wt.worktreeOf ? wt.branch : wt.name;
+      if (!name) return false;
+      /* Still no toast — there is none over a terminal in this app, and a line
+         written into the shell would be a line in somebody's command history.
+         The pane's own bar answers instead: up for a moment with a green tick,
+         which says WHICH branch went to the clipboard rather than merely that
+         something did. */
+      void navigator.clipboard?.writeText(name).catch(() => { /* no permission */ });
+      setCopyFlash(Date.now());
+      return true;
+    };
+    paneDoor = (which) => {
+      const wt = wtRef.current;
+      if (which === "pr") {
+        const at = prRef.current;
+        if (!at) return false;
+        openPr(at.repo, at.pr.number);
+        return true;
+      }
+      if (which === "card") {
+        const go = cardGoRef.current;
+        if (!go) return false;
+        go();
+        return true;
+      }
+      if (!wt) return false;
+      requestWorktreeJump(which === "git" ? { view: "git", root: wt.root } : { view: "diff", filter: dirName(wt.root) });
+      return true;
+    };
     // Claim the find chord only while this view is on screen and has a pane to
     // search — see `panelFind`.
     panelFind = () => { setFindOpen(true); return true; };
+    panelPluck = () => { setPluckOpen(true); return true; };
     /* And the shell's Ctrl+F, when the focus is anywhere but inside the pane
        itself — the tab strip, a toolbar. Inside the pane the key still belongs
        to the program running there (readline reads it as forward-char), which
@@ -1708,6 +2349,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       if (!s || !el) return;
       el.appendChild(s.holder);
       if (!s.opened) { s.term.open(s.holder); s.opened = true; }
+      attachRenderer(s); // see the console strip above
       s.term.options.theme = themeFromCss(); // pick up theme switches between opens
       const unTheme = applyThemeLive(s);
       s.subs.add(force);
@@ -1718,7 +2360,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
       const fitSoon = () => { if (fitTimer) clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 100); };
       doFit();
-      if (s.status === "idle") connect(s);
+      /* The first shell waits for a server; nothing else here does.
+         A pty socket opened before the sidecar is listening is a refused
+         connection, and Chromium logs it whether or not the reconnect picks it
+         up — the same reason the fetch layer and the live socket stopped asking
+         early. `connect` keeps its own `s.ws` guard and its onmessage still
+         checks identity, so this only delays the FIRST attempt; the status is
+         re-read after the wait because a session connected meanwhile must not be
+         connected twice. `then(go, go)`: a latch that rejected still opens the
+         shell rather than leaving a dead panel. */
+      if (s.status === "idle") {
+        const go = () => { if (s.status === "idle") connect(s); };
+        void whenServerUp().then(go, go);
+      }
       // Once per session, not once per mount: switching views and coming back
       // would otherwise replay the same test run on top of itself, and the
       // scrollback would read as a shell stuck in a loop.
@@ -1735,6 +2389,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     return () => {
       panelClose = () => {};
       panelFind = () => false;
+      panelPluck = () => false;
       unclaim();
       for (const { s, el, ro, unTheme, stopFit } of mounted) {
         ro.disconnect();
@@ -1742,6 +2397,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
         unTheme();
         s.subs.delete(force);
         if (s.holder.parentElement === el) el.removeChild(s.holder);
+        parkRenderer(s);
       }
     };
     // `onClose` deliberately absent: see closeRef above. Re-running this for a
@@ -1797,6 +2453,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * arriving on the next poll, never a local guess that could disagree with it.
    */
   const tmuxWindows = sess?.tmuxWindows ?? [];
+  /** Where the session menu is open, or null. Anchored to the chip rather than
+   *  to the pointer: it is a menu hanging off a control, not a right-click. */
+  const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number } | null>(null);
+  /** Which session's × has been pressed once. Ending one takes everything
+   *  running in it and there is no undo, so it asks. */
+  const [killing, setKilling] = useState<string | null>(null);
   /*
    * Re-fit the terminal when tmux takes the panel over, or its window list
    * changes shape.
@@ -1959,6 +2621,24 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (!s || s.ws?.readyState !== WebSocket.OPEN) return;
     s.ws.send(ptyFrame({ t: "tmux", ...body }));
   }, [sess]);
+  /*
+   * WHAT EACH TAB IS FOR, under a name that deliberately says nothing.
+   *
+   * `AI01` is an address: stable, short, and the same thing an hour later. The
+   * price of that is that it carries no information at all, which is why the
+   * ask was "AI0X... or have it match the task being worked on" —
+   * and the answer to that `or` is both, the number as the name and this as the
+   * label under it.
+   *
+   * Every twenty seconds, not with the frame: the frame is swept twice a
+   * second per attached client, and a sentence an agent publishes every few
+   * minutes has no business in a poll that fast.
+   */
+  const [tabHints, setTabHints] = useState<Record<string, string>>({});
+  usePoll(true, useCallback(async () => {
+    const r = await api.tabHints().catch(() => null);
+    if (r?.hints) setTabHints(r.hints);
+  }, []), 20_000);
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -2140,18 +2820,92 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
      is a different thing and is what the status line says. */
   const disabled = !IS_DEMO && cmds ? !cmds.enabled : false;
 
-  const statusDot: Record<SessStatus, { color: string; label: string }> = {
-    idle: { color: "var(--text2)", label: "Idle" },
-    connecting: { color: "var(--warning)", label: "Connecting…" },
-    live: { color: "var(--success, #98c379)", label: sess ? `${sess.shell} · ${sess.mode === "pipe" ? "pipe" : "pty"}${sess.mode !== "pipe" && !sess.canResize ? " · fixed size" : ""}` : "live" },
-    exited: { color: "var(--text2)", label: "Exited" },
-    error: { color: "var(--error)", label: "Disconnected" },
-    unauthorized: { color: "var(--error)", label: "Unauthorized ⚿" },
-  };
+  /*
+   * What is left of the terminal's own chrome, and where it went.
+   *
+   * The row that stood above the tabs is gone. It carried the worktree chip —
+   * branch, Diff, PR, card — and every one of those is now a door in the pane's
+   * own block, drawn on the pane it describes. That is the difference that made
+   * the row a duplicate rather than a summary: with four panes on screen it
+   * named exactly one of them, and never the one you were reading. His words,
+   * twice: "this line is no use any more, it is duplicating", then "this row has
+   * to go, only Commands and Sessions stay".
+   *
+   * So the survivors ride the tabs row instead, pinned to its right and OUTSIDE
+   * its scroller — a right-hand group inside `overflow-x-auto` scrolls away the
+   * moment there are more tabs than fit, which is precisely when somebody goes
+   * looking for it. The workspace is one row shorter at rest, which is what the
+   * move was for.
+   */
+  const barRight = (
+    <>
+            {/* The one piece of the old status pill worth keeping: when
+                the shell is NOT fine, and only then. Unauthorised is a
+                button because the remedy is a token; disconnected says
+                so and reconnects on press. */}
+            {(status === "unauthorized" || status === "error" || status === "exited") && (
+              <button
+                onClick={() => (status === "unauthorized" ? reauthPrompt() : restart())}
+                title={status === "unauthorized"
+                  ? "This server needs an access token — click to enter it"
+                  : "The shell is not connected — click to attach again"}
+                className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg"
+                style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>
+                <span aria-hidden>●</span>
+                {status === "unauthorized" ? "Token needed" : "Reconnect"}
+              </button>
+            )}
+            {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ Split</button>}
+            {/* The way back, and it lives here because the way out
+                lives in the strip — which is the thing being hidden.
+                A toggle whose "off" state removes the button that
+                turns it on is a one-way door. Exactly one of the two
+                is on screen at any time. */}
+            {tmuxActive && tmuxWindows.length > 0 && tmuxBar && (
+              <button onClick={() => setTmuxBar(false)} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+                title="Draw the window list here instead, and take tmux's row back for the shell">
+                Use agentglass bar
+              </button>
+            )}
+            {/* Commands, in the background and on this side.
+                It is used from the Docker console far more than from
+                here — his words — and the pinned slot in this bar sat
+                empty offering "Pin a command" to nobody. So the console
+                keeps the full control, the terminal gets the quiet one
+                (no count, no colour, no pinned strip), and it sits with
+                the other things you press occasionally rather than
+                beside the chip. The left side is the chip and nothing
+                else. */}
+            <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} runTargetInTmux={!!sess?.tmux} onClose={focusTerm} quiet />
+            {/* Sessions, last on the right — the one control here that
+                is about work you have already done rather than the
+                shell in front of you. */}
+            <ResumeSessions
+              root={root}
+              disabled={disabled || !sess?.tmux}
+              onOpen={(sn, how) => { tmuxCmd({ cmd: "resume", id: sn.id, cwd: sn.cwd, split: how.split, yolo: how.yolo }); focusTerm(); }}
+              onGo={(at) => { void api.focusPane({ sessionId: at.sessionId, windowId: at.windowId, paneId: at.paneId }); }}
+            />
+    </>
+  );
+  /* Exactly one of the two window lists is ever on screen, and either one can be
+     absent — tmux drawing its own bar, a repo with no shell yet. `barRight` has
+     to exist in all three cases or Commands and Sessions become unreachable. */
+  const tabsRowShown = (!IS_DEMO && !disabled && !tmuxActive) || (tmuxActive && tmuxWindows.length > 0 && !tmuxBar);
+
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
       {dialog}
+      {/* Find, floating over the shell rather than living in the header. Opened
+          by Ctrl+Shift+F (see panelFind), closed by Escape, and it hands the
+          cursor back to the terminal on the way out. */}
+      {pluckOpen && (
+        <PluckPalette rows={pluckRows} onPick={pluckPaste} onCopy={pluckCopy} onClose={() => { setPluckOpen(false); focusTerm(); }} />
+      )}
+      {findOpen && (
+        <FindBar sess={sessions.get(paneIds[focusIdx] ?? "")} onClose={() => { setFindOpen(false); focusTerm(); }} />
+      )}
                 {/* The plan meters live in the top bar, which is over every view
                     rather than only over the terminal. */}
                 <style>{SCROLLBAR_CSS}</style>
@@ -2171,259 +2925,23 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 .xterm-viewport{scrollbar-width:none!important}
 .xterm-viewport::-webkit-scrollbar{width:0!important;height:0!important}`}</style>
 
-                {/* header: where this pane is + command launcher + actions */}
-                <div className={viewHeaderClass} style={viewHeaderStyle}>
-                  <h2 className="sr-only">Terminal</h2>
-                  {/*
-                    * Where this pane is, not where to go.
-                    *
-                    * There was a repo picker here, and it could not do what it
-                    * looked like it did: the server reads a shell's directory
-                    * once, when the PTY opens (`terminal.ts`), so picking a
-                    * worktree never moved the shell in front of you — it hid
-                    * your shells and started a new one somewhere else. Moving a
-                    * live shell for real means typing `cd` into it, over
-                    * whatever you were typing, in whichever of several panes,
-                    * possibly under a running build. tmux already answers that
-                    * question, and answers it better.
-                    *
-                    * So the slot states a fact instead of offering a choice.
-                    * Which matters twice over: with no picker, nothing else on
-                    * this bar said which checkout you were in, and "I thought I
-                    * was in the worktree" is the same surprise the picker used
-                    * to cause, just mirrored.
-                    *
-                    * The answer comes from the server (see panewt.ts) rather
-                    * than from this end guessing off the pane's own directory —
-                    * that is the parent repo for every agent in a fleet, which
-                    * is what made it look unanswerable.
-                    */}
-                  {/*
-                    * Three doors, not one.
-                    *
-                    * The chip named the worktree and could only open Source
-                    * control, so the two things you actually do with a branch an
-                    * agent is working on — read its diff, look at its pull
-                    * request — were a view switch and a search away from the one
-                    * place already holding the branch's name. The status bar's
-                    * copy had grown Git and Diff for exactly that reason; this
-                    * is the complete one, and the pull request is the part
-                    * neither had.
-                    *
-                    * Separate buttons rather than one button with a menu: a menu
-                    * is a click to find out what the options are, and there are
-                    * three.
-                    */}
-                  {(() => {
-                    // Mid-switch, with the read still out: say so rather than
-                    // fall back to the panel's own checkout, which is a
-                    // different branch stated with the same confidence.
-                    if (!chipWt) {
-                      return wtDetecting ? (
-                        <span
-                          className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg shrink-0"
-                          title="Reading which worktree this pane is working in"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text3)" }}
-                        >
-                          <span className="shrink-0 text-[9.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>WT</span>
-                          <span className="animate-pulse">Reading this pane…</span>
-                        </span>
-                      ) : null;
-                    }
-                    const at = chipWt;
-                    const label = at.worktreeOf ? at.branch : at.name;
-                    return (
-                      <span
-                        className={`${CHIP} flex items-center gap-1.5 min-w-0 shrink`}
-                        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
-                      >
-                        <span
-                          className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded"
-                          title={at.worktreeOf ? `worktree of ${at.worktreeOf}` : "main checkout"}
-                          style={at.worktreeOf
-                            ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
-                            : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
-                        >{at.worktreeOf ? "WT" : "REPO"}</span>
-                        {/* The name still opens Source control on its own — that
-                            was the chip's one action and muscle memory for it is
-                            older than the buttons beside it. */}
-                        <button
-                          onMouseDown={keepTermFocus}
-                          onClick={() => requestWorktreeJump({ view: "git", root: at.root })}
-                          title={`${at.root}\nOpen its Source control`}
-                          className="agx-btn flex items-center gap-1.5 min-w-0 shrink rounded px-1"
-                          style={{ color: "var(--text)" }}
-                        >
-                          <span className="font-medium truncate min-w-0">{label}</span>
-                          {at.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${at.dirty} changed file${at.dirty === 1 ? "" : "s"}`}>●{at.dirty}</span>}
-                          <span className="t-dim2 shrink-0 text-[10px]">↗</span>
-                        </button>
-                        <button
-                          onMouseDown={keepTermFocus}
-                          onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(at.root) })}
-                          title={`Open ${dirName(at.root)}'s changes in File changes`}
-                          className="agx-btn shrink-0 flex items-center gap-1 px-2 py-px rounded leading-none"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
-                        >Diff <span className="t-dim2 text-[10px]">↗</span></button>
-                        {/* Only when the branch HAS one. A dashed "no pull
-                            request" pill in the terminal's chrome would be a
-                            permanent fixture on every local branch, and Source
-                            control is where that fact belongs. */}
-                        {chipPr && (
-                          <button
-                            onMouseDown={keepTermFocus}
-                            onClick={() => openPr(chipPr.repo, chipPr.pr.number)}
-                            title={`#${chipPr.pr.number} ${chipPr.pr.title}\n${chipPr.pr.state === "OPEN" && chipPr.pr.isDraft ? "Draft" : chipPr.pr.state.toLowerCase()} · open it in Pull requests`}
-                            className="agx-btn shrink-0 flex items-center gap-1 px-2 py-px rounded leading-none tabular-nums"
-                            style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
-                          >PR #{chipPr.pr.number} <span className="t-dim2 text-[10px]">↗</span></button>
-                        )}
-                        <WtCardChip branch={at.branch} onDown={keepTermFocus} />
-                      </span>
-                    );
-                  })()}
-
-                  {/* Commands and pins — the same control the docked console
-                      mounts, so the two shells offer the same thing. Its own
-                      dropdown state lives inside it, which is why it sits
-                      outside the pickers group above. */}
-                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} runTargetInTmux={!!sess?.tmux} onClose={focusTerm} />
-
-                  {/* Past sessions, in the middle of the bar where it can be
-                      seen. The one control here that is about work you have
-                      already done rather than the shell in front of you — see
-                      ResumeSessions for why it lists every checkout. */}
-                  <ResumeSessions
-                    root={root}
-                    disabled={disabled || !sess?.tmux}
-                    onOpen={(sn, how) => { tmuxCmd({ cmd: "resume", id: sn.id, cwd: sn.cwd, split: how.split, yolo: how.yolo }); focusTerm(); }}
-                    onGo={(at) => { void api.focusPane({ sessionId: at.sessionId, windowId: at.windowId, paneId: at.paneId }); }}
-                  />
-
-                  {/* keepTermFocus so none of these buttons — split, restart,
-                      clear, the status pill — steals the shell's cursor on
-                      press; they act and the terminal keeps the keyboard. */}
-                  {/* Find sits outside the keepTermFocus group on purpose: its
-                      input is the one control here that has to take the cursor
-                      off the shell, and closing it hands the cursor back. */}
-                  {blocked && <BlockedNotice cmd={blocked} onSend={() => { run(blocked, true); setBlocked(null); }} onDismiss={() => setBlocked(null)} />}
-
-                  <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                    {findOpen
-                      ? <FindBar sess={sessions.get(paneIds[focusIdx] ?? "")} onClose={() => { setFindOpen(false); focusTerm(); }} />
-                      : <button onMouseDown={keepTermFocus} onClick={() => setFindOpen(true)} disabled={!root || IS_DEMO || disabled} title="Find in scrollback (Ctrl+Shift+F)" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⌕ Find</button>}
+                <h2 className="sr-only">Terminal</h2>
+                {/* A notice, not a bar. The row that used to stand here is gone;
+                    this is the one thing it carried that has to interrupt — a
+                    command that was NOT typed, because a full-screen program had
+                    the keyboard — and it takes a row only while that is true. */}
+                {blocked && (
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center px-3 py-1 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                    <BlockedNotice cmd={blocked} onSend={() => { run(blocked, true); setBlocked(null); }} onDismiss={() => setBlocked(null)} />
                   </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0" onMouseDown={keepTermFocus}>
-                    <span onClick={status === "unauthorized" ? reauthPrompt : undefined}
-                      className={`flex items-center gap-1.5 text-[10px] t-dim2 mr-1 ${status === "unauthorized" ? "cursor-pointer" : ""}`}
-                      title={status === "unauthorized" ? "This server needs an access token — click to enter it" : "Shell status"}>
-                      <span style={{ color: statusDot[status].color }}>●</span>{statusDot[status].label}
-                    </span>
-                    {/* Jump straight to a worktree's changes. The one the
-                        focused pane's agent is in is pinned at the top when the
-                        server can say (panewt.ts); the rest are picked, with
-                        dirty checkouts first, which is where the work is. */}
-                    <div className="relative" ref={wtRef}>
-                      <button onClick={() => { if (wtOpen) { setWtOpen(false); focusTerm(); } else setWtOpen(true); }} disabled={!root || IS_DEMO || disabled} title="Open a worktree's Source control or File changes" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↗ Worktree ▾</button>
-                      {wtOpen && (() => {
-                        const project = here?.worktreeOf || here?.root || root;
-                        const ACTIVE_MS = 3 * 60 * 60 * 1000; // dirty, or touched within 3h — where an agent actually is
-                        // Worktrees only — the parent repo (the main checkout, on
-                        // its trunk) is where the shell's own cwd sits, not a
-                        // checkout you jump to from a button called Worktree, and
-                        // filtering the diff by its folder would match everything.
-                        const all = repos
-                          .filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project)
-                          .sort((a, b) => (b.dirty - a.dirty) || (b.touchedAt - a.touchedAt) || dirName(a.root).localeCompare(dirName(b.root)));
-                        const active = all.filter((r) => r.dirty > 0 || (r.touchedAt > 0 && Date.now() - r.touchedAt < ACTIVE_MS));
-                        const q = wtQuery.trim().toLowerCase();
-                        // Empty box shows only what is live — a dozen idle checkouts is the
-                        // noise the picker was drowning in. A search, or "Show all", looks
-                        // through every one.
-                        // What THIS pane's agent is working in, read from its terminal output.
-                        const detected = detectedWt;
-                        const base = (q || wtShowAll || active.length === 0) ? all : active;
-                        const list = base.filter((r) => !q || (r.branch + " " + dirName(r.root)).toLowerCase().includes(q)).filter((r) => r.root !== detected?.root);
-                        const hiddenCount = all.length - active.length;
-                        return (
-                          <div className="absolute right-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 400, maxWidth: "min(90vw, 640px)", maxHeight: 440, overflow: "hidden" }}>
-                            <div className="px-2.5 pt-2 pb-1.5 shrink-0 flex items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                              <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>Open a worktree's changes</span>
-                              {!q && hiddenCount > 0 && (
-                                <button onMouseDown={keepTermFocus} onClick={() => setWtShowAll((v) => !v)} className="agx-btn ml-auto text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title={wtShowAll ? "Show only worktrees with recent activity" : "Show every worktree, active or not"}>{wtShowAll ? `Active only (${active.length})` : `Show all (${all.length})`}</button>
-                              )}
-                            </div>
-                            <input autoFocus value={wtQuery} onChange={(e) => setWtQuery(e.target.value)} placeholder="Filter by ticket or name…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
-                            {detected && !wtQuery && (
-                              /* Auto-detected from what the focused pane's agent is doing — the one you
-                                 almost certainly want, pinned above the list and out of the filter. */
-                              <div className="w-full px-2.5 py-1.5 flex items-center gap-2 shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                                <span className="shrink-0 text-[10px] uppercase tracking-wider px-1 py-0.5 rounded self-start mt-0.5" title="Where this pane's agent is working — from its directory and its transcript" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
-                                <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${detected.branch}\n${detected.root}`}>
-                                  <span className="truncate font-medium" style={{ color: "var(--text)" }}>{detected.branch}</span>
-                                  <span className="truncate text-[10px]" style={{ color: "var(--text3)" }}>{dirName(detected.root)}</span>
-                                </span>
-                                {detected.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${detected.dirty} changed file${detected.dirty === 1 ? "" : "s"}`}>●{detected.dirty}</span>}
-                                <button onClick={() => { requestWorktreeJump({ view: "git", root: detected.root }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open in Source control">Git</button>
-                                <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(detected.root) }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open its changes in File changes">Diff</button>
-                              </div>
-                            )}
-                            <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
-                              {list.map((r) => {
-                                const wt = !!r.worktreeOf;
-                                return (
-                                  <div key={r.root} className="w-full px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded self-start mt-0.5" title={wt ? `Worktree of ${r.worktreeOf}` : "Main checkout"} style={wt ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" } : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{wt ? "WT" : "REPO"}</span>
-                                    {/* The branch is the descriptive name (`WEB-1042-fix-the-cart`); the
-                                        folder (`orbit-WEB-1042`) is the terse stub below it. A ticket number
-                                        alone is not something anyone recognises without having memorised it. */}
-                                    <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${r.branch}\n${r.root}`}>
-                                      <span className="truncate font-medium" style={{ color: "var(--text)" }}>{wt ? r.branch : r.name}</span>
-                                      <span className="truncate text-[10px]" style={{ color: "var(--text3)" }}>{wt ? dirName(r.root) : r.branch}</span>
-                                    </span>
-                                    {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
-                                    <button onClick={() => { requestWorktreeJump({ view: "git", root: r.root }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open in Source control">Git</button>
-                                    <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(r.root) }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open its changes in File changes">Diff</button>
-                                  </div>
-                                );
-                              })}
-                              {list.length === 0 && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>{q ? "No match." : active.length === 0 ? "No worktree changed recently." : "No worktrees for this repo."}</div>}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ Split</button>}
-                    {/* Under tmux this button does not restart anything: it
-                        drops the pty connection and re-attaches. tmux is a
-                        daemon, so a detach ends the client, not the session —
-                        every window and agent keeps running (see terminal.ts,
-                        "a detach ends the client, not the server"). Calling it
-                        "Restart" beside a pane full of working agents reads as a
-                        button that could throw the work away, which it cannot.
-                        Only a bare, non-tmux shell is actually restarted. */}
-                    <button onClick={restart} disabled={!root || IS_DEMO || disabled} title={tmuxActive ? "Re-attach this terminal to tmux — every window and agent keeps running, nothing is killed" : "Kill this shell and start a fresh one"} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ {tmuxActive ? "Reconnect" : "Restart"}</button>
-                    <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>Clear</button>
-                    {/* The way back, and it lives here because the way out
-                        lives in the strip — which is the thing being hidden.
-                        A toggle whose "off" state removes the button that
-                        turns it on is a one-way door. Exactly one of the two
-                        is on screen at any time. */}
-                    {tmuxActive && tmuxWindows.length > 0 && tmuxBar && (
-                      <button onClick={() => setTmuxBar(false)} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
-                        title="Draw the window list here instead, and take tmux's row back for the shell">
-                        Use agentglass bar
-                      </button>
-                    )}
-                  </div>
-                </div>
+                )}
 
                 {/* shells open in this repo — scrolls, so the count can grow.
                     keepTermFocus on the strip so switching, closing or adding a
                     shell by click doesn't blur the terminal underneath. */}
                 {!IS_DEMO && !disabled && !tmuxActive && (
-                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  <div className="shrink-0 flex items-stretch border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                    <div onMouseDown={keepTermFocus} className="min-w-0 flex-1 flex items-center gap-1 px-3 py-1 overflow-x-auto agw-noscrollbar">
                     {tabs.map((t) => {
                       const shown = paneIds.includes(t.id);
                       const focused = t.id === paneIds[focusIdx];
@@ -2442,6 +2960,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       );
                     })}
                     <button onClick={addShell} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title="New shell in this repo">+</button>
+                    </div>
+                    <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1.5 pl-2 pr-3">{barRight}</div>
                   </div>
                 )}
 
@@ -2460,7 +2980,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   // owning the keyboard the instant the tab changes. The rename
                   // input is excluded by the handler, so it can still be typed
                   // in; it hands focus back on close (see below).
-                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-2 px-3 py-0.5 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  <div className="shrink-0 flex items-stretch border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                    <div onMouseDown={keepTermFocus} className="min-w-0 flex-1 flex items-center gap-2 px-3 py-0.5 overflow-x-auto agw-noscrollbar">
                     <span
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
                       className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
@@ -2491,10 +3012,163 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         : "the tmux on this machine — your ~/.tmux.conf, your bindings. The Pane engine settings do not touch it."}>
                       {sess?.tmuxEngine ? "engine" : "your tmux"}
                     </span>
+                    {/*
+                      * THE SESSION, AND A WAY TO ANY OTHER — which is the fix.
+                      *
+                      * The strip shows the windows of the session this client is
+                      * attached to, so a window opened anywhere else is
+                      * invisible. The app used to answer that by switching the
+                      * client itself, and that took four windows of somebody's
+                      * own work off the screen at once. A person choosing is a
+                      * different act: they know where they are going, and the
+                      * way back is one more choice.
+                      *
+                      * NOT A `<select>`. The first version was, and the native
+                      * popup renders in the platform's own colours and type over
+                      * this theme — "the selector's styling is COMPLETE GARBAGE",
+                      * and it was. The panel's own menu draws in the panel's
+                      * palette and, more to the point, can carry a second action
+                      * per row.
+                      */}
                     {sess?.tmuxSession && (
-                      <span className="shrink-0 px-1 text-[10px] max-w-[9rem] truncate" style={{ color: "var(--text4)" }} title={`tmux session: ${sess.tmuxSession}`}>
+                      <button
+                        className="shrink-0 px-1.5 py-0.5 text-[10px] max-w-[12rem] truncate rounded"
+                        style={{
+                          color: sessionMenu ? "var(--text2)" : "var(--text4)",
+                          background: sessionMenu ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent",
+                          border: 0, cursor: (sess.tmuxSessions ?? []).length > 1 ? "pointer" : "default",
+                        }}
+                        title={(sess.tmuxSessions ?? []).length > 1
+                          ? "Which session this strip is showing — and the others"
+                          : sess.tmuxSession}
+                        onClick={(e) => {
+                          if ((sess.tmuxSessions ?? []).length < 2) return;
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setSessionMenu({ x: r.left, y: r.bottom + 4 });
+                        }}
+                      >
                         {sess.tmuxSession}
-                      </span>
+                        {(sess.tmuxSessions ?? []).length > 1 && (
+                          <span style={{ color: "var(--text4)", marginLeft: 4 }}>▾</span>
+                        )}
+                      </button>
+                    )}
+                    {sessionMenu && sess?.tmuxSession && (
+                      <ContextMenu x={sessionMenu.x} y={sessionMenu.y} onClose={() => { setSessionMenu(null); setKilling(null); }}>
+                        <div className="px-2 pb-1 pt-0.5 text-[9.5px] tracking-wider uppercase"
+                          style={{ color: "var(--text4)" }}>
+                          tmux sessions
+                        </div>
+                        {(sess.tmuxSessions ?? []).map((x) => {
+                          const current = x.name === sess.tmuxSession;
+                          return (
+                            <div key={x.id} className="flex items-center gap-1 pr-1">
+                              <button
+                                role="menuitem"
+                                className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-left hover:bg-white/5 transition-colors flex items-baseline gap-2"
+                                style={{ color: current ? "var(--primary)" : "var(--text2)" }}
+                                onClick={() => {
+                                  setSessionMenu(null);
+                                  if (!current) tmuxCmd({ cmd: "session", name: x.name });
+                                }}
+                              >
+                                <span className="text-[10px]" style={{ width: "0.7rem", flex: "0 0 auto" }}>
+                                  {current ? "●" : ""}
+                                </span>
+                                <span className="flex-1 min-w-0 truncate text-[12px]">{x.name}</span>
+                                <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
+                                  {x.windows === 1 ? "1 window" : `${x.windows} windows`}
+                                </span>
+                              </button>
+                              {/* The half a picker is usually missing: the
+                                  sessions you find in one are often the ones you
+                                  want gone — "it was doing nothing whatsoever and
+                                  ending that session was a nightmare". Never
+                                  the one you are on: ending that detaches the
+                                  terminal you are looking at and tmux decides
+                                  where you land. */}
+                              {/* ASKED FIRST, and in the row rather than in a
+                                  dialog: ending a session takes everything
+                                  running in it and there is no undo, but a
+                                  modal over a menu is two layers to escape
+                                  from. Closing the menu cancels it. */}
+                              {killing === x.name ? (
+                                <span className="flex items-center gap-1">
+                                  <button
+                                    className="rounded px-1.5 py-0.5 text-[10px]"
+                                    style={{
+                                      border: 0, cursor: "pointer", fontWeight: 600,
+                                      color: "var(--error)",
+                                      background: "color-mix(in srgb, var(--error) 16%, transparent)",
+                                    }}
+                                    onClick={() => {
+                                      setKilling(null);
+                                      setSessionMenu(null);
+                                      tmuxCmd({ cmd: "endsession", name: x.name });
+                                    }}
+                                  >
+                                    end {x.windows === 1 ? "1 window" : `${x.windows} windows`}
+                                  </button>
+                                  <button
+                                    className="rounded px-1 py-0.5 text-[10px]"
+                                    style={{ border: 0, background: "transparent", color: "var(--text4)", cursor: "pointer" }}
+                                    onClick={() => setKilling(null)}
+                                  >
+                                    cancel
+                                  </button>
+                                </span>
+                              ) : (
+                                <>
+                                {/* THE PADLOCK. A locked session cannot be ended
+                                    — not by this button and not by the server,
+                                    which checks the same list. Held by NAME, so
+                                    it survives the session being recreated,
+                                    which is exactly when it earns its keep. */}
+                                <button
+                                  aria-label={x.locked ? `Unlock ${x.name}` : `Lock ${x.name} so it cannot be ended`}
+                                  title={x.locked
+                                    ? `${x.name} is protected — click to allow ending it`
+                                    : `Protect ${x.name} from being ended`}
+                                  className="rounded"
+                                  style={{
+                                    minWidth: 22, minHeight: 22, border: 0, background: "transparent",
+                                    color: x.locked ? "var(--warning)" : "var(--text4)",
+                                    opacity: x.locked ? 1 : 0.5,
+                                    cursor: "pointer", fontSize: 11, lineHeight: 1,
+                                  }}
+                                  onClick={() => {
+                                    setKilling(null);
+                                    tmuxCmd({ cmd: "locksession", name: x.name, after: x.locked === true });
+                                  }}
+                                >
+                                  {x.locked ? "🔒" : "🔓"}
+                                </button>
+                                <button
+                                  aria-label={current ? `${x.name} is the session you are on` : `End ${x.name}`}
+                                  title={x.locked
+                                    ? `${x.name} is protected — unlock it first`
+                                    : current
+                                      ? "Switch somewhere else first — ending the session you are on drops your terminal"
+                                      : `End ${x.name} and everything running in it`}
+                                  disabled={current || x.locked === true}
+                                  className="rounded"
+                                  style={{
+                                    minWidth: 22, minHeight: 22, border: 0, background: "transparent",
+                                    color: current || x.locked ? "var(--text4)" : "var(--error)",
+                                    opacity: current || x.locked ? 0.35 : 1,
+                                    cursor: current || x.locked ? "not-allowed" : "pointer",
+                                    fontSize: 13, lineHeight: 1,
+                                  }}
+                                  onClick={() => { if (!current && !x.locked) setKilling(x.name); }}
+                                >
+                                  ×
+                                </button>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </ContextMenu>
                     )}
                     {tmuxWindows.map((w) => {
                       // `!` is a bell — a window that rang on purpose, kept. `#`
@@ -2615,7 +3289,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" }}
                             />
                           ) : (
-                            <span>{w.name || "shell"}</span>
+                            <>
+                              <span>{w.name || "shell"}</span>
+                              {/* Dim, after the name, and clipped to a few
+                                  words: this is a label, and a label that
+                                  competes with the address it labels has cost
+                                  the strip the thing it was readable for. */}
+                              {!!tabHints[w.id] && (
+                                <span className="truncate max-w-[16ch]" style={{ color: "var(--text4)" }}
+                                  title={tabHints[w.id]}>{tabHints[w.id]}</span>
+                              )}
+                            </>
                           )}
                           {zoomed && <span className="text-[10px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="A pane in this window is zoomed">⤢</span>}
                           {/* A phone is watching a pane in this window.
@@ -2708,11 +3392,24 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         Use tmux's bar
                       </button>
                     )}
+                    </div>
+                    <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1.5 pl-2 pr-3">{barRight}</div>
+                  </div>
+                )}
+
+                {/* Neither window list is on screen — tmux is drawing its own
+                    bar, or there is no shell to tab through yet — and these are
+                    the only way in to a command or to a session you left. One
+                    row, holding exactly what the tabs row would have held. */}
+                {!tabsRowShown && (
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center justify-end gap-1.5 px-3 py-1 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                    {barRight}
                   </div>
                 )}
 
                 {/* the terminals — one slot per visible pane */}
-                <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}>
+                <div ref={wrapRef} className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}
+                  onMouseLeave={() => { setActionsIdx(null); setSeamNear(false); }}>
                   {/* The gap survives — it separates two panes and is doing real
                       work. The outer padding does not: with one pane it is pure
                       dead margin, and a full-screen TUI is drawn right to the
@@ -2727,11 +3424,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       <div key={id}
                         ref={(el) => { paneRefs.current[i] = el; }}
                         onMouseDown={() => setFocusIdx(i)}
-                        onMouseEnter={(e) => hoverFocus(i, e.buttons)}
+                        onMouseEnter={(e) => { hoverFocus(i, e.buttons); setActionsIdx(i); }}
                         // And inside tmux, where the panes are painted rather
                         // than rendered — so this needs the pointer's position,
                         // not just the fact that it arrived.
-                        onMouseMove={(e) => hoverTmuxPane(i, e)}
+                        onMouseMove={(e) => { hoverTmuxPane(i, e); nearFoot(e); setActionsIdx((cur) => (cur === i ? cur : i)); }}
                         // No padding. A full-screen TUI — tmux, nvim, htop —
                         // draws its own borders and status lines flush to the
                         // edge, so any inset here shows up as a dead margin
@@ -2757,6 +3454,70 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         }} />
                     ))}
                   </div>
+                  {/*
+                    * The pane's own four doors.
+                    *
+                    * Drawn in the wrapper rather than inside the slot: the slot
+                    * is where xterm's element is reparented to by hand, and
+                    * React children beside an imperatively appended node is a
+                    * fight nobody needs to have. The wrapper is already
+                    * `relative`, so it is the coordinate space the box was
+                    * measured in.
+                    *
+                    * Only the pane under the pointer, and only when the bar
+                    * beside them has an answer: a block whose buttons lead
+                    * nowhere is chrome. `chipWt` is that answer — the same one
+                    * the strip at the top is showing, for the same pane.
+                    */}
+                  {/* Not while the scratch is up. A tmux popup is drawn INTO
+                      this same screen — the windows, the panes and the
+                      geometry are all unchanged — so the block went on being
+                      drawn over the popup, on a pane nobody can see, following
+                      a pointer that is no longer choosing anything. Reported
+                      with six screenshots of exactly that. */}
+                  {/* The seam is drawn whether or not the worktree read has come
+                      back. A pane that shows nothing at all is indistinguishable
+                      from a broken feature — which is exactly how this was
+                      reported — so while it is reading, the bar says so, the way
+                      the strip above the terminal used to before it was deleted.
+                      *
+                      *
+                      * The popup gate is back, and it belongs here: a popup is
+                      * drawn INTO this screen, so a seam under a pane the popup
+                      * is covering is a line across somebody's scratch — "from
+                      * the scratch, that bar of the panes underneath gets
+                      * activated", with a screenshot of the bar standing on top of
+                      * it. What it is gated on is sharper than it was, since
+                      * one stray `tmux attach` left running by an agent used to
+                      * read as a popup and take the bar off every pane of every
+                      * session: a popup's pty belongs to no pane, an attach
+                      * typed inside one carries that pane's tty. */}
+                  {actionsMode !== "off" && footBox && !chipWt && (
+                    <PaneBar foot={footBox} near={seamNear} blocked={!!sess?.tmuxPopup} branch="" dirty={0}
+                      note={wtDetecting
+                        ? "Reading this pane…"
+                        : paneDir
+                          ? `${paneDir.split("/").pop()} — no repo scanned here`
+                          : "No checkout behind this pane"}
+                      onDown={keepTermFocus} onGit={() => {}} onDiff={() => {}} onCopy={() => {}} />
+                  )}
+                  {actionsMode !== "off" && footBox && chipWt && (
+                    <PaneBarFor
+                      foot={footBox}
+                      near={seamNear}
+                      blocked={!!sess?.tmuxPopup}
+                      flash={copyFlash}
+                      at={chipWt}
+                      pr={chipPr}
+                      onDown={keepTermFocus}
+                      onGit={() => requestWorktreeJump({ view: "git", root: chipWt.root })}
+                      onDiff={() => requestWorktreeJump({ view: "diff", filter: dirName(chipWt.root) })}
+                      onPr={() => { if (chipPr) openPr(chipPr.repo, chipPr.pr.number); }}
+                      onCopy={() => { copyPaneBranch(); }}
+                      selection={selection}
+                      onAsk={() => { void askAboutSelection(); }}
+                    />
+                  )}
                   {/* Not in the demo any more. The overlay is for a terminal
                       that cannot draw anything — Windows, or disabled by config
                       — and in the demo it was covering a terminal that now has
@@ -2930,56 +3691,22 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   ) : (
                     <span>Real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
                   )}
+                  {/*
+                    * The pane's worktree is NOT repeated here.
+                    *
+                    * It used to be: a "This pane" pill with the branch, the folder,
+                    * a dirty count and Git/Diff buttons, at the far end of this
+                    * bar. The header above now carries the same worktree with more
+                    * of it — the full branch name rather than a truncated one, the
+                    * pull request it belongs to, and its card — so this was the
+                    * second, worse copy of a fact already on screen. Two chips
+                    * about one thing is a bar you have to read twice to find out
+                    * they agree.
+                    *
+                    * `detectedWt` and `wtDetecting` are still what the header's
+                    * chip is drawn from (see chipWt); only the duplicate went.
+                    */}
                   <span className="ml-auto flex items-center gap-2 shrink-0">
-                    {/* The focused pane's worktree, offered right in the bar —
-                        read from the agent's output, one click to its changes.
-
-                        This chip must NOT make the status bar any taller than it
-                        is without it — the row is `items-center`, so a child
-                        taller than the surrounding 9.5px text grows the whole
-                        bar. `leading-none` here + `py-0` on the buttons keep
-                        every element inside the text's own line box. Give one
-                        back a normal line-height, or vertical padding, and the
-                        bar jumps a few pixels the moment a worktree is detected
-                        — which is why the buttons below were given room to
-                        breathe SIDEWAYS only.
-
-                        The badge wears the same filled pill as `tmux` at the
-                        other end of this bar: one bar, one way of marking what a
-                        stretch of it is about. The bordered 9px capital version
-                        it replaced was a third style in a row that already had
-                        two, and at that size the letters had no room. */}
-                    {detectedWt ? (
-                      <span className="flex items-center gap-1.5" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
-                        <span className="px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
-                        {/* Branch is the name of the thing you are working on; the
-                            folder is where it lives. Show the branch, and the
-                            folder after it in a dimmer hand — both on one line, so
-                            the bar keeps its height. */}
-                        <span className="truncate max-w-[190px]" style={{ color: "var(--text2)" }}>{detectedWt.branch || dirName(detectedWt.root)}</span>
-                        {detectedWt.branch && detectedWt.branch !== dirName(detectedWt.root) && (
-                          <span className="truncate max-w-[110px] text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detectedWt.root)}</span>
-                        )}
-                        {detectedWt.dirty > 0 && <span className="tabular-nums" style={{ color: "var(--warning)" }}>●{detectedWt.dirty}</span>}
-                        {/* The arrow is what keeps these reading as buttons once
-                            they have room around the word — the same ↗ the
-                            worktree chip in the header uses for the same promise:
-                            pressing this leaves the terminal. */}
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn inline-flex items-center gap-1 px-2 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git <span className="t-dim2">↗</span></button>
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn inline-flex items-center gap-1 px-2 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff <span className="t-dim2">↗</span></button>
-                        <span className="t-dim2">·</span>
-                      </span>
-                    ) : wtDetecting ? (
-                      /* The switch has happened and the answer has not arrived.
-                         Holding the previous pane's worktree here for the ~100ms
-                         a first read costs is how the bar came to disagree with
-                         the tab strip above it. */
-                      <span className="flex items-center gap-1.5" title="Reading which worktree this pane is working in">
-                        <span className="px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>This pane</span>
-                        <span className="animate-pulse" style={{ color: "var(--text3)" }}>Reading…</span>
-                        <span className="t-dim2">·</span>
-                      </span>
-                    ) : null}
                     <span>{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
                   </span>
                 </div>

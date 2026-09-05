@@ -46,7 +46,12 @@ describe("saying how old a reading is", () => {
 
 describe("the strip keeps answering the question it exists to answer", () => {
   test("the meters take the age rather than being replaced by a word", () => {
-    expect(bar).toContain("pct={w.usedPercent} age={age}");
+    /* The strip is one phrase per window now — "19% used 40m · 77% used 2d 1h"
+       — rather than a caption, a bar and a number three times over. What this
+       is guarding has not changed: the AGE reaches the thing that draws the
+       reading, so a stuck number is legible as stuck without ever ceasing to
+       be the best answer anybody has. */
+    expect(bar).toContain("<PlanStrip u={u} age={age}");
     // The age comes from when the reading was taken, which is what the server
     // preserves across a failed refresh — and for Codex is the last turn that
     // ran, which can be days back.
@@ -54,7 +59,11 @@ describe("the strip keeps answering the question it exists to answer", () => {
   });
 
   test("a stale meter is legible as stale without losing its number", () => {
-    expect(bar).toContain("${tag} · ${age} old");
+    /* Dimmed and said out loud on the hover, rather than a caption suffix:
+       the caption it used to hang off ("5H", "WEEKLY") is gone, because the
+       phrase now ends with when the window comes back instead of what it is
+       called. */
+    expect(bar).toContain("could not refresh — last read ${age} ago");
     expect(bar).toContain("opacity: age ? 0.55 : 1");
   });
 
@@ -86,8 +95,8 @@ describe("weekly windows scoped to one model", () => {
     // Scoped windows stopped being a second list the strip has to know about:
     // the server folds them into `windows`, so the bar draws whatever came
     // back and a new bucket needs no change here.
-    expect(bar).toContain("u?.windows.map((w) => (");
-    expect(bar).toContain("tag={w.label} pct={w.usedPercent} age={age}");
+    expect(bar).toContain("const windows = [...u.windows]");
+    expect(bar).toContain("{parts.map((p, i) => (");
     // No model name may DECIDE anything — mentioning one in a comment is fine,
     // branching on one is the thing that goes stale.
     expect(bar).not.toMatch(/label\s*===\s*['"]/);
@@ -105,9 +114,13 @@ describe("weekly windows scoped to one model", () => {
     // be worse than not drawing it. One list means one call site, so this is
     // now "the call site carries the age" — and that no second one appeared
     // beside it without it.
-    const meters = bar.match(/<PlanMeter[\s\S]*?\/>/g) ?? [];
-    expect(meters.length).toBeGreaterThanOrEqual(1);
-    for (const m of meters) expect(m).toContain("age={age}");
+    const strips = bar.match(/<PlanStrip[\s\S]*?\/>/g) ?? [];
+    expect(strips.length).toBeGreaterThanOrEqual(1);
+    for (const m of strips) expect(m).toContain("age={age}");
+    /* And the panel behind it, which is the other place a reading is drawn.
+       A window that goes stale there while the strip above says so would be
+       the same failure one level down. */
+    expect(bar).toContain("<PlanPanel u={u} age={age}");
   });
 });
 

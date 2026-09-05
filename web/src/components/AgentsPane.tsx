@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Fold, SettingRow } from "./SettingRow.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import type { AgentProbe } from "../../../shared/types.ts";
 
 /**
@@ -33,15 +34,11 @@ export function AgentsPane({ open }: { open: boolean }) {
     api.agents().then((r) => setAgents(r.agents)).catch(() => setAgents([]));
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    load();
-    // Polled, because the state this pane exists to show is one that changes
-    // without anybody pressing anything: the moment the first event from a
-    // newly wired agent arrives, "waiting" becomes "live".
-    const t = setInterval(load, 4000);
-    return () => clearInterval(t);
-  }, [open, load]);
+  useEffect(() => { if (open) load(); }, [open, load]);
+  // Polled, because the state this pane exists to show is one that changes
+  // without anybody pressing anything: the moment the first event from a
+  // newly wired agent arrives, "waiting" becomes "live".
+  usePoll(open, load, 4000);
 
   const connect = async (p: AgentProbe, undo: boolean) => {
     setBusy(p.id);

@@ -112,6 +112,44 @@ export function setZoomLevel(level: number): void {
  *  ladder: 1.2^level, to the nearest whole percent. */
 export const zoomPercent = (level: number): number => Math.round(Math.pow(1.2, level) * 100);
 
+/**
+ * ZOOM MOVES IN TENS.
+ *
+ * Chromium's own ladder is geometric — each step multiplies the last by 1.2^0.5
+ * — so it walks 100, 110, 120, 132, 145, 158, 173. Every step is the same
+ * proportion and no two are the same NUMBER, which is what makes it feel
+ * arbitrary from the outside: "sometimes it goes up by five, sometimes by
+ * three. That has to be something consistent."
+ *
+ * So the ladder is in percentage points instead: ten up, ten down, always. A
+ * level that arrived from somewhere else — an old stored value, a pinch — lands
+ * ON the grid with the first press rather than carrying its offset forever.
+ *
+ * The trade is real and worth saying once: ten points is a third of the way up
+ * from 30% and a thirtieth from 300%, so the low end steps in bigger visual
+ * jumps than the high end. That is what "always ten" means, and it is what was
+ * asked for.
+ */
+export const ZOOM_PCT_MIN = 30;
+export const ZOOM_PCT_MAX = 350;
+export const ZOOM_PCT_STEP = 10;
+
+const levelOfPercent = (pct: number): number => Math.log(pct / 100) / Math.log(1.2);
+
+/** The next level in that ladder. `dir` is +1 for in, -1 for out. */
+export function stepZoom(level: number, dir: 1 | -1): number {
+  const now = Math.pow(1.2, level) * 100;
+  const grid = Math.round(now / ZOOM_PCT_STEP) * ZOOM_PCT_STEP;
+  /* Off the grid: the first press SNAPS, in the direction asked for, so 107%
+     becomes 110 going up and 100 going down rather than 117 and 97. */
+  const off = Math.abs(grid - now) > 0.6;
+  const next = off
+    ? (dir > 0 ? Math.ceil(now / ZOOM_PCT_STEP) : Math.floor(now / ZOOM_PCT_STEP)) * ZOOM_PCT_STEP
+    : grid + dir * ZOOM_PCT_STEP;
+  const held = Math.max(ZOOM_PCT_MIN, Math.min(ZOOM_PCT_MAX, next));
+  return levelOfPercent(held);
+}
+
 /*
  * Whether history and bookmarks ride along with a cookie import.
  *
@@ -144,3 +182,64 @@ export function pickImportRows<T extends { bookmarked: boolean }>(
 ): T[] {
   return rows.filter((r) => (r.bookmarked ? bookmarks : history));
 }
+
+/* -------------------------------------------------------------- the inspector */
+
+export const DEVTOOLS_SIDE_KEY = "agentglass.browser.devtoolsSide";
+export const DEVTOOLS_SIZE_KEY = "agentglass.browser.devtoolsSize";
+
+export type DevtoolsSide = "bottom" | "right";
+
+/** Bottom by default, which is where Chrome puts it and where a DOM tree reads
+ *  best — a tree is deep, not wide. Right is offered because a wide monitor has
+ *  the room and a tall page does not. */
+export function devtoolsSide(): DevtoolsSide {
+  return read(DEVTOOLS_SIDE_KEY) === "right" ? "right" : "bottom";
+}
+export function setDevtoolsSide(side: DevtoolsSide): void {
+  write(DEVTOOLS_SIDE_KEY, side === "right" ? "right" : "");
+}
+
+/** How big the pane is, in pixels — a height at the bottom, a width at the
+ *  right. One number per side, because the two are not the same size and
+ *  remembering only one makes the other wrong every time you switch. */
+export function devtoolsSize(side: DevtoolsSide): number {
+  const n = Number(read(`${DEVTOOLS_SIZE_KEY}.${side}`));
+  if (Number.isFinite(n) && n >= 120 && n <= 1600) return n;
+  return side === "right" ? 460 : 340;
+}
+export function setDevtoolsSize(side: DevtoolsSide, px: number): void {
+  write(`${DEVTOOLS_SIZE_KEY}.${side}`, String(Math.round(px)));
+}
+
+export const DEVTOOLS_ZOOM_KEY = "agentglass.browser.devtoolsZoom";
+
+/** The inspector's own zoom level, on the same logarithmic ladder as the page's
+ *  (see ZOOM_MIN). Remembered because a level that resets every time the pane
+ *  opens is no use to somebody who set it once because the default was too
+ *  small to read. */
+export function devtoolsZoom(): number {
+  const n = Number(read(DEVTOOLS_ZOOM_KEY));
+  return Number.isFinite(n) && n >= ZOOM_MIN && n <= ZOOM_MAX ? n : 0;
+}
+export function setDevtoolsZoom(level: number): void {
+  write(DEVTOOLS_ZOOM_KEY, level ? String(level) : "");
+}
+
+/* ---------------------------------------------------------------- the bar */
+
+export const SIDEBAR_OPEN_KEY = "agentglass.browser.sidebar";
+export const SIDEBAR_W_KEY = "agentglass.browser.sidebarWidth";
+
+/** Open unless it was closed. The bar IS the tab strip now — starting hidden
+ *  would be starting with no way to see what is open. */
+export function sidebarOpen(): boolean { return read(SIDEBAR_OPEN_KEY) !== "0"; }
+export function setSidebarOpen(on: boolean): void { write(SIDEBAR_OPEN_KEY, on ? "" : "0"); }
+
+/** 228px, which is what the mockup was drawn at: enough for a title of about
+ *  thirty characters, which is where a page name stops being recognisable. */
+export function sidebarWidth(): number {
+  const n = Number(read(SIDEBAR_W_KEY));
+  return Number.isFinite(n) && n >= 170 && n <= 460 ? n : 228;
+}
+export function setSidebarWidth(px: number): void { write(SIDEBAR_W_KEY, String(Math.round(px))); }

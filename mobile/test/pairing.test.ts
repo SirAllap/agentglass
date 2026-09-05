@@ -15,10 +15,14 @@
  */
 import { describe, expect, test } from "bun:test";
 import { sealTo, INFO as SERVER_INFO, validPub } from "../../server/src/pairing.ts";
-import { INFO, makeKeys, normalizeOrigin, readPairingCode, unseal } from "../src/lib/pairing.ts";
+import { announce, installed, pairing } from "./npm-deps.ts";
+
+announce("pairing.test.ts");
+
+const { INFO, makeKeys, normalizeOrigin, readPairingCode, unseal } = pairing;
 import { b64urlDecode, b64urlEncode } from "../src/lib/b64.ts";
 
-describe("a credential sealed by the computer, opened by the phone", () => {
+describe.skipIf(!installed)("a credential sealed by the computer, opened by the phone", () => {
   test("round-trips a real device token", () => {
     const ticket = "Ux9-mQ2bK1pA";
     const token = "dev_5f3c9a1e88b24d0f_a-real-looking-device-token";
@@ -63,7 +67,7 @@ describe("a credential sealed by the computer, opened by the phone", () => {
   });
 });
 
-describe("base64url", () => {
+describe.skipIf(!installed)("base64url", () => {
   test("known vectors, both ways", () => {
     const cases: [number[], string][] = [
       [[], ""],
@@ -101,7 +105,7 @@ describe("base64url", () => {
   });
 });
 
-describe("what the camera read", () => {
+describe.skipIf(!installed)("what the camera read", () => {
   test("takes the ticket out of the URL the Remote pane draws", () => {
     expect(readPairingCode("http://192.168.1.20:4000/?pair=Ux9-mQ2bK1pA")).toEqual({
       ticket: "Ux9-mQ2bK1pA",
@@ -122,7 +126,7 @@ describe("what the camera read", () => {
   });
 });
 
-describe("the address somebody typed", () => {
+describe.skipIf(!installed)("the address somebody typed", () => {
   test("fills in what they left out", () => {
     // The port is the field people get wrong, and http is right here: this
     // server speaks plain HTTP on a LAN, and guessing https produces a TLS

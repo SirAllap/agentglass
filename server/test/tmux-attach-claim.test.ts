@@ -108,10 +108,29 @@ function secondServerBoot(): number {
   const code = `const m = await import(${JSON.stringify(CTL)});\nconsole.log(m.sweepPinnedWindows(m.tmuxSockets()));`;
   const r = Bun.spawnSync(["bun", "-e", code], {
     stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, TMUX_TMPDIR: TMPDIR, NODE_ENV: "production" },
+    /*
+     * COLOUR OFF, because this reads the child's stdout as a NUMBER.
+     *
+     * `console.log(0)` in bun is `\x1b[0m\x1b[33m0\x1b[0m` when the
+     * environment says colour is wanted, and `Number()` of that is NaN — so
+     * these four tests failed for anybody whose shell exports FORCE_COLOR, and
+     * every agent session on this machine does (`FORCE_COLOR=3`). Measured
+     * from the child directly: with it, `033 [ 0 m 033 [ 3 3 m 0 …`; without
+     * it, `0`.
+     *
+     * Both halves on purpose: the environment says plain, and the parse does
+     * not trust it. A test that reads another process's output has no business
+     * caring how that process feels about terminals.
+     */
+    env: {
+      ...process.env, TMUX_TMPDIR: TMPDIR, NODE_ENV: "production",
+      FORCE_COLOR: "0", NO_COLOR: "1",
+    },
   });
-  const n = Number(r.stdout.toString().trim());
-  if (!Number.isInteger(n)) throw new Error(`the second boot said: ${r.stdout.toString()} ${r.stderr.toString()}`);
+  // eslint-disable-next-line no-control-regex
+  const plain = r.stdout.toString().replace(/\x1b\[[0-9;]*m/g, "").trim();
+  const n = Number(plain);
+  if (!Number.isInteger(n)) throw new Error(`the second boot said: ${JSON.stringify(r.stdout.toString())} ${r.stderr.toString()}`);
   return n;
 }
 

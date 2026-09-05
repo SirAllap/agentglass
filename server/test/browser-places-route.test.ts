@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 const TOKEN = "test-machine-token-not-a-real-one";
 let dir: string, data: string, base: string;
@@ -47,6 +48,9 @@ beforeAll(async () => {
       HOME: process.env.HOME ?? "",
       TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       XDG_CONFIG_HOME: dir,
+      // State (audit log, ledgers, engine conf) jailed too: without this a booted
+      // server writes into the developer's real ~/.local/state/agentglass.
+      AGENTGLASS_STATE_DIR: `${dir}/state`,
       XDG_DATA_HOME: data, // placestore writes places.db here — never the real one
       AGENTGLASS_ROOT: dir,
       AGENTGLASS_DB: join(dir, "f.db"),
@@ -62,7 +66,7 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
   throw new Error("server did not start");
-});
+}, SERVER_BOOT_MS);
 
 afterAll(() => {
   proc?.kill();

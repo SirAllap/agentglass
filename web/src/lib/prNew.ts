@@ -77,6 +77,26 @@ export function migrateSeen(): void {
   } catch { /* private mode — nothing was stored to migrate */ }
 }
 
+/**
+ * Anything drawing a badge from these marks.
+ *
+ * The board reads the whole map — one entry per pull request — and it is not
+ * React state, so nothing re-renders when a mark moves. Without this, pressing
+ * "Mark read" on a conversation and going back to the board leaves the badge up
+ * on the very thing you just read, until something else happens to redraw it.
+ */
+const seenWatchers = new Set<() => void>();
+
+export function onSeenChange(fn: () => void): () => void {
+  seenWatchers.add(fn);
+  return () => { seenWatchers.delete(fn); };
+}
+
+function announceSeen(): void {
+  // A copy, because a listener is allowed to unsubscribe itself while being told.
+  for (const fn of [...seenWatchers]) { try { fn(); } catch { /* a badge must not break a write */ } }
+}
+
 export function readSeen(): Record<string, number> {
   // Here rather than wired into the panel, so there is no ordering to get
   // wrong: nothing can read the map before the migration has had its say.
@@ -113,6 +133,7 @@ export function writeSeen(key: string, at: number): Record<string, number> {
     for (const k of keys.slice(0, keys.length - SEEN_MAX)) delete all[k];
   }
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+  announceSeen();
   return all;
 }
 
@@ -129,6 +150,7 @@ export function clearSeen(key: string): Record<string, number> {
   if (!(key in all)) return all;
   delete all[key];
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+  announceSeen();
   return all;
 }
 

@@ -6,7 +6,7 @@
 // as punctuation. The escaping tests are the ones with teeth — a body is a
 // string a stranger wrote.
 import { describe, expect, test } from "bun:test";
-import { parseBody, renderInline, stripTags, diffKind, type MdBlock } from "../src/lib/prBody.ts";
+import { parseBody, renderInline, stripTags, diffKind, toggleChecklistItem, type MdBlock } from "../src/lib/prBody.ts";
 
 /** Everything a tree of blocks would put on screen, flattened. What the
  *  `<details>` tests want to assert is mostly about where text ended up — inside
@@ -409,9 +409,9 @@ describe("an HTML table from a bot", () => {
  * The two reasons a review comment read worse here than on GitHub.
  *
  * Both were reported by comparing our rendering of the SAME comment with
- * GitHub's, side by side: «no tenemos esos puntos ni el indentado correcto ni
- * los saltos de línea correctos... el espaciado es muy importante para la
- * lectura».
+ * GitHub's, side by side: «we don't have those bullets, nor the right
+ * indentation, nor the right line breaks... spacing matters a lot for
+ * readability».
  *
  * Neither was a parse failure, which is why nothing in this suite noticed: the
  * markdown was read correctly and then drawn with the bullets switched off and
@@ -522,5 +522,55 @@ describe("nesting is about order, not about how far", () => {
 
   test("a tab is an indent like any other", () => {
     expect(depths("- a\n\t- b")).toEqual([0, 1]);
+  });
+});
+
+/*
+ * A REAL CHECKBOX, GITHUB'S OWN WAY.
+ *
+ * "GitHub already does that without hand-editing the body, by marking it as a
+ * real checkbox" — clicking a box in the description used to mean
+ * opening the whole editor to hand-edit `[ ]` into `[x]`. `toggleChecklistItem`
+ * is the other half: given the raw body and which box (by position, the same
+ * way the renderer numbers them), flip exactly that one character and leave
+ * everything else — the wording, the blank lines, a table above it — byte for
+ * byte where it was.
+ */
+describe("toggling a checklist item", () => {
+  test("flips the Nth box, counting top to bottom", () => {
+    const body = "- [ ] one\n- [x] two\n- [ ] three";
+    expect(toggleChecklistItem(body, 0)).toBe("- [x] one\n- [x] two\n- [ ] three");
+    expect(toggleChecklistItem(body, 1)).toBe("- [ ] one\n- [ ] two\n- [ ] three");
+    expect(toggleChecklistItem(body, 2)).toBe("- [ ] one\n- [x] two\n- [x] three");
+  });
+
+  test("leaves the rest of the body untouched, wording and all", () => {
+    const body = "## Checklist\n\nSome context first.\n\n- [ ] a thing to do\n- [x] already done\n\nMore prose after.";
+    const next = toggleChecklistItem(body, 0);
+    expect(next).toBe("## Checklist\n\nSome context first.\n\n- [x] a thing to do\n- [x] already done\n\nMore prose after.");
+  });
+
+  test("counts a nested box right after its parent, not after its siblings", () => {
+    // Document order, depth-first — the same order the renderer numbers them
+    // in, since a nested item is the one immediately below its parent in the
+    // raw text.
+    const body = "- [ ] parent\n  - [ ] child\n- [x] sibling";
+    expect(toggleChecklistItem(body, 1)).toBe("- [ ] parent\n  - [x] child\n- [x] sibling");
+  });
+
+  test("skips a line that only looks like one — no brackets, no space after them", () => {
+    const body = "- [ ] real one\n- [ ]missing the space\n- not a list item [ ] at all\n- [ ] real two";
+    // Index 1 must land on "real two", not on either impostor.
+    expect(toggleChecklistItem(body, 1)).toBe("- [ ] real one\n- [ ]missing the space\n- not a list item [ ] at all\n- [x] real two");
+  });
+
+  test("an index past the last box changes nothing", () => {
+    const body = "- [ ] only one";
+    expect(toggleChecklistItem(body, 5)).toBe(body);
+  });
+
+  test("a plain list item with no checkbox is not counted", () => {
+    const body = "- [ ] box\n- plain item, not a task\n- [x] another box";
+    expect(toggleChecklistItem(body, 1)).toBe("- [ ] box\n- plain item, not a task\n- [ ] another box");
   });
 });

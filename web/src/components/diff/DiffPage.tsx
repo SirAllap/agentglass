@@ -22,20 +22,24 @@
  * occasionally and the file list is the thing you came for.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ChangeRow } from "../../../../shared/types.ts";
 import {
   filterRows, groupRows, reviewKeyOf, rowByKey, statusWord, totalsOf, useChangeRows, useFileDiff,
   visibleRows, whenLabel, type DiffMode, type GroupBy, type RowGroup,
 } from "../../lib/changeRows.ts";
 import { useIncremental } from "../../lib/useIncremental.ts";
+import { openPeek } from "../../lib/openPeek.ts";
+import { groupHunks } from "../../lib/changeGroups.ts";
 import { useSidebarWidth } from "../../lib/sidebarWidth.ts";
 import { SidebarGrip } from "../SidebarGrip.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { CHIP_ICON, Chip, FilterField, IconChip, Segmented } from "../workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
-import { diffSplit, diffWrap, setDiffSplit, setDiffWrap } from "../../lib/diffPrefs.ts";
+import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../../lib/diffPrefs.ts";
+import { subscribeWorktreeJump, worktreeJump } from "../../lib/worktreeJump.ts";
+import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLines.tsx";
 
@@ -70,7 +74,46 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
     new Set(read<string[]>(K_REVIEW, [], (r) => JSON.parse(r) as string[])));
   const [split, setSplit] = useState(diffSplit);
   const [wrap, setWrap] = useState(diffWrap);
+  /* The same preference the pull request panel reads, so the two surfaces open the
+     same way — a toggle that means one thing in one panel and nothing in the other is
+     the "every panel looks like it came from a different program" this app keeps having to fix. */
+  const [noWs, setNoWs] = useState(diffNoWhitespace);
   const [menu, setMenu] = useState(false);
+
+  /*
+   * "Open its changes in File changes", honoured.
+   *
+   * Four buttons in this app ask for exactly this — the terminal's header, two in
+   * its worktree picker, and the pull request's own — and every one of them landed
+   * you on the whole list: twenty-seven files across six worktrees, with the filter
+   * box empty and the six you asked about somewhere in the middle. Reported that
+   * way, with the by-hand version of what was expected beside it.
+   *
+   * The request has always been made. Nothing here had ever read it: `App` routes
+   * the view and `GitPanel` serves the `git` half, and when this page was rebuilt
+   * (v3) the `diff` half lost its only consumer. So the button switched the view
+   * and the scope it carried was dropped on the floor.
+   *
+   * Served once per request `n`, exactly as Source control does it, so a jump
+   * survives arriving while this page was still hidden without being replayed every
+   * time it is shown again. And it is a FILTER, not a mode: what it puts in the box
+   * is what you would have typed, visible and clearable, rather than a hidden scope
+   * that makes the list disagree with the field above it.
+   */
+  const wtJump = useSyncExternalStore(subscribeWorktreeJump, worktreeJump);
+  const wtServed = useRef(0);
+  useEffect(() => {
+    if (!wtJump || wtJump.view !== "diff" || wtJump.n === wtServed.current) return;
+    wtServed.current = wtJump.n;
+    /* An empty filter is a real request — "show me everything" — so it is applied
+       rather than skipped, which is the difference between this and a guard on
+       truthiness. */
+    setQ(wtJump.filter ?? "");
+    /* The selection belonged to a row that is probably about to be filtered out.
+       Dropping it lets the list heal to the first row of what you asked for, which
+       is the file you wanted to be looking at. */
+    setSelKey(null);
+  }, [wtJump]);
 
   const sidebarW = useSidebarWidth();
   const listRef = useRef<HTMLDivElement>(null);
@@ -178,6 +221,14 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
         </span>
 
         <div className="ml-auto flex items-center gap-2 relative">
+          {/* What git's `-w` does, applied to the diff on screen. The COUNTS in the
+              list beside it stay git's own: they come from a status walk that never
+              reads a patch, and re-reading forty diffs to correct a number nobody is
+              looking at is not a trade worth making. Said in the tooltip. */}
+          <Chip on={noWs} onClick={() => { setNoWs(!noWs); setDiffNoWhitespace(!noWs); }}
+            title={noWs
+              ? "Ignoring whitespace in the diff below — a line that only changed its indentation is drawn as unchanged. The counts in the list are still git's own."
+              : "Ignore whitespace — fold a line that only changed its indentation back into context"}>Ignore space</Chip>
           <Chip on={split} onClick={() => { setSplit(!split); setDiffSplit(!split); }} title="Side by side">Split</Chip>
           <Chip on={wrap} onClick={() => { setWrap(!wrap); setDiffWrap(!wrap); }} title="Wrap long lines">Wrap</Chip>
           <IconChip on={menu} onClick={() => setMenu((v) => !v)} title="List options" expanded={menu} hasPopup>
@@ -198,7 +249,7 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        <div className="shrink-0 flex flex-col min-h-0" style={{ width: sidebarW }}>
+        <div className="shrink-0 flex flex-col min-h-0 agx-sidelist" style={{ width: sidebarW }}>
           <div className="px-3 py-2 shrink-0">
             <FilterField value={q} onChange={setQ} className="w-full"
               placeholder="Filter by file, folder or branch…" label="Filter the list" />
@@ -212,7 +263,34 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
             groupBy={groupBy}
             empty={loading && !rows.length ? "Reading git…"
               : error ? error
-              : q ? "Nothing matches that filter"
+              /*
+               * A filter with nothing under it, and the other half of the view is
+               * the likely reason.
+               *
+               * This page answers two different questions — what a checkout has not
+               * committed, and what it committed last — and a jump from somewhere
+               * else ("open orbit-1042's changes") cannot know which of them
+               * the reader means. Guessing is the wrong fix twice over: it takes a
+               * mode away from somebody who chose it, and it is wrong half the time
+               * anyway.
+               *
+               * So the mode is never changed for you, and the empty case is where
+               * the ambiguity gets resolved — by the reader, in one press, with the
+               * filter kept. No second fetch to find out whether the other mode has
+               * anything: that would be this view quietly doing double the work to
+               * answer a question nobody has asked yet.
+               */
+              : q ? (
+                <>
+                  {mode === "committed" ? "Nothing committed matches that filter" : "Nothing uncommitted matches that filter"}
+                  <button onClick={() => setMode(mode === "committed" ? "working" : "committed")}
+                    className="agx-btn block mx-auto mt-2 px-2 py-1 rounded text-[11px]"
+                    title={`Keep the filter and look at ${mode === "committed" ? "what is uncommitted" : "the last commit"} instead`}
+                    style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+                    Look in {mode === "committed" ? "Uncommitted" : "Last commit"} →
+                  </button>
+                </>
+              )
               : mode === "committed" ? "No commits in the checkouts in scope"
               : "Nothing uncommitted anywhere"}
             notice={notices({ truncated, failed, hiddenIgnored, hiddenOutside, showIgnored, showOutside })}
@@ -223,7 +301,7 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
 
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {selected
-            ? <Body row={selected} state={body} split={split} wrap={wrap} />
+            ? <Body row={selected} state={body} split={split} wrap={wrap} noWs={noWs} />
             : <Blank>Nothing selected</Blank>}
         </div>
       </div>
@@ -348,7 +426,9 @@ function List({
   reviewed: ReadonlySet<string>;
   onToggleReviewed: (r: ChangeRow) => void;
   groupBy: GroupBy;
-  empty: string;
+  /** A node, not a string: when a filter comes from a jump the empty case has
+   *  something to OFFER — the other mode, with the filter kept. See `emptyLine`. */
+  empty: React.ReactNode;
   notice: string[];
 }) {
   /* Sections render incrementally rather than all at once: nineteen checkouts of
@@ -481,14 +561,43 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed }: {
 
 /* ── the diff ─────────────────────────────────────────────────────────────── */
 
-function Body({ row, state, split, wrap }: {
+function Body({ row, state, split, wrap, noWs }: {
   row: ChangeRow;
   state: { diff: { hunks: { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }[]; truncated: boolean; binary: boolean; error?: string } | null; loading: boolean; error: string | null };
   split: boolean; wrap: boolean;
+  /** Fold whitespace-only changes into context — see diffNoWhitespace.ts. */
+  noWs: boolean;
 }) {
   const { hilite } = useDiffHighlight(row.path);
   const [copied, setCopied] = useState(false);
-  const hunks = state.diff?.hunks ?? [];
+  const raw = state.diff?.hunks ?? [];
+  /* A hunk that held nothing but whitespace is dropped rather than drawn empty; when
+     that leaves none at all, the file says so below instead of rendering as blank. */
+  const hunks = useMemo(() => (noWs ? raw.map(hunkWithoutWhitespace).filter(hunkChanges) : raw), [noWs, raw]);
+  const allWs = noWs && raw.length > 0 && hunks.length === 0;
+
+  /**
+   * Open it in the viewer, the way the pull request does.
+   *
+   * It used to go to whatever nvim happened to be running — and on a machine
+   * with none, it copied a command to the clipboard and called that an answer.
+   * One verb, one behaviour: the modal with an editor in it, at the first
+   * changed line, with the rest of them down its right.
+   */
+  const groups = useMemo(() => groupHunks(hunks), [hunks]);
+  const openFile = () => {
+    openPeek({
+      root: row.repoRoot,
+      path: `${row.repoRoot}/${row.path}`,
+      label: row.path,
+      // This is the working tree: his checkout, his branch, opened from a diff
+      // of his own changes. The pull request's copy is the read-only case.
+      edit: true,
+      branch: row.branch || undefined,
+      line: groups[0]?.from ?? 1,
+      groups,
+    });
+  };
 
   const copy = async () => {
     try {
@@ -510,12 +619,24 @@ function Body({ row, state, split, wrap }: {
             {" · "}{whenLabel(row.changedAt)}
           </p>
         </div>
+        {/* Open it where the change is.
+            Source control has had this on `e` for a while and the pull request
+            has it as a button; this view had neither, which is what he noticed.
+            The line is the first hunk's, not line 1: opening a 900-line file
+            you came to BECAUSE of a diff and landing at the top means scrolling
+            back to where you already were. */}
+        <button onClick={openFile} title="Open it here, at its first change"
+          className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10.5px] flex items-center gap-1"
+          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          ⧉ Open
+        </button>
         <button onClick={copy} title="Copy the full path"
-          className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10.5px]"
+          className="shrink-0 px-2 py-1 rounded-md text-[10.5px]"
           style={{ color: copied ? "var(--success)" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
           {copied ? "Copied" : "Copy path"}
         </button>
       </div>
+
 
       <div className="agx-scroll flex-1 min-h-0 overflow-auto">
         {state.loading && !state.diff && <Blank>Reading the diff…</Blank>}
@@ -525,7 +646,11 @@ function Body({ row, state, split, wrap }: {
         {state.diff?.binary && <Blank>Binary file — {row.additions || row.deletions ? "changed" : "added"}, nothing to show as text</Blank>}
         {!state.diff?.binary && !state.error && !hunks.length && !state.loading && (
           <Blank>
-            {row.status === "renamed" ? `Renamed from ${row.oldPath ?? "somewhere"} — the contents did not change`
+            {/* "No textual change" would be a lie here: there IS one, and it is being
+                ignored on purpose. A file that empties because of a toggle has to name
+                the toggle, or the reader goes looking for what went wrong. */}
+            {allWs ? "Only whitespace changed in this file — turn off Ignore space to see it"
+              : row.status === "renamed" ? `Renamed from ${row.oldPath ?? "somewhere"} — the contents did not change`
               : row.tooBig ? "Too large to diff"
               : "No textual change"}
           </Blank>

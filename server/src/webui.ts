@@ -18,9 +18,18 @@
 // bundle it came from the API's own origin, so the web app can point its calls
 // at location.origin instead of assuming :4000 — that is the whole contract
 // between this file and web/src/lib/api.ts.
+//
+// It is also where the UI's security headers are attached. This origin, not the
+// desktop shell's, is the one a phone on the LAN and anything behind
+// `tailscale serve` actually loads, and until now it was the one with no
+// Content-Security-Policy at all while its Electron twin had one. The policy
+// itself lives in shared/csp.ts, byte-identical on both.
 
 import { resolve, sep } from "node:path";
 import { readFileSync, statSync } from "node:fs";
+/* The policy is the desktop shell's, to the byte — see shared/csp.ts for why
+   this origin needs it more than that one does. */
+import { SECURITY_HEADERS, DOCUMENT_SECURITY_HEADERS } from "../../shared/csp.ts";
 
 /** Does `root` hold a real build (index.html present)? */
 function hasBuild(root: string): boolean {
@@ -121,11 +130,23 @@ export function resolveAsset(pathname: string, dist: string | null = DIST): stri
 }
 
 /** index.html, marker planted. Never cached: it's the one file whose content
- *  names the (hashed) assets, so a stale copy pins a whole stale UI. */
+ *  names the (hashed) assets, so a stale copy pins a whole stale UI.
+ *
+ *  This is also the only response whose Content-Security-Policy a browser
+ *  reads — the policy binds to a document, not to the files it goes on to
+ *  fetch — so the assets below get the sniffing and referrer headers and this
+ *  one gets those plus the policy. Security headers go on LAST: a CORS key
+ *  can't collide with them today, and if one ever does, the policy should win
+ *  rather than quietly vanish. */
 function indexResponse(dist: string, cors: Record<string, string>): Response {
   const html = injectSameOrigin(readFileSync(resolve(dist, "index.html"), "utf8"));
   return new Response(html, {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", ...cors },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-cache",
+      ...cors,
+      ...DOCUMENT_SECURITY_HEADERS,
+    },
   });
 }
 
@@ -142,7 +163,7 @@ export function serveWeb(pathname: string, cors: Record<string, string>): Respon
   const cache = pathname.startsWith("/assets/")
     ? "public, max-age=31536000, immutable"
     : "no-cache";
-  return new Response(Bun.file(abs), { headers: { "cache-control": cache, ...cors } });
+  return new Response(Bun.file(abs), { headers: { "cache-control": cache, ...cors, ...SECURITY_HEADERS } });
 }
 
 /** The SPA fallback: index.html for a UI deep-link. The caller has already let

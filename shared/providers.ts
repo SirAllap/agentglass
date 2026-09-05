@@ -260,10 +260,52 @@ export interface ProviderTask {
    *
    * `color` is the option's own colour when the field is a drop-down that has
    * one — the workspace picked it, and a board where "Blue" is blue and
-   * "Purple" is purple is read at a glance rather than word by word. Absent for
+   * "Crimson" is crimson is read at a glance rather than word by word. Absent for
    * text fields and for options nobody coloured.
    */
-  custom?: { id: string; name: string; value: string; color?: string }[];
+  custom?: CardField[];
+}
+
+/**
+ * One custom field with a value on a card.
+ *
+ * `kind` is the part that was missing, and every wrong cell on the card came from
+ * not having it: a date printed its epoch, a label printed the option's UUID, and a
+ * paragraph-long field sat in a 150px column beside them. The layout cannot decide
+ * how to draw a value it has been handed as an anonymous string.
+ *
+ * Deliberately NOT ClickUp's own type name. Eleven of theirs collapse to five things
+ * a card actually does differently — and a sixth type arriving from a workspace we
+ * have never seen answers `text`, which is the honest fallback: show the words.
+ */
+export type CardFieldKind =
+  /** A word or two, or a chosen option. Drawn as a chip when it has a colour. */
+  | "chip"
+  /** A paragraph. Belongs with the description, never in a column. */
+  | "text"
+  /** A moment. Drawn as a date, in the reader's own locale. */
+  | "date"
+  /** Somewhere to go. */
+  | "url"
+  /** A person, or several. */
+  | "people"
+  /** A quantity — a count, an estimate, an amount of money. */
+  | "number";
+
+export interface CardField {
+  id: string;
+  name: string;
+  /** Ready to draw: an option's NAME rather than its index, a person's username
+   *  rather than an object, a label's name rather than its id. */
+  value: string;
+  /** The workspace's own colour for a chosen option, when it gave one. */
+  color?: string;
+  kind: CardFieldKind;
+  /** Milliseconds, for `date` — so the client formats it in the reader's locale
+   *  rather than being handed somebody else's idea of a date format. */
+  at?: number;
+  /** For `url`: the address. `value` stays the text to show. */
+  href?: string;
 }
 
 export interface ClickUpUser { id: string; name: string; email: string }
@@ -323,6 +365,16 @@ export interface SavedView {
    *  `ASSIGNED_VIEW_ID`. It cannot be removed and has no address. */
   builtin?: boolean;
   /**
+   * The colour the tracker draws this list's icon in.
+   *
+   * Not the icon — the emoji beside a list in their sidebar is not in the v2
+   * API, and asking `/list/{id}` directly returns fifteen fields with no icon
+   * among them. The colour is there, and it is the half that does the work: a
+   * dot in the list's own colour is recognisable across a rail in a way a name
+   * in grey is not.
+   */
+  color?: string;
+  /**
    * Where it sits in the workspace, so the sidebar can draw ClickUp's own
    * hierarchy instead of a flat list of names.
    *
@@ -339,7 +391,7 @@ export interface SavedView {
  * A folder somebody added, and the reason the app stores a folder rather than
  * the lists inside it.
  *
- * A team's folder is a living thing: `Projects Purple` gains a list when the
+ * A team's folder is a living thing: `Projects Crimson` gains a list when the
  * next project starts, and a copy of its contents taken on the day it was added
  * is wrong by the end of the sprint. So the id is what is kept, and the lists
  * are read back from ClickUp — one call per space, which is the same call the
@@ -528,16 +580,121 @@ export interface ViewTasksResponse {
   at: number;
 }
 
+/**
+ * One dated thing that happened to a card, other than somebody speaking.
+ *
+ * What is here is what a personal API token can actually answer, which was
+ * measured rather than assumed: `GET /task/{id}/history` and `/activity` are 404
+ * on v1 and v2, the task payload carries no `history_items`, and the audit-log
+ * endpoint is 404 for this workspace. So the field-by-field feed ClickUp's own web
+ * app draws — "set Urgency to High", "ClickBot added tag bug-intake" — is not
+ * available to an app holding a token, and this does not pretend otherwise.
+ *
+ * What IS available is the shape of how a card advanced: who opened it and when
+ * (`creator` + `date_created`), and every status it has been in with the moment it
+ * entered (`GET /task/{id}/time_in_status`, which is documented and works).
+ */
+export interface CardEvent {
+  at: number;
+  kind: "created" | "status" | "seen";
+  /** The status this event put the card in. */
+  status?: string;
+  /** ClickUp's colour for it, so the row reads like the pill everywhere else. */
+  color?: string;
+  /** The status it left. Absent on the first one, which is the creation. */
+  from?: string;
+  /**
+   * Named only where the API names somebody, which is the creation and nothing
+   * else. A status change carries no user, so a row about one says what happened
+   * and never who — a guess there would be an accusation.
+   *
+   * Measured against the real API on 2026-09-01, with a personal token:
+   * `/task/{id}/history` and `/task/{id}/activity` are 404 on both v1 and v2,
+   * and the v1 route the web client uses answers "Auth header missing"
+   * (JWT_008) — it wants a browser session, not an API key. So the only people
+   * ClickUp will name are the card's creator and the author of a comment.
+   */
+  who?: string;
+  /** Their picture, where the API carries one — the creation does. */
+  avatar?: string;
+  /**
+   * The sentence, for a `seen` row: what a ClickUp notification said about this
+   * card on this machine. The API has no history — who assigned it, who moved
+   * it, who followed it are all invisible to it — and the notification says
+   * exactly that, with a name in it. Marked as seen HERE, never presented as
+   * something the API reported.
+   */
+  text?: string;
+  /**
+   * How long the card sat in the status this event LEFT, in minutes.
+   *
+   * `time_in_status` is the one thing the public API adds over the payload, and
+   * it is worth having on the row: "moved to qa complete" after two hours in qa
+   * reads differently from the same move after four days.
+   */
+  mins?: number;
+}
+
+/**
+ * A file on a card — nearly always a screenshot, on a board like this one.
+ *
+ * The metadata rides on the task payload the card already fetches, so knowing there
+ * are fifteen costs nothing. The IMAGES are what costs, which is why they live behind
+ * their own tab: a thumbnail is a few kilobytes, the file behind it is half a
+ * megabyte, and a card that fetched fifteen of those before you asked would be a card
+ * that takes a second to open for a reason nobody wanted.
+ *
+ * The URLs are ClickUp's own CDN and are public — measured: 200 with no credential —
+ * so they are handed over as they came, rather than proxied through this app for no
+ * gain.
+ */
+export interface CardAttachment {
+  id: string;
+  /** The file name, as it was uploaded. */
+  title: string;
+  /** Lower case, no dot: `png`, `pdf`. Empty when the workspace did not say. */
+  ext: string;
+  /** Bytes, or 0 when unknown — never guessed at. */
+  size: number;
+  /** The file itself. */
+  url: string;
+  /** A small version, when ClickUp made one. Only images have these, which is also
+   *  how the grid knows what it can show and what it can only name. */
+  thumb?: string;
+  /** When it was attached, in milliseconds. */
+  at?: number;
+  /** Who attached it. */
+  who?: string;
+}
+
 export interface TaskDetail {
   task: ProviderTask;
+  /** The files on the card. Metadata only — see CardAttachment. */
+  attachments?: CardAttachment[];
+  /**
+   * How the card got here, oldest first. Empty when the workspace refused the
+   * call, which is not the same as "nothing happened" — see CardEvent.
+   */
+  events?: CardEvent[];
   /** Markdown, as the workspace wrote it. */
   description: string;
   subtasks: ProviderTask[];
   checklists: { name: string; items: { name: string; done: boolean }[] }[];
   comments: {
     id: string; who: string; text: string; at: number;
+    /** Written by the connected account — so it can be edited or deleted, which
+     *  ClickUp allows for nobody else's. */
+    mine?: boolean;
+    /** Ticked off in ClickUp. */
+    resolved?: boolean;
     /** How many replies the thread has, from the workspace's own count. */
     replies?: number;
+    /** The author's face, the way a reply already carries one. ClickUp draws it
+     *  beside every comment and it is how you find your own thread on a card
+     *  with four people talking. */
+    avatar?: string;
+    initials?: string;
+    color?: string;
     /**
      * The replies themselves, fetched with the card rather than on demand.
      *
@@ -580,6 +737,9 @@ export interface TaskReply {
   who: string;
   text: string;
   at: number;
+  /** Written by the connected account, so it can be edited or deleted — the
+   *  same rule the parent comment goes by, one level down. */
+  mine?: boolean;
   /** For the face on the row. Initials are the fallback the workspace itself
    *  uses when somebody has no picture. */
   avatar?: string;

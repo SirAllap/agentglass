@@ -60,7 +60,8 @@ import {
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon, KeyboardIcon, MicIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
-import type { AgentSessionRow } from "../../../shared/types.ts";
+import { canRunAgents } from "../../src/model/scope.ts";
+import type { AgentSessionRow, DeviceScope } from "../../../shared/types.ts";
 
 /** The last segment of a path, which is what a person calls a checkout — the
  *  same rule src/terminal/tabs.ts uses to name a window. */
@@ -114,7 +115,81 @@ import type { PanesResponse } from "../../../shared/types.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
 
+/**
+ * The gate in front of the pane.
+ *
+ * `/terminal/pty` needs `full` (server/src/auth.ts, FULL_GET). A phone paired
+ * for `read` or `answer` that reached this screen opened a socket the server
+ * closed on arrival, and the pane reported the connection lost — a refusal
+ * dressed as an outage, and one that invited a "Reconnect" tap that could
+ * never succeed. So the socket is never opened: this decides before the pane
+ * mounts, with the one fact it needs (the scope this phone was paired with)
+ * and no hooks of its own to keep in order under the pane's forty.
+ *
+ * Two components rather than an early return inside one, because an early
+ * return above a hook is how a screen goes black (the hook order changes
+ * between renders). The pane keeps every hook it has; this has one.
+ */
 export default function TerminalScreen(): React.ReactNode {
+  const { host } = useAgentglass();
+  if (host && !canRunAgents(host.scope)) return <TerminalRefused scope={host.scope} />;
+  return <TerminalPane />;
+}
+
+/** What a phone that may not type sees instead of a pane that cannot open. */
+function TerminalRefused({ scope }: { scope: DeviceScope }): React.ReactNode {
+  usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
+  const { fleet } = useAgentglass();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const held = fleet.gates.length;
+  return (
+    <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: insets.top }}>
+      {/* The same back control the pane draws, for the same reason: this
+          screen has no navigator header, and `back` in a tab navigator lands
+          on the Inbox anyway. */}
+      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: SPACE.xs }}>
+        <Pressable
+          onPress={() => router.replace("/")}
+          accessibilityRole="button"
+          accessibilityLabel="Back to the inbox"
+          style={({ pressed }) => ({
+            width: 40, minHeight: 44, alignItems: "center", justifyContent: "center",
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <BackIcon color={C.text3} size={20} />
+        </Pressable>
+        <Text style={{ color: C.text, fontSize: T.body, fontWeight: "700" }}>Terminal</Text>
+      </View>
+      <View style={{ padding: SPACE.lg, gap: SPACE.lg }}>
+        <Card>
+          <Label text="Not on this phone" />
+          <Note>
+            {scope === "answer"
+              ? "This phone was paired to answer things — approving a held command and replying to a "
+                + "running session. Opening a terminal needs the full grant, which is given at the computer "
+                + "when a phone is paired."
+              : "This phone was paired to look only. Opening a terminal needs the full grant, which is "
+                + "given at the computer when a phone is paired."}
+          </Note>
+        </Card>
+        {/* The door the pane keeps for an `answer` phone stays open here: a
+            held gate is the one thing such a phone is FOR, and the pane was
+            where it was pointed at. */}
+        {held > 0 ? (
+          <Btn
+            label={held === 1 ? "An agent is waiting on you" : `${held} agents are waiting on you`}
+            tone="primary"
+            onPress={() => router.push("/now")}
+          />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function TerminalPane(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host, fleet } = useAgentglass();
   const router = useRouter();

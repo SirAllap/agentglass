@@ -1,4 +1,5 @@
 import { FacetMenu } from "./FacetMenu.tsx";
+import { ICON } from "../lib/iconSize.ts";
 import {
   serializeQuery, toggleFacet, clearFacet, setSort, DEFAULT_SORT, SORT_OPTIONS, FACETS,
   type FilterState, type FacetView, type SortTok,
@@ -14,7 +15,7 @@ import {
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, pending, searching, checksPending, shown, total, swept,
+  query, filters, facets, onQuery, onSearch, pending, searching, checksPending, shown, total, swept, unread,
 }: {
   query: string;
   filters: FilterState;
@@ -32,6 +33,15 @@ export function PrFilterBar({
   /** How far the background sweep has read, while free text is filtering. A
    *  count over a partial pool has to say so. */
   swept?: { rows: number; done: boolean };
+  /**
+   * Rows with something said on them since you last looked.
+   *
+   * Not a facet: every other pill here is a GitHub search qualifier, and "since I last
+   * looked" is a timestamp in this browser that GitHub has never heard of. It sits
+   * with them because that is where somebody looks for it, and its tooltip says out
+   * loud that it counts only the rows this table has loaded.
+   */
+  unread?: { count: number; on: boolean; onToggle: () => void };
 }) {
   const emit = (next: FilterState) => onQuery(serializeQuery(next));
 
@@ -114,6 +124,24 @@ export function PrFilterBar({
 
       {/* Facet pills — wrap in the narrow sidebar; each menu floats via a Portal. */}
       <div className="flex flex-wrap items-center gap-1">
+        {!!unread?.count && (
+          <button onClick={unread.onToggle} aria-pressed={unread.on}
+            title={unread.on
+              ? "Showing only the pull requests somebody has spoken on since you last looked. Press again for all of them."
+              : `${unread.count} of the loaded pull requests have something said on them since you last looked. Counted here rather than on GitHub — the mark is this browser\u2019s.`}
+            className="agx-btn inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded tabular-nums"
+            style={{
+              color: "var(--warning)",
+              border: `1px solid color-mix(in srgb, var(--warning) ${unread.on ? 70 : 40}%, transparent)`,
+              background: unread.on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
+            }}>
+            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" aria-hidden
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+            {unread.count} unread
+          </button>
+        )}
         {/*
           * The row exists before the rows do.
           *

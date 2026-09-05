@@ -1,0 +1,1732 @@
+#!/usr/bin/env python3
+"""agentglass's browser, as an MCP server.
+
+The same browser the person is looking at — signed in to the same sites, in the
+same window — offered to an agent as tools with schemas instead of a shell
+command whose output has to be parsed back out of a terminal.
+
+WHY NOT chrome-devtools-mcp. It is the obvious answer and it is the wrong one
+here: it drives a Chrome over CDP, and pointing it at this app means starting
+Electron with `--remote-debugging-port`, which opens the WHOLE application over
+CDP — not the page: the app's own renderer too, where the API token lives. Any
+process on the machine could then read it and drive everything. This server
+reaches the browser the way the CLI does, through the relay the app already has
+(`POST /browser/<verb>` → the panel → the guest), so what an agent can do is
+exactly what that relay exposes and nothing else — the app's own renderer, and
+the token in it, stay out of reach.
+
+WHAT ACTS. Four of these tools run code or reach the debugger of the PAGE, and
+this docstring used to say the opposite ("there is no 'run this JavaScript'
+tool") from before they existed: `browser_eval` runs JavaScript in the page,
+`browser_addInitScript` installs JavaScript that runs before every page does,
+`browser_expose` gives the page a function that calls back into the caller,
+and `browser_cdp` sends raw Chrome DevTools Protocol commands to the guest's
+session. All four are confined to the guest page — none of them reaches the
+app's renderer — and all four count as ACTING under AGENTGLASS_BROWSER_READONLY.
+
+Transport is stdio with one JSON-RPC message per line, which is what the MCP
+stdio transport is. No dependencies: this has to run on a machine where the app
+is installed, not one where a package tree was.
+
+    claude mcp add agentglass-browser -- agentglass-browser-mcp
+
+Environment:
+    AGENTGLASS_SERVER   default http://localhost:4000
+    AGENTGLASS_TOKEN    only needed if the server was started with one
+"""
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+
+def _server_or_die(url):
+    """Where the Bearer token goes. It is sent to whatever AGENTGLASS_SERVER
+    names, and over plain http to a remote host it travels in the clear —
+    every hop between here and there reads it. So: https anywhere, http only
+    to this machine (localhost, or a loopback address). Anything else is one
+    line on stderr and exit 2, before a single request is built."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    host = (u.hostname or "").lower()
+    if u.scheme == "https" and host:
+        return url
+    if u.scheme == "http" and host:
+        loop = host == "localhost"
+        if not loop:
+            try:
+                loop = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                loop = False
+        if loop:
+            return url
+        print(f"agentglass: refusing plain http to {host}: the token would travel in the clear. "
+              f"Use https://, or http:// only to localhost/127.0.0.1/::1 (AGENTGLASS_SERVER={url})", file=sys.stderr)
+        sys.exit(2)
+    print(f"agentglass: AGENTGLASS_SERVER must be https://<host> or http://<loopback>, got {url!r}", file=sys.stderr)
+    sys.exit(2)
+
+
+SERVER = _server_or_die(os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"))
+PROTOCOL = "2025-06-18"
+NAME = "agentglass-browser"
+VERSION = "1.0.0"
+
+
+def call(op, body, timeout=120):
+    """One verb, through the app's relay. Every failure comes back as an answer
+    rather than an exception: the caller is a model, and a stack trace on stdout
+    would also break the transport."""
+    req = urllib.request.Request(
+        f"{SERVER}/browser/{op}",
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            # Same-origin is how the server tells a browser tab from everything
+            # else; a program on this machine says so plainly.
+            "Origin": SERVER,
+        },
+    )
+    token = os.environ.get("AGENTGLASS_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read() or b"{}")
+        except json.JSONDecodeError:
+            return {"ok": False, "error": f"server said {e.code}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
+
+
+
+# ── identity ────────────────────────────────────────────────────────────────
+#
+# WHO IS DRIVING, AND WHICH TAB IS THEIRS. This surface had neither: `grep -c
+# 'my_name\|my_tab\|remember_tab' bin/agentglass-browser-mcp` returned 0, so
+# all 65 tools sent a body with no `page` in it — and a request that names no
+# tab is not "unspecified" to the relay, it is "the tab in front", whoever owns
+# it. That is the incident seen from this side of the same relay: "another
+# agent was getting into that container and putting its data into that
+# screen… the other agent was going in to take screenshots and could not,
+# because the first one was overwriting on top of it."
+#
+# STATE_DIR and the file name are COPIED from bin/agentglass-browser rather
+# than chosen, so a session's shell and its MCP client are one identity holding
+# one tab. An agent that opens a page with the CLI and then reads it through
+# this server has to land on the same tab; a second, private map would have
+# made those two into exactly the two agents this fix is about.
+#
+# The intended end state is one module both binaries import — the same contract
+# cannot be kept in two files forever. Until then the rules below are a literal
+# copy, and server/test/browser-mcp.test.ts asserts the two agree on the file
+# and on the name so the copies cannot drift apart in silence.
+STATE_DIR = (os.environ.get("AGENTGLASS_BROWSER_STATE_DIR")
+             or os.path.expanduser("~/.cache/agentglass-browser"))
+
+
+def my_name(explicit=None):
+    """The identity this server works as.
+
+    Explicit name, then AGENTGLASS_PROFILE, then one derived from the session,
+    so that an agent has an identity WITHOUT having thought about it — because
+    "declare your identity on every call" is a rule that is kept for ten
+    minutes and then quietly stops being kept: "the agents are using the browser
+    but not creating their profiles; I have to tell them myself."
+    """
+    if explicit:
+        return explicit[:24]
+    env = os.environ.get("AGENTGLASS_PROFILE")
+    if env:
+        return env[:24]
+    root = os.environ.get("CLAUDE_PROJECT_ROOT") or os.getcwd()
+    stem = re.sub(r"[^A-Za-z0-9]", "", os.path.basename(root.rstrip("/")))[:12] or "agent"
+    seed = (os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or os.environ.get("TMUX_PANE", "").lstrip("%")
+            or str(os.getppid()))
+    tail = re.sub(r"[^A-Za-z0-9]", "", seed)[-6:] or "0"
+    return f"{stem}-{tail}"[:24]
+
+
+def _tabs_path():
+    return os.path.join(STATE_DIR, "my-tabs.json")
+
+
+def my_tab(name):
+    """The tab this identity opened, if it still has one."""
+    try:
+        with open(_tabs_path()) as f:
+            return (json.load(f) or {}).get(name) or None
+    except Exception:
+        return None
+
+
+def remember_tab(name, tab_id):
+    """Written after `open`/`newtab`/`tab` so every later tool can name it.
+
+    Best effort: a state file that cannot be written costs the automatic
+    targeting, not the call — the caller can always pass `page` itself.
+    """
+    if not name or not tab_id:
+        return
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        try:
+            with open(_tabs_path()) as f:
+                held = json.load(f) or {}
+        except Exception:
+            held = {}
+        held[name] = tab_id
+        tmp = _tabs_path() + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(held, f)
+        os.replace(tmp, _tabs_path())
+    except Exception:
+        pass
+
+
+def forget_tab(name):
+    """After a tab is closed, or found to be gone."""
+    try:
+        with open(_tabs_path()) as f:
+            held = json.load(f) or {}
+        if held.pop(name, None) is None:
+            return
+        tmp = _tabs_path() + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(held, f)
+        os.replace(tmp, _tabs_path())
+    except Exception:
+        pass
+
+
+# How long to keep waiting for a window that is still starting, once the quick
+# look has already failed. Bounded on purpose: nothing opens a pane any more —
+# that was the screen theft — so all this can do is wait and then say so, and an
+# agent blocked for ten seconds is its own kind of theft.
+WAIT_TAIL = float(os.environ.get("AGENTGLASS_BROWSER_WAIT") or 2.5)
+
+
+def windows_ready(seconds=1.6):
+    """Wait for a window to say it can drive a browser.
+
+    The app registers itself a moment after its renderer is up, and a restart is
+    seconds of that moment — so a call landing in it is told "the browser view
+    is not open" about a window that is simply still starting. Switching the app
+    to the browser then is the worst possible answer: it takes the screen off
+    whoever is using it, and it happens EVERY time, which is what was reported —
+    "every reinstall drags me to the browser view… three or four times over".
+
+    So the wait comes first. This is a read; it opens nothing and moves nothing.
+    """
+    deadline = time.time() + seconds
+    while True:
+        req = urllib.request.Request(f"{SERVER}/browser-use/status")
+        token = os.environ.get("AGENTGLASS_TOKEN")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=3) as r:
+                if json.loads(r.read()).get("windows", 0) > 0:
+                    return True
+        except Exception:
+            # Nothing to wait FOR: a server that cannot be asked is not a window
+            # that is starting, and waiting five seconds to find that out is
+            # five seconds an agent spends learning nothing.
+            return False
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.4)
+
+
+def open_browser_view():
+    """Ask the window to show the browser pane.
+
+    The pane is where the guest lives, so nothing can answer until it is
+    mounted. Used for one failure only — see `run`."""
+    req = urllib.request.Request(
+        f"{SERVER}/control",
+        data=json.dumps({"cmd": "view", "to": "browser"}).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "Origin": SERVER},
+    )
+    token = os.environ.get("AGENTGLASS_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        return True
+    except Exception:
+        return False
+
+
+# The tools, and their shapes. Names match the CLI's verbs so anything written
+# against one reads as the other.
+TOOLS = [
+    {
+        "name": "browser_open",
+        "description": (
+            "Go to a page in agentglass's built-in browser and wait for it to load. This is the "
+            "person's own browser: it is signed in to the sites they are signed in to, and they can "
+            "see everything it does. It opens in YOUR OWN container and stays there — the first "
+            "open mints a tab for this client, and every later tool goes to that same tab, so "
+            "another agent driving the same browser cannot navigate the page out from under you. "
+            "Pass `profile` to name the container yourself; pass `page` to reuse a tab you already "
+            "know the id of."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "http(s) address"}},
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_read",
+        "description": "The current page's url, title and visible text. Use this rather than fetching the url yourself when a page needs a login or renders with JavaScript.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        # ONE CALL INSTEAD OF SIX. Reported by an agent who drove this all day:
+        # "what I need is a call that returns the whole state, not six verbs I
+        # poll in turn — every read/text/shot is a new process and I write
+        # for i in $(seq 1 20); that is where the time goes, not the network."
+        "name": "browser_observe",
+        "description": (
+            "EVERYTHING AT ONCE, and the verb to reach for first. One answer with: the URL and title; "
+            "whether the view is VISIBLE and focused (a page in a hidden panel stops polling and pauses "
+            "timers, which turns a screenshot into a false negative); the console and network since "
+            "`since`, with status and timing, so a 4xx can be diagnosed without touching the server; a "
+            "tree of the interactive page addressed by role, accessible name and data-testid rather than "
+            "as flat text; and the current values of every input and select. Pass shot=true for the "
+            "picture in the same answer. Poll this instead of looping over read/text/shot."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sinceLast": {"type": "boolean", "description": "Only what is new since YOUR last sinceLast call on this verb. The SERVER keeps the cursor, so there is no timestamp to carry — and a caller that has to carry one forgets, and re-reads the whole log every turn."},
+                "since": {"type": "number", "description": "Only console and network newer than this epoch ms — pass the `now` from your last observe."},
+                "shot": {"type": "boolean", "description": "Include a screenshot in the same answer."},
+            },
+        },
+    },
+    {
+        # §15's one-liner, and §4's two verbs. All three shipped reachable only
+        # from the CLI, which is not where agents live.
+        "name": "browser_health",
+        "description": (
+            "One line: is the window open, is the panel mounted, is anything able to answer. It "
+            "ALWAYS answers — it never fails with the condition it is reporting — so it is the safe "
+            "first call when something has gone quiet, and it costs almost nothing."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_addInitScript",
+        "description": (
+            "JavaScript that runs BEFORE the page's own scripts, on every navigation, until you "
+            "replace or remove it by name. This is the thing browser_eval cannot do: eval only reaches "
+            "a page that is already running. Use it to instrument without touching the source — wrap "
+            "fetch, seal Date.now, catch the errors that happen before your first call."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Registering the same name again REPLACES it, so you never end up with two."},
+                "js": {"type": "string"},
+            },
+            "required": ["name", "js"],
+        },
+    },
+    {
+        "name": "browser_expose",
+        "description": "Give the page a function it can call back into. Read what it sent with browser_exposed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "browser_exposed",
+        "description": "What the page called back with, since the last read.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}},
+    },
+    {
+        # §3's other pointer verbs, built and reachable by nothing: the server
+        # knew all seven and neither the CLI nor this file had a word for one,
+        # so no agent could ever have called them.
+        "name": "browser_hover",
+        "description": (
+            "Hover an element. The ONLY way to open a menu that appears on hover — clicking such a "
+            "menu's trigger often does nothing at all, which reads as a broken selector."
+        ),
+        "inputSchema": {"type": "object", "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+    },
+    {
+        "name": "browser_dblclick",
+        "description": "Double-click an element. Two clicks are not a double click; a page listening for dblclick ignores them.",
+        "inputSchema": {"type": "object", "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+    },
+    {
+        "name": "browser_rightclick",
+        "description": "Right-click, which opens the PAGE's own context menu — not the browser's.",
+        "inputSchema": {"type": "object", "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+    },
+    {
+        "name": "browser_focus",
+        "description": "Focus an element without clicking it, for when the click itself would do something.",
+        "inputSchema": {"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"]},
+    },
+    {
+        "name": "browser_blur",
+        "description": "Take focus off an element. This is what fires an on-leave validation, which is how you see the error message a form shows when a field is wrong.",
+        "inputSchema": {"type": "object", "properties": {"selector": {"type": "string"}}, "required": ["selector"]},
+    },
+    {
+        "name": "browser_check",
+        "description": (
+            "Check or uncheck a checkbox or radio properly, so the framework notices. Use this rather "
+            "than clicking one: a click TOGGLES blind, so it turns off the box you meant to turn on."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "checked": {"type": "boolean", "description": "Default true."}},
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_fill",
+        "description": (
+            "A whole form in ONE call: {selector: value} for every field, then submit if you ask. A "
+            "partial failure names WHICH field, instead of leaving you to work out which of N separate "
+            "calls was the one that did not take."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},
+                "fields": {"type": "object", "description": '{"#name": "Ada", "#email": "ada@example.com"}'},
+                "submit": {"type": "boolean"},
+            },
+            "required": ["fields"],
+        },
+    },
+    {
+        # §5. The spec asks for a debugger, DOM breakpoints, a listener
+        # inspector, coverage, a profiler, heap snapshots, source maps, paint
+        # layers and an accessibility audit. Every one of those is a CDP
+        # domain Chromium already implements, so the protocol is exposed whole
+        # rather than as nine tools that would be missing the tenth.
+        "name": "browser_cdp",
+        "description": (
+            "THE DEVTOOLS PROTOCOL, whole. Everything the Inspector can do, by its own method names: "
+            "Debugger.setBreakpointByUrl and Debugger.resume; DOMDebugger.setDOMBreakpoint to stop when "
+            "a subtree changes, which is how you answer 'who deleted this row'; HeapProfiler and "
+            "Profiler for leaks and hot code; Network.setBlockedURLs; Accessibility.getFullAXTree. "
+            "Pass events=true instead of a method to drain what the protocol sent while you were not "
+            "asking — a debugger pause, a DOM breakpoint firing. Counts as ACTING for read-only mode, "
+            "because the protocol can navigate, click and evaluate."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "method": {"type": "string", "description": "A CDP method, e.g. Debugger.enable"},
+                "params": {"type": "object", "description": "That method's parameters."},
+                "events": {"type": "boolean", "description": "Drain buffered CDP events instead of sending a command."},
+            },
+        },
+    },
+    {
+        # §5's debugger. The protocol is reachable whole through browser_cdp;
+        # this wraps the part that is genuinely awkward there — a pause is an
+        # EVENT, and reading a paused frame's scope is a three-call chain whose
+        # arguments come out of the previous answer.
+        "name": "browser_debug",
+        "description": (
+            "The debugger. action=break with url and line sets a breakpoint (optionally conditional) "
+            "and TELLS YOU WHETHER IT BOUND — an unbound breakpoint and a line that never runs look "
+            "identical and mean opposite things. action=dom with a selector stops when a node's "
+            "subtree changes, which is how you answer 'who deleted this row' and is the one question "
+            "nothing else here can answer. action=where says whether it is paused, the top of the "
+            "stack, and the LOCAL VARIABLES — one call instead of three. Then resume / into / over / "
+            "out. Use browser_events to wait for the pause rather than polling for it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["on", "off", "break", "dom", "where", "resume", "into", "over", "out"]},
+                "url": {"type": "string"}, "line": {"type": "number"},
+                "condition": {"type": "string"}, "selector": {"type": "string"},
+                "on": {"type": "string", "enum": ["subtree-modified", "attribute-modified", "node-removed"]},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        # §16 built the log to prove what was touched; §12 wants the same list
+        # as something QA can re-run. One read, two shapes.
+        "name": "browser_audit",
+        "description": (
+            "Everything this browser was asked to do, in order, with secrets already taken out. Use "
+            "it to say exactly what you touched and have that be checkable rather than a promise. "
+            "Pass script=true and you get a runnable bash script of the steps that CHANGED something "
+            "— reads are left out because replaying them proves nothing — so a reproduction stops "
+            "being a conversation and becomes a file somebody else can run."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"script": {"type": "boolean"}},
+        },
+    },
+    {
+        # §12: "video, and N-frame capture at an interval, straight to a GIF —
+        # exactly what gets assembled by hand with ffmpeg/convert today."
+        "name": "browser_record",
+        "description": (
+            "N screenshots at a fixed interval, written to DISK and optionally assembled into a GIF. "
+            "Use it to show a thing changing over time — a spinner that never resolves, a countdown, "
+            "a board updating. Frames go to files and you get back paths, never images: ten frames in "
+            "your context is ten pictures you pay for on every turn for the rest of the session. "
+            "Takes the same selector / clip as browser_shot, so you can record one element."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dir": {"type": "string", "description": "Absolute directory for the frames. It is created if missing."},
+                "frames": {"type": "number", "description": "1 to 120 (default 10)."},
+                "every": {"type": "number", "description": "Gap in ms, 50 to 10000 (default 500)."},
+                "gif": {"type": "string", "description": "Absolute path ending in .gif."},
+                "selector": {"type": "string"},
+            },
+            "required": ["dir"],
+        },
+    },
+    {
+        # §11: "return the resulting local path, do not just let it vanish
+        # into a directory — a download reported done with no path is the
+        # same as no download."
+        "name": "browser_download",
+        "description": (
+            "Click something that starts a download and wait for the file, returning the LOCAL "
+            "PATH it landed at — never just a directory. Use this whenever a click would trigger "
+            "a file download you need to read afterwards."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "The link or button that starts the download."},
+                "dir": {"type": "string", "description": "Absolute directory to save the file into."},
+                "timeoutMs": {"type": "number", "description": "1000 to 110000 (default 60000)."},
+            },
+            "required": ["selector", "dir"],
+        },
+    },
+    {
+        # §1. The spec opens on a shell loop — `for i in $(seq 1 20); do ...
+        # done` — and that loop is the expensive thing: a process start and an
+        # HTTP round trip per turn, and every answer parked in the context for
+        # the rest of the session.
+        "name": "browser_events",
+        "description": (
+            "WAIT for something to happen, instead of polling. One call that returns the MOMENT "
+            "there is a console message, a network response or a DevTools event — or says nothing "
+            "happened, which is an answer and not a failure. Use this instead of calling "
+            "browser_console or browser_network in a loop: the waiting happens on the server, so it "
+            "costs you ONE answer in your context rather than twenty. Carry the `now` from each "
+            "reply into the next `since` and you never re-read what you already saw."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "wait": {"type": "number", "description": "Seconds to wait, 0 to 120 (default 30)."},
+                "since": {"type": "number", "description": "Epoch ms — the `now` from your last reply."},
+                "kinds": {"type": "array", "items": {"type": "string", "enum": ["console", "network", "cdp"]}},
+            },
+        },
+    },
+    {
+        # §6, and the row in §18 that says failure states could only ever be
+        # proved in a unit test.
+        "name": "browser_fake",
+        "description": (
+            "Force a 404, a 500 or a hang on every request whose URL contains `pattern`. This is the "
+            "only way to prove 'the board freezes when the API is down' against the REAL app rather "
+            "than in a unit test. It is enforced inside the page, in the same fetch and XHR wrappers "
+            "the console and network logs already read, so a faked request never touches the network. "
+            "Pass clear=true to remove one. A fake left in place is a lie the page keeps believing, so "
+            "clear it when you are done — an observation while one is active says so."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Substring of the URL to match."},
+                "status": {"type": "number", "description": "The status to answer with, e.g. 500."},
+                "timeoutMs": {"type": "number", "description": "Hang for this long instead of answering."},
+                "clear": {"type": "boolean"},
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "browser_intercept",
+        "description": (
+            "Pause a request at the NETWORK level and decide what happens to it: fulfil it yourself "
+            "with a status and a body, or abort it. This catches what browser_fake cannot — fake "
+            "patches fetch and XHR inside the page, so a request the page did not make that way goes "
+            "straight past it. A paused request BLOCKS the page until something answers, so a rule "
+            "must always say what to do, and clear:true removes it when you are done."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "fulfill": {"type": "boolean"}, "status": {"type": "number"}, "body": {"type": "string"},
+                "abort": {"type": "boolean"}, "reason": {"type": "string"},
+                "clear": {"type": "boolean"},
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "browser_headers",
+        "description": (
+            "Extra HTTP headers on EVERY request for this session — an auth header, a feature flag, a "
+            "trace id. That is the difference from setting one on a single call: a page makes dozens "
+            "of requests, and a header that rides only on the one you named proves nothing about the "
+            "rest. Pass no headers to clear them."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"headers": {"type": "object", "description": "name -> value, at most 20."}},
+        },
+    },
+    {
+        "name": "browser_clipboard",
+        "description": (
+            "Read or write the clipboard. Note the scar: navigator.clipboard fails when focus is in "
+            "the browser view, so if a read is refused, grant clipboardReadWrite with "
+            "browser_permission first rather than assuming the page is broken."
+        ),
+        "inputSchema": {"type": "object", "properties": {"write": {"type": "string"}}},
+    },
+    {
+        "name": "browser_save",
+        "description": (
+            "The whole page as one file (MHTML) — images and stylesheets included, so it still renders "
+            "once it is off the network. NOT the same as browser_html, which gives you markup that "
+            "stops rendering the moment it leaves the page it came from."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_region",
+        "description": (
+            "The interactive tree and text of ONE subtree instead of the whole page. A modal is "
+            "fifteen nodes inside three hundred, and the other two hundred and eighty-five stay in "
+            "your context for the rest of the session. Takes a selector or an id from an observation, "
+            "and stamps ids on what it finds so you can act on them."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"selector": {"type": "string"}},
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_throttle",
+        "description": (
+            "Make the machine slow. A page that works on a fast machine and falls over at 3G is the "
+            "commonest bug that never reproduces locally, and the only honest way to see it is to BE "
+            "slow rather than to reason about it. network: slow-3g / fast-3g / 4g (Chromium's own "
+            "numbers, so a report here matches one from a person's DevTools). cpu is a slowdown rate, "
+            "4 meaning four times slower. offline is NOT zero bandwidth — a request that fails "
+            "instantly takes a different path through most apps than one that takes twelve seconds, "
+            "and treating them as one setting hides one of the two bugs. off:true restores both."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "network": {"type": "string", "enum": ["slow-3g", "fast-3g", "4g"]},
+                "cpu": {"type": "number"}, "offline": {"type": "boolean"}, "off": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "browser_har",
+        "description": (
+            "The network log as a HAR — evidence that outlives the session and opens in any tool that "
+            "reads one. Built from the same buffer browser_network reads, not a second recording: a "
+            "second one would drift, and the whole value of a HAR is that it is what actually "
+            "happened."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_storage",
+        "description": (
+            "Read or write localStorage and sessionStorage. A login is as often a token here as it is "
+            "a cookie, and restoring one without the other gives a page that is HALF signed in — which "
+            "fails later and somewhere else. Reading returns values, unlike browser_observe, which "
+            "returns keys alone: an observation lives in your context and secrets are kept out of it, "
+            "while this is an explicit ask."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "where": {"type": "string", "enum": ["local", "session", "idb"], "description": "idb lists IndexedDB databases by name and version. Not their contents: those are a page's whole offline cache, and they would sit in your context for the rest of the session. The name answers the question that is actually being asked — did this page create its database."},
+                "set": {"type": "boolean"}, "remove": {"type": "boolean"},
+                "key": {"type": "string"}, "value": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "browser_permission",
+        "description": (
+            "Grant a permission for an origin — clipboard, geolocation, notifications, camera — "
+            "instead of waiting for a dialog nobody can click. For an agent a dialog is worse than a "
+            "refusal: a refusal is an answer, a dialog is a page that has stopped responding. Goes "
+            "through the same origin allow-list as every other verb."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "origin": {"type": "string"},
+                "permissions": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["origin", "permissions"],
+        },
+    },
+    {
+        "name": "browser_pdf",
+        "description": (
+            "Print the page to PDF. NOT a screenshot: this applies the page's PRINT stylesheet, which "
+            "is usually a different document from what is on screen — and usually the one being asked "
+            "about when somebody says 'the invoice looks wrong'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"landscape": {"type": "boolean"}, "background": {"type": "boolean"}},
+        },
+    },
+    {
+        "name": "browser_drag",
+        "description": (
+            "Drag one element onto another. NOT two clicks: a drag is a pointer sequence with the "
+            "button held between them, and a page listening for dragstart or pointermove sees nothing "
+            "at all from click-then-click. It moves in several steps rather than one jump, because a "
+            "sortable list decides where a row lands from the moves it saw."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "to": {"type": "string", "description": "Where to drop it."}},
+            "required": ["selector", "to"],
+        },
+    },
+    {
+        "name": "browser_upload",
+        "description": (
+            "Put files into a file input. Script CANNOT do this — the value of a file input is "
+            "read-only by design — so it goes through the browser's own debugger. Paths must be "
+            "absolute: a relative one resolves against the shell's working directory, not yours, and "
+            "the failure is a file that silently is not there."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string"},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute paths, 1 to 20."},
+            },
+            "required": ["selector", "paths"],
+        },
+    },
+    {
+        # §10, and the spec is explicit that it is not cosmetic: a centred
+        # modal covered exactly the cell that had to be proved, and there was
+        # no way to frame both in one capture.
+        "name": "browser_emulate",
+        "description": (
+            "Make the page think it is somewhere else: viewport and deviceScaleFactor, mobile (which "
+            "sets TOUCH as well — a mobile viewport without it is a phone-shaped desktop where hover "
+            "menus still open), user agent, language, timezone, prefers-color-scheme, "
+            "prefers-reduced-motion, colour-vision deficiency, geolocation. Not cosmetic: colour "
+            "scheme, timezone and language change what a real app RENDERS. Only the keys you pass are "
+            "touched, so changing one thing does not reset the rest. Pass reset=true to clear "
+            "everything — an emulation left on is a wrong answer that arrives hours later."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "width": {"type": "number"}, "height": {"type": "number"},
+                "scale": {"type": "number", "description": "deviceScaleFactor"},
+                "mobile": {"type": "boolean"},
+                "userAgent": {"type": "string"}, "language": {"type": "string"},
+                "timezone": {"type": "string", "description": "e.g. Europe/Madrid"},
+                "locale": {"type": "string", "description": "e.g. es-ES — Intl inside the page (toLocaleDateString, NumberFormat), not the Accept-Language header (that's language)"},
+                "colorScheme": {"type": "string", "enum": ["light", "dark", "no-preference"]},
+                "reducedMotion": {"type": "string", "enum": ["reduce", "no-preference"]},
+                "vision": {"type": "string", "enum": ["none", "achromatopsia", "blurredVision", "deuteranopia", "protanopia", "tritanopia", "reducedContrast"]},
+                "geolocation": {"type": "object", "description": "{lat, lon}"},
+                "reset": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        # §8: three minutes of real waiting, measured, for one screenshot of a
+        # thirty-second timer. `advanceMs` is Emulation.setVirtualTimePolicy;
+        # seal and freezeAnimations are the rest of what a REPEATABLE capture
+        # needs alongside the jump.
+        "name": "browser_clock",
+        "description": (
+            "Advance the page's clock without waiting for it. advanceMs is virtual milliseconds — "
+            "Chromium runs every timer the jump crosses back to back, at whatever speed the page's own "
+            "code takes, not the ms you asked for. waitFor=networkIdle pauses the jump while a fetch is "
+            "in flight; waitFor=noTimers reports, AFTER the jump, whether a timer is still scheduled — a "
+            "page polling on setInterval never reaches zero here, on purpose, because the interval "
+            "re-arms itself forever. seal makes Math.random() deterministic so a run repeats; "
+            "Date.now() needs no separate sealing, because advanceMs already makes it report virtual "
+            "time. freezeAnimations pauses CSS and Web Animations so a capture is stable. Any subset — "
+            "pass just seal, or just freezeAnimations, with no advanceMs at all."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "advanceMs": {"type": "number", "description": "0..3600000"},
+                "waitFor": {"type": "string", "enum": ["networkIdle", "noTimers"]},
+                "seal": {"type": "boolean"},
+                "freezeAnimations": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        # §13: the browser's settings, as an API. Scoped to what a page's own
+        # CDP session can actually reach — proxy, DNS remapping, Chromium
+        # flags and extensions live at the Electron session/process level,
+        # not here, and are not exposed by this tool.
+        "name": "browser_settings",
+        "description": (
+            "GET or SET browser settings. get returns cache, ignoreCertErrors and the per-origin "
+            "block list as last set — set applies whichever of cache/block/page are given. "
+            "cache: normal or bypass (Network.setCacheDisabled). Switching TLS verification off "
+            "(ignoreCertErrors) is NOT available from this tool: that is a person's decision, made "
+            "once at the `agentglass-browser settings` command line, not a model's mid-task. "
+            "block: {origin, images?, js?} blocks that request type for that origin (host or "
+            "host:port, no scheme); repeat with a different origin to add more, or set both to "
+            "false to unblock. page: 'blank' navigates to about:blank — the only internal page a "
+            "bare Electron webview renders. Counts as ACTING for read-only mode when action=set; "
+            "action=get is always allowed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["get", "set"]},
+                "cache": {"type": "string", "enum": ["normal", "bypass"]},
+                "block": {
+                    "type": "object",
+                    "description": "{origin, images?, js?}",
+                    "properties": {
+                        "origin": {"type": "string"},
+                        "images": {"type": "boolean"},
+                        "js": {"type": "boolean"},
+                    },
+                },
+                "page": {"type": "string", "enum": ["blank"]},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        # §9. "Tabs alone are not enough: they share a session" — the spec's
+        # own words. Two actors at once is what a pure reproduction needs, and
+        # the panel has had profiles the whole time with nothing addressing
+        # them.
+        "name": "browser_profiles",
+        "description": (
+            "Containers: isolated contexts with their own cookies, storage and cache. Two tabs in "
+            "the SAME container are one person in two windows; two tabs in DIFFERENT containers are "
+            "two people.\n\n"
+            "MAKE YOUR OWN AND DROP IT WHEN YOU ARE DONE. Never work in a container somebody else "
+            "made: two agents sharing one share a login, and the second to act changes what the "
+            "first is looking at — silently, because nothing about a cookie says who set it. Name it "
+            "after yourself and the task (`review-pr-540`), so a person looking at the window can "
+            "tell whose it is. A container left behind is a login nobody meant to keep.\n\n"
+            "Pass the name to browser_newtab to open into it."
+        ),
+        "description": (
+            "THE DEVTOOLS PROTOCOL, whole. Everything the Inspector can do, by its own method names: "
+            "Debugger.setBreakpointByUrl and Debugger.resume; DOMDebugger.setDOMBreakpoint to stop when "
+            "a subtree changes, which is how you answer 'who deleted this row'; HeapProfiler and "
+            "Profiler for leaks and hot code; Network.setBlockedURLs; Accessibility.getFullAXTree. "
+            "Pass events=true instead of a method to drain what the protocol sent while you were not "
+            "asking — a debugger pause, a DOM breakpoint firing. Counts as ACTING for read-only mode, "
+            "because the protocol can navigate, click and evaluate."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "make": {"type": "string", "description": "Make a container with this name."},
+                "drop": {"type": "string", "description": "Throw one away, with everything in it."},
+                "force": {"type": "boolean", "description": "Drop a container somebody else created. Without it the drop is refused and the refusal names them."},
+                "identity": {"type": "string", "description": "Who is asking, for the ledger. Defaults to the name this server works as."},
+                "method": {"type": "string", "description": "A CDP method, e.g. Debugger.enable"},
+                "params": {"type": "object", "description": "That method's parameters."},
+                "events": {"type": "boolean", "description": "Drain buffered CDP events instead of sending a command."},
+            },
+        },
+    },
+    {
+        # §11. THE PRE-FLIGHT, and the one call to make before any other.
+        #
+        # `browser_profiles` used to answer a flat list of bare names, which was
+        # just enough for an agent to see that four containers existed and not
+        # enough to tell whether any of them was busy or which one owned the
+        # screen. This is the other half: who you are and whether you still
+        # hold a tab.
+        "name": "browser_whoami",
+        "description": (
+            "WHO YOU ARE, whether you still hold a live tab, and which container owns the tab that "
+            "is on screen right now. Touches no page and changes nothing.\n\n"
+            "Call this FIRST. `tabLive: false` means every verb that does not name a tab would go to "
+            "whichever tab is in front — which may belong to another agent that is mid-screenshot. "
+            "Pass `identity` to say who you are; without it you still get `activeTab`, which answers "
+            "'whose screen is this'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "identity": {"type": "string", "description": "The name you work as (see browser_profiles)."},
+                "tab": {"type": "string", "description": "The tab id you believe is yours, to be checked against what is open."},
+            },
+        },
+    },
+    {
+        "name": "browser_listeners",
+        "description": (
+            "Which event listeners a node has, and WHICH FILE each came from. The direct answer to "
+            "'why does clicking this do nothing' and 'what else runs when I click this'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"selector": {"type": "string"}},
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_coverage",
+        "description": (
+            "Which JavaScript and CSS actually RAN. This is the direct answer to 'is my change even "
+            "being loaded' — a question that has been answered by comparing bytes of a bundle with "
+            "cmp. Call with action=start, exercise the page, then action=stop. The result is "
+            "summarised per file (used and total bytes) rather than raw: a precise-coverage dump of a "
+            "real bundle is megabytes, and it would sit in your context for the rest of the session."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"action": {"type": "string", "enum": ["start", "stop"]}},
+        },
+    },
+    {
+        "name": "browser_trace",
+        "description": (
+            "DevTools trace recording — DOM, network and console against one timeline. "
+            "Call with action=start, exercise the page, then action=stop with a path to save the trace to. "
+            "The trace file can be viewed with Chrome DevTools or analysed programmatically."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["start", "stop"]},
+                "path": {"type": "string", "description": "Absolute path to save the trace to (required for stop)"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        # §1 of the spec, and the first item on his own list by return: "a
+        # persistent duplex transport + action-returns-state kills polling and
+        # half the calls". This is the half of it that does not need a new
+        # transport — one request carrying the whole interaction.
+        "name": "browser_do",
+        "description": (
+            "SEVERAL VERBS IN ONE CALL. Starting this tool costs ~104ms before it has said a word, so "
+            "the ordinary interaction — click, wait for the network to settle, look at what changed — "
+            "spends a third of a second on process startup, and a real repro spends most of a second. "
+            "Send the whole sequence instead: steps run in order and stop at the first failure, which "
+            "comes back with its own console errors and failed requests. Pass observe=true to get the "
+            "state of the page after the last step, so the batch also answers 'what does it look like "
+            "now' without another call."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lanes": {
+                    "type": "array",
+                    "description": 'Several PAGES at once, each with its own steps: [{"page":"p1","steps":[...]},{"page":"p2","steps":[...]}]. Concurrent on purpose — running them in turn would let the watching page see the change already made, which is the thing you are testing.',
+                    "items": {"type": "object"},
+                },
+                "steps": {
+                    "type": "array",
+                    "description": 'In order, e.g. [{"op":"click","args":{"selector":"#save"}},{"op":"waitfor","args":{"selector":"#done"}}]',
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {"type": "string", "description": "Any verb this server exposes."},
+                            "args": {"type": "object", "description": "That verb's own arguments."},
+                        },
+                        "required": ["op"],
+                    },
+                },
+                "observe": {"type": "boolean", "description": "Append the observation after the last step."},
+            },
+            "required": ["steps"],
+        },
+    },
+    {
+        # The verb the documentation used to forbid: "Nothing here runs
+        # arbitrary JavaScript, by design." For an agent that is not a
+        # guardrail, it is half the browser amputated — without it there is no
+        # way to reach the app's own runtime, and somebody had to write unit
+        # tests today to find out what a component was holding.
+        "name": "browser_eval",
+        "description": (
+            "Run JavaScript in the page and get the result back, serialised. Use it to read the app's own "
+            "runtime — a Vue or Pinia store, a component's state — which nothing else here can reach. "
+            "Pass await=true for an expression that returns a promise."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "js": {"type": "string", "description": "Expression, e.g. document.querySelectorAll('.row').length"},
+                "await": {"type": "boolean"},
+                "max": {"type": "number", "description": "Truncate the serialised result at this many characters."},
+            },
+            "required": ["js"],
+        },
+    },
+    {
+        "name": "browser_select",
+        "description": "Choose an option in a native <select>, by value or by its visible text, firing the input and change events a framework listens for. click+press is fragile and leaves Vue and React holding the old value.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "value": {"type": "string"}},
+            "required": ["selector", "value"],
+        },
+    },
+    {
+        "name": "browser_reload",
+        "description": "Reload, ignoring the cache by default — with assets versioned by query string there is no other way to force a new bundle.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"bypassCache": {"type": "boolean"}},
+        },
+    },
+    {
+        "name": "browser_cookies",
+        "description": "Read the page's cookies, or set one. Reusing the session the browser already has beats repeating a login by hand. httpOnly cookies are not visible to the page and so not here.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "set": {"type": "object", "description": "{ name, value, path?, domain? }"},
+            },
+        },
+    },
+    {
+        "name": "browser_frames",
+        "description": "The iframes, service workers and shadow roots on this page, and which frames are same-origin enough to read.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_tabs",
+        "description": "What tabs are open, with the active one marked. Their index is what browser_tab and browser_closetab take.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_tab",
+        "description": "Switch to a tab by index (from browser_tabs) or by id. Wakes it if it was sleeping — and it becomes THIS client's tab from then on, so every later verb goes to it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"index": {"type": "number"}, "id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "browser_newtab",
+        "description": (
+            "Open a URL in a NEW tab, leaving the current one where it is. The new tab becomes THIS "
+            "client's tab from then on, so every later verb goes to it — browser_open would instead "
+            "have replaced the page in the tab you already had. Pass `profile` "
+            "(a name from browser_profiles) to open it in an ISOLATED "
+            "context with its own cookies and storage — that is what makes two tabs two different "
+            "people rather than one person in two windows, which is what a reproduction with two "
+            "actors actually needs. A profile that does not exist is refused, not quietly swapped for "
+            "the current one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "profile": {"type": "string", "description": "An isolated context by name — see browser_profiles."},
+                "shared": {"type": "boolean", "description": "Open it in the person's own container instead of this client's — the old behaviour, on purpose."},
+                "url": {"type": "string"}},
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_closetab",
+        "description": "Close a tab by index or id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"index": {"type": "number"}, "id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "browser_console",
+        "description": "The page's console since `since`: level, text and stack, including uncaught errors and unhandled rejections. Collected from the moment the page loaded, so the error you are chasing is already in it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sinceLast": {"type": "boolean", "description": "Only what is new since YOUR last sinceLast call on this verb. The SERVER keeps the cursor, so there is no timestamp to carry — and a caller that has to carry one forgets, and re-reads the whole log every turn."},"since": {"type": "number"}, "limit": {"type": "number"}},
+        },
+    },
+    {
+        "name": "browser_network",
+        "description": "Requests the page made since `since`: method, URL, status, milliseconds and size. Covers fetch and XHR.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sinceLast": {"type": "boolean", "description": "Only what is new since YOUR last sinceLast call on this verb. The SERVER keeps the cursor, so there is no timestamp to carry — and a caller that has to carry one forgets, and re-reads the whole log every turn."},"since": {"type": "number"}, "limit": {"type": "number"}},
+        },
+    },
+    {
+        "name": "browser_resize",
+        "description": "Give the page a viewport of your own size. Use it when a modal covers the column you came to look at, or when two captures need to be the same size.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"width": {"type": "number"}, "height": {"type": "number"}},
+            "required": ["width", "height"],
+        },
+    },
+    {
+        "name": "browser_zoom",
+        "description": (
+            "The browser's OWN zoom — the one Ctrl+ and Ctrl- move, so `factor: 1.58` and a "
+            "person's 158% are one number. Left out, it reports what the page is at, which is "
+            "how you match a screen instead of guessing. This is NOT the CSS `zoom` property: "
+            "that one reflows the page and multiplies with whatever the person has already set, "
+            "so a capture taken that way is of a page nobody is looking at."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"factor": {"type": "number", "description": "1 is 100%, 0.25 to 5"}},
+        },
+    },
+    {
+        "name": "browser_html",
+        "description": "The markup of one element, not just its text — for choosing a selector without reading the source that built the page.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"selector": {"type": "string"}, "max": {"type": "number"}},
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_waitfor",
+        "description": (
+            "Wait until a JavaScript expression is true in the page, or pass until=network-idle "
+            "(the network gone quiet AND stayed quiet — between two requests of a chain there is an "
+            "instant where nothing is in flight, and a check that fires there calls a page settled in "
+            "the middle of loading) or until=no-timers (nothing scheduled to run soon, which also "
+            "means the page has painted what it just changed)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "until": {"type": "string", "enum": ["network-idle", "no-timers"]},
+                "js": {"type": "string", "description": "Expression returning true when ready, e.g. document.querySelectorAll('.row').length > 3"},
+                "timeoutMs": {"type": "number"},
+            },
+            "required": ["js"],
+        },
+    },
+    {
+        "name": "browser_text",
+        "description": "The text of one element, instead of the whole page.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"selector": {"type": "string", "description": "CSS selector"}},
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_click",
+        "description": "Click the first element matching a CSS selector. Reports whether anything matched, and where the page ended up.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}},
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_type",
+        "description": "Type into a field, optionally submitting the form it is in.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},
+                "selector": {"type": "string"},
+                "text": {"type": "string"},
+                "submit": {"type": "boolean", "description": "press Enter afterwards"},
+            },
+            "required": ["selector", "text"],
+        },
+    },
+    {
+        "name": "browser_wait",
+        "description": "Wait for an element to appear. Use after anything that navigates, and wait for something that only exists on the page you expect — it is how you find out you landed on a login page instead.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"selector": {"type": "string"}},
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_scroll",
+        "description": "Scroll to an element, by a number of pixels, or to the top or bottom. Reading reports the VISIBLE text, so scrolling changes what browser_read returns.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string"},
+                "by": {"type": "integer", "description": "pixels; negative scrolls up"},
+                "to": {"type": "string", "enum": ["top", "bottom"]},
+            },
+        },
+    },
+    {
+        "name": "browser_press",
+        "description": "Press a key that is not text: Enter, Escape, Tab, arrows.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "browser_back",
+        "description": "Go back in this page's history.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_forward",
+        "description": "Go forward again.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_shot",
+        "description": (
+            "A screenshot of the page, returned as an image. Works while the browser pane is behind "
+            "another view, and frames the whole document rather than whatever fits in the pane: the "
+            "pane's width, the browser's zoom and the display's DPI no longer change what is in the "
+            "picture or how big the PNG is. Use selector for one element, clip for a rectangle. "
+            "There is no full-page shot: it repeated any sticky header once per screen, and a "
+            "picture that duplicates content is evidence that is simply wrong, and no scale "
+            "option either — it tiled the page the same way. A shot is one pixel per css "
+            "pixel, which is exactly what the page lays out."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "Crop to just this element."},
+                "clip": {
+                    "type": "object",
+                    "description": "Crop to a rectangle in CSS pixels.",
+                    "properties": {
+                        "x": {"type": "number"}, "y": {"type": "number"},
+                        "width": {"type": "number"}, "height": {"type": "number"},
+                    },
+                },
+                "highlight": {"type": "string", "description": "Draw a box around this element, on the image."},
+                "label": {"type": "string", "description": "A caption beside the highlight box."},
+                "page": {"type": "string", "description": "A tab id, instead of the active tab."},
+            },
+        },
+    },
+]
+
+VERB = {t["name"]: t["name"][len("browser_"):] for t in TOOLS}
+
+# Verbs about the LIST of tabs, or about the window's session, rather than
+# about a page inside one tab. Copied from bin/agentglass-browser's TAB_OPS,
+# for the same reasons and with the same one that is easy to miss: `settings`
+# has an argument of its OWN called `page` — the internal page a webview may
+# render, and "blank" is its only allowed value. Putting a tab id there made
+# every `settings set` answer `page must be "blank"`, which is a sentence about
+# an argument the caller never passed.
+#
+# AND `whoami` IS IN IT, which is the one worth saying out loud: it is the verb
+# that tells a caller whether it HAS a tab. Refusing it for not having one is a
+# refusal nobody can answer — the same trap that cost the CLI's identity fix a
+# first version and that gets worked around with "shared" on everything, which
+# is the hole reopened by hand. Caught here by REQ-11's own MCP test, which
+# asked `browser_whoami` with no tab and got the refusal sentence where it
+# expected JSON.
+TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings"}
+
+# `profile` and `shared` say WHO, not WHAT: they choose which tab this call is
+# addressed to and never travel to the relay as part of the verb's body.
+# `newtab` and `open` are the exception — for them a container IS the request,
+# and the panel routes on it.
+ADDRESSING = ("profile", "shared")
+
+
+def _address_schemas():
+    """Every acting tool advertises `page`, `profile` and `shared`.
+
+    WRITTEN ONCE, HERE, RATHER THAN SIXTY TIMES IN THE LITERAL. The failure
+    this avoids is measured on the other binary: six CLI verbs declared
+    `--page` and exactly one sent it, so `shot --page t2-abc` quietly
+    photographed the ACTIVE tab instead. A property added by hand to each
+    schema is a property the next verb forgets, and forgetting it here is not a
+    missing feature — it is a call that lands on somebody else's page.
+
+    Existing properties are never overwritten: `browser_shot` already wrote its
+    own `page`, and its wording is better than a generic one.
+    """
+    for t in TOOLS:
+        if VERB[t["name"]] in TAB_OPS:
+            continue
+        props = t["inputSchema"].setdefault("properties", {})
+        props.setdefault("page", {
+            "type": "string",
+            "description": "A tab id, instead of your own tab. browser_tabs lists them.",
+        })
+        props.setdefault("profile", {
+            "type": "string",
+            "description": "Act as this container rather than this client's own. Also what browser_open puts a new tab in.",
+        })
+        props.setdefault("shared", {
+            "type": "boolean",
+            "description": "Deliberately act on whichever tab is in front, even if it belongs to another agent. Without this, a client with no tab of its own is refused rather than sent there.",
+        })
+
+
+_address_schemas()
+
+
+def _do_at(page, body):
+    """`do`, addressed — on every STEP, because the top level is not read.
+
+    MEASURED in server/src/index.ts: the `do` route hands `b.steps` straight to
+    `runSteps` and never looks at `b.page`, so a page set beside `steps` is
+    dropped in silence and the whole batch runs on whatever tab is in front —
+    the exact failure this file is being fixed for, wearing the one verb that
+    can do fifteen things before anybody notices.
+
+    The server's own `lanes` path already does it the right way, stamping
+    `args: {...st.args, page}` onto each step, so this is that same move
+    applied to the single-lane form — and to any lane that did not name a page
+    of its own, which keeps `lanes` the one thing this surface can express and
+    the CLI cannot.
+    """
+    out = dict(body)
+    if isinstance(out.get("lanes"), list):
+        out["lanes"] = [dict(lane, page=lane.get("page") or page) if isinstance(lane, dict) else lane
+                        for lane in out["lanes"]]
+        return out
+    out["steps"] = [dict(st, args=dict(st.get("args") or {}, page=page)) if isinstance(st, dict) else st
+                    for st in (out.get("steps") or [])]
+    return out
+
+
+def _no_tab(name, who):
+    """The refusal, when this client has no tab and did not ask for one.
+
+    A REFUSAL RATHER THAN A FALL-THROUGH. A request with no `page` is not
+    "unspecified" to the relay, it is "the tab in front", so an MCP client that
+    believed itself isolated drove another container's page — `ok: true` every
+    time, with no signal on either side, and the victim cannot see it either:
+    it addresses its tab by id, the tab still exists, only the page inside
+    changed.
+
+    And this needs nobody to make a mistake. A client loses its remembered tab
+    when the tab is closed, when an open failed, when the state file cannot be
+    read, and when the app restarts — which invalidates every agent's
+    remembered id at once.
+
+    Every line below is an answer to it, which is why the refusal is safe to
+    make: `browser_open` and `browser_newtab` always carry a container, so they
+    never reach here and there is always a way to get a tab.
+    """
+    return {"content": [{"type": "text", "text": (
+        f'{name}: "{who}" has no tab open, so this would have gone to whichever tab is in '
+        f"front — which may belong to another agent.\n"
+        f'  open one:      browser_open {{"url": "..."}}  — it lands in your own container\n'
+        f'  or name a tab: {name} {{"page": "<tab id>"}}  — browser_tabs lists them\n'
+        f'  or say you mean the active one: {name} {{"shared": true}}'
+    )}], "isError": True}
+
+
+def run(name, args):
+    """A tool call, as MCP content."""
+    verb = VERB.get(name)
+    if not verb:
+        return {"content": [{"type": "text", "text": f"no such tool: {name}"}], "isError": True}
+
+    body = {}
+    if verb == "do":
+        body = {"observe": bool(args.get("observe"))}
+        if args.get("lanes"):
+            body["lanes"] = args["lanes"]
+        else:
+            body["steps"] = args.get("steps") or []
+    elif verb == "addInitScript":
+        body = {"name": args.get("name", ""), "js": args.get("js", "")}
+    elif verb in ("expose", "exposed"):
+        body = {"name": args.get("name", "")}
+    elif verb in ("hover", "dblclick", "rightclick", "focus", "blur"):
+        body = {"selector": args.get("selector", "")}
+        if args.get("observe"):
+            body["observe"] = True
+    elif verb == "check":
+        body = {"selector": args.get("selector", ""), "checked": args.get("checked", True)}
+    elif verb == "fill":
+        body = {"fields": args.get("fields") or {}, "submit": bool(args.get("submit"))}
+    elif verb == "debug":
+        body = {k: v for k, v in args.items() if v is not None}
+    elif verb == "audit":
+        body = {"script": bool(args.get("script"))}
+    elif verb == "record":
+        body = {k: v for k, v in args.items() if v is not None}
+    elif verb == "download":
+        body = {"selector": args.get("selector", ""), "dir": args.get("dir", "")}
+        if args.get("timeoutMs") is not None:
+            body["timeoutMs"] = args["timeoutMs"]
+    elif verb in ("observe", "console", "network"):
+        body = {k: v for k, v in args.items() if v is not None}
+    elif verb == "events":
+        body = {k: v for k, v in args.items() if v is not None}
+    elif verb in ("emulate", "clock", "settings"):
+        # Not from here: a model that can turn certificate checking off can be
+        # talked into it by the page it is looking at, and the relay would
+        # oblige. The field is gone from the schema above; a client that sends
+        # it anyway gets a refusal, not a silent drop, so nobody reads "ok" as
+        # "the cert warning is gone".
+        if verb == "settings" and "ignoreCertErrors" in args:
+            return {"content": [{"type": "text", "text": (
+                "ignoreCertErrors is not available from the MCP tool: switching TLS verification off is "
+                "a person's decision, made at the `agentglass-browser settings` command line."
+            )}], "isError": True}
+        body = {k: v for k, v in args.items() if v is not None}
+    elif verb in ("profiles", "whoami"):
+        # Straight through, both of them. The relay composes the answer out of
+        # the container list and the tab list; what it needs from a caller is
+        # only who that caller says it is.
+        body = {k: v for k, v in args.items() if v is not None}
+    elif verb == "cdp":
+        body = {"events": True} if args.get("events") else {
+            "method": args.get("method", ""), "params": args.get("params") or {}}
+    elif verb == "listeners":
+        body = {"selector": args.get("selector", "")}
+    elif verb == "coverage":
+        body = {"action": args.get("action", "start")}
+    elif verb == "open":
+        body = {"url": args.get("url", "")}
+    elif verb in ("click", "wait", "text"):
+        body = {"selector": args.get("selector", "")}
+        if args.get("observe"):
+            body["observe"] = True
+    elif verb == "type":
+        body = {"selector": args.get("selector", ""), "text": args.get("text", ""), "submit": bool(args.get("submit"))}
+        if args.get("observe"):
+            body["observe"] = True
+    elif verb == "press":
+        body = {"key": args.get("key", "")}
+    elif verb == "newtab":
+        # It had no branch at all, so it reached the server with an empty body:
+        # the URL an agent asked for was dropped on the way and the tab opened
+        # blank. The profile would have gone the same way.
+        body = {"url": args.get("url", "")}
+        # `profile` used to be forwarded here. It is set at the chokepoint
+        # below instead, so a newtab with no profile named lands in THIS
+        # client's container rather than the shared default — which is the
+        # whole point — while a profile that is named still wins, and one that
+        # does not exist is still refused by the panel rather than quietly
+        # swapped for the current one.
+    elif verb in ("tab", "closetab"):
+        body = {}
+        if args.get("index") is not None:
+            body["index"] = args["index"]
+        if args.get("id"):
+            body["id"] = args["id"]
+    elif verb == "scroll":
+        if args.get("selector"):
+            body = {"selector": args["selector"]}
+        elif args.get("by") is not None:
+            body = {"by": args["by"]}
+        else:
+            body = {"to": args.get("to", "bottom")}
+    else:
+        # THE ARGUMENTS OF 21 TOOLS WENT NOWHERE. Every verb without a branch
+        # above left `body` at `{}`, so what the schema promised never reached
+        # the relay: measured over TOOLS and this chain, 21 of the 57 tools
+        # that take arguments dropped all 55 of their declared properties —
+        # `eval`'s `js`, `upload`'s `paths`, `shot`'s `selector`, `clip` and
+        # the `page` this whole change is about. The tool answered as though it
+        # had worked, because a verb with an empty body is a valid request that
+        # does something else.
+        #
+        # A default rather than 21 more branches, on purpose: a branch per verb
+        # is what produced the 21, and the 22nd tool would join them.
+        body = {k: v for k, v in args.items() if v is not None}
+
+    # ── EVERY TOOL GOES TO THIS CLIENT'S OWN TAB ───────────────────────────
+    #
+    # Not "the active tab", which is whatever the person or the last agent left
+    # in front. That default is right for somebody clicking around and wrong
+    # for every agent that has ever used this: it is how two agents end up
+    # typing into each other's page, and how a screenshot comes back showing
+    # somebody else's work — "the other agent was going in to take screenshots
+    # and could not, because the first one was overwriting on top of it."
+    #
+    # `page` still wins, the tab verbs are about the LIST rather than a page
+    # inside one, and `settings` applies to the window's session — all three
+    # are left alone, exactly as in bin/agentglass-browser.
+    for key in ADDRESSING:
+        body.pop(key, None)
+    who = "" if args.get("shared") else my_name(args.get("profile"))
+    mine = my_tab(who) if who else None
+    sent_to = None
+
+    if verb in ("open", "newtab") and who:
+        # NAMING A TAB IS THE WHOLE ANSWER, and it is also the trap: an `open`
+        # that carries a profile is routed by the panel to "make a tab in that
+        # container", so setting both a page and a profile minted a NEW tab,
+        # left the named one where it was, and answered with the new tab's URL
+        # and title — which the caller reads as success.
+        if verb == "open" and args.get("page"):
+            body["page"] = sent_to = args["page"]
+        elif verb == "open" and mine:
+            # Already have one: GO there, do not make another. An agent that
+            # calls open fifty times in a session means fifty pages, not fifty
+            # tabs, and fifty tabs is how a browser runs out of room holding
+            # the same page over and over.
+            body["page"] = sent_to = mine
+        else:
+            body["profile"] = who
+    elif verb not in TAB_OPS:
+        target = args.get("page") or mine
+        if not target:
+            if who:
+                return _no_tab(name, who)
+        elif verb == "do":
+            body = _do_at(target, body)
+            sent_to = target
+        else:
+            body["page"] = sent_to = target
+
+    # WHO IS ASKING, ON EVERY REQUEST. The panel's cross-container check reads
+    # `as` and treats its ABSENCE as "cannot tell", which it must — a
+    # hand-written client sends none — so a surface that never sends it turns
+    # the check into a no-op for every tab it drives, and this one drove
+    # whichever tab was in front for a whole incident. `how` rides with it for
+    # the audit, and `pageExplicit` marks a page the AGENT named, as opposed to
+    # the one this server filled in from the tab map: the two are the same
+    # field on the wire and mean opposite things to the check.
+    if who:
+        body.setdefault("as", who)
+        # And the ledger's name for the same thing. `open`/`newtab` mint
+        # containers and `profiles` makes and drops them; without `identity`
+        # every container this surface made had no creator, so the drop guard
+        # treated it as unknown and let anybody take it.
+        if verb in ("open", "newtab", "profiles"):
+            body.setdefault("identity", who)
+    if verb == "profiles":
+        if args.get("identity"):
+            body["identity"] = args["identity"]
+        if args.get("force"):
+            body["force"] = True
+    if args.get("page"):
+        body["pageExplicit"] = True
+    body.setdefault("how", (
+        "explicit-page" if args.get("page")
+        else "shared" if not who
+        else "own-tab" if sent_to
+        else "own-container"))
+
+    res = call(verb, body)
+    # One retry, and only for the failure a retry can fix: no pane is mounted,
+    # so nothing can answer until one is. "Not on screen" is deliberately NOT
+    # retried — the capture works behind another view, and pulling the window
+    # over to the browser is the app taking the screen off the person using it.
+    if not res.get("ok") and "view is not open" in (res.get("error") or ""):
+        # Ask again first. The panel re-registers itself for a moment when its
+        # tab changes, and a call landing in that gap is told the view is not
+        # open when it is — and opening it takes the screen off the person.
+        time.sleep(0.5)
+        res = call(verb, body)
+    # AND THEN WAIT, RATHER THAN TAKE THE SCREEN.
+    #
+    # This used to switch the app to the browser view, and that is the single
+    # most complained-about behaviour this tool has: "I am working away
+    # quietly in my terminal… and it focuses the browser on me. I go back to
+    # the terminal and it focuses the browser again… up to four, five, six
+    # times." It is not a fix either: the browser panel is mounted from launch
+    # whether or not anybody goes to it, so this error nearly always means the
+    # window is still STARTING, and the answer to that is patience.
+    if not res.get("ok") and "view is not open" in (res.get("error") or ""):
+        if windows_ready(WAIT_TAIL):
+            res = call(verb, body)
+
+    # ── AND THE MAP IS KEPT HONEST ─────────────────────────────────────────
+    #
+    # A tab of ours that is gone stops being ours, so the next call opens a
+    # fresh one instead of addressing a ghost forever — and a closed tab is a
+    # reason to open another one, not a reason to stop.
+    if sent_to and str(res.get("error") or "").startswith("no tab called"):
+        forget_tab(who)
+        if verb == "open" and who:
+            body.pop("page", None)
+            body["profile"] = who
+            res = call(verb, body)
+    if verb in ("open", "newtab") and who and body.get("profile") and not res.get("error"):
+        made = res.get("value") if isinstance(res.get("value"), dict) else res
+        remember_tab(who, (made or {}).get("id"))
+    # AND `browser_tab` CHANGES WHICH TAB IS OURS.
+    #
+    # Selecting a tab and then capturing without `page` would otherwise give
+    # the tab this client last OPENED, not the one just selected — a valid
+    # picture of the wrong page, which is the same silent failure as the
+    # incident with the parties swapped.
+    #
+    # WHAT WAS ASKED FOR, not what the answer calls active: the panel replies
+    # with the list it had in hand, and the selection it has just made has not
+    # reached that list yet, so reading the `active` flag off it records the
+    # tab we were LEAVING — measured on the CLI, `tab t37` and the record still
+    # said t38. The caller named one; that is not ambiguous.
+    if verb == "closetab" and who and mine and args.get("id") == mine and not res.get("error"):
+        forget_tab(who)
+    if verb == "tab" and who and not res.get("error"):
+        if args.get("id"):
+            remember_tab(who, args["id"])
+        elif args.get("index") is not None:
+            rows = res.get("value") if isinstance(res.get("value"), list) else []
+            i = int(args["index"])
+            row = rows[i] if 0 <= i < len(rows) else None
+            if isinstance(row, dict) and row.get("id"):
+                remember_tab(who, row["id"])
+
+    if verb == "do":
+        # A batch answers per step, and a failure is not the whole batch
+        # failing: the steps before it DID happen, and hiding them would send
+        # the caller back to find out how far it got — which is the extra round
+        # trip this verb exists to remove.
+        lines = []
+        for i, st in enumerate(res.get("steps") or []):
+            if st.get("ok"):
+                v = st.get("value")
+                lines.append(f"{i + 1}. {st.get('op')}: {json.dumps(v) if v is not None else 'ok'}")
+            else:
+                lines.append(f"{i + 1}. {st.get('op')}: FAILED — {st.get('error') or 'no reason given'}")
+                d = st.get("diagnosis")
+                if d:
+                    lines.append(f"   diagnosis: {json.dumps(d)}")
+        if not res.get("ok"):
+            lines.append("stopped here; the steps after this one did not run.")
+        return {"content": [{"type": "text", "text": "\n".join(lines) or "no steps"}],
+                "isError": not res.get("ok")}
+
+    if not res.get("ok"):
+        return {"content": [{"type": "text", "text": res.get("error") or "the browser could not do that"}], "isError": True}
+
+    value = res.get("value") or {}
+    if verb == "shot":
+        png = value.get("png", "")
+        data = png.split(",", 1)[1] if "," in png else ""
+        if not data:
+            return {"content": [{"type": "text", "text": "the page produced no image"}], "isError": True}
+        return {"content": [
+            {"type": "image", "data": data, "mimeType": "image/png"},
+            {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"},
+        ]}
+    if verb in ("read", "text"):
+        # Plain text, because the caller is a language model reading a page:
+        # JSON around one string is punctuation it pays for.
+        if verb == "text":
+            return {"content": [{"type": "text", "text": value.get("text", "")}]}
+        return {"content": [{"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}\n\n{value.get('text', '')}"}]}
+    return {"content": [{"type": "text", "text": json.dumps(value)}]}
+
+
+def reply(msg_id, result=None, error=None):
+    out = {"jsonrpc": "2.0", "id": msg_id}
+    if error is not None:
+        out["error"] = error
+    else:
+        out["result"] = result
+    sys.stdout.write(json.dumps(out) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        method = msg.get("method")
+        msg_id = msg.get("id")
+        # A notification has no id and takes no answer. `initialized` is the one
+        # every client sends, and answering it is a protocol error.
+        if msg_id is None:
+            continue
+        if method == "initialize":
+            reply(msg_id, {
+                "protocolVersion": PROTOCOL,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": NAME, "version": VERSION},
+                "instructions": (
+                    "This is the person's own browser, in their window, signed in as they are. "
+                    "They can see every page it opens. Open what the task needs and leave it "
+                    "somewhere reasonable; do not go rummaging. The browser pane does not have "
+                    "to be the view on screen — every tool works while they are reading "
+                    "something else, and taking the screen off them is not part of the job.\n\n"
+                    "OTHER AGENTS MAY BE DRIVING THIS SAME BROWSER. Start with browser_open: it "
+                    "mints a tab in a container of your own, and every tool after it goes to that "
+                    "tab, so nothing you do lands on somebody else's page and nothing they do "
+                    "moves yours. Until you have one, any tool that acts on a page is refused "
+                    "rather than sent to whichever tab is in front."
+                ),
+            })
+        elif method == "tools/list":
+            reply(msg_id, {"tools": TOOLS})
+        elif method == "tools/call":
+            params = msg.get("params") or {}
+            reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
+        elif method == "ping":
+            reply(msg_id, {})
+        else:
+            reply(msg_id, error={"code": -32601, "message": f"method not found: {method}"})
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (BrokenPipeError, KeyboardInterrupt):
+        sys.exit(0)

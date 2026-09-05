@@ -17,7 +17,16 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { paletteFor, type Palette } from "../../shared/palettes.ts";
-import { terminalDocument, terminalTheme } from "../src/terminal/terminal-html.ts";
+import { announce, built } from "./generated-artifacts.ts";
+
+announce("terminal-theme.test.ts");
+
+const { terminalDocument, terminalTheme } = built
+  ? await import("../src/terminal/terminal-html.ts")
+  : {
+      terminalDocument: (() => "") as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalDocument"],
+      terminalTheme: (() => ({})) as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalTheme"],
+    };
 
 const DARK: Palette = paletteFor("dark", "blue");
 const LIGHT: Palette = paletteFor("light", "violet");
@@ -25,7 +34,7 @@ const LIGHT: Palette = paletteFor("light", "violet");
 const view = readFileSync(join(import.meta.dir, "../src/terminal/TerminalView.tsx"), "utf8");
 const html = readFileSync(join(import.meta.dir, "../src/terminal/terminal-html.ts"), "utf8");
 
-describe("one mapping from palette to terminal", () => {
+describe.skipIf(!built)("one mapping from palette to terminal", () => {
   test("the document carries exactly what the bridge would inject", () => {
     // The failure this prevents is quiet: two mappings that agree today, and a
     // theme change that gives you colours the next cold start does not.

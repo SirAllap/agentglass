@@ -33,18 +33,24 @@ export interface TmuxWindowDetail extends TmuxWindow {
 
 const WINDOW_RE = /^@\d+$/;
 const PANE_RE = /^%\d+$/;
+/** `#{window_layout}`: a checksum, then sizes, offsets, pane ids and braces —
+ *  nothing a shell would read, and nothing else is accepted for `-t` either. */
+export const LAYOUT_RE = /^[0-9a-f]{4},[0-9x,{}\[\]]+$/;
 
 /** One window row for a session, or null when the session is gone. */
 export async function listWindows(name: string): Promise<TmuxWindow[]> {
   if (!validSessionName(name)) return [];
   const r = await tmux([
     "list-windows", "-t", `=${name}`,
-    "-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_flags}",
+    "-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_flags}\t#{window_layout}",
   ]);
   if (!r.ok) return [];
   return r.stdout.split("\n").filter(Boolean).map((line) => {
-    const [id, index, name_, active, flags] = line.split("\t");
-    return { id, index: Number(index), name: name_ ?? "", active: active === "1", flags: flags ?? "", ask: undefined, phone: undefined, agent: undefined };
+    const [id, index, name_, active, flags, layout] = line.split("\t");
+    /* How the window is split, in tmux's own words — the one string that
+       brings a window back split the way it was, not merely into as many
+       panes. See tmuxrestore.ts (restoreLayout). */
+    return { id, index: Number(index), name: name_ ?? "", active: active === "1", flags: flags ?? "", ask: undefined, phone: undefined, agent: undefined, ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}) };
   }).filter((w) => WINDOW_RE.test(w.id));
 }
 

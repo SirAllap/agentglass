@@ -63,7 +63,7 @@ describe("what is worth writing down", () => {
 describe("a profile is a set of tabs", () => {
   it("keeps each profile's strip apart", () => {
     const work = [tab("https://github.com/", { title: "GitHub" })];
-    const test = [tab("https://staging.test/"), tab("https://mail.test/")];
+    const test = [tab("https://staging.test/", { profile: "work" }), tab("https://mail.test/", { profile: "work" })];
     saveSession("", work, work[0]!.id);
     saveSession("work", test, test[1]!.id);
 
@@ -77,7 +77,7 @@ describe("a profile is a set of tabs", () => {
     // The whole reason the file is keyed by profile: the other profile's tabs
     // are not in memory, so a write that rebuilt the file from what is on
     // screen would throw them away.
-    saveSession("work", [tab("https://staging.test/")], "");
+    saveSession("work", [tab("https://staging.test/", { profile: "work" })], "");
     saveSession("", [tab("https://github.com/")], "");
     expect(countFor(readSession(), "work")).toBe(1);
   });
@@ -88,14 +88,14 @@ describe("a profile is a set of tabs", () => {
   });
 
   it("says how many pages each profile is holding", () => {
-    saveSession("work", [tab("https://a.test/"), tab("https://b.test/")], "");
+    saveSession("work", [tab("https://a.test/", { profile: "work" }), tab("https://b.test/", { profile: "work" })], "");
     expect(countFor(readSession(), "work")).toBe(2);
     expect(countFor(readSession(), "nope")).toBe(0);
   });
 
   it("stops holding a profile it has been emptied of", () => {
-    saveSession("work", [tab("https://a.test/")], "");
-    saveSession("work", [tab("about:blank")], "");
+    saveSession("work", [tab("https://a.test/", { profile: "work" })], "");
+    saveSession("work", [tab("about:blank", { profile: "work" })], "");
     expect(setFor(readSession(), "work")).toBeNull();
   });
 
@@ -232,5 +232,45 @@ describe("what a restored tab costs", () => {
 
   it("carries the profile, because that is which jar it loads with", () => {
     expect(sleepingTab("https://a.test/", "A", null, "work").profile).toBe("work");
+  });
+});
+
+/*
+ * A TAB IS FILED UNDER ITS OWN IDENTITY.
+ *
+ * The strip holds one list whatever profile each page belongs to — that is what
+ * makes an agent's tab addressable while a person works in another identity.
+ * The write used to file the whole list under whichever profile was on screen,
+ * which RELABELLED every foreign tab in it: an agent's page, opened with
+ * `--as review-pr-540` into the list that happened to be loaded, came back
+ * after a restart as one of the default profile's pages.
+ *
+ * That is the whole of "the agent ended up in Default without doing anything
+ * wrong", and the obvious diagnosis — "profiles do not survive a restart" — is
+ * the wrong one. The profile survived. The tab was filed under the wrong one
+ * before the restart and came back wearing it.
+ */
+describe("a strip holding more than one profile", () => {
+  it("files each tab under the profile it belongs to, not the one on screen", () => {
+    const mine = tab("https://github.com/");                               // the person's
+    const theirs = tab("https://staging.test/", { profile: "agent1" });   // an agent's
+    saveSession("", [mine, theirs], mine.id);
+
+    const back = readSession()!;
+    expect(setFor(back, "")!.tabs.map((t) => t.url)).toEqual(["https://github.com/"]);
+    expect(setFor(back, "agent1")!.tabs.map((t) => t.url)).toEqual(["https://staging.test/"]);
+  });
+
+  it("does not empty a profile just because it is not in the strip", () => {
+    saveSession("agent1", [tab("https://staging.test/", { profile: "agent1" })], "");
+    // A later write from the person's own strip, which knows nothing about it.
+    saveSession("", [tab("https://github.com/")], "");
+    expect(countFor(readSession(), "agent1")).toBe(1);
+  });
+
+  it("still clears the profile being written from when its last page closes", () => {
+    saveSession("agent1", [tab("https://staging.test/", { profile: "agent1" })], "");
+    saveSession("agent1", [], "");
+    expect(setFor(readSession(), "agent1")).toBeNull();
   });
 });

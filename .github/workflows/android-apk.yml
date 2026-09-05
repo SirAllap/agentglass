@@ -68,7 +68,15 @@ jobs:
           # the build by hand after touching it. Not documentation either — a
           # README cannot change an APK, and `mobile/**/*.md` does not match
           # `mobile/README.md`, which is how the first version of this counted it.
-          mob="$(git diff --name-only "$prev" "$GITHUB_REF_NAME" -- mobile/ ':(exclude)*.md' ':(exclude)mobile/*.md')"
+          #
+          # And not the tests. `mobile/test/` is not bundled into the app —
+          # Metro builds from `app/` and `src/` — so a test-only commit produced
+          # a six-minute Android build whose output was byte-for-byte the last
+          # one. The check is what the phone is MADE of, and a test is not part
+          # of it.
+          mob="$(git diff --name-only "$prev" "$GITHUB_REF_NAME" -- mobile/ \
+                 ':(exclude)*.md' ':(exclude)mobile/*.md' \
+                 ':(exclude)mobile/test/**' ':(exclude)mobile/**/*.test.ts' ':(exclude)mobile/**/*.test.tsx')"
           # `shared/` counts only where the phone actually reaches into it, and
           # the list is read from the phone rather than written here: a hardcoded
           # one goes stale the first time somebody imports one more module. Today

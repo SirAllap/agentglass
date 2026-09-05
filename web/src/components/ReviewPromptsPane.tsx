@@ -116,14 +116,20 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const hidden = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id)).length;
 
   return (
-    <Wrap>
-      <p className="text-[12px] pb-1" style={{ color: "var(--text3)" }}>
+    <>
+      {/* Four groups, four cards. It was ONE card holding fifteen prompts with
+          a 9.5px tracked sub-label between them, so the page read as a single
+          list you had to scan end to end — and the four names that would have
+          told you where to stop were the smallest type on it. Each group
+          already carries the two lines a heading needs; they just were not
+          being used as one. */}
+      <p className="text-[12.5px] px-1 pb-4" style={{ color: "var(--text3)" }}>
         What the ✦ Review with Claude button offers on a pull request. The one that fits the pull request in front of you is
         suggested at the top; the rest are always in the menu, because GitHub's fields describe what somebody remembered to set.
       </p>
 
       {note && (
-        <div className="my-2 text-[12px] px-2 py-1 rounded"
+        <div className="mb-4 text-[12px] px-2.5 py-1.5 rounded-lg"
           style={{ color: note.ok ? "var(--success)" : "var(--error)",
             background: `color-mix(in srgb, var(--${note.ok ? "success" : "error"}) 10%, transparent)` }}>
           {note.text}
@@ -133,11 +139,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
       {GROUPS.map((g) => {
         const rows = list.filter((r) => r.group === g.id);
         return (
-          <div key={g.id} className="pt-2">
-            <div className="flex items-baseline gap-2 pb-1">
-              <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{g.label}</span>
-              <span className="text-[11px]" style={{ color: "var(--text4)" }}>{g.what}</span>
-            </div>
+          <Wrap key={g.id} title={g.label} desc={g.what}>
             {rows.map((r) => (
               <Fragment key={r.id}>
               <SettingRow
@@ -188,24 +190,33 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
               <Editor r={editing} skills={skills} presets={list.filter((x) => x.builtIn)}
                 onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
             )}
-          </div>
+          </Wrap>
         );
       })}
 
       {!hidden && (
-        <div className="py-2 text-[12px]" style={{ color: "var(--text4)" }}>
+        <div className="px-1 pb-4 text-[12px]" style={{ color: "var(--text4)" }}>
           Every built-in is hidden. Reset one from the list, or write your own.
         </div>
       )}
-
-    </Wrap>
+    </>
   );
 }
 
 /** The shape SettingsModal's Section renders, written out rather than imported
  *  because SettingsModal imports this file. */
-function Wrap({ children }: { children: React.ReactNode }) {
-  return <div className="pb-5 agx-settings-section"><div className="agx-settings-rows">{children}</div></div>;
+function Wrap({ title, desc, children }: { title?: string; desc?: string; children: React.ReactNode }) {
+  return (
+    <div className="agx-settings-section">
+      {title && (
+        <div className="agx-settings-head">
+          <div className="agx-settings-head-t">{title}</div>
+          {desc && <div className="agx-settings-head-d">{desc}</div>}
+        </div>
+      )}
+      <div className="agx-settings-rows">{children}</div>
+    </div>
+  );
 }
 
 function Editor({ r, skills, presets, onChange, onSave, onCancel }: {

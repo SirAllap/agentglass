@@ -137,7 +137,7 @@ function outsideLinksAndCode(s: string, fn: (chunk: string) => string): string {
     .join("");
 }
 
-export function renderInline(raw: string, autolinkRepo?: string): string {
+export function renderInline(raw: string, autolinkRepo?: string, viewer?: string): string {
   const spans: string[] = [];
   /*
    * The placeholder character is removed from the author's text first.
@@ -189,6 +189,37 @@ export function renderInline(raw: string, autolinkRepo?: string): string {
     (_m, text: string, href: string) => `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${text}</a>`);
   s = outsideLinksAndCode(s, (chunk) => chunk.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g,
     (_m, pre: string, href: string) => `${pre}<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${escapeHtml(href)}</a>`));
+
+  /*
+   * `@somebody`, the way GitHub draws it.
+   *
+   * These arrived as plain text, so the one line in a review that is addressed to
+   * a person read like the rest of the prose — and the case that matters is the
+   * one where the person is YOU: on github.com your own handle is highlighted, and
+   * that highlight is how you find, in a wall of review, the sentence somebody
+   * wrote at you.
+   *
+   * Inside links and code it is not a mention: `@` appears in emails, in npm
+   * scopes (`@types/node`) and in shell prose, and every one of those is already
+   * inside a code span or an href by the time this runs — see outsideLinksAndCode.
+   *
+   * The shape is GitHub's own rule for a login: letters and digits with single
+   * hyphens between them, 39 at most, and a team mention carries `/team-slug`
+   * after it. Refusing anything longer or oddly punctuated is what keeps an email
+   * address that escaped the passes above from becoming a link to a user that does
+   * not exist.
+   */
+  s = outsideLinksAndCode(s, (chunk) => chunk.replace(
+    /(^|[^\w@`/])@([A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38})((?:\/[A-Za-z\d][\w-]{0,38})?)/g,
+    (_m, pre: string, login: string, team: string) => {
+      const handle = `@${login}${team}`;
+      const mine = !!viewer && login.toLowerCase() === viewer.toLowerCase();
+      const href = team
+        ? `https://github.com/orgs/${login}/teams/${team.slice(1)}`
+        : `https://github.com/${login}`;
+      return `${pre}<a class="agx-mention${mine ? " agx-mention-you" : ""}" href="${escapeHtml(href)}"`
+        + ` target="_blank" rel="noreferrer noopener">${escapeHtml(handle)}</a>`;
+    }));
 
   // `:tada:` and friends. GitHub renders these everywhere and a bot's release
   // notes are full of them; unrendered they read as punctuation soup.
@@ -330,7 +361,7 @@ function matchingClose(text: string): { start: number; end: number } | null {
 /** A table cell is markdown too. Returning the raw text put `**Drift**` on
  *  screen with its asterisks — the bold that a RED/GREEN comparison leans on
  *  was exactly what stopped rendering. */
-const cells = (l: string, repo?: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => renderInline(c.trim(), repo));
+const cells = (l: string, repo?: string, viewer?: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => renderInline(c.trim(), repo, viewer));
 const isDivider = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
 const IMG_MD = /^\s*!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)\s*$/;
 const IMG_HTML = /<img[^>]*\bsrc="(https?:\/\/[^"]+)"[^>]*>/i;
@@ -411,13 +442,13 @@ export function htmlCellToMarkdown(html: string): string {
  * header row is `<th>`; a table with none gets its first row promoted, because
  * a table drawn with no head reads as if its first line of data were missing.
  */
-export function parseHtmlTable(raw: string, autolinkRepo?: string): Extract<MdBlock, { kind: "table" }> | null {
+export function parseHtmlTable(raw: string, autolinkRepo?: string, viewer?: string): Extract<MdBlock, { kind: "table" }> | null {
   const rows: string[][] = [];
   let head: string[] = [];
   for (const tr of raw.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi) ?? []) {
     const isHead = /<th\b/i.test(tr);
     const cells = (tr.match(/<t[hd]\b[^>]*>[\s\S]*?<\/t[hd]>/gi) ?? [])
-      .map((c) => renderInline(htmlCellToMarkdown(c.replace(/^<t[hd]\b[^>]*>/i, "").replace(/<\/t[hd]>$/i, "")), autolinkRepo));
+      .map((c) => renderInline(htmlCellToMarkdown(c.replace(/^<t[hd]\b[^>]*>/i, "").replace(/<\/t[hd]>$/i, "")), autolinkRepo, viewer));
     if (!cells.length) continue;
     if (isHead && !head.length) head = cells;
     else rows.push(cells);
@@ -429,7 +460,7 @@ export function parseHtmlTable(raw: string, autolinkRepo?: string): Extract<MdBl
   return { kind: "table", head, rows };
 }
 
-export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
+export function parseBody(body: string, autolinkRepo?: string, viewer?: string): MdBlock[] {
   const out: MdBlock[] = [];
   // HTML comments are invisible on GitHub and were not on screen here, which is
   // how a coverage report opened with `<!-- Pytest Coverage Comment: … -->` and
@@ -491,7 +522,7 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
      * what GitHub's comment box produced, and matching what GitHub then drew is
      * the whole job.
      */
-    out.push({ kind: "para", html: para.map((x) => renderInline(x, autolinkRepo)).join("<br>") });
+    out.push({ kind: "para", html: para.map((x) => renderInline(x, autolinkRepo, viewer)).join("<br>") });
     para = [];
   };
 
@@ -524,7 +555,7 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
       flushPara();
       const rest = [line, ...lines.slice(i + 1)].join("\n");
       const close = rest.search(/<\/table>/i);
-      const tbl = parseHtmlTable(close < 0 ? rest : rest.slice(0, close), autolinkRepo);
+      const tbl = parseHtmlTable(close < 0 ? rest : rest.slice(0, close), autolinkRepo, viewer);
       if (tbl) out.push(tbl);
       // Never closed: the table has taken the rest of the document with it.
       if (close < 0) break;
@@ -587,7 +618,7 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
       out.push({
         kind: "alert",
         level: alert[1]!.toLowerCase() as "note",
-        html: body.map((x) => renderInline(x, autolinkRepo)).join(" "),
+        html: body.map((x) => renderInline(x, autolinkRepo, viewer)).join(" "),
       });
       continue;
     }
@@ -610,7 +641,7 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); out.push({ kind: "rule" }); continue; }
 
     const h = line.match(/^(#{1,6})\s+(.*)$/);
-    if (h) { flushPara(); out.push({ kind: "heading", level: h[1]!.length, html: renderInline(h[2]!, autolinkRepo) }); continue; }
+    if (h) { flushPara(); out.push({ kind: "heading", level: h[1]!.length, html: renderInline(h[2]!, autolinkRepo, viewer) }); continue; }
 
     const img = line.match(IMG_MD);
     if (img) { flushPara(); out.push({ kind: "image", src: img[2]!, alt: img[1]! }); continue; }
@@ -625,10 +656,10 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
     // is not a table, and treating it as one ate the sentence.
     if (line.includes("|") && i + 1 < lines.length && isDivider(lines[i + 1]!)) {
       flushPara();
-      const head = cells(line, autolinkRepo);
+      const head = cells(line, autolinkRepo, viewer);
       const rows: string[][] = [];
       i += 2;
-      while (i < lines.length && lines[i]!.includes("|") && lines[i]!.trim()) { rows.push(cells(lines[i]!, autolinkRepo)); i++; }
+      while (i < lines.length && lines[i]!.includes("|") && lines[i]!.trim()) { rows.push(cells(lines[i]!, autolinkRepo, viewer)); i++; }
       i--;
       out.push({ kind: "table", head, rows });
       continue;
@@ -639,7 +670,7 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
       const quoted: string[] = [];
       while (i < lines.length && /^\s*>\s?/.test(lines[i]!)) { quoted.push(lines[i]!.replace(/^\s*>\s?/, "")); i++; }
       i--;
-      out.push({ kind: "quote", html: quoted.map((x) => renderInline(x, autolinkRepo)).join(" ") });
+      out.push({ kind: "quote", html: quoted.map((x) => renderInline(x, autolinkRepo, viewer)).join(" ") });
       continue;
     }
 
@@ -656,7 +687,7 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
           // An indented continuation belongs to the item above it — GitHub's
           // own checklist wraps this way and it read as a stray paragraph.
           if (items.length && lines[i]!.trim() && /^\s{2,}\S/.test(lines[i]!)) {
-            items[items.length - 1]!.html += " " + renderInline(lines[i]!.trim(), autolinkRepo);
+            items[items.length - 1]!.html += " " + renderInline(lines[i]!.trim(), autolinkRepo, viewer);
             i++;
             continue;
           }
@@ -697,8 +728,8 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
         const itemOrdered = /\d/.test(m[2]!);
         const task = m[3]!.match(/^\[([ xX])\]\s+(.*)$/);
         items.push(task
-          ? { html: renderInline(task[2]!, autolinkRepo), checked: task[1]!.toLowerCase() === "x", depth, ordered: itemOrdered }
-          : { html: renderInline(m[3]!, autolinkRepo), depth, ordered: itemOrdered });
+          ? { html: renderInline(task[2]!, autolinkRepo, viewer), checked: task[1]!.toLowerCase() === "x", depth, ordered: itemOrdered }
+          : { html: renderInline(m[3]!, autolinkRepo, viewer), depth, ordered: itemOrdered });
         i++;
       }
       i--;
@@ -710,6 +741,41 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
   }
   flushPara();
   return out;
+}
+
+/**
+ * Flip the Nth checkbox in a body, leaving everything else byte-for-byte.
+ *
+ * `index` counts task items in the same order the renderer assigns them —
+ * document order, depth-first, so a box nested under another is still the
+ * item immediately after its parent rather than after every top-level one.
+ * The two regexes below are copies of the ones the list parser above uses
+ * (`(\s*)([-*+]|\d+[.)])\s+(.*)` then `\[([ xX])\]\s+(.*)` on what follows):
+ * this is what lets clicking the third box on screen still mean the third
+ * one here, on a body that also has an ordered list, a quote, and a table
+ * before it.
+ *
+ * A GitHub checkbox toggle is exactly this: which line, which character —
+ * never a rewrite of the surrounding text, which is how a person's own
+ * wording under an item would survive untouched.
+ */
+export function toggleChecklistItem(body: string, index: number): string {
+  const lines = body.split("\n");
+  let n = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const li = lines[i]!.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+    if (!li) continue;
+    const task = li[3]!.match(/^\[([ xX])\]\s+(.*)$/);
+    if (!task) continue;
+    if (n === index) {
+      const flipped = task[1]!.toLowerCase() === "x" ? " " : "x";
+      const prefix = lines[i]!.slice(0, lines[i]!.length - li[3]!.length);
+      lines[i] = `${prefix}[${flipped}] ${task[2]}`;
+      return lines.join("\n");
+    }
+    n++;
+  }
+  return body;
 }
 
 /** Checklist boxes, for the merge-readiness signal on the overview. */

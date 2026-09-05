@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { listChats } from "../lib/chatStore.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import type { ChatPane } from "../../../shared/types.ts";
 
 /**
@@ -39,14 +40,10 @@ export function RunningPanes({ open }: { open: boolean }) {
       .catch(() => setPanes([]));
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    load();
-    // Slow: this is a list of long-lived processes, not a live meter, and the
-    // listing shells out to tmux.
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, [open, load]);
+  useEffect(() => { if (open) load(); }, [open, load]);
+  // Slow: this is a list of long-lived processes, not a live meter, and the
+  // listing shells out to tmux.
+  usePoll(open, load, 5000);
 
   const end = async (p: ChatPane) => {
     setBusy(p.name);

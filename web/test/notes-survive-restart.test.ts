@@ -35,14 +35,14 @@ describe("what comes back", () => {
     const a = await restart();
     a.recordNote({
       app: "ClickUp", summary: "T19 assigned to you", body: "GiftCard config model",
-      goto: { kind: "card", id: "86e2gm3uu", label: "T19" },
+      goto: { kind: "card", id: "86xabc002", label: "T19" },
     });
     const b = await restart();
     const n = b.notifyHistory()[0]!;
     expect(n.summary).toBe("T19 assigned to you");
     // The destination is the point — a row that comes back without it is a row
     // you can read and not act on.
-    expect(n.goto).toEqual({ kind: "card", id: "86e2gm3uu", label: "T19" });
+    expect(n.goto).toEqual({ kind: "card", id: "86xabc002", label: "T19" });
   });
 
   it("keeps a note that leads to a pull request", async () => {

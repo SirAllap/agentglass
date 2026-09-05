@@ -28,6 +28,8 @@ import {
   paneAlive, startPane, killPane, pasteText, submit, interrupt, capture,
   touchPane, forgetPane, tmuxCapability, validPaneName, attachCommand,
 } from "./tmuxpane.ts";
+import { sealSituation, recordDecision, enabled as understudyEnabled, ATTACH_WINDOW_MS } from "./understudy.ts";
+import { predictSealed } from "./understudy-predict.ts";
 
 /**
  * Which agent this engine runs.
@@ -415,9 +417,109 @@ export function __submitVerdict(screen: string, pasted: string): SubmitOutcome |
 /** A turn that is actually working says so. Used to tell "idle" apart from
  *  "thinking", which is the difference between ending a turn and abandoning it. */
 const RUNNING_RE = /esc to interrupt/i;
+/** Exported for the named-agent verbs (agentops.ts): one regex, read by the
+ *  chat, the clone and a script's `wait --until working` alike. */
+export const __running = (screen: string): boolean => RUNNING_RE.test(screen);
 
 /** How often to look at the screen while a turn has produced nothing at all. */
 const NEEDS_YOU_PROBE_MS = 4_000;
+
+/**
+ * WHICH prompt is on screen, as a word.
+ *
+ * `NEEDS_YOU_RE` is three alternatives and they are three different situations:
+ * a picker being cancellable, a picker asking for confirmation, and the
+ * permission prompt's "for this session only". A class that is scored on
+ * "would it have allowed this" has to be able to tell them apart, and it must
+ * do so without keeping a line of the screen — the screen at that moment is a
+ * command line, a path and sometimes a token.
+ *
+ * Ordered as `NEEDS_YOU_RE` is, so this and the verdict never disagree about
+ * which alternative fired.
+ */
+function promptShape(screen: string): string {
+  if (/Esc to cancel/.test(screen)) return "cancellable";
+  if (/Enter to confirm/.test(screen)) return "confirm";
+  if (/to use this session only/.test(screen)) return "session-only";
+  return "none";
+}
+
+/**
+ * Watch a prompt we sealed until he answers it, and write down what happened.
+ *
+ * This is the only seam in the server that observes a TRANSITION rather than a
+ * frame, and that is why C6 lives here rather than at the other two
+ * `NEEDS_YOU_RE` sites. Those two run inside the submit retry loop: they see one
+ * frame, conclude "diverted", and hand back. A single frame can say a prompt is
+ * up; only two frames can say he answered it, and the answer is the decision.
+ *
+ * WHAT COUNTS AS THE ANSWER. The prompt going away is the event; whether the
+ * transcript grew across it is the content. A permission prompt he allowed is
+ * followed by a tool running and the CLI writing, so the file grows; one he
+ * declined, and a `/model` picker he escaped out of, leave it exactly where it
+ * was. That is a proxy and it is named as one — but it is a proxy built from
+ * two facts we already have, and the alternative is reading the words on his
+ * screen, which is the thing this feature promised never to do.
+ *
+ * THE BOUND is `ATTACH_WINDOW_MS`, and it is the same constant on purpose:
+ * past it `recordDecision` can no longer attach an actual to the seal it
+ * belongs to and would open a second row marked `unsealed`, which would read as
+ * a trigger that never fired when in fact it fired and we gave up watching.
+ * Giving up silently leaves an unanswered seal, which is the honest shape for
+ * "a prompt went up and nobody answered it inside half an hour".
+ *
+ * THE POLL SLOWS DOWN. Four seconds while he is plausibly at the keyboard, then
+ * fifteen: a prompt is normally answered in the first few seconds, and the tail
+ * of this window is the case where he walked away — where an answer arriving
+ * eleven seconds late costs nothing and a `capture-pane` every four seconds for
+ * twenty-nine minutes costs a spawn a person can hear the fan for.
+ *
+ * It never throws and it is never awaited. A scoreboard that can break a chat
+ * turn is not a scoreboard anybody should be running.
+ */
+async function watchTheAnswer(sessionId: string, sealedAt: number, transcript: string, from: number): Promise<void> {
+  const deadline = sealedAt + ATTACH_WINDOW_MS;
+  const fast = sealedAt + 60_000;
+  try {
+    for (;;) {
+      await Bun.sleep(Date.now() < fast ? NEEDS_YOU_PROBE_MS : 15_000);
+      if (Date.now() > deadline) return;
+      // Re-read every lap rather than once at the top. Somebody may have hit
+      // halt while this prompt sat open, and "off" has to mean this loop stops
+      // spawning `capture-pane` — a watcher that keeps looking for half an hour
+      // after being switched off is exactly the thing nobody could promise was
+      // off.
+      if (!understudyEnabled()) return;
+      if (!(await paneAlive(sessionId))) {
+        // The pane died with the prompt still up. Somebody killed the window or
+        // the CLI fell over — either way it is not him answering, so it is
+        // recorded with no provenance and stays out of the denominator. It is
+        // kept at all because a class whose situations mostly end this way is a
+        // class watching the wrong thing.
+        recordDecision("C6", {
+          subject: sessionId,
+          actual: { answer: "gone", tool: "no-run" },
+          provenance: "",
+        });
+        return;
+      }
+      const screen = await capture(sessionId);
+      if (promptShape(screen) !== "none") continue;
+      const ran = (await sizeOf(transcript)) > from;
+      recordDecision("C6", {
+        subject: sessionId,
+        actual: { answer: ran ? "allowed" : "dismissed", tool: ran ? "ran" : "no-run" },
+        // He answered it in his own terminal, with keys. That is `typed`, and it
+        // is the provenance the whole scorecard is built to trust.
+        provenance: "typed",
+      });
+      return;
+    }
+  } catch {
+    // A capture that failed, a pane that vanished between two calls. The turn it
+    // belongs to finished long ago; there is nothing here worth propagating.
+  }
+}
 
 /** Consecutive idle probes before a turn that never started is called over.
  *
@@ -598,6 +700,44 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
             lastProbe = Date.now();
             const screen = await capture(sessionId);
             if (NEEDS_YOU_RE.test(screen)) {
+              /*
+               * C6's seal, and it is written before anything else in this
+               * branch runs.
+               *
+               * The situation has to be sealed before he can answer it, and
+               * from here the browser is about to be told the prompt exists —
+               * so the very next thing that can happen is him going to the
+               * terminal and answering. `sealSituation` is synchronous top to
+               * bottom for exactly this moment.
+               *
+               * The body is categorical: which of the three prompts it is, and
+               * whether the pane also looks busy. Not one character of `screen`
+               * goes in, and `tail` below — fourteen lines of his terminal —
+               * goes to the browser and nowhere near a table. That asymmetry is
+               * the design: the person who asked gets the whole screen, the
+               * scoreboard gets a word.
+               */
+              if (understudyEnabled()) {
+                const sealedAt = Date.now();
+                const sealed = sealSituation("C6", {
+                  subject: sessionId,
+                  at: sealedAt,
+                  body: JSON.stringify({
+                    prompt: promptShape(screen),
+                    running: RUNNING_RE.test(screen),
+                    queued: QUEUED_RE.test(screen),
+                  }),
+                });
+                /* Guess before he answers — which is the whole reason the
+                   seal exists a few lines up. A sealed row with no prediction
+                   is honest and unscored, and a class that is never scored can
+                   never earn anything. */
+                if (sealed) predictSealed(sealed, "C6", sessionId);
+                // Detached on purpose: the answer arrives after this stream has
+                // closed, so awaiting it would hold a turn open for as long as
+                // he takes to read his own screen.
+                if (sealed) void watchTheAnswer(sessionId, sealedAt, path, offset);
+              }
               /*
                * Left open rather than cancelled with Escape. The user asked for
                * this prompt; throwing it away to tidy up would discard what

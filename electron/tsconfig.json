@@ -1,0 +1,36 @@
+{
+  // The desktop shell is hand-written JavaScript and stays that way — it is
+  // loaded by Electron directly, with no build step between the file and the
+  // main process, and that is worth keeping. This config only lets `tsc` READ
+  // it: `bun run typecheck` here emits nothing.
+  //
+  // `checkJs` is deliberately false. Checking is opted into per file by the
+  // `// @ts-check` at the top of main.js and preload.js, which is where the
+  // dangerous surface is; guest-guard.js and browser-menu.js are in `include`
+  // so their exports are typed for the two files that require them, without
+  // their own contents being checked yet. Turning either of them on is a
+  // one-line change and a separate piece of work.
+  //
+  // `strict`, and not a softened version of it: the point of pointing a checker
+  // at this file is the null and the wrong-argument cases, and every one of
+  // them found something worth writing a JSDoc line for.
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "target": "ES2022",
+    // CommonJS because that is what Electron loads here — `require`, not
+    // `import`. It also means `tsc` reads the module top level as a module's,
+    // where Node reads it as the body of the wrapper function it puts around
+    // every CommonJS file; see the one `@ts-ignore` in main.js.
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    // Node's globals only. `bun-types`, which the other two workspaces use, is
+    // the wrong shelf: nothing in this directory runs under Bun.
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["main.js", "preload.js", "guest-guard.js", "browser-menu.js"]
+}

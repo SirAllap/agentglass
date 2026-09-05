@@ -25,7 +25,7 @@ export function subscribeTermReview(fn: () => void): () => void {
 export function termReview(): TermReview | null { return pending; }
 
 /** `n` increments so that asking for the same pull request twice is two
- *  requests. Without it, reviewing #17219, closing the window and asking again
+ *  requests. Without it, reviewing #219, closing the window and asking again
  *  would be indistinguishable from the request already served. */
 export function requestTermReview(root: string, number: number, recipe = "", card = ""): void {
   pending = { root, number, n: (pending?.n ?? 0) + 1, recipe, card };

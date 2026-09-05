@@ -97,10 +97,22 @@ export function toSet(tabs: BrowserTab[], activeId: string): SavedSet | null {
   };
 }
 
-function write(session: SavedSession): void {
+/**
+ * Which strip is being written.
+ *
+ * The browser is mounted twice now — the view, and the tab in the floating
+ * bench — and they are two sets of pages, not one: closing a tab in the bench
+ * must not close it in the view, and a write that rebuilt the file from what is
+ * on screen would do exactly that. A scope is a suffix on the key rather than a
+ * second module, so everything else about a session — the shape, the profiles,
+ * the migration from v1 — stays written once.
+ */
+const keyFor = (scope?: string): string => (scope ? `${SESSION_KEY}.${scope}` : SESSION_KEY);
+
+function write(session: SavedSession, scope?: string): void {
   try {
-    if (!Object.keys(session.byProfile).length) { localStorage.removeItem(SESSION_KEY); return; }
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    if (!Object.keys(session.byProfile).length) { localStorage.removeItem(keyFor(scope)); return; }
+    localStorage.setItem(keyFor(scope), JSON.stringify(session));
   } catch { /* private mode, or a quota that a page list should never hit */ }
 }
 
@@ -111,14 +123,41 @@ function write(session: SavedSession): void {
  * of the profile you are not looking at are not in memory, so a write that
  * rebuilt the file from what is on screen would delete them.
  */
-export function saveSession(profileId: string, tabs: BrowserTab[], activeId: string): void {
-  const id = isProfileId(profileId) ? profileId : "";
-  const prev = readSession();
+export function saveSession(profileId: string, tabs: BrowserTab[], activeId: string, scope?: string): void {
+  const cur = isProfileId(profileId) ? profileId : "";
+  const prev = readSession(scope);
   const byProfile = { ...(prev?.byProfile ?? {}) };
-  const set = toSet(tabs, activeId);
-  if (set) byProfile[id] = set;
-  else delete byProfile[id];
-  write({ v: 2, current: id, byProfile });
+  /*
+   * FILED UNDER THE TAB'S OWN PROFILE, not under whichever one is on screen.
+   *
+   * This wrote every tab in the strip under the CURRENT profile, and an agent's
+   * tab is not in the current profile: `open --as review-pr-540` adds a tab in
+   * its own identity to the list that happens to be loaded, deliberately, so
+   * that driving the browser never yanks the strip somebody is working in.
+   * Saving that list under one id relabelled those tabs, and the next launch
+   * restored them as the DEFAULT profile's pages.
+   *
+   * That is the whole of "the agent ended up in Default without doing anything
+   * wrong", and it is worth being precise about the mechanism, because the
+   * obvious diagnosis is the wrong one: the profile did not disappear at
+   * restart. The tab was filed under the wrong one before the restart, and
+   * came back wearing it.
+   */
+  const groups = new Map<string, BrowserTab[]>();
+  for (const t of tabs) {
+    const id = isProfileId(t.profile) ? t.profile : "";
+    const list = groups.get(id);
+    if (list) list.push(t); else groups.set(id, [t]);
+  }
+  for (const [id, list] of groups) {
+    const set = toSet(list, activeId);
+    if (set) byProfile[id] = set; else delete byProfile[id];
+  }
+  /* A profile whose last tab has just been closed keeps no entry: it is not in
+     `groups` at all, so the loop above cannot clear it. Only the one being
+     written from — another profile's set is somebody else's and stays. */
+  if (!groups.has(cur)) delete byProfile[cur];
+  write({ v: 2, current: cur, byProfile }, scope);
 }
 
 /** One profile's saved strip, or null. */
@@ -151,9 +190,9 @@ const cleanSet = (raw: unknown): SavedSet | null => {
  * end up choosing which cookie jar a page loads with — a hand-edited one falls
  * back to the default rather than naming a partition nobody validated.
  */
-export function readSession(): SavedSession | null {
+export function readSession(scope?: string): SavedSession | null {
   let raw: string | null = null;
-  try { raw = localStorage.getItem(SESSION_KEY); } catch { return null; }
+  try { raw = localStorage.getItem(keyFor(scope)); } catch { return null; }
   if (!raw) return null;
   let v: Record<string, unknown>;
   try { v = JSON.parse(raw) as Record<string, unknown>; } catch { return null; }

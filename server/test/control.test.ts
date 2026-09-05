@@ -6,7 +6,7 @@ import { parseControlCmd } from "../src/control.ts";
 
 describe("parseControlCmd — view", () => {
   test("accepts every real view id", () => {
-    for (const to of ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files"]) {
+    for (const to of ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "understudy"]) {
       expect(parseControlCmd({ cmd: "view", to })).toEqual({ cmd: "view", to } as never);
     }
   });
@@ -103,6 +103,18 @@ describe("parseControlCmd — junk", () => {
     for (const b of [null, undefined, 42, "view", [], { cmd: "nope" }, {}]) {
       expect(parseControlCmd(b as unknown)).toBeNull();
     }
+  });
+
+  test("a read-only view is on the list like any other", () => {
+    /* The understudy shows a scorecard and commands nothing, so there is a
+       temptation to leave it off a list whose whole job is to keep untrusted
+       input away from things that act. Off the list it is not safer, it is
+       broken: the rail draws the tab, the keyboard opens it with one letter,
+       and only the external controller is told it does not exist. What this
+       list restricts is what may be SHOWN, and every view in the rail may be
+       shown. See web/test/understudy-view-registration.test.ts, which pins all
+       four registration points against each other. */
+    expect(parseControlCmd({ cmd: "view", to: "understudy" })).toEqual({ cmd: "view", to: "understudy" });
   });
 
   test("the browser view can be opened too — an agent driving it needs it mounted", () => {

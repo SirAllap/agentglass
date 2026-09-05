@@ -74,6 +74,27 @@ export function subscribeProviderUsage(fn: () => void): () => void {
   };
 }
 
+/**
+ * Ask again, now.
+ *
+ * The poll is every five minutes and that is right for a number that moves by
+ * a fraction of a percent a minute — but a reading can also go STUCK, when a
+ * provider stops answering, and then five minutes is forever and the only
+ * remedy was to restart the app. This is the button on the strip.
+ *
+ * It shares the poll's rule about failure: a request that loses leaves the
+ * last good answer standing. A meter that blinks out is worse than one that is
+ * a few minutes old, and the age is already on screen.
+ */
+export async function refreshProviderUsage(): Promise<void> {
+  try {
+    snapshot = await api.providerUsage();
+  } catch { /* offline — keep what we have */ } finally {
+    firstFetchDone = true;
+    for (const l of listeners) l();
+  }
+}
+
 /** The hourly cadence the setting promises. The 5-minute poll is what notices
  *  the moment has come, so no second timer is needed — and the floor in
  *  shouldRefresh() is what makes a page reload cheap. */
@@ -106,6 +127,30 @@ export function usedColor(used: number): string {
   if (used >= 85) return "var(--error)";
   if (used >= 60) return "var(--warning)";
   return "var(--success)";
+}
+
+/**
+ * "2d 1h", "48m" — the same fact as `resetLabel`, at strip width.
+ *
+ * Two spellings on purpose. A panel has room for "Resets in 1h 44m" and a
+ * weekday for anything further out, which is the more useful of the two when
+ * you are deciding whether to wait. The top strip has neither the room nor the
+ * question: there it is one phrase among three and the only thing being asked
+ * is roughly how long.
+ *
+ * Nothing narrower than a minute — a window that resets in forty seconds
+ * resets now for every purpose anybody has. Empty when the provider does not
+ * say, which is a real answer and not zero.
+ */
+export function resetShort(iso: string | null, now = Date.now()): string {
+  if (!iso) return "";
+  const ms = new Date(iso).getTime() - now;
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `${Math.max(1, mins)}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 /** "in 1h 44m" when soon, else "Wed 3:00 PM". */

@@ -14,9 +14,10 @@ declare global {
       webview: DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
         src?: string;
         partition?: string;
-        /** Present only to be explicitly undefined: a guest that may open
-         *  windows is one this app has nowhere to put. */
-        allowpopups?: undefined;
+        /* `allowpopups` is deliberately NOT declared here. @types/react already
+           declares it on this element as a boolean, its declaration wins the
+           merge, and React's DOM renderer then DROPS a boolean for a custom
+           element — see where it is set in BrowserPanel.tsx. */
         useragent?: string;
       };
     }

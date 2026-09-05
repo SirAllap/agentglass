@@ -43,11 +43,13 @@ import {
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import type { CardPr, ProviderTask, TaskDetail } from "../../../shared/providers.ts";
+import type { CardPr, ProviderId, ProviderTask, TaskDetail } from "../../../shared/providers.ts";
 import type { GitRepoRef, SkillInfo } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
+import { announceCard } from "../../src/state/card-edits.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { providerTitle } from "../../src/model/taskProviders.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { cardSkills, namedForIt, skillCommand, skillModes, windowName } from "../../../shared/cardSkills.ts";
@@ -55,6 +57,15 @@ import { dueIn, since } from "../../src/lib/dates.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+
+/**
+ * Where this card lives. Every route this screen reads is `/clickup/…`, so
+ * this is the route's own name and not a guess — and it is spelled once, here,
+ * so the button that opens the card in the tracker takes the catalogue's title
+ * (`providerTitle`) rather than a word typed into JSX. A `ProviderTask` does
+ * not carry its provider, which is why the screen has to say.
+ */
+const PROVIDER: ProviderId = "clickup";
 
 /** GitHub's three states, in the colours this app already uses for them.
  *  Draft is grey rather than green: it is open and it is not asking to be
@@ -199,23 +210,50 @@ export default function CardScreen(): React.ReactNode {
     return () => { gone = true; };
   }, [host, mayWrite]);
 
+  /**
+   * The write routes answer with the card as it stands afterwards — re-read by
+   * the server, not assumed — and this screen used to drop it and re-fetch.
+   * The list behind this screen never heard either way, so going back showed
+   * the old column until a pull-to-refresh. Now the returned card goes on
+   * screen at once and out to whoever holds a list (state/card-edits.ts);
+   * `load` still follows, for the description, comments and subtasks the
+   * write route does not carry.
+   */
+  const landed = useCallback((task: ProviderTask | undefined): void => {
+    if (!task) return;
+    setCard(task);
+    announceCard(task);
+  }, []);
+
   const move = useCallback(async (status: string): Promise<void> => {
     if (!host || !card) return;
     setBusy(status);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const answer = await ask<{ ok: boolean; error?: string }>(host, "/clickup/status", {
-      method: "POST",
-      body: { id: card.id, status },
-    });
+    /*
+     * `updated` rides along, as it does on `claim` below and did not here: the
+     * server's stale-write guard only runs when it is given the stamp the
+     * screen read, so a move without it was the one write on this screen that
+     * two people could both win. The comment on `comment` said this write
+     * sent the stamp; the code did not.
+     */
+    const answer = await ask<{ ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask }>(
+      host, "/clickup/status", { method: "POST", body: { id: card.id, status, updated: card.updated } },
+    );
     setBusy(null);
     if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
     if (!answer.value.ok) {
-      setSaid({ ok: false, text: answer.value.error ?? "The board refused that." });
+      setSaid({
+        ok: false,
+        text: answer.value.conflict
+          ? "The card moved on the board while this was open — reopen it and try again."
+          : answer.value.error ?? "The board refused that.",
+      });
       return;
     }
+    landed(answer.value.task);
     setSaid({ ok: true, text: `Moved to ${status}` });
     await load();
-  }, [host, card, load]);
+  }, [host, card, load, landed]);
 
   /**
    * A note on the card's activity.
@@ -257,7 +295,7 @@ export default function CardScreen(): React.ReactNode {
     if (!host || !card) return;
     setBusy("assign");
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const answer = await ask<{ ok: boolean; error?: string; conflict?: boolean }>(host, "/clickup/assign", {
+    const answer = await ask<{ ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask }>(host, "/clickup/assign", {
       method: "POST",
       body: { id: card.id, on, updated: card.updated },
     });
@@ -274,9 +312,10 @@ export default function CardScreen(): React.ReactNode {
       });
       return;
     }
+    landed(answer.value.task);
     setSaid({ ok: true, text: on ? "Assigned to you." : "Taken off you." });
     await load();
-  }, [host, card, load]);
+  }, [host, card, load, landed]);
 
   /* After the card, and only once it has an id to search for. A failure is
      left as an empty list rather than an error on the screen: "no pull request
@@ -326,7 +365,9 @@ export default function CardScreen(): React.ReactNode {
    * were written against and what their own descriptions quote.
    */
   const hand = useCallback((repo: GitRepoRef): void => {
-    if (!card) return;
+    // The terminal needs `full`; a phone without it is not offered this and,
+    // if it gets here, does not go. See model/scope.ts.
+    if (!card || !mayWrite) return;
     const label = card.customId || card.id;
     const command = picked
       ? `${skillCommand(picked.skill.name, card)}${picked.mode ? ` ${picked.mode}` : ""}`
@@ -343,7 +384,7 @@ export default function CardScreen(): React.ReactNode {
     setHanding(false);
     setPicking(false);
     router.push("/terminal");
-  }, [card, picked, router]);
+  }, [card, picked, router, mayWrite]);
 
   /* The search, over name and description both — the same two fields the
      matcher itself reads, so a skill found by its description is findable by
@@ -699,7 +740,7 @@ export default function CardScreen(): React.ReactNode {
                 {card.customId || card.id}
               </Text>
               {card.url ? (
-                <Btn label="Open in ClickUp" onPress={() => { void Linking.openURL(card.url); }} />
+                <Btn label={`Open in ${providerTitle(PROVIDER)}`} onPress={() => { void Linking.openURL(card.url); }} />
               ) : null}
             </View>
           </>

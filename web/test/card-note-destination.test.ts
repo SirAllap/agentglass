@@ -31,19 +31,19 @@ describe("what a card notification carries", () => {
       app: "ClickUp",
       summary: "T19 assigned to you",
       body: "GiftCard config model · CODE REVIEW",
-      goto: { kind: "card", id: "86e2gm3uu", label: "T19" },
+      goto: { kind: "card", id: "86xabc002", label: "T19" },
     });
     const n = s.notifyHistory()[0]!;
-    expect(n.goto).toEqual({ kind: "card", id: "86e2gm3uu", label: "T19" });
+    expect(n.goto).toEqual({ kind: "card", id: "86xabc002", label: "T19" });
   });
 
   it("carries the internal id, not only the human label", async () => {
     // Both are things the finder accepts, but only the internal one is certain
     // to resolve — a board without custom ids has no other handle on the card.
     const s = await load();
-    s.recordNote({ app: "ClickUp", summary: "x", body: "y", goto: { kind: "card", id: "86e2gm3uu", label: "T19" } });
+    s.recordNote({ app: "ClickUp", summary: "x", body: "y", goto: { kind: "card", id: "86xabc002", label: "T19" } });
     const g = s.notifyHistory()[0]!.goto!;
-    expect(g.kind === "card" && g.id).toBe("86e2gm3uu");
+    expect(g.kind === "card" && g.id).toBe("86xabc002");
   });
 
   it("leaves a note with nowhere to go without a destination", async () => {
@@ -109,8 +109,11 @@ describe("resolving a mirrored ClickUp notification", () => {
     /* The answer arrives after the row is on screen. Patching by position would
        decorate whatever had moved into that slot. */
     const s = await src;
+    /* Delimited by the next declaration, not by a byte count: a comment added
+       inside this function pushed the second assertion past a fixed window. */
     const at = s.indexOf("async function attachCard");
-    const body = s.slice(at, at + 1400);
+    const next = s.indexOf("\nfunction ", at) >= 0 ? s.indexOf("\nfunction ", at) : s.length;
+    const body = s.slice(at, next);
     expect(body).toContain("history.findIndex((h) => h.id === n.id)");
     expect(body).toContain("if (i < 0 || history[i]!.goto) return;");
   });

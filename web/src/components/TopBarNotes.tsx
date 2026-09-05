@@ -144,10 +144,17 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
         if (c.attention === "blocked") {
           // Blocked, not merely finished: the chat cannot continue without you.
           push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "Chat", sub: c.blockedTool ? `Needs "${c.blockedTool}"` : "Waiting on you", urgent: true });
-          recordNote({ app: "chat", summary: c.title || "Chat", body: c.blockedTool ? `Blocked — needs "${c.blockedTool}"` : "Blocked — waiting on you", urgency: 2 , goto: { kind: "chat", id: c.id } });
+          // The summary differs from the "Turn finished" one on purpose.
+          // `supersede` keys a chat note on id + summary, so while both said
+          // just the chat title, a turn ending QUIETLY DELETED the urgent
+          // "Blocked" row above it — the one note in this loop he had to act on.
+          recordNote({ app: "chat", summary: `${c.title || "Chat"} — blocked`, body: c.blockedTool ? `Blocked — needs "${c.blockedTool}"` : "Blocked — waiting on you", urgency: 2, goto: { kind: "chat", id: c.id } });
         } else if (c.attention === "done") {
           push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success)", title: c.title || "Chat", sub: "Turn finished" });
-          recordNote({ app: "chat", summary: c.title || "Chat", body: "Turn finished" , goto: { kind: "chat", id: c.id } });
+          // Silent, and it always should have been: a turn that ended is not a
+          // task. The chat's own green dot says the same thing without a sound,
+          // and with nine sessions this is the highest-volume note in the app.
+          recordNote({ app: "chat", summary: c.title || "Chat", body: "Turn finished", urgency: 0, goto: { kind: "chat", id: c.id } });
         }
       }
       first = false;
@@ -214,7 +221,11 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
             // passed: mirrored git notes get one derived from their *text*
             // (gitDestination), while ours — which hold the repo and the branch
             // as facts — arrived with nothing and could not be clicked.
-            recordNote({ app: "git", summary: r.name, body: `${r.behind} commit${r.behind === 1 ? "" : "s"} to pull on ${r.branch}`,
+            // Silent: the same number already sits permanently in the "to
+            // pull" chip a few centimetres away in this very bar, and it grows
+            // on its own because the server autofetches. Being behind is never
+            // something to do THIS SECOND.
+            recordNote({ app: "git", summary: r.name, body: `${r.behind} commit${r.behind === 1 ? "" : "s"} to pull on ${r.branch}`, urgency: 0,
               goto: { kind: "git", repo: r.name, branch: r.branch, root: r.root } });
           }
         }
@@ -615,10 +626,20 @@ export function NotifyBell({ noDrag, onGoto }: {
             ? `${hist.length} notification${hist.length === 1 ? "" : "s"}${unread ? ` — ${unread} since you last looked` : ""}${quiet ? " (quiet)" : ""}`
             : "Notifications — nothing yet"
         }
+        /* 22x22 and a 14px bell, up from 20x18 and 12px.
+         *
+         * Measured across all fourteen views: this was the ONE icon-only
+         * control in the whole app below the house floor of a 14px glyph in a
+         * 20x20 target — every other small glyph either sits in a labelled
+         * control or already has the room. Two pixels short in one place is
+         * not a pattern, but this is the bell, which is the control you go
+         * for when something is waiting on you.
+         *
+         * The bar is 30px, so 22 leaves four either side. */
         className="relative shrink-0 grid place-items-center rounded hover:bg-white/10"
-        style={{ width: 20, height: 18, color: tint, ...noDrag }}
+        style={{ width: 22, height: 22, color: tint, ...noDrag }}
       >
-        <BellGlyph width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        <BellGlyph width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor"
           strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
         {/* The count sits on the bell rather than beside it: the bar has no width
             to spare, and a badge is read as "on the bell" wherever it is drawn. */}

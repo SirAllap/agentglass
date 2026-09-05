@@ -52,10 +52,10 @@ describe("what lands on disk", () => {
 
 describe("what a route may see", () => {
   it("never returns the secret from the redacted view", () => {
-    C.setCredential("clickup", { token: "pk_12345_SECRETVALUE", account: "David", workspace: "Producto" });
+    C.setCredential("clickup", { token: "pk_12345_SECRETVALUE", account: "Ada", workspace: "Acme" });
     const r = C.redacted("clickup")!;
-    expect(r.account).toBe("David");
-    expect(r.workspace).toBe("Producto");
+    expect(r.account).toBe("Ada");
+    expect(r.workspace).toBe("Acme");
     expect(r.present).toBe(true);
     // Belt and braces: not under `token`, and not anywhere else either.
     expect((r as Record<string, unknown>).token).toBeUndefined();
@@ -90,9 +90,9 @@ describe("what may be printed", () => {
 describe("keeping notes without touching the secret", () => {
   it("annotates an existing credential and leaves the token alone", () => {
     C.setCredential("clickup", { token: "pk_12345_SECRETVALUE" });
-    C.annotate("clickup", { account: "David", workspace: "Producto", verifiedAt: 1 });
+    C.annotate("clickup", { account: "Ada", workspace: "Acme", verifiedAt: 1 });
     expect(C.secretFor("clickup")).toBe("pk_12345_SECRETVALUE");
-    expect(C.redacted("clickup")!.workspace).toBe("Producto");
+    expect(C.redacted("clickup")!.workspace).toBe("Acme");
   });
 
   it("does not invent a credential for a provider that has none", () => {

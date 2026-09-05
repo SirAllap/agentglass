@@ -25,35 +25,151 @@ import { api } from "../lib/api.ts";
 import { iconFor } from "../lib/fileIcons.ts";
 import { requestFilesReveal } from "../lib/filesReveal.ts";
 import { recents, remember, forget, subscribeRecents, ago } from "../lib/fileRecents.ts";
+import { completion, looksLikePath, parseQuery, passesFilters, readPath, scoreMatch } from "../lib/finderQuery.ts";
+import { Preview } from "./finder/Preview.tsx";
+import type { BrowseReport } from "../../../shared/types.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
 import { shortPath } from "../lib/shortPath.ts";
-import type { GitRepoRef, GrepHit } from "../../../shared/types.ts";
+import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 
-export type PaletteTab = "names" | "contents" | "recent";
+export type PaletteTab = "names" | "contents" | "recent" | "machine";
 
+/*
+ * The fourth question is not about the checkout at all.
+ *
+ * "Where is that document" — the evidence folder for a ticket, the note in
+ * ~/Documents, the export somebody left in ~/Downloads — is asked as often as
+ * the other three and none of them could answer it, because all three are
+ * bounded by the repository. Reading one meant leaving the app for a file
+ * manager, which is the trip this palette exists to remove.
+ *
+ * Last in the row, deliberately: the three that were here keep the order your
+ * hands already know, so ⇥⇥ still lands where it used to.
+ */
 const TABS: { id: PaletteTab; label: string; placeholder: string }[] = [
   { id: "names", label: "Name", placeholder: "Find a file or folder by name…" },
   { id: "contents", label: "Contents", placeholder: "Search the code of this checkout…" },
   { id: "recent", label: "Recent", placeholder: "Filter what you have opened…" },
+  { id: "machine", label: "Machine", placeholder: "Find a document anywhere in your home folder…" },
 ];
 
 /** One row of the result list, whatever produced it. Kept as data rather than
  *  as JSX so the keyboard can index into it without asking the DOM. */
 type Row =
-  | { kind: "dir"; rel: string }
-  | { kind: "file"; rel: string; hits?: GrepHit[] }
+  | { kind: "dir"; rel: string; abs?: string; items?: number | null; mtime?: number }
+  | { kind: "file"; rel: string; hits?: GrepHit[]; abs?: string; bytes?: number | null; mtime?: number }
   /* A recent carries its own checkout. It is a memory of somewhere you have
      been, and the palette may be pointed somewhere else by the time you come
      back to it — opening it against the current chip would build a path in the
      wrong tree. */
-  | { kind: "recent"; rel: string; at: number; root: string; gone?: boolean };
+  | { kind: "recent"; rel: string; at: number; root: string; gone?: boolean; abs?: string };
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
+
+/**
+ * A path as the pieces it is made of, each one somewhere to jump to.
+ *
+ * Home is folded back into `~` because that is what it is called on screen
+ * everywhere else in this app, and the first crumb of every path being
+ * `/home/<somebody>` is four wasted characters and a name nobody needs to read.
+ */
+/** Bytes as a listing says them. Rounded hard: a file list is scanned. */
+export function humanBytes(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let n = bytes / 1000;
+  let i = 0;
+  while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}
+
+/** A path with home written as `~`, which is how the box shows one and how
+ *  anybody types one. */
+export function shortenHome(abs: string, home: string): string {
+  if (home && (abs === home || abs.startsWith(`${home}/`))) return `~${abs.slice(home.length)}`;
+  return abs;
+}
+
+export function crumbs(abs: string, home = ""): { label: string; path: string; last: boolean }[] {
+  const parts = abs.replace(/\/+$/, "").split("/").filter(Boolean);
+  const out: { label: string; path: string; last: boolean }[] = [];
+  let at = "";
+  for (const part of parts) {
+    at += `/${part}`;
+    out.push({ label: part, path: at, last: false });
+    if (home && at === home) { out.length = 0; out.push({ label: "~", path: at, last: false }); }
+  }
+  if (out.length) out[out.length - 1]!.last = true;
+  return out;
+}
+
+/*
+ * A menu of this palette's lives in a Portal, and two things go wrong there.
+ * Both were measured in the running app rather than reasoned about, and
+ * neither shows up in a screenshot.
+ *
+ *   the keys    A React portal bubbles its events through the REACT tree, not
+ *               the DOM one — so every key pressed inside an open menu ALSO
+ *               reached the palette's own handler. Measured, with the checkout
+ *               menu open: ⇥ switched the tab underneath and left the menu
+ *               floating over a different question, ↑↓ walked a cursor nobody
+ *               could see, and ⏎ opened the highlighted result — nvim came up
+ *               on a file behind the menu that was supposed to have the keys.
+ *   the focus   `autoFocus` does not take when the field mounts while another
+ *               one holds focus, which is always the case here: the palette
+ *               focuses its search box and keeps it. So "Filter 24 copies and
+ *               928 branches…" never had the caret, and what you typed to
+ *               narrow the list went into the search behind the menu, quietly
+ *               rebuilding the results underneath.
+ *
+ * Hence: a menu takes its own keys, and its field takes its own focus.
+ */
+
+/** Every key pressed inside a menu belongs to the menu. Escape closes it —
+ *  here rather than in each field, so it also works from a row. */
+const menuKeys = (close: () => void) => (e: React.KeyboardEvent) => {
+  e.stopPropagation();
+  if (e.key === "Escape") { e.preventDefault(); close(); }
+};
+
+/** The caret goes in the menu's field, by hand. The delay is the palette's
+ *  own: the panel around it may still be animating when this mounts. */
+function useMenuField(open: boolean) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => ref.current?.focus(), 20);
+    return () => clearTimeout(t);
+  }, [open]);
+  return ref;
+}
 
 /** Where the palette last searched, so opening it lands on the checkout you
  *  were working in rather than on whichever repository sorts first. */
 const ROOT_KEY = "agentglass.files.paletteRoot";
+/* Where the machine tab is pointed, and the folders it has been pointed at
+   before. Kept apart from the checkout for the obvious reason — one is a
+   repository and the other is a folder of documents — and remembered for the
+   same reason the checkout is: you come back to the same few places. */
+const PLACE_KEY = "agentglass.files.palettePlace";
+const PLACE_RECENTS_KEY = "agentglass.files.placeRecents";
+const PLACE_RECENTS_MAX = 8;
+const readPlace = (): string => { try { return localStorage.getItem(PLACE_KEY) ?? ""; } catch { return ""; } };
+const savePlace = (p: string) => { try { localStorage.setItem(PLACE_KEY, p); } catch { /* non-fatal */ } };
+const readPlaceRecents = (): string[] => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PLACE_RECENTS_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  } catch { return []; }
+};
+/** Reopening a place MOVES it to the top rather than adding a second row —
+ *  same rule as the recent files, and for the same reason. */
+const rememberPlace = (p: string): string[] => {
+  const next = [p, ...readPlaceRecents().filter((x) => x !== p)].slice(0, PLACE_RECENTS_MAX);
+  try { localStorage.setItem(PLACE_RECENTS_KEY, JSON.stringify(next)); } catch { /* non-fatal */ }
+  return next;
+};
 const REF_KEY = "agentglass.files.paletteRef";
 const readRoot = (): string => { try { return localStorage.getItem(ROOT_KEY) ?? ""; } catch { return ""; } };
 const saveRoot = (r: string) => { try { localStorage.setItem(ROOT_KEY, r); } catch { /* non-fatal */ } };
@@ -128,8 +244,28 @@ export function FilePalette({
    * forgotten you selected.
    */
   const [ref, setRef] = useState(() => readRef(readRoot()));
+  /* The machine tab's half of "where": a folder rather than a checkout, with
+     no branch to it — a document on disk has one version, the one on disk. */
+  const [place, setPlace] = useState(readPlace);
+  const [places, setPlaces] = useState<DiskPlace[]>([]);
+  /** Where home is, as the engine says — the browser has no `process.env`, and
+   *  a path drawn as `/home/somebody/Documents` wastes four crumbs on a name
+   *  nobody needs to read. */
+  const [homeDir, setHomeDir] = useState("");
+  const [placeRecents, setPlaceRecents] = useState<string[]>(readPlaceRecents);
+  const [placeErr, setPlaceErr] = useState<string | null>(null);
   const [refs, setRefs] = useState<{ local: string[]; remote: string[]; head?: string }>({ local: [], remote: [] });
   const [refOpen, setRefOpen] = useState(false);
+  /*
+   * Browsing, which is the half the finder never had.
+   *
+   * A folder used to "narrow the search", which is a different gesture: it left
+   * you typing when what you wanted was to look. `browsePath` non-null means
+   * the list is a FOLDER rather than a result set — for every tab, so the four
+   * of them stop behaving differently depending on which backend answers.
+   */
+  const [browsePath, setBrowsePath] = useState<string | null>(null);
+  const [browsed, setBrowsed] = useState<BrowseReport | null>(null);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -169,6 +305,21 @@ export function FilePalette({
 
   useEffect(() => { if (root) saveRoot(root); }, [root]);
 
+  /* Asked the server rather than assumed: which folders exist is a fact about
+     this machine, and the boundary the search is held to is one too — a menu
+     built here out of guesses would offer rows that come back refused. */
+  useEffect(() => {
+    if (!open || tab !== "machine") return;
+    api.diskPlaces().then((r) => {
+      setPlaces(r.places);
+      setHomeDir(r.home || "");
+      setPlaceErr(r.ok ? null : (r.error ?? "this machine cannot be searched"));
+      setPlace((cur) => cur || r.home || "");
+    }).catch(() => setPlaceErr("could not ask this machine where it keeps things"));
+  }, [open, tab]);
+
+  useEffect(() => { if (place) savePlace(place); }, [place]);
+
   /*
    * A branch belongs to a checkout, so moving to another one loads THAT
    * checkout's last branch rather than carrying a name across that may not
@@ -204,7 +355,21 @@ export function FilePalette({
     !!root && tab === "contents" && q.trim().length >= 2,
   );
 
-  const recent = useSyncExternalStore(subscribeRecents, recents);
+  /* Its own call, not `filesFind` with a flag: that one is bounded by the open
+     project and includes hidden files, and both are right for a checkout and
+     wrong for a home folder. See server/src/disk.ts. */
+  const onDisk = useSearch(
+    () => (tab === "machine" ? api.diskFind(place, q) : null),
+    [tab === "machine", place, q.trim()],
+    !!place && tab === "machine" && q.trim().length >= 2,
+  );
+
+  /* The third argument is the server snapshot, and without it this component
+     cannot be rendered outside a browser at all — which is why nothing ever
+     executed it in a test. `recents()` reads localStorage behind a try/catch
+     and answers an empty list where there is none, so it is a correct answer
+     in both places rather than a stub for one. */
+  const recent = useSyncExternalStore(subscribeRecents, recents, recents);
 
   /*
    * Which of them the working tree still has.
@@ -229,7 +394,68 @@ export function FilePalette({
     return () => { live = false; };
   }, [open, tab, root, recent]);
 
+  /* What was typed, read as a question: the needle, and the filters taken out
+     of it. Applied on the client to whatever the tab produced, which is what
+     lets `ext:png mod:hoy` work identically on all four. */
+  const asked = useMemo(() => parseQuery(q), [q]);
+
+  /*
+   * Where the list is looking, which is a folder whenever nothing was typed.
+   *
+   * Picking `Documents` used to answer "Two letters at least" — a chip that
+   * names a place and then refuses to show it. A file browser with a folder
+   * selected and an empty box has an obvious thing to draw: that folder. So an
+   * empty query IS the browse, and typing turns it back into a search.
+   *
+   * `browsePath` still wins when it is set, because walking into a folder is a
+   * deliberate move and must survive the box being empty.
+   */
+  /* A typed path is somewhere to go, not something to find. `~/Downloads` used
+     to answer "Nothing under ~/Documents is called ~/Downloads", which is the
+     literal truth and completely useless. */
+  const typedPath = useMemo(
+    () => readPath(q, homeDir, browsePath || place || root || homeDir),
+    [q, homeDir, browsePath, place, root],
+  );
+
+  const at = useMemo(() => {
+    if (typedPath) return typedPath.dir;
+    if (browsePath) return browsePath;
+    if (asked.text.trim()) return null;
+    if (tab === "machine") return place || null;
+    if (tab === "names") return root || null;
+    return null;
+  }, [typedPath, browsePath, asked.text, tab, place, root]);
+
+  // The folder under the cursor, fetched when it changes. Errors land in the
+  // report itself — "no permission to read this folder" is an answer, and the
+  // list says it rather than showing an empty folder that looks like a bug.
+  useEffect(() => {
+    if (!open || !at) { setBrowsed(null); return; }
+    let live = true;
+    void api.browse(at).then((r) => { if (live) setBrowsed(r); }).catch(() => { if (live) setBrowsed(null); });
+    return () => { live = false; };
+  }, [open, at]);
+
   const rows: Row[] = useMemo(() => {
+    if (at) {
+      const d = browsed;
+      if (!d?.ok) return [];
+      const base = at.replace(/\/+$/, "");
+      return d.entries.map((e): Row => e.kind === "dir"
+        ? { kind: "dir", rel: e.name, abs: `${base}/${e.name}`, items: e.items, mtime: e.mtime }
+        : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime });
+    }
+    if (tab === "machine") {
+      const d = onDisk.data;
+      if (!d?.ok) return [];
+      // Folders first here too, and they matter more on this tab: naming a
+      // folder is how you say "search in there", which is what picking one does.
+      return [
+        ...(d.dirs ?? []).map((rel): Row => ({ kind: "dir", rel })),
+        ...d.files.map((rel): Row => ({ kind: "file", rel })),
+      ];
+    }
     if (tab === "names") {
       const d = found.data;
       if (!d?.ok) return [];
@@ -256,21 +482,58 @@ export function FilePalette({
     return recent
       .filter((r) => (root ? r.root === root : true))
       .filter((r) => !needle || r.rel.toLowerCase().includes(needle))
-      .map((r): Row => ({ kind: "recent", rel: r.rel, at: r.at, root: r.root, gone: gone.has(`${r.root}\u0000${r.rel}`) }));
-  }, [tab, found.data, grepped.data, recent, q, root, gone]);
+      .map((r): Row => ({ kind: "recent", rel: r.rel, at: r.at, root: r.root, gone: gone.has(`${r.root}\u0000${r.rel}`), abs: `${r.root}/${r.rel}` }));
+  }, [tab, at, browsed, found.data, grepped.data, onDisk.data, recent, q, root, gone]);
+
+  /** Where a row IS, whichever tab produced it — the one thing every backend
+   *  knew and none of them handed over, and what the preview pane needs. */
+  const absOf = useCallback((row: Row): string | null => {
+    if (row.abs) return row.abs;
+    if (tab === "machine") return place ? `${place.replace(/\/+$/, "")}/${row.rel}` : null;
+    if (row.kind === "recent") return `${row.root}/${row.rel}`;
+    return root ? `${root.replace(/\/+$/, "")}/${row.rel}` : null;
+  }, [tab, place, root]);
+
+  /*
+   * The filters, and the fuzzy match, over whatever the tab produced.
+   *
+   * On the client on purpose: `ext:png mod:hoy size:>1M` then works the same on
+   * a repository search, a machine search, a folder listing and the recents,
+   * without four backends learning the same syntax — and a row that cannot
+   * answer a filter is kept rather than silently dropped (see finderQuery.ts).
+   *
+   * The needle is NOT re-applied to the tabs whose server already matched it:
+   * doing that would throw away ripgrep's own matching. It is applied when
+   * browsing, where nothing has filtered anything yet, and that is what makes
+   * `/` inside a folder work.
+   */
+  const shown: Row[] = useMemo(() => {
+    const { text, exact, filters } = asked;
+    const filtered = rows.filter((r) => {
+      const abs = absOf(r) ?? r.rel;
+      return passesFilters({ path: abs, kind: r.kind === "recent" ? "file" : r.kind, bytes: r.kind === "file" ? r.bytes ?? null : null, mtime: r.kind === "recent" ? r.at : r.mtime ?? null }, filters);
+    });
+    const needle = typedPath ? typedPath.tail : text;
+    if (!at || !needle) return filtered;
+    return filtered
+      .map((r) => ({ r, score: scoreMatch(r.rel, needle, exact) }))
+      .filter((x) => x.score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.r);
+  }, [rows, asked, at, typedPath, absOf]);
 
   // The cursor is an index into a list that changes under it on every keystroke.
   // Reset on anything that rebuilds the list, or ↑↓ starts from wherever the
   // previous, longer list had left it.
-  useEffect(() => { setCursor(0); }, [tab, q, root]);
-  useEffect(() => { setCursor((c) => (c >= rows.length ? 0 : c)); }, [rows.length]);
+  useEffect(() => { setCursor(0); }, [tab, q, root, place, browsePath]);
+  useEffect(() => { setCursor((c) => (c >= shown.length ? 0 : c)); }, [shown.length]);
 
   // Keep the cursor on screen. `block: "nearest"` rather than "center" so
   // holding ↓ walks the list instead of jumping it around under the eye.
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-row="${cursor}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [cursor, rows.length]);
+  }, [cursor, shown.length]);
 
   /**
    * Three rows, and the rest on the scrollbar — only with a document open.
@@ -328,9 +591,77 @@ export function FilePalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listCap, docOpen]);
 
-  const openRow = useCallback((row: Row | undefined) => {
-    if (!row || !root) return;
-    if (row.kind === "dir") { onRevealDir(root, row.rel); onClose(); return; }
+  /*
+   * The formats that must never reach a text editor.
+   *
+   * Opening a `.png` from here sent it to the floating nvim modal — a modal
+   * nobody asked for, showing a binary nobody can read. The preview pane draws
+   * these; the editor is still one keystroke away for whoever really wants it
+   * (⌘⏎), because refusing outright is its own kind of wrong.
+   */
+  const IMAGEY = /\.(png|jpe?g|jfif|gif|webp|avif|bmp|ico|cur|svg|apng|tiff?|heic|heif|psd|xcf|jp2|jxl|exr|hdr|tga|pcx|ppm|pgm|pbm|cr2|cr3|nef|arw|dng|orf|raf|rw2|sr2|pdf|mp4|webm|mkv|mov|m4v|mp3|wav|ogg|flac|m4a|opus)$/i;
+
+  const openRow = useCallback((row: Row | undefined, secondary = false) => {
+    if (!row) return;
+
+    /* Browsing: a folder is somewhere to go, and a file is looked at where it
+       is. This is the same on every tab, which is the point. */
+    if (at) {
+      const abs = row.abs ?? `${at.replace(/\/+$/, "")}/${row.rel}`;
+      if (row.kind === "dir") {
+        // The box follows you when you were typing a path, the way a shell's
+        // line does — so the next `../` or `foo/` is typed onto what is there.
+        setBrowsePath(abs);
+        setQ(typedPath ? `${shortenHome(abs, homeDir)}/` : "");
+        inputRef.current?.focus();
+        return;
+      }
+      // An image, a video, a PDF: the pane beside the list is already showing
+      // it. Pressing ⏎ on one should not throw it at an editor.
+      if (IMAGEY.test(row.rel) && !secondary) return;
+      const cut = abs.lastIndexOf("/");
+      onOpenFile(abs.slice(0, cut), abs.slice(cut + 1), "");
+      return;
+    }
+    /*
+     * On the machine tab a folder is not somewhere to GO.
+     *
+     * Everywhere else a folder opens the Files view at that path, and the Files
+     * view is bounded by the open project — pointing it at ~/Documents would
+     * come back refused, which is a dead row wearing a name. So here a folder
+     * narrows the search to itself, which is what picking one meant anyway:
+     * "in there".
+     */
+    if (tab === "machine") {
+      if (!place) return;
+      if (row.kind === "dir") {
+        /* It used to narrow the search to this folder, which left you typing.
+           Now it OPENS it — the folder's own contents, with sizes and dates —
+           and the place is still remembered, so the search box is still
+           pointed here when you go back to searching. */
+        const abs = `${place.replace(/\/+$/, "")}/${row.rel}`;
+        setPlaceRecents(rememberPlace(abs));
+        setPlace(abs);
+        setBrowsePath(abs);
+        setQ(""); inputRef.current?.focus();
+        return;
+      }
+      // No branch and no ref: a document on disk has exactly one version.
+      if (row.kind === "file") {
+        if (IMAGEY.test(row.rel) && !secondary) return;   // the pane is showing it
+        onOpenFile(place, row.rel, "");
+      }
+      return;
+    }
+    if (!root) return;
+    if (row.kind === "dir") {
+      // ⌘⏎ still hands it to the Files view, which is a different thing to
+      // want: that one is a place to work, this is a look inside.
+      if (secondary) { onRevealDir(root, row.rel); onClose(); return; }
+      setBrowsePath(`${root.replace(/\/+$/, "")}/${row.rel}`);
+      setQ(""); inputRef.current?.focus();
+      return;
+    }
     // A recent opens against the checkout it was opened FROM, and a recent that
     // is no longer on disk is dropped instead of opened into an empty viewer.
     if (row.kind === "recent") {
@@ -342,16 +673,43 @@ export function FilePalette({
     // A file found on a branch is opened AS THAT BRANCH HAS IT. Opening the
     // working tree's copy of the same path would be a different file wearing
     // the right name — or nothing at all, for one that only exists upstream.
+    if (IMAGEY.test(row.rel) && !secondary && !ref) return;   // the pane is showing it
     if (!ref) remember(root, row.rel);
     onOpenFile(root, row.rel, branch, ref || undefined);
-  }, [root, branch, ref, repos, onOpenFile, onRevealDir, onClose]);
+  }, [tab, at, place, root, branch, ref, repos, onOpenFile, onRevealDir, onClose]);
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
-      e.preventDefault(); setCursor((c) => (rows.length ? (c + 1) % rows.length : 0)); return;
+      e.preventDefault(); setCursor((c) => (shown.length ? (c + 1) % shown.length : 0)); return;
     }
     if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) {
-      e.preventDefault(); setCursor((c) => (rows.length ? (c - 1 + rows.length) % rows.length : 0)); return;
+      e.preventDefault(); setCursor((c) => (shown.length ? (c - 1 + shown.length) % shown.length : 0)); return;
+    }
+    /* ← goes up a folder and → goes into one: the two keys a file browser is
+       driven with. Only while browsing, and only with the box empty, so they
+       stay ordinary arrow keys inside a query somebody is editing. */
+    if (at && (e.key === "ArrowLeft" || (e.key === "Backspace" && !q)) && !q) {
+      e.preventDefault();
+      if (browsed?.parent) setBrowsePath(browsed.parent);
+      else setBrowsePath(null);
+      return;
+    }
+    if (at && e.key === "ArrowRight" && !q) {
+      const row = shown[cursor];
+      if (row?.kind === "dir") { e.preventDefault(); openRow(row); return; }
+    }
+    if (e.key === "Tab" && typedPath) {
+      /* In a path, Tab is completion — the thing every shell does with it, and
+         what makes typing a path bearable. It only steals the key while the box
+         holds a path; anywhere else it still switches tabs. */
+      e.preventDefault();
+      const names = rows.map((r) => r.rel);
+      const done = completion(typedPath.tail, names);
+      if (done) {
+        const isDir = rows.find((r) => r.rel === done)?.kind === "dir";
+        setQ(`${shortenHome(typedPath.dir, homeDir)}/${done}${isDir ? "/" : ""}`);
+      }
+      return;
     }
     if (e.key === "Tab") {
       // Tab cycles the three questions. It is free here — there is exactly one
@@ -361,16 +719,47 @@ export function FilePalette({
       setTab(TABS[(i + (e.shiftKey ? TABS.length - 1 : 1)) % TABS.length]!.id);
       return;
     }
-    if (e.key === "Enter") { e.preventDefault(); openRow(rows[cursor]); return; }
+    // ⌘⏎ / ctrl+⏎ is the second thing a row can do: the editor for a picture,
+    // the Files view for a folder. One key, one meaning — "not the obvious one".
+    if (e.key === "Enter") { e.preventDefault(); openRow(shown[cursor], e.metaKey || e.ctrlKey); return; }
     if (e.key === "Escape") {
+      e.preventDefault(); e.stopPropagation();
+      /* One step back before the way out: leaving a folder you walked into is
+         what esc means there, and closing the whole finder instead is how you
+         lose the place you were looking at. */
+      if (q) { setQ(""); return; }
+      if (at) { setBrowsePath(browsed?.parent ?? null); return; }
       // Stops here rather than reaching App's global handler, which would close
       // the viewer underneath in the same keystroke. One Escape, one layer.
-      e.preventDefault(); e.stopPropagation(); onClose(); return;
+      onClose(); return;
     }
   };
 
+  /* What the pane is looking at: the row under the cursor, wherever it came
+     from. Null while nothing is selected, which the pane draws as such. */
+  const preview = useMemo(() => {
+    const row = shown[cursor];
+    return row ? absOf(row) : null;
+  }, [shown, cursor, absOf]);
+
+  /*
+   * Room for the pane, or not.
+   *
+   * A 300px column is worth having on a desk and is most of a phone. Measured
+   * against the window rather than a media query so it also does the right
+   * thing in a narrow desktop window, which is where somebody actually notices.
+   */
+  const [wide, setWide] = useState(() => (typeof window === "undefined" ? true : window.innerWidth >= 900));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const on = () => setWide(window.innerWidth >= 900);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  const showPreview = wide && open;
+
   const active = TABS.find((t) => t.id === tab)!;
-  const status = tab === "names" ? found : tab === "contents" ? grepped : null;
+  const status = tab === "names" ? found : tab === "contents" ? grepped : tab === "machine" ? onDisk : null;
 
   return (
     <AnimatePresence>
@@ -430,7 +819,7 @@ export function FilePalette({
                * narrower palette above a wider document looked like an
                * accident, because it was one.
                */
-              ...(docOpen ? { left: "8vw", right: "8vw" } : { width: "min(720px, 92vw)" }),
+              ...(docOpen ? { left: "8vw", right: "8vw" } : { width: showPreview ? "min(1040px, 96vw)" : "min(720px, 92vw)" }),
               maxHeight: docOpen ? "38vh" : "72vh",
               background: "var(--bg2)",
               border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
@@ -462,8 +851,22 @@ export function FilePalette({
               )}
             </div>
 
-            {/* the field, and which checkout it is asking */}
-            <div className="flex items-center gap-2.5 px-3 py-2.5 shrink-0" style={{ borderTop: edge(18), borderBottom: edge(18) }}>
+            {/* the field, and which place it is asking
+             *
+             * Two boxes, and the outer one is the whole reason for it. A field
+             * that declares itself bare hands its focus ring to whatever wraps
+             * it (index.css), and what wrapped it was a full-bleed row — so
+             * focusing drew a violet rectangle a pixel inside the panel's own
+             * violet border. Two lines that close, which reads as a rendering
+             * fault rather than as focus. The frame is inset now and the ring
+             * lands on a box with room around it.
+             *
+             * `rounded-md` and not `rounded-lg`: that same rule sets a 6px
+             * radius on whatever it rings, and a box that rounds itself
+             * differently would square up by 2px the moment you typed. */}
+            <div className="px-2.5 py-2.5 shrink-0" style={{ borderTop: edge(18), borderBottom: edge(18) }}>
+            <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md"
+              style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: edge(14) }}>
               <span style={{ color: "var(--primary)" }}>⌕</span>
               <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
                 spellCheck={false} autoComplete="off" placeholder={active.placeholder}
@@ -474,7 +877,16 @@ export function FilePalette({
                   same answer from any checkout of the repository, because they
                   share the object store. What actually varies is a single
                   thing — what am I searching — so it is asked once. */}
-              {tab !== "recent" && (
+              {tab === "machine" && (
+                <PlaceChip
+                  place={place} places={places} recents={placeRecents} error={placeErr}
+                  openState={[pickOpen, setPickOpen]}
+                  onPick={(p) => {
+                    setPlaceRecents(rememberPlace(p));
+                    setPlace(p); setPickOpen(false); inputRef.current?.focus();
+                  }} />
+              )}
+              {tab !== "recent" && tab !== "machine" && (
                 <ScopeChip
                   repo={repo} repos={repos} ref_={ref} refs={refs}
                   openState={[pickOpen, setPickOpen]}
@@ -492,21 +904,67 @@ export function FilePalette({
                   onPick={(r) => { setRoot(r); setPickOpen(false); inputRef.current?.focus(); }} />
               )}
             </div>
+            </div>
 
-            {/* the answers */}
-            <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto py-2"
-              /* A cap, not a height: three results stay three rows tall rather
-                 than being stretched to a box sized for more. */
-              style={listCap ? { maxHeight: listCap } : undefined}>
-              <Answers tab={tab} q={q} root={root} rows={rows} cursor={cursor}
-                status={status} onHover={setCursor} onPick={openRow} />
+            {/* Where you are, when you are somewhere rather than searching. Each
+                crumb is a jump, which is the whole reason a path is drawn as
+                pieces instead of as a string. */}
+            {at && (
+              <div className="flex items-center gap-1 px-3 py-1.5 shrink-0 flex-wrap text-[10.5px]"
+                style={{ borderTop: edge(12), color: "var(--text4)" }}>
+                {browsePath && (
+                  <>
+                    <button onClick={() => setBrowsePath(null)} title="Volver al sitio elegido"
+                      className="px-1.5 py-0.5 rounded min-h-[20px]" style={{ color: "var(--primary-hover)" }}>↺ volver</button>
+                    <span>·</span>
+                  </>
+                )}
+                {crumbs(at, homeDir).map((c) => (
+                  <button key={c.path} onClick={() => setBrowsePath(c.path)}
+                    className="px-1 py-0.5 rounded min-h-[20px] truncate max-w-[180px]"
+                    style={{ color: c.last ? "var(--text)" : "var(--text3)" }}>{c.label}</button>
+                ))}
+                {browsed?.hiddenSkipped ? (
+                  /* Said, not hidden: a folder that shows less than it holds
+                     without saying so is a browser you stop trusting. */
+                  <span className="ml-auto" title="Hidden files and folders are out of the finder's reach">
+                    {browsed.hiddenSkipped} hidden {browsed.hiddenSkipped === 1 ? "item" : "items"} left out
+                  </span>
+                ) : null}
+              </div>
+            )}
+
+            {/* the answers, and what the one under the cursor is */}
+            <div className="flex-1 min-h-0 flex">
+              <div ref={listRef} className="flex-1 min-w-0 agx-scroll overflow-y-auto overflow-x-hidden py-2"
+                /* A cap, not a height: three results stay three rows tall rather
+                   than being stretched to a box sized for more. */
+                style={listCap ? { maxHeight: listCap } : undefined}>
+                <Answers tab={tab} q={q} root={root} place={place} placeErr={placeErr} rows={shown} cursor={cursor}
+                  status={status} onHover={setCursor} onPick={openRow} browsing={!!at}
+                  browseError={browsed && !browsed.ok ? browsed.error ?? null : null} />
+              </div>
+              {/* The pane that answers "is this the one I mean" without opening
+                  anything. Hidden on a narrow window, where the list is already
+                  the whole width. */}
+              {showPreview && (
+                <div className="shrink-0 border-l flex flex-col" style={{ width: 300, borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                  <Preview path={preview} compact={docOpen}
+                    onOpen={(_p, facts) => openRow(shown[cursor], facts.kind !== "dir")}
+                    onCopyPath={(p) => { void navigator.clipboard?.writeText(p); }} />
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-4 px-3 py-2 shrink-0 text-[10.5px]"
               style={{ borderTop: edge(18), color: "var(--text4)" }}>
               <span>↑↓ move</span>
               <span>⏎ open</span>
-              <span>a folder goes to Files</span>
+              {/* What Enter does to a folder is not the same question on both
+                  tabs, and saying the wrong one is worse than saying nothing. */}
+              <span>{at ? "← up · → into · ⇥ completes a path" : "⏎ enters a folder · ⌘⏎ opens it in Files"}</span>
+              {/* The gesture nobody discovers by looking: the box takes a path. */}
+              <span className="hidden sm:inline">type ~/ or ../ to move around</span>
               <span className="ml-auto">esc closes this · {chordLabel(appChordFor("files.palette"))} reopens</span>
             </div>
           </motion.div>
@@ -518,12 +976,36 @@ export function FilePalette({
 
 /* --------------------------------------------------------------- the list */
 
-function Answers({ tab, q, root, rows, cursor, status, onHover, onPick }: {
-  tab: PaletteTab; q: string; root: string; rows: Row[]; cursor: number;
+function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover, onPick, browsing, browseError }: {
+  tab: PaletteTab; q: string; root: string; place: string; placeErr: string | null; rows: Row[]; cursor: number;
   status: { pending: boolean; error: string | null; data: { ok: boolean; error?: string; via?: string; truncated?: boolean } | null } | null;
-  onHover: (i: number) => void; onPick: (row: Row) => void;
+  onHover: (i: number) => void; onPick: (row: Row, secondary?: boolean) => void;
+  /** Looking at a folder rather than at results: the empty state, the floors
+   *  and the "no checkout" note are all different questions there. */
+  browsing?: boolean;
+  browseError?: string | null;
 }) {
-  if (!root) return <Note>No checkout to search. Open a repository first.</Note>;
+  if (browsing) {
+    if (browseError) return <Note tint="var(--warning)">{browseError}</Note>;
+    if (!rows.length) {
+      return <Note>{q.trim() ? `Nothing in here matches “${q.trim()}”.` : "This folder is empty."}</Note>;
+    }
+    return (
+      <>
+        {rows.map((row, i) => (
+          <RowView key={`${row.kind}:${row.rel}:${i}`} row={row} i={i} on={i === cursor}
+            onHover={onHover} onPick={onPick} />
+        ))}
+      </>
+    );
+  }
+  /* The machine tab has no checkout to be missing, and its floor is its own:
+     one letter matches most of a home folder, which is not a search result. */
+  if (tab === "machine") {
+    if (placeErr) return <Note tint="var(--error)">{placeErr}</Note>;
+    if (!place) return <Note>Nowhere to search yet — pick a folder with the chip on the right.</Note>;
+    if (q.trim().length < 2) return <Note>Two letters at least — one matches most of a home folder.</Note>;
+  } else if (!root) return <Note>No checkout to search. Open a repository first.</Note>;
   if (tab === "contents" && q.trim().length < 2) return <Note>Two letters at least — one matches every file there is.</Note>;
   if (tab !== "recent" && !q.trim()) return <Note>Type to search {tab === "names" ? "for a file or a folder" : "the code"}.</Note>;
   if (status?.pending) return <Note>Searching…</Note>;
@@ -534,7 +1016,8 @@ function Answers({ tab, q, root, rows, cursor, status, onHover, onPick }: {
     return <Note>{
       tab === "recent"
         ? (q.trim() ? `Nothing you opened matches “${q.trim()}”.` : "Nothing opened here yet — the files you read will collect in this tab.")
-        : tab === "names" ? `Nothing here is called “${q.trim()}”.`
+        : tab === "machine" ? `Nothing under ${shortPath(place)} is called “${q.trim()}”. Hidden folders are not searched.`
+          : tab === "names" ? `Nothing here is called “${q.trim()}”.`
           : `No code in this checkout says “${q.trim()}”.`
     }</Note>;
   }
@@ -571,10 +1054,18 @@ function RowView({ row, i, on, onHover, onPick }: {
         <span className="shrink-0" style={{ color: icon.tint }}>{icon.glyph}</span>
         {cut >= 0 && <span className="truncate" style={{ color: "var(--text4)" }}>{row.rel.slice(0, cut + 1)}</span>}
         <span className="shrink-0" style={{ color: icon.tint, fontWeight: 500 }}>{name}{row.kind === "dir" ? "/" : ""}</span>
-        {row.kind === "dir" && (
+        {/* Size and date, when the row knows them — a listing does, a search
+            result does not, and inventing a dash for the ones that do not is
+            noise in a column people scan. */}
+        {(row.kind === "file" && row.bytes != null) || (row.kind === "dir" && row.items != null) ? (
+          <span className="ml-auto shrink-0 flex items-baseline gap-3 text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>
+            <span>{row.kind === "dir" ? `${row.items} elemento${row.items === 1 ? "" : "s"}` : humanBytes(row.bytes!)}</span>
+            {row.mtime ? <span>{ago(row.mtime)}</span> : null}
+          </span>
+        ) : row.kind === "dir" ? (
           <span className="ml-auto shrink-0 text-[9px] px-1.5 rounded"
             style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>folder</span>
-        )}
+        ) : null}
         {row.kind === "recent" && (
           <span className="ml-auto shrink-0 flex items-baseline gap-2">
             {/* Named, not merely greyed: "not on this branch" is the fact, and
@@ -643,6 +1134,7 @@ function RepoChip({ repo, repos, openState, onPick }: {
   const btn = useRef<HTMLButtonElement>(null);
   const [box, setBox] = useState<{ top: number; right: number } | null>(null);
   const [filter, setFilter] = useState("");
+  const field = useMenuField(open);
 
   // Measured when it opens, and again if the window moves under it. A position
   // computed once at mount would be wrong the moment anything resized.
@@ -684,7 +1176,7 @@ function RepoChip({ repo, repos, openState, onPick }: {
               width: "min(520px, calc(100vw - 16px))", maxHeight: "min(420px, 60vh)",
               background: "var(--bg2)", border: edge(30),
             }}
-            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } }}>
+            onKeyDown={menuKeys(() => setOpen(false))}>
             {/* Said once, at the top: the pair of chips is only unambiguous
                 if each menu also says which question it answers. */}
             {/* Label and explanation are two different kinds of text, so they
@@ -695,14 +1187,14 @@ function RepoChip({ repo, repos, openState, onPick }: {
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>a copy on disk — each has its own branch and its own uncommitted work</div>
             </div>
             {repos.length > 6 && (
-              <input autoFocus value={filter} onChange={(e) => setFilter(e.target.value)}
+              <input ref={field} value={filter} onChange={(e) => setFilter(e.target.value)}
                 placeholder="Filter checkouts…" spellCheck={false}
                 className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                 style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
             )}
             {/* Padded on both ends: bottom-only put the first row against the
                 filter field, where it read as part of it. */}
-            <div className="agx-scroll overflow-y-auto py-1.5" style={{ minHeight: 0 }}>
+            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
               {repos.length === 0 && <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No checkouts found.</div>}
               {repos.length > 0 && shown.length === 0 && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No checkout matches “{filter.trim()}”.</div>
@@ -730,6 +1222,133 @@ function RepoChip({ repo, repos, openState, onPick }: {
                   <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>on {r.branch}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        </Portal>
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------- the place */
+
+/**
+ * Which folder of the machine the search is asking.
+ *
+ * The checkout chip's sibling, and deliberately not the same control: a
+ * checkout has a branch and a repository behind it, and this has neither — a
+ * document on disk is one folder and one version. What it needs instead is a
+ * way in for a path nobody put in a menu, which is most of them: the field at
+ * the top filters the list until you type something that looks like a path,
+ * and then it completes directories the way the project picker does, because
+ * that is the habit those keys already have.
+ *
+ * The list is in a Portal for the same reason RepoChip's is — the palette
+ * clips its children, so a menu drawn inside it loses its left half.
+ */
+function PlaceChip({ place, places, recents, error, openState, onPick }: {
+  place: string; places: DiskPlace[]; recents: string[]; error: string | null;
+  openState: [boolean, (v: boolean) => void]; onPick: (path: string) => void;
+}) {
+  const [open, setOpen] = openState;
+  const btn = useRef<HTMLButtonElement>(null);
+  const [box, setBox] = useState<{ top: number; right: number } | null>(null);
+  const [typed, setTyped] = useState("");
+  const [sugg, setSugg] = useState<FsEntry[]>([]);
+  const field = useMenuField(open);
+
+  useEffect(() => {
+    if (!open) { setTyped(""); setSugg([]); return; }
+    const put = () => {
+      const r = btn.current?.getBoundingClientRect();
+      if (r) setBox({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+    };
+    put();
+    window.addEventListener("resize", put);
+    return () => window.removeEventListener("resize", put);
+  }, [open]);
+
+  /** A path, as opposed to a filter — the same test the project picker uses,
+   *  so the same input means the same thing in both. */
+  const isPath = (v: string) => v.startsWith("/") || v.startsWith("~");
+
+  useEffect(() => {
+    const v = typed.trim();
+    if (!open || !isPath(v)) { setSugg([]); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      api.fsComplete(v).then((r) => { if (live) setSugg(r.entries.slice(0, 12)); })
+        .catch(() => { if (live) setSugg([]); });
+    }, 140);
+    return () => { live = false; clearTimeout(t); };
+  }, [typed, open]);
+
+  const label = places.find((p) => p.path === place)?.label
+    ?? (place ? place.split("/").filter(Boolean).pop() ?? place : "Pick a folder");
+
+  const needle = typed.trim().toLowerCase();
+  const listed = isPath(typed.trim()) ? [] : places.filter((p) => !needle || `${p.label} ${p.path}`.toLowerCase().includes(needle));
+  const past = isPath(typed.trim())
+    ? []
+    : recents.filter((r) => r !== place && !places.some((p) => p.path === r) && (!needle || r.toLowerCase().includes(needle)));
+
+  const Row = ({ path, primary, secondary }: { path: string; primary: string; secondary?: string }) => (
+    <button key={path} onClick={() => onPick(path)}
+      className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
+      style={{ background: path === place ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
+      <span className="truncate" style={{ color: "var(--text)" }}>{primary}</span>
+      {secondary && <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>{secondary}</span>}
+    </button>
+  );
+
+  return (
+    <>
+      <button ref={btn} onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded-md max-w-[220px] shrink-0"
+        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text2)" }}
+        title={place ? `Searching ${place}` : "Pick a folder on this machine"}>
+        <span className="truncate min-w-0">{label}</span>
+        <span className="shrink-0" style={{ color: "var(--text3)" }}>▾</span>
+      </button>
+      {open && box && (
+        <Portal z={LAYER.menu}>
+          <div className="fixed inset-0" onClick={() => setOpen(false)} />
+          <div className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col overflow-hidden"
+            style={{
+              top: box.top, right: box.right,
+              width: "min(520px, calc(100vw - 16px))", maxHeight: "min(420px, 60vh)",
+              background: "var(--bg2)", border: edge(30),
+            }}
+            onKeyDown={menuKeys(() => setOpen(false))}>
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
+              <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where on this machine</div>
+              <div className="text-[10px]" style={{ color: "var(--text4)" }}>your home folder and what is under it — hidden folders are never searched</div>
+            </div>
+            <input ref={field} value={typed} onChange={(e) => setTyped(e.target.value)}
+              placeholder="Filter, or type a path like ~/Documents…" spellCheck={false} autoComplete="off"
+              onKeyDown={(e) => {
+                // Escape is the menu's, one level up — see menuKeys.
+                // Tab takes the first completion, Enter takes what you typed —
+                // the two things those keys mean in a shell.
+                if (e.key === "Tab") { e.preventDefault(); if (sugg.length) setTyped(`${sugg[0]!.path}/`); return; }
+                if (e.key === "Enter" && isPath(typed.trim())) { e.preventDefault(); onPick(typed.trim().replace(/\/+$/, "")); }
+              }}
+              className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
+            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
+              {error && <div className="px-3 py-2" style={{ color: "var(--error)" }}>{error}</div>}
+              {sugg.map((e) => <Row key={e.path} path={e.path} primary={e.name} secondary={e.path} />)}
+              {isPath(typed.trim()) && !sugg.length && (
+                <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing under that path yet — ⏎ searches it anyway.</div>
+              )}
+              {listed.map((p) => <Row key={p.path} path={p.path} primary={p.label} secondary={shortPath(p.path)} />)}
+              {past.length > 0 && (
+                <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Lately</div>
+              )}
+              {past.map((r) => <Row key={r} path={r} primary={shortPath(r)} />)}
+              {!error && !sugg.length && !listed.length && !past.length && !isPath(typed.trim()) && (
+                <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No folder matches “{typed.trim()}”. Type a path to go straight there.</div>
+              )}
             </div>
           </div>
         </Portal>
@@ -769,6 +1388,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
   const btn = useRef<HTMLButtonElement>(null);
   const [box, setBox] = useState<{ top: number; right: number } | null>(null);
   const [filter, setFilter] = useState("");
+  const field = useMenuField(open);
 
   useEffect(() => {
     if (!open) { setFilter(""); return; }
@@ -811,17 +1431,18 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
             style={{
               top: box.top, right: box.right, width: "min(560px, calc(100vw - 16px))",
               maxHeight: "min(460px, 66vh)", background: "var(--bg2)", border: edge(30),
-            }}>
+            }}
+            onKeyDown={menuKeys(() => setOpen(false))}>
             <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>What to search</div>
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>
                 a copy on disk, or any branch — reading a branch checks nothing out
               </div>
             </div>
-            <input autoFocus value={filter} onChange={(e) => setFilter(e.target.value)}
+            <input ref={field} value={filter} onChange={(e) => setFilter(e.target.value)}
               placeholder={`Filter ${repos.length} copies and ${nRefs} branches…`} spellCheck={false}
               onKeyDown={(e) => {
-                if (e.key === "Escape") { e.stopPropagation(); setOpen(false); return; }
+                // Escape is the menu's, one level up — see menuKeys.
                 // Enter takes the only thing left, which is what you typed towards.
                 if (e.key !== "Enter") return;
                 const only = copies.length + local.length + remote.length;
@@ -832,7 +1453,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
               }}
               className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
               style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
-            <div className="agx-scroll overflow-y-auto py-1.5" style={{ minHeight: 0 }}>
+            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
               {copies.length + local.length + remote.length === 0 && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing matches “{filter.trim()}”.</div>
               )}
@@ -888,6 +1509,7 @@ function RefChip({ value, refs, openState, onPick }: {
   const btn = useRef<HTMLButtonElement>(null);
   const [box, setBox] = useState<{ top: number; right: number } | null>(null);
   const [filter, setFilter] = useState("");
+  const field = useMenuField(open);
 
   useEffect(() => {
     if (!open) { setFilter(""); return; }
@@ -936,7 +1558,8 @@ function RefChip({ value, refs, openState, onPick }: {
             style={{
               top: box.top, right: box.right, width: "min(420px, calc(100vw - 16px))",
               maxHeight: "min(360px, 55vh)", background: "var(--bg2)", border: edge(30),
-            }}>
+            }}
+            onKeyDown={menuKeys(() => setOpen(false))}>
             {/* Only once there are enough to hunt through. Below that the list
                 IS the answer and a field in front of it is one more thing to
                 get past. */}
@@ -945,18 +1568,17 @@ function RefChip({ value, refs, openState, onPick }: {
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>of the checkout on the left — nothing is checked out to look</div>
             </div>
             {total > 8 && (
-              <input autoFocus value={filter} onChange={(e) => setFilter(e.target.value)}
+              <input ref={field} value={filter} onChange={(e) => setFilter(e.target.value)}
                 placeholder={`Filter ${total} branches…`} spellCheck={false}
                 onKeyDown={(e) => {
                   // Enter takes the only one left, which is what you were
-                  // typing towards.
+                  // typing towards. Escape is the menu's — see menuKeys.
                   if (e.key === "Enter" && shown === 1) { e.preventDefault(); onPick(local[0] ?? remote[0]!); }
-                  if (e.key === "Escape") { e.stopPropagation(); setOpen(false); }
                 }}
                 className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                 style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
             )}
-            <div className="agx-scroll overflow-y-auto py-1.5" style={{ minHeight: 0 }}>
+            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
               {/* The working tree stays reachable whatever is typed: it is not
                   a branch, so filtering it out with the branch names would take
                   away the way back. */}

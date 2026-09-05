@@ -9,12 +9,14 @@ import { db } from "./db.ts";
 import {
   insertEvent,
   getRecent,
+  capPayloadStrings,
   openToolCalls,
   getFilterOptions,
   getSessions,
   statsSummary,
   exportRows,
   pruneOldRows,
+  reclaimFreePages,
   RETENTION_DAYS,
   dbPath,
   getChanges,
@@ -31,17 +33,20 @@ import {
   actionLog,
   claimDatabase,
   releaseDatabaseClaim,
+  noteWaitFromHook,
 } from "./db.ts";
 import { maybeAlert, setAlertSink } from "./alerts.ts";
-import { noteAction, actorOf } from "./actions.ts";
+import { noteAction, actorOf, type ActorSource } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage, ingestStatusline } from "./usage.ts";
+import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
-import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed } from "./gate.ts";
+import { budgetHoldFor } from "./budget.ts";
 import { parseControlCmd } from "./control.ts";
-import { askBrowser, browserReadyCount, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp } from "./browserdrive.ts";
+import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation} from "./browserdrive.ts";
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -67,6 +72,7 @@ import {
   searchCommits, grepWorkingTree, searchHistory,
   createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
+  worktrees as repoWorktrees,
 } from "./gitwork.ts";
 import { sessionsForProject } from "./agentsessions.ts";
 import { changeRows, fileDiff } from "./changerows.ts";
@@ -80,7 +86,7 @@ import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme } from "./themesync.ts";
-import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite } from "node:fs";
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
@@ -88,9 +94,10 @@ import { procDetail, revealEnv } from "./procdetail.ts";
 import {
   listIssues, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
+import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -99,19 +106,30 @@ import {
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
 } from "./reminders.ts";
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist } from "./files.ts";
+import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
+import { browseDir, fileBytes, fileFacts, openInDesktop } from "./browse.ts";
+import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
+  disk as dockerDisk, volumeDetail as dockerVolumeDetail, volumePeek as dockerVolumePeek, DOCKER_WRITE_ENABLED,
+  envCompare as dockerEnvCompare,
   startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
 } from "./docker.ts";
+import { streamLogs } from "./dockerlogs.ts";
+import { capBuildCache, removeImages } from "./dockerprune.ts";
+import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
+import { measureFile } from "./filemeasure.ts";
+import { editorCursor } from "./editorwhere.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
-  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
+  editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup,
-  prBranches, prsForBranch } from "./prs.ts";
+  prBranches, prsForBranch, nodeIdOk } from "./prs.ts";
+import { repoSpend } from "./spend.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
@@ -119,24 +137,28 @@ import { makeViewTempDir } from "./viewtemp.ts";
 import { transcribe, transcriberOn } from "./dictate.ts";
 import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
 import { claudeCode } from "./agents/claudecode.ts";
-import { listPanes, focusPaneAnywhere, activePane, sweepPinnedWindows, pinnedSockets } from "./tmuxctl.ts";
+/* Both sides' imports: main added five, this branch still uses `panesWithPids`
+   and `reapMirrorSessions`. Neither list is a superset of the other. */
+import { listPanes, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
-import { tmuxBinStatus } from "./tmuxbin.ts";
-import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf } from "./tmuxconf.ts";
-import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper } from "./tmuxrestore.ts";
+import { tmuxBinStatus, tmuxSocket } from "./tmuxbin.ts";
+import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf, sweepStaleConfs } from "./tmuxconf.ts";
+import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper, noteLaunch, forgetSession, noteCrashLoop, crashLoopWarning, captureLayoutSync } from "./tmuxrestore.ts";
 import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, tmux } from "./tmuxpane.ts";
+import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
+import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
@@ -145,11 +167,1211 @@ import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, basename } from "node:path";
-import { privateHost, resolvePeer, originOf } from "./net.ts";
-import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller, type Origin } from "./auth.ts";
+import { tmpdir } from "node:os";
+import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
+import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, answersFromADevice, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, type Caller, type Origin } from "./auth.ts";
+import {
+  listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin,
+  listCatalogues, addCatalogue, removeCatalogue,
+} from "./plugins.ts";
+import { fetchCatalogue } from "./plugin-catalogue.ts";
+import {
+  openStub, settleLedger, recordDecision, recordFence, scorecard,
+  setMode, halt, setEnabled, enabled as understudyEnabled, sealSituation,
+  consent, setAllowed, addExtraSource, removeExtraSource, setNever, termsStatus,
+  precedentCount, precedentsByClass,
+  proposeScope, setProposeScope, quarantinedEver, openProjectNameAllowed,
+  judgeEnabled, setJudge, isOpenProjectPath, OPEN_PARTITION, openProjectName, setOpenProject,
+  nowhereReason,
+  bankByPartition,
+} from "./understudy.ts";
+import { listSources } from "./understudy-sources.ts";
+/** The last ingest run, so the panel can say what it learned without re-reading
+ *  a single file. Deliberately in memory and not on disk: it is a receipt for
+ *  something that just happened, and a stale one after a restart would claim
+ *  knowledge the bank may no longer match. */
+let lastUnderstudyLearn: import("./understudy-ingest.ts").IngestResult | null = null;
+
+/* ── what the work loop is allowed to do ────────────────────────────────────
+ *
+ * The three capabilities, defined here and handed down, so that
+ * `understudy-loop.ts` can reach neither a shell nor a repository on its own.
+ * Everything it does, it does through something this file decided to give it —
+ * the same shape as the actuator's runner and for the same reason: a module
+ * that can start a process is a module every fence has to be re-argued around.
+ */
+
+/** Checkouts the loop may work in. The open project, and today only that. */
+async function openProjectRepos(): Promise<string[]> {
+  const paths = getChanges(300).map((c) => c.file_path);
+  const found = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
+  const roots = found.map((r) => r.root);
+
+  /*
+   * THE CHECKOUT THIS SERVER IS RUNNING FROM, which discovery never finds.
+   *
+   * `discoverRepos` works from telemetry — where work has recently happened
+   * THROUGH the app — and from projects somebody has opened in it. On this
+   * machine both are the employer's repositories: the open project gets worked
+   * on from a terminal, so the app has never seen it, so the loop concluded it
+   * had nowhere to work and declined every task it found.
+   *
+   * The app knows perfectly well where it lives. Leaving it out was the loop
+   * being unable to find the ground under its own feet.
+   *
+   * Deduplicated, because a checkout arriving by both routes would be offered
+   * twice and worked twice.
+   */
+  /*
+   * DELIBERATELY NOT `workspaceRoot()`.
+   *
+   * It looks like the right answer — the root somebody launched the app with —
+   * and on this machine it is the employer's repository, because that is what
+   * the application is pointed at. Adding it here put thirty of their
+   * checkouts one `isOpenProjectPath` call away from being worked in; the only
+   * thing that stopped them was the fence name, which is the thing that had
+   * just been wrong.
+   *
+   * "What the app is watching" and "where something may act for me" are
+   * different questions. This one is answered by the open-project setting and
+   * by discovery, and when neither finds anything the honest answer is none.
+   */
+  const here = repoRootOf(process.cwd());
+  if (here && !roots.includes(here)) roots.push(here);
+
+  /*
+   * ITS OWN SIBLINGS, which discovery never finds either.
+   *
+   * `here` is one checkout; the fence (`isOpenProjectPath`) allows every
+   * worktree of the same repository, because they are the same project on
+   * other branches. Discovery is telemetry-driven and never sees a worktree
+   * nobody has worked in through the app yet — so a task queued against one
+   * was allowed by the fence and invisible to the loop, which is the queue
+   * that stops moving with tasks still in it.
+   *
+   * `git worktree list` on `here`, not a filesystem sweep: it answers from
+   * the repository itself, so it can only ever name checkouts that already
+   * are this project — nothing the filter below wouldn't have kept anyway.
+   */
+  if (here) {
+    for (const w of await repoWorktrees(here)) {
+      if (w.path && !roots.includes(w.path)) roots.push(w.path);
+    }
+  }
+
+  /*
+   * AND THE WORKTREES OF THE PROJECT THE FENCE NAMES, or the fence cannot be
+   * pointed at all.
+   *
+   * Everything above depends on two things that were both empty on a real
+   * morning: telemetry — work done THROUGH the app, which does not happen when
+   * somebody works in a terminal — and `here`, the checkout the server process
+   * is running from. An installed app relaunched by its own installer starts
+   * outside any checkout, so `here` is null.
+   *
+   * The result was a deputy that declined every task with "it has nowhere to
+   * work", a `Pick a checkout` control whose list was built from the SAME empty
+   * discovery, and therefore no way out from inside the application: measured
+   * this morning, with the fence set to `agentglass-understudy` and the screen
+   * reading "0 checkouts".
+   *
+   * So the projects this machine has actually worked in are consulted — and
+   * ONLY the one the fence names. The name is matched before anything is
+   * opened: a fence called `agentglass-understudy` looks inside `agentglass`
+   * and nowhere else, so the employer's repository next to it is never so much
+   * as listed. Everything found still has to pass `isOpenProjectPath` below,
+   * exactly as before. This makes it possible for a name to match something;
+   * it never makes a name unnecessary.
+   */
+  const wanted = openProjectName().trim();
+  if (wanted) {
+    for (const p of knownProjects()) {
+      /* The candidate has to be the fence's OWN test (`isOpenProjectPath`), not
+         a hand-rolled reading of it. The previous version matched only a leaf
+         that STARTS WITH `<project>-`, which is the prefix case of what the
+         fence actually allows: the fence is a segment test, so it also allows
+         a worktree named `work-agentglass` (suffix) or `team-agentglass-2`
+         (middle), and matches case-insensitively. Measured: of five leaf
+         shapes the fence accepts for project `agentglass`, the prefix-only
+         check passed 2 and silently dropped 3 — the same "allowed and never
+         found" gap as the backwards comparison this replaced, just on the
+         other side of the string. */
+      if (!isOpenProjectPath(p.path)) continue;
+      if (!roots.includes(p.path)) roots.push(p.path);
+      for (const w of await repoWorktrees(p.path)) {
+        if (w.path && !roots.includes(w.path)) roots.push(w.path);
+      }
+    }
+  }
+
+  /*
+   * AND IT HAS TO EXIST. Discovery is telemetry-driven: a checkout that a
+   * session once worked in stays in the changes table after the directory is
+   * gone, and the fence kept listing it — measured on the installed app, a
+   * `~/code/agentglass-dr` that had been deleted was one of four allowed
+   * checkouts. A run cut from a path that is not there fails with the same
+   * `ENOENT … posix_spawn` a missing binary produces, which is the diagnosis
+   * that cost an afternoon once already.
+   */
+  return roots.filter((r) => isOpenProjectPath(r) && fsExists(r));
+}
+
+async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out: string }> {
+  const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const out = await new Response(p.stdout).text();
+  const errText = await new Response(p.stderr).text();
+  return { ok: (await p.exited) === 0, out: (out + errText).slice(0, 4000) };
+}
+
+/*
+ * His own agent, with his own tools, inside one worktree.
+ *
+ * No permission prompting, because there is no terminal to answer a prompt at
+ * and a run that stalls waiting for one is a run that silently does nothing.
+ * That is only defensible because of WHERE it runs: a worktree cut for this
+ * task and thrown away if it goes wrong. Isolation is doing the work that a
+ * permission dialogue would otherwise have to.
+ */
+/*
+ * THE RUN, IN A PANE SOMEBODY CAN WATCH.
+ *
+ * A task is an agent with a shell for up to twenty-five minutes, and until now
+ * it was a hidden `Bun.spawn`: the screen said "this takes as long as the task
+ * does" and nothing else moved until it was over. You could not see which file
+ * it was in, what it had tried, or whether it was stuck — the difference
+ * between watching popcorn being made and being handed a bag.
+ *
+ * So the work happens in a tmux window in the project's own engine session,
+ * which is the same machinery every other pane in this application already
+ * uses: it can be watched, scrolled, interrupted, and typed into.
+ *
+ * THE PIECES THAT ARE NOT OBVIOUS.
+ *
+ * The prompt goes in a FILE. It is thousands of characters of rules and
+ * precedents, and a command line has a length limit that varies by kernel; a
+ * brief that grows past it would fail as something unrelated.
+ *
+ * `tee` rather than a redirect, because both things are wanted at once: the
+ * pane is for the person and the file is for the outcome row.
+ *
+ * `PIPESTATUS[0]` rather than `$?`. Through a pipe, `$?` is tee's exit code,
+ * which is zero whatever the agent did — the run would be recorded as finished
+ * no matter how it ended. That is bash-only, hence bash rather than sh.
+ *
+ * The exit code lands in a FILE, and that file is the signal the run is over.
+ * A window is gone the moment its command ends, so waiting on the window is a
+ * race with reading it.
+ *
+ * Returns null when there is no tmux, or when the window could not be opened,
+ * and the caller falls back to the hidden spawn. Watching is worth a lot and
+ * it is not worth being the reason nothing runs.
+ */
+/*
+ * The pane's formatter, carried with the run rather than found on disk.
+ * Kept verbatim from scripts/understudy-watch.py, which is where it is read
+ * and edited; a test holds the two in step.
+ */
+const WATCH_PY = `#!/usr/bin/env python3
+"""
+Turn the agent's event stream into something worth watching.
+
+\`claude -p\` prints nothing at all until it is finished, so a pane running it is
+a blank rectangle for the length of the task — which is the opposite of the
+point. \`--output-format stream-json --verbose\` does emit as it goes, but it
+emits JSON: measured at roughly two hundred characters a line, most of it
+identifiers. Watching that tells you the process is alive and nothing else.
+
+So the stream goes through here on its way to the pane. One short line per
+event, in the order things happened: which tool, on which file, and the first
+words of anything it says. The raw stream is teed to a file untouched, because
+the run's recorded outcome has to be the agent's own words rather than this
+summary of them.
+
+Deliberately not pretty. It is a counter you glance at to see whether it is
+reading, editing, or stuck on the same file for ten minutes.
+"""
+import json
+import re
+import sys
+
+
+def tail(path: str, keep: int = 60) -> str:
+    """The END of a path, which is the part that differs between two of them."""
+    return path if len(path) <= keep else "…" + path[-(keep - 1):]
+
+
+def head(cmd: str, keep: int = 110) -> str:
+    """
+    The START of a command, which is the opposite rule and the right one.
+
+    A path is identified by its last segment; a command is identified by its
+    first word. Cutting commands from the left produced fourteen rows reading
+    \`Bash …ass-understudy-the-tracker-fence-does-no\`, which is the middle of a
+    directory name and tells you nothing about what it ran.
+    """
+    return cmd if len(cmd) <= keep else cmd[:keep - 1] + "…"
+
+
+# What a shell command is actually doing, in the order these are tried.
+# Deliberately a short list: the point is to recognise the handful of things a
+# coding agent does over and over, not to parse shell.
+SHELL_MEANS = [
+    (re.compile(r"\\b(bun|npm|yarn|pnpm)\\s+(run\\s+)?test\\b"), "running the tests"),
+    (re.compile(r"\\btsc\\b|\\btypecheck\\b"), "checking the types"),
+    (re.compile(r"\\bgit\\s+(commit)\\b"), "committing"),
+    (re.compile(r"\\bgit\\s+(diff|show)\\b"), "reading its own changes"),
+    (re.compile(r"\\bgit\\s+(status)\\b"), "checking what it has changed"),
+    (re.compile(r"\\bgit\\s+(checkout|restore|reset)\\b"), "undoing something"),
+    (re.compile(r"\\b(grep|rg|ag)\\b"), None),          # handled with its pattern
+    (re.compile(r"\\b(cat|head|tail|sed -n|less)\\b"), None),
+    (re.compile(r"\\b(find|ls)\\b"), "looking around the files"),
+    (re.compile(r"\\b(mkdir|cp|mv|rm)\\b"), "moving files about"),
+    (re.compile(r"\\bmake\\b"), "running make"),
+]
+
+QUOTED = re.compile(r"""["']([^"']{2,60})["']""")
+
+
+def file_in(cmd: str) -> str:
+    """The likeliest filename in a command, for the ones that read or search."""
+    for word in reversed(cmd.split()):
+        # No backtick in this set on purpose: this file is embedded verbatim
+        # inside a TypeScript template literal, and a backtick followed by a
+        # semicolon here ended that literal early when the copy was made.
+        base = word.strip("\\"';|&()")
+        if "/" in base or re.search(r"\\.[a-z]{2,4}$", base):
+            return tail(base, 40)
+    return ""
+
+
+def shell_means(cmd: str) -> str:
+    """A sentence for a command, or the command's first word if none fits."""
+    for pattern, said in SHELL_MEANS:
+        if not pattern.search(cmd):
+            continue
+        if said:
+            return said
+        if pattern.pattern.startswith(r"\\b(grep"):
+            found = QUOTED.search(cmd)
+            where = file_in(cmd)
+            what = f'looking for "{found.group(1)}"' if found else "searching"
+            return f"{what} in {where}" if where else what
+        where = file_in(cmd)
+        return f"reading {where}" if where else "reading a file"
+    first = cmd.split()[0] if cmd.split() else "something"
+    return f"running {tail(first, 20)}"
+
+
+# The tools an agent uses most, said as a person would say them.
+TOOL_MEANS = {
+    "Read": "reading", "Write": "writing", "Edit": "editing",
+    "NotebookEdit": "editing", "Glob": "finding", "Grep": "looking for",
+    "TodoWrite": "planning", "Task": "asking another agent", "WebFetch": "fetching a page",
+}
+
+
+def describe(ev: dict) -> str | None:
+    kind = ev.get("type")
+
+    if kind == "assistant":
+        out = []
+        for block in ev.get("message", {}).get("content", []) or []:
+            if block.get("type") == "text":
+                said = " ".join((block.get("text") or "").split())
+                # Its own words, marked and kept whole-ish: this is the line
+                # that says WHY, and everything else is only what it touched.
+                if said:
+                    out.append("\\n▸ " + said[:220])
+            elif block.get("type") == "tool_use":
+                name = block.get("name", "?")
+                arg = block.get("input", {}) or {}
+                path = arg.get("file_path") or arg.get("path")
+                cmd = arg.get("command")
+                pattern = arg.get("pattern")
+                if name == "Bash" and cmd:
+                    out.append("   " + shell_means(" ".join(str(cmd).split())))
+                elif path:
+                    verb = TOOL_MEANS.get(name, name.lower())
+                    out.append(f"   {verb} {tail(' '.join(str(path).split()), 50)}")
+                elif pattern:
+                    verb = TOOL_MEANS.get(name, name.lower())
+                    out.append(f'   {verb} "{head(" ".join(str(pattern).split()), 50)}"')
+                else:
+                    out.append("   " + TOOL_MEANS.get(name, name.lower()))
+        return "\\n".join(out) if out else None
+
+    if kind == "user":
+        # Tool results: only whether it worked, never the body. A file's
+        # contents scrolling past hides the thing you were watching for.
+        for block in ev.get("message", {}).get("content", []) or []:
+            if block.get("type") == "tool_result" and block.get("is_error"):
+                return "   ↳ that did not work"
+        return None
+
+    if kind == "rate_limit_event":
+        """
+        The one event that explains a run stopping for no visible reason.
+
+        A run of the understudy died after thirty minutes with 782KB of work
+        and nothing committed. Nothing on screen said why: the pane simply
+        stopped. This was in the stream all along and the formatter dropped it,
+        which is the worst thing a formatter can do with the only line that
+        answers "what happened".
+        """
+        info = ev.get("rate_limit_info", {}) or {}
+        why = info.get("overageDisabledReason") or info.get("overageStatus") or ""
+        kind_of = info.get("rateLimitType") or "usage"
+        when = info.get("resetsAt")
+        at = ""
+        if isinstance(when, (int, float)):
+            import time as _t
+            at = _t.strftime(" — resets %H:%M", _t.localtime(when))
+        return f"\\n! {kind_of} limit reached ({why}){at}"
+
+    if kind == "result":
+        cost = ev.get("total_cost_usd")
+        turns = ev.get("num_turns")
+        bits = [b for b in (f"{turns} steps" if turns else "",
+                            f"\${cost:.2f}" if isinstance(cost, (int, float)) else "") if b]
+        return f"\\n— finished ({', '.join(bits)})" if bits else "\\n— finished"
+
+    return None
+
+
+def main() -> int:
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            ev = json.loads(raw)
+        except json.JSONDecodeError:
+            # Not everything on this stream is an event: hooks and the runtime
+            # write plain lines too, and dropping them would hide a crash.
+            print(raw[:160], flush=True)
+            continue
+        line = describe(ev)
+        if line:
+            print(line, flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+`;
+
+/**
+ * How often the run loop asks whether the agent's window is still there.
+ *
+ * Every ask is a tmux subprocess, and the thing it detects — an agent that
+ * died — does not need one-second resolution. Five seconds turns a
+ * forty-five-minute wait on a corpse into a five-second one, which is the whole
+ * of the improvement; going finer buys nothing and costs a process per second
+ * per concurrent run.
+ */
+const AGENT_LIVENESS_MS = 5_000;
+
+/*
+ * What was on screen when a run ended badly.
+ *
+ * Run 18 produced three transcript events in forty-five minutes and then timed
+ * out, and the outcome could say nothing about why, because the transcript is
+ * the only thing it read and the transcript was empty. Whatever the agent was
+ * actually doing — sitting at a prompt, printing an error the event stream
+ * never carries, waiting on something — was on the screen of its own window,
+ * and nobody looked.
+ *
+ * Only on a bad ending. A run that finished has its answer, and the pane
+ * underneath it is noise.
+ */
+async function paneTail(windowId: string): Promise<string> {
+  const r = await tmux(["capture-pane", "-p", "-t", windowId]);
+  const text = r.ok ? r.stdout.trimEnd() : "";
+  return text ? `\n--- what its window had on screen ---\n${text.split("\n").slice(-40).join("\n")}` : "";
+}
+
+async function runAgentInPane(p: {
+  cwd: string; root: string; label: string; argv: string[];
+  prompt: string; env: Record<string, string>; timeoutMs: number;
+  onPane?: (paneId: string) => void;
+  /*
+   * Told WHY there is no pane, rather than falling back in silence.
+   *
+   * Measured the first time this ran for real: an over-long TMUX_TMPDIR pushed
+   * the socket path past the 108 bytes a unix socket allows, tmux refused with
+   * "File name too long", and the run carried on perfectly well in a hidden
+   * spawn. Which is the right behaviour — being watchable is not worth being
+   * the reason nothing runs — but the screen simply showed no pane, and there
+   * was nothing anywhere to say the difference between "no pane yet" and "no
+   * pane ever". A silent fallback on the one feature whose entire point is
+   * being able to watch is the wrong kind of quiet.
+   */
+  onNoPane?: (why: string) => void;
+}): Promise<{ ok: boolean; out: string } | null> {
+  const can = tmuxCapability();
+  if (!can.available) { p.onNoPane?.(can.reason || "tmux is not available"); return null; }
+
+  const box = mkdtempSync(joinPath(tmpdir(), "agx-understudy-"));
+  const promptPath = joinPath(box, "brief.txt");
+  const outPath = joinPath(box, "transcript.txt");
+  const rcPath = joinPath(box, "exit-code");
+  await Bun.write(promptPath, p.prompt);
+
+  const q = (v: string) => `'${v.replaceAll("'", "'\\''")}'`;
+  /*
+   * THE PANE WAS EMPTY, and that was the whole feature not working.
+   *
+   * Measured: `claude -p` prints nothing at all until it finishes, so a pane
+   * running it is a blank rectangle for the length of the task. Watching an
+   * empty box is not better than watching a sentence that says "this takes as
+   * long as it takes".
+   *
+   * `--output-format stream-json --verbose` does emit as it goes. It emits
+   * JSON — around two hundred characters a line, mostly identifiers — so it
+   * goes through a formatter on the way to the screen: one short line per
+   * event, which tool and which file.
+   *
+   * The RAW stream is teed out first, untouched. The recorded outcome has to
+   * be the agent's own words, not this summary of them; the formatter is for
+   * the person standing at the counter.
+   */
+  const watchArgv = [...p.argv, "--output-format", "stream-json", "--verbose"];
+  /*
+   * THE FORMATTER IS WRITTEN OUT, not pointed at.
+   *
+   * It was resolved with `import.meta.url` against `../../scripts/`, which is
+   * right in a checkout and wrong everywhere else: from the installed bundle
+   * that path resolves to `/scripts/understudy-watch.py`, and the pane's first
+   * and only line was
+   *
+   *     python3: can't open file '/scripts/understudy-watch.py'
+   *
+   * Found by installing the app and watching a run — it worked in the tree it
+   * was written in, which is the class of bug a test in that same tree cannot
+   * see. A file the run carries with it has no opinion about how the server
+   * was installed.
+   */
+  const fmt = joinPath(box, "watch.py");
+  await Bun.write(fmt, WATCH_PY);
+  const line =
+    `${watchArgv.map(q).join(" ")} < ${q(promptPath)} 2>&1 | tee ${q(outPath)} | python3 ${q(fmt)}; ` +
+    `echo \${PIPESTATUS[0]} > ${q(rcPath)}`;
+
+  /*
+   * THE MACHINE TOKEN OUT OF THE ENGINE'S ENVIRONMENT, before the agent runs.
+   *
+   * The agent is handed a minted READ-ONLY credential through `-e`, and that
+   * override works: measured, the variable inside its window is the minted
+   * one. But the tmux SERVER carries the environment it was started with, and
+   * on this machine that includes `AGENTGLASS_TOKEN` — the machine token, with
+   * every write route open to it.
+   *
+   * The agent has bash. `tmux -L agentglass show-environment -g
+   * AGENTGLASS_TOKEN` returns it, verified against the real socket. So the
+   * fence around what the understudy may do was one command away from being
+   * irrelevant, and the careful `-e` was protecting a window while the door
+   * beside it stood open.
+   *
+   * Unset globally rather than trusted not to be asked. It is only read when a
+   * new pane inherits it, and every pane this application opens is given what
+   * it needs explicitly — the panes a person opens get their environment from
+   * their own shell.
+   */
+  await tmux(["set-environment", "-g", "-u", "AGENTGLASS_TOKEN"]);
+
+  const win = await engineWindowRunning(
+    p.root, `understudy: ${p.label}`.slice(0, 60), ["bash", "-c", line], p.cwd, p.env,
+  );
+  if (!win) {
+    // The engine session could not be opened or the window refused. The socket
+    // path being too long lands here rather than in the capability check.
+    p.onNoPane?.("tmux would not open a window for it");
+    return null;
+  }
+
+  /*
+   * WIDE, BECAUSE 80 COLUMNS IS WHERE EVERY LINE WAS BEING CUT.
+   *
+   * A window opened with no client attached is 80x24, and the panel showed
+   * fourteen rows of `Bash …ass-understudy-the-tracker-fence-does-no` — the
+   * tool's name, then the middle of a command. Reported as "tiny, and none of it
+   * can be made out", and the font size was the smaller half of it.
+   *
+   * Set on THIS WINDOW rather than on the session: `window-size` is a window
+   * option, and putting `manual` on a session pins every window in it — which
+   * has already once shrunk seven of somebody's real ones. Failures are
+   * ignored on purpose; a narrow pane is worse than a wide one and better than
+   * no run.
+   */
+  await tmux(["set-window-option", "-t", win.windowId, "window-size", "manual"]);
+  await tmux(["resize-window", "-t", win.windowId, "-x", "200", "-y", "50"]);
+
+  /*
+   * THE WINDOW IS LEASED, and that is what closes it.
+   *
+   * A `-p` run ends by itself: the command exits and tmux takes the window with
+   * it, so the only path that had to kill anything was the timeout below. That
+   * stops being true the moment the pane holds an interactive CLI, which is the
+   * next thing to go in here — an agent that stays at its prompt is a window
+   * nothing ends, and nothing sweeps it either, because `evictIdlePanes`
+   * enumerates sessions and this is a window inside one.
+   *
+   * Leasing it now rather than with that change, because the rule the lease
+   * exists for is the same either way and it is easier to trust when it is not
+   * also new: the only window this can ever close is one it stamped itself.
+   * See panelease.ts for why a name or an age would not do.
+   */
+  await takeLease(win.windowId, `understudy: ${p.label}`);
+
+  p.onPane?.(win.paneId);
+
+  try {
+    /*
+     * WAITING FOR AN AGENT THAT IS STILL THERE.
+     *
+     * This used to poll for the exit-code file and nothing else, so the only
+     * thing that could end a wait early was the agent finishing. An agent that
+     * DIED — window killed, tmux restarted, the shell inside it gone — wrote no
+     * rc file, and the loop sat on it for the whole forty-five minute budget
+     * before recording a timeout. Measured: a run spent thirty-five minutes
+     * "running" with no process anywhere on the machine, no file touched in its
+     * worktree, and nothing to tell anyone until the clock ran out.
+     *
+     * The window is the signal, and the lease already knows how to ask: the
+     * stamp we wrote is on that window or it is not. Asking every five seconds
+     * rather than every second because it is a subprocess per ask and the thing
+     * being detected does not need one-second resolution.
+     *
+     * The rc file is re-checked AFTER the window comes back gone, never before:
+     * an agent that finishes writes rc and then its window closes, and those two
+     * are not simultaneous. Checking in that order is what stops a normal ending
+     * being reported as a death.
+     */
+    const started = Date.now();
+    const deadline = started + p.timeoutMs;
+    let died = false;
+    let nextLivenessCheck = Date.now() + AGENT_LIVENESS_MS;
+    /*
+     * How long the transcript has been silent, carried into whatever ending
+     * this run gets. It does not decide anything — an agent thinking hard
+     * between tool calls writes nothing for minutes and is working perfectly —
+     * but "it ran out of time" and "it ran out of time and had written nothing
+     * for forty of those minutes" are different reports, and only the second
+     * one is diagnosable.
+     */
+    let lastSize = -1;
+    let lastGrew = started;
+    while (Date.now() < deadline) {
+      if (fsExists(rcPath)) break;
+      await new Promise((r) => setTimeout(r, 1000));
+      if (Date.now() < nextLivenessCheck) continue;
+      nextLivenessCheck = Date.now() + AGENT_LIVENESS_MS;
+      const size = fsExists(outPath) ? Bun.file(outPath).size : 0;
+      if (size !== lastSize) { lastSize = size; lastGrew = Date.now(); }
+      if (await leaseHeld(win.windowId)) continue;
+      if (fsExists(rcPath)) break;
+      died = true;
+      break;
+    }
+    const silentFor = Math.round((Date.now() - lastGrew) / 1000);
+    const silence = silentFor >= 60 ? `, after ${Math.round(silentFor / 60)}min with nothing written to its transcript` : "";
+
+    const out = fsExists(outPath) ? await Bun.file(outPath).text() : "";
+    if (died) {
+      /* The transcript is worth more than the sentence: whatever the agent got
+         through before it went is in there, and a run that died at minute two
+         with an empty one is a different problem from a run that died at minute
+         thirty with 400KB. */
+      const ran = Math.round((Date.now() - started) / 1000);
+      return { ok: false, out: `${out}\n--- its window is gone: the agent died after ${ran}s${silence}, and nothing was left running ---${await paneTail(win.windowId)}`.trim().slice(-8000) };
+    }
+    if (!fsExists(rcPath)) {
+      // Out of time. The window goes rather than being left, because an agent
+      // still typing into a worktree nobody is waiting for is worse than no
+      // transcript — the run is already recorded as failed either way. The
+      // `finally` does it, so the path that throws on the way here ends the
+      // same way this one does.
+      /* Captured BEFORE the `finally` closes the window — on a timeout it is
+         still there, and it is the only place the reason can be. */
+      const screen = await paneTail(win.windowId);
+      return { ok: false, out: `${out}\n--- it ran out of time and was stopped${silence} ---${screen}`.trim().slice(-8000) };
+    }
+    const code = Number.parseInt((await Bun.file(rcPath).text()).trim(), 10);
+    return { ok: code === 0 && out.trim().length > 0, out: finalWords(out) };
+  } finally {
+    // Every ending, including the ones nobody wrote a branch for. A window that
+    // already closed itself is the common case and costs one refused lookup.
+    await endLease(win.windowId);
+  }
+}
+
+/**
+ * The agent's answer, pulled back out of its event stream.
+ *
+ * The transcript on disk is now one JSON object per line, and the outcome a
+ * person reads has to be the words rather than the envelope. The last `result`
+ * event carries them; anything else means the stream did not get that far, and
+ * then the raw tail is more use than an empty string — it is where a crash is.
+ */
+function finalWords(stream: string): string {
+  const lines = stream.trim().split("\n");
+
+  /*
+   * A RUN CUT OFF BY A USAGE LIMIT, which otherwise records as a blank
+   * failure.
+   *
+   * Measured: a run worked for thirty minutes, produced 782KB of transcript,
+   * and stopped mid-sentence. The reason was in the stream — a
+   * `rate_limit_event` saying the five-hour window had no credit left — and
+   * the outcome said nothing at all, because there was no `result` event to
+   * find. Half an hour of work, and the row could not say why it ended.
+   *
+   * Read before the result, and separately: a limit reached part-way through
+   * is the thing worth reporting even when the run went on to finish.
+   */
+  let limited = "";
+  for (const line of lines) {
+    if (!line.includes("rate_limit_event")) continue;
+    try {
+      const ev = JSON.parse(line) as {
+        type?: string;
+        rate_limit_info?: { rateLimitType?: string; overageDisabledReason?: string; resetsAt?: number };
+      };
+      if (ev.type !== "rate_limit_event") continue;
+      const i = ev.rate_limit_info ?? {};
+      const when = typeof i.resetsAt === "number"
+        ? new Date(i.resetsAt * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+        : "";
+      limited = `--- stopped by the ${i.rateLimitType ?? "usage"} limit`
+        + `${i.overageDisabledReason ? ` (${i.overageDisabledReason})` : ""}`
+        + `${when ? `, resets ${when}` : ""} ---`;
+    } catch { /* a line that mentions it without being one */ }
+  }
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const ev = JSON.parse(lines[i]!) as { type?: string; result?: string };
+      if (ev.type === "result" && typeof ev.result === "string") {
+        return `${limited ? `${limited}\n` : ""}${ev.result}`.slice(-8000);
+      }
+    } catch { /* not every line on that stream is an event */ }
+  }
+  // No result event at all: it did not get to the end. Say so, and say why if
+  // the stream knows — a tail of raw JSON answers nothing.
+  const why = limited || "--- it stopped before finishing, and left no closing message ---";
+  return `${why}\n${stream.slice(-4000)}`.slice(-8000);
+}
+
+/**
+ * The plan limits as percentages left, or null when they cannot be read.
+ *
+ * `getUsage` reports utilisation; what a decision needs is what is LEFT, and
+ * the seven-day window is the one that runs out — the five-hour one refills
+ * while you sleep. Failure is null rather than an optimistic 100: a chooser
+ * that cannot see the meter must not spend as though it were full.
+ */
+async function usageNow(): Promise<UsageNow | null> {
+  try {
+    const u = await getUsage();
+    if (!u?.available) return null;
+    const week = u.seven_day?.remaining;
+    const hour = u.five_hour?.remaining;
+    if (typeof week !== "number") return null;
+    return { weekRemaining: week, hourRemaining: typeof hour === "number" ? hour : 100 };
+  } catch {
+    return null;
+  }
+}
+
+/*
+ * Which run is in which pane, right now.
+ *
+ * In memory rather than in the row, on purpose. A live pane exists only while
+ * this process does — a server that restarts leaves no pane behind it to point
+ * at — so a column would be a value that is wrong more often than right, and it
+ * would need a migration to say so.
+ *
+ * Cleared when the run ends, so the tab offers to show you something that is
+ * still there.
+ */
+const watching = new Map<number, { paneId?: string; why?: string }>();
+/**
+ * The window a run is in, asked of tmux rather than remembered.
+ *
+ * The map is in this process, and this process restarts — every reinstall, and
+ * any crash. The RUN does not: it is an agent in a tmux window that outlives
+ * the server entirely, so a restart left a task visibly `running` with no way
+ * to watch it, which is exactly when somebody wants to look.
+ *
+ * Matched on the window name, which is `understudy: <title>` truncated to
+ * sixty characters — set when the window was opened, by this same code. Not a
+ * guess: nothing else on that socket is named that way.
+ */
+async function paneOfRun(title: string): Promise<string> {
+  const want = `understudy: ${title}`.slice(0, 60);
+  const r = await tmux(["list-windows", "-a", "-F", "#{pane_id}\t#{window_name}"]);
+  if (!r.ok) return "";
+  for (const line of r.stdout.split("\n")) {
+    const [paneId = "", name = ""] = line.split("\t");
+    if (name && paneId.startsWith("%") && name === want) return paneId;
+  }
+  return "";
+}
+
+export function watchingPanes(): { runId: number; paneId?: string; why?: string }[] {
+  /*
+   * Filtered by the ROW, not by a delete somewhere else.
+   *
+   * A pane is worth offering only while its run is still going, and the row
+   * already knows that — `finishRun` writes the state whichever way the run
+   * ended, including the paths that throw. Clearing the map by hand at each of
+   * those exits is the kind of bookkeeping that is right until somebody adds a
+   * fourth way to finish, and then silently points at a pane that closed an
+   * hour ago.
+   */
+  const live = new Set(Work.runs(50).filter((r) => r.state === "running").map((r) => r.id));
+  for (const id of [...watching.keys()]) if (!live.has(id)) watching.delete(id);
+  return [...watching].map(([runId, v]) => ({ runId, ...v }));
+}
+const nowWatching = (runId: number | null, paneId: string) => {
+  if (!runId) return;
+  watching.set(runId, { paneId });
+  /* And on the row, because this map dies with the process while the run does
+     not — and because a pane id is the only handle on that window that a
+     rename cannot break. */
+  Work.rememberPane(runId, paneId);
+};
+
+/**
+ * What is watchable right now, memory first and tmux for the rest.
+ *
+ * A server that has just restarted remembers nothing, and the answer is on the
+ * tmux socket. Recovered entries are put back in the map so the next call is
+ * the cheap one.
+ */
+async function watchedNow(): Promise<{ runId: number; paneId?: string; why?: string }[]> {
+  const known = watchingPanes();
+  const seen = new Set(known.map((w) => w.runId));
+  const out = [...known];
+  for (const r of Work.runs(50)) {
+    if (r.state !== "running" || seen.has(r.id)) continue;
+    const paneId = await paneOfRun(r.title);
+    if (!paneId) continue;
+    watching.set(r.id, { paneId });
+    out.push({ runId: r.id, paneId });
+  }
+  return out;
+}
+/** No pane, and the sentence saying why — so the screen can tell you. */
+const noPane = (runId: number | null, why: string) => { if (runId) watching.set(runId, { why }); };
+
+async function runAgentIn(
+  cwd: string, prompt: string, timeoutMs: number,
+  show?: {
+    root: string; label: string;
+    /*
+     * The body of the card, for the thing choosing the model.
+     *
+     * `label` is the title and the title alone. His cards are a short title
+     * with the substance underneath it — the part that says whether this is a
+     * rename or an audit — and until this existed that part went to the brief
+     * and was withheld from `chooseModel`.
+     */
+    detail?: string;
+    onPane?: (paneId: string) => void;
+    onNoPane?: (why: string) => void;
+    /** Which model and effort this run got, and why — recorded on the row. */
+    onModel?: (c: Choice) => void;
+  },
+): Promise<{ ok: boolean; out: string }> {
+  const bin = Bun.which("claude");
+  if (!bin) return { ok: false, out: "no local claude CLI" };
+
+  /*
+   * THE MODEL AND THE EFFORT, chosen instead of defaulted.
+   *
+   * Every run before this launched with no `--model`, so a two-line rename and
+   * a whole-feature audit both went to the account's default — the most
+   * expensive model there is, out of a weekly allowance shared with the person
+   * whose account it is.
+   *
+   * The task asks for a tier and the REMAINING BUDGET can only lower it. That
+   * asymmetry is the design: a mechanical edit is never promoted because the
+   * week is young, and a hard one is demoted when it is nearly over. Fable is
+   * never launched at all — not a quality judgement, it is the allowance he
+   * needs for his own work.
+   *
+   * A usage reading that fails is not a reason to spend as if the week were
+   * full: `chooseModel` caps at sonnet when it cannot see the meter.
+   */
+  const usage = show ? await usageNow() : null;
+  const pick = chooseModel({ title: show?.label ?? "", detail: show?.detail ?? "", usage });
+  show?.onModel?.(pick);
+
+  /*
+   * `Monitor` IS REMOVED, not merely discouraged. This is a one-shot `-p`
+   * process: the turn that runs is the only turn there is, nothing survives
+   * it, and no notification a background job fires later has anywhere to
+   * land. Six runs on this machine reached for it anyway — "waiting for the
+   * Monitor notification", "I'll pick back up when the monitor fires" — and
+   * spent their entire turn on a promise the harness could never keep. The
+   * character check below now catches the run that happens regardless, but
+   * catching it after the fact is the second line, not the first: taking the
+   * tool away is cheaper than detecting what it was used for, the same
+   * reasoning that keeps this agent from committing on his behalf. `Bash`
+   * stays — git and the test suite need it — so `run_in_background` is still
+   * technically reachable, but with no `Monitor` to report back to it a run
+   * that backgrounds something has no honest story left to tell about it.
+   */
+  const argv = [bin, "-p", "--dangerously-skip-permissions",
+    "--disallowedTools", "Monitor",
+    "--model", pick.model, "--effort", pick.effort];
+
+  /*
+   * A READ-ONLY CREDENTIAL, and swapping it in is a fence rather than a
+   * feature.
+   *
+   * The environment it inherits carries `AGENTGLASS_TOKEN` — the machine token,
+   * `full` scope, every write route in the application open to it. So until
+   * this line, an agent that thought to curl its own server could push a
+   * branch, merge a pull request or write to the task tracker, and the careful
+   * wording in its brief was the only thing standing in the way.
+   *
+   * It gets a minted one instead: the understudy's principal, every GET
+   * answered and every write refused by `understudyAllows`. That is also what
+   * gives it the views he asked for — the panel, the diff, the branch list —
+   * because a view is a route once you have no screen to look at.
+   *
+   * Minted per run and revoked in `finally`, so a credential never outlives the
+   * work it was made for.
+   */
+  const readToken = mintUnderstudyToken();
+
+  try {
+    if (show) {
+      /*
+       * Only the two variables that differ from what the window would inherit
+       * anyway. Handing the whole environment to `-e` would put every variable
+       * this server holds onto a tmux command line, which is the opposite of
+       * why the credential is passed this way at all.
+       */
+      /*
+       * THE INTERACTIVE PANE FIRST, and it is a rung above `runAgentInPane`
+       * rather than a replacement for it.
+       *
+       * `runAgentInPane` still launches `-p` — one shot, model fixed at
+       * launch. This opens the same shape of window and runs the real CLI in
+       * it, so a run can be told mid-task to change model or effort the way
+       * he does, and drop back to `-p` only where the interactive pane itself
+       * could not be opened at all — no tmux, no window. Once a window opens
+       * it commits to it: `runAgentInteractivePane` returns null only in
+       * that one case, never after it has leased a pane and started typing
+       * into it, so this never opens two windows for one run.
+       */
+      /* The same fence on all three ladders. It is built once per run so the
+         empty `gh` config is the same directory whichever one starts. */
+      const fenced = understudyRunEnv(cwd);
+
+      const interactive = await runAgentInteractivePane({
+        cwd, root: show.root, label: show.label, model: pick.model, effort: pick.effort,
+        prompt, timeoutMs,
+        env: { ...fenced, AGENTGLASS_TOKEN: readToken, AGENTGLASS_READ_TOKEN: readToken },
+        onPane: show.onPane,
+      });
+      if (interactive) return interactive;
+
+      const watched = await runAgentInPane({
+        cwd, root: show.root, label: show.label, argv, prompt, timeoutMs,
+        env: { ...fenced, AGENTGLASS_TOKEN: readToken, AGENTGLASS_READ_TOKEN: readToken },
+        onPane: show.onPane,
+        onNoPane: show.onNoPane,
+      });
+      // Null means no tmux, or a window that would not open. Fall through to
+      // the hidden run: being watchable is worth a great deal and it is not
+      // worth being the reason nothing runs at all.
+      if (watched) return watched;
+    }
+
+    /* The hidden ladder inherits the server's whole environment, which is the
+       one that carries the user's `gh` and ssh: the fence goes on last so it
+       wins over what it is overriding. */
+    const env = { ...process.env, ...understudyRunEnv(cwd), AGENTGLASS_TOKEN: readToken, AGENTGLASS_READ_TOKEN: readToken };
+    const p = Bun.spawn(argv, {
+      cwd,
+      stdin: new TextEncoder().encode(prompt),
+      stdout: "pipe",
+      // Captured rather than discarded: a run that dies — a missing credential,
+      // a crash, a CLI that refuses — says so HERE and writes nothing to
+      // stdout. Thrown away, those runs recorded a failure with an empty
+      // reason, which is the one row somebody actually wants to read.
+      stderr: "pipe",
+      env,
+    });
+    /*
+     * MEASURED ON THE FIRST REAL CHAINED RUN, which came back as a failure
+     * with an empty reason after exactly 25.0 minutes.
+     *
+     * The agent had done the work — the right two files, staged, with comments
+     * in his own idiom — and the timeout killed it before it committed. What
+     * was recorded was `failed` and a blank outcome, so from the screen it was
+     * indistinguishable from an agent that sat there doing nothing.
+     *
+     * `claude -p` writes to a PIPE, and a pipe buffers: nothing is flushed
+     * until it finishes, so killing it loses the entire transcript. In a pane
+     * it writes to a tty and prints as it goes, which is one more reason the
+     * watched path is the better one — but this path has to be honest about
+     * what happened rather than silent.
+     */
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { p.kill(); } catch { /* already gone */ }
+    }, timeoutMs);
+    try {
+      // Concurrently, for the same reason as the test runner: whichever pipe is
+      // not being read is the one that fills and stops the process.
+      const [out, err] = await Promise.all([
+        new Response(p.stdout).text(),
+        new Response(p.stderr).text(),
+      ]);
+      const code = await p.exited;
+      if (timedOut) {
+        const mins = Math.round(timeoutMs / 60_000);
+        return {
+          ok: false,
+          out: [
+            out.trim(),
+            err.trim(),
+            `--- it was still going after ${mins} minutes and was stopped ---`,
+            "Anything it had written is in the worktree; a pipe holds its output",
+            "until the process ends, so there may be no transcript above this line.",
+          ].filter(Boolean).join("\n").slice(-8000),
+        };
+      }
+      const ok = code === 0 && out.trim().length > 0;
+      // Only on failure. A successful run's stderr is progress chatter, and
+      // appending it would bury the transcript the outcome is there to hold.
+      const said = ok || !err.trim() ? out : `${out}\n--- it also said ---\n${err}`.trim();
+      return { ok, out: said.slice(0, 8000) };
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    // In `finally` rather than after the return, so a run that throws or times
+    // out does not leave a live credential behind. That is the whole reason it
+    // is minted per run instead of once at boot.
+    revokeUnderstudyToken(readToken);
+  }
+}
+
+/*
+ * The verdict, and it is his test command rather than a guess at one.
+ *
+ * "Compiling is not evidence" is his sentence, said after a session reported
+ * success on a build nobody had run. So the suite decides, and the agent's own
+ * confidence counts for nothing against it.
+ */
+/**
+ * The names of the tests that failed, pulled out before the tail throws them away.
+ *
+ * `bun test` prints its failures as it goes and its summary at the end, and the
+ * report kept only the last 4000 characters — which is the per-file listing and
+ * the counts. So a run came back saying "1 fail" and nothing whatever about
+ * WHICH, and finding out meant re-running the whole suite by hand. Twice in one
+ * afternoon.
+ */
+function failedTestNames(output: string): string[] {
+  return [...output.matchAll(/^\(fail\) .*$/gm)].map((m) => m[0]!.trim());
+}
+
+/**
+ * One suite run, both streams, both at once.
+ *
+ * `bun test` writes its verdict to STDERR — its stdout carries the version
+ * banner and nothing else, so reading stdout alone recorded that banner as what
+ * the tests said, for every run, under the words "what the TESTS said, not what
+ * the agent claimed".
+ *
+ * And reading them in sequence can HANG. An unread pipe fills, a process
+ * blocking on a full stderr never exits, and `p.exited` waits for a program
+ * that is waiting for us — until the timeout kills a run that had already
+ * finished. A suite this size writes far more than a pipe buffer holds.
+ */
+/**
+ * The suites the verdict runs, in CI's order and with CI's arguments.
+ *
+ * It ran ONE of them, without its argument, and both halves of that cost a run.
+ *
+ *   - `web` was missing. Measured on the deliveries since 2026-08-20, 30 of 63
+ *     touched `web/`: a task that broke the dashboard could come back `done`
+ *     because nothing the verdict ran could see it. web is already a bun
+ *     workspace and costs about 32 seconds.
+ *   - `--timeout 20000` was missing, and CI's own comment says why it is there:
+ *     several tests here brush the 5 s default. Without it the verdict
+ *     manufactures reds, and the retry below then files them as flakes — a
+ *     configuration mistake wearing the costume of a flaky suite.
+ *
+ * `mobile` stays out on purpose: it needs `npm ci` and generated artifacts a
+ * fresh worktree does not have, and its own tests skip with a reason there.
+ */
+const VERDICT_SUITES: readonly { dir: string; args: readonly string[] }[] = [
+  { dir: "server", args: ["--timeout", "20000"] },
+  { dir: "web", args: [] },
+];
+
+async function runSuiteOnce(cwd: string, timeoutMs: number, suite: { dir: string; args: readonly string[] } = VERDICT_SUITES[0]!): Promise<{ ok: boolean; out: string }> {
+  /* An absolute path, not the bare word: the packaged app's PATH is whatever
+     the launcher handed it, and a missing `bun` arrived as an ENOENT from
+     inside a run that then read as a failed task. See bunbin.ts. */
+  const bun = bunBin();
+  if (!bun) return { ok: false, out: NO_BUN() };
+  const p = Bun.spawn([bun, "test", ...suite.args], { cwd: `${cwd}/${suite.dir}`, stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
+  /*
+   * BOTH STREAMS, AND BOTH AT ONCE. Two separate bugs met here.
+   *
+   * `bun test` writes its verdict to STDERR. Its stdout carries the version
+   * banner and nothing else, so reading stdout alone recorded this as what the
+   * tests said, for every run:
+   *
+   *     bun test v1.3.9 (…)
+   *
+   * The tab prints that under the words "what the TESTS said, not what the
+   * agent claimed", which is the promise the whole loop rests on.
+   *
+   * And reading them in sequence can HANG. An unread pipe fills, a process
+   * blocking on a full stderr never exits, and `p.exited` waits for a program
+   * that is waiting for us — until the timeout kills a run that had already
+   * finished. A suite this size writes far more than a pipe buffer holds.
+   */
+  const [outText, errText] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+  ]);
+  const code = await p.exited;
+  clearTimeout(timer);
+  // The verdict first, because it is the last thing bun writes and the first
+  // thing a person looks for.
+  const both = `${errText.trim()}\n${outText.trim()}`.trim();
+  return { ok: code === 0, out: both };
+}
+
+/**
+ * ONE RED DOES NOT STOP THE QUEUE UNTIL IT HAS BEEN ASKED TWICE.
+ *
+ * The tmux tests share one socket and the server behind it is single-threaded,
+ * so under load a couple of them lose a race that has nothing to do with the
+ * change under test. A shift stops on ONE failure — deliberately, and it is the
+ * right rule — which means a flake does not cost a run, it costs the whole
+ * queue until a person comes back and looks.
+ *
+ * Measured on three separate runs in one afternoon: each reported a red, and
+ * each was green on a second pass in the same worktree with nothing changed.
+ * Every one of those cost the queue the rest of the hour.
+ *
+ * So a red is asked again, once, and only a red twice is a failure. The retry
+ * is never silent: a run that went green the second time says so and names
+ * what failed the first time, because "this suite has a flake in it" is
+ * something worth seeing, and a retry nobody is told about is how a real
+ * intermittent bug gets to hide for months.
+ *
+ * The cost is bounded and paid only when something is already wrong: a red run
+ * can now take two budgets instead of one. The suite is about four minutes and
+ * the budget is ten, so a genuine failure is reported in roughly eight rather
+ * than four — against a flake costing the rest of the shift, that is cheap.
+ */
+/**
+ * Dependencies into a freshly cut worktree, before the agent is asked to work.
+ *
+ * `git worktree add` links no `node_modules`, and everything a verdict depends
+ * on — `bun test`, `tsc` — needs them. About 70ms off the shared cache.
+ */
+async function runInstallIn(cwd: string, timeoutMs: number): Promise<{ ok: boolean; out: string }> {
+  const bun = bunBin();
+  if (!bun) return { ok: false, out: NO_BUN() };
+  const p = Bun.spawn([bun, "install"], { cwd, stdout: "pipe", stderr: "pipe" });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
+  const [out, err] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+  ]);
+  const code = await p.exited;
+  clearTimeout(timer);
+  if (timedOut) {
+    const mins = Math.round(timeoutMs / 60_000);
+    return {
+      ok: false,
+      out: [err.trim(), out.trim(), `--- it was still going after ${mins} minutes and was stopped ---`]
+        .filter(Boolean).join("\n").slice(-2000),
+    };
+  }
+  return { ok: code === 0, out: `${err.trim()}\n${out.trim()}`.trim().slice(-2000) };
+}
+
+/**
+ * Every suite in `VERDICT_SUITES`, stopping at the first that stays red.
+ *
+ * Stopping early is deliberate: a red server suite tells the agent what to fix,
+ * and running web afterwards only buys a second wall of output underneath the
+ * answer. `timeoutMs` bounds ONE spawn, not the sequence, so adding a suite
+ * does not shorten the time any of them get.
+ */
+async function runTestsIn(cwd: string, timeoutMs: number): Promise<{ ok: boolean; out: string }> {
+  const parts: string[] = [];
+  for (const suite of VERDICT_SUITES) {
+    const r = await runOneSuiteWithRetry(cwd, timeoutMs, suite);
+    parts.push(`--- ${suite.dir} ---\n${r.out}`);
+    if (!r.ok) return { ok: false, out: parts.join("\n\n") };
+  }
+  return { ok: true, out: parts.join("\n\n") };
+}
+
+async function runOneSuiteWithRetry(cwd: string, timeoutMs: number, suite: { dir: string; args: readonly string[] }): Promise<{ ok: boolean; out: string }> {
+  const first = await runSuiteOnce(cwd, timeoutMs, suite);
+  const names = failedTestNames(first.out);
+  const named = names.length ? `\n\nwhat failed:\n${names.slice(0, 20).join("\n")}` : "";
+  if (first.ok) return { ok: true, out: first.out.slice(-4000) };
+
+  const second = await runSuiteOnce(cwd, timeoutMs, suite);
+  if (!second.ok) {
+    /* Red twice. Whichever names the second run produced are the ones that
+       reproduce, so those are the ones worth carrying. */
+    const twice = failedTestNames(second.out);
+    const stuck = twice.length ? `\n\nwhat failed (and failed again):\n${twice.slice(0, 20).join("\n")}` : named;
+    return { ok: false, out: `${second.out.slice(-4000)}${stuck}` };
+  }
+  return {
+    ok: true,
+    out: `${second.out.slice(-4000)}\n\n--- the first run of this suite was red and the second was green, unchanged. Treated as a flake, and the queue kept going. ---${named}`,
+  };
+}
+import { ingest, policySummary } from "./understudy-ingest.ts";
+import { predictSealed } from "./understudy-predict.ts";
+import { ask, compiledRules } from "./understudy-ask.ts";
+import * as Shift from "./understudy-shift.ts";
+import { judge, JUDGE_AVAILABLE } from "./understudy-judge.ts";
+import * as Work from "./understudy-work.ts";
+import { agentIsWorking } from "./agentworking.ts";
+import * as Loop from "./understudy-loop.ts";
+// Registers the readers. Imported for the side effect, which is the whole
+// point of a source: it announces itself rather than being wired in by hand.
+import * as Sources from "./understudy-sources-work.ts";
+import { bunBin, NO_BUN } from "./bunbin.ts";
+import { understudyRunEnv } from "./understudy-runenv.ts";
+import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
+import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
 import { activeDevices, markSeen, revokeDevice, devices, publicDevice, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
+import * as CardIndex from "./clickupindex.ts";
+import * as AgentBoard from "./agentboard.ts";
+import { boardNow, lanternChat, noteLanternSession, hookSaysLantern, isLanternSession } from "./lantern.ts";
+import * as AgentOps from "./agentops.ts";
+import { nudgeText, nudgeChannel, sendNudge } from "./prnudge.ts";
+import * as Schedule from "./agentschedule.ts";
+import { handoffBrief } from "./handoff.ts";
+import { startLanternWatch, restartLanternWatch, lastLook } from "./lanternwatch.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
@@ -193,6 +1415,23 @@ let warnedNoMetrics = false;
 
 const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
+/**
+ * The off switch for `/budgets/set`, which every other write family already had.
+ *
+ * Git write, Docker write, task write and ClickUp write can each be turned off
+ * with one variable, so an instance can be run with a capability it simply does
+ * not have. Budgets had no such switch, and of all the routes to be missing one
+ * this is the odd choice: a budget is not a preference, it is the brake. When a
+ * session is over its limit, `budgetHoldFor` puts a reason on the hold and, with
+ * `AGENTGLASS_GATE_FAILCLOSED`, is what makes an unanswered call DENY. Raising
+ * the limit is therefore a way to stop being gated, and it was reachable by
+ * anything holding the token.
+ *
+ * It lives beside the route rather than in config.ts because the route is the
+ * whole write surface: `writeBudgets` has exactly one caller, and a flag in the
+ * module it lives in would suggest there are others to protect.
+ */
+const BUDGET_WRITE_ENABLED = process.env.AGENTGLASS_BUDGET_WRITE_DISABLED !== "1";
 /** One socket, three roles: the live event stream, PTY terminal shells, and
  *  the desktop-notification mirror. */
 /** Every socket carries the address that opened it, so "who is connected right
@@ -275,13 +1514,26 @@ function fromDesktopShell(origin: string): boolean {
   try { return new URL(origin).protocol === DESKTOP_ORIGIN_SCHEME; } catch { return false; }
 }
 
-function localOrigin(req: Request): boolean {
-  const o = req.headers.get("origin");
-  if (!o) return true;
+/**
+ * The half of every Origin gate that is about the header's CONTENTS.
+ *
+ * The three gates below differ only in what they do when the header is absent:
+ * `localOrigin` waves it through, `trustedCaller` asks where the request came
+ * from, `mayReleaseAHold` refuses. What they do when it is present must be one
+ * test forever — two of them drifted apart once over the desktop scheme and the
+ * app came up unable to reach its own API.
+ */
+function vouchedOrigin(o: string): boolean {
   if (fromDesktopShell(o)) return true;
   try {
     return trusted(new URL(o).hostname);
   } catch { return false; }
+}
+
+function localOrigin(req: Request): boolean {
+  const o = req.headers.get("origin");
+  if (!o) return true;
+  return vouchedOrigin(o);
 }
 
 /**
@@ -340,10 +1592,78 @@ function trustedCaller(req: Request, from: Origin): boolean {
   // request where it came from is the same test, applied to the thing it was
   // always about.
   if (!o) return from === "loopback";
-  if (fromDesktopShell(o)) return true;
-  try {
-    return trusted(new URL(o).hostname);
-  } catch { return false; }
+  return vouchedOrigin(o);
+}
+
+/**
+ * The hosts an attachment may be streamed from — the tracker's own and its
+ * attachment CDN, the two shared/csp.ts already trusts for pictures. Applied to
+ * every redirect hop by guardedFetch, not only to the first URL.
+ */
+const attachmentHostError = hostsOnly(["clickup.com", "clickup-attachments.com"]);
+
+/**
+ * Who may let a held tool call go — the one gate the held party must not open.
+ *
+ * A gate is worth exactly one thing: an agent is stopped, and it stays stopped
+ * until a person says otherwise. `trustedCaller` cannot express that, and not
+ * by accident — it admits an Origin-less caller on loopback because that is
+ * precisely who the hooks are, and the hook POSTing `/gate` (asking to be held)
+ * is the thing working correctly. The same shape arriving at `/gate/decide` is
+ * the agent answering its own question: it runs as this user, so it can read
+ * `~/.config/agentglass/token`, or find `AGENTGLASS_TOKEN` in the environment
+ * it was launched with, and one `curl` later `actorOf` writes `local` into the
+ * audit row — byte for byte what the desk's own button writes — and gate.ts
+ * tells the model a human reviewed the call.
+ *
+ * So this asks for something the held party has no way to produce:
+ *
+ *   * a **paired device** with the `answer` grant. Its credential was minted at
+ *     the desk, lives on that phone, is stored here only as a hash and is never
+ *     in any environment an agent inherits (auth.ts, devices.ts).
+ *   * or an **Origin**. The desktop shell serves its renderer from a scheme no
+ *     browser can be served from, and a browser attaches `Origin` to every POST
+ *     it makes, same-origin ones included — so the web UI on this machine and
+ *     the companion over the tailnet keep working untouched, while `curl`,
+ *     `urllib` and every other library that sends no such header do not.
+ *
+ * The honest limit, because it belongs next to the code and not in a commit
+ * message: a header is a string, and a local process determined to forge one
+ * can. This does not make the gate a security boundary — SECURITY.md is right
+ * that nothing here can be, against code running as you. What it does is make
+ * self-release deliberate rather than incidental: the helpful agent reaching
+ * for the obvious `curl`, and the injected instruction that says "approve it",
+ * both now get a refusal that explains itself instead of an approval the log
+ * records as a person. Closing it properly needs a credential the agent cannot
+ * read, which means one the desk holds and the token file does not.
+ *
+ * And the case that is easy to read past: with no token configured at all,
+ * `caller` is always null — `resolveToken` returns none on a loopback-only box
+ * and index.ts never runs the block that identifies anybody — so the device
+ * branch does not exist there and the Origin branch is the whole of this check.
+ * It still turns away the Origin-less `curl`, which is the shape this is about,
+ * but on such a box nothing else is authenticated either: any local process can
+ * post a gate and read the queue. That is `bun run dev` and any hand-started
+ * server, never the packaged app, which mints a secret for its own sidecar. If
+ * it is you, set `AGENTGLASS_TOKEN` — see resolveToken in auth.ts.
+ */
+/**
+ * A caller as the action log wants it. `Caller.kind` grew a third value —
+ * `plugin`, see auth.ts — and ActorSource has two. A plugin's token was logged
+ * as an unnamed device before, which came out as the address it arrived from;
+ * it still does, because a plugin has no `device` to name, and the log line is
+ * about WHERE a write came from when nobody can be named. What changed is the
+ * gate (answersFromADevice), not the log.
+ */
+function asActor(c: Caller | null | undefined): ActorSource | null {
+  if (!c) return null;
+  return c.kind === "plugin" ? { kind: "device" } : { kind: c.kind, device: c.device };
+}
+
+function mayReleaseAHold(req: Request, caller: Caller | null): boolean {
+  if (answersFromADevice(caller)) return true;
+  const o = req.headers.get("origin");
+  return !!o && vouchedOrigin(o);
 }
 
 /**
@@ -514,6 +1834,17 @@ setMergedVerdictHook(() => {
  * for a client that was merely slow; the cost of being too slow is an alert
  * nobody hears. Freshly opened sockets start alive, so the first alert after a
  * connect is never a false negative.
+ *
+ * A `pty` socket was exempt from all of this, and that is what let a phone's
+ * mirror outlive the phone: `new-session ... destroy-unattached on` only ever
+ * fires on OUR side once the pty this socket feeds is hung up (`ptyClose` ->
+ * `killGroup` -> the child that was running `tmux attach` dies -> tmux sees
+ * the detach). A phone that goes dark — backgrounded, out of signal — never
+ * sends a close frame, so that chain never starts, and the grouped session
+ * with it sits on the socket for as long as the TCP connection is willing to
+ * pretend it is still open. Same ping, same deadline, same `alive` map a pty
+ * socket already gets entries in (the `pong` handler below sets one for every
+ * kind) — it was just never read for anything.
  */
 const LIVE_PING_MS = 10_000;
 const LIVE_DEADLINE_MS = 30_000;
@@ -528,6 +1859,18 @@ setInterval(() => {
       try { ws.close(1001, "no answer to a ping in 30s"); } catch { /* already gone */ }
       clients.delete(ws);
       alive.delete(ws);
+      continue;
+    }
+    try { ws.ping(); } catch { /* going away; close() will tidy up */ }
+  }
+  for (const ws of sockets) {
+    if (ws.data?.kind !== "pty") continue;
+    const at = alive.get(ws) ?? 0;
+    if (now - at > LIVE_DEADLINE_MS) {
+      // `close()` runs the same `ptyClose` a real client disconnecting would:
+      // hang up the pty group, which is what lets `destroy-unattached` do its
+      // job on the mirror session underneath, if there is one.
+      try { ws.close(1001, "no answer to a ping in 30s"); } catch { /* already gone */ }
       continue;
     }
     try { ws.ping(); } catch { /* going away; close() will tidy up */ }
@@ -604,6 +1947,215 @@ function broadcast(frame: WsFrame) {
       alive.delete(ws);
     }
   }
+}
+
+/*
+ * The understudy's seams, as index.ts needs them.
+ *
+ * Three small things live here rather than in understudy.ts, and the split is
+ * deliberate: understudy.ts owns what a row MEANS and this file owns what a
+ * ROUTE was. The moment the scoring module starts knowing that
+ * `/prs/update-branch` is C8, every future route has two homes and one of them
+ * is always the one nobody edited.
+ */
+
+/**
+ * Routes the universal net does not open a row for, because their body is a
+ * credential.
+ *
+ * A denylist rather than the usual allowlist, and this is the one place in the
+ * server where that is the right shape: the net's whole job is to catch the
+ * route somebody added without telling anybody, so it has to default to
+ * recording. What it must never do is grow, one careless edit later, into the
+ * place a token was copied to — and the row it writes today carries no body at
+ * all, so the guard exists for the edit that has not happened yet rather than
+ * for the code as written.
+ *
+ * `/pair/*` carries the pairing code, `/providers/*` reaches one shared handler
+ * that takes `b.token`, `/auth/*` is reserved for the same reason and has no
+ * route today, and `/control` is navigation — logging it would bury the writes
+ * under UI focus changes, which is the same argument action-log.test.ts makes
+ * for keeping it out of the audit log.
+ *
+ * `/machine/env` is deliberately NOT here. `noteAction` already records that
+ * route while withholding the value, and copying that is the pattern; adding it
+ * to a blind list would be a second, quieter rule about the same call.
+ */
+const UNDERSTUDY_BLIND_PREFIXES = ["/pair/", "/providers/", "/auth/"];
+
+/**
+ * And the machine talking to itself, which is a different argument.
+ *
+ * Measured on a real install four hours after this shipped: 213 stub rows, of
+ * which 102 were `/ingest`, 79 `/browser/ready` and 30 `/statusline`. Two rows
+ * out of 213 were a person doing something. None of it is dangerous — a stub
+ * holds no body, and the scorecard never counts one — but the stub table exists
+ * to answer ONE question, "what fraction of his real writes do the classed
+ * seams actually see", and a denominator that is 99% telemetry cannot answer
+ * it. Worse, it answers it wrongly and confidently: coverage looks like 1%.
+ *
+ * These are the routes an agent, a hook or the app's own chrome calls without a
+ * human deciding anything. `/ingest` is the hook intake and fires on every tool
+ * call; `/browser/ready` and `/statusline` are the renderer reporting in.
+ */
+const UNDERSTUDY_MACHINE = new Set([
+  "/ingest", "/browser/ready", "/statusline", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs",
+]);
+const UNDERSTUDY_BLIND = new Set(["/control", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
+function understudyBlind(pathname: string): boolean {
+  return UNDERSTUDY_BLIND.has(pathname) || UNDERSTUDY_BLIND_PREFIXES.some((p) => pathname.startsWith(p));
+}
+
+/**
+ * Which class a write on the git and pull-request chokepoints belongs to.
+ *
+ * Local to this file and NOT a `classFor(route)` in understudy.ts, for the
+ * reason written on `UnderstudyClass.routes`: `/chat/send` is both C5 and C7,
+ * so a general route-to-class map has to guess at exactly the route that
+ * matters most. Every name below is unambiguous — a merge is a merge — which is
+ * why a map is honest here and dishonest there.
+ */
+const UNDERSTUDY_CLASS_OF: Record<string, string> = {
+  "/git/worktree-add": "C1",
+  "/git/branch-create": "C1",
+  "/git/commit": "C2",
+  "/git/commit-staged": "C2",
+  "/git/merge": "C3",
+  "/git/branch-delete": "C3",
+  "/git/worktree-remove": "C3",
+  "/prs/reply": "C4",
+  "/prs/thread-resolved": "C4",
+  "/prs/update-branch": "C8",
+  "/prs/rerun": "C8",
+  "/prs/merge": "C9",
+  "/prs/review-with": "C10",
+  "/prs/pending-review": "C10",
+  "/prs/edit": "C11",
+};
+
+/** Branch prefixes this machine actually uses, plus the trunk names. Anything
+ *  else is `other`, which is the point: the class is being scored on "does it
+ *  guess the SHAPE he reaches for", and a set that grows a member per branch
+ *  would be scoring it on remembering names. */
+const BRANCH_SHAPES = new Set([
+  "feat", "feature", "fix", "hotfix", "chore", "docs", "refactor",
+  "test", "perf", "build", "ci", "style", "revert", "release",
+  "main", "master", "develop",
+]);
+
+/**
+ * A branch name reduced to the only part of it that is categorical.
+ *
+ * A branch name is free text with a ticket id in it more often than not, so it
+ * cannot be stored — but the decision worth scoring was never the words after
+ * the slash. It was `feat/` rather than `fix/`, and whether he cut a namespaced
+ * branch at all.
+ */
+function branchShape(name: unknown): string {
+  const s = String(name ?? "");
+  if (!s) return "none";
+  const slash = s.indexOf("/");
+  const head = (slash === -1 ? s : s.slice(0, slash)).toLowerCase();
+  if (BRANCH_SHAPES.has(head)) return head;
+  return slash === -1 ? "bare" : "other";
+}
+
+/** A count, as a bucket. The number of files in a commit is a fact about the
+ *  work; the bucket is a fact about the habit, and only the second one is
+ *  something a prediction can be right or wrong about. */
+function countShape(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n === 1) return "1";
+  if (n <= 5) return "2-5";
+  if (n <= 20) return "6-20";
+  return "20+";
+}
+
+/** One of a fixed set, or `other`. Used for anything a client sends as a word
+ *  — a merge method, a review verb — so an unexpected spelling widens no
+ *  column. */
+function oneOf(value: unknown, allowed: readonly string[]): string {
+  const s = String(value ?? "").toLowerCase();
+  return allowed.includes(s) ? s : s ? "other" : "none";
+}
+
+/**
+ * The categorical shape of a write, built from its request body and answer.
+ *
+ * Read the returns rather than the parameter list: `b` is the request body and
+ * not one field of it survives as itself. Titles and commit messages become
+ * booleans, branches become shapes, counts become buckets, and the review body
+ * becomes "there was one". That is what makes this safe to call with the whole
+ * body in hand — the function is the filter, so a future case that wants to
+ * keep a string has to be written here, in front of the comment saying not to.
+ */
+function understudyShape(route: string, b: any, ok: boolean): {
+  subject: string;
+  repo: string;
+  actual: Record<string, unknown>;
+} | null {
+  const repo = basename(String(b?.root ?? "")) || "";
+  const pr = b?.number === undefined || b?.number === null ? "" : `#${String(b.number).slice(0, 12)}`;
+  const files = Array.isArray(b?.paths) ? b.paths.length : Array.isArray(b?.files) ? b.files.length : 0;
+  switch (route) {
+    case "/git/worktree-add":
+      return { subject: repo, repo, actual: { branch: branchShape(b?.branch), fresh: b?.newBranch === true, from: b?.startPoint ? "start-point" : "head", ok } };
+    case "/git/branch-create":
+      return { subject: repo, repo, actual: { branch: branchShape(b?.name), ok } };
+    case "/git/commit":
+      return { subject: repo, repo, actual: { staged: false, files: countShape(files), titled: !!String(b?.title ?? ""), described: !!String(b?.body ?? ""), ok } };
+    case "/git/commit-staged":
+      return { subject: repo, repo, actual: { staged: true, files: "staged", titled: !!String(b?.title ?? ""), described: !!String(b?.body ?? ""), ok } };
+    case "/git/merge":
+      return { subject: repo, repo, actual: { from: branchShape(b?.name), ok } };
+    case "/git/branch-delete":
+      return { subject: repo, repo, actual: { branch: branchShape(b?.name), force: b?.force === true, ok } };
+    case "/git/worktree-remove":
+      return { subject: repo, repo, actual: { force: b?.force === true, ok } };
+    case "/prs/reply":
+      return { subject: pr, repo, actual: { replied: true, ok } };
+    case "/prs/thread-resolved":
+      return { subject: pr, repo, actual: { resolved: b?.resolved !== false, ok } };
+    case "/prs/update-branch":
+      return { subject: pr, repo, actual: { syncLocal: b?.syncLocal === true, ok } };
+    case "/prs/rerun":
+      return { subject: pr, repo, actual: { what: "failed-checks", ok } };
+    case "/prs/merge":
+      return { subject: pr, repo, actual: { method: oneOf(b?.method, ["merge", "squash", "rebase"]), deleteBranch: b?.deleteBranch === true, auto: b?.auto === true, ok } };
+    case "/prs/review-with":
+      return { subject: pr, repo, actual: { verb: oneOf(b?.verb, ["approve", "comment", "request_changes"]), comments: countShape(Array.isArray(b?.comments) ? b.comments.length : 0), wrote: !!String(b?.body ?? ""), ok } };
+    case "/prs/pending-review":
+      return { subject: pr, repo, actual: { read: true, ok } };
+    case "/prs/edit":
+      return { subject: pr, repo, actual: { title: b?.title !== undefined, body: b?.body !== undefined, base: b?.base !== undefined, ok } };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Tell the view the score moved, at most once a second.
+ *
+ * `broadcast` says of itself that it is a fan-out on the hot path of ingest,
+ * and `scorecard()` is thirteen rows of aggregate over the whole ledger. A
+ * merge that lands four writes in the same tick should cost one frame, not
+ * four, and the panel is watching a number that changes at the speed a person
+ * presses buttons — so a one-second trailing coalesce is invisible to it and is
+ * the difference between "the panel is live" and "the panel is a load".
+ *
+ * Nothing at all happens while the understudy is off, which is the property
+ * that has to hold: off means no rows, no reads and no frames.
+ */
+let scoreTimer: ReturnType<typeof setTimeout> | null = null;
+function understudyChanged(): void {
+  if (!understudyEnabled() || scoreTimer) return;
+  scoreTimer = setTimeout(() => {
+    scoreTimer = null;
+    try { broadcast({ type: "understudy", data: scorecard() }); } catch { /* a frame nobody got */ }
+  }, 1000);
+  // Never a reason to hold the process open: a scoreboard update is worth
+  // exactly nothing to a server that is shutting down.
+  (scoreTimer as any).unref?.();
 }
 
 /**
@@ -684,6 +2236,21 @@ function csvEscape(v: unknown): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/**
+ * The commit this build was made from, read once off `build-info.json`.
+ *
+ * Empty in a dev tree, which is right: there is no installed build to be behind.
+ */
+let stampCache: string | null = null;
+function buildStamp(): string {
+  if (stampCache !== null) return stampCache;
+  try {
+    const here = new URL("../../build-info.json", import.meta.url).pathname;
+    stampCache = String(JSON.parse(fsRead(here, "utf8")).commit || "");
+  } catch { stampCache = ""; }
+  return stampCache;
+}
+
 const server = Bun.serve<WsData>({
   port: PORT,
   hostname: BIND,
@@ -744,12 +2311,50 @@ const server = Bun.serve<WsData>({
     // Per-request response helpers: `cors` reflects this caller's Origin, so it
     // has to be built here rather than shared as a module constant.
     const cors = corsFor(req);
-    const json = (data: unknown, status = 200) =>
-      new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...cors } });
+    /*
+     * The understudy's row for this request.
+     *
+     * Opened below, once the caller is resolved and before any route can
+     * answer, and settled here — because the status this request ended up
+     * giving is the one thing about a write that no call site knows at the
+     * moment it happens. `settleLedger(0, …)` is a no-op, so every `json()`
+     * above the seam (the rebinding refusal, the CSRF refusal, the 401) costs
+     * nothing and leaves no row: a request the fences turned away is not a
+     * write, and the ledger is a record of writes.
+     *
+     * `body()` below and the handlers that build their own `new Response` do
+     * NOT settle, on purpose. Those rows keep `status = NULL`, and NULL here
+     * means "answered outside the json helper" rather than "we lost it" —
+     * understudy-net.test.ts asserts one of them, so the meaning stays a fact
+     * about the code instead of a claim in a comment.
+     */
+    let stub = 0;
+    const json = (data: unknown, status = 200) => {
+      settleLedger(stub, status);
+      return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...cors } });
+    };
     /** Already-serialised JSON — see whileRefsHold. */
     const body = (s: string, status = 200) =>
       new Response(s, { status, headers: { "content-type": "application/json", ...cors } });
     const csrfBlocked = () => json({ ok: false, error: "cross-origin write blocked" }, 403);
+    /**
+     * A bare 403 here is the worst possible answer.
+     *
+     * Whoever reads it is one of two people. If it is the agent that was held,
+     * the sentence has to say that answering its own gate is not a thing it can
+     * do, or it will read "403" as a bug and try the call again with a
+     * different spelling. If it is a person whose client genuinely sends no
+     * Origin — a script somebody wrote against this API — they need to be told
+     * which clients do work, because nothing about "forbidden" points at the
+     * app they already have open.
+     */
+    const heldPartyBlocked = () => json({
+      ok: false,
+      error: "a held call is released by a person, not by the process being held — "
+        + "this request carried no Origin and no paired-device credential, which is "
+        + "what an agent's own shell looks like. Answer it in the desktop app, in the "
+        + "web UI, or on a paired phone.",
+    }, 403);
     const rebindBlocked = () =>
       json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);
 
@@ -824,6 +2429,24 @@ const server = Bun.serve<WsData>({
       caller = callerFor(req, url, AUTH_TOKEN);
       if (!caller) return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
       if (!allowed(caller, req.method, pathname)) {
+        /*
+         * The understudy answers differently, and the wording is the point.
+         *
+         * A refusal here is not a scope problem — the understudy has no scope,
+         * it has an allowlist (see `understudyAllows` in auth.ts) — so the
+         * device sentence below would tell whoever reads it two false things:
+         * that this is a paired device, and that a wider scope would fix it.
+         * Nothing widens it. The row is kept for ever as `kind = 'fence'`,
+         * because a 403 for a principal that is supposed to only ever watch is
+         * the single most interesting line this feature can produce.
+         */
+        if (caller.principal === "understudy") {
+          recordFence(pathname, req.method);
+          return json({
+            ok: false,
+            error: `the clone may not ${req.method} ${pathname} — it watches and never acts`,
+          }, 403);
+        }
         // 403 rather than 401: the credential is real and was accepted. Saying
         // "unauthorized" to a device that is correctly paired sends people to
         // re-scan a QR, which fixes nothing and is the wrong thing to learn.
@@ -839,6 +2462,129 @@ const server = Bun.serve<WsData>({
       // heard from, which is the difference between a device list and a guess.
       if (caller.device) markSeen(caller.device.id);
     }
+
+    /*
+     * THE UNIVERSAL NET.
+     *
+     * Here and not one line earlier or later. Earlier and `caller` is not
+     * resolved, so the row would say a write happened without being able to say
+     * whose; later and a route has already answered, so the write the net exists
+     * to notice is the one write it misses. This is also the last point at which
+     * `req.json()` has certainly not been consumed — every handler below reads
+     * the body itself and a body can only be read once — which is what makes
+     * "the net cannot see the body" a property of where it sits rather than a
+     * promise about how it behaves.
+     *
+     * POSTs only. A GET is a read, and a ledger with the dashboard's own polling
+     * in it is a ledger nobody scrolls to the bottom of.
+     *
+     * What this answers that the per-class seams cannot: "did a write happen
+     * that no class was watching". A seam knows about itself; only the net knows
+     * about the route somebody added last week.
+     */
+    if (req.method === "POST" && !understudyBlind(pathname)) {
+      stub = openStub({ route: pathname, method: req.method, actor: actorOf(clientIp, asActor(caller)) });
+    }
+
+    /**
+     * Was there a person behind this request.
+     *
+     * The same test `/gate/decide` uses to decide whether a machine-token caller
+     * was the app's renderer or an agent's shell: browsers attach an Origin to a
+     * POST and cannot be talked out of it, and a shell sends none unless it was
+     * told to. It matters far more here than it does in the log, because only
+     * `typed` and `clicked` count toward a class's denominator — an agent
+     * driving the API is not him agreeing with anything, and counting it would
+     * let the understudy score itself.
+     */
+    const pressed = (): string => {
+      const o = req.headers.get("origin");
+      return o && vouchedOrigin(o) ? "clicked" : "agent-tolerated";
+    };
+
+    /*
+     * SEAL AND GUESS, BEFORE THE ROUTE RUNS.
+     *
+     * A prediction is worth nothing unless it was written down before the
+     * answer, so it happens here — after the caller is known, before any
+     * handler has done a thing — and never beside the line that records what
+     * he actually did. A predictor called from the same place as the actual
+     * would score beautifully and mean nothing.
+     *
+     * The body is read off a CLONE. `req.json()` consumes the stream and the
+     * handler downstream still needs it; a clone costs one copy of a small
+     * JSON body and keeps this seam invisible to everything after it.
+     */
+    if (req.method === "POST" && UNDERSTUDY_CLASS_OF[pathname] && understudyEnabled()) {
+      const cls = UNDERSTUDY_CLASS_OF[pathname]!;
+      try {
+        const peek = await req.clone().json() as Record<string, unknown>;
+        const shape = understudyShape(pathname, peek, true);
+        if (shape) {
+          const id = sealSituation(cls, {
+            subject: shape.subject,
+            repo: shape.repo,
+            partition: isOpenProjectPath(shape.repo) ? OPEN_PARTITION : "closed",
+            /* The situation, as text, and deliberately thin: the route and the
+               identifier are enough to hash a case and carry nothing a body could
+               have leaked into. */
+            body: `${pathname} ${shape.subject}`,
+          });
+          if (id) {
+            const pred = predictSealed(id, cls, shape.subject);
+            /*
+             * And, when the stance allows it, write down what it would have
+             * done — not as a shape, as a request somebody could press.
+             *
+             * At `queued` nothing runs; the proposal waits. The seam is the only
+             * place proposals are made, deliberately: a route that produced them
+             * on request would let a caller aim the understudy at a repository
+             * of their choosing, and `propose` refuses anything outside the open
+             * project for the same reason.
+             */
+            /*
+             * NO DRAFT IS MADE HERE, and a version of this file made one.
+             *
+             * Drafting hung off this seam for a day: it seals when the person
+             * CLICKS something, so a proposal made here is a proposal to do the
+             * thing they are already doing. It also could not have worked — the
+             * predicted shape is `{branch, fresh, from, ok}` and the bridge
+             * wanted `{base, pattern}`, and the `repo` in that shape is a name
+             * rather than a path, so there was no root to send. Prediction is
+             * deliberately thin; an action cannot be built from thin.
+             *
+             * Proposals come from `understudy-scan.ts`, which reads the state of
+             * the repositories instead. This seam goes back to what it is good
+             * at: sealing, predicting, and being scored.
+             */
+          }
+        }
+      } catch { /* an unreadable body is simply a decision we did not foresee */ }
+    }
+
+    /**
+     * The per-class seam for the two write families.
+     *
+     * Called on the same `res` the audit log is called on, one statement above
+     * it, and deliberately not folded into that line: action-log.test.ts counts
+     * those one-liners as a tripwire for "a write family was restructured", and
+     * a class seam is not a reason to make that count lie.
+     */
+    const noteClass = (route: string, b: unknown, ok: boolean): void => {
+      const cls = UNDERSTUDY_CLASS_OF[route];
+      if (!cls) return;
+      const shape = understudyShape(route, b, ok);
+      if (!shape) return;
+      recordDecision(cls, { subject: shape.subject, repo: shape.repo, actual: shape.actual, provenance: pressed() });
+      understudyChanged();
+    };
+
+    /** C6 has no family switch to hang off — a gate is answered by one handler
+     *  — so it gets its own two lines rather than an entry in the route map. */
+    const noteClass6 = (gateId: string, actual: Record<string, unknown>): void => {
+      recordDecision("C6", { subject: gateId, actual, provenance: pressed() });
+      understudyChanged();
+    };
 
     // Throttle the unauthenticated intake sinks so a runaway client can't flood
     // the DB and the broadcast fan-out. Keyed by source address + route.
@@ -869,6 +2615,9 @@ const server = Bun.serve<WsData>({
         // A path to open, not a command to run. Validated in ptyOpen against
         // the same scope rule the directory gets.
         view: url.searchParams.get("view") || undefined,
+        // Where to put the cursor in that file. A number, bounded here so a
+        // URL cannot ask for a line that is not one.
+        line: Math.min(Math.max(Number(url.searchParams.get("line")) || 0, 0), 10_000_000),
         // Editing is asked for explicitly. Absent, the file opens read-only —
         // see PtyWsData.edit for why that default is the whole point.
         edit: url.searchParams.get("edit") === "1",
@@ -888,6 +2637,10 @@ const server = Bun.serve<WsData>({
         // PtyWsData.fresh for the three clients this was measured on.
         fresh: url.searchParams.get("fresh") === "1",
         console: url.searchParams.get("console") === "1",
+        // Which tab of the floating bench this is. A small number the client
+        // keeps; the server turns it into a session name, so no client ever
+        // names a session on this engine. See engineBenchArgv.
+        bench: Math.min(Math.max(Number(url.searchParams.get("bench")) || 0, 0), 99) || undefined,
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,
@@ -922,7 +2675,25 @@ const server = Bun.serve<WsData>({
     // spawning its sidecar, and "answers 200" is not the same as "is us". Any
     // other local dev server squatting the port answers 200 too, and adopting
     // it pointed the whole cockpit at a stranger's API. See electron/main.js.
-    if (pathname === "/health") return json({ ok: true, service: "agentglass", clients: clients.size, notifyWatching: notifyWatching() });
+    if (pathname === "/health") {
+      /*
+       * THE BUILD, so a window can tell it has been left behind.
+       *
+       * Installing replaces the server and the bundle on disk and relaunches —
+       * but a window that was already open keeps the JavaScript it loaded. The
+       * data then arrives in the new shape and is drawn by the old code, which
+       * looks exactly like data that never arrived: a board whose verdict
+       * headers and tracker lines simply never appear, and a Refresh button
+       * that cannot fix it because it refreshes DATA, not code.
+       *
+       * That cost an afternoon of looking for a bug in the wrong half. The
+       * window compares this against what it saw when it loaded.
+       */
+      return json({
+        ok: true, service: "agentglass", clients: clients.size,
+        notifyWatching: notifyWatching(), build: buildStamp(),
+      });
+    }
 
     // --- ingest ---
     if (pathname === "/ingest" && req.method === "POST") {
@@ -940,15 +2711,43 @@ const server = Bun.serve<WsData>({
       // scanner owns still has a pane, and "where is this agent working" is a
       // question about the pane, not about who counts its tokens.
       notePaneFromHook(body);
+      // Whether this session is now stopped on a person — set by a wait-shaped
+      // Notification, cleared by anything it does after. Here, before the
+      // scanner check: an owned session's hook events never get past it, and
+      // its notifications are hook-only, so this is the one place they exist.
+      noteWaitFromHook(body);
+      /* The Lantern's own chat is an observer: its "waiting for your input"
+         is you having asked it something, not an agent stopped on you, and
+         the reminder to say what it is on would be the watcher watching
+         itself. The pane says so in its environment; the hook passes it on. */
+      const lanternItself = hookSaysLantern(body) || isLanternSession(String(body.session_id ?? ""));
+      if (lanternItself) noteLanternSession(String(body.session_id ?? ""));
+      /*
+       * THE LANTERN REMINDER RIDES THE ANSWER.
+       *
+       * On a prompt, and only then, the hook may be handed one line to print
+       * — which Claude Code shows the session as context for that turn, the
+       * same way it shows the memory-save reminder. Decided here rather than
+       * in the hook because this is where the two clocks live: whether this
+       * session has already said what it is doing (agent_status), and when
+       * it was last asked. Computed BEFORE the scanner check below: a session
+       * the scanner owns is exactly the kind that runs in a pane and shows on
+       * the board, and it was returning before this line could be added.
+       */
+      const remind = body.hook_event_type === "UserPromptSubmit" && lanternNudge() && !lanternItself
+        && AgentBoard.nudgeDue(String(body.session_id ?? ""), lanternNudgeMinutes() * 60_000)
+        ? { remind: AgentBoard.lanternReminder({ session: String(body.session_id), server: `http://127.0.0.1:${PORT}` }) }
+        : null;
       // A Claude Code session with a transcript on disk is already covered by
       // the scanner, which reads the same turns in richer form. Taking the hook
       // copy too would count every tool call and every token twice.
-      if (ownsSession(body.session_id)) return json({ ok: true, skipped: "scanner owns this session" });
+      if (ownsSession(body.session_id)) return json({ ok: true, skipped: "scanner owns this session", ...remind });
       const result = ingestBody(body);
       return json({
         ok: true,
         id: result.event.id,
         ...(!result.inserted ? { duplicate: true } : {}),
+        ...remind,
       });
     }
 
@@ -1118,6 +2917,122 @@ const server = Bun.serve<WsData>({
      */
     if (pathname === "/agents") return json({ agents: probeAgents() });
 
+    /*
+     * WHO IS WORKING ON WHAT.
+     *
+     * The deputy has a screen and the agents in the terminals do not, which is
+     * how "suddenly they are doing lots of tasks and I don't even know which" happens.
+     * Most of that list this app can already assemble — panes, sessions,
+     * worktrees, the transcript clock — but what an agent is working ON is the
+     * one thing only the agent knows, so it says so here.
+     *
+     * A status, not a log: one row per agent, replaced. Stale rows are kept
+     * and dated rather than hidden, because "nobody has touched this in an
+     * hour" is the answer somebody is usually looking for.
+     */
+    /*
+     * WHAT THE TAB IS FOR, IN THREE WORDS.
+     *
+     * The strip's names are stable (`AI01`, `AI02`) and stability is exactly
+     * what makes them say nothing: "I want them to always be AI0X... or for it
+     * to match the task being worked on", and the answer to that
+     * `or` is both. The number is the address; this is the label under it.
+     *
+     * Its own route rather than a field on the terminal frame, which is swept
+     * twice a second per attached client: a sentence an agent publishes every
+     * few minutes does not belong in a poll that fast, and the frame's pane
+     * format is read positionally by three parsers.
+     */
+    if (pathname === "/terminal/tab-hints") {
+      const board = AgentBoard.merged({ runs: Work.runningRuns().map((r) => ({
+        title: r.title, worktree: r.worktree, branch: r.branch, startedAt: r.startedAt,
+      })) }).filter((a) => a.doing && a.worktree);
+      const hints: Record<string, string> = {};
+      if (board.length) {
+        const r = await tmux(["list-panes", "-a", "-F", "#{window_id}\t#{pane_current_path}"]);
+        for (const line of (r.ok ? r.stdout : "").split("\n")) {
+          const [win = "", cwd = ""] = line.split("\t");
+          if (!win.startsWith("@") || !cwd || hints[win]) continue;
+          /* Longest worktree first, so a checkout inside another checkout is
+             answered by the inner one. */
+          const owner = board
+            .filter((a) => cwd.startsWith(a.worktree!))
+            .sort((a, b) => b.worktree!.length - a.worktree!.length)[0];
+          if (owner?.doing) hints[win] = owner.doing.slice(0, 120);
+        }
+      }
+      return json({ ok: true, hints });
+    }
+    if (pathname === "/agents/board") {
+      /* Every source at once — see lantern.ts, which the terminal's "Ask
+         about the field" reads too, so the view and the chat cannot disagree. */
+      return json({ ok: true, agents: await boardNow(), watch: lastLook(), cacheTtlMinutes: cacheTtlMinutes() });
+    }
+    if (pathname === "/agents/status" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      /* Cut here as well as in agentboard.ts. This route is tokenless on
+         loopback under the 32 MB body limit, so the cap is the only thing
+         between a local process and a row of that size; and a cap applied in
+         one place is a cap the next caller of saidBy forgets. Names and refs
+         at 512, prose at 4096 — both far above anything real. */
+      const text = (v: unknown, cap: number) => String(v ?? "").slice(0, cap);
+      const name = text(b.name, 512).trim();
+      if (!name) return json({ ok: false, error: "which agent?" }, 400);
+      const session = typeof b.session === "string" ? b.session.slice(0, 512) : "";
+      /* An agent that has finished says so by clearing its line, rather than
+         leaving a claim behind for the next person to disbelieve — and only
+         the session that wrote the line may clear it; see forgetAgent. */
+      if (b.done === true) {
+        if (!session) return json({ ok: false, error: "done needs the session that posted the line" }, 400);
+        const cleared = AgentBoard.forgetAgent(name, session);
+        return json(cleared ? { ok: true, cleared: true } : { ok: false, error: "no line by that name from this session" }, cleared ? 200 : 403);
+      }
+      /* The observer does not post: a status from the Lantern's own chat is
+         the watcher listing itself, and it is answered kindly and dropped. */
+      if (session && isLanternSession(session)) return json({ ok: true, ignored: "the Lantern does not post status" });
+      const ok = AgentBoard.saidBy({
+        name,
+        doing: text(b.doing, 4096), worktree: text(b.worktree, 512),
+        branch: text(b.branch, 512), left: text(b.left, 4096),
+        // The hooked session behind the claim, when the reminder that asked
+        // for it baked one in. What lets the reminder stop asking.
+        session,
+      });
+      return json(ok ? { ok: true } : { ok: false, error: "could not write that down" }, ok ? 200 : 500);
+    }
+
+    /*
+     * THE LANTERN'S OWN SETTINGS — whether hooked sessions get asked what they
+     * are doing, and how often. Read by the Agents pane in Settings; written
+     * by it too. Nothing else here is configurable on purpose: the view is a
+     * screen you read, and this is the one thing about it that costs a session
+     * something (one line of attention every interval).
+     */
+    if (pathname === "/lantern/settings" && req.method === "GET") {
+      return json({ ok: true, nudge: lanternNudge(), minutes: lanternNudgeMinutes(), watch: lanternWatch(), watchMinutes: lanternWatchMinutes(), cacheTtlMinutes: cacheTtlMinutes(), min: LANTERN_NUDGE_MIN_MIN, max: LANTERN_NUDGE_MAX_MIN });
+    }
+    if (pathname === "/lantern/settings" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const fields: Parameters<typeof writeLanternSettings>[0] = {};
+      if (b.nudge !== undefined) fields.lanternNudge = b.nudge === true;
+      if (b.watch !== undefined) fields.lanternWatch = b.watch === true;
+      if (b.cacheTtlMinutes !== undefined) fields.cacheTtlMinutes = Number(b.cacheTtlMinutes);
+      for (const [key, field] of [["minutes", "lanternNudgeMinutes"], ["watchMinutes", "lanternWatchMinutes"]] as const) {
+        if (b[key] === undefined) continue;
+        const n = Number(b[key]);
+        if (!Number.isFinite(n)) return json({ ok: false, error: "the interval has to be a number of minutes" }, 400);
+        fields[field] = n;
+      }
+      const w = writeLanternSettings(fields);
+      /* The clock reads its interval when it arms, so a change takes effect at
+         the next arming — which is now, or the old interval lingers once. */
+      if (w.ok) restartLanternWatch();
+      return json({ ...w, nudge: lanternNudge(), minutes: lanternNudgeMinutes(), watch: lanternWatch(), watchMinutes: lanternWatchMinutes(), cacheTtlMinutes: cacheTtlMinutes() }, w.ok ? 200 : 400);
+    }
+
     /**
      * Wire one, and only the one asked for.
      *
@@ -1186,6 +3101,7 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/budgets/set" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!BUDGET_WRITE_ENABLED) return json({ ok: false, error: "budget writes are disabled (AGENTGLASS_BUDGET_WRITE_DISABLED=1)" }, 403);
       let b: { budgets?: unknown };
       try { b = (await req.json()) as { budgets?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (!Array.isArray(b.budgets)) return json({ ok: false, error: "expected a list of budgets" }, 400);
@@ -1260,10 +3176,43 @@ const server = Bun.serve<WsData>({
         // a dropped connection (see /gate/status). Shape-checked in gate.ts;
         // anything else falls back to a server-generated one.
         { id: typeof b.id === "string" ? b.id : undefined, source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
-        Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000)
+        Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000),
+        budgetHoldFor(String(b.session_id || "unknown"), gateFailClosed())
       );
       return json(decision);
     }
+    /**
+     * The three reads, and why they do NOT get the gate `/gate/decide` just got.
+     *
+     * The case for giving it to them is real. `/gate/pending` hands back the
+     * command an agent is stopped on, and `/gate/history` hands back every
+     * command it was stopped on this month plus who decided each one. That is a
+     * description of what this user does with their machine, and today it is
+     * readable by anything on the box holding the token — the same shell that
+     * was just refused the button next to it. Locking a decision while leaving
+     * the queue open is half a door.
+     *
+     * It is still the wrong trade, for a reason that is specific rather than
+     * philosophical: `hooks/gate_event.py` polls `/gate/status` to re-attach
+     * after a dropped connection, and it is Python `urllib` — it sends no
+     * Origin and there is no sensible way to make it send one. A 403 there is
+     * not caught as a refusal; the retry loop treats a non-404 error as "the
+     * connection went away, keep trying" until its own deadline passes, and
+     * then falls into fail-open. Every held call on the box would auto-allow,
+     * silently, with the hold looking healthy on screen. That is strictly worse
+     * than the bug being fixed here — it converts the gate from "an agent can
+     * release itself if it tries" into "no agent is ever held".
+     *
+     * And the disclosure the other two carry is bounded in a way the release is
+     * not. A process that can read `/gate/pending` runs as this user, which
+     * means it can already read the transcripts, the events database and the
+     * repositories those commands are about. Reading the queue tells it what it
+     * could have learned anyway; answering the queue lets it do something it
+     * could not. So: reads stay on the surface-wide origin gate plus the token,
+     * writes carry the stricter one. If `/gate/pending` and `/gate/history` are
+     * ever tightened, `/gate/status` must be left exactly as it is, and the
+     * reason is this paragraph rather than an oversight.
+     */
     // Re-attach to a request whose connection dropped — a server restart, a
     // proxy hanging up. Holds open like /gate does when it's still pending,
     // answers immediately when it's already decided, and 404s on an id it has
@@ -1288,6 +3237,13 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/gate/decide" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      // Both gates, and neither is redundant. `trustedCaller` is the CSRF
+      // question — is this browser one we are willing to be driven by — and
+      // `mayReleaseAHold` is the one this route exists for: the party being
+      // held may not let itself go. See the function; the difference between
+      // them is exactly the Origin-less loopback caller, which is a hook, an
+      // agent's shell, or a script, and is never a person pressing a button.
+      if (!mayReleaseAHold(req, caller)) return heldPartyBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false }); }
       const decision = b.decision === "deny" ? "deny" : "allow";
@@ -1299,7 +3255,20 @@ const server = Bun.serve<WsData>({
       // one write with a stopped agent on the other end of it. Resolved once
       // and handed to both writers, so the gate row and the log line cannot
       // name two different people for one press.
-      const who = actorOf(clientIp, caller);
+      /*
+       * `fromPage` is what turns actorOf's three answers from a type into a
+       * fact. Without it every machine-token caller — the app's own renderer
+       * and a curl from an agent's shell alike — was written as "local", which
+       * is the string a person pressing the button produces.
+       *
+       * A present, vouched Origin is the signal: browsers attach one to a POST
+       * and cannot be talked out of it, and the desktop renderer sends the
+       * app's own scheme. A shell sends none unless it is told to, and a shell
+       * that IS told to is a different sentence in the log than a shell that
+       * was not.
+       */
+      const pageOrigin = req.headers.get("origin");
+      const who = actorOf(clientIp, caller ? { ...asActor(caller)!, fromPage: !!pageOrigin && vouchedOrigin(pageOrigin) } : caller);
       const ok = decideGate(String(b.id), decision, String(b.reason || ""), who);
       /*
        * Why it did not take, in words.
@@ -1322,7 +3291,26 @@ const server = Bun.serve<WsData>({
         : `already ${held.decision === "deny" ? "denied" : "allowed"} by ${
             held.resolution === "human" ? "somebody else" : "the timeout"} — this answer arrived too late`;
       noteAction(clientIp, `/gate/${decision}`,
-        { tool: held?.tool_name, summary: held?.summary }, { ok, error }, caller);
+        { tool: held?.tool_name, summary: held?.summary }, { ok, error }, asActor(caller));
+      /*
+       * C6, beside the audit line and built from the same held row.
+       *
+       * `summary` goes to `noteAction` and NOT here, and that asymmetry is the
+       * whole of the difference between the two records. The audit log answers
+       * "who allowed WHAT", so it needs `rm -rf build`; the understudy answers
+       * "would it have said allow", which the tool name settles and the command
+       * line only endangers — a summary is a command line, and a command line is
+       * a path, a hostname and sometimes a token.
+       *
+       * `reasoned` for the same reason: whether he bothered to type a reason is
+       * a habit worth predicting, and the reason itself is prose.
+       */
+      noteClass6(String(b.id), {
+        decision,
+        tool: String(held?.tool_name ?? "") || "unknown",
+        reasoned: !!String(b.reason ?? ""),
+        took: ok,
+      });
       return json({ ok, ...(error ? { error } : {}) });
     }
     // Drive the dashboard's own UI from outside — a Stream Deck, a phone. Unlike
@@ -1339,6 +3327,769 @@ const server = Bun.serve<WsData>({
       if (!cmd) return json({ ok: false, error: "unknown control command" }, 400);
       broadcast({ type: "control", data: cmd });
       return json({ ok: true });
+    }
+
+    /*
+     * The understudy's own surface: read the score, read one row, turn a class
+     * down, stop, and switch the whole thing on.
+     *
+     * Every one of them is a line and a half, because there is nothing to any
+     * of them but a call into understudy.ts. The interesting decisions — what
+     * counts, what may be promoted, what is refused — all live there, and a
+     * route that re-decided any of them would be a second opinion nobody could
+     * tell apart from the first.
+     */
+    if (pathname === "/understudy/scorecard") {
+      /* The panel's 7d / 30d / All control. Anything unparseable is "all",
+         because a filter that silently narrows the numbers is worse than one
+         that silently widens them. */
+      const w = url.searchParams.get("window");
+      const days = w === "7" ? 7 : w === "30" ? 30 : null;
+      return json(scorecard(days));
+    }
+    /*
+     * The Ledger tab: the last few decisions, newest first.
+     *
+     * This is the feature's most convincing screen and the reason the route
+     * exists — a scorecard is an assertion, whereas a list of "here is what I
+     * saw, here is what I said you would do, here is what you did" is the
+     * evidence for it. Same safety property as /why: the columns it returns
+     * are categorical by construction and there is no body column to leak.
+     */
+    /*
+     * ── teaching it ──────────────────────────────────────────────────────
+     *
+     * Everything under here is local file reading driven by the panel. The
+     * shape is deliberate: /sources describes what is on the machine and reads
+     * nothing, /allow records a yes or a no one source at a time, and /learn is
+     * the only thing that opens a file. A person can look at the first, change
+     * their mind on the second, and never press the third.
+     */
+    if (pathname === "/understudy/sources") {
+      const { allow, extra, never } = consent();
+      return json({
+        ok: true,
+        sources: listSources(allow, extra),
+        never,
+        terms: termsStatus(),
+        policy: policySummary(),
+        learned: lastUnderstudyLearn,
+        /*
+         * Everything ever refused, not just what the last read refused.
+         * `learned.quarantined` is counted in memory during one pass and gone
+         * afterwards, so a machine with refusals on record showed zero.
+         */
+        refusedEver: quarantinedEver(),
+        banked: precedentCount(),
+        byClass: precedentsByClass(),
+      });
+    }
+    if (pathname === "/understudy/allow" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => null) as { id?: string; allowed?: boolean } | null;
+      if (!b?.id) return json({ ok: false, error: "which source" }, 400);
+      setAllowed(String(b.id), b.allowed === true);
+      const { allow, extra } = consent();
+      return json({ ok: true, sources: listSources(allow, extra) });
+    }
+    if (pathname === "/understudy/source/add" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => null) as { path?: string; label?: string; kind?: "rules" | "precedents" } | null;
+      const p = gitSafeAbs(String(b?.path || ""));
+      if (!p) return json({ ok: false, error: "not a path we can read" }, 400);
+      let id: string;
+      try { id = addExtraSource(p, b?.label, b?.kind); }
+      catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }, 400); }
+      setAllowed(id, true);
+      const { allow, extra } = consent();
+      return json({ ok: true, id, sources: listSources(allow, extra) });
+    }
+    if (pathname === "/understudy/source/remove" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => null) as { id?: string } | null;
+      if (b?.id) removeExtraSource(String(b.id));
+      const { allow, extra } = consent();
+      return json({ ok: true, sources: listSources(allow, extra) });
+    }
+    /*
+     * The recommended set, applied in one press.
+     *
+     * The screen was reported as confusing and it was: twenty rows of equal
+     * weight, one holding eight kilobytes of somebody's own conventions and
+     * another four hundred megabytes of their employer's work, and a request to
+     * choose. This is the answer to "where do I start" — everything the person
+     * wrote deliberately about how they work, plus their own project's record,
+     * and no raw transcript of anybody else's.
+     *
+     * It also seeds the exclusion list if it is empty, because an empty list is
+     * the one state on that screen where nothing is being protected and the
+     * person cannot tell.
+     */
+    if (pathname === "/understudy/recommend" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => null) as { everything?: boolean } | null;
+      const { allow, extra, never } = consent();
+      /*
+       * `everything` is a real and reasonable thing to want: a person learning
+       * from their own history wants the bad days in it as much as the good
+       * ones, and a set that only reads their tidy public project learns a
+       * tidier person than exists.
+       *
+       * It is a separate button rather than a wider default because the two
+       * choices carry different risks, and the difference belongs in front of
+       * somebody rather than inside a heuristic. Reading is not the risk — the
+       * partition keeps closed material out of anything open-bound — but the
+       * terms list only knows the names already in it, and only the person
+       * knows this quarter's.
+       */
+      const all = b?.everything === true;
+      for (const s of listSources(allow, extra)) {
+        if (s.found && (all || s.recommended)) setAllowed(s.id, true);
+      }
+      /*
+       * The seed list, and it is not decoration.
+       *
+       * A survey of this machine found ~/Documents/secrets holding a 1Password
+       * emergency kit, a CSV of cloud access keys and a file of GitHub recovery
+       * codes. Those directories exist on most working machines under some
+       * name, and an exclusion list that does not name them on the first run is
+       * an exclusion list that protects nothing on the first run.
+       */
+      if (!never.length) {
+        setNever([
+          "Documents/secrets", ".ssh", ".gnupg", ".env", "credentials",
+          "accessKeys", "recovery-code", "1Password", "id_rsa", "id_ed25519",
+        ]);
+      }
+      const after = consent();
+      return json({ ok: true, sources: listSources(after.allow, after.extra), never: after.never });
+    }
+    if (pathname === "/understudy/never" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => null) as { never?: unknown } | null;
+      const list = Array.isArray(b?.never) ? (b!.never as unknown[]).map(String) : [];
+      return json({ ok: true, never: setNever(list) });
+    }
+    /*
+     * The only route that opens a file.
+     *
+     * It refuses without a private-terms list rather than reading anything —
+     * see the note on ingest(). The refusal is a 409 and not a 500: nothing
+     * went wrong, the machine is simply not in a state where reading a corpus
+     * is a safe thing to do.
+     */
+    if (pathname === "/understudy/learn" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      try {
+        // The one way past the gate: the body says, in so many words, that
+        // this machine has nothing to protect. Desktop only — a page on the
+        // wifi does not get to make that call.
+        const b = (await req.json().catch(() => ({}))) as { iAcceptNoTermsList?: unknown } | null;
+        const accept = b?.iAcceptNoTermsList === true && desktopOnly(req);
+        const r = ingest({ iAcceptNoTermsList: accept });
+        lastUnderstudyLearn = r;
+        broadcast({ type: "understudy", data: scorecard() });
+        return json({ ok: true, learned: r });
+      } catch (e) {
+        return json({ ok: false, error: String(e instanceof Error ? e.message : e) }, 409);
+      }
+    }
+
+    /*
+     * "What would he do here?" — a read across everything it has learned.
+     *
+     * GET, because it changes nothing, and the partition is REQUIRED rather
+     * than defaulted. This route reaches into somebody's private material and
+     * the argument that decides WHICH material is not something to guess at:
+     * `retrieve` throws without one, and that throw is the fence.
+     */
+    if (pathname === "/understudy/ask" && req.method === "GET") {
+      const text = (url.searchParams.get("q") || "").trim();
+      if (!text) return json({ ok: false, error: "ask what?" }, 400);
+      if (text.length > 400) return json({ ok: false, error: "too long to be a question" }, 400);
+      const partition = (url.searchParams.get("partition") || "").trim();
+      if (!partition) return json({ ok: false, error: "which partition — open work or kept private?" }, 400);
+      const cls = url.searchParams.get("cls") || undefined;
+      try {
+        // The counts travel with the answer so a thin result can say where the
+        // rest of the material is instead of just looking empty.
+        const answer = ask({ text, cls, partition });
+        /*
+         * The judge runs only where counting failed, and only if he switched it
+         * on. Asking it when the bank already answered would spend a network
+         * round trip to paraphrase evidence that is sitting right there — and
+         * paraphrase is the one thing this feature must not do.
+         */
+        const verdict = answer.thin && judgeEnabled()
+          ? await judge({ situation: text, cls: answer.cls, partition })
+          : null;
+        return json({
+          ok: true,
+          answer,
+          verdict,
+          judge: { enabled: judgeEnabled(), available: JUDGE_AVAILABLE() },
+          banked: bankByPartition(),
+        });
+      } catch (e) {
+        return json({ ok: false, error: String(e instanceof Error ? e.message : e) }, 400);
+      }
+    }
+    /*
+     * Where it may draft actions. Narrow by default, and his to widen.
+     *
+     * Deliberately its own route rather than a field on some larger settings
+     * body: this is the switch that decides whether the understudy may draft a
+     * request against his employer's repository, and a setting like that should
+     * be a thing somebody did, not a field that rode along with something else.
+     */
+    /*
+     * The shift: handing over for a stated while.
+     *
+     * GET reports what is running and what has run; POST opens or ends one.
+     * There is no route that EXTENDS a shift, on purpose — a stand-in that can
+     * lengthen its own shift is not standing in, and adding one later should
+     * feel like the change that it is.
+     */
+    if (pathname === "/understudy/shift" && req.method === "GET") {
+      const live = Shift.current();
+      return json({
+        ok: true,
+        current: live,
+        recent: Shift.recent(8),
+        maxMs: Shift.MAX_SHIFT_MS,
+        maxActions: Shift.MAX_SHIFT_ACTIONS,
+        /* Asleep until the agent's session comes back, when it is. */
+        hold: Work.heldUntil(),
+      });
+    }
+    if (pathname === "/understudy/shift/start" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { goal?: string; minutes?: number; maxActions?: number } = {};
+      try { b = await req.json() as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = Shift.start(String(b.goal ?? ""), Number(b.minutes ?? 30), Number(b.maxActions ?? 5));
+      if (!r.ok) return json({ ok: false, error: r.error }, 409);
+      /*
+       * NO SCAN ON THE WAY IN, and removing it is the point rather than a
+       * simplification.
+       *
+       * Opening a shift used to walk every checkout looking for work and draft
+       * proposals from it. That queue has never held a single row — so the
+       * scan filled nothing, and the repository's own measurement puts it at
+       * 18.2 SECONDS across twelve checkouts. Handing over to the clone paid
+       * that, every time, for a screen nobody could see.
+       *
+       * The work loop finds its own work, through `nextTask`, at the moment it
+       * is about to do some.
+       */
+      return json({ ok: true, shift: Shift.current() ?? r.shift });
+    }
+    /*
+     * What it did on its own, and the button that takes it back.
+     *
+     * This is the first screen anybody opens after leaving it running, so the
+     * list and the undo are one route apart deliberately: seeing what happened
+     * and being able to reverse it should never be two separate journeys.
+     */
+    /*
+     * What HEAD points at, and it exists for exactly one caller.
+     *
+     * The commit undo is a soft reset to the parent the clone committed on top
+     * of. That is exact only while the clone's commit is still the top one:
+     * once somebody has committed after it, resetting to that parent takes the
+     * newer work with it — a reversal eating the thing it was meant to protect.
+     *
+     * So the undo checks first, and checking needs a way to ask. A read-only
+     * route rather than a git call inside `understudy-act.ts`, because that file
+     * deliberately runs nothing: every fence it lives behind depends on it
+     * reaching git only through a request somebody authorised.
+     */
+    if (pathname === "/git/head" && req.method === "GET") {
+      const root = url.searchParams.get("root") || "";
+      // From the worktree list, which is where the short sha of a checkout
+      // already lives — rather than adding a second way to ask git the same
+      // question and a second thing to keep in step.
+      const wts = await gitWorktrees(root);
+      const here = wts.find((w) => w.path === root) ?? wts.find((w) => w.current) ?? null;
+      return json({ ok: !!here, head: here?.head ?? "", branch: here?.branch ?? "" });
+    }
+    /*
+     * THE WORK LOOP — take a task, cut a worktree, put an agent in it.
+     *
+     * Everything else in this feature measures. This is the part he actually
+     * asked for: leave it working on the issues for a while. The isolation is
+     * the worktree, which is what makes it defensible to hand the agent every
+     * tool he has — a run that goes wrong costs a directory.
+     *
+     * The repositories are the ones already discovered and then filtered to the
+     * open project. His decision, taken on a Saturday and for a good reason:
+     * prove it where a mistake costs a worktree rather than his job.
+     */
+    if (pathname === "/understudy/work/next" && req.method === "GET") {
+      const repos = await openProjectRepos();
+      const item = await Work.nextTask({ repos });
+      // The list is capped at twenty; the tally is not, because "how much has it
+      // finished" is a question about the shift and not about the last screenful.
+      return json({
+        ok: true, item, repos, sources: Work.sources(),
+        runs: Work.runs(20), tally: Work.runsSoFar(),
+        // The panes worth walking over to, if any run is still going. Asked
+        // of tmux for anything this process does not remember — it restarts,
+        // the runs do not.
+        watching: await watchedNow(),
+      });
+    }
+
+    /*
+     * What it knows, and what it has done. Two counts and nothing else.
+     *
+     * The header used to carry the agreement percentage, the countdown to the
+     * next rung and the trust rail — all of which ranked the thirteen decision
+     * classes, of which twelve had never held a sample. These are the two
+     * questions the loop can actually answer: how much of him it has to work
+     * from, and how much it has finished.
+     *
+     * Four COUNTs against tables already indexed, so it is cheap enough for a
+     * header that redraws whenever the panel does. Deliberately NOT part of
+     * /understudy/work/next, which asks every source what it is holding — that
+     * one reaches the network, and a header must not.
+     */
+    /*
+     * What it is stuck on, and what it needs from you.
+     *
+     * A loop that stops quietly is worse than one that stops loudly, and until
+     * this endpoint existed there was no way to see the difference from
+     * outside: 26 of 108 runs ended having delivered nothing, and not one of
+     * them said what it needed. An open row here is a question waiting on a
+     * person, oldest work first in the queue and newest question first here.
+     */
+    if (pathname === "/understudy/help" && req.method === "GET") {
+      return json({ ok: true, open: openRequests(), history: helpHistory(30) });
+    }
+
+    /* A person has dealt with one. The row stays as history — what it asked for
+       and how long it waited is the record of where the loop needs a hand. */
+    if (pathname === "/understudy/help/answered" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const body = await req.json().catch(() => ({})) as { id?: number };
+      const id = Number(body?.id);
+      if (!Number.isFinite(id) || id <= 0) return json({ ok: false, error: "which question?" }, 400);
+      markAnswered(id);
+      return json({ ok: true });
+    }
+
+    if (pathname === "/understudy/standing" && req.method === "GET") {
+      const tally = Work.runsSoFar();
+      return json({
+        ok: true,
+        precedents: precedentCount(),
+        rules: compiledRules().length,
+        done: tally.done,
+        failed: tally.failed,
+        /* How many questions are waiting on a person. Carried here rather than
+           on a route of its own because the header already asks for this one on
+           every open, and a count nobody fetches is a raised hand nobody sees. */
+        stuck: openRequests().length,
+      });
+    }
+
+    /*
+     * The counter you watch the popcorn over.
+     *
+     * A run is up to twenty-five minutes of an agent with a shell, and the tab
+     * used to show one fixed sentence for all of it. This returns what is on
+     * the pane right now, so the panel can draw the work as it happens instead
+     * of describing it afterwards.
+     *
+     * Only a pane this server opened for a run that is still going. The id is
+     * pinned to tmux's own shape rather than escaped — it goes on a command
+     * line, and `-t` accepts far more than pane ids, so anything else here
+     * would be choosing a target somebody else named.
+     */
+    if (pathname === "/understudy/work/watch" && req.method === "GET") {
+      const pane = url.searchParams.get("pane") ?? "";
+      if (!/^%\d{1,9}$/.test(pane)) return json({ ok: false, error: "not a pane id" }, 400);
+      // Recovered too, not just remembered: the guard and the list have to
+      // agree, or a pane the panel was just handed is refused when it asks.
+      if (!(await watchedNow()).some((w) => w.paneId === pane)) {
+        return json({ ok: false, error: "not a pane this is working in" }, 404);
+      }
+      const r = await tmux(["capture-pane", "-p", "-t", pane]);
+      /*
+       * Trailing blank lines trimmed. `capture-pane` returns the whole pane —
+       * fifty rows now that the window is resized — so a run that has printed
+       * eight lines comes back as eight lines and forty-two empty ones. On
+       * screen that is a box mostly full of nothing with a scrollbar sitting
+       * in the middle of it, which is what "it has a weird scroll" was.
+       */
+      const text = r.ok ? r.stdout.replace(/\s+$/, "").slice(-6000) : "";
+      return json({ ok: r.ok, text, error: r.ok ? undefined : "the pane has gone" });
+    }
+
+    if (pathname === "/understudy/work/run" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const repos = await openProjectRepos();
+      if (!repos.length) return json({ ok: false, error: "no open-project checkout to work in" }, 409);
+      const item = await Work.nextTask({ repos });
+      if (!item) return json({ ok: false, error: "nothing to work on right now" }, 404);
+
+      /*
+       * A TASK WITHOUT A REPOSITORY IS NOT WORK THIS CAN DO, and the first
+       * version of this line said `item.repo || repos[0]` — take whatever is
+       * first if the task does not say.
+       *
+       * Found by running it: the top task on a real machine was a card from his
+       * EMPLOYER'S tracker, and a card carries no checkout. With one open-project
+       * repository present that fallback would have cut a worktree in agentglass
+       * and set an agent to work on somebody else's ticket inside it. Not a
+       * leak — nothing would have reached the employer's repository — but a
+       * confident, wrong, and completely wasted run, and the kind that erodes
+       * trust faster than a failure does.
+       *
+       * A card can only say WHAT to do. Which checkout it belongs in is a fact
+       * nobody has told this yet, so it declines and says so.
+       */
+      if (!item.repo) {
+        return json({
+          ok: false,
+          error: `"${item.title}" does not say which checkout it belongs in, and guessing would be worse than waiting`,
+          item,
+        }, 409);
+      }
+      if (!repos.includes(item.repo)) {
+        return json({ ok: false, error: `${item.repo} is outside what it may work in today`, item }, 403);
+      }
+
+      /*
+       * A SHIFT IS REQUIRED HERE TOO, and the asymmetry it replaces was real.
+       *
+       * The chained loop demanded one and this route did not, so a single task
+       * ran with no wall, no budget and no stop rules — and it did, on the first
+       * live task: the shift failed to open because one was already running,
+       * and the work went ahead regardless. It happened to be fine. It was
+       * still an unbounded run, and "one task" is not a limit when the task is
+       * an agent with a shell and twenty-five minutes.
+       *
+       * The budget is charged before the work rather than after, so a run that
+       * never returns has still been paid for. Charging on completion means a
+       * hung agent costs nothing and the next request starts another.
+       */
+      const shift = Shift.current();
+      if (!shift || shift.state !== "running") {
+        return json({ ok: false, error: "hand over first — a run with no shift has no limit on it" }, 409);
+      }
+      if (shift.actionsLeft <= 0) {
+        return json({ ok: false, error: "it used everything it was given" }, 409);
+      }
+      Shift.countAction(shift.id);
+
+      const res = await Loop.workOne({
+        item,
+        repo: item.repo,
+        shiftId: shift.id,
+        agent: runAgentIn,
+        install: runInstallIn,
+        usage: await usageNow(),
+        onPane: nowWatching,
+        onNoPane: noPane,
+        git: runGitIn,
+        verify: runTestsIn,
+        // So the agent can read the same views he does — see the brief.
+        api: { url: `http://127.0.0.1:${PORT}` },
+      });
+      return json({ ok: res.ok, run: res });
+    }
+
+    /*
+     * Handing it a task directly.
+     *
+     * The other two sources cannot say WHICH CHECKOUT — a card never carries
+     * one — so on a quiet day the loop correctly declines everything. This is
+     * the queue he fills himself, and it is also the honest way to watch the
+     * thing work for the first time: give it something small, read what came
+     * back, decide whether to give it something bigger.
+     */
+    if (pathname === "/understudy/work/ask" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let ab: { title?: string; detail?: string; repo?: string } = {};
+      try { ab = await req.json() as typeof ab; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const title = String(ab.title ?? "").trim();
+      const repo = String(ab.repo ?? "").trim();
+      if (!title) return json({ ok: false, error: "what should it do?" }, 400);
+      // The checkout is checked HERE rather than when the task is picked up: a
+      // row naming somewhere out of scope is a disappointment scheduled for
+      // later, and saying so now costs nothing.
+      const allowed = await openProjectRepos();
+      if (!allowed.includes(repo)) {
+        return json({ ok: false, error: `it may only work in: ${allowed.join(", ") || "(nothing today)"}`, allowed }, 403);
+      }
+      // A second row with the same title in the same checkout is duplicate
+      // work waiting to be worked twice, not a second instruction — refuse it
+      // and say which row it already has, rather than writing another.
+      const dupe = Sources.pendingDuplicate(title, repo);
+      if (dupe) {
+        return json({
+          ok: false,
+          error: `already queued as #${dupe} — same title, same checkout`,
+          id: dupe,
+        }, 409);
+      }
+      const id = Sources.ask({ title, detail: String(ab.detail ?? ""), repo });
+      return id ? json({ ok: true, id, queued: Sources.asked() }) : json({ ok: false, error: "could not queue it" }, 500);
+    }
+
+    /*
+     * Which project is the open one.
+     *
+     * It was a constant naming this application, which put one person's project
+     * name into logic in a public repository and defined everything else as
+     * "not that". Both halves are facts about one machine, not about the
+     * software. The default is the checkout this server runs from, so nobody
+     * has to set it — and pointing the loop elsewhere is now something somebody
+     * does here rather than in a diff.
+     */
+    if (pathname === "/understudy/open-project" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let ob: { name?: string } = {};
+      try { ob = await req.json() as typeof ob; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      /*
+       * Refused with a reason rather than silently ignored. `you`, `code`
+       * or `home` are segments of the path every repository on this machine
+       * lives under, and the matcher is a segment test — so any of them puts
+       * the whole disk inside the fence.
+       */
+      const asked = String(ob.name ?? "");
+      // The known checkouts, so "the folder projects live in" is answered from
+      // this machine rather than assumed to be $HOME.
+      const known = knownProjects().map((p) => p.path);
+      if (!openProjectNameAllowed(asked, known)) {
+        return json({
+          ok: false,
+          error: `"${asked.slice(0, 40)}" would match every repository on this machine — name the project, not a folder above it`,
+          openProject: openProjectName(),
+        }, 400);
+      }
+      const name = setOpenProject(asked, known);
+      return json({ ok: true, openProject: name, repos: await openProjectRepos() });
+    }
+
+    if (pathname === "/understudy/work/ask" && req.method === "GET") {
+      /* Resolved once: the fence, the project list and the checkout list are
+         three readings of the same discovery, and calling it three times is
+         three filesystem walks for one answer. */
+      const roots = await openProjectRepos();
+      return json({
+        ok: true,
+        queued: Sources.asked(),
+        allowed: roots,
+        openProject: openProjectName(),
+        /*
+         * WHY THE LIST ABOVE IS EMPTY, when it is.
+         *
+         * The panel printed "It has nowhere to work, so it will decline every
+         * task" and never said why — and this morning the why was that the app
+         * had been relaunched by its own installer, so the server started
+         * outside any checkout and discovery found nothing. The reply already
+         * knew that; it just kept it to itself. Only asked when there is
+         * nothing allowed: a reason for a working setup is noise.
+         */
+        reason: roots.length === 0
+          ? nowhereReason({
+              project: openProjectName(),
+              here: repoRootOf(process.cwd()),
+              known: knownProjects().map((p) => p.path),
+            })
+          : null,
+        /*
+         * THE PROJECTS THIS MACHINE HAS ACTUALLY SEEN, so the fence stops being
+         * a bare text field.
+         *
+         * Asked, meeting that field: "what a crap way to pick another
+         * project" — you typed a name with no list of what was valid, no
+         * sense of what existed, and a name matching everything was refused by
+         * a rule you could not see.
+         *
+         * Derived from the checkouts discovery already found: the last path
+         * segment of each root, minus its worktree suffixes, deduplicated. Not
+         * a filesystem scan — the same source the fence itself resolves
+         * against, so nothing appears here that could not be chosen.
+         */
+        projects: (() => {
+          const seen = new Map<string, number>();
+          for (const root of roots) {
+            const leaf = root.split("/").filter(Boolean).pop() ?? "";
+            /* `agentglass-understudy` and `agentglass-unread` are checkouts OF
+               `agentglass`; the fence names the project, not the worktree. */
+            const name = leaf.split("-")[0] || leaf;
+            if (name) seen.set(name, (seen.get(name) ?? 0) + 1);
+          }
+          return [...seen].map(([name, checkouts]) => ({ name, checkouts }));
+        })(),
+        /*
+         * THE OTHER HALF OF THE FENCE, and it had no way of being read.
+         *
+         * `open-only` keeps the task-tracker sources silent; `everywhere` lets
+         * them offer work. There was a route to SET it and none to ask, so the
+         * switch that decides whether the clone reaches somebody's employer
+         * could not be seen in the application at all — only changed with curl.
+         * A fence whose position is invisible is one nobody can trust, and this
+         * is the position people most want to check before walking away.
+         */
+        scope: proposeScope(),
+      });
+    }
+
+    if (pathname === "/understudy/work/unask" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let ub: { id?: number } = {};
+      try { ub = await req.json() as typeof ub; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      Sources.unask(Number(ub.id || 0));
+      return json({ ok: true, queued: Sources.asked() });
+    }
+
+    /*
+     * Keep working until there is nothing left.
+     *
+     * His actual sentence: "if we run out of work, look for more where we
+     * usually look for it". The single-task route above is one step of this;
+     * this is the loop, and it requires a running shift because a shift is the
+     * thing that bounds how long and how much.
+     *
+     * `keepGoing` is asked FRESH each round rather than captured once — a shift
+     * can be halted between two tasks and the loop has to find that out, which
+     * is the difference between a stop button and a decoration.
+     */
+    if (pathname === "/understudy/work/loop" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const started = await startWorkLoop();
+      if (!started.ok) return json(started, 409);
+      return json(started);
+    }
+
+    if (pathname === "/understudy/work/discard" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let wb: { worktree?: string; repo?: string } = {};
+      try { wb = await req.json() as typeof wb; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      /*
+       * ONLY A WORKTREE THIS SERVER CUT, and the path is checked against the
+       * runs table rather than trusted.
+       *
+       * `discardRun` finishes with `rm(path, { recursive: true, force: true })`
+       * and the path arrived in the request body. Nothing looked at it — so
+       * any directory on the machine was a valid argument to a route whose
+       * job is deleting one, and being same-origin was the only thing in the
+       * way.
+       *
+       * The run also has to be finished. Deleting the worktree of a run still
+       * in flight pulls the ground out from under an agent mid-edit, and the
+       * row would go on claiming to be working in a directory that is gone.
+       */
+      const asked = String(wb.worktree ?? "");
+      const owner = Work.runOwning(asked);
+      if (!owner) return json({ ok: false, error: "not a worktree this made" }, 404);
+      if (owner.state === "running") {
+        return json({ ok: false, error: "that run is still going — stop it first" }, 409);
+      }
+      // Its own recorded repository, not one the caller supplies: the pair has
+      // to be the pair this server wrote, or the check above proves nothing.
+      /* Its branch goes with it, or the same task can never be cut again: the
+         branch name is a hash of the item, so an orphan makes every future
+         attempt fail with "already exists". `-d` inside refuses to delete work
+         nobody merged. */
+      const gone = await Loop.discardRun(owner.worktree, owner.repo, runGitIn, owner.branch);
+      return json({ ok: gone });
+    }
+
+    if (pathname === "/understudy/shift/stop" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const cur = Shift.current();
+      if (!cur) return json({ ok: false, error: "nothing is running" }, 404);
+      Shift.stop(cur.id, "you ended it", "done");
+      return json({ ok: true, shift: Shift.recent(1)[0] ?? null });
+    }
+    /*
+     * The judge's switch, on its own route like the propose scope — because
+     * this one decides whether his material is sent to a model while he is not
+     * watching, and that should be an act rather than a field riding along in
+     * some larger body.
+     */
+    if (pathname === "/understudy/judge" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let jb: { on?: boolean } = {};
+      try { jb = await req.json() as typeof jb; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json({ ok: true, enabled: setJudge(jb.on === true), available: JUDGE_AVAILABLE() });
+    }
+    if (pathname === "/understudy/propose-scope" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { scope?: string } = {};
+      try { b = await req.json() as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (b.scope !== "open-only" && b.scope !== "everywhere") {
+        return json({ ok: false, error: "open-only or everywhere" }, 400);
+      }
+      return json({ ok: true, scope: setProposeScope(b.scope) });
+    }
+    if (pathname === "/understudy/mode" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      // `setMode` refuses an unknown class, an unknown mode, and anything above
+      // the v1 ceiling — including for a class whose lock says never. The route
+      // reports the refusal and does not argue with it: in v1 the only mode it
+      // can accept is `shadow`, and that is deliberate, not a gap.
+      const ok = setMode(String(b.class || ""), b.mode);
+      if (ok) broadcast({ type: "understudy", data: scorecard() });
+      return json({ ok, ...(ok ? {} : { error: "the clone refused that mode — see UNDERSTUDY_CEILING" }) }, ok ? 200 : 400);
+    }
+    if (pathname === "/understudy/halt" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      // No body, no arguments, no confirmation. A stop that needs a well-formed
+      // request is a stop that can fail to arrive.
+      const dropped = halt();
+
+      /*
+       * HALT STOPS IT. What it already did is a worktree, not an act to undo.
+       *
+       * This used to unwind a table of reversible acts, and the safety seal it
+       * answered read "halt mid-sequence puts everything back". That table has
+       * never held a row, so the unwinding never ran — but the promise is not
+       * missing, it moved: the work happens in a DISPOSABLE WORKTREE, and
+       * putting everything back is removing a directory. That is why the agent
+       * can be handed every tool in the first place.
+       *
+       * Which is also why halting does not delete anything here. A stopped run
+       * leaves its worktree exactly where it is, because that directory is the
+       * only copy of whatever it had done, and throwing it away is a decision
+       * somebody makes after reading it — `/understudy/work/discard`.
+       */
+      const running = Shift.current();
+      if (running) Shift.stop(running.id, "you halted it");
+
+      broadcast({ type: "understudy", data: scorecard() });
+      return json({ ok: true, dropped });
+    }
+    /*
+     * Switching it on, and the one refusal that matters.
+     *
+     * Desktop-only, because turning on a thing that watches everything he does
+     * is not a decision a page on the wifi gets to make for him.
+     *
+     * And a 409 when the server has no auth token, which reads like paranoia
+     * and is not. `resolveToken` returns null on the zero-config loopback path;
+     * with AUTH_TOKEN null the whole `if (AUTH_TOKEN && …)` block above never
+     * runs, so `callerFor` is never called, no principal is ever resolved, and
+     * `understudyAllows` — the entire fence around what the understudy may do —
+     * is never consulted. Enabling it there would give it a limit that exists
+     * only in a comment. Refusing is the only honest answer, and it is a 409
+     * rather than a 403 because nothing about the request is wrong: the server
+     * is in a state that cannot hold the promise.
+     */
+    if (pathname === "/understudy/enable" && req.method === "POST") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      if (understudyRequiresToken(AUTH_TOKEN)) return json({ ok: false, error: UNDERSTUDY_NO_TOKEN_ERROR }, 409);
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      setEnabled(b.on !== false);
+      broadcast({ type: "understudy", data: scorecard() });
+      return json({ ok: true, enabled: understudyEnabled() });
     }
     /**
      * Whether an agent could drive this browser at all, and what is missing.
@@ -1373,6 +4124,16 @@ const server = Bun.serve<WsData>({
      * recording: every POST /browser/places came back 400, places.db stayed
      * empty, and the address bar had nothing of yours to complete.
      */
+    /**
+     * §16: "I only touched the local one", checkable rather than promised.
+     * Every op that reached the relay in browserdrive.ts — refused by the
+     * origin fence or read-only mode, or carried out and answered — with
+     * secrets already taken out (see redactAsk/redactValue there).
+     */
+    if (pathname === "/browser/audit" && req.method === "GET") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      return json({ ok: true, entries: exportAudit() });
+    }
     const browserDataPost = pathname === "/browser/places" || pathname === "/browser/places/forget" || pathname === "/browser/visit";
     if (pathname.startsWith("/browser/") && req.method === "POST" && !browserDataPost) {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -1388,15 +4149,183 @@ const server = Bun.serve<WsData>({
         // The window reporting back. Not an agent-facing route.
         let b: any = {};
         try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        const known = settleBrowser(b.id, { ok: b.ok === true, value: b.value, error: typeof b.error === "string" ? b.error : undefined });
+        const known = settleBrowser(b.id, {
+          ok: b.ok === true, value: b.value, error: typeof b.error === "string" ? b.error : undefined,
+          diagnosis: b.diagnosis,
+        });
         return json({ ok: true, known });
+      }
+      if (op === "audit") {
+        /* §16 built this list to prove what an agent touched; §12 wants the
+           same list as a script somebody can run again. One read, two shapes. */
+        let b: any = {};
+        try { b = await req.json(); } catch { b = {}; }
+        const parsed = parseAsk("audit", b);
+        if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+        /* §9's filters. `by` narrows to one caller and `tab` to one tab from
+           EVERY caller, which is the question a cross-container mix-up
+           actually needs answered. `as` is who is ASKING and filters nothing:
+           the CLI stamps it on every request, so the day it doubled as the
+           filter every `audit` came back scoped to its own caller. */
+        const f = parsed.ask.args as { script?: boolean; by?: string; tab?: string };
+        const entries = exportAudit({ as: f.by, tab: f.tab });
+        return json(f.script
+          ? { ok: true, value: { script: auditAsScript(entries), steps: entries.length } }
+          : {
+            ok: true,
+            value: {
+              entries,
+              /* Said in the answer, not only in the docs: `as` is asserted by a
+                 local CLI over a loopback endpoint whose only credential is one
+                 machine-wide token every agent shell holds. Forensics between
+                 cooperating agents, which is the real threat model — not
+                 authentication, and never to be described as one. */
+              note: "`as` is self-asserted by the caller over a loopback endpoint with one "
+                + "machine-wide token: this is forensics between cooperating agents, not authentication.",
+            },
+          });
+      }
+      if (op === "record") {
+        /* Answered here for the same reason as `events`: the loop belongs on
+           the side that already holds the connection, and the frames belong on
+           disk rather than in the reply. */
+        let b: any = {};
+        try { b = await req.json(); } catch { b = {}; }
+        const parsed = parseAsk("record", b);
+        if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+        const a = parsed.ask.args as Record<string, unknown>;
+        const shotArgs: Record<string, unknown> = {};
+        /*
+         * `page` TOO, and leaving it out is how a recording came back of a
+         * different tab.
+         *
+         * Every frame is a `shot`, and this list is what a frame inherits. It
+         * held the three that frame the picture and not the one that says WHICH
+         * PAGE, so `record --page t12` parsed the id, dropped it here, and
+         * photographed whatever the window had in front — for every frame.
+         *
+         * Measured by somebody using it: a recording asked for on a login page
+         * came back as the app's own git view, and the md5 of the frame was
+         * byte-identical to a capture of the ACTIVE tab. It is the worst shape
+         * of failure this tool has, because the answer is indistinguishable
+         * from a good one: "I recorded a navigation three times pinning --page to
+         * an id I had just read, and the starting page came out every time".
+         */
+        for (const k of ["selector", "fullPage", "clip", "page", "as", "how", "pageExplicit"]) if (a[k] !== undefined) shotArgs[k] = a[k];
+        const r = await recordFrames({
+          frames: a.frames as number, everyMs: a.every as number,
+          dir: a.dir as string, gif: a.gif as string | undefined, shotArgs,
+        });
+        return json(r);
+      }
+      if (op === "download") {
+        /* §11: click something that starts a download and wait for the file —
+           answered here for the same reason as `record`: the polling loop and
+           the filesystem belong on the side that has both, not on the panel. */
+        let b: any = {};
+        try { b = await req.json(); } catch { b = {}; }
+        const parsed = parseAsk("download", b);
+        if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+        const a = parsed.ask.args as { selector: string; dir: string; timeoutMs?: number };
+        const r = await downloadFile({ selector: a.selector, dir: a.dir, timeoutMs: a.timeoutMs });
+        return json(r);
+      }
+      if (op === "events") {
+        /* Answered HERE, not by the panel: the whole point is a wait, and the
+           server is the side already holding the connection — so the polling
+           costs a loop here instead of a process start and a context entry per
+           turn on the agent's side. */
+        let b: any = {};
+        try { b = await req.json(); } catch { b = {}; }
+        const parsed = parseAsk("events", b);
+        if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+        const a = parsed.ask.args as { since?: number; wait?: number; kinds?: string[]; page?: string };
+        const r = await waitForEvents({
+          since: a.since ?? Date.now(),
+          waitMs: (a.wait ?? 30) * 1000,
+          kinds: a.kinds ?? [],
+          /* THE CALLER'S TAB. `events` is not a tab op, so the CLI attaches
+             the caller's page like every other verb — and this route dropped
+             it, so all three kinds read whatever was in front. The `cdp` kind
+             DRAINS what it reads, so an agent waiting on its own tab was
+             emptying another agent's event buffer. */
+          page: a.page,
+        });
+        return json(r);
+      }
+      if (op === "trace") {
+        /* Trace recording: start/stop DevTools trace collection.
+           For "stop", the trace path must be provided and the window
+           will have already collected and saved the trace data. */
+        let b: any = {};
+        try { b = await req.json(); } catch { b = {}; }
+        const parsed = parseAsk("trace", b);
+        if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+        const a = parsed.ask.args as { action: string; path?: string };
+        if (a.action === "stop" && a.path) {
+          const r = await traceRecording({ path: a.path });
+          return json(r);
+        }
+        /* For "start", delegate to the window via askBrowser. */
+        const reply = await askBrowser(parsed.ask);
+        return json(reply, reply.ok ? 200 : 409);
+      }
+      if (op === "do") {
+        /* Several verbs in one request — §1. The whole point is the round trip
+           it does NOT make, so validation, guardrails and the §15 diagnosis of
+           a failed step all happen inside `runSteps` rather than out here. */
+        let b: any = {};
+        try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        /* Several pages at once — §9. `lanes` instead of `steps`, and each
+           lane names its page. Concurrent on purpose: sequencing them would
+           make the watching page see the change already made, which is the
+           thing being tested. */
+        /* WHO IS ASKING RIDES ON THE OUTER BODY. The CLI stamps `as`, `how`
+           and `pageExplicit` on the batch once, not on each step, and this
+           route used to hand only the steps on — so every step reached the
+           panel with a page and no name. The panel reads a missing `as` as
+           "cannot tell" and allows (it has to: the MCP surface sends none),
+           which made `do` the one verb the ownership check never saw. */
+        const caller: Record<string, unknown> = {};
+        for (const k of ["as", "how", "pageExplicit"]) if (b[k] !== undefined) caller[k] = b[k];
+        if (Array.isArray(b.lanes)) {
+          if (b.lanes.length === 0 || b.lanes.length > 8) {
+            return json({ ok: false, error: "lanes takes 1 to 8 pages" }, 400);
+          }
+          for (const lane of b.lanes) {
+            if (!lane || !Array.isArray(lane.steps) || lane.steps.length === 0) {
+              return json({ ok: false, error: "every lane needs steps: [{op, args}, ...]" }, 400);
+            }
+          }
+          const r = await runLanes(b.lanes, { observe: b.observe === true, caller });
+          return json(r);
+        }
+        if (!Array.isArray(b.steps) || b.steps.length === 0) {
+          return json({ ok: false, error: "do needs steps: [{op, args}, ...]" }, 400);
+        }
+        if (b.steps.length > 64) {
+          return json({ ok: false, error: `do takes at most 64 steps, got ${b.steps.length}` }, 400);
+        }
+        const r = await runSteps(b.steps, {
+          observe: b.observe === true,
+          page: typeof b.page === "string" ? b.page : undefined,
+          caller,
+        });
+        return json(r, r.ok ? 200 : 200);
       }
       let b: unknown = {};
       try { b = await req.json(); } catch { b = {}; }
       const parsed = parseAsk(op as BrowserOp, b);
       if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
       const reply = await askBrowser(parsed.ask);
-      return json(reply, reply.ok ? 200 : 409);
+      /* §3: an action can hand back the page it left behind, under `after`.
+         Opt-in, because an observation is the tree, the console and the
+         network — attaching one to every click would put six in an agent's
+         context for a five-step sequence where it wanted the last. */
+      const answered = (b as { observe?: boolean })?.observe === true
+        ? await withObservation(parsed.ask, reply)
+        : reply;
+      return json(answered, answered.ok ? 200 : 409);
     }
 
     /**
@@ -1516,6 +4445,24 @@ const server = Bun.serve<WsData>({
 
     if (pathname === "/pair/accept" && req.method === "POST") {
       if (!atMachine()) return notHere();
+      /*
+       * And accepting is the HUMAN half of pairing, so a bare machine token is
+       * not enough to complete it.
+       *
+       * This is the door that made the gate fix worse than the bug it fixed.
+       * An agent holding the machine token — which it does, the file is
+       * readable by anything running as the user — could drive the whole
+       * ceremony itself: ask for a ticket, accept its own ticket, and mint a
+       * device with any label it liked. It then released its own held call
+       * through the device branch, needing no Origin at all, and the audit line
+       * read as a named phone somebody had once approved. A log that invents a
+       * human is worse than one that cannot tell you which machine it was.
+       *
+       * `mayReleaseAHold` is deliberately the same test: consenting to a new
+       * device on your account and consenting to a held command are the same
+       * kind of act, and neither is something the held party gets to do.
+       */
+      if (!mayReleaseAHold(req, caller)) return heldPartyBlocked();
       let b: { ticket?: unknown; scope?: unknown };
       try { b = (await req.json()) as { ticket?: unknown; scope?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       // Anything unrecognised lands on the narrow scope rather than the wide
@@ -1619,6 +4566,122 @@ const server = Bun.serve<WsData>({
       });
     }
 
+    /**
+     * --- plugins: install / manifest / review / enable ---
+     *
+     * docs/PLUGINS.md. No plugin code runs from install; a plugin
+     * only starts as its own process, holding a token scoped to what its
+     * manifest declared and a human then approved. GET is a read (the
+     * global gate already requires `read`); every write below is unlisted
+     * in ANSWER_POST/READ_POST so the same gate already requires `full` —
+     * installing, enabling, disabling and removing a plugin is exactly as
+     * privileged as git write or docker control, which is what it is.
+     */
+    if (pathname === "/plugins" && req.method === "GET") {
+      return json({ master: masterEnabled(), plugins: listPlugins() });
+    }
+
+    if (pathname === "/plugins/master" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { enabled?: unknown };
+      try { b = (await req.json()) as { enabled?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+      await setMaster(b.enabled);
+      return json({ ok: true, master: b.enabled });
+    }
+
+    if (pathname === "/plugins/install" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { source?: unknown; kind?: unknown; url?: unknown; path?: unknown; ref?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      // Either the back-compat bare string, or a typed request naming its
+      // own kind explicitly (a git install with a ref pinned, in practice).
+      const input = b.kind === "git" || b.kind === "local-path"
+        ? (b as { kind: "git" | "local-path"; url?: unknown; path?: unknown; ref?: unknown })
+        : b.source;
+      const r = await installPlugin(input as never);
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    if (pathname === "/plugins/catalogue" && req.method === "GET") {
+      const catalogueUrl = url.searchParams.get("url");
+      if (!catalogueUrl) return json({ ok: false, error: "url is required" }, 400);
+      const r = await fetchCatalogue(catalogueUrl);
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    /**
+     * The catalogues he has added, kept as a plain list of URLs — GET is a
+     * read; adding and removing one are writes at the same level as
+     * installing a plugin, so they go through the same trusted-caller check.
+     * Browsing a catalogue (above) never adds it: that stays a separate,
+     * explicit step, the same distinction viewing a repo has from starring it.
+     */
+    if (pathname === "/plugins/catalogues" && req.method === "GET") {
+      return json({ catalogues: listCatalogues() });
+    }
+    if (pathname === "/plugins/catalogues/add" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { url?: unknown };
+      try { b = (await req.json()) as { url?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.url !== "string" || !b.url.trim()) return json({ ok: false, error: "url is required" }, 400);
+      const r = addCatalogue(b.url);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/plugins/catalogues/remove" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { url?: unknown };
+      try { b = (await req.json()) as { url?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.url !== "string" || !b.url.trim()) return json({ ok: false, error: "url is required" }, 400);
+      return json({ ok: removeCatalogue(b.url) });
+    }
+
+    if (pathname === "/plugins/install-from-catalogue" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { catalogueUrl?: unknown; pluginId?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.catalogueUrl !== "string" || !b.catalogueUrl.trim()) return json({ ok: false, error: "catalogueUrl is required" }, 400);
+      if (typeof b.pluginId !== "string" || !b.pluginId.trim()) return json({ ok: false, error: "pluginId is required" }, 400);
+      const r = await installFromCatalogue(b.catalogueUrl, b.pluginId);
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    if (pathname === "/plugins/update" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { name?: unknown };
+      try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
+      const r = await updatePlugin(b.name);
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    if (pathname === "/plugins/enable" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { name?: unknown };
+      try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
+      const r = await enablePlugin(b.name);
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    if (pathname === "/plugins/disable" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { name?: unknown };
+      try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
+      const ok = await disablePlugin(b.name);
+      return json({ ok }, ok ? 200 : 404);
+    }
+
+    if (pathname === "/plugins/remove" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { name?: unknown };
+      try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
+      const ok = await removePlugin(b.name);
+      return json({ ok }, ok ? 200 : 404);
+    }
+
     if (pathname === "/search") {
       const q = url.searchParams.get("q") || "";
       const limit = Math.min(200, Number(url.searchParams.get("limit") || 60));
@@ -1673,6 +4736,17 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = gitCommit(String(b.root || ""), Array.isArray(b.files) ? b.files : [], String(b.title || ""), String(b.body || ""));
+      /*
+       * C2 is seamed HERE as well as on the family chokepoint, and that is not
+       * a duplicate.
+       *
+       * `/git/commit` is not inside the `/git/*` switch — it is its own handler
+       * several hundred lines above it, and it carries no `noteAction` either.
+       * It is also the route the commit box in the Diff view actually calls, so
+       * a class hung only on the chokepoint would have recorded nothing at all
+       * for the commits he makes, while looking fully instrumented.
+       */
+      noteClass(pathname, b, res.ok !== false);
       return json(res, res.ok ? 200 : 400);
     }
     if (pathname === "/git/amend" && req.method === "POST") {
@@ -1956,6 +5030,14 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/changelog") return json(await generateChangelog(url.searchParams.get("root") || "", url.searchParams.get("from") || "", url.searchParams.get("to") || ""));
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
     if (pathname === "/editor/capability") return json(editorCapability());
+    /* Where the cursor is, in an editor this server started.
+       The id is opaque and ours — a socket path from a client would be a way to
+       talk to any nvim on the machine. Every failure is "no idea", which is
+       what the rail behaves like when nothing can be asked. */
+    if (pathname === "/editor/where") {
+      const r = await editorCursor(url.searchParams.get("id") || "");
+      return json(r);
+    }
     if (pathname === "/theme/status") return json({ ...snippetStatus(), snippets: SNIPPETS });
     /*
      * What this machine is wearing, so a paired phone can wear it too.
@@ -2037,7 +5119,7 @@ const server = Bun.serve<WsData>({
       // still reachable from the Diff view, from another window, and from an
       // agent driving the app. See stoppedRefusal().
       const stopped = stoppedRefusal(root, pathname);
-      if (stopped) { noteAction(clientIp, pathname, b, stopped, caller); return json(stopped, 400); }
+      if (stopped) { noteAction(clientIp, pathname, b, stopped, asActor(caller)); return json(stopped, 400); }
       let res;
       switch (pathname) {
         case "/git/stage": res = stage(root, paths); break;
@@ -2100,9 +5182,6 @@ const server = Bun.serve<WsData>({
         case "/git/snapshot-delete": res = deleteSnapshot(root, b.sha); break;
         case "/git/protected-branches": res = protectedBranches(root); break;
         case "/git/protected-branches-set": res = setProtectedBranches(root, b.names); break;
-        case "/git/protected-branches": res = protectedBranches(root); break;
-        case "/git/protected-branches-set": res = setProtectedBranches(root, b.names); break;
-        case "/git/push": res = gitPush(root, { force: b.force === true }); break;
         case "/git/submodule-add": res = submoduleAdd(root, b.url, b.path); break;
         case "/git/submodule-update": res = await submoduleUpdate(root, b.path); break;
         case "/git/submodule-sync": res = submoduleSync(root, b.path); break;
@@ -2119,7 +5198,10 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      // The understudy's seam sits on its own line above the audit line rather
+      // than inside it: action-log.test.ts counts those one-liners.
+      if (res) noteClass(pathname, b, res.ok !== false);
+      if (res) { noteAction(clientIp, pathname, b, res, asActor(caller)); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- live docker panel (lazydocker-style) ---
@@ -2156,6 +5238,20 @@ const server = Bun.serve<WsData>({
       return json(await issuePullRequests(url.searchParams.get("root") || "", url.searchParams.get("number")));
     }
     if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
+
+    // --- runs ---
+    /* One prompt, several checkouts, tracked as one thing — including the legs
+       this app never started. See runs.ts for why adoption is the half worth
+       building and fan-out is not. */
+    if (pathname === "/runs") return json({ runs: currentRuns(url.searchParams.get("root") || undefined) });
+    /* What each leg has produced, grouped by the directories the legs ran in.
+       Its own route rather than a field on the list: it is a database query per
+       run, and the list is what a panel paints first. */
+    if (pathname === "/run/activity") {
+      const run = runById(url.searchParams.get("id"));
+      if (!run) return json({ ok: false, error: "no such run" }, 404);
+      return json({ ok: true, run, legs: runActivity(run) });
+    }
 
     // --- tasks (taskwarrior-backed, read-only) ---
     /*
@@ -2242,6 +5338,23 @@ const server = Bun.serve<WsData>({
        prose. Writes go through `saveReviewRecipe`, which is where a title, a
        body and a skill line are checked; nothing here runs anything, the same
        way /recipes does not run a recipe. */
+    /* The sentences somebody writes over and over on other people's pull requests —
+       see savedReplies.ts. Same shape as the prompt catalogue above it, and stored the
+       same way, because it is the same kind of thing. */
+    if (pathname === "/saved-replies") {
+      const { savedReplies } = await import("./savedReplies.ts");
+      return json({ ok: true, replies: savedReplies() });
+    }
+    if (pathname.startsWith("/saved-replies/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const { putSavedReply, removeSavedReply } = await import("./savedReplies.ts");
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = pathname === "/saved-replies/save" ? putSavedReply(b)
+        : pathname === "/saved-replies/remove" ? removeSavedReply(b.id)
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : 400);
+    }
     if (pathname === "/pr-prompts") {
       const { reviewRecipes } = await import("./reviewPrompts.ts");
       return json({ ok: true, recipes: reviewRecipes() });
@@ -2269,6 +5382,29 @@ const server = Bun.serve<WsData>({
      * Answered from the watcher's own file, so this costs no ClickUp call and
      * cannot fail with a rate limit.
      */
+    /*
+     * File a mirrored notification against its card, from the window that has
+     * it on screen.
+     *
+     * The server subscribes to the mirror itself, so this is not the usual
+     * path — it is the catch-up for notifications that arrived BEFORE this
+     * existed and are still in the panel's own list, and for a window that saw
+     * one while the server was restarting. Same id, same row: filing one twice
+     * changes nothing.
+     */
+    if (pathname === "/clickup/card-note" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      /* Capped here and again in rememberNote: same reasoning as /agents/status
+         above — a free-text field with no cap under a 32 MB body limit is a
+         row of that size, written by any local page that can reach this. */
+      const text = (v: unknown, cap: number) => String(v ?? "").slice(0, cap);
+      CardIndex.rememberNote({
+        id: text(b.id, 200), cardId: text(b.cardId, 64), label: text(b.label, 512),
+        text: text(b.text, 4096), at: Number(b.at) || Date.now(),
+      });
+      return json({ ok: true });
+    }
     if (pathname === "/clickup/card-for-note") {
       return json({ card: cardForTitle(url.searchParams.get("title") || "") });
     }
@@ -2299,6 +5435,58 @@ const server = Bun.serve<WsData>({
     }
     /* The tabs a list has in ClickUp, for the sidebar to hang under it. Read on
        demand — one call, and only for a list somebody actually opened. */
+    /*
+     * A VIDEO ATTACHMENT, served so a browser will actually play it.
+     *
+     * The tracker's own host sends `content-disposition: attachment` on every
+     * file it hands out. That header means "this is a download" — so a <video>
+     * pointed at it fails before it ever looks at the bytes, whatever they
+     * are. Measured, after two wrong guesses: the host DOES answer range
+     * requests (206), and the file IS avc1/H.264, which this browser plays
+     * without complaint. It was the header the whole time.
+     *
+     * So this passes the bytes through with that header removed, `video/mp4`
+     * in its place — Chromium refuses `video/quicktime` even when the stream
+     * inside it is one it can decode — and the Range header forwarded, so
+     * seeking still works and nothing has to be downloaded whole.
+     *
+     * ONLY urls this server has already handed out. The id is looked up in the
+     * attachments we cached for a card; a caller cannot name an address of its
+     * own. Otherwise this is a hole that fetches any URL on the internet with
+     * the app's own network position.
+     *
+     * AND ONLY THE TRACKER'S OWN HOSTS, checked at every hop. The url in that
+     * table is whatever the tracker's API returned for the attachment — a
+     * remote system's word, not this server's — and it was fetched with no
+     * host check, no redirect check and no timeout. A poisoned attachment
+     * record pointing at a LAN address, or a redirect to one, was proxied as
+     * "the video". The hosts named here are the two the CSP already trusts for
+     * pictures (shared/csp.ts): `*.clickup.com` and the attachment CDN
+     * `*.clickup-attachments.com`. Ten seconds to first byte, then the stream
+     * is the browser's to abandon.
+     */
+    if (pathname === "/clickup/file") {
+      const { attachmentUrl } = await import("./providers.ts");
+      const src = attachmentUrl(url.searchParams.get("id") || "");
+      if (!src) return json({ ok: false, error: "not a file this app has offered" }, 404);
+      const range = req.headers.get("range");
+      const got = await guardedFetch(src, { headers: range ? { Range: range } : {}, signal: AbortSignal.timeout(10_000) }, attachmentHostError);
+      if (!got.res) return json({ ok: false, error: `attachment refused: ${got.error}` }, 502);
+      const upstream = got.res;
+      const head = new Headers();
+      /* `video/mp4` rather than what the origin said: the container is
+         QuickTime and the stream inside it is H.264, and Chromium decides on
+         the label rather than on the stream. */
+      head.set("content-type", "video/mp4");
+      head.set("accept-ranges", "bytes");
+      for (const k of ["content-length", "content-range", "etag", "last-modified"]) {
+        const v = upstream.headers.get(k);
+        if (v) head.set(k, v);
+      }
+      /* Deliberately NOT content-disposition. That is the whole fix. */
+      return new Response(upstream.body, { status: upstream.status, headers: head });
+    }
+
     if (pathname === "/clickup/list-views") {
       const { listViews } = await import("./clickup.ts");
       const { secretFor } = await import("./credentials.ts");
@@ -2379,8 +5567,77 @@ const server = Bun.serve<WsData>({
     if (pathname === "/notify/reach") {
       return json({ ok: true, slack: slackReachable() });
     }
+    /*
+     * Text search, which ClickUp's API does not have.
+     *
+     * A GET with the query in it, and slow on purpose the first time: see
+     * searchTasks for the measurement that shapes it. The panel warns before it
+     * fires this, because sixteen seconds without a word is a broken search box.
+     */
+    /*
+     * The same search, streamed as it goes.
+     *
+     * "at least show me what it finds as it goes, no?" — the sweep is
+     * three sequential pages of a workspace with thousands of cards, and
+     * answering only at the end is a spinner where a filling list should be.
+     * One JSON object per line: the rows found so far, then a last line with
+     * what was scanned. A reader that cannot parse a line ignores it; a client
+     * that goes away aborts the request and the sweep's own cache keeps
+     * whatever it had read.
+     */
+    /* Start reading the expensive half of the search now, so the first one is
+       not the one that pays for it. Answers immediately; the work is not
+       awaited and a failure is not reported — see warmBodySweep. */
+    if (pathname === "/clickup/warm") {
+      warmBodySweep();
+      return json({ ok: true });
+    }
+    if (pathname === "/clickup/search/stream") {
+      const q = url.searchParams.get("q") ?? "";
+      const force = url.searchParams.get("force") === "1";
+      const stream = new ReadableStream<Uint8Array>({
+        async start(ctrl) {
+          const enc = new TextEncoder();
+          const line = (o: unknown) => { try { ctrl.enqueue(enc.encode(`${JSON.stringify(o)}\n`)); } catch { /* gone */ } };
+          const r = await searchTasksStream(q, force, (tasks) => line({ tasks }));
+          line(r.ok
+            /* `partial` on the closing line: a sweep that lost a page answers
+               with fewer cards and no other sign of it, and the panel has to
+               be able to say "this is not all of them". */
+            ? {
+              done: true, scanned: r.data?.scanned ?? 0, refs: r.data?.refs ?? 0,
+              partial: r.data?.partial === true,
+              /* The window in TIME, and whether the sweep stopped at its cap.
+                 A card count cannot answer "did it look at last week". */
+              since: r.data?.since, capped: r.data?.capped === true,
+            }
+            : { done: true, error: r.error });
+          try { ctrl.close(); } catch { /* already closed */ }
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-store" } });
+    }
+    if (pathname === "/clickup/search") {
+      const q = url.searchParams.get("q") ?? "";
+      const force = url.searchParams.get("force") === "1";
+      const r = await searchTasks(q, force);
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error }, r.ok ? 200 : 400);
+    }
+    // The sprints this card could move to. A GET because it reads, and behind
+    // the card's own id because a sprint is a list in the CARD's space — there
+    // is no workspace-wide answer to ask for.
+    if (pathname === "/clickup/sprints") {
+      const r = await sprintLists(url.searchParams.get("id") ?? "");
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, unauthorised: r.unauthorised }, r.ok ? 200 : 400);
+    }
     if (pathname === "/clickup/task") {
       const r = await taskDetail(url.searchParams.get("id") ?? "");
+      /* Remembered so `/clickup/file` can serve one back. A proxy that fetches
+         whatever a caller names is a hole; this can only fetch what it has
+         already offered. */
+      if (r.ok && r.data?.attachments?.length) {
+        (await import("./providers.ts")).rememberFiles(r.data.attachments);
+      }
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname.startsWith("/clickup/") && req.method === "POST") {
@@ -2413,12 +5670,52 @@ const server = Bun.serve<WsData>({
             status: b.status != null ? String(b.status) : undefined,
           }, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
-        : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
+        // The flag, ClickUp's own field. `null` clears it, which is why the
+        // body is read as "absent means none" rather than defaulted to a name.
+        : pathname === "/clickup/priority" ? await setPriority(id, b.priority == null ? null : String(b.priority), seen)
+        : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""), String(b.kind ?? "drop_down"))
         // A note on the card's activity. No `updated` guard: a comment adds to
         // the history rather than overwriting anybody's field, so a card that
         // moved underneath is not a reason to refuse this one.
         : pathname === "/clickup/comment"
           ? await commentOn(id, String(b.text ?? ""), b.assignee != null ? Number(b.assignee) : undefined)
+        // The card's own fields, all in one write. Absent means "leave it";
+        // `null` means "clear it" — and the difference matters, because a due
+        // date somebody set by mistake has to be removable.
+        : pathname === "/clickup/task"
+          ? await updateTask(id, {
+            name: b.name != null ? String(b.name) : undefined,
+            description: b.description != null ? String(b.description) : undefined,
+            due: "due" in b ? (b.due == null ? null : Number(b.due)) : undefined,
+            start: "start" in b ? (b.start == null ? null : Number(b.start)) : undefined,
+            points: "points" in b ? (b.points == null ? null : Number(b.points)) : undefined,
+            estimate: "estimate" in b ? (b.estimate == null ? null : Number(b.estimate)) : undefined,
+            archived: typeof b.archived === "boolean" ? b.archived : undefined,
+          }, seen)
+        : pathname === "/clickup/tag" ? await setTag(id, String(b.tag ?? ""), b.on !== false)
+        : pathname === "/clickup/field/clear" ? await clearField(id, String(b.field ?? ""))
+        // Sprints are lists, so changing one is a move. `from` is the list it
+        // is leaving; without it the card ends up in both.
+        : pathname === "/clickup/move" ? await moveToList(id, String(b.list ?? ""), b.from != null ? String(b.from) : undefined)
+        : pathname === "/clickup/create"
+          ? await createTask(String(b.list ?? ""), {
+            name: String(b.name ?? ""),
+            description: b.description != null ? String(b.description) : undefined,
+            assignees: Array.isArray(b.assignees) ? (b.assignees as unknown[]).map(Number) : undefined,
+            priority: b.priority != null ? String(b.priority) : undefined,
+            points: b.points != null ? Number(b.points) : undefined,
+            due: b.due != null ? Number(b.due) : undefined,
+            status: b.status != null ? String(b.status) : undefined,
+          })
+        : pathname === "/clickup/checklist" ? await addChecklist(id, String(b.name ?? ""))
+        : pathname === "/clickup/checklist/item" ? await addChecklistItem(String(b.checklist ?? ""), String(b.name ?? ""))
+        : pathname === "/clickup/checklist/check" ? await setChecklistItem(String(b.checklist ?? ""), String(b.item ?? ""), b.done === true)
+        // A comment already written: edited, answered, ticked off or removed.
+        // `id` here is the COMMENT's, not the card's.
+        : pathname === "/clickup/comment/edit" ? await editClickupComment(id, String(b.text ?? ""))
+        : pathname === "/clickup/comment/reply" ? await replyToComment(id, String(b.text ?? ""))
+        : pathname === "/clickup/comment/resolve" ? await resolveComment(id, b.on !== false)
+        : pathname === "/clickup/comment/delete" ? await deleteClickupComment(id)
         : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
@@ -2478,12 +5775,129 @@ const server = Bun.serve<WsData>({
       // `ref` is optional everywhere: absent means this working tree, which is
       // what every existing caller sends and must keep meaning.
       if (pathname === "/files/read") return json(fileText(root, url.searchParams.get("rel") || "", url.searchParams.get("ref") || undefined));
+      /* How long a file is, and nothing else.
+         The editor pane draws a strip of the WHOLE file with a band per change,
+         and a strip drawn to a length nobody measured is a picture that lies.
+         Counting newlines is cheap and the answer is one number, so this is not
+         `/files/read` with the body thrown away. Absolute paths are allowed
+         because the pull request's copy lives in a temp directory this server
+         wrote — the same rule the viewer itself follows. */
+      if (pathname === "/files/measure") {
+        const want = url.searchParams.get("path") || "";
+        return json(await measureFile(want));
+      }
       // A ref's copy written out so the editor can open it — see fileToTemp.
       if (pathname === "/files/temp") return json(fileToTemp(root, url.searchParams.get("rel") || "", url.searchParams.get("ref") || ""));
       if (pathname === "/files/find") return json(findFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
       if (pathname === "/files/grep") return json(grepFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
       if (pathname === "/files/refs") return json(listRefs(root));
       if (pathname === "/files/exist") return json(filesExist(root, url.searchParams.getAll("rel")));
+    }
+
+    /* --- and searching the machine, which is a different question ---
+     *
+     * Its own prefix rather than a flag on /files/find, because it is its own
+     * boundary: /files/ is bounded by the open project and this one is bounded
+     * by your home directory with the dotted paths taken out (disk.ts). Behind
+     * the file browser's switch as well as its own — turning directory browsing
+     * off must not leave a second door standing. */
+    /* --- the floating bench ---
+     *
+     * Only the two things a tmux session cannot hold: the checkout's note, and
+     * which of its tabs are still running. The tabs themselves need no route —
+     * they are sessions on the engine and the pty socket reaches them. */
+    if (pathname === "/bench/note" && req.method === "GET") {
+      return json(readNote(url.searchParams.get("root") || ""));
+    }
+    if (pathname === "/bench/live") return json(await benchLive(url.searchParams.get("root") || ""));
+    if (pathname === "/bench/end" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown; slot?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = await benchEnd(b.root, b.slot);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/bench/edit" && req.method === "POST") {
+      /* Puts a file in front of you in the checkout's own editor, which is a
+         thing this server does to a process it started — so it takes the same
+         gate every other write does. */
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, live: false, error: "terminal is disabled" }, 403);
+      let body: { root?: unknown; path?: unknown; line?: unknown; readonly?: unknown };
+      try { body = (await req.json()) as typeof body; }
+      catch { return json({ ok: false, live: false, error: "invalid json" }, 400); }
+      const r = await benchEdit(body?.root, body?.path, body?.line, body?.readonly);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/bench/note" && req.method === "POST") {
+      // A write, so it takes the same gate every other write here does.
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let body: { root?: unknown; text?: unknown };
+      try { body = (await req.json()) as { root?: unknown; text?: unknown }; }
+      catch { return json({ ok: false, text: "", error: "invalid json" }, 400); }
+      const r = writeNote(body?.root, body?.text);
+      return json(r, r.ok ? 200 : 400);
+    }
+
+    if (pathname.startsWith("/disk/")) {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      if (pathname === "/disk/places") return json(diskPlaces());
+      if (pathname === "/disk/find") return json(diskFind(url.searchParams.get("root") || "", url.searchParams.get("q") || ""));
+      // What documents SAY, not just what they are called — the question the
+      // Contents tab could only ask inside the open checkout.
+      if (pathname === "/disk/grep") return json(diskGrep(url.searchParams.get("root") || "", url.searchParams.get("q") || ""));
+    }
+
+    /* --- looking at a place, and looking at a file ------------------------
+     *
+     * One pair of routes for BOTH worlds the finder can see, because the split
+     * between them was invisible to whoever was using it and was why the tabs
+     * behaved differently. The boundary is the union of the two that already
+     * exist and nothing more — see browse.ts, and the test that caught it
+     * listing /etc when no project was open.
+     *
+     * Behind the same switch as directory browsing: turning that off must not
+     * leave a second door standing. */
+    if (pathname === "/browse" || pathname.startsWith("/preview/")) {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      /* Handing a file to the desktop starts a process, so it takes the same
+         gate every other write on this surface takes. */
+      if (pathname === "/preview/open" && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        let b: { path?: unknown } = {};
+        try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = openInDesktop(b?.path);
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || ""));
+      if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || ""));
+      if (pathname === "/preview/raw") {
+        const r = await fileBytes(url.searchParams.get("path") || "");
+        if (!r.ok) return json({ error: r.error }, 404);
+        return new Response(r.body, {
+          headers: {
+            /*
+             * `cors`, and it is the whole bug.
+             *
+             * Every JSON answer here goes through the `json()` helper, which
+             * adds them; this route built its own Response and did not. The
+             * renderer is a different origin from the engine, so the facts call
+             * (JSON, helper, headers) worked and the bytes call failed with a
+             * bare "TypeError: Failed to fetch" — a browser refusing a
+             * cross-origin response, reported to the page as nothing at all.
+             */
+            ...cors,
+            "content-type": r.mime,
+            // A preview is a picture of a file on this machine at this moment;
+            // caching it is how a screenshot you just retook shows the old one.
+            "cache-control": "no-store",
+            // It is a file the user pointed at, and it is served as bytes to be
+            // drawn — never as a document with a script in it.
+            "content-security-policy": "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
     }
 
     if (pathname === "/docker/capability") return json(await dockerCapability());
@@ -2506,12 +5920,46 @@ const server = Bun.serve<WsData>({
         return JSON.stringify({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
       }));
     }
+    // --- the slow lane -------------------------------------------------
+    // Everything here makes the daemon do real work, so none of it is on a
+    // timer: it is asked for when somebody opens the section that needs it.
+    if (pathname === "/docker/disk") {
+      const d = await dockerDisk(url.searchParams.get("force") === "1");
+      return json(d ?? { error: "docker could not report disk usage" }, d ? 200 : 503);
+    }
+    if (pathname === "/docker/volume") return json(await dockerVolumeDetail(url.searchParams.get("name") || ""));
+    if (pathname === "/docker/volume/peek") {
+      return json(await dockerVolumePeek(url.searchParams.get("name") || "", url.searchParams.get("path") || ""));
+    }
+    // Two environments, compared on this side of the wire — see dockerenv.ts
+    // for why the values of anything credential-shaped never cross it.
+    if (pathname === "/docker/env-diff") {
+      return json(await dockerEnvCompare(url.searchParams.get("a") || "", url.searchParams.get("b") || ""));
+    }
     if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
     if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);
       return json(await dockerLogs(id, tail));
+    }
+    // The same log, followed instead of re-asked every three seconds. Kept
+    // beside the one-shot rather than replacing it: the phone and the demo
+    // adapter still want a snapshot, and a snapshot is also the honest fallback
+    // when the browser cannot hold a stream open.
+    if (pathname === "/docker/logs/stream") {
+      const r = streamLogs(url.searchParams.get("id") || "", Number(url.searchParams.get("tail") || 200), req.signal);
+      if (!r.ok || !r.stream) return json({ ok: false, error: r.error ?? "could not follow" }, 409);
+      return new Response(r.stream, {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+          // Without this a proxy in front of the engine can hold the whole
+          // stream until the container stops, which is the same as not
+          // streaming at all — and much harder to notice.
+          "x-accel-buffering": "no",
+        },
+      });
     }
     if (pathname === "/update/run" && req.method === "POST") {
       if (!desktopOnly(req)) return csrfBlocked();
@@ -2534,11 +5982,28 @@ const server = Bun.serve<WsData>({
         case "/docker/stop": res = await stopContainer(id); break;
         case "/docker/restart": res = await restartContainer(id); break;
         case "/docker/rm": res = await removeContainer(id); break;
+        // Reclaiming disk. Gated exactly like the container actions — write
+        // mode, trusted caller, and recorded — because these are deletes, and
+        // the panel only offers the two whose consequence is "a slower build"
+        // rather than "every worktree reinstalls".
+        case "/docker/prune/cache": {
+          if (!DOCKER_WRITE_ENABLED) { res = { ok: false, error: "this instance is read-only" }; break; }
+          const r = await capBuildCache(Number(b.bytes) || 60_000_000_000);
+          res = { ok: r.ok, ...(r.error ? { error: r.error } : {}), output: r.freed != null ? `reclaimed ${r.freed} bytes` : r.removed.join(", ") };
+          break;
+        }
+        case "/docker/images/rm": {
+          if (!DOCKER_WRITE_ENABLED) { res = { ok: false, error: "this instance is read-only" }; break; }
+          const refs = Array.isArray(b.refs) ? b.refs.map((x: unknown) => String(x)) : [];
+          const r = await removeImages(refs);
+          res = { ok: r.ok, ...(r.error ? { error: r.error } : {}), output: `removed ${r.removed.length} image${r.removed.length === 1 ? "" : "s"}` };
+          break;
+        }
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(clientIp, pathname, b, res, asActor(caller)); return json(res, res.ok ? 200 : 400); }
     }
 
     /*
@@ -2614,7 +6079,42 @@ const server = Bun.serve<WsData>({
         case "/issues/state": res = await setIssueState(root, b.number, b.close === true); break;
         default: res = null;
       }
-      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(clientIp, pathname, b, res, asActor(caller)); return json(res, res.ok ? 200 : 400); }
+    }
+
+    /*
+     * The three writes a run has.
+     *
+     * Gated and recorded like every other write on this surface, and behind
+     * TERMINAL_ENABLED on top — `/run/start` opens tmux windows running an
+     * agent, which is the same capability `/terminal/agent` guards that way. A
+     * server with the terminal turned off must not have a second door to it.
+     *
+     * `yolo` goes through the same permission the chat engines do rather than
+     * arriving as a parameter, so a socket cannot buy a flag the config
+     * refuses — and it is folded in per leg here, because that is where a run
+     * would otherwise smuggle it past the check.
+     */
+    if (pathname.startsWith("/run/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      let res: { ok: boolean; error?: string; detail?: string } | null = null;
+      switch (pathname) {
+        case "/run/start": {
+          const bypass = chatBypassAllowed();
+          const legs = Array.isArray(b.legs)
+            ? b.legs.map((l: any) => ({ agent: l?.agent, from: l?.from, yolo: l?.yolo === true && bypass }))
+            : b.legs;
+          res = await startRun(b.root, b.prompt, legs);
+          break;
+        }
+        case "/run/adopt": res = await adoptPane(b.id, b.pane, b.agent); break;
+        case "/run/finish": res = await finishRun(b.id, b.winner, b.force === true); break;
+        default: res = null;
+      }
+      if (res) { noteAction(clientIp, pathname, b, res, asActor(caller)); return json(res, res.ok ? 200 : 400); }
     }
 
     // The one write in the machine panel, and it signals a process. Origin
@@ -2649,7 +6149,7 @@ const server = Bun.serve<WsData>({
       // the panel, and writing the value there would undo the masking by a
       // different door. The fact that a reveal happened is worth recording; the
       // value is the thing being protected.
-      noteAction(clientIp, pathname, { pid: b.pid, key: b.key }, { ok: res.ok, error: res.error }, caller);
+      noteAction(clientIp, pathname, { pid: b.pid, key: b.key }, { ok: res.ok, error: res.error }, asActor(caller));
       return json(res, res.ok ? 200 : 400);
     }
 
@@ -2658,7 +6158,7 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = removeStaleLock(b.path, knownProjects().map((p) => p.path));
-      noteAction(clientIp, pathname, b, res, caller);
+      noteAction(clientIp, pathname, b, res, asActor(caller));
       return json(res, res.ok ? 200 : 400);
     }
 
@@ -2667,7 +6167,7 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = killPort(b.pid);
-      noteAction(clientIp, pathname, b, res, caller);
+      noteAction(clientIp, pathname, b, res, asActor(caller));
       return json(res, res.ok ? 200 : 400);
     }
 
@@ -2680,6 +6180,26 @@ const server = Bun.serve<WsData>({
     // What is left of GitHub's hourly budget. Asked by a settings page somebody
     // is looking at, so it is never served from a cache — see ghRateLimit.
     if (pathname === "/prs/rate-limit") return json(await ghRateLimit());
+    /*
+     * GitHub's notification inbox.
+     *
+     * A different question from the board's: that one is about STATE — who is
+     * blocked, what is green — and this is about what happened while you were
+     * away, including the two things the board cannot see at all, a mention in
+     * a comment and an issue that is not a pull request.
+     */
+    if (pathname === "/prs/inbox") {
+      return json(await inbox(url.searchParams.get("unread") !== "1", url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/prs/inbox/act" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const id = String(b.id ?? "");
+      const r = b.act === "unsubscribe" ? await unsubscribe(id)
+        : b.act === "repo-read" ? await markRepoRead(String(b.repo ?? ""))
+        : await markRead(id);
+      return json(r, r.ok ? 200 : 400);
+    }
     // How far behind its base a branch is — asked apart from the detail because
     // it costs about 600ms, and the detail should not. See branchBehind.
     /*
@@ -2690,6 +6210,7 @@ const server = Bun.serve<WsData>({
      * the checkout the user is standing in — see prepareConflictMerge.
      */
     if (pathname === "/prs/conflict" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const asked = String(b.root ?? "");
       const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
@@ -2750,6 +6271,16 @@ const server = Bun.serve<WsData>({
       const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
       return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0)));
     }
+    /* What this project's agents have spent, by branch and by checkout — the
+       whole repository in one answer, because the board looks its rows up in it
+       rather than asking per pull request. Scoped like every other read here:
+       an out-of-scope root falls back to the open project instead of reporting
+       on a repository the cockpit is not showing. See spend.ts. */
+    if (pathname === "/prs/spend") {
+      const asked = url.searchParams.get("root") ?? "";
+      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      return json(await repoSpend(root));
+    }
     /* Where this app keeps things, and for how long — read by Settings →
        Privacy. Paths, not contents: the page says what is on disk so somebody
        can go and look, and nothing here reads a credential to display it. */
@@ -2771,6 +6302,20 @@ const server = Bun.serve<WsData>({
         url.searchParams.get("after") || undefined,
         url.searchParams.get("q") || undefined,
       ));
+    }
+    /* Which files moved between two commits of this pull request — see filesSince.
+       A GET because it reads, and cached by the client against the pair of shas: the
+       answer cannot change while both ends are fixed. */
+    if (pathname === "/prs/files-since") {
+      return json(await filesSince(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("from") || "",
+        url.searchParams.get("to") || "",
+      ));
+    }
+    /* The repository's own CODEOWNERS, read from the checkout — see codeowners. */
+    if (pathname === "/prs/codeowners") {
+      return json(await codeowners(url.searchParams.get("root") || ""));
     }
     if (pathname === "/prs/file-slice") {
       return json(await fileSlice(url.searchParams.get("root") || "", url.searchParams.get("number") || "", {
@@ -2794,6 +6339,20 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/prs/counts") {
       return json(await viewCounts(url.searchParams.get("root") || "", url.searchParams.get("state") || "open"));
+    }
+    /* The nudge: the line for a pull request waiting on somebody, sent down
+       the alerts' webhook when there is one. The text always comes back so
+       the client can put it on the clipboard either way. */
+    if (pathname === "/prs/nudge" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { root?: unknown; number?: unknown; send?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const got = await prDetail(b.root, b.number);
+      if (!got.ok || !got.detail) return json({ ok: false, error: got.error ?? "no such pull request" }, 400);
+      const text = nudgeText(got.detail);
+      const channel = nudgeChannel();
+      const sent = b.send === true && channel.configured ? await sendNudge(text) : null;
+      return json({ ok: true, text, channel: channel.configured, sent: sent?.sent ?? false, ...(sent?.error ? { error: sent.error } : {}) });
     }
     if (pathname === "/prs/detail") {
       return json(await prDetail(
@@ -2824,6 +6383,17 @@ const server = Bun.serve<WsData>({
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const root = b.root ?? "";
       const n = b.number;
+      /* A node id is checked at the door as well as in prs.ts — see nodeIdOk
+         for what `-F id=@/path` used to do with an unchecked one. Refusing
+         here makes it a 400 with a sentence rather than gh's usage text. */
+      const NODE_ID_ROUTES: Record<string, string> = {
+        "/prs/thread-resolved": "threadId", "/prs/react": "nodeId", "/prs/comment-edit": "nodeId",
+        "/prs/comment-delete": "nodeId", "/prs/comment-hide": "nodeId", "/prs/file-viewed": "prNodeId",
+      };
+      const idField = NODE_ID_ROUTES[pathname];
+      if (idField && !nodeIdOk(pathname === "/prs/react" ? (b.nodeId ?? b.commentId) : b[idField])) {
+        return json({ ok: false, error: `${idField} is not a GitHub node id` }, 400);
+      }
       let res;
       switch (pathname) {
         case "/prs/review": res = await submitReview(root, n, b.verb, b.body); break;
@@ -2837,6 +6407,11 @@ const server = Bun.serve<WsData>({
         case "/prs/react": res = await react(root, b.nodeId ?? b.commentId, b.content, b.on); break;
         case "/prs/comment-edit": res = await editComment(root, b.nodeId, b.body, b.kind); break;
         case "/prs/comment-delete": res = await deleteComment(root, b.nodeId, b.kind); break;
+        /* Folded away rather than deleted, with the reason GitHub records — see
+           hideComment. One route for both directions: the caller says which. */
+        case "/prs/comment-hide": res = b.on === false
+          ? await unhideComment(root, b.nodeId)
+          : await hideComment(root, b.nodeId, b.reason); break;
         case "/prs/file-viewed": res = await setFileViewed(root, b.prNodeId, b.path, b.viewed); break;
         case "/prs/assignees": res = await setAssignees(root, n, b.add, b.remove); break;
         case "/prs/milestone": res = await setMilestone(root, n, b.title); break;
@@ -2857,7 +6432,9 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      // As in the git family: its own line, so the tripwire count stays true.
+      if (res) noteClass(pathname, b, res.ok !== false);
+      if (res) { noteAction(clientIp, pathname, b, res, asActor(caller)); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
@@ -2955,10 +6532,54 @@ const server = Bun.serve<WsData>({
      * opened for one project does not get to enumerate directories from another.
      */
     if (pathname === "/terminal/pane-dirs") {
-      const pane = activePane(lastTmuxTarget()?.socket, url.searchParams.get("window") || "");
+      /*
+       * Every pane of the window, not only the one tmux has selected.
+       *
+       * The desk used to ask this once per hover, about whichever pane it had
+       * just selected — so the four buttons a pane draws could not appear until
+       * a round trip had been made FOR that pane, and after a restart a
+       * six-pane grid needed six of them, one at a time, as the pointer
+       * wandered. Reported as "it takes ages… especially after a restart… it
+       * just sits there saying Reading this pane".
+       *
+       * `all=1` answers for the lot off the same `list-panes` call, so the
+       * panel can fill its memory for the whole window in one request while
+       * nobody is waiting. The single-pane answer is unchanged, and is still
+       * what a hover falls back to.
+       */
+      const win = url.searchParams.get("window") || "";
+      if (url.searchParams.get("all") === "1") {
+        const panes = panesWithPids(lastTmuxTarget()?.socket, win);
+        return json({
+          ok: true,
+          panes: panes.map((p) => {
+            const { dirs } = paneDirs(p.paneId, p.pid);
+            const note = paneAgentNote(p.paneId);
+            return {
+              pane: p.paneId,
+              active: p.active,
+              dirs: dirs.filter((d) => sessionInScope({ cwd_path: d })),
+              agent: note ? note.session_id : "",
+            };
+          }),
+        });
+      }
+      const pane = activePane(lastTmuxTarget()?.socket, win);
       if (!pane) return json({ ok: true, pane: null, dirs: [] });
       const { dirs } = paneDirs(pane.paneId, pane.pid);
-      return json({ ok: true, pane: pane.paneId, dirs: dirs.filter((d) => sessionInScope({ cwd_path: d })) });
+      /* WHOSE answer this is, alongside the answer.
+         The panel keeps the last worktree a pane named — an agent between turns
+         says nothing, and a chip that emptied itself every quiet minute would
+         be useless. That memory has to end when the AGENT ends: `/clear` starts
+         a new session with a new transcript, and without this the chip went on
+         naming a branch from a conversation that no longer exists. */
+      const note = paneAgentNote(pane.paneId);
+      return json({
+        ok: true,
+        pane: pane.paneId,
+        dirs: dirs.filter((d) => sessionInScope({ cwd_path: d })),
+        agent: note ? note.session_id : "",
+      });
     }
 
     /** Put one of them in front of whoever is attached. The ids are validated
@@ -3066,6 +6687,183 @@ const server = Bun.serve<WsData>({
       if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
       const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title), kind: wanted });
       return json({ ok: true, ticket: id });
+    }
+
+    /*
+     * THE LANTERN'S CHAT — a ticket whose prompt is the field, composed here.
+     *
+     * Herdr's Lantern is a chat in a pane; here it is an agent tab on the
+     * floating bench, reachable from any view and floating over the Lantern
+     * itself, so the board and the conversation are on screen together.
+     * "Don't you think that terminal with the ASK should live in the lantern,
+     * since it will be something general?" — the bench is the app's one answer to "a shell or an
+     * agent without leaving where you are", and it is general by construction.
+     *
+     * The client sends nothing: the readout is assembled from the same board
+     * `/agents/board` serves (lantern.ts), at this moment, so the chat opens
+     * on what is true now. The checkout is the most pressing agent's, or the
+     * workspace root, or the caller's — a bench tab hangs off a checkout even
+     * when the conversation is about all of them.
+     */
+    if (pathname === "/lantern/ticket" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { cwd?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      const offered = gitSafeAbs(b.cwd) || workspaceRoot() || "";
+      const plan = await lanternChat(offered);
+      const cwd = plan.cwd && inScope(plan.cwd) && fsExists(plan.cwd) ? plan.cwd
+        : offered && inScope(offered) && fsExists(offered) ? offered : "";
+      if (!cwd) return json({ ok: false, error: "no checkout in the open project to run the Lantern's chat in" }, 400);
+      const id = mintAgentTicket({ cwd, prompt: plan.prompt, yolo: false, title: "Lantern", kind: "claude", role: "lantern" });
+      return json({ ok: true, ticket: id, cwd, needs: plan.rows.filter((r) => r.needsYou).length });
+    }
+
+    /*
+     * NAMED AGENTS — the launcher and the liveness a script needs, by name.
+     *
+     * An unattended worker script — one that picks a task on a clock, cuts a
+     * worktree and seats an agent in it — leans on an orchestrator like Herdr
+     * for six verbs and nothing else: start an agent in a checkout, prompt it,
+     * wait until it is working, read its screen, press a key, list who is
+     * still alive. These are those six, over the engine this app already
+     * owns, served in Herdr's answer shape (`result.agents[].name`) so such a
+     * script reads them unchanged. `bin/agentglass-agent` is the CLI in front
+     * of them. See agentops.ts for what this is not.
+     *
+     * Token-gated like `/terminal/agent` — these open sessions that can run
+     * with permissions skipped — and the bypass itself is Settings' to grant.
+     */
+    /*
+     * HANDOFF — a session's conversation, summarised into a brief and seated
+     * as another agent's first message on the bench. The brief is composed
+     * here from the record (see handoff.ts); the client gets a ticket and
+     * never sends a prompt.
+     */
+    if (pathname === "/agents/handoff" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { session?: unknown; kind?: unknown; cwd?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const session = typeof b.session === "string" ? b.session : "";
+      const d = session ? getSession(session) : null;
+      if (!d) return json({ ok: false, error: "no such session" }, 404);
+      const wanted = typeof b.kind === "string" ? b.kind : "claude";
+      if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
+      const cwd = gitSafeAbs(b.cwd) || gitSafeAbs(d.cwd_path) || workspaceRoot() || "";
+      if (!cwd || !inScope(cwd) || !fsExists(cwd)) return json({ ok: false, error: "that directory is not in the open project" }, 400);
+      const prompt = handoffBrief(d);
+      const title = `handoff: ${(d.custom_title || d.ai_title || session.slice(0, 8)).slice(0, 40)}`;
+      const id = mintAgentTicket({ cwd, prompt, yolo: false, title: sessionTitle(title), kind: wanted });
+      return json({ ok: true, ticket: id, cwd, kind: wanted, title });
+    }
+    /* Scheduled starts: a reminder whose firing seats a named agent. */
+    if (pathname === "/agents/schedule" && req.method === "GET") {
+      return json({ ok: true, result: { schedules: Schedule.listSchedules() } });
+    }
+    if (pathname === "/agents/schedule" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: Record<string, unknown>;
+      try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = Schedule.addSchedule({ name: b.name, cwd: typeof b.cwd === "string" ? gitSafeAbs(b.cwd) : b.cwd, kind: b.kind, prompt: b.prompt, yolo: b.yolo, when: b.when });
+      return json(r.ok ? { ok: true, result: { schedule: r.schedule } } : r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/agents/schedule/cancel" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { id?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const ok = Schedule.cancelSchedule(String(b.id ?? ""));
+      return json({ ok, ...(ok ? {} : { error: "no such schedule, or it already fired" }) }, ok ? 200 : 404);
+    }
+    if (pathname === "/agents/named" && req.method === "GET") {
+      const all = url.searchParams.get("all") === "1";
+      return json({ ok: true, result: { agents: await AgentOps.listAgents(all) } });
+    }
+    if (pathname.startsWith("/agents/named/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      const verb = pathname.slice("/agents/named/".length);
+      let b: Record<string, unknown>;
+      try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (!AgentOps.validName(b.name)) return json({ ok: false, error: "name: letters, digits, dot, dash or underscore, 64 at most" }, 400);
+      const name = b.name;
+      const timeoutMs = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
+
+      if (verb === "start") {
+        const cwd = gitSafeAbs(b.cwd);
+        if (!cwd || !inScope(cwd) || !fsExists(cwd)) {
+          return json({ ok: false, error: "that directory is not in the open project" }, 400);
+        }
+        const wanted = typeof b.kind === "string" ? b.kind : "claude";
+        if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
+        const args = Array.isArray(b.args) ? b.args.filter((a): a is string => typeof a === "string") : [];
+        const r = await AgentOps.startAgent({
+          root: workspaceRoot() || cwd, name, cwd, kind: wanted,
+          prompt: typeof b.prompt === "string" ? b.prompt : "",
+          yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
+          remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
+        });
+        if (!r.ok) {
+          const why: Record<string, string> = {
+            exists: "an agent by that name is still running",
+            "no-cli": "that agent CLI is not installed here",
+            "no-window": "tmux would not open a window for it",
+            "bad-name": "bad name",
+            "yolo-refused": "skipping permissions is off in Settings (chatBypass)",
+            "bad-args": "args must be plain strings",
+          };
+          /* Named, so the caller learns which arg and why in one answer: what
+             an agent is allowed to do is decided in Settings (yolo) or by this
+             server, never by a flag riding in `args` — see refusedArg. */
+          if (r.error === "arg-refused") {
+            return json({ ok: false, error: `${r.flag} is not an arg a start may carry: it changes what the agent is allowed to do, and that is decided in Settings, not in args` }, 400);
+          }
+          return json({ ok: false, error: why[r.error], result: r.error === "exists" ? { agent: r.agent } : undefined }, r.error === "exists" ? 409 : 400);
+        }
+        /* `--timeout` on start is Herdr's "wait until the CLI is up": the
+           worker's next verb is a prompt, and a paste into a pane whose CLI has
+           not drawn its box yet is a paste into a shell. */
+        const wait = timeoutMs > 0 ? await AgentOps.waitFor(r.agent.paneId, ["ready", "working", "needs-you"], timeoutMs) : null;
+        return json({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
+      }
+
+      const a = AgentOps.agentNamed(name);
+      if (!a || a.endedAt !== null) return json({ ok: false, error: "no agent by that name" }, 404);
+
+      if (verb === "prompt") {
+        const text = typeof b.text === "string" ? b.text : "";
+        if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
+        const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs || 10_000);
+        return json({ ok: outcome === "sent" || outcome === "queued", result: { name, outcome } }, outcome === "gone" ? 410 : 200);
+      }
+      if (verb === "wait") {
+        const raw = typeof b.until === "string" ? b.until.split(",") : [];
+        const until = raw.map((s) => s.trim()).filter((s): s is AgentOps.AgentState => ["starting", "ready", "working", "needs-you", "gone"].includes(s));
+        if (!until.length) return json({ ok: false, error: "until: ready, working, needs-you or gone" }, 400);
+        const w = await AgentOps.waitFor(a.paneId, until, timeoutMs || 90_000);
+        return json({ ok: w.reached, result: { name, state: w.state, reached: w.reached } });
+      }
+      if (verb === "read") {
+        const lines = Math.min(2000, Math.max(0, Number(b.lines ?? 0) || 0));
+        const screen = await AgentOps.screenOf(a.paneId, lines);
+        if (screen === null) return json({ ok: false, error: "its window is gone" }, 410);
+        /* The bottom of a pane is blank rows, not content: trimmed before the
+           tail is cut, or "the last 3 lines" of a 50-row pane are three blanks. */
+        const text = lines > 0 ? screen.trimEnd().split("\n").slice(-lines).join("\n") : screen;
+        return json({ ok: true, result: { name, state: AgentOps.stateOfScreen(screen), text } });
+      }
+      if (verb === "keys") {
+        const key = AgentOps.keyNamed(b.key);
+        if (!key) return json({ ok: false, error: "key: enter, escape, up, down, left, right, tab, space, backspace or ctrl-c" }, 400);
+        const ok = await AgentOps.pressKey(a.paneId, key);
+        return json({ ok, result: { name, key } }, ok ? 200 : 410);
+      }
+      if (verb === "stop") {
+        const ok = await AgentOps.stopAgent(a);
+        return json({ ok: true, result: { name, killed: ok } });
+      }
+      return json({ ok: false, error: "no such verb" }, 404);
     }
 
     // --- the pane engine's tmux, exposed to the agentglass UI -------------
@@ -3284,7 +7082,7 @@ const server = Bun.serve<WsData>({
       // transcript and in `events`, and a second copy in an append-only table
       // that nothing prunes is a copy nobody asked for.
       noteAction(clientIp, "/chat/send",
-        { root: b.cwd, name: b.model }, { ok: true }, caller);
+        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
       // What the turn may be is the caller's business, not the body's: a device
       // paired for "answer" gets the prompting default, no pre-approved tools,
       // and has to name a session that already exists — see scopedTurn in
@@ -3402,7 +7200,7 @@ const server = Bun.serve<WsData>({
       // Same reasoning as /chat/send: the launch is the auditable fact, not the
       // turn, and the prompt is already in Codex's own rollout.
       noteAction(clientIp, "/codex/send",
-        { root: b.cwd, name: b.model }, { ok: true }, caller);
+        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
       return codexStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images);
     }
     // What a Codex thread said, for a chat adopting it from the fleet. The
@@ -3427,7 +7225,7 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       noteAction(clientIp, "/antigravity/send",
-        { root: b.cwd, name: b.model }, { ok: true }, caller);
+        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
       // `ingestBody` is handed in rather than imported by antigravity.ts, which
       // would be a cycle. It is also what puts an Antigravity chat on the radar
       // at all: unlike Claude (hooks) and Codex (OTel), this CLI reports to
@@ -3458,6 +7256,9 @@ const server = Bun.serve<WsData>({
     // finished ten seconds ago. Deliberately outside the session cache: it
     // changes on process lifetimes, not on events.
     if (pathname === "/chat/active") return json({ ids: activeTurns() });
+    // Whether an agent is working right now, anywhere — what the desktop
+    // shell's "keep the machine awake while an agent works" mode polls.
+    if (pathname === "/agents/working") return json({ working: agentIsWorking() });
     if (pathname === "/session") {
       const id = url.searchParams.get("id") || "";
       if (!id) return json({ error: "not found" }, 404);
@@ -3633,7 +7434,12 @@ const server = Bun.serve<WsData>({
       // user cuts that device off.
       sockets.add(ws);
       noteSocket(ws.data?.ip, 1);
-      if (ws.data?.kind === "pty") { ptyOpen(ws); return; }
+      if (ws.data?.kind === "pty") {
+        // Alive from the moment it connects — see the note on the sweep above.
+        alive.set(ws, Date.now());
+        ptyOpen(ws);
+        return;
+      }
       if (ws.data?.kind === "notify") {
         notifySubs.set(ws, subscribeNotifications((n) => {
           try { ws.send(JSON.stringify(n)); } catch { /* closing */ }
@@ -3651,7 +7457,13 @@ const server = Bun.serve<WsData>({
       // Each open call carries when its session last showed evidence of life —
       // read here rather than in db.ts, which has no business touching the
       // filesystem. See evidence.ts for why elapsed time alone cannot answer it.
-      const frame: WsFrame = { type: "initial", data: getRecent(300), openTools: withEvidence(openToolCalls()) };
+      // Every string in every payload capped — this frame is a batch of 300, not
+      // the single event `broadcast()` sends after it, and a handful of full
+      // file writes or long command outputs in that batch is what pushed a
+      // routine reconnect to half a megabyte. See capPayloadStrings for the
+      // measurement and why this caps rather than strips the field outright.
+      const initialData = getRecent(300).map((e) => ({ ...e, payload: capPayloadStrings(e.payload) }));
+      const frame: WsFrame = { type: "initial", data: initialData, openTools: withEvidence(openToolCalls()) };
       ws.send(JSON.stringify(frame));
     },
     close(ws: ServerWebSocket<WsData>) {
@@ -3673,13 +7485,14 @@ const server = Bun.serve<WsData>({
       clients.delete(ws);
     },
     message(ws: ServerWebSocket<WsData>, msg) {
+      // A frame that did arrive is still proof somebody is running — for a
+      // pty this is a keystroke or a resize, not just the event stream.
+      alive.set(ws, Date.now());
       if (ws.data?.kind === "pty") ptyMessage(ws, msg as string | Buffer);
-      /* event-stream clients are read-only */
-      // ...but a frame that did arrive is still proof somebody is running.
-      else alive.set(ws, Date.now());
     },
-    /** The answer to the sweep's ping, and the only routine evidence an
-     *  event-stream client ever sends: it is otherwise read-only. */
+    /** The answer to the sweep's ping, and — for an event-stream or notify
+     *  socket — the only routine evidence its peer ever sends; a pty socket
+     *  also gets this from every keystroke, above. */
     pong(ws: ServerWebSocket<WsData>) {
       alive.set(ws, Date.now());
     },
@@ -3817,6 +7630,15 @@ function prune() {
 prune();
 setInterval(prune, 3_600_000);
 
+/* And once, if what retention has already deleted is a third of the file. See
+   reclaimFreePages: pruning frees pages, it does not give them back, and this
+   database does not grow back into them. Before the first request, and silent
+   when there is nothing worth doing. */
+{
+  const reclaimed = reclaimFreePages();
+  if (reclaimed) console.log(`🗜  reclaimed ${(reclaimed.freed / 1e6).toFixed(0)} MB of free pages in ${reclaimed.ms}ms`);
+}
+
 // Reclaim chat panes nobody has spoken to in a while. A warm CLI is the whole
 // point of the pane engine and also its whole cost (~380MB and climbing), so an
 // abandoned chat gives its memory back and resumes transparently next time.
@@ -3835,16 +7657,224 @@ ensureConf();
 void reloadEngineConf();
 
 startPaneSweeper();
+/* Windows a previous life of this process opened and never got to close: the
+   run died with the server, the agent in it did not. Only ever the ones in our
+   own record, each still checked against the stamp we put on it — a record that
+   outlived the tmux server closes nothing. */
+void reapLeases();
+/* Phone mirrors a previous life of this process made and never got to close:
+   the same case as the windows above, one scope down. `destroy-unattached`
+   only fires when OUR client detaches, and a phone that went dark without a
+   close frame never triggered that — so a mirror it opened can still be
+   sitting there, unattached, verified against its own stamp before anything
+   here touches it. */
+/**
+ * The work loop, as something that can be started twice.
+ *
+ * It used to live only inside its route, which meant the ONLY way back to work
+ * was a person pressing the button. Measured: a server restart killed two runs,
+ * the tasks were correctly put back on the queue, and then the shift sat
+ * `running` with three tasks waiting and nothing running for forty minutes,
+ * saying nothing. The watchdog can call this now — see `setResumeHook`.
+ */
+/*
+ * ONE LOOP AT A TIME.
+ *
+ * There was no guard, and the watchdog's only "already working" test is
+ * `Work.runningRuns()` — which is empty for the whole window between cutting a
+ * worktree and writing the run row, and `runInstallIn` sits inside that window
+ * with no timeout at all. So a second loop could start, take the same untaken
+ * item, be refused with "already exists", and hand its worktree to the barren
+ * sweep — which is the directory the FIRST loop was about to run an agent in.
+ *
+ * A refusal rather than a queue: two loops is never the intent, and the caller
+ * that gets this back (the watchdog) reads it as "busy", not as a try spent.
+ */
+let loopInFlight: Promise<{ ok: boolean; error?: string; [k: string]: unknown }> | null = null;
+
+async function startWorkLoop(): Promise<{ ok: boolean; error?: string; [k: string]: unknown }> {
+  if (loopInFlight) return { ok: false, error: "a loop is already running", busy: true };
+  const started = runWorkLoop();
+  loopInFlight = started;
+  try { return await started; } finally { loopInFlight = null; }
+}
+
+async function runWorkLoop(): Promise<{ ok: boolean; error?: string; [k: string]: unknown }> {
+  const loopRepos = await openProjectRepos();
+  if (!loopRepos.length) return ({ ok: false, error: "no open-project checkout to work in" });
+  const open = Shift.current();
+  if (!open || open.state !== "running") {
+    return ({ ok: false, error: "hand over first — a loop with no shift has no limit on it" });
+  }
+  const looped = await Loop.workUntilDone({
+    repos: loopRepos,
+    shiftId: open.id,
+    keepGoing: (lastFailed) => {
+      const live = Shift.current();
+      if (!live || live.state !== "running") return { go: false, why: live?.stoppedReason || "the shift ended" };
+      /*
+       * THE SHIFT'S OWN RULES, rather than two of them copied here.
+       *
+       * This used to re-check "still running" and "actions left" by hand,
+       * which are two of the five `shouldStop` knows — so the loop ran past
+       * a shift that had timed out, past a failed round, and past a pile of
+       * failed worktrees nobody had read. `shouldStop` was exported,
+       * tested, and called by nothing but the scanner that has been
+       * removed; a stop rule with no caller is a comment.
+       */
+      const s = Shift.shouldStop(live, { lastFailed });
+      return s.stop ? { go: false, why: s.reason } : { go: true, why: "" };
+    },
+    next: async () => {
+      /*
+       * The action is charged where the run BEGINS, not here.
+       *
+       * This spent one of the shift's actions the moment a task was selected —
+       * before the fence check, before the worktree was cut, before a row
+       * existed. With the panel's default of four, four selections that never
+       * became runs ended the shift reporting that it had used everything it
+       * was given, having done nothing at all. `countAction` now sits beside
+       * `beginRun` in the loop, so what is counted is work that started.
+       */
+      return await Work.nextTask({ repos: loopRepos });
+    },
+    countAction: () => Shift.countAction(open.id),
+    agent: runAgentIn,
+    install: runInstallIn,
+    usage: await usageNow(),
+    onPane: nowWatching,
+    onNoPane: noPane,
+    git: runGitIn,
+    verify: runTestsIn,
+    // So the agent can read the same views he does — see the brief.
+    api: { url: `http://127.0.0.1:${PORT}` },
+  });
+
+  return { ok: true, ...looped };
+}
+
+reapMirrorSessions();
+/* And the tmux confs an isolated instance used to leave behind — one per probe
+   and per test run, in the shared state directory, since the day the hashed
+   name was introduced. 136 of them by the time anybody looked. The placement is
+   fixed (see `confPath`); this clears what the old one left. */
+{
+  const gone = sweepStaleConfs();
+  if (gone) console.log(`[tmux] swept ${gone} conf${gone === 1 ? "" : "s"} left behind by isolated runs`);
+}
+/* And the two rules the startup call cannot cover on its own: a mirror whose
+   record was lost is invisible to the sweep above, and a phone that walks away
+   an hour from now is not this moment's problem. Measured: nine live mirrors
+   against zero records, each one carrying its own copy of four windows with a
+   `claude --resume` inside every one — 525 MCP processes and 13 GB. */
+startMirrorSweeper(["-L", tmuxSocket()]);
+
+/*
+ * Runs left `running` by a server that is no longer here.
+ *
+ * Whatever was awaiting them lived in the previous process, so nothing will
+ * ever write their result. Two of them sat at `running` for 75 and 41 minutes
+ * with no agent alive — work in flight on the screen, and invisible to the
+ * shift's stop rules, which count what finished and what broke.
+ */
+{
+  /* Not just marked abandoned — PUT BACK. Six runs were lost this way, and each
+     one was a task he had queued that nothing would ever pick up again, because
+     the queue had already marked it taken. Installing a build cost a shift. */
+  const recovered = await recoverAfterRestart();
+  for (const r of recovered) {
+    if (r.askedForHelp) {
+      console.log(`   Understudy  → "${r.title}" has now died ${r.attempts} times — it is waiting on you, not being retried`);
+    } else if (r.requeued) {
+      console.log(`   Understudy  → "${r.title}" was interrupted by the restart; back on the queue (try ${r.attempts + 1})`);
+    } else {
+      console.log(`   Understudy  → "${r.title}" abandoned: the server it was running under is gone`);
+    }
+  }
+}
+/* How the watchdog gets work moving again without a person pressing anything.
+   A slot rather than an import, because the loop closes over a dozen of this
+   file's own helpers and reaching for it from the watchdog would be a module
+   cycle — which this app has already paid for once, with a black window. */
+setResumeHook(() => startWorkLoop());
+/* And how it clears up after a run that ended with nothing in it — the same
+   slot pattern, for the same reason: git runs where the server's own helpers
+   are, and reaching for them from the watchdog would be a module cycle. */
+setGitHook(runGitIn);
+/* And whether `bun` is reachable, so a run abandoned before its first commit
+   can be told apart from one whose branch was actually merged and deleted —
+   see the note beside `setBunHook`. */
+setBunHook(bunBin);
+/* And where it may cut, so the watchdog can tell "nothing is picking this up"
+   from "this was queued for somewhere I am not allowed to go" — two sentences
+   with two different fixes, which used to be one sentence with neither. */
+setFenceHook(() => openProjectRepos());
+/* Whether a run's agent is still there, answered by the same window-name match
+   the watch route uses. `paneOfRun` returns "" when tmux cannot be reached at
+   all, which would read as "every agent is dead" — so an unreachable socket is
+   reported as ALIVE and the rows are left alone. */
+setBusyHook(Loop.busyWorktree);
+setAliveHook(async (title, paneId) => {
+  /*
+   * THE PANE, AND THE NAME ONLY AS A FALLBACK.
+   *
+   * This asked tmux for a window called `understudy: <title>`, and a window
+   * name is not an identity: tmux renames one when the program inside sets a
+   * title. The moment that match failed, a working agent was read as gone, its
+   * row was ended, and the empty-worktree sweep deleted the directory out from
+   * under it — the run then died of `ENOENT … posix_spawn 'bun'` sixteen
+   * minutes in, blaming a program that was there all along.
+   *
+   * A pane id is written down when the run starts and survives every rename.
+   * The name match stays for rows from before this existed, and an unreadable
+   * tmux still answers ALIVE: declaring a live agent dead is the expensive
+   * mistake, not the other way round.
+   */
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}"]);
+  if (!r.ok) return true;
+  if (paneId) return r.stdout.split("\n").some((l) => l.trim() === paneId);
+  return !!(await paneOfRun(title));
+});
+startUnderstudyWatchdog();
 startTaskSweep();
 startReminderTick();
+/* Scheduled agent starts ride a clock of the same shape. See agentschedule.ts. */
+Schedule.startScheduleTick();
 
-// Photograph the pane layout so a reboot can give it back. When the restore
-// feature is on: capture immediately (a reboot in the next minute loses
-// nothing), restore at boot — idempotent, since live sessions are skipped —
-// and sweep on a timer. All no-ops when the feature is off or tmux is gone.
+/*
+ * RESTORE FIRST, CAPTURE AFTER — and this order is the whole bug.
+ *
+ * It used to capture and then restore. On the morning of 2026-08-25 the
+ * machine rebooted and this process crash-looped six times in twenty-three
+ * minutes; each boot photographed the one session that happened to be alive,
+ * wrote that over a file that listed six, and the next boot restored one. A
+ * day of sessions went that way while the tmux daemon itself never died once.
+ *
+ * Capturing before restoring means photographing a desk that is, by
+ * definition, not back yet. So: note the launch, decline to touch anything at
+ * all if this looks like a loop, restore, and only then capture — against a
+ * desk that has had its chance to come back.
+ *
+ * The merge in `writeMerged` means none of this can lose a session any more.
+ * The order means it does not even try.
+ */
 if (tmuxRestoreEnabled()) {
-  void captureLayout();
-  void restoreLayout();
+  const launch = noteLaunch();
+  if (launch.looping) {
+    /* Six launches in twenty minutes is not somebody restarting the app. Leave
+       the last known layout exactly as it is, and SAY SO — degrading quietly
+       is what made this cost a day rather than a minute. */
+    console.warn(`[tmux] ${launch.recent} launches in the last ten minutes — this looks like a crash loop.`);
+    console.warn("[tmux] Not restoring or re-capturing: the saved session layout is left untouched.");
+    console.warn(`[tmux] Restore it by hand when the app is stable, from Settings, or delete ${"~/.local/state/agentglass/tmux/restore/launches.json"} to clear this.`);
+    /* And where a person can SEE it, not only in a log they are not reading:
+       the restore status endpoint carries it, so Settings can say why the
+       layout was left alone instead of the person discovering it by finding
+       sessions missing. */
+    noteCrashLoop(launch.recent);
+  } else {
+    void restoreLayout().then(() => captureLayout());
+  }
 }
 startRestoreSweeper(tmuxRestoreEnabled);
 
@@ -3905,7 +7935,23 @@ if (gates.restored || gates.expired) {
 // Hang up shells and clean temp dirs on the way out — a bare kill leaves them
 // orphaned. Re-raise so the default disposition still terminates the process.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, () => { shutdownTerminals(); releaseDatabaseClaim(); process.exit(0); });
+  process.on(sig, () => {
+    /* Photograph the desk before going, belt and braces. The merge means a
+       missed capture can no longer lose anything — but a clean exit is the one
+       moment the layout is certainly whole, and it costs a few milliseconds to
+       write it down. Synchronous on purpose: `process.exit` does not wait for
+       a promise, and a capture that loses the race is a capture that did not
+       happen. */
+    captureLayoutSync();
+    /* Before the terminals: a sweep firing while the process is on its way out
+       would put a task back on the queue that this shutdown is not going to
+       work, and the next boot's own recovery covers exactly that case. */
+    stopUnderstudyWatchdog();
+    stopMirrorSweeper();
+    shutdownTerminals();
+    releaseDatabaseClaim();
+    process.exit(0);
+  });
 }
 
 /*
@@ -4034,8 +8080,22 @@ const watchTailnet = async (): Promise<void> => {
 };
 void watchTailnet();
 if (!LOOPBACK_ONLY) {
-  const posture = AUTH_TOKEN ? "token-protected" : "UNAUTHENTICATED";
-  console.warn(`⚠  bound to ${BIND} — this exposes a shell, git write access and docker control to the network (${posture})`);
+  /*
+   * `guarded`, not `posture`. The name was a collision, and it hid a dead
+   * subsystem for weeks.
+   *
+   * `understudy.ts` exports a `posture()` that nothing calls. The orphan guard
+   * counts occurrences of a name across the source, so this local — in the
+   * network-bind warning, with no connection to the understudy at all — was
+   * read as a caller and kept the guard green. Comments are stripped before
+   * that count; a same-named local in another file is the harder case, because
+   * stripping prose does not remove it.
+   *
+   * Found by the understudy auditing itself, after a human pass had looked at
+   * the same grep and accepted "two uses elsewhere" without reading them.
+   */
+  const guarded = AUTH_TOKEN ? "token-protected" : "UNAUTHENTICATED";
+  console.warn(`⚠  bound to ${BIND} — this exposes a shell, git write access and docker control to the network (${guarded})`);
   if (!TRUST_LAN) console.warn(`⚠  AGENTGLASS_TRUST_LAN is not set — LAN browsers will be refused as cross-origin; set it to allow them`);
 }
 if (AUTH_TOKEN) {
@@ -4062,10 +8122,41 @@ startAutoFetch();
 // arrives once per verdict no matter how many browser tabs are watching, and
 // the frame carries the names of what failed rather than only a count.
 subscribeCi((v) => broadcast({ type: "ci", data: v }));
+/* And somebody speaking on one. Derived from the same poll — GitHub's
+   notifications are an inbox rather than a feed a desktop app can subscribe to —
+   with the latch on the server, so a review carrying nine line comments is one
+   message and not nine. Never a bot. See noteTalk. */
+subscribeTalk((n) => broadcast({ type: "talk", data: n }));
 /* A card of yours moved. Derived from a poll rather than received — ClickUp has
    no notifications API — and silent on the first run, so connecting an account
    does not announce a day of history. See clickupwatch.ts. */
+/*
+ * WHAT A NOTIFICATION SAID ABOUT A CARD, KEPT.
+ *
+ * ClickUp's API has no history: who assigned a card, who moved it, who added a
+ * follower are invisible to it — measured, /task/{id}/history is 404 on both
+ * versions. Their own desktop notification says exactly that, with a name in
+ * it, and this machine already mirrors those. So the ones that can be
+ * attributed to a card are written down and shown on that card, marked as seen
+ * here rather than read from the API.
+ *
+ * Subscribed once at startup rather than per window: a card's record must not
+ * depend on somebody having the app open when the notification arrived.
+ */
+subscribeNotifications((n) => {
+  try {
+    const card = cardForTitle(n.summary);
+    if (!card) return;
+    const text = `${n.body || n.summary}`.trim();
+    if (!text) return;
+    CardIndex.rememberNote({ id: String(n.id), cardId: card.id, label: card.label, text, at: n.at });
+  } catch { /* a note that cannot be filed is not worth an error */ }
+});
+
 startCardWatch((n) => broadcast({ type: "card", data: n }));
+/* The Lantern's watch: the field re-read every N minutes, a loud word when
+   something on it needs a person. See lanternwatch.ts. */
+startLanternWatch();
 // Watch our own event loop. Cheap (one timer, one subtraction) and the only
 // thing that turns "the terminal feels laggy" into a name and a number.
 watchLoop();

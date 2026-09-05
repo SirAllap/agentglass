@@ -1,0 +1,78 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "codex" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "codex", "version": "0.1.0" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1787130000000000000",
+              "observedTimeUnixNano": "1787130000000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "api request completed" },
+              "attributes": [
+                { "key": "event.name", "value": { "stringValue": "codex.api_request" } },
+                { "key": "conversation.id", "value": { "stringValue": "cafe0004-0000-4000-8000-000000000004" } },
+                { "key": "gen_ai.request.model", "value": { "stringValue": "example-codex-model" } },
+                { "key": "input_token_count", "value": { "intValue": "1500" } },
+                { "key": "output_token_count", "value": { "intValue": "90" } },
+                { "key": "cached_token_count", "value": { "intValue": "1200" } },
+                { "key": "cache_write_token_count", "value": { "intValue": "0" } }
+              ]
+            },
+            {
+              "timeUnixNano": "1787130001000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "shell" },
+              "attributes": [
+                { "key": "event.name", "value": { "stringValue": "codex.tool.decision" } },
+                { "key": "conversation.id", "value": { "stringValue": "cafe0004-0000-4000-8000-000000000004" } },
+                { "key": "tool_name", "value": { "stringValue": "shell" } },
+                { "key": "call_id", "value": { "stringValue": "call_0000000000000002" } }
+              ]
+            },
+            {
+              "timeUnixNano": "1787130002500000000",
+              "severityNumber": 17,
+              "severityText": "ERROR",
+              "body": { "stringValue": "bash: pytest: command not found" },
+              "attributes": [
+                { "key": "event.name", "value": { "stringValue": "codex.tool.result" } },
+                { "key": "conversation.id", "value": { "stringValue": "cafe0004-0000-4000-8000-000000000004" } },
+                { "key": "tool_name", "value": { "stringValue": "shell" } },
+                { "key": "call_id", "value": { "stringValue": "call_0000000000000002" } }
+              ]
+            },
+            {
+              "timeUnixNano": "1787130003000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "approve running shell?" },
+              "attributes": [
+                { "key": "event.name", "value": { "stringValue": "codex.notification.approval_required" } },
+                { "key": "conversation.id", "value": { "stringValue": "cafe0004-0000-4000-8000-000000000004" } }
+              ]
+            },
+            {
+              "timeUnixNano": "1787130004000000000",
+              "severityNumber": 5,
+              "severityText": "DEBUG",
+              "body": { "stringValue": "flushed 3 rollout records" },
+              "attributes": [
+                { "key": "event.name", "value": { "stringValue": "codex.rollout.flush" } },
+                { "key": "conversation.id", "value": { "stringValue": "cafe0004-0000-4000-8000-000000000004" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

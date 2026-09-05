@@ -1,0 +1,71 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "notekeeper-agent" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "example.instrumentation.genai", "version": "0.1.0" },
+          "spans": [
+            {
+              "traceId": "0af7651916cd43dd8448eb211c80319c",
+              "spanId": "b7ad6b7169203331",
+              "name": "chat claude-opus-4-8",
+              "kind": 3,
+              "startTimeUnixNano": "1787130000000000000",
+              "endTimeUnixNano": "1787130002000000000",
+              "attributes": [
+                { "key": "gen_ai.system", "value": { "stringValue": "anthropic" } },
+                { "key": "gen_ai.operation.name", "value": { "stringValue": "chat" } },
+                { "key": "gen_ai.request.model", "value": { "stringValue": "claude-opus-4-8" } },
+                { "key": "gen_ai.response.model", "value": { "stringValue": "claude-opus-4-8" } },
+                { "key": "gen_ai.conversation.id", "value": { "stringValue": "cafe0003-0000-4000-8000-000000000003" } },
+                { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "32011" } },
+                { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "120" } },
+                { "key": "gen_ai.usage.cache_read.input_tokens", "value": { "intValue": "30000" } },
+                { "key": "gen_ai.usage.cache_creation.input_tokens", "value": { "intValue": "2000" } }
+              ],
+              "status": { "code": 1 }
+            },
+            {
+              "traceId": "0af7651916cd43dd8448eb211c80319c",
+              "spanId": "b7ad6b7169203332",
+              "name": "ChatCompletion",
+              "kind": 3,
+              "startTimeUnixNano": "1787130003000000000",
+              "endTimeUnixNano": "1787130004000000000",
+              "attributes": [
+                { "key": "openinference.span.kind", "value": { "stringValue": "LLM" } },
+                { "key": "llm.model_name", "value": { "stringValue": "example-model-1" } },
+                { "key": "session.id", "value": { "stringValue": "cafe0003-0000-4000-8000-000000000003" } },
+                { "key": "llm.token_count.prompt", "value": { "intValue": "1500" } },
+                { "key": "llm.token_count.completion", "value": { "intValue": "90" } },
+                { "key": "llm.token_count.prompt_details.cache_read", "value": { "intValue": "1200" } }
+              ],
+              "status": { "code": 1 }
+            },
+            {
+              "traceId": "0af7651916cd43dd8448eb211c80319c",
+              "spanId": "b7ad6b7169203333",
+              "name": "execute_tool search_notes",
+              "kind": 1,
+              "startTimeUnixNano": "1787130005000000000",
+              "endTimeUnixNano": "1787130006500000000",
+              "attributes": [
+                { "key": "gen_ai.system", "value": { "stringValue": "anthropic" } },
+                { "key": "gen_ai.operation.name", "value": { "stringValue": "execute_tool" } },
+                { "key": "gen_ai.tool.name", "value": { "stringValue": "search_notes" } },
+                { "key": "gen_ai.tool.call.id", "value": { "stringValue": "call_0000000000000001" } },
+                { "key": "gen_ai.conversation.id", "value": { "stringValue": "cafe0003-0000-4000-8000-000000000003" } }
+              ],
+              "status": { "code": 2, "message": "index unavailable" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type {
   WatchEvent,
   SessionRollup,
@@ -32,6 +32,32 @@ import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
  * using the local file if one is already there.
  */
 function defaultDbPath(): string {
+  /*
+   * A PROBE'S STATE DIRECTORY OWNS ITS DATABASE TOO.
+   *
+   * `AGENTGLASS_STATE_DIR` is how a second server — a probe, a measurement, an
+   * agent trying something — says "my state lives over here". Everything else
+   * honoured it (tmux socket, panes, tasks) and this did not, so a probe with a
+   * scratch state directory still opened the REAL history and wrote to it.
+   *
+   * Measured 2026-08-27: a probe started at 22:19 the night before was still
+   * running eighteen hours later against this database, with the previous
+   * day's code. Its watchdog stopped the deputy's shifts with a reason that no
+   * longer exists in the source and closed the rows of runs that were alive —
+   * from a process nobody was looking at, while the app itself was fixed and
+   * reinstalled four times. The whole afternoon read as "the deputy does not
+   * work".
+   *
+   * `AGENTGLASS_DB` still wins over this: naming a file exactly is a stronger
+   * statement than naming a directory.
+   */
+  const state = process.env.AGENTGLASS_STATE_DIR;
+  if (state) {
+    try {
+      mkdirSync(state, { recursive: true, mode: 0o700 });
+      return join(state, "agentglass.db");
+    } catch { /* unwritable: fall through to the ordinary answer */ }
+  }
   const local = resolve("agentglass.db");
   if (existsSync(local)) return local;
   const base =
@@ -178,6 +204,7 @@ if (!hasPricingBaseline) {
 // Optional idempotency key for external harnesses. Scoped to the sender and
 // session so independent agents can use the same local counter safely.
 try { db.exec("ALTER TABLE events ADD COLUMN event_id TEXT"); } catch { /* already present */ }
+
 db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_events_ingest_idempotency
   ON events(source_app, session_id, event_id)
@@ -316,8 +343,25 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_events_model_cov ON events(
 db.exec(`CREATE INDEX IF NOT EXISTS idx_events_app_cov ON events(
   source_app, timestamp, session_id, hook_event_type,
   cost_usd, input_tokens, output_tokens)`); // by_app (hook_event_type for the tool_calls CASE)
-db.exec(`CREATE INDEX IF NOT EXISTS idx_events_type_cov ON events(
-  hook_event_type, timestamp, tool_name, duration_ms, is_error)`); // by_type + tool-latency durations
+// `project_path` and `cwd_path` are VIRTUAL columns — json_extract, recomputed
+// for every row that touches them — so a scoped /stats paid a JSON parse twice
+// per row for a filter the index could have carried. Indexing them materialises
+// them here, which is the whole point. Measured on a real 476 MB cockpit scoped
+// to one project: the summary went 158.9 -> 137.5 ms over 24 hours and
+// 394.0 -> 301.4 ms over all of history — synchronous blocks, on the thread the
+// terminal rides. The file grew by nothing: it went into the freelist retention
+// had already left.
+//
+// The old index has to GO, not merely be joined: measured, with both present
+// the planner still took the narrow one. Written as DROP-then-CREATE under a new
+// name, the pattern this file already uses two blocks down, because this whole
+// section runs at every module load — a `DROP INDEX idx_events_type_cov;
+// CREATE INDEX idx_events_type_cov` pair under the SAME name would rebuild the
+// index on every launch, for ever. Under a new name, both statements are no-ops
+// from the second launch on.
+db.exec("DROP INDEX IF EXISTS idx_events_type_cov");
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_type_cov_scoped ON events(
+  hook_event_type, timestamp, project_path, cwd_path, tool_name, duration_ms, is_error)`); // by_type + tool-latency durations
 
 // Sessions have no payload of their own, so these are real columns, written at
 // upsert and backfilled from the session's events for rows that predate them.
@@ -403,22 +447,58 @@ export interface DbClaimRow {
  *  `0` skips claiming AND skips being held off — the pre-fix behaviour. */
 const CLAIM_ENABLED = process.env.AGENTGLASS_DB_CLAIM !== "0";
 
+/** stdout of a command, or "" — for the two Mac readings below, where there is
+ *  no file to read and the answer has to be asked for. */
+function ask(argv: string[]): string {
+  try {
+    const r = Bun.spawnSync(argv, { stdout: "pipe", stderr: "ignore" });
+    return r.success ? new TextDecoder().decode(r.stdout) : "";
+  } catch { return ""; }
+}
+
 /** Identifies the boot, so a pid from before a reboot is never mistaken for a
- *  live process. Linux only; empty elsewhere, where the ticks check below still
- *  applies (and, failing both, a wrongly-live claim only disables a scanner). */
+ *  live process. Linux reads the kernel's boot_id; a Mac has no /proc, so it
+ *  asks `sysctl -n kern.boottime` — `{ sec = 1757000000, usec = 123 } …` — whose
+ *  seconds are fixed for the life of a boot and different after one. Empty
+ *  elsewhere, where the ticks check below still applies (and, failing both, a
+ *  wrongly-live claim only disables a scanner). */
 function bootId(): string {
+  if (process.platform === "darwin") {
+    const m = /sec\s*=\s*(\d+)/.exec(ask(["sysctl", "-n", "kern.boottime"]));
+    return m ? `boot:${m[1]}` : "";
+  }
   try { return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(); } catch { return ""; }
 }
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 /**
- * Field 22 of /proc/<pid>/stat — when that pid started, in clock ticks.
+ * When that pid started — the property that distinguishes "the claim holder
+ * is still running" from "some unrelated process now has that pid".
  *
- * This is what distinguishes "the claim holder is still running" from "some
- * unrelated process now has that pid". Parsed from after the last `)` because
- * field 2 is the command name in parentheses and may itself contain spaces and
- * parens; splitting the whole line on spaces gets the wrong column for anything
- * named like `(my prog)`.
+ * Linux: field 22 of /proc/<pid>/stat, in clock ticks. Parsed from after the
+ * last `)` because field 2 is the command name in parentheses and may itself
+ * contain spaces and parens; splitting the whole line on spaces gets the wrong
+ * column for anything named like `(my prog)`.
+ *
+ * macOS: there is no /proc, and before this branch the answer was 0 — which
+ * `holderAlive` reads as "cannot tell", so a reused pid on a Mac passed as the
+ * live holder and the second instance stood its scanner down for a process
+ * that had been gone since the last login. `ps -o lstart=` prints the start
+ * time to the second (`Fri Sep  5 10:11:12 2026`), which is not ticks but is
+ * the same fact: two processes cannot share a pid AND a start second unless
+ * the pid was reused within one second, which the kernel does not do. Parsed
+ * by hand rather than `Date.parse`, whose reading of that legacy shape is
+ * engine-specific; the value only has to be stable across reads of the same
+ * process, so local time is fine.
  */
 function startTicks(pid: number): number {
+  if (process.platform === "darwin") {
+    const m = /^\s*\w{3}\s+(\w{3})\s+(\d+)\s+(\d+):(\d+):(\d+)\s+(\d{4})\s*$/.exec(ask(["ps", "-o", "lstart=", "-p", String(pid)]));
+    const month = m ? MONTHS.indexOf(m[1]!) : -1;
+    if (!m || month < 0) return 0;
+    return Math.floor(new Date(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])).getTime() / 1000);
+  }
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
@@ -741,6 +821,602 @@ CREATE INDEX IF NOT EXISTS idx_reminders_live ON reminders(fired_at, due);
  * would invent one — the same reason `actorOf` refuses to invent a name.
  */
 try { db.exec("ALTER TABLE gates ADD COLUMN decided_by TEXT"); } catch { /* already present */ }
+
+// ---------------------------------------------------------------------------
+/*
+ * The understudy — what he would have done, and how often that matched.
+ *
+ * Four tables, created in one block, and the shape has to be right the first
+ * time. This file has no migration system: it versions itself with CREATE TABLE
+ * IF NOT EXISTS for anything new and an ad-hoc `try { ALTER TABLE … } catch {}`
+ * for a column added later, which works for one column and degrades badly for a
+ * table whose columns are the record. A rename here cannot be expressed at all,
+ * so every column below is either one the scorecard reads today or one whose
+ * absence would make an already-written row unreadable later.
+ *
+ * What the ledger is NOT is the thing worth stating first. It holds no request
+ * body, no prompt, no keystroke and no free text. `subject` is an identifier —
+ * a pull request number, a branch name, a pane id — and `predicted`/`actual`
+ * are JSON of CATEGORICAL decisions: which branch pattern, which cwd, which of
+ * the offered findings were rejected. That is enough to score agreement and not
+ * enough to reconstruct what he was working on, which is the trade the whole
+ * feature is built around. A ledger that kept the bodies would be a second copy
+ * of everything sensitive in the product, in a table with a longer retention
+ * than the events it was derived from.
+ *
+ * `sealed_at` and `situation_hash` are the reason the numbers mean anything.
+ * The situation is hashed and written synchronously BEFORE he can answer it, so
+ * a prediction can never be fitted to an answer already known. A prediction
+ * that lands after his answer is kept with `late = 1` rather than dropped —
+ * dropping late rows would quietly select for the situations that were easy to
+ * predict fast — and an actual that arrives with no seal in front of it sets
+ * `unsealed = 1`, which is counted against trigger recall instead of being
+ * scored as a hit it never earned.
+ *
+ * `provenance` is what makes `n` honest: only `typed` and `clicked` count
+ * toward a class's denominator. `agent-tolerated` is an agent not objecting,
+ * which is not the user agreeing, and counting it would let the understudy
+ * grade its own homework.
+ *
+ * `kind` splits the rows by how long they are worth keeping. A `stub` is the
+ * bare fact that a write happened — route, actor, status — and it ages out at
+ * ninety days. A `decision` (a prediction scored against an actual) and a
+ * `fence` (a refusal, a halt) are the record itself and are never deleted.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS understudy_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  class TEXT NOT NULL DEFAULT '',
+  route TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL DEFAULT '',
+  partition TEXT NOT NULL DEFAULT 'global',
+  actor TEXT NOT NULL DEFAULT '',
+  provenance TEXT NOT NULL DEFAULT '',
+  sealed_at INTEGER NOT NULL,
+  situation_hash TEXT NOT NULL DEFAULT '',
+  predicted TEXT,
+  predicted_at INTEGER,
+  late INTEGER NOT NULL DEFAULT 0,
+  actual TEXT,
+  actual_at INTEGER,
+  unsealed INTEGER NOT NULL DEFAULT 0,
+  verdict TEXT,
+  mode TEXT NOT NULL DEFAULT 'shadow',
+  status INTEGER,
+  tokens INTEGER NOT NULL DEFAULT 0
+);
+/*
+ * What it would do, written down before anybody agrees to it.
+ *
+ * The ladder has a rung called "queued" and until now nothing built it. This is
+ * that rung: the understudy drafts a WHOLE action — the route, the arguments,
+ * why, and the evidence it stood on — files it here, and a person presses or
+ * throws it away. Nothing runs on its own.
+ *
+ * It is the base of everything above it, and not because it is easy. It is the
+ * only thing that produces the evidence that actually matters. The scorecard
+ * answers "would it have guessed the shape of my answer"; a queue answers
+ * "would it have done the right thing", which is a different question and the
+ * one somebody needs settled before letting it act.
+ *
+ * args is JSON and evidence is JSON: what the proposal would send, and the
+ * precedents and rules behind it, so a person deciding can see the reasoning
+ * rather than a verdict. decided_by records who resolved it, because a
+ * proposal the clone resolved itself would be the whole point defeated.
+ */
+CREATE TABLE IF NOT EXISTS understudy_proposals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  class TEXT NOT NULL,
+  /* The ledger row this was drafted against, when there is one. */
+  ledger_id INTEGER,
+  /*
+   * What it is ABOUT — the branch, the pull request number — as distinct from
+   * what it would SEND.
+   *
+   * Missing at first, and the gap was invisible until something needed to
+   * reverse an action: undoing a worktree removal means adding it back, which
+   * needs the branch name, and the request body for a removal does not carry
+   * one. A proposal that knows only its arguments cannot always describe its
+   * own subject, and an undo recipe is exactly the thing that has to.
+   */
+  subject TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  route TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL DEFAULT 'POST',
+  args TEXT NOT NULL DEFAULT '{}',
+  repo TEXT NOT NULL DEFAULT '',
+  partition TEXT NOT NULL DEFAULT 'closed',
+  why TEXT NOT NULL DEFAULT '',
+  evidence TEXT NOT NULL DEFAULT '[]',
+  confidence REAL NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  /* pending | approved | discarded | done | failed */
+  state TEXT NOT NULL DEFAULT 'pending',
+  decided_at INTEGER,
+  decided_by TEXT NOT NULL DEFAULT '',
+  result TEXT NOT NULL DEFAULT '',
+  status INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_understudy_proposals ON understudy_proposals(state, created_at);
+
+/*
+ * A shift: the understudy standing in, for a bounded while.
+ *
+ * Everything else here is per-decision, and per-decision is not what "cover for
+ * me for an hour" means. A stand-in needs to know what it is doing, how long it
+ * has, when it has done enough, and — the part that actually matters — when to
+ * stop and wait rather than carry on being confidently wrong.
+ *
+ * SO THE LIMITS ARE WRITTEN DOWN FIRST, BEFORE IT STARTS. Not as a policy it
+ * consults and could reason its way around, but as columns: an end time, a
+ * budget of actions, and a stop reason it fills in when it halts. A shift that
+ * cannot say why it stopped is a shift nobody can audit, and the first question
+ * anybody asks on coming back is "what did it do and why did it quit".
+ *
+ * goal is the person's own words. It is not parsed and nothing branches on
+ * it: it exists so that what comes back can be read against what was asked for,
+ * by the human, which is the only comparison that means anything here.
+ */
+CREATE TABLE IF NOT EXISTS understudy_shifts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal TEXT NOT NULL DEFAULT '',
+  started_at INTEGER NOT NULL,
+  /* Hard wall. Past this it proposes nothing, whatever else is true. */
+  ends_at INTEGER NOT NULL,
+  /* And a budget, because an hour is a long time at machine speed. */
+  max_actions INTEGER NOT NULL DEFAULT 10,
+  actions INTEGER NOT NULL DEFAULT 0,
+  /* running | done | stopped */
+  state TEXT NOT NULL DEFAULT 'running',
+  stopped_at INTEGER,
+  stopped_reason TEXT NOT NULL DEFAULT '',
+  scope TEXT NOT NULL DEFAULT 'open-only'
+);
+CREATE INDEX IF NOT EXISTS idx_understudy_shifts ON understudy_shifts(state, started_at);
+
+/*
+ * What it did on its own, and how to put each one back.
+ *
+ * The moment anything acts without a press, one question matters more than the
+ * rest: what happened while I was away, and can I undo it. A queue answers the
+ * first half; this answers the second.
+ *
+ * The recipe is written AT THE MOMENT OF ACTING, not reconstructed afterwards.
+ * A repository moves on, and an undo derived later is a guess about a world
+ * that has changed since — the branch it would recreate may no longer point
+ * where it did, and nobody would find out until they needed it.
+ *
+ * undo_kind and undo_arg are a RECIPE, never a command line. Storing shell to
+ * run later would mean the undo path can do whatever that string says, which is
+ * exactly the reach this design spends its whole length refusing to hand over.
+ */
+CREATE TABLE IF NOT EXISTS understudy_acts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shift_id INTEGER NOT NULL,
+  proposal_id INTEGER,
+  class TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  ok INTEGER NOT NULL DEFAULT 0,
+  result TEXT NOT NULL DEFAULT '',
+  undo_kind TEXT NOT NULL DEFAULT '',
+  undo_arg TEXT NOT NULL DEFAULT '{}',
+  undone_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_understudy_acts ON understudy_acts(shift_id, at);
+
+/*
+ * The work loop's two tables, moved here from the modules that used them.
+ *
+ * They were created with a db.run at module scope — correct-looking, and it
+ * made the schema depend on WHICH FILES HAD BEEN IMPORTED. Every other table in
+ * this application is declared in this one place and exists the moment the
+ * database opens; those two existed only once somebody had reached for the
+ * module that made them.
+ *
+ * That is invisible until the import order changes. It surfaced when two
+ * branches were merged together and the suite gained a file that pulled the
+ * work module in earlier: the schema test, which enumerates the tables a fresh
+ * database gets, suddenly saw two more than it had been told about — passing
+ * alone and failing in the full run, which is the worst way for a defect to
+ * announce itself.
+ *
+ * A schema that depends on import order is not a schema. It belongs where the
+ * database is opened, with everything else.
+ */
+CREATE TABLE IF NOT EXISTS understudy_work (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  shift_id INTEGER,
+  source TEXT NOT NULL DEFAULT '',
+  item_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL DEFAULT '',
+  worktree TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT '',
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  /* running | done | failed | abandoned | uncommitted | empty */
+  state TEXT NOT NULL DEFAULT 'running',
+  outcome TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_understudy_work ON understudy_work(state, started_at);
+
+
+/*
+ * Where it raises its hand.
+ *
+ * The failure this exists for is silence: a run that cannot finish used to end
+ * as a row nobody reads, and the loop would move on as if nothing had been
+ * asked. Measured over 108 runs — 26 ended without delivering, and not one of
+ * them said what it needed. Five sat unfinished for over 45 minutes, the worst
+ * for 513, because the only thing that noticed was the next server start.
+ *
+ * So: when it cannot, or does not know, it writes here instead of dying quiet.
+ * A row is a question addressed to a person, with what it already tried, so
+ * the answer does not have to start by reconstructing the attempt.
+ */
+CREATE TABLE IF NOT EXISTS understudy_help (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  /* The run that gave up, when there was one. Null for a task that never got
+     far enough to have a run at all. */
+  run_id INTEGER,
+  title TEXT NOT NULL,
+  /* What it needs from a person, in one sentence. */
+  question TEXT NOT NULL,
+  /* What it tried, so the answer does not start from nothing. */
+  tried TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  /* Set when a person has dealt with it. An open row is one still waiting. */
+  answered_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_understudy_help_open ON understudy_help(answered_at, id);
+
+/* Work he queued by hand: the only source that can say which checkout. */
+CREATE TABLE IF NOT EXISTS understudy_asked (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  taken_at INTEGER,
+  /* The file this task owes, when what it owes is a file rather than a commit.
+     Nullable: most tasks owe a commit and this does not apply to them. See the
+     ALTER below for databases that predate it, and the check in
+     understudy-loop.ts for why it exists. */
+  deliverable TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_understudy_sealed ON understudy_ledger(sealed_at);
+CREATE INDEX IF NOT EXISTS idx_understudy_class ON understudy_ledger(kind, class, sealed_at);
+CREATE INDEX IF NOT EXISTS idx_understudy_subject ON understudy_ledger(class, subject, actual_at);
+
+/*
+ * The situation a hash stands for, kept only long enough to argue about it.
+ *
+ * hash is the primary key because the seal IS the identity: two ledger rows
+ * that saw the same situation point at one body, and a body that arrives twice
+ * is the same body. It expires at thirty days while the ledger row it belongs
+ * to lives for ninety or for ever, and that asymmetry is deliberate — the score
+ * is a permanent claim, the evidence behind one disagreement is only useful
+ * while somebody might still look at it.
+ */
+CREATE TABLE IF NOT EXISTS understudy_snapshots (
+  hash TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  repo TEXT NOT NULL DEFAULT '',
+  partition TEXT NOT NULL DEFAULT 'global',
+  body TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_understudy_snap_at ON understudy_snapshots(at);
+
+/*
+ * Why something was refused — and only why.
+ *
+ * The quarantine exists because the understudy reads material that can carry a
+ * name it must never write down: an employer, a ticket id, a customer. When a
+ * term like that is found, the honest record is that a refusal happened and
+ * where it happened, so a person can go and look at the source themselves.
+ * What must not be here is the text that was refused or the term that matched
+ * it, because a table of the exact strings we promised never to keep is the
+ * worst possible shape for a table whose whole purpose is that promise.
+ *
+ * term_index is the position in the term list, not the term: -1 when the
+ * refusal was not a term match at all. source_ref points back at whatever the
+ * material was, so the trail is followable without the trail holding the thing.
+ */
+CREATE TABLE IF NOT EXISTS understudy_quarantine (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_ref TEXT NOT NULL,
+  class TEXT NOT NULL DEFAULT '',
+  term_index INTEGER NOT NULL DEFAULT -1,
+  at INTEGER NOT NULL
+);
+
+/*
+ * Decisions he has already made, in his own words, for the classes to reason
+ * from. Created empty, and stays empty: v1 ingests nothing at all — no
+ * transcripts are read, no model is called, and there is no writer for this
+ * table anywhere in the server.
+ *
+ * It is here anyway because of the paragraph at the top of this block. There is
+ * no migration system, so the choice is between settling the shape once, now,
+ * while it costs a CREATE TABLE nobody executes twice, or discovering later
+ * that alternatives and outcome needed to exist on rows that were written
+ * without them. The UNIQUE(source, source_ref, class) is the part that would be
+ * genuinely painful to add afterwards — it is what makes a re-ingest idempotent
+ * rather than a second copy of everything.
+ */
+CREATE TABLE IF NOT EXISTS understudy_precedents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  class TEXT NOT NULL,
+  partition TEXT NOT NULL DEFAULT 'global',
+  repo TEXT NOT NULL DEFAULT '',
+  situation TEXT NOT NULL DEFAULT '',
+  decision TEXT NOT NULL DEFAULT '',
+  his_words TEXT NOT NULL DEFAULT '',
+  alternatives TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  source_ref TEXT NOT NULL DEFAULT '',
+  provenance TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  UNIQUE(source, source_ref, class)
+);
+
+-- External-content full-text index over the precedents, the same arrangement
+-- events_fts uses. There is not one trigger anywhere in server/src and this
+-- does not introduce the first: fts5 does not synchronise an external-content
+-- table by itself, so whatever eventually writes understudy_precedents writes
+-- the matching INSERT INTO understudy_precedents_fts(rowid, …) beside it, by
+-- hand, exactly as recordEvent does for events_fts. Nothing writes either today.
+CREATE VIRTUAL TABLE IF NOT EXISTS understudy_precedents_fts USING fts5(
+  class, repo, situation, decision, his_words, source_ref,
+  content='understudy_precedents', content_rowid='id'
+);
+/*
+ * WHAT THE WORKSPACE SWEEP ALREADY READ, kept.
+ *
+ * ClickUp's API has no text search, so "which cards mention this one" means
+ * downloading the cards and looking. Measured on a real workspace: three
+ * hundred cards WITH their bodies take about 45 seconds, and the same question
+ * asked a minute later takes 33ms because the answer is still in memory. The
+ * moment the app restarts, somebody pays the 45 seconds again.
+ *
+ * So the sweep writes down what it saw. The next question is answered from
+ * here first — in milliseconds, cold or not — and the sweep still runs behind
+ * it for anything the index has not seen yet.
+ *
+ * The body column is the whole point: it is where a mention of another card
+ * lives, and it is the field that makes the read expensive. It stays here.
+ * (No backticks in this comment on purpose — the schema is a template literal
+ * and one of them ends it, which is a syntax error two hundred lines away.)
+ */
+CREATE TABLE IF NOT EXISTS clickup_cards (
+  id TEXT PRIMARY KEY,
+  custom_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  list TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  updated INTEGER NOT NULL DEFAULT 0,
+  /* The whole card as the panel wants it, so a hit needs no second call. */
+  json TEXT NOT NULL DEFAULT '',
+  seen_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_clickup_cards_seen ON clickup_cards(seen_at);
+
+/*
+ * WHAT A NOTIFICATION SAID ABOUT A CARD.
+ *
+ * ClickUp's API gives no history: who assigned a card, who moved it, who added
+ * a follower are all invisible to it (measured — /task/{id}/history is 404 on
+ * v1 and v2, and the route their own web client uses wants a browser session).
+ * But their desktop notification says exactly that, in a sentence with a name
+ * in it, and this machine already mirrors those.
+ *
+ * So the ones that can be attributed to a card are kept here and shown on that
+ * card, marked as what they are: seen on this machine, not read from the API.
+ * A person who wants the full record still opens ClickUp; what this fixes is
+ * "it happened, I was told, and the card shows nothing".
+ */
+CREATE TABLE IF NOT EXISTS clickup_card_notes (
+  id TEXT PRIMARY KEY,
+  card_id TEXT NOT NULL DEFAULT '',
+  label TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_clickup_card_notes ON clickup_card_notes(card_id, at);
+
+/*
+ * WHAT EACH AGENT SAYS IT IS DOING.
+ *
+ * The deputy has a screen; the agents in the terminals do not, and "suddenly
+ * they are doing lots of tasks and I do not even know which" is the cost of that. Six of
+ * the seven columns of such a screen can be assembled from what this app
+ * already reads — tmux panes, the sessions on disk, worktrees, the transcript
+ * clock. The seventh, what an agent is working ON, is the one thing only the
+ * agent knows, so it writes it here.
+ *
+ * One row per agent, replaced rather than appended: this is a status, not a
+ * log. An agent that stops writing goes stale and the screen says so instead
+ * of showing a claim from an hour ago as if it were now.
+ */
+CREATE TABLE IF NOT EXISTS agent_status (
+  name TEXT PRIMARY KEY,
+  doing TEXT NOT NULL DEFAULT '',
+  worktree TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT '',
+  /** What it last delivered — a commit, a branch, a sentence. */
+  left_behind TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL DEFAULT 0
+);
+`);
+
+/* Which hooked session wrote its status, when it said. A name is what a
+   person reads; the session id is what the Lantern reminder needs to know it
+   can stop asking — the reminder rides a hook, and a hook carries the session,
+   not the name the agent chose for itself. An ALTER after the CREATE so a
+   database from before today gains it too. */
+try { db.exec("ALTER TABLE agent_status ADD COLUMN session_id TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+
+/*
+ * Which sessions are stopped on a person, written the moment the hook says so.
+ *
+ * Its own table rather than a query over `events`, and the reason is measured:
+ * a session the scanner owns is answered by /ingest BEFORE its hook event is
+ * inserted, so its Notification never reaches `events` at all — and what the
+ * scanner writes there from the transcript runs behind by minutes and carries
+ * no hook-only notifications in the first place. On this machine the newest
+ * `events` row for 24 of 36 hooked sessions was a `Stop` from earlier, while
+ * the hooks had said "waiting for your input" since. One row per session:
+ * set by a wait-shaped Notification, cleared by anything the session does
+ * after it.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS session_wait (
+  session_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  why TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL
+);
+`);
+
+/*
+ * What a session IS to the app, when it is not a person's agent. One row so
+ * far: the Lantern's own chat, which is an observer — never counted as
+ * waiting on anybody, never reminded, never a status row. Persisted because
+ * the mark has to survive a server restart: the chat outlives the process
+ * that opened it, and an in-memory set forgot it the afternoon it was written.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS session_role (
+  session_id TEXT PRIMARY KEY,
+  role TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+`);
+
+/*
+ * The understudy's one nap: when the agent's session limit is hit, the loop
+ * sleeps until the reset the CLI announced and picks the work up again. One
+ * row, overwritten; cleared by writing `until = 0`, never deleted — a person
+ * looking at the Work view during the nap sees when it ends and why.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS understudy_hold (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  until INTEGER NOT NULL DEFAULT 0,
+  why TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL DEFAULT 0
+);
+`);
+
+/*
+ * "At 08:00 start this agent with this prompt in this checkout" — a reminder
+ * whose firing is a start (agentschedule.ts). Claimed in one statement when
+ * due; what happened is written back on the row. Fired and cancelled rows age
+ * out with the other ninety-day records.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS agent_schedule (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'claude',
+  prompt TEXT NOT NULL DEFAULT '',
+  yolo INTEGER NOT NULL DEFAULT 0,
+  due INTEGER NOT NULL,
+  created INTEGER NOT NULL,
+  fired_at INTEGER,
+  cancelled_at INTEGER,
+  result TEXT NOT NULL DEFAULT ''
+);
+`);
+
+/*
+ * The agents a SCRIPT started by name — the launcher half of running the
+ * team's unattended worker without Herdr (agentops.ts). One row per name: the
+ * checkout it runs in and the engine pane it lives in. Liveness is the pane,
+ * not this row; `ended_at` is stamped the moment somebody looks and the pane is
+ * gone, and a name whose pane is gone is free to be started again.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS named_agent (
+  name TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'claude',
+  cwd TEXT NOT NULL,
+  pane_id TEXT NOT NULL,
+  window_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER
+);
+`);
+
+/* What a run's branch pointed at when something last looked at it.
+ *
+ * Added after a merged branch was deleted by hand and the run that made it was
+ * re-offered as unstarted work: counting commits ahead cannot tell "merged and
+ * tidied" from "never began", and a sha HEAD contains can. Kept as an ALTER
+ * rather than a column in the CREATE above so a database made before today
+ * gains it too — and placed AFTER that statement, because an ALTER on a table
+ * that does not exist yet fails silently into the catch. */
+try { db.exec("ALTER TABLE understudy_work ADD COLUMN tip_sha TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+/* The tmux pane the run's agent is in. Its NAME was the only handle on that
+   window, and a name is not an identity: tmux renames a window when the
+   program inside sets a title, and the moment the match failed the watchdog
+   read a working agent as gone, ended its row, and the empty-worktree sweep
+   deleted the directory out from under it — `ENOENT … posix_spawn 'bun'`,
+   sixteen minutes into a run. A pane id survives every rename. */
+try { db.exec("ALTER TABLE understudy_work ADD COLUMN pane_id TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+
+/*
+ * The same column, for databases made before it existed.
+ *
+ * Has to sit AFTER the block above rather than up with the other migrations:
+ * ALTER on a table that does not exist yet fails, the failure is swallowed by
+ * the catch every migration here has, and a fresh database then never gets the
+ * column at all. Which is exactly what happened — the suite went red on an
+ * INSERT naming a column the CREATE had just been taught about.
+ */
+try { db.exec("ALTER TABLE understudy_asked ADD COLUMN deliverable TEXT"); } catch { /* already present */ }
+/* How many times this task has been handed out and come back unfinished. A
+   task that dies with the server is put back rather than lost, and without a
+   count that is an infinite loop: the same task, restarted for ever, is worse
+   than a task that stops. Two goes, then it asks for help. */
+try { db.exec("ALTER TABLE understudy_asked ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
+
+/*
+ * WHAT KIND OF HAND THIS IS, so a machine can clear one it raised itself
+ * without matching on the title — the title is not free for that. A requeue's
+ * give-up hand is filed under the user's OWN task title, which a title match
+ * would either miss or clear by accident depending on what he happened to call
+ * the task. `kind` is the fixed, code-chosen tag ("idle-cannot-start", ...)
+ * that names WHY the hand was raised, independent of what it is about. NULL
+ * for a hand raised before this column existed, or one only a person is ever
+ * meant to close — a give-up hand is never auto-cleared, so it never needed a
+ * kind that means "clear me".
+ */
+try { db.exec("ALTER TABLE understudy_help ADD COLUMN kind TEXT"); } catch { /* already present */ }
+db.exec("CREATE INDEX IF NOT EXISTS idx_understudy_help_kind ON understudy_help(kind, answered_at)");
+
+/*
+ * `review` and `reviewed_at` USED TO BE ADDED HERE, and are not any more.
+ *
+ * They held a person's ruling on a disagreement — the queue that went out with
+ * the predictor's apparatus. Nothing writes them and nothing reads them, and a
+ * column added on every startup for a feature that no longer exists is the
+ * database's version of the dead export the guard next door catches.
+ *
+ * NOT DROPPED, only no longer created. `ALTER TABLE … DROP COLUMN` on somebody
+ * else's database destroys whatever is in it to save two nulls per row, and
+ * this file has no migration system to sequence that against. Databases that
+ * already carry the columns keep them, inert; new ones never grow them.
+ */
 
 export interface GateRow {
   id: string;
@@ -1112,6 +1788,21 @@ const isTerminal = (t: string) => t === "Stop" || t === "SessionEnd";
 export const RETENTION_DAYS = Math.max(0, Number(process.env.AGENTGLASS_RETENTION_DAYS ?? 8));
 
 /**
+ * The understudy's own two windows — see the table block above for what is in
+ * them. Fixed rather than read from the environment, and deliberately not
+ * derived from RETENTION_DAYS: that variable bounds the raw events and is the
+ * user's to set, including to 0, while these bound a store the user did not ask
+ * for and should not have to remember to bound. Exported so a panel can say
+ * "thirty days" without keeping a second copy of the number that could disagree
+ * with the sweep that enforces it.
+ */
+export const UNDERSTUDY_SNAPSHOT_DAYS = 30;
+
+/** How long the bare fact of a write is kept. Decision and fence rows never
+ *  expire: they are the score, and a score with holes in it is not a score. */
+export const UNDERSTUDY_STUB_DAYS = 90;
+
+/**
  * Fold every event older than `cutoff` into daily_rollup.
  *
  * Runs inside the prune transaction, immediately before the DELETE, so a
@@ -1159,8 +1850,205 @@ function foldExpiringEvents(cutoff: number): number {
   return r.changes;
 }
 
-export function pruneOldRows(): { events: number; sessions: number; rolled: number } {
-  if (!RETENTION_DAYS) return { events: 0, sessions: 0, rolled: 0 };
+/**
+ * Give back the pages retention has already freed.
+ *
+ * Pruning deletes rows; SQLite keeps their pages on a freelist and reuses them,
+ * which is the right default — a database that grows back to its high-water
+ * mark every week should not pay to shrink in between. This one does not grow
+ * back: measured on a real cockpit, 62,706 of 116,162 pages were free, and the
+ * file was 476 MB holding 214 MB of data.
+ *
+ * Guarded on that ratio rather than run every boot, because VACUUM rewrites the
+ * whole file. At 30% free it is worth the rewrite; below that it is churn. On
+ * the machine this was written for the rewrite took 0.43 s and returned 262 MB.
+ *
+ * SQLITE_TMPDIR is set because VACUUM builds its copy in the temp directory,
+ * and `/tmp` here is a 16 GB tmpfs that runs at 94% full — a vacuum of a large
+ * database would go into RAM and could fail on space. Next to the database is
+ * where there is certainly room for a copy of it.
+ */
+export function reclaimFreePages(): { freed: number; ms: number } | null {
+  try {
+    const pageCount = Number((db.query("PRAGMA page_count").get() as { page_count?: number } | null)?.page_count ?? 0);
+    const freelist = Number((db.query("PRAGMA freelist_count").get() as { freelist_count?: number } | null)?.freelist_count ?? 0);
+    const pageSize = Number((db.query("PRAGMA page_size").get() as { page_size?: number } | null)?.page_size ?? 0);
+    if (!pageCount || !pageSize || freelist / pageCount <= 0.3) return null;
+    if (!process.env.SQLITE_TMPDIR) process.env.SQLITE_TMPDIR = dirname(DB_PATH);
+    const started = Date.now();
+    db.exec("VACUUM");
+    return { freed: freelist * pageSize, ms: Date.now() - started };
+  } catch {
+    // A vacuum that cannot run is not a reason to fail a boot: the database is
+    // correct either way, and the only thing lost is disk that was already lost.
+    return null;
+  }
+}
+
+export function pruneOldRows(): { events: number; sessions: number; rolled: number; snapshots: number; stubs: number } {
+  /*
+   * The understudy's two sweeps run ABOVE the early return, and the placement is
+   * the point rather than an accident of ordering.
+   *
+   * AGENTGLASS_RETENTION_DAYS is a number the user sets, and 0 is a legitimate
+   * value meaning "keep the events for ever". Hanging the understudy's expiry
+   * off that switch would mean somebody turning event pruning off silently
+   * turned off the expiry of the sealed situations too — a store that holds the
+   * material the understudy was reading, growing without bound, because of a
+   * setting about something else entirely. That is the worst failure available
+   * in this file, so these two are unconditional and carry their own windows.
+   *
+   * Outside the transaction below on purpose: they share no invariant with the
+   * fold-then-delete pair, and a snapshot sweep has no business being able to
+   * roll back a day of rollup.
+   */
+  const snapCut = Date.now() - UNDERSTUDY_SNAPSHOT_DAYS * 86_400_000;
+  const snapshots = db.run(`DELETE FROM understudy_snapshots WHERE at < ?`, [snapCut]).changes;
+  // Stubs only. A `decision` row is the score and a `fence` row is a refusal we
+  // promised to be able to show; neither has an expiry, at any age.
+  const stubCut = Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000;
+  const stubs = db.run(`DELETE FROM understudy_ledger WHERE kind = 'stub' AND sealed_at < ?`, [stubCut]).changes;
+
+  /*
+   * The queue, the shifts and the acts, which arrived with the actuator and
+   * arrived without an expiry.
+   *
+   * Every other table in this feature had a window decided when it was written.
+   * These three did not, which is how a store grows without bound: not by
+   * anybody deciding to keep everything, but by three tables being added on an
+   * afternoon when the interesting question was whether the thing worked.
+   *
+   * THE WINDOWS ARE NOT THE SAME, for the same reason the two above are not.
+   *
+   * A RESOLVED proposal is scaffolding — it was drafted, it was pressed or
+   * thrown away, and a month later nobody wants the JSON body it would have
+   * sent. A pending one never expires: it is the understudy waiting on a
+   * person, and expiring it would answer on their behalf by doing nothing.
+   *
+   * An ACT is the record of something that happened on somebody's machine
+   * without them pressing anything. That is the last row in this feature that
+   * should quietly disappear, so it keeps the longest window — and an act that
+   * has NOT been undone is never swept at all, because the undo recipe is the
+   * only way back and deleting it is deciding on their behalf that they no
+   * longer want one.
+   */
+  const proposalCut = Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000;
+  const proposals = db.run(
+    `DELETE FROM understudy_proposals WHERE state <> 'pending' AND created_at < ?`,
+    [proposalCut],
+  ).changes;
+  /*
+   * THE RECORD OF WHAT RAN UNATTENDED honours the user's switch; the rest of
+   * this feature does not, and the split is deliberate.
+   *
+   * Everything above and below this block is scaffolding the understudy made
+   * for itself — sealed situations, stubs, drafted proposals, the queue's
+   * bookkeeping, a role, a schedule — and it expires on its own clock precisely
+   * so that a setting about EVENTS cannot make it grow without bound. That
+   * reasoning was written for those tables and it is still right for them.
+   *
+   * Shifts, acts and runs are a different kind of row. Each one says that an
+   * agent did something on this machine, at night, with permissions skipped,
+   * and nobody watching. The retention switch set to 0 is the user saying "keep
+   * my history for ever", and until this block existed the three tables that
+   * ARE the history of the unattended work were the ones that ignored him: the
+   * raw prompts he typed himself were kept, and the record of what ran in his
+   * name without him was swept at ninety days. Read aloud, that is backwards.
+   * So these three, and only these three, keep for ever when the switch is 0
+   * and otherwise keep their ninety-day window unchanged.
+   *
+   * Still above the early return on RETENTION_DAYS below, because that return
+   * is about the fold-then-delete transaction on events and these share
+   * nothing with it — the placement tests in understudy-retention.test.ts and
+   * retention-promises.test.ts pin exactly this shape (and they find the guard
+   * by its source text, which is why this comment does not quote it).
+   */
+  const keepsTheRecord = RETENTION_DAYS === 0;
+  if (!keepsTheRecord) {
+    db.run(`DELETE FROM understudy_shifts WHERE state <> 'running' AND started_at < ?`, [proposalCut]);
+    db.run(
+      `DELETE FROM understudy_acts WHERE undone_at IS NOT NULL AND at < ?`,
+      [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+    );
+  }
+  /*
+   * The work loop's two tables, and this is the SECOND time this exact gap has
+   * been opened in this feature.
+   *
+   * The proposals, the shifts and the acts arrived without a window and were
+   * given one. Then the work loop arrived with two more tables and no window,
+   * by the same route: tables added on an afternoon when the interesting
+   * question was whether the thing worked at all. Writing the reasoning down
+   * once changed nothing, because a comment is only read by somebody already
+   * looking at the file — so the rule is enumerated in a test now, which walks
+   * every understudy table and fails on one nobody has decided about.
+   *
+   * The exceptions match the ones above, for the same reasons. A FINISHED run
+   * ages out; a RUNNING one never does, because "started, never finished" is
+   * the only record that an agent was killed mid-task, and it is exactly the
+   * row somebody wants when they find a worktree they do not recognise. A task
+   * still QUEUED never expires either: it is a person waiting to be worked
+   * for, and expiring it answers on their behalf by doing nothing.
+   *
+   * TWO RECORDS OF THE SAME FACT, and the queue's sweep reads both — the same
+   * reason the queue's own reader does. `taken_at` is this table's mark and the
+   * run table is the loop's, and for a while nothing wrote the first: rows
+   * worked start to finish kept a NULL there. The reader consults both, so
+   * those rows correctly stop being offered as work; a sweep trusting
+   * `taken_at` alone would leave exactly them immortal — invisible in the app,
+   * permanent on disk, which is the shape of bug this sweep exists to close,
+   * reappearing inside the fix for it.
+   *
+   * Which makes the ORDER of the two statements load-bearing, and that is not
+   * visible from either one alone. Sweeping the runs first deletes the evidence
+   * the queue's sweep needs to read. The queue goes first; both use the same
+   * cutoff, so a run old enough to be swept is one the queue has finished with.
+   */
+  db.run(
+    `DELETE FROM understudy_asked
+      WHERE at < ?
+        AND (taken_at IS NOT NULL
+             OR ('asked:' || id) IN (SELECT item_id FROM understudy_work WHERE source = 'asked'))`,
+    [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+  );
+  /* The run table is the third of the three that honour the switch — see the
+     shifts/acts block above. The queue's sweep just above it does NOT: it reads
+     the run table to know what was worked, and a kept run keeps answering that
+     question for it. */
+  if (!keepsTheRecord) {
+    db.run(
+      `DELETE FROM understudy_work WHERE state <> 'running' AND started_at < ?`,
+      [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+    );
+  }
+  /* A named agent that has ENDED is a fact about a window that no longer
+     exists; ninety days is plenty to read back what ran. A live one is never
+     swept — its pane is the record that it is still working. */
+  db.run(
+    `DELETE FROM named_agent WHERE ended_at IS NOT NULL AND ended_at < ?`,
+    [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+  );
+  /* A role outlives its session by ninety days, then nothing needs it. */
+  db.run(`DELETE FROM session_role WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+  /* A schedule that fired or was cancelled is a record, kept ninety days; one
+     still waiting is a person's intent and is never swept. */
+  db.run(`DELETE FROM agent_schedule WHERE (fired_at IS NOT NULL OR cancelled_at IS NOT NULL) AND created < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+  /*
+   * Answered questions age out; an OPEN one never does.
+   *
+   * Same ruling the queue above makes, and for the same reason: a row still
+   * waiting on a person is a person who has not answered yet, and expiring it
+   * answers on their behalf by doing nothing. That is precisely the silence
+   * this table was added to end, so it may not come back in through the sweep
+   * that is supposed to keep the table small.
+   */
+  db.run(
+    `DELETE FROM understudy_help WHERE answered_at IS NOT NULL AND at < ?`,
+    [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
+  );
+  void proposals;
+
+  if (!RETENTION_DAYS) return { events: 0, sessions: 0, rolled: 0, snapshots, stubs };
   const cutoff = Date.now() - RETENTION_DAYS * 86_400_000;
   // One transaction: the fold and the delete are the same decision, and a
   // crash between them would delete a day nobody had summarised.
@@ -1181,7 +2069,7 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
     // Acknowledged reminders age out; a live one is never retention's business
     // however old its row looks — the same ruling the gates line above makes.
     db.run(`DELETE FROM reminders WHERE (acked_at IS NOT NULL OR cancelled_at IS NOT NULL) AND due < ?`, [cutoff]);
-    return { events: ev.changes, sessions: se.changes, rolled };
+    return { events: ev.changes, sessions: se.changes, rolled, snapshots, stubs };
   })();
 }
 
@@ -1561,6 +2449,10 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
   // an idempotent retry has no cache side effects.
   notePath(n.payload?.project_path);
   notePath((n.payload as { cwd?: unknown } | undefined)?.cwd);
+  // Same rule, same place, for the filter dropdowns: three Set lookups per
+  // event, and the memo behind them is dropped only when this event carries a
+  // value those lists do not have. See getFilterOptions.
+  noteFilterValues(n.source_app, n.hook_event_type, n.model_name);
   // A Pre opens a call and a Post closes one, so the open-tool memo the fleet
   // draws from just went stale. Drop it here, the single write chokepoint, so
   // the next read — the push that fires right after this returns — is fresh,
@@ -1676,14 +2568,71 @@ export function setSessionTitles(session_id: string, custom: string | null, ai: 
 export function getRecent(limit = 300, provider?: string): WatchEvent[] {
   const scope = scopeClause();
   const prov = providerScope(provider);
+  // Unscoped there is nothing to filter, so the index is walked in the order
+  // the answer wants and SQLite stops at LIMIT — nothing to improve.
   if (!scope.clause && !prov.clause) return recentStmt.all(limit).map(parseEventRow).reverse();
-  return db
-    .query<any, any[]>(
-      `SELECT * FROM events WHERE 1=1${prov.clause}${scope.clause} ORDER BY timestamp DESC, id DESC LIMIT ?`
+  /*
+   * Ids first, then the rows.
+   *
+   * `SELECT *` with a filter the index cannot serve makes SQLite sort the whole
+   * matching set before it can know which 300 rows are the newest — and every
+   * row it drags through that sort carries its payload, which for this table is
+   * the prompt, the file contents and the command output. Measured on a real
+   * 476 MB cockpit database scoped to one project: 31,090 rows through a temp
+   * B-tree, 204 ms of a FULLY BLOCKED event loop, for 300 rows of answer.
+   *
+   * Sorting ids and fetching by primary key afterwards gives the identical
+   * list — asserted id-for-id in the test, and in the measurement — for 13 ms.
+   *
+   * That loop is the one the PTY pump and every HTTP handler ride, and this
+   * runs on every `/stream` connect: a visibility change, coming back online, a
+   * server restart, or the 30-second pong deadline. It is the terminal that
+   * stops echoing while it happens.
+   */
+  const ids = db
+    .query<{ id: number }, any[]>(
+      `SELECT id FROM events WHERE 1=1${prov.clause}${scope.clause} ORDER BY timestamp DESC, id DESC LIMIT ?`
     )
     .all(...prov.args, ...scope.args, limit)
+    .map((r) => r.id);
+  if (!ids.length) return [];
+  // The outer ORDER BY stays: `IN` says nothing about order, and this list has
+  // to come back newest-first before it is reversed for the client.
+  return db
+    .query<any, any[]>(
+      `SELECT * FROM events WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY timestamp DESC, id DESC`
+    )
+    .all(...ids)
     .map(parseEventRow)
     .reverse();
+}
+
+/**
+ * Bound the big strings inside a payload before it goes out on the wire.
+ *
+ * Measured on the `/stream` initial frame (300 events): 542 KB total, 374 KB
+ * (69%) of it `payload`, and ten events — full file writes, long command
+ * output — accounted for 150 KB of that on their own. The feed only ever reads
+ * a handful of short fields back out of a payload (labels.ts, derive.ts): a
+ * command, a path, a query, a message. Nothing on first paint reads the full
+ * body of a 30 KB file write; a chat pane resuming mid-turn (chatStore.ts,
+ * applyLiveEvent) does read a tool's real output, but for exactly the same
+ * reason a human reading it would want a preview, not a wall of text — the
+ * fold UI already collapses anything this long. Capped, not dropped: unlike
+ * the fields the client never reads, this one occasionally is.
+ */
+const PAYLOAD_STRING_CAP = 4000;
+export function capPayloadStrings<T>(value: T, max = PAYLOAD_STRING_CAP): T {
+  if (typeof value === "string") {
+    return (value.length > max ? `${value.slice(0, max)}…[+${value.length - max} chars]` : value) as unknown as T;
+  }
+  if (Array.isArray(value)) return value.map((v) => capPayloadStrings(v, max)) as unknown as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = capPayloadStrings(v, max);
+    return out as T;
+  }
+  return value;
 }
 
 // A tool call is "open" while its PreToolUse has no matching Post. The client
@@ -1802,14 +2751,52 @@ export function openToolCalls(): OpenToolCall[] {
  * this is the contents of a dropdown. A new app or model appearing thirty
  * seconds late costs nothing; the freeze costs the terminal.
  */
-const FILTER_TTL_MS = 30_000;
+/*
+ * The dropdowns only change when a value nobody has seen before arrives.
+ *
+ * This was a 30-second memo, so an idle machine recomputed three scoped
+ * SELECT DISTINCTs about once every forty seconds for ever, to produce the list
+ * it produced last time. The pattern that fits is the one `notePath` already
+ * uses two hundred lines up: hold what has been seen, test the event at the
+ * single write chokepoint, and drop the memo only on a miss — "so an idle
+ * machine with no tool traffic never invalidates".
+ *
+ * It is also better behaviour, not merely cheaper. A new agent or a new model
+ * appears in the dropdown on its FIRST event instead of up to thirty seconds
+ * later, which is the same argument `notePath` makes for a new worktree.
+ *
+ * The long TTL stays as the net for the one case a write cannot signal:
+ * retention pruning deleting the last event that carried a value, which is a
+ * DELETE, not an insert. Ten minutes of a dropdown offering a value whose rows
+ * have just aged out is a filter that finds nothing, not a wrong answer.
+ */
+const FILTER_TTL_MS = 10 * 60_000;
 let filterCache: { at: number; scope: string | null; data: ReturnType<typeof computeFilterOptions> } | null = null;
+/** The values the memo was built from, so an event can be tested against them
+ *  without a query. Rebuilt with the memo; null while there is none. */
+let filterSeen: { apps: Set<string>; types: Set<string>; models: Set<string> } | null = null;
+
+/** One ingested event, against the lists the dropdowns are showing. A value
+ *  that is not in them makes the memo stale — and nothing else does. */
+function noteFilterValues(app: unknown, type: unknown, model: unknown): void {
+  if (!filterSeen) return;
+  const missing =
+    (typeof app === "string" && app && !filterSeen.apps.has(app)) ||
+    (typeof type === "string" && type && !filterSeen.types.has(type)) ||
+    (typeof model === "string" && model && !filterSeen.models.has(model));
+  if (missing) { filterCache = null; filterSeen = null; }
+}
 
 export function getFilterOptions() {
   const scope = workspaceRoot();
   if (filterCache && filterCache.scope === scope && Date.now() - filterCache.at < FILTER_TTL_MS) return filterCache.data;
   const data = computeFilterOptions();
   filterCache = { at: Date.now(), scope, data };
+  filterSeen = {
+    apps: new Set(data.source_apps),
+    types: new Set(data.hook_event_types),
+    models: new Set(data.models),
+  };
   return data;
 }
 
@@ -1877,6 +2864,161 @@ function firstPrompts(ids: string[]): Map<string, string> {
       if (typeof p === "string" && p.trim()) out.set(r.session_id, p);
     } catch { /* a payload we cannot read is not a name */ }
   }
+  return out;
+}
+
+/**
+ * A short name for each of these sessions, by the same rule `getSessions`
+ * already draws its own list by: a rename, then the title Claude Code
+ * generated, then the first thing typed.
+ *
+ * Written for the Lantern, whose "seen" rows had nothing to call
+ * themselves but their own tmux pane id — `%32` — because a hook only carries
+ * a `sessionId`, and nobody had gone and asked what that session was
+ * actually named. The name was sitting in this same table the whole time,
+ * same as `firstPrompts` above: every session already has one, or the prompt
+ * that started it. "what the hell are they, what do they do" was the question a bare pane
+ * number cannot answer and this table already could.
+ *
+ * A handful of ids at a time — the panes a board is drawing right now — never
+ * the whole table, which is what `getSessions`'s own paging is for.
+ */
+export function sessionNames(ids: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  const holes = ids.map(() => "?").join(",");
+  const nameless: string[] = [];
+  for (const r of db.query<{ session_id: string; custom_title: string | null; ai_title: string | null }, string[]>(
+    `SELECT session_id, custom_title, ai_title FROM sessions WHERE session_id IN (${holes})`,
+  ).all(...ids)) {
+    const t = (r.custom_title || r.ai_title || "").trim();
+    if (t) out.set(r.session_id, t);
+    else nameless.push(r.session_id);
+  }
+  if (nameless.length) {
+    for (const [id, p] of firstDecentPrompts(nameless)) out.set(id, p);
+  }
+  return out;
+}
+
+/**
+ * Whether a prompt could name a session to a person.
+ *
+ * Measured on the Lantern the first time it drew real names: three of eighteen
+ * rows read `<cross-session-message from="uds:/run/user/…"` (a message another
+ * session sent), one read `/model` (a slash command), and one `Where did you
+ * leave off?` — a question, but at least a human one. The first two are not what
+ * anybody typed to start work; they are what happened to arrive first.
+ */
+function decentPrompt(p: string): boolean {
+  const t = p.trim();
+  if (!t || t.length < 3) return false;
+  if (t.startsWith("<") || t.startsWith("/") || t.startsWith("!")) return false;
+  if (/^(y|yes|no|ok|si|sí|vale|dale)\b/i.test(t) && t.length < 12) return false;
+  return true;
+}
+
+/**
+ * The first prompt a person could recognise the session by, per session.
+ *
+ * `firstPrompts` above takes the earliest prompt and is what the sessions page
+ * shows; this walks the first few and skips the ones that are not a name.
+ * Trimmed to one line of the width a row has.
+ */
+function firstDecentPrompts(ids: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  const holes = ids.map(() => "?").join(",");
+  const seen = new Map<string, number>();
+  for (const r of db.query<{ session_id: string; payload: string }, string[]>(
+    `SELECT session_id, payload FROM events
+     WHERE hook_event_type = 'UserPromptSubmit' AND session_id IN (${holes})
+     ORDER BY timestamp ASC, id ASC`).all(...ids)) {
+    if (out.has(r.session_id)) continue;
+    const n = (seen.get(r.session_id) ?? 0) + 1;
+    seen.set(r.session_id, n);
+    if (n > 6) continue; // six prompts in and still nothing to call it: the pane id will do
+    let p = "";
+    try { p = String(JSON.parse(r.payload)?.prompt ?? ""); } catch { continue; }
+    if (!decentPrompt(p)) continue;
+    out.set(r.session_id, p.replace(/\s+/g, " ").trim().slice(0, 80));
+  }
+  return out;
+}
+
+/** Why a session is stopped on a person, as the Lantern draws it. */
+export interface SessionWait {
+  kind: "permission" | "input";
+  /** The notification's own words, trimmed to a line. */
+  why: string;
+  since: number;
+}
+
+/**
+ * What a hook event says about whether its session is waiting on a person.
+ *
+ * Lantern reads this off the pane text — "your approval", "may I merge",
+ * "waiting on you" — with a regex. This app has the fact itself: Claude Code
+ * fires a `Notification` hook when it stops for a person. The same words
+ * alerts.ts already grades — measured over a week there: "needs your
+ * permission" / "approval" are the blockages, "waiting for your input" is a
+ * turn that ended and is waiting to be told what next. Both are somebody's
+ * to answer; the board tells them apart.
+ *
+ * Anything the session does AFTER — a tool call, a prompt, a stop — is the
+ * end of the wait, whatever it said. A notification that is merely news
+ * ("usage limit reset") changes nothing either way.
+ */
+const roleUpsert = db.query<never, [string, string, number]>(`INSERT INTO session_role (session_id, role, at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET role = excluded.role, at = excluded.at`);
+const roleAll = db.query<{ session_id: string; role: string }, []>(`SELECT session_id, role FROM session_role`);
+export function setSessionRole(sessionId: string, role: string, at = Date.now()): void { if (sessionId) roleUpsert.run(sessionId, role, at); }
+export function sessionRoles(): Map<string, string> { return new Map(roleAll.all().map((r) => [r.session_id, r.role])); }
+/** Sessions whose first prompt carries a marker — how the Lantern's chats
+ *  from before the role existed are found, once, at boot. */
+export function sessionsWhosePromptStarts(mark: string): string[] {
+  const out = new Set<string>();
+  for (const r of db.query<{ session_id: string }, [string]>(
+    `SELECT DISTINCT session_id FROM events WHERE hook_event_type = 'UserPromptSubmit' AND payload LIKE ?`).all(`%${mark}%`)) out.add(r.session_id);
+  return [...out];
+}
+
+export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {
+  /* The Lantern's own chat never waits on anybody in the board's sense: a
+     person asked it something and it answered. Its notifications are dropped
+     here, and any wait it once recorded is cleared. */
+  if (e.role === "lantern") {
+    if (typeof e.session_id === "string" && e.session_id) db.run(`DELETE FROM session_wait WHERE session_id = ?`, [e.session_id]);
+    return;
+  }
+  const session = typeof e.session_id === "string" ? e.session_id : "";
+  if (!session || session === "unknown") return;
+  if (e.hook_event_type === "Notification") {
+    const msg = String((e.payload as { message?: unknown } | undefined)?.message ?? "");
+    const kind = /needs your (permission|approval)/i.test(msg) ? "permission"
+      : /waiting for your input/i.test(msg) ? "input"
+        : null;
+    if (!kind) return;
+    try {
+      db.query("INSERT OR REPLACE INTO session_wait (session_id, kind, why, at) VALUES (?, ?, ?, ?)")
+        .run(session, kind, msg.replace(/\s+/g, " ").trim().slice(0, 160), at);
+    } catch { /* the board says a little less; the event still lands */ }
+    return;
+  }
+  try { db.query("DELETE FROM session_wait WHERE session_id = ?").run(session); } catch { /* same */ }
+}
+
+/** Which of these sessions are stopped on a person right now, and why. */
+export function latestWaits(ids: string[]): Map<string, SessionWait> {
+  const out = new Map<string, SessionWait>();
+  if (!ids.length) return out;
+  const holes = ids.map(() => "?").join(",");
+  try {
+    for (const r of db.query<{ session_id: string; kind: string; why: string; at: number }, string[]>(
+      `SELECT session_id, kind, why, at FROM session_wait WHERE session_id IN (${holes})`).all(...ids)) {
+      if (r.kind !== "permission" && r.kind !== "input") continue;
+      out.set(r.session_id, { kind: r.kind, why: r.why, since: r.at });
+    }
+  } catch { /* a database that cannot answer is not a reason to lose the board */ }
   return out;
 }
 

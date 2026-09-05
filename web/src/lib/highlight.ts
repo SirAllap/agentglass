@@ -9,13 +9,30 @@
 // giving the same look on ANY theme. Themes' own italic/bold are always honored.
 import type { Highlighter, ThemeRegistrationRaw } from "shiki";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import { onceOk } from "./onceOk.ts";
 
 // Lazy handle to the shiki module — imported once, shared by every helper, so
 // the whole library is a single on-demand chunk.
-let modP: Promise<typeof import("shiki")> | null = null;
-const shiki = () => (modP ??= import("shiki"));
+/*
+ * A FAILED load is not remembered. That is the whole point of the two catches
+ * below, and it was a real fault: a rejected promise cached here is cached for
+ * the life of the page, so one failed chunk fetch left every code block in the
+ * app flat grey until the app was restarted — reported exactly that way, "sometimes
+ * the code blocks lose their colour… I restart the app and look".
+ *
+ * And the failure is ordinary rather than exotic. These are dynamic chunks
+ * fetched from the local server at the moment a block first needs colour: a
+ * server restarting under a long-lived window (which is what installing a build
+ * does), a reload racing the first paint, a deploy whose hashed chunks moved.
+ * Any of them, once, and the handle below was poisoned for good.
+ */
+const shiki = onceOk(() => import("shiki"));
 
-let hp: Promise<Highlighter> | null = null;
+/** Same rule as `shiki` above, and the same reason: the highlighter is worth
+ *  sharing, the failure to build one is not. */
+const highlighter = onceOk(() =>
+  shiki().then((m) => m.createHighlighter({ themes: [], langs: [], engine: createJavaScriptRegexEngine() })));
+
 /**
  * The one shared highlighter, tokenizing with shiki's **JavaScript** RegExp
  * engine rather than its default Oniguruma one.
@@ -33,8 +50,7 @@ let hp: Promise<Highlighter> | null = null;
  * hostile or minimal policy can never silently leave highlighting broken.
  */
 export function getHighlighter(): Promise<Highlighter> {
-  if (!hp) hp = shiki().then((m) => m.createHighlighter({ themes: [], langs: [], engine: createJavaScriptRegexEngine() }));
-  return hp;
+  return highlighter();
 }
 
 // --- theme catalog (Shiki bundled ids), mirroring the user's Neovim themes ----
@@ -84,7 +100,28 @@ function boldify(theme: ThemeRegistrationRaw, id: string): ThemeRegistrationRaw 
   };
 }
 
-const loadedThemes = new Set<string>();
+/*
+ * What has been loaded, PER HIGHLIGHTER.
+ *
+ * These were two plain module-level Sets, which is right exactly as long as there
+ * is only ever one highlighter for the life of the page — and that stopped being
+ * true the moment a failed build stopped being cached (see `onceOk`): the second
+ * highlighter would be told "github-dark is already loaded", never load it, and
+ * then throw `Theme not found` on every block. A note about one object kept in a
+ * variable that outlives it is not a cache, it is a lie waiting for a retry.
+ *
+ * Caught by a suite that made two highlighters, which is also the only reason
+ * anybody would notice.
+ */
+const loadedThemes = new WeakMap<Highlighter, Set<string>>();
+const loadedLangs = new WeakMap<Highlighter, Set<string>>();
+
+/** The set for this highlighter, made on first use. */
+function seen(map: WeakMap<Highlighter, Set<string>>, hl: Highlighter): Set<string> {
+  let set = map.get(hl);
+  if (!set) { set = new Set<string>(); map.set(hl, set); }
+  return set;
+}
 
 /** Register one theme and return the name it was registered under. Rejects if
  *  the theme cannot be loaded — including for an id shiki doesn't bundle, which
@@ -92,7 +129,8 @@ const loadedThemes = new Set<string>();
  *  highlighter is the failure mode this whole module has to avoid. */
 async function loadInto(hl: Highlighter, id: string, bold: boolean): Promise<string> {
   const name = bold ? `${id}-bold` : id;
-  if (loadedThemes.has(name)) return name;
+  const done = seen(loadedThemes, hl);
+  if (done.has(name)) return name;
   if (!bold) {
     await hl.loadTheme(id as never); // shiki resolves the bundled id string
   } else {
@@ -101,11 +139,9 @@ async function loadInto(hl: Highlighter, id: string, bold: boolean): Promise<str
     if (!loader) throw new Error(`"${id}" is not a bundled shiki theme`);
     await hl.loadTheme(boldify((await loader()).default, id) as never);
   }
-  loadedThemes.add(name);
+  done.add(name);
   return name;
 }
-
-const loadedLangs = new Set<string>();
 
 /**
  * Load a grammar and make it ready to tokenize *correctly on the first call*.
@@ -132,7 +168,8 @@ const loadedLangs = new Set<string>();
  * also why this only ever bites once.
  */
 export async function ensureLanguage(hl: Highlighter, lang: string): Promise<void> {
-  if (loadedLangs.has(lang)) return;
+  const done = seen(loadedLangs, hl);
+  if (done.has(lang)) return;
   await hl.loadLanguage(lang as never);
   try {
     // Any registered theme will do; register the dark fallback if the theme
@@ -145,7 +182,7 @@ export async function ensureLanguage(hl: Highlighter, lang: string): Promise<voi
     // report, not this one's. Never let warming turn a working load into a
     // failed one.
   }
-  loadedLangs.add(lang);
+  done.add(lang);
 }
 
 /** Whichever theme a diff surface should actually tokenize with. `name` is

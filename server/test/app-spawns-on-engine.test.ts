@@ -63,9 +63,18 @@ describe("the engine's own window opener", () => {
     const fn = engine.slice(engine.indexOf("export async function engineWindowRunning"), engine.indexOf("export function engineWindowName"));
     expect(fn).toContain('await tmux(["has-session", "-t", `=${session}`])');
     expect(fn).toContain('await tmux(["new-session", "-d", "-s", session');
-    expect(fn).toContain('"new-window", "-P", "-F"');
-    // No socket argument anywhere: `tmux()` in this module always adds -L and -f.
-    expect(fn).not.toContain("-L");
+    /* `-d` sits between them now: selecting the new window is opt-in, because a
+       window opened for the clone must not take the screen off whoever is
+       attached to that session. See buttons-open-where-you-are.test.ts. */
+    expect(fn).toContain('"new-window", ...(select ? [] : ["-d"])');
+    expect(fn).toContain('"-P", "-F"');
+    /* No socket argument anywhere: `tmux()` in this module always adds -L and
+       -f. Compared against the CODE with comments stripped — the prose next to
+       it says `tmux -L agentglass attach` while explaining who gets moved, and
+       a test that reads a whole function cannot tell one from the other. That
+       is a test arguing with its own documentation. */
+    const code = fn.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toContain("-L");
   });
 
   it("asks whether the session is there rather than using -A", () => {

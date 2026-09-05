@@ -21,7 +21,7 @@
 // the header. So the shell now reports its own failures and they are rendered
 // here, with the reason and the fix, beside the guess-check that came first.
 import { useEffect, useState } from "react";
-import { IS_DEMO, SERVER, SERVER_GUESSED, probeServer, sidecarFailure, onSidecarFailure, type ServerIdentity, type SidecarFailure } from "../lib/api.ts";
+import { IS_DEMO, SERVER, SERVER_GUESSED, probeServer, sidecarFailure, onSidecarFailure, type ServerIdentity, type SidecarFailure, whenServerUp } from "../lib/api.ts";
 
 /** How often to look again while the answer is wrong. Often enough that
  *  starting the server clears the banner without a reload, rare enough that a
@@ -42,6 +42,11 @@ export default function ServerBanner() {
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     const look = async () => {
+      // The gate first, then the probe. Asking the network before the shell
+      // has a server is one refused /health per launch — and this component's
+      // whole job is to report a server that is NOT coming, which the gate
+      // already waits for and releases on.
+      await whenServerUp();
       const now = await probeServer();
       if (stop) return;
       setIdentity(now);

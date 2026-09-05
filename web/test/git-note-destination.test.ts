@@ -46,7 +46,7 @@ describe("the destination inside a git notification", () => {
     // A Slack message, a build, a calendar reminder. None of these have a
     // checkout to open, and guessing one would send somebody somewhere wrong.
     for (const n of [
-      { summary: "David", body: "sent you a message about the pull request" },
+      { summary: "Ada", body: "sent you a message about the pull request" },
       { summary: "CI", body: "build finished" },
       { summary: "agentglass", body: "" },
       {},

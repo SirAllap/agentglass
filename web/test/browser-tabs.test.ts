@@ -8,7 +8,7 @@
  * show and no way back.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
-import { addTab, closeTab, MAX_TABS, newTab, patchTab, stepTab, tabLabel, __resetTabIds } from "../src/lib/browserTabs.ts";
+import { addTab, closeTab, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, __resetTabIds } from "../src/lib/browserTabs.ts";
 
 beforeEach(__resetTabIds);
 
@@ -198,5 +198,46 @@ describe("profiles", () => {
     const r = closeTab([only], only.id);
     expect(r.tabs.length).toBe(1);
     expect(r.tabs[0]!.profile).toBe("work");
+  });
+});
+
+/*
+ * A blank tab is not a page.
+ *
+ * It is the state between pressing Ctrl+T and typing something, and the panel
+ * already says so in the middle of the screen. A row for it in the sidebar is
+ * the same sentence said again, in a list of pages you actually have — "it
+ * should not count as a tab".
+ */
+describe("blank tabs", () => {
+  const blank = { ...newTab(), id: "b1" };
+  const real = { ...newTab("https://orbit.example/"), id: "r1", title: "Orbit" };
+
+  it("a blank one is one with no address and no title", () => {
+    expect(isBlank(blank)).toBe(true);
+    expect(isBlank(real)).toBe(false);
+    // A tab that has started loading has a title or an address, so it is a page
+    // from that moment on rather than from when it finishes.
+    expect(isBlank({ ...blank, url: "https://orbit.example/" })).toBe(false);
+    expect(isBlank({ ...blank, title: "Loading…" })).toBe(false);
+  });
+
+  it("the list draws pages only", () => {
+    expect(listable([blank, real]).map((t) => t.id)).toEqual(["r1"]);
+  });
+
+  /* Not drawn means not reachable, so one left in the background would be a tab
+     with no way back to it. */
+  it("one you have walked away from is dropped", () => {
+    expect(pruneBlank([blank, real], "r1").map((t) => t.id)).toEqual(["r1"]);
+  });
+
+  it("the one you are on survives — that is where you are about to type", () => {
+    expect(pruneBlank([blank, real], "b1").map((t) => t.id)).toEqual(["b1", "r1"]);
+  });
+
+  it("never nothing", () => {
+    // An empty list has no active tab and nowhere to type.
+    expect(pruneBlank([blank], "somebody-else")).toHaveLength(1);
   });
 });

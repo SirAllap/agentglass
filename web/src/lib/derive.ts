@@ -5,7 +5,32 @@ import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
 import type { AgentKind } from "./agents.ts";
 
-export type AgentStatus = "working" | "waiting" | "errored" | "idle";
+/**
+ * What is happening to this session *right now* — the axis the fleet's dot, the
+ * radar's blip and the header chip all read.
+ *
+ *  - `working`  something arrived recently, or a tool call is open and nothing
+ *               contradicts it.
+ *  - `waiting`  the last thing it did was ask you something: a permission
+ *               request, or a notification it raised.
+ *  - `stalled`  a tool call is open, has been open past the point where a
+ *               reader starts to wonder, AND the evidence says nothing has
+ *               moved since it opened. See `isStalled`.
+ *  - `errored`  it hit an error seconds ago and is still live.
+ *  - `failed`   it is over, and it ended badly — stopped mid-tool, or on an
+ *               error it never recovered from.
+ *  - `idle`     it is over, or has been quiet long enough to count as over.
+ *
+ * `stalled` and `failed` are the two verdicts here, and both are deliberately
+ * built from evidence rather than from a clock. That is not fastidiousness: a
+ * state that fires wrongly is worse than no state at all, because the first
+ * time a dot says "stalled" over a build that was merely slow, the dot stops
+ * being read — and every honest one after it is wasted. The elapsed-time
+ * thresholds this file used to ship were retired for exactly that reason, and
+ * putting one back with a better name would be the same mistake in new
+ * lettering.
+ */
+export type AgentStatus = "working" | "waiting" | "stalled" | "errored" | "failed" | "idle";
 
 /**
  * How a session *ended* — a separate question from whether it is *running*.
@@ -16,8 +41,11 @@ export type AgentStatus = "working" | "waiting" | "errored" | "idle";
  * question nobody answered are indistinguishable: three identical grey cards,
  * bottom-sorted, each needing a modal opened to tell them apart.
  *
- * Only meaningful once a card is idle — a session still working has no outcome
- * yet, and claiming one would be inventing information.
+ * Only meaningful once a run is over — a session still working has no outcome
+ * yet, and claiming one would be inventing information. `faulted` is the one
+ * answer the status axis also carries: the ladder promotes it to `failed`,
+ * because "it is over" and "it is over and broken" are not the same news and
+ * should not be the same grey card.
  */
 export type AgentOutcome =
   | "settled"     // reached a deliberate end with nothing trailing
@@ -34,7 +62,9 @@ export interface AgentCard {
   title?: string;
   model_name: string | null;
   status: AgentStatus;
-  /** Set on every card; only carries meaning while `status === "idle"`. */
+  /** Set on every card; only carries meaning once the run is over — `idle` or
+   *  `failed`, which is itself the `faulted` outcome promoted onto the status
+   *  axis so a bad ending is visible without reading a glyph. */
   outcome: AgentOutcome;
   lastAction: string;
   lastType: string;
@@ -121,6 +151,41 @@ const TOOL_RUN_WARN_MS = 5 * 60_000;
 // than one it hit and recovered from. Wide enough to cover the Stop that
 // normally trails a failure by a few seconds.
 const ERROR_TAIL_MS = 60_000;
+
+/**
+ * Stalled, precisely: an open tool call with nothing to show for itself.
+ *
+ * Three conditions, and all three have to hold.
+ *
+ *  1. A tool call is open. Silence between turns is not a stall — an agent that
+ *     finished its turn and is waiting for you to type is `idle` or `waiting`,
+ *     and there is nothing wedged about it.
+ *  2. The server's evidence verdict is `stuck`. That verdict comes from
+ *     server/src/evidence.ts and never from elapsed time: for an Edit it means
+ *     the file the call *named* has not changed since the call opened; for a
+ *     Read or a Glob it means the session has written nothing anywhere, and
+ *     there is no such thing as a slow Glob. A Bash call whose working
+ *     directory is moving is `working`, however long it runs, and a WebFetch —
+ *     which leaves nothing local to check — is `unknown` and can never reach
+ *     here. That last part is the whole design: the states we cannot see are
+ *     reported as unseen rather than rounded up into a scary one.
+ *  3. It has been open at least TOOL_RUN_WARN_MS. The verdict alone can be
+ *     reached three minutes in, and a red dot over a three-minute call is
+ *     noise. This floor is also the point at which the fleet already raises an
+ *     alert about the same call, so the dot and the alert now say the same
+ *     thing at the same moment instead of disagreeing for two minutes.
+ *
+ * A long-thinking agent fails (1) if it is between turns and (2) if it is
+ * inside a call that is visibly producing something. Both are the false
+ * positive worth caring about, and both are tested.
+ *
+ * Exported so the ladder in `deriveAgents` and the alert in `deriveAlerts`
+ * cannot drift apart about what a stall is — the moment they can, the panel and
+ * the chip start telling you different stories about one session.
+ */
+export function isStalled(a: AgentCard, now: number): boolean {
+  return !!a.runningTool && a.liveness === "stuck" && now - a.runningSince >= TOOL_RUN_WARN_MS;
+}
 
 /**
  * Why an agent stopped, in its own words.
@@ -412,12 +477,26 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     // Errored only on a RECENT error, not a lifetime count — one transient
     // failure early shouldn't paint a now-healthy agent red for its whole run.
     else if (now - a.lastErrorTs < STALL_MS) a.status = "errored";
+    // Below `errored` on purpose: an error twenty seconds ago is a session
+    // that is plainly still producing things, whatever an older open call
+    // looks like. Above `working`, because a stall is a *kind* of working
+    // that a green dot describes wrongly — the card is running and nothing is
+    // happening, and that is the one combination worth interrupting for.
+    else if (isStalled(a, now)) a.status = "stalled";
     else if (since < STALL_MS || running) a.status = "working";
     else a.status = "idle";
     a.outcome = deriveOutcome(a);
+    // A run that is over AND ended badly gets its own state rather than being
+    // a grey card with a small red glyph beside the metrics. The glyph was
+    // right about the fact and wrong about the weight: three finished cards
+    // sort together, look alike at a glance, and the one that died is the only
+    // one you needed to see. Promoting it here rather than inside
+    // `deriveOutcome` keeps that function's single question ("how did it end")
+    // separate from this one's ("what is it now").
+    if (a.status === "idle" && a.outcome === "faulted") a.status = "failed";
     // While a tool call is open, its live duration is the most informative
     // thing the card can say — better than the stale "PreToolUse · Bash".
-    if (a.status === "working" && running) {
+    if ((a.status === "working" || a.status === "stalled") && running) {
       // Past the point where a reader starts to wonder, say which of the two
       // things it is. Before that the duration speaks for itself and a verdict
       // on a ten-second call is noise.
@@ -465,7 +544,11 @@ export interface Alert {
  * would send you to read a stack trace when what it wants is a yes or a no.
  */
 export function deriveOutcome(a: AgentCard): AgentOutcome {
-  if (a.status !== "idle") return "unclear";
+  // `failed` is `idle` that has already been through this function once — the
+  // ladder promotes it from the `faulted` answer below. Accepting it here keeps
+  // the function idempotent, so a card re-derived from its own previous state
+  // does not lose the verdict it just earned.
+  if (a.status !== "idle" && a.status !== "failed") return "unclear";
   // It stopped on a question. The ladder above has already demoted this to idle
   // so it stops alerting forever; without this it would also become invisible,
   // which is the whole failure being fixed — the card most likely to want you
@@ -486,8 +569,10 @@ export function deriveOutcome(a: AgentCard): AgentOutcome {
 }
 
 /** Why a call was called stuck, in the reader's terms. The verdict is only
- *  useful if the sentence under it can be argued with. */
-function stuckBecause(a: AgentCard): string {
+ *  useful if the sentence under it can be argued with — which is also why the
+ *  fleet row shows it on the mark itself, and not only in an alert somebody has
+ *  to go and open. */
+export function stuckBecause(a: AgentCard): string {
   if (a.evidenceKind === "target") return "the file it named has not changed since it started";
   if (a.evidenceKind === "dir") return "nothing has moved in its working directory";
   return "the session has written nothing since it started";
@@ -502,21 +587,41 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
       // a card seeded without the blocking event in the buffer, which is the
       // only case left where we honestly do not know.
       out.push({ id: "wait:" + a.key, level: "warn", agent: a.key, text: a.needBecause || "waiting for approval / input", ts: a.lastSeen });
-    if (a.status === "errored")
-      out.push({ id: "err:" + a.key, level: "error", agent: a.key, text: `${a.errors} error(s) — last action ${a.lastAction}`, ts: a.lastSeen });
+    // `errored` paints the card and raises nothing.
+    //
+    // This used to push "N error(s) — last action PostToolUse · Bash" onto the
+    // WAITING ON YOU panel, and the panel's own doc says what belongs there:
+    // "everything that is waiting on you, with what can honestly be done about
+    // it". A tool call that failed is neither half. There is no action — the
+    // row's only affordance was "Go to its pane", and going there showed a
+    // session working away with nothing wrong, because by then there wasn't.
+    //
+    // Measured over 8 days of the real database, 465 error events: 464 had
+    // another event from the same session within 60 seconds, all 465 within
+    // five minutes, and NOT ONE was the last thing a session ever did. A
+    // session that actually dies is `failed`, and a session that is genuinely
+    // stopped raises `wait:` above or `stuck:` below — three states that ARE
+    // waiting on him, none of which this one implies.
+    //
+    // The red dot on the fleet card stays: that is information on a surface he
+    // chose to look at, which is where a recent failure belongs.
     // A long tool call used to raise the same warning whatever it was doing,
     // and asked the reader to guess: "long job or stuck?". Half of those were
     // healthy builds, which is how the warning stopped being read at all. The
     // evidence answers it now, and where it cannot, it says so instead of
     // pretending. A call that is visibly working raises nothing.
-    if (a.status === "working" && a.runningTool && now - a.runningSince >= TOOL_RUN_WARN_MS) {
-      const openFor = fmtMs(now - a.runningSince);
-      if (a.liveness === "stuck")
-        out.push({ id: "stuck:" + a.key, level: "error", agent: a.key, ts: a.runningSince,
-          text: `${a.runningTool} open ${openFor} with nothing to show for it — ${stuckBecause(a)}` });
-      else if (a.liveness === "unknown")
-        out.push({ id: "long:" + a.key, level: "warn", agent: a.key, ts: a.runningSince,
-          text: `${a.runningTool} running ${openFor} — nothing local to check, so this could be either` });
+    //
+    // Read off `a.status` rather than re-testing the evidence, so this alert
+    // and the dot in the fleet are the same fact rather than two computations
+    // of it. A stalled card raises exactly one stall alert, and a card that
+    // raises one is stalled.
+    if (a.status === "stalled" && a.runningTool) {
+      out.push({ id: "stuck:" + a.key, level: "error", agent: a.key, ts: a.runningSince,
+        text: `${a.runningTool} open ${fmtMs(now - a.runningSince)} with nothing to show for it — ${stuckBecause(a)}` });
+    } else if (a.status === "working" && a.runningTool && a.liveness === "unknown"
+      && now - a.runningSince >= TOOL_RUN_WARN_MS) {
+      out.push({ id: "long:" + a.key, level: "warn", agent: a.key, ts: a.runningSince,
+        text: `${a.runningTool} running ${fmtMs(now - a.runningSince)} — nothing local to check, so this could be either` });
     }
     // toolErrors, not errors: the denominator is tool calls, and an errored
     // LLM span or notification never enters it. With the all-events count this

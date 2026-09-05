@@ -12,6 +12,18 @@ Safety by design — it NEVER blocks your agents by accident:
   * if no one decides within the timeout → the server auto-allows
   * only sessions wired to this hook are gated; everything else is untouched
 
+How long it waits is per hook entry, because patience is not one number: a
+`Bash` matcher gating `rm -rf` is worth standing up for, a file write probably
+isn't. Each matcher in settings.json carries its own command line, so `--timeout`
+on that line is the per-matcher setting.
+
+    { "matcher": "Bash", "hooks": [{ "type": "command", "command":
+      "python3 hooks/gate_event.py --source-app my-project --timeout 900" }] }
+
+The server clamps what it is asked for, and its ceiling is the larger of 300s and
+its own AGENTGLASS_GATE_TIMEOUT — so a matcher wanting longer than five minutes
+needs that raised on the server too, or it is quietly held for five.
+
 Durable across a server restart: the hook picks the request id, so if the
 connection drops mid-wait (agentglass restarted, a crash, a proxy hanging up)
 it re-attaches to that same request instead of giving up and falling into the
@@ -21,7 +33,10 @@ Deny/allow are returned to Claude Code via the PreToolUse permissionDecision.
 
 Env:
     AGENTGLASS_SERVER   server base url (default http://127.0.0.1:4000)
-    AGENTGLASS_GATE_TIMEOUT  seconds to wait for a human (default 60)
+    AGENTGLASS_GATE_TIMEOUT  seconds to wait for a human (default 300)
+    AGENTGLASS_GATE_FAILCLOSED  "1" → an unreachable agentglass DENIES the call
+        instead of allowing it. Off by default; with it on, agentglass being
+        down blocks every gated call.
 """
 import argparse
 import json
@@ -92,7 +107,36 @@ def _shared_secret():
         return ""
 
 
-TIMEOUT = int(os.environ.get("AGENTGLASS_GATE_TIMEOUT", "60"))
+# The wait when nothing asks for anything else. Five minutes, not the one minute
+# this shipped with: the gate exists for the moments you are not at the desk, and
+# a window you cannot win auto-allows the very call it was raised to show you.
+#
+# The same number lives in GATE_DEFAULT_MS in server/src/gate.ts, because the
+# server clamps whatever we send here — two different values means the wait
+# somebody configured is not the wait they get. server/test/gate-defaults.test.ts
+# reads this line and fails if the two part company, so change them together.
+DEFAULT_TIMEOUT = 300
+
+
+def _seconds(raw, fallback):
+    """Seconds from something a human typed into a settings.json, or `fallback`.
+
+    Both sources — the environment and `--timeout` — are hand-edited, and a
+    traceback here is a broken gate on every single tool call. So a typo falls
+    back rather than raising, and `argparse` is deliberately not asked to do the
+    parsing: `type=int` makes it exit 2, and exit 2 from a PreToolUse hook is how
+    Claude Code spells *deny*. A mistyped timeout must not block anything.
+
+    Floored at 1s for the same reason the server floors it: a negative wait is an
+    instant auto-allow, which is the one outcome nobody asked for.
+    """
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return fallback
+
+
+TIMEOUT = _seconds(os.environ.get("AGENTGLASS_GATE_TIMEOUT"), DEFAULT_TIMEOUT)
 # Default is fail-open: if agentglass is unreachable, allow (never block agents
 # by accident). Set this to invert it — an unreachable control plane DENIES the
 # tool call. Opt-in, because with agentglass down every gated call is blocked.
@@ -123,8 +167,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source-app", default=os.path.basename(os.getcwd()))
     ap.add_argument("--server", default=DEFAULT_SERVER)
+    # Per-matcher patience. A settings.json entry is already per-matcher — it is
+    # the unit the `matcher` key selects — so the hook's own command line is the
+    # place a per-matcher setting belongs, and no second config file is needed.
+    ap.add_argument("--timeout", default=None,
+                    help="seconds to wait for a human, for this matcher only "
+                         "(overrides AGENTGLASS_GATE_TIMEOUT, default %d)" % DEFAULT_TIMEOUT)
     args = ap.parse_args()
     server = _agentglass_local_only(getattr(args, "server", None) or DEFAULT_SERVER)
+    # `None` falls through to TIMEOUT, which is the env var or the default.
+    timeout = _seconds(args.timeout, TIMEOUT)
 
     try:
         raw = sys.stdin.read()
@@ -142,7 +194,7 @@ def main():
         "session_id": payload.get("session_id") or "unknown",
         "tool_name": payload.get("tool_name") or "?",
         "tool_input": payload.get("tool_input") or {},
-        "timeout_ms": TIMEOUT * 1000,
+        "timeout_ms": timeout * 1000,
     }).encode("utf-8")
 
     # Carry the shared secret when the server has one. /gate is the control plane
@@ -180,7 +232,7 @@ def main():
     # just as the window closes still reaches us. Every drop inside it is a
     # reconnect, not a verdict: the request is persisted server-side, so giving
     # up early would convert "a human is deciding" into a silent auto-allow.
-    deadline = time.monotonic() + TIMEOUT + 10
+    deadline = time.monotonic() + timeout + 10
     out = None
     sent = True
     backoff = 0.5
@@ -189,7 +241,7 @@ def main():
     # refused connection for a full timeout would stall every gated tool call on
     # a machine where agentglass simply isn't running.
     try:
-        out = submit(TIMEOUT + 5)
+        out = submit(timeout + 5)
     except urllib.error.HTTPError:
         # The server answered, just not with a decision — retrying won't help.
         deadline = time.monotonic()

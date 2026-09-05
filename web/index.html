@@ -121,9 +121,31 @@
         if (!msg) return;
         var origin = (window.agentglass && window.agentglass.apiOrigin) || location.origin;
         var t0 = Date.now();
+        // ASK THE SHELL WHEN THERE IS ONE, because asking the network costs an
+        // error in the console — the browser logs every refused request, and
+        // this poll runs three times a second for as long as the sidecar takes.
+        // It was the last console error left at a cold start after the fetch
+        // and socket layers stopped asking early. The shell has known the
+        // answer since it started the sidecar; `sidecarUp` is that answer, read
+        // synchronously over the same bridge `apiOrigin` comes from.
+        //
+        // The fetch below stays for everything that is not the desktop shell —
+        // a phone, a paired browser tab — where there is nothing to ask.
+        var askShell = window.agentglass && typeof window.agentglass.sidecarUp === "function"
+          ? window.agentglass.sidecarUp
+          : null;
         function tick() {
           // Gone means React mounted and this whole subtree was replaced.
           if (!document.getElementById("ag-boot")) return;
+          if (askShell) {
+            var up = false;
+            try { up = askShell() === true; } catch (e) { up = false; }
+            msg.textContent = up
+              ? "loading the interface…"
+              : (Date.now() - t0 > 4000 ? "still starting the server…" : "starting the server…");
+            setTimeout(tick, up ? 500 : 300);
+            return;
+          }
           fetch(origin + "/health", { cache: "no-store" })
             .then(function (r) {
               if (!document.getElementById("ag-boot")) return;

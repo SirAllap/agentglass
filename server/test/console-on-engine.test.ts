@@ -56,8 +56,10 @@ describe("the console's engine session", () => {
 describe("how the server decides", () => {
   it("gives the console the engine whatever the terminal view is set to", () => {
     /* The setting is about YOUR terminal, where you may well want your own tmux
-       and your own sessions. The console is the app's. */
-    expect(terminal).toContain("const engine = d.console\n    ? engineConsoleArgv(startIn)");
+       and your own sessions. The console is the app's.
+       The bench is asked first — it is the same rule one step further, a tab
+       with a session of its own — and the console's branch is what is left. */
+    expect(terminal).toContain("d.console\n      ? engineConsoleArgv(startIn)");
   });
 
   it("still lets the terminal view choose", () => {

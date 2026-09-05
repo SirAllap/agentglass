@@ -139,7 +139,7 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
 
   return (
     <div className="flex-1 min-h-0 flex">
-    <div className="flex-1 min-w-0 agx-scroll overflow-y-auto">
+    <div className="flex-1 min-w-0 agx-scroll overflow-y-auto overflow-x-hidden">
       {note && <div className="px-3.5 py-1.5 text-[10.5px]" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>{note}</div>}
 
       {/* Above the groups rather than inside one: it filters both, and a filter
@@ -532,7 +532,7 @@ function Resources() {
   return (
     <div className="flex-1 min-h-0 flex">
     <div className="flex flex-col min-h-0 flex-1 min-w-0">
-      <div className="flex-1 min-h-0 agx-scroll overflow-y-auto">
+      <div className="flex-1 min-h-0 agx-scroll overflow-y-auto overflow-x-hidden">
         {/* Under the totals rather than over them: the numbers at the top are
             the machine's and do not move when you filter, and a box above them
             would suggest they do. */}
@@ -851,7 +851,7 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
   };
 
   return (
-    <div className="shrink-0 flex flex-col min-h-0 agx-scroll overflow-y-auto"
+    <div className="shrink-0 flex flex-col min-h-0 agx-scroll overflow-y-auto overflow-x-hidden"
       // 420 rather than 340: this holds absolute paths and full command lines,
       // and at 340 both wrapped over three lines each, which is how a detail
       // pane becomes harder to read than the row it replaced.
@@ -990,7 +990,7 @@ function Locks() {
 
   return (
     <div className="flex-1 min-h-0 flex">
-    <div className="flex-1 min-w-0 agx-scroll overflow-y-auto">
+    <div className="flex-1 min-w-0 agx-scroll overflow-y-auto overflow-x-hidden">
       {note && <div className="px-3.5 py-1.5 text-[10.5px]" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>{note}</div>}
 
       {/* The count of checkouts is not decoration: an empty list has to be

@@ -7,10 +7,16 @@ import type { AgentCard, AgentStatus } from "../lib/derive.ts";
 const STATUS_COLOR: Record<string, string> = {
   working: "var(--success)",
   waiting: "var(--warning)",
+  stalled: "var(--warning)",
   errored: "var(--error)",
+  failed: "var(--error)",
   idle: "var(--text4)",
 };
-const STATUS_ORDER: AgentStatus[] = ["working", "waiting", "errored", "idle"];
+/** Legend order. `stalled` and `failed` share a hue with the state above them,
+ *  which is deliberate — the dial has no room for a sixth colour anybody could
+ *  learn, and the shape carries the difference: a stalled blip wears a broken
+ *  ring nothing else on the dial has. */
+const STATUS_ORDER: AgentStatus[] = ["working", "waiting", "stalled", "errored", "failed", "idle"];
 /**
  * A finished blip, tinted by how it finished.
  *
@@ -98,7 +104,12 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
     return { a, x, y, frac: rawFrac, size: 3.4 + busy * 4.2, color };
   });
 
-  const counts = STATUS_ORDER.map((s) => ({ s, n: agents.filter((a) => a.status === s).length }));
+  // Every state the dial can show, minus the two exceptional ones when nothing
+  // is in them: a legend line reading "stalled 0" teaches nothing and costs the
+  // four everyday states a row of width on a narrow panel.
+  const counts = STATUS_ORDER
+    .map((s) => ({ s, n: agents.filter((a) => a.status === s).length }))
+    .filter(({ s, n }) => n > 0 || (s !== "stalled" && s !== "failed"));
 
   // Sweep trail: a fan of radial lines fading behind the leading edge.
   const TRAIL = 66;
@@ -218,6 +229,14 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
                   <circle cx={b.x} cy={b.y} r={b.size + (active ? 4 : 2.6)} fill={b.color} opacity={active ? 0.4 : 0.2} />
                   {/* core — dimmed when the position is recency fallback, not context */}
                   <circle cx={b.x} cy={b.y} r={active ? b.size + 1 : b.size} fill={b.color} opacity={b.frac == null ? 0.55 : 1} />
+                  {/* A stalled session wears a broken ring. Colour cannot carry
+                      it here — amber already means "waiting on you" — and at
+                      four pixels a blip has no room for a silhouette, so the
+                      difference goes outside the blip instead of inside it. */}
+                  {b.a.status === "stalled" && (
+                    <circle cx={b.x} cy={b.y} r={b.size + 4.5} fill="none" stroke={b.color}
+                      strokeWidth="1.2" strokeDasharray="2.4 2.4" opacity={0.9} />
+                  )}
                 </motion.g>
               );
             })}

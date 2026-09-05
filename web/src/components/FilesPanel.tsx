@@ -131,7 +131,7 @@ function FilesBody({ root, branch, active }: { root: string; branch: string; act
         </span>
       </div>
 
-      <div className="flex-1 min-h-0 agx-scroll overflow-y-auto">
+      <div className="flex-1 min-h-0 agx-scroll overflow-y-auto overflow-x-hidden">
         {q.trim() ? (
           mode === "names" ? <NameHits root={root} q={q} onOpen={open} onOpenDir={openDir} />
             : <ContentHits root={root} q={q} onOpen={open} />
