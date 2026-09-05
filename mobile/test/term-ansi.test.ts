@@ -22,7 +22,7 @@
  * reason look.test.ts does it.
  */
 import { describe, expect, test } from "bun:test";
-import { PHONE_ACCENTS, paletteFor, type Polarity } from "../../shared/palettes.ts";
+import { PANE, PHONE_ACCENTS, paletteFor, type AccentId, type Polarity } from "../../shared/palettes.ts";
 import { deriveAnsi } from "../../shared/termPalette.ts";
 import { counterTheme, terminalDocument, terminalTheme } from "../src/terminal/terminal-html.ts";
 
@@ -50,11 +50,18 @@ const FLOOR = 4.5;
 
 const POLARITIES: Polarity[] = ["dark", "light"];
 
+/** What the app actually paints with. Every palette below composes on PANE and
+ *  not on the module default, because these are contrast floors: measuring them
+ *  against a ground this app no longer wears would pass a terminal nobody can
+ *  read on the one it does. */
+const phone = (polarity: Polarity, accent: AccentId): ReturnType<typeof paletteFor> =>
+  paletteFor(polarity, accent, PANE);
+
 describe("every ANSI colour is readable on the surface it is painted on", () => {
   for (const polarity of POLARITIES) {
     for (const accent of PHONE_ACCENTS) {
       test(`${polarity} + ${accent.id}`, () => {
-        const p = paletteFor(polarity, accent.id);
+        const p = phone(polarity, accent.id);
         const theme = terminalTheme(p);
         for (const slot of ANSI) {
           const ratio = contrast(theme[slot]!, p.bg);
@@ -84,7 +91,7 @@ describe("sixteen slots hold sixteen colours", () => {
   for (const polarity of POLARITIES) {
     for (const accent of PHONE_ACCENTS) {
       test(`${polarity} + ${accent.id}`, () => {
-        const theme = terminalTheme(paletteFor(polarity, accent.id));
+        const theme = terminalTheme(phone(polarity, accent.id));
         const hexes = ANSI.map((slot) => theme[slot]!.toLowerCase());
         expect(new Set(hexes).size, hexes.join(" ")).toBe(16);
       });
@@ -96,7 +103,7 @@ describe("sixteen slots hold sixteen colours", () => {
     // reader lost: a cyan directory listing that was blue, an emphasised line
     // that was the same white as the rest, and a black that was the background.
     for (const polarity of POLARITIES) {
-      const p = paletteFor(polarity, "blue");
+      const p = phone(polarity, "blue");
       const theme = terminalTheme(p);
       expect(theme.cyan).not.toBe(theme.blue);
       expect(theme.brightWhite).not.toBe(theme.white);
@@ -112,7 +119,7 @@ describe("one derivation, not a second copy of it", () => {
      * desk and the phone are one product showing one machine's screens. This is
      * the assertion that keeps the rule in shared/ rather than beside it.
      */
-    const p = paletteFor("dark", "violet");
+    const p = phone("dark", "violet");
     const theme = terminalTheme(p);
     const ansi = deriveAnsi({
       bg: p.bg, text: p.text, primary: p.primary,
@@ -125,8 +132,8 @@ describe("one derivation, not a second copy of it", () => {
 describe("the other surface, carried in the page beside this one", () => {
   test("the counter set is the opposite polarity wearing the same accent", () => {
     for (const polarity of POLARITIES) {
-      const p = paletteFor(polarity, "amber");
-      const other = paletteFor(polarity === "dark" ? "light" : "dark", "amber");
+      const p = phone(polarity, "amber");
+      const other = phone(polarity === "dark" ? "light" : "dark", "amber");
       const counter = counterTheme(p);
       expect(counter.background).toBe(other.bg);
       expect(counter.foreground).toBe(other.text);
@@ -138,7 +145,7 @@ describe("the other surface, carried in the page beside this one", () => {
 
   test("and it is readable on its own background", () => {
     for (const polarity of POLARITIES) {
-      const counter = counterTheme(paletteFor(polarity, "blue"));
+      const counter = counterTheme(phone(polarity, "blue"));
       for (const slot of ANSI) {
         const min = slot === "black" && luminance(counter.background!) < 0.4 ? 2.5 : FLOOR;
         expect(contrast(counter[slot]!, counter.background!), `${slot} ${counter[slot]}`).toBeGreaterThanOrEqual(min);
@@ -155,7 +162,7 @@ describe("the other surface, carried in the page beside this one", () => {
      * dim by construction and this background is lighter than the one they were
      * derived for. Worst non-black at #1e1e1e is brightBlack at 4.78.
      */
-    const dark = terminalTheme(paletteFor("dark", "blue"));
+    const dark = terminalTheme(phone("dark", "blue"));
     for (const slot of ANSI) {
       const min = slot === "black" ? 2.2 : FLOOR;
       expect(contrast(dark[slot]!, "#1e1e1e"), `${slot} ${dark[slot]} on #1e1e1e`).toBeGreaterThanOrEqual(min);
@@ -166,9 +173,9 @@ describe("the other surface, carried in the page beside this one", () => {
     // Structural: the page picks between them by measuring the pane (see the
     // browser tests in pane-line.test.ts), and it cannot pick one it was never
     // given. Cheap, and it catches the counter being dropped on the way in.
-    const doc = terminalDocument({ palette: paletteFor("light", "blue"), columns: 80 });
-    expect(doc).toContain(JSON.stringify(terminalTheme(paletteFor("light", "blue"))));
-    expect(doc).toContain(JSON.stringify(counterTheme(paletteFor("light", "blue"))));
+    const doc = terminalDocument({ palette: phone("light", "blue"), columns: 80 });
+    expect(doc).toContain(JSON.stringify(terminalTheme(phone("light", "blue"))));
+    expect(doc).toContain(JSON.stringify(counterTheme(phone("light", "blue"))));
     expect(doc).toContain("var OWN = ");
   });
 });

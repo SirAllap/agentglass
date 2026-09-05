@@ -148,7 +148,7 @@ export default function NowScreen(): React.ReactNode {
       }
       ListHeaderComponent={
         <View style={{ gap: SPACE.xs, paddingBottom: SPACE.sm }}>
-          <Text style={{ color: C.text, fontSize: T.head, fontWeight: "700" }}>
+          <Text style={{ color: C.text, fontSize: T.display, fontWeight: "700", lineHeight: 31 }}>
             {waiting.length === 0
               ? "Nothing is waiting on you"
               : `${waiting.length} ${waiting.length === 1 ? "thing wants" : "things want"} you`}

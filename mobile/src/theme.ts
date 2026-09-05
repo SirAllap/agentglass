@@ -44,7 +44,7 @@
  * remember, which is exactly right.
  */
 import {
-  BASE, PHONE_ACCENTS, inkOn, paletteFor, polarityOf, sanitizeLook,
+  PANE, PHONE_ACCENTS, inkOn, paletteFor, polarityOf, sanitizeLook,
   type AccentId, type Look, type Palette, type Polarity, type ThemeMode,
 } from "../../shared/palettes.ts";
 
@@ -52,19 +52,27 @@ export type { AccentId, Look, Palette, Polarity, ThemeMode };
 export { PHONE_ACCENTS as ACCENTS };
 
 /*
- * Dark and blue, which is what this app looked like before it had a choice.
+ * Dark and teal, which is what this app looks like.
  *
- * Not System, and not Neutral, on purpose: both would repaint a phone that has
- * been in somebody's pocket for weeks the first time it updates. github-dark's
- * own primary was #58a6ff, so blue is the accent that leaves the app where it
- * was, and every change from here is one somebody made.
+ * It used to be dark and blue, and the reason given was that github-dark's own
+ * primary was #58a6ff, so blue left the app exactly where it was. That reason
+ * expired the moment the phone stopped wearing github-dark: it wears PANE now
+ * (see shared/palettes.ts), whose ground is darker, whose hairlines are quieter
+ * and whose default accent is the teal. Blue against that ground is the old app
+ * showing through the new one.
+ *
+ * Still not System and still not Neutral, and that half of the argument holds:
+ * both would repaint a phone that has been in a pocket for weeks the first time
+ * it updates, and a repaint nobody asked for is the one change a person cannot
+ * attribute to themselves. Anybody who chose an accent keeps it — `sanitizeLook`
+ * reads what was stored and this is only the fallback.
  */
-const SHIPPED: Look = { mode: "dark", accent: "blue" };
+const SHIPPED: Look = { mode: "dark", accent: "teal" };
 
 /** The live palette. Read it at render time — never destructure it into a
  *  module-level constant, which would freeze a screen in the palette that was
  *  current when its file was first evaluated. */
-export const C: Palette = { ...paletteFor("dark", SHIPPED.accent) };
+export const C: Palette = { ...paletteFor("dark", SHIPPED.accent, PANE) };
 
 let look: Look = { ...SHIPPED };
 let polarity: Polarity = "dark";
@@ -130,9 +138,9 @@ function systemIsDark(): boolean {
  */
 function paint(): void {
   polarity = polarityOf(look.mode, systemIsDark());
-  const next = paletteFor(polarity, look.accent);
+  const next = paletteFor(polarity, look.accent, PANE);
   let changed = false;
-  for (const key of Object.keys(BASE.dark) as (keyof Palette)[]) {
+  for (const key of Object.keys(PANE.dark) as (keyof Palette)[]) {
     if (C[key] !== next[key]) { C[key] = next[key]; changed = true; }
   }
   if (!changed) return; // a system event that resolved to the same surface
@@ -220,15 +228,78 @@ export function toneColor(tone: "crit" | "bad" | "good" | "plain"): string {
  * arm's length on a 27-inch monitor. Outdoors, in one hand, it does not.
  */
 export const T = {
+  /* Pane's ladder asks for 10.5 here and it does not get it. The rule above is
+     older and it wins: this is read outdoors, in one hand, by somebody deciding
+     whether a check failed. What makes an eyebrow an eyebrow is the tracking
+     and the caps, and Label already carries both — see ui.tsx. */
   eyebrow: 11,
   small: 12,
   body: 14,
-  title: 16,
+  title: 17,
   head: 20,
+  /* One line per screen, and only the line that says what the screen is FOR:
+     "3 things want you". It is not a title — a title names a thing and this
+     states a count, which is why the only place it appears is the top of Now.
+     A PR's own title is prose and stays at `head`, because 26pt of somebody
+     else's sentence is four lines before the screen has said anything. */
+  display: 26,
 } as const;
 
 export const SPACE = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 } as const;
-export const RADIUS = { sm: 6, md: 10, lg: 14 } as const;
+
+/*
+ * Corners, and the ladder is deliberately not even.
+ *
+ * `sm` and `md` sit two points apart on purpose. Small furniture — a key, a
+ * chip, a badge — is nearly a rectangle with the corner taken off, and a
+ * control is barely rounder. That is the whole of the shape language for
+ * everything you press: flat, quiet, and not competing with the words in it.
+ * A phone screen at 393 points is mostly small furniture, and a ladder that
+ * separates each rung visibly ends up with eight different corners on one
+ * screen, which reads as several apps stacked.
+ *
+ * Then there is exactly ONE round thing, and `pill` is it: a capsule, for the
+ * one surface per screen that is a place to type or a single filter. Being far
+ * away from the rest is the point — one round shape among rectangles is a
+ * signal, and three sizes of round is decoration.
+ *
+ * `lg` is the middle: cards, sheets and grouped rows. It went 14 → 16 when `sm`
+ * went 6 → 8, because it is the container those small things sit inside and a
+ * container whose corner is tighter than its contents' looks like a mistake.
+ */
+export const RADIUS = { sm: 8, md: 10, lg: 16, pill: 22 } as const;
+
+/**
+ * A palette colour at low opacity, as a wash behind text.
+ *
+ * Eight-digit hex rather than `rgba(…)` with the channels written out, because
+ * the channels are the point: a literal freezes whichever palette was current
+ * when somebody typed it, and the two places this is used — the diff's added
+ * and removed rows — carried github-dark's green and red long after the phone
+ * stopped wearing github-dark. The red had drifted a whole hue away from the
+ * `C.error` printed on the same row.
+ *
+ * Call it at render time. A tint hoisted to module scope is the same bug in a
+ * new place: it would hold the shipped palette through every theme change.
+ */
+export function tint(hex: string, alpha: number): string {
+  const pct = Math.round(Math.min(1, Math.max(0, alpha)) * 255);
+  return `${hex}${pct.toString(16).padStart(2, "0")}`;
+}
+
+/**
+ * The veil behind a sheet.
+ *
+ * A constant and not a palette entry, because a scrim's job is to darken what
+ * is behind it and that job does not change in Light — a pale veil over a pale
+ * page is a sheet with no edge. It is PANE's own ground at 55%, so the dark
+ * mode's dimmed background is the colour the app is already made of.
+ *
+ * One constant because there were two: a sheet dimmed to `rgba(1,4,9,.55)` and
+ * a modal on another screen to `rgba(0,0,0,.55)`, which are visibly different
+ * greys on the same phone thirty seconds apart.
+ */
+export const SCRIM = "rgba(10,12,16,0.55)";
 
 /** A monospace face that exists on Android, for a command or a branch name. */
 export const MONO = "monospace";

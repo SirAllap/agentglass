@@ -46,7 +46,7 @@ import {
 import { gapLabel, gapsIn, nextSlice, type Gap } from "../../src/model/expand.ts";
 import { draftCount, takeDraft, type LineNote } from "../../src/model/reviewDraft.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
-import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { C, MONO, RADIUS, SPACE, T, tint } from "../../src/theme.ts";
 
 /** The two backgrounds a changed line takes.
  *
@@ -55,8 +55,8 @@ import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
  *  marker column carries the sign as well, so the distinction survives for
  *  anybody who cannot rely on the tint. */
 function lineFace(kind: DiffLine["kind"]): { bg: string; mark: string; ink: string } {
-  if (kind === "add") return { bg: "rgba(63,185,80,0.14)", mark: "+", ink: C.success };
-  if (kind === "del") return { bg: "rgba(248,81,73,0.14)", mark: "−", ink: C.error };
+  if (kind === "add") return { bg: tint(C.success, 0.14), mark: "+", ink: C.success };
+  if (kind === "del") return { bg: tint(C.error, 0.14), mark: "−", ink: C.error };
   return { bg: "transparent", mark: " ", ink: C.text4 };
 }
 

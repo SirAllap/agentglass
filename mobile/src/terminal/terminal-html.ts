@@ -24,7 +24,7 @@
  */
 import { XTERM_CSS, XTERM_JS } from "./engine.generated.ts";
 import { NERD_ICONS_RANGE, NERD_ICONS_WOFF2_B64 } from "./nerdfont.generated.ts";
-import { BASE, type Palette } from "../../../shared/palettes.ts";
+import { PANE, type Palette } from "../../../shared/palettes.ts";
 import { contrastRatio, deriveAnsi } from "../../../shared/termPalette.ts";
 
 export interface TerminalDocOptions {
@@ -112,7 +112,11 @@ export function terminalTheme(palette: Palette): Record<string, string> {
 export function counterTheme(palette: Palette): Record<string, string> {
   const isLight = contrastRatio(palette.bg, "#000000") > contrastRatio(palette.bg, "#ffffff");
   return terminalTheme({
-    ...BASE[isLight ? "dark" : "light"],
+    // PANE and not BASE: this is the phone's own furniture in the polarity it
+    // is not currently wearing, so it has to be the phone's other half. Reading
+    // BASE here would drop github-light's paper into an app that is nowhere
+    // else painted with it.
+    ...PANE[isLight ? "dark" : "light"],
     primary: palette.primary,
     primaryHover: palette.primaryHover,
   });

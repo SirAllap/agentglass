@@ -44,7 +44,7 @@ import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { since } from "../../src/lib/dates.ts";
 import { hunkTail, ordered, replyAnchor, whereOf } from "../../src/model/threads.ts";
 import { Btn, Card, Label, Note, TAP } from "../../src/ui.tsx";
-import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+import { C, MONO, RADIUS, SCRIM, SPACE, T, tint } from "../../src/theme.ts";
 
 /** The diff hunk GitHub kept with the comment, trimmed to what fits.
  *  Kept because a reply written without seeing the code it is about is a reply
@@ -66,7 +66,7 @@ function Hunk({ text }: { text: string }): React.ReactNode {
             numberOfLines={1}
             style={{
               color: add ? C.success : del ? C.error : C.text3,
-              backgroundColor: add ? "rgba(63,185,80,0.12)" : del ? "rgba(248,81,73,0.12)" : "transparent",
+              backgroundColor: add ? tint(C.success, 0.12) : del ? tint(C.error, 0.12) : "transparent",
               fontSize: 10, fontFamily: MONO, lineHeight: 16, paddingHorizontal: SPACE.sm,
             }}
           >{line}</Text>
@@ -349,7 +349,7 @@ export default function ThreadsScreen(): React.ReactNode {
       {confirming ? (
         <View style={{
           position: "absolute", left: 0, right: 0, bottom: 0, top: 0,
-          backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end",
+          backgroundColor: SCRIM, justifyContent: "flex-end",
         }}>
           <View style={{
             backgroundColor: C.bg2, borderTopLeftRadius: RADIUS.lg, borderTopRightRadius: RADIUS.lg,

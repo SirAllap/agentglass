@@ -10,9 +10,10 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ACCENTS, BASE, PHONE_ACCENTS, accentFor, cssVars, inkOn, paletteFor, polarityOf, sanitizeLook,
+  ACCENTS, BASE, PANE, PHONE_ACCENTS, accentFor, cssVars, inkOn, paletteFor, polarityOf, sanitizeLook,
   type AccentId, type Palette, type Polarity,
 } from "../../shared/palettes.ts";
+import { tint } from "../src/theme.ts";
 
 const POLARITIES: Polarity[] = ["dark", "light"];
 const IDS = PHONE_ACCENTS.map((a) => a.id);
@@ -78,8 +79,11 @@ describe("the accent, laid over a base", () => {
     expect(PHONE_ACCENTS[0]?.id).toBe("neutral");
     expect(new Set(IDS).size).toBe(IDS.length);
     // The desk's six, unchanged and all present — this file adds an axis to the
-    // phone, it takes nothing off the desk.
-    expect(IDS.slice(1)).toEqual(["blue", "violet", "green", "amber", "rose", "cyan"]);
+    // phone, it takes nothing off the desk. Teal is the seventh and it is in
+    // ACCENTS rather than in a phone-only list on purpose: the rule above is
+    // that an accent named the same in both products IS the same hex, and a
+    // colour only one of them can spell would be the first exception to it.
+    expect(IDS.slice(1)).toEqual(["blue", "violet", "green", "amber", "rose", "cyan", "teal"]);
   });
 
   test("an accent nobody has heard of paints the base rather than throwing", () => {
@@ -87,6 +91,16 @@ describe("the accent, laid over a base", () => {
     // file says "purple" is worse than a phone with a blue cursor.
     const stray = accentFor("dark", "purple" as AccentId);
     expect(stray.primary).toBe(BASE.dark.primary);
+  });
+
+  test("the base it falls back to is the caller's, not this file's", () => {
+    /* The phone does not wear BASE any more, so this fallback is the one place
+       an unreadable preference could put the desk's blue on a PANE ground.
+       Reading the module constant here instead of the argument would do exactly
+       that, and it would only ever show on somebody's phone. */
+    const stray = accentFor("dark", "purple" as AccentId, PANE);
+    expect(stray.primary).toBe(PANE.dark.primary);
+    expect(stray.hover).toBe(PANE.dark.primaryHover);
   });
 });
 
@@ -201,5 +215,40 @@ describe("the bases are the desk's, not new colours", () => {
       // text3 is the note under a control — the smallest type on the screen.
       expect(contrast(base.text3, base.bg)).toBeGreaterThan(4.5);
     }
+  });
+});
+
+describe("tint", () => {
+  test("appends the alpha as two hex digits", () => {
+    // React Native reads #RRGGBBAA. Eight digits and not seven: a single digit
+    // makes a seven-character string, which RN silently draws as transparent.
+    expect(tint("#3fb950", 0.14)).toBe("#3fb95024");
+    expect(tint("#3fb950", 0.14).length).toBe(9);
+  });
+
+  test("a small alpha still gets two digits", () => {
+    // 0.02 * 255 rounds to 5, which is "5" before padding. This is the case the
+    // padStart exists for.
+    expect(tint("#000000", 0.02)).toBe("#00000005");
+  });
+
+  test("the ends are the ends", () => {
+    expect(tint("#ffffff", 0)).toBe("#ffffff00");
+    expect(tint("#ffffff", 1)).toBe("#ffffffff");
+  });
+
+  test("an alpha outside 0..1 is clamped rather than wrapped", () => {
+    /* Wrapping would be the worst failure available here: 1.2 * 255 is 306,
+       which is 0x132 — three digits, a ten-character colour, and RN draws
+       nothing. Clamping makes an out-of-range alpha merely wrong. */
+    expect(tint("#ffffff", 1.2)).toBe("#ffffffff");
+    expect(tint("#ffffff", -1)).toBe("#ffffff00");
+  });
+
+  test("it follows the live palette rather than a frozen hex", () => {
+    // The whole reason it exists: the diff's washes used to be github-dark's
+    // green and red written out as rgba(), on a phone that wears PANE.
+    expect(tint(PANE.dark.error, 0.14).startsWith(PANE.dark.error)).toBe(true);
+    expect(tint(PANE.light.error, 0.14).startsWith(PANE.light.error)).toBe(true);
   });
 });
