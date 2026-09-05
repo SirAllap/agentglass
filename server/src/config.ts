@@ -7,7 +7,7 @@
 // overrides the file without editing it.
 
 import type { Budget } from "../../shared/types.ts";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter } from "node:path";
 import { worktreeFamily } from "./worktree.ts";
@@ -421,7 +421,43 @@ export function scopeRoots(scope = workspaceRoot()): string[] {
  *  same input to the same root. */
 function resolveScope(asked: string): string {
   const abs = resolve(expand(asked));
-  return repoTop(abs) ?? abs; // a path that isn't a repo is still a scope
+  const top = repoTop(abs);
+  if (!top) return abs; // a path that isn't a repo is still a scope
+  /*
+   * git answers with the REAL path, and the path we were asked about may be
+   * reached through a symlink. That matters because this string is not used as
+   * a path — it is used as a PREFIX, against `project_path` and `cwd_path` on
+   * rows written by hooks, which spell the directory however the agent was
+   * launched with it. Two spellings of the same directory share no prefix, so
+   * handing back git's spelling filters out the very rows the scope exists to
+   * select, and the cockpit comes up empty with nothing to say about why.
+   *
+   * It is not an exotic setup. `~/code` symlinked onto another volume, a home
+   * directory behind an automounter, and `os.tmpdir()` on a machine that is not
+   * ours are all this. The last one is how it was found: this suite passed for
+   * months, then failed on an unchanged commit when the runner's temp directory
+   * moved behind a link.
+   *
+   * So git is asked the question it is uniquely good at — HOW MUCH of this path
+   * is the repository — and the answer is re-spelled in the caller's terms by
+   * trimming the same tail. The segment names are identical either way; only
+   * the prefix differs, which is exactly the part being replaced.
+   */
+  let real: string;
+  try {
+    real = realpathSync(abs);
+  } catch {
+    return top; // the directory went away mid-question; git's answer is all there is
+  }
+  if (real === top) return abs;
+  if (real.startsWith(top + sep)) {
+    const tail = real.length - top.length;
+    const mapped = abs.slice(0, abs.length - tail);
+    // Only when the tail really is a shared suffix. A path where it is not is
+    // not something to guess at — git's own answer is the safer wrong.
+    if (mapped && real.slice(top.length) === abs.slice(abs.length - tail)) return mapped;
+  }
+  return top;
 }
 
 /** git's own answer for "which repo is this", or null. */
