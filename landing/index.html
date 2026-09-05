@@ -3060,7 +3060,7 @@ ccT.textContent = STEPS[0].title; ccB.textContent = STEPS[0].body;
       <p class="dlb-na" data-na="mac-arm" hidden></p>
       <a class="dlb" data-dl="mac-x64" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Intel <span class="sz" data-size="mac-x64">.dmg</span></a>
       <p class="dlb-na" data-na="mac-x64" hidden></p>
-      <p class="dlc-f"><b>First run.</b> The build is unsigned, so Gatekeeper quarantines it and reports the app as <i>damaged</i>. It is not. Right-click the app ▸ <b>Open</b>, or clear the flag:</p>
+      <p class="dlc-f"><b>First run.</b> The build is unsigned, so Gatekeeper quarantines it and reports the app as <i>damaged</i>. It is not. On Apple silicon right-click ▸ <b>Open</b> does not clear this variant — run this once, then open it normally:</p>
       <code class="dlc-c">xattr -dr com.apple.quarantine /Applications/agentglass.app</code>
     </article>
 
@@ -3081,6 +3081,13 @@ sudo apt install ./agentglass_*.deb</code>
       <p class="dlb-na" data-na="win-exe" hidden></p>
       <p class="dlc-f"><b>First run.</b> Unsigned, so SmartScreen warns: <b>More info</b> ▸ <b>Run anyway</b>.</p>
       <p class="dlc-f"><b>Known gap.</b> The terminal panel is POSIX-only and does not work here yet (<a target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/issues/98">#98</a>). Everything else runs.</p>
+    </article>
+
+    <article class="dlc" data-os="android">
+      <header class="dlc-h"><span class="dlc-os">Android</span><span class="dlc-you">your phone</span></header>
+      <a class="dlb pri" data-dl="android" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Companion app <span class="sz" data-size="android">.apk</span></a>
+      <p class="dlb-na" data-na="android" hidden></p>
+      <p class="dlc-f"><b>First run.</b> Sideloaded, so Android asks you to allow installs from your browser once. Pair it with the desktop app by scanning a code — it reaches your machine over your own network, not through a server of ours.</p>
     </article>
   </div>
 

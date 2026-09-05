@@ -323,7 +323,7 @@ export function ViewRail({
           "put it at the bottom of the top group", and a container sized to its
           contents would have quietly refused. */}
       <div
-        className="flex-1 flex flex-col gap-1"
+        className="flex-1 min-h-0 flex flex-col gap-1"
         onDragOver={(e) => overDrawer(e, "work")}
         onDrop={commit}
       >
@@ -349,7 +349,11 @@ export function ViewRail({
         {dragging && !base.utility.length && !at(slot, "utility", 0) && <div className="h-6" />}
       </div>
 
-      <div className="flex flex-col gap-1">
+      {/* `shrink-0`: this cluster is the way back — Ports, Resources, Settings —
+          and it is the one thing on the rail that must never be the part that
+          gets pushed off the bottom. Reported from a short window: the
+          Resources button "looks cutoff". */}
+      <div className="shrink-0 flex flex-col gap-1">
         {/* A second hairline, because everything below is not a view at all:
             these open OVER whatever you are in and hand it straight back. A
             divider is the cheapest way to say "these do not change where you
@@ -398,7 +402,7 @@ export function ViewRail({
             data-tip={dragging
               ? "Drop to take it off the rail — it comes back from here"
               : `Hidden views · ${hiddenViews.length} put away`}
-            className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+            className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
             style={{
               color: aimingHidden ? "var(--error)" : restoreAt ? "var(--primary-hover)" : "var(--text4)",
               // Only while something is in the air. A dashed outline the rest of
@@ -424,7 +428,7 @@ export function ViewRail({
           onClick={() => onMachine("ports")}
           aria-label="Ports"
           data-tip="Ports · what is listening, and from which checkout"
-          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <PortsIcon size={ICON.rail} />
@@ -433,7 +437,7 @@ export function ViewRail({
           onClick={() => onMachine("resources")}
           aria-label="Resources"
           data-tip="Resources · CPU, memory and disk, by checkout"
-          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <ResourcesIcon size={ICON.rail} />
@@ -442,7 +446,7 @@ export function ViewRail({
           onClick={onSettings}
           aria-label="Settings"
           data-tip="Settings · preferences, exports, shortcuts"
-          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <RailGear size={ICON.rail} />
@@ -454,7 +458,7 @@ export function ViewRail({
           onClick={onSkills}
           aria-label="Skills catalog"
           data-tip="Skills catalog · what this fleet can do"
-          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <SkillsIcon size={ICON.rail} />
