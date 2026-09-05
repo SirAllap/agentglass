@@ -127,6 +127,7 @@ const PICKS = {
   "linux-appimage": [/\.AppImage$/i],
   "linux-deb": [/\.deb$/i],
   "win-exe": [/\.exe$/i, /\.msi$/i],
+  android: [/\.apk$/i],
 };
 
 /**
@@ -145,6 +146,7 @@ const NAMES = {
   "linux-appimage": "AppImage",
   "linux-deb": ".deb",
   "win-exe": "Windows installer",
+  android: "the Android app",
 };
 
 /** Bytes as something a human reads before clicking a 150 MB link. */

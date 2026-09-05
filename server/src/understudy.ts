@@ -384,9 +384,16 @@ export function setAllowed(id: string, allowed: boolean): void {
  * "an id, then allow it", and an id for something not registered would be
  * allowed into nothing while the panel said it worked.
  */
+/** A path this app will not read, refused by rule. Its message is ours. */
+export class SourceRefused extends Error {}
+
 export function addExtraSource(path: string, label?: string, kind?: "rules" | "precedents"): string {
   const refused = extraSourceError(path);
-  if (refused) throw new Error(refused);
+  /* Its own type, so a route can tell "this path is not one we read" — a
+     sentence written here, safe to show — from a filesystem or database error,
+     whose text carries absolute paths and internals a caller has no business
+     seeing. */
+  if (refused) throw new SourceRefused(refused);
   const st = load();
   const id = `added:${sha256(path).slice(0, 12)}`;
   if (st.extra.some((e) => e.id === id)) return id;

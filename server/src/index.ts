@@ -178,7 +178,7 @@ import { fetchCatalogue } from "./plugin-catalogue.ts";
 import {
   openStub, settleLedger, recordDecision, recordFence, scorecard,
   setMode, halt, setEnabled, enabled as understudyEnabled, sealSituation,
-  consent, setAllowed, addExtraSource, removeExtraSource, setNever, termsStatus,
+  consent, setAllowed, addExtraSource, SourceRefused, removeExtraSource, setNever, termsStatus,
   precedentCount, precedentsByClass,
   proposeScope, setProposeScope, quarantinedEver, openProjectNameAllowed,
   judgeEnabled, setJudge, isOpenProjectPath, OPEN_PARTITION, openProjectName, setOpenProject,
@@ -1346,7 +1346,7 @@ async function runOneSuiteWithRetry(cwd: string, timeoutMs: number, suite: { dir
     out: `${second.out.slice(-4000)}\n\n--- the first run of this suite was red and the second was green, unchanged. Treated as a flake, and the queue kept going. ---${named}`,
   };
 }
-import { ingest, policySummary } from "./understudy-ingest.ts";
+import { ingest, IngestRefused, policySummary } from "./understudy-ingest.ts";
 import { predictSealed } from "./understudy-predict.ts";
 import { ask, compiledRules } from "./understudy-ask.ts";
 import * as Shift from "./understudy-shift.ts";
@@ -3399,7 +3399,16 @@ const server = Bun.serve<WsData>({
       if (!p) return json({ ok: false, error: "not a path we can read" }, 400);
       let id: string;
       try { id = addExtraSource(p, b?.label, b?.kind); }
-      catch (e) { return json({ ok: false, error: String((e as Error)?.message ?? e) }, 400); }
+      catch (e) {
+        /* Only our own refusal reaches the caller. Anything else — a
+           filesystem error, a database error — is logged here and answered
+           with a fixed sentence: that text carries absolute paths and
+           internals, and a reader on the other end of the wire is owed the
+           decision, not the plumbing. */
+        if (e instanceof SourceRefused) return json({ ok: false, error: e.message }, 400);
+        console.error("[understudy] source/add:", e);
+        return json({ ok: false, error: "that path could not be added" }, 400);
+      }
       setAllowed(id, true);
       const { allow, extra } = consent();
       return json({ ok: true, id, sources: listSources(allow, extra) });
@@ -3491,7 +3500,12 @@ const server = Bun.serve<WsData>({
         broadcast({ type: "understudy", data: scorecard() });
         return json({ ok: true, learned: r });
       } catch (e) {
-        return json({ ok: false, error: String(e instanceof Error ? e.message : e) }, 409);
+        // Same rule as /understudy/source/add: our refusal by name, and
+        // nothing else. `IngestRefused` is the "no private-terms list" answer,
+        // which the screen shows and acts on.
+        if (e instanceof IngestRefused) return json({ ok: false, error: e.message }, 409);
+        console.error("[understudy] learn:", e);
+        return json({ ok: false, error: "it could not read the sources" }, 409);
       }
     }
 
@@ -3531,7 +3545,8 @@ const server = Bun.serve<WsData>({
           banked: bankByPartition(),
         });
       } catch (e) {
-        return json({ ok: false, error: String(e instanceof Error ? e.message : e) }, 400);
+        console.error("[understudy] ask:", e);
+        return json({ ok: false, error: "it could not answer that" }, 400);
       }
     }
     /*
