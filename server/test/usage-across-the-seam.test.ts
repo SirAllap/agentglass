@@ -46,19 +46,6 @@ for (const d of [PKG, OTHER]) mkdirSync(d, { recursive: true });
  * point of the two scoping tests below.
  */
 Bun.spawnSync(["git", "init", "-q", ROOT], { stdout: "ignore", stderr: "ignore" });
-/* TEMPORARY, and it comes out again the moment it has answered.
- * This suite fails only on the CI runner and passes in every environment that
- * can be built to imitate one, so the facts it depends on have to be read from
- * the machine that disagrees. bun prints assertion detail inline, and the log
- * API returns only the tail, which the detail has scrolled off — but the tail
- * always carries the failing test NAMES. So the facts ride in the names. */
-const DIAG = (() => {
-  const top = Bun.spawnSync(["git", "-C", PKG, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "pipe" });
-  let real = "?";
-  try { real = require("node:fs").realpathSync(ROOT); } catch { real = "THREW"; }
-  return `tmp=${tmpdir()} root=${ROOT} real=${real} top=${top.exitCode === 0 ? top.stdout.toString().trim() : `exit${top.exitCode}`}`;
-})();
-
 process.env.AGENTGLASS_DB = join(dir, "seam.db");
 process.env.AGENTGLASS_ROOT = ROOT;
 process.env.XDG_CONFIG_HOME = dir;
@@ -104,8 +91,8 @@ function fold(over: {
   events?: number;
   input_tokens?: number;
   cost_usd?: number;
-}) {
-  db.db.run(
+}, mod: typeof import("../src/db.ts") = db) {
+  mod.db.run(
     `INSERT INTO daily_rollup (day, project_path, session_id, source_app, model_name, provider,
        events, tool_calls, tool_errors, errors, input_tokens, output_tokens,
        cache_creation_tokens, cache_read_tokens, cost_usd, duration_ms_total, timed_calls)
@@ -124,21 +111,50 @@ function fold(over: {
 
 const byDay = <T extends { day: string }>(days: T[], d: string) => days.find((x) => x.day === d);
 
-beforeAll(async () => {
-  db = await import("../src/db.ts");
+/* TEMPORARY, and it comes out again the moment it has answered.
+ * This suite fails only on the CI runner and passes in every environment that
+ * can be built to imitate one, so the facts have to be read from the machine
+ * that disagrees. bun prints assertion detail inline and the log API returns
+ * only the tail, by bytes, so the detail has always scrolled off before it
+ * reaches me — but the tail always carries the failing test NAMES.
+ *
+ * Round one put the paths in the names and ruled them out: tmp, root, realpath
+ * and git's own toplevel came back identical on the runner, so the scope is
+ * exactly right and the question is the data. This round reports the data.
+ *
+ * The fixtures run at module scope rather than in beforeAll so their outcome
+ * exists by the time the describe titles are built. Top-level await, because
+ * db.ts is an async module and require() refuses it. */
+db = await import("../src/db.ts");
 
-  // Rollup side.
-  fold({ day: OLD, session_id: "seam-old", events: 7, input_tokens: 700, cost_usd: 3 });
-  fold({ day: SPLIT, session_id: "seam-split", events: 3, input_tokens: 300, cost_usd: 1 });
-  // The same day in a project this scope does not cover.
-  fold({ day: OLD, session_id: "seam-elsewhere", project_path: OTHER, events: 99, cost_usd: 99 });
-
-  // Events side. Two on the split day under the SAME session as its folded
-  // half, plus one live today.
-  db.insertEvent(event({ timestamp: noonOn(SPLIT), session_id: "seam-split" }) as any);
-  db.insertEvent(event({ timestamp: noonOn(SPLIT) + 1000, session_id: "seam-split" }) as any);
-  db.insertEvent(event({ timestamp: Date.now() - 60_000, session_id: "seam-live" }) as any);
-});
+const DIAG = await (async () => {
+  try {
+    fold({ day: OLD, session_id: "seam-old", events: 7, input_tokens: 700, cost_usd: 3 });
+    fold({ day: SPLIT, session_id: "seam-split", events: 3, input_tokens: 300, cost_usd: 1 });
+    fold({ day: OLD, session_id: "seam-elsewhere", project_path: OTHER, events: 99, cost_usd: 99 });
+    db.insertEvent(event({ timestamp: noonOn(SPLIT), session_id: "seam-split" }) as any);
+    db.insertEvent(event({ timestamp: noonOn(SPLIT) + 1000, session_id: "seam-split" }) as any);
+    db.insertEvent(event({ timestamp: Date.now() - 60_000, session_id: "seam-live" }) as any);
+    const one = (sql: string): string => {
+      try { return String(Object.values(db.db.query(sql).get() ?? {})[0] ?? "null"); }
+      catch (e) { return `ERR:${(e as Error).message.slice(0, 30)}`; }
+    };
+    let days = "?";
+    try { days = db.dailyUsage().map((x: any) => x.day).join("|") || "EMPTY"; }
+    catch (e) { days = `ERR:${(e as Error).message.slice(0, 40)}`; }
+    const cfg = await import("../src/config.ts");
+    return [
+      `roll=${one("SELECT COUNT(*) FROM daily_rollup")}`,
+      `ev=${one("SELECT COUNT(*) FROM events")}`,
+      `evpath=${one("SELECT project_path FROM events LIMIT 1")}`,
+      `scope=${cfg.workspaceRoot()}`,
+      `want=${OLD}|${SPLIT}|${LIVE}`,
+      `got=${days}`,
+    ].join(" ");
+  } catch (e) {
+    return `PROBE-THREW:${(e as Error).message.slice(0, 140)}`;
+  }
+})();
 
 describe(`one continuous series across the retention boundary ${DIAG}`, () => {
   test("days from both sides are present, in order", () => {
