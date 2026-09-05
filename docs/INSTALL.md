@@ -291,6 +291,20 @@ make desktop-open DIR=~/code/my-project   # or: agentglass ~/code/my-project
 
 ---
 
+**Power.** The desktop app can keep the machine awake while agents work. A button
+in the header cycles three modes — **On** (awake continuously), **Agent** (awake
+only while something is working, polled from `GET /agents/working` every 20
+seconds) and **Off** (normal system sleep) — and the choice is saved to
+`~/.config/agentglass/power.json`. The default is **Agent**, the one mode that
+costs nothing when nothing is working. "Working" is judged from live state, not
+from what an agent last said: a chat pane mid-turn, a Clone run still running
+(staled out after two hours, so a run killed mid-task cannot hold the lid), a
+hook that fired in the last ten minutes from any session on the machine — the
+ones in your own terminals included — or a named agent whose pane still exists.
+On Linux the hold is `systemd-inhibit` (sleep and the lid switch) plus Electron's
+display blocker; on macOS it is the display blocker plus an app-suspension
+assertion.
+
 ## Updating
 
 **Settings ▸ About** shows the version you are running, the commit it was built from, and whether a newer **release** is published. One click builds it and restarts.
