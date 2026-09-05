@@ -57,6 +57,24 @@ import type { AgentSessionRow } from "../../../shared/types.ts";
 
 /** The last segment of a path, which is what a person calls a checkout — the
  *  same rule src/terminal/tabs.ts uses to name a window. */
+/*
+ * The picture and the microphone are wired and do not work, so they are drawn
+ * disabled rather than drawn as if they might.
+ *
+ * Both need a computer to finish: the attach path wants a server that will take
+ * the upload, and dictation wants a transcriber configured on the machine.
+ * Neither is a phone-side change and neither is being guessed at from here.
+ *
+ * Drawn and dimmed rather than removed, which is the opposite call to the one
+ * `80c`, `line` and `fit` got. Those were controls that WORKED and duplicated
+ * something else; these are controls that do not work yet, and a row that
+ * silently loses them says the feature was dropped. A dimmed one says "not
+ * this build", which is true. The wiring below is untouched — `attach` and
+ * `dictate` still exist and still do what they did — so re-enabling is this
+ * line and nothing else.
+ */
+const HARDWARE_READY = false;
+
 const leafOf = (path: string): string => path.split("/").filter(Boolean).pop() ?? path;
 
 import { fileFrom, pastePayload, type Uploaded } from "../../src/terminal/imagePaste.ts";
@@ -1712,7 +1730,7 @@ export default function TerminalScreen(): React.ReactNode {
         */}
         <View style={{ paddingHorizontal: SPACE.sm, paddingBottom: SPACE.sm }}>
           <View style={{
-            flexDirection: "row", alignItems: "flex-end", gap: 2,
+            flexDirection: "row", alignItems: "center", gap: 2,
             backgroundColor: C.bg2, borderWidth: 1,
             // The one border on this row, and it is the field's. In `keys` it
             // takes the accent, because the field behaving differently is the
@@ -1733,7 +1751,10 @@ export default function TerminalScreen(): React.ReactNode {
                 // Said differently in the two cases, because they behave
                 // differently and a field that lies about which one it is in is
                 // worse than one that says nothing.
-                : mirror ? "This is the pane's line — type into it" : "Write a line for this pane"
+                // Short enough to fit. The old one wrapped at this width, and
+                // a wrapped placeholder was the row breaking its own layout
+                // before anybody had typed anything.
+                : mirror ? "The pane's line" : "Write a line"
               : "Nothing is open"}
             placeholderTextColor={C.text4}
             editable={!!open}
@@ -1756,11 +1777,22 @@ export default function TerminalScreen(): React.ReactNode {
             // preference: prediction rewrites characters it has already given
             // up, and those have gone down the socket.
             keyboardType={raw ? (Platform.OS === "android" ? "visible-password" : "ascii-capable") : "default"}
-            // Multiline so a long command wraps and the field grows to about
-            // five lines, but the return key SENDS rather than adding a line —
-            // this is a terminal, and Enter has meant "run it" the whole time.
-            // A newline can still arrive by paste, and `submit` handles that.
-            multiline
+            /*
+             * One line, and it does not grow. It used to be `multiline` with a
+             * 120pt ceiling, which meant the pill got taller as you typed and
+             * the three icons beside it slid down with it — the row reorganised
+             * itself under the thumb that was using it, and a placeholder long
+             * enough to wrap did it before a single character was typed.
+             *
+             * A terminal line is a line. It scrolls sideways here exactly as it
+             * scrolls sideways in the pane, which is the behaviour the thing
+             * being typed into already has, and the row is now a fixed height
+             * that nothing can push around.
+             *
+             * Enter still sends rather than inserting a newline, which is what
+             * it always did — this is a terminal and Enter has meant "run it"
+             * the whole time.
+             */
             submitBehavior="submit"
             /*
              * There is no onKeyPress here any more, and its absence is the fix
@@ -1787,9 +1819,12 @@ export default function TerminalScreen(): React.ReactNode {
               // number for a field would pass the test on somebody else's
               // reason. It costs nothing here — the icons beside it are 44, so
               // the pill is the same height either way.
-              flex: 1, minHeight: TAP, maxHeight: 120,
+              // A fixed height rather than a floor and a ceiling: `minHeight`
+              // with `multiline` is what let this grow. TAP is still the number,
+              // for the same reason as before — the icons beside it are 44.
+              flex: 1, height: TAP,
               backgroundColor: "transparent", color: C.text,
-              paddingTop: SPACE.sm, paddingBottom: SPACE.sm, paddingRight: SPACE.xs,
+              paddingVertical: 0, paddingRight: SPACE.xs,
               fontSize: T.body, fontFamily: MONO,
             }}
           />
@@ -1810,21 +1845,27 @@ export default function TerminalScreen(): React.ReactNode {
           */}
           <Pressable
             onPress={() => { void attach(); }}
-            disabled={!open || sending}
+            disabled={!HARDWARE_READY || !open || sending}
             accessibilityRole="button"
-            accessibilityLabel="Attach a picture to this pane"
+            accessibilityState={{ disabled: !HARDWARE_READY }}
+            accessibilityLabel={HARDWARE_READY
+              ? "Attach a picture to this pane"
+              : "Attach a picture — not available in this build"}
             // 40 wide rather than 44, and the eight points that buys across
             // the two icons are what keep the field readable at this width. The
             // HEIGHT stays at the 44 floor, which is the axis a thumb misses on.
             style={({ pressed }) => ({
               width: 40, height: TAP, alignItems: "center", justifyContent: "center",
-              borderRadius: RADIUS.md,
-              opacity: !open ? 0.4 : pressed ? 0.5 : 1,
+              // The pill's own roundness, not the ladder's control radius. A
+              // 10pt corner inside a 22pt capsule reads as a button escaping
+              // the thing it sits in — which is exactly what it looked like.
+              borderRadius: RADIUS.pill,
+              opacity: !HARDWARE_READY ? 0.28 : !open ? 0.4 : pressed ? 0.5 : 1,
             })}
           >
             {sending
               ? <ActivityIndicator color={C.text3} size="small" />
-              : <ImageIcon color={C.text3} size={19} />}
+              : <ImageIcon color={HARDWARE_READY ? C.text3 : C.text4} size={19} />}
           </Pressable>
           {/* The microphone, beside the picture, for the same reason: what is
               being said is part of the line being written, not a separate
@@ -1834,22 +1875,28 @@ export default function TerminalScreen(): React.ReactNode {
               your turn to hold on. */}
           <Pressable
             onPress={() => { void dictate(); }}
-            disabled={!open || hearing === "thinking"}
+            disabled={!HARDWARE_READY || !open || hearing === "thinking"}
             accessibilityRole="button"
-            accessibilityLabel={hearing === "listening" ? "Stop and transcribe" : "Speak a line"}
+            accessibilityState={{ disabled: !HARDWARE_READY }}
+            accessibilityLabel={!HARDWARE_READY
+              ? "Speak a line — not available in this build"
+              : hearing === "listening" ? "Stop and transcribe" : "Speak a line"}
             style={({ pressed }) => ({
               width: 40, height: TAP, alignItems: "center", justifyContent: "center",
-              borderRadius: RADIUS.md,
+              borderRadius: RADIUS.pill, // same reason as the picture above
               // Filled only while it is listening. Inside the pill an idle fill
               // would be a button drawn on top of a field; a live one is the
               // one state on this row that has to be unmissable.
               backgroundColor: hearing === "listening" ? C.error : "transparent",
-              opacity: !open ? 0.4 : pressed ? 0.5 : 1,
+              opacity: !HARDWARE_READY ? 0.28 : !open ? 0.4 : pressed ? 0.5 : 1,
             })}
           >
             {hearing === "thinking"
               ? <ActivityIndicator color={C.text3} size="small" />
-              : <MicIcon color={hearing === "listening" ? ink(C.error) : C.text3} size={19} />}
+              : <MicIcon
+                  color={hearing === "listening" ? ink(C.error) : HARDWARE_READY ? C.text3 : C.text4}
+                  size={19}
+                />}
           </Pressable>
           {/* Send, or Enter — the same thing the return key does, put where a
               thumb already is. */}
@@ -1859,7 +1906,10 @@ export default function TerminalScreen(): React.ReactNode {
             accessibilityLabel={raw ? "Enter" : "Send this line to the pane"}
             disabled={!canSend}
             style={{
-              width: 40, height: TAP, borderRadius: RADIUS.md,
+              // The one that had to change most: filled, and at the ladder's
+              // control radius it was a 10pt rectangle sitting inside a 22pt
+              // capsule with its corners visibly proud of it.
+              width: 40, height: TAP, borderRadius: RADIUS.pill,
               alignItems: "center", justifyContent: "center",
               // The only filled thing inside the pill, because it is the only
               // one that DOES something to what has been typed.
