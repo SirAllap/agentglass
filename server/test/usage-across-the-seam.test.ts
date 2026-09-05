@@ -25,6 +25,27 @@ const ROOT = join(dir, "proj");
 const PKG = join(ROOT, "packages", "api"); // a monorepo subdir, not the root
 const OTHER = join(dir, "other");
 for (const d of [PKG, OTHER]) mkdirSync(d, { recursive: true });
+/*
+ * ROOT is a real repository, and that is load-bearing rather than set dressing.
+ *
+ * `resolveScope` answers "which project is this" with git's own answer —
+ * `git -C <dir> rev-parse --show-toplevel` — so that pointing the cockpit at a
+ * package inside a monorepo scopes it to the monorepo. git resolves that by
+ * walking UP, and it does not stop at the directory it was asked about. So when
+ * the temp directory this fixture lives in happens to sit inside somebody's
+ * repository, the scope silently becomes THAT repository instead of ROOT, and
+ * every scoped read in this file is answering about the wrong project.
+ *
+ * That is not hypothetical: it is what `os.tmpdir()` resolves to on the machine
+ * that runs this, which is not ours and can change under us. This suite passed
+ * for months and then failed on an unchanged commit, on ten of its twelve
+ * tests, because the runner's temp directory moved under a repository.
+ *
+ * Making ROOT a repository pins the answer: `--show-toplevel` from PKG stops
+ * here, whatever is above `dir`. OTHER stays outside it, which is the whole
+ * point of the two scoping tests below.
+ */
+Bun.spawnSync(["git", "init", "-q", ROOT], { stdout: "ignore", stderr: "ignore" });
 process.env.AGENTGLASS_DB = join(dir, "seam.db");
 process.env.AGENTGLASS_ROOT = ROOT;
 process.env.XDG_CONFIG_HOME = dir;
