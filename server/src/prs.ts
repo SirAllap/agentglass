@@ -15,6 +15,7 @@
 //    so every mutation goes through `writeGuard` and the irreversible ones are
 //    named separately from the rest.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
@@ -1784,7 +1785,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
         for (const r of page.rows) noteTalk(repo, r);
       }
     } catch (e) {
-      listCache.set(key, keep({ loading: false, checksPending: false, error: String(e) }));
+      listCache.set(key, keep({ loading: false, checksPending: false, error: failed("prs/list", e, "the pull requests could not be read") }));
     } finally {
       inflight.delete(key);
     }

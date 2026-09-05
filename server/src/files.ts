@@ -17,6 +17,7 @@
 // `../../../etc` is a file server for the whole machine.
 
 import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { failed } from "./refused.ts";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
@@ -138,7 +139,7 @@ export function fileTree(rootIn: unknown, relIn: unknown): TreeReport {
   if ("error" in at) return { ok: false, root: "", rel: "", entries: [], error: at.error };
 
   let names: string[];
-  try { names = readdirSync(at.abs); } catch (e) { return { ok: false, root: at.root, rel: at.rel, entries: [], error: String(e) }; }
+  try { names = readdirSync(at.abs); } catch (e) { return { ok: false, root: at.root, rel: at.rel, entries: [], error: failed("files/tree", e, "that directory could not be read") }; }
 
   const marks = statusMarks(at.root);
   const entries: FileEntry[] = [];
@@ -492,7 +493,7 @@ export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): File
   if (st.isDirectory()) return { ok: false, rel: at.rel, text: "", bytes: 0, error: "that is a directory" };
 
   let buf: Buffer;
-  try { buf = readFileSync(at.abs); } catch (e) { return { ok: false, rel: at.rel, text: "", bytes: 0, error: String(e) }; }
+  try { buf = readFileSync(at.abs); } catch (e) { return { ok: false, rel: at.rel, text: "", bytes: 0, error: failed("files/text", e, "that file could not be read") }; }
 
   const head = buf.subarray(0, 8192);
   if (head.includes(0)) return { ok: false, rel: at.rel, text: "", bytes: st.size, error: "that file is binary" };
