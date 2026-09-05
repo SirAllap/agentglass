@@ -55,7 +55,7 @@ import {
   clearFocusTimer, focusCapture, liveDetail, scheduleFocus, type FocusTimer,
 } from "../../src/terminal/liveFocus.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
-import { BackIcon, ImageIcon, MicIcon } from "../../src/nav/icons.tsx";
+import { BackIcon, ImageIcon, KeyboardIcon, MicIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
 import type { AgentSessionRow } from "../../../shared/types.ts";
 
@@ -1789,11 +1789,19 @@ export default function TerminalScreen(): React.ReactNode {
         <View style={{ paddingHorizontal: SPACE.sm, paddingBottom: SPACE.sm }}>
           <View style={{
             flexDirection: "row", alignItems: "center", gap: 2,
-            backgroundColor: C.bg2, borderWidth: 1,
-            // The one border on this row, and it is the field's. In `keys` it
-            // takes the accent, because the field behaving differently is the
-            // thing that switch used to have to say out loud.
-            borderColor: raw ? C.primary : C.border,
+            /*
+             * A field has an edge; a button has a face. That is the whole of
+             * the difference drawn here, and it was reported from a phone as
+             * "sigue pareciendo un input" — because it was one shape doing two
+             * jobs, with only a border colour between them.
+             *
+             * `keys` is a BUTTON: filled, no border, a keyboard on it. Line
+             * mode is a FIELD: a raised ground inside a hairline, which is what
+             * every other field in this app looks like.
+             */
+            backgroundColor: raw ? C.bg3 : C.bg2,
+            borderWidth: raw ? 0 : 1,
+            borderColor: C.border,
             // The capsule, and the only one on this screen. Pane allows exactly
             // one round thing per screen against everything else being nearly
             // rectangular, and on the terminal this is it: the place you type.
@@ -1818,10 +1826,15 @@ export default function TerminalScreen(): React.ReactNode {
               accessibilityLabel="Show the keyboard for this pane"
               accessibilityHint="What you type is sent to the pane as you type it"
               style={({ pressed }) => ({
-                flex: 1, height: TAP, justifyContent: "center",
-                paddingRight: SPACE.xs, opacity: !canSend ? 0.45 : pressed ? 0.6 : 1,
+                flex: 1, height: TAP, flexDirection: "row", alignItems: "center",
+                gap: SPACE.sm, paddingRight: SPACE.xs,
+                opacity: !canSend ? 0.45 : pressed ? 0.6 : 1,
               })}
             >
+              {/* The glyph is what a border used to do: say what this is. It
+                  goes first because it is read first — the words after it are
+                  the CONTENT of the button, not its name. */}
+              <KeyboardIcon color={C.text3} size={18} />
               <Text
                 numberOfLines={1}
                 /* From the HEAD, so a long line shows its END. The other way
@@ -1829,8 +1842,15 @@ export default function TerminalScreen(): React.ReactNode {
                    part of a line anybody is reading. */
                 ellipsizeMode="head"
                 style={{
-                  color: keyed.length > 0 ? C.text : C.text4,
-                  fontSize: T.body, fontFamily: MONO,
+                  // `text2`, not the placeholder's `text4`. Faint grey on the
+                  // left of a rounded box IS the drawing of an empty field —
+                  // the one thing this must not look like.
+                  color: keyed.length > 0 ? C.text : C.text2,
+                  fontSize: T.body,
+                  // The line itself is the pane's, so it is mono. The prompt to
+                  // press is this app talking, so it is not.
+                  fontFamily: keyed.length > 0 ? MONO : undefined,
+                  flex: 1,
                 }}
               >
                 {open ? liveDetail(keyed) : "Nothing is open"}

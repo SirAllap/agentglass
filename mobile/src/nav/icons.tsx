@@ -242,6 +242,30 @@ export function MicIcon({ color, size = 20 }: IconProps): React.ReactNode {
   );
 }
 
+/**
+ * A keyboard: the case and four keys, one of them the space bar.
+ *
+ * On the live-input bar, where the whole job is to say "this is not a field,
+ * it is the way to get the keyboard". A field's cue is a border and a caret;
+ * this has neither, and the glyph is what replaces them.
+ *
+ * Four keys rather than a full row of twelve. At 18px a real layout is grey
+ * mush — what survives is the outline plus enough marks to read as keys, and
+ * the wide one at the bottom is the whole of why it is a keyboard and not a
+ * calculator.
+ */
+export function KeyboardIcon({ color, size = 20 }: IconProps): React.ReactNode {
+  return (
+    <Svg {...line} {...box(size)} color={color}>
+      <Path d="M3.2 6.2h17.6a1.4 1.4 0 0 1 1.4 1.4v8.8a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4V7.6a1.4 1.4 0 0 1 1.4-1.4z" />
+      <Path d="M6 9.6h1.6" />
+      <Path d="M11.2 9.6h1.6" />
+      <Path d="M16.4 9.6h1.6" />
+      <Path d="M7.6 14.2h8.8" />
+    </Svg>
+  );
+}
+
 /** The way back out of a screen the bar cannot return you to — Now and
  *  Settings, which are tabs with no tab. A chevron rather than "‹", which is
  *  the character problem this whole file exists to avoid. */
