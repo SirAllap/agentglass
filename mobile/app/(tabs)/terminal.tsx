@@ -52,6 +52,9 @@ import {
 import { bytesFor } from "../../src/terminal/customKeys.ts";
 import { editFor } from "../../src/terminal/mirror.ts";
 import {
+  NO_MODES, applyDefault, isLive, prune, setLive, type LiveModes,
+} from "../../src/terminal/liveDefault.ts";
+import {
   clearFocusTimer, focusCapture, liveDetail, scheduleFocus, type FocusTimer,
 } from "../../src/terminal/liveFocus.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
@@ -387,7 +390,40 @@ export default function TerminalScreen(): React.ReactNode {
    * something unrecoverable, and one that guesses the other way leaves them
    * tapping at a prompt that is not listening.
    */
-  const [raw, setRaw] = useState(false);
+  /*
+   * Direct input is the default, per pane, applied once.
+   *
+   * A pane opens typing straight through, because that is what a shell, a
+   * REPL, an editor and an agent's prompt all expect — composing a line first
+   * is the special case. Somebody who wants the other one says so in the ···
+   * sheet, and their answer survives every refresh after it.
+   *
+   * Per PANE and not per screen: two tabs are two terminals, and an answer
+   * given about one is not an answer about the other. The bookkeeping that
+   * makes the default one-shot is in liveDefault.ts, with the reason it cannot
+   * be a plain `useState(true)` — the tab list refreshes constantly, and a
+   * default re-applied on any of those refreshes would undo a choice made
+   * seconds earlier with nothing on screen to explain it.
+   */
+  const [modes, setModes] = useState<LiveModes>(NO_MODES);
+  const raw = isLive(modes, active);
+  const setRawFor = useCallback((on: boolean) => {
+    setModes((current) => (active ? setLive(current, active, on) : current));
+  }, [active]);
+  /*
+   * Apply the default to panes nobody has answered for, and forget the closed
+   * ones — both driven by `strip`, which is what the machine actually reported.
+   *
+   * `null` is "we have not asked yet" and is skipped entirely: pruning against
+   * a list that has not arrived would forget every answer on screen and then
+   * hand the panes back as new on the next poll, which is the default
+   * re-applying under a different name. See the test that states exactly that.
+   */
+  useEffect(() => {
+    if (!strip) return;
+    const panes = strip.map((t) => t.paneId).filter(Boolean);
+    setModes((current) => applyDefault(prune(current, panes), panes));
+  }, [strip]);
   /*
    * What the field holds in `keys` mode, and how much of it has already gone.
    *
@@ -2131,7 +2167,7 @@ export default function TerminalScreen(): React.ReactNode {
               // The transcript is emptied on the way past, in both directions:
               // it belongs to `keys`, and a deliberate tap is a moment when
               // nothing is being typed.
-              onPress={() => { setRaw((v) => !v); forgetKeys(); }}
+              onPress={() => { setRawFor(!raw); forgetKeys(); }}
             />
 
             <Label text="Past sessions" />
