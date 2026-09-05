@@ -18,6 +18,7 @@
 // checkouts and no idea which is which.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { failed } from "./refused.ts";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, basename } from "node:path";
@@ -211,7 +212,7 @@ export async function listIssues(rootIn: unknown, opts: { state?: string; assign
     const rows = (JSON.parse(r.stdout) as any[]).map((x) => normalise(x, repo, work));
     return { ok: true, issues: rows };
   } catch (e) {
-    return { ok: false, issues: [], error: String(e) };
+    return { ok: false, issues: [], error: failed("issues/list", e, "the issues could not be read") };
   }
 }
 
@@ -238,7 +239,7 @@ export async function issueDetail(rootIn: unknown, numberIn: unknown): Promise<{
       },
     };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: failed("issues/detail", e, "that issue could not be read") };
   }
 }
 

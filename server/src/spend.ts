@@ -30,6 +30,7 @@
 // panel can say which part of the number it is sure of instead of rounding the
 // doubt away. See PrPanel's spend chip for the wording that comes out of it.
 import { resolve } from "node:path";
+import { failed } from "./refused.ts";
 import { db, scopeClause, RETENTION_DAYS, retentionSeamDay, spendBetween } from "./db.ts";
 import { isWithin } from "./config.ts";
 import { gitAsync } from "./git.ts";
@@ -310,7 +311,7 @@ export async function repoSpend(rootIn: unknown): Promise<RepoSpend> {
   } catch (e) {
     // A failure here is a missing number on a chip, never a broken board — so
     // it is reported as one rather than thrown at the route.
-    return { ok: false, error: String(e), since, seamDay, beforeSeamUsd: 0, branches: [], worktrees: [] };
+    return { ok: false, error: failed("spend/repo", e, "the spend for this repository could not be read"), since, seamDay, beforeSeamUsd: 0, branches: [], worktrees: [] };
   }
   if (cache.size > 32) cache.clear();
   cache.set(root, { at: Date.now(), value });

@@ -19,6 +19,7 @@
  */
 
 import { spawn, type Subprocess } from "bun";
+import { failed } from "./refused.ts";
 import { existsSync } from "node:fs";
 
 export type SystemNote = {
@@ -317,7 +318,7 @@ export function openNote(id: unknown): { ok: boolean; error?: string } {
     spawn({ cmd, stdout: "ignore", stderr: "ignore", stdin: "ignore" }).unref();
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: failed("notify/open", e, "that note could not be opened") };
   }
 }
 

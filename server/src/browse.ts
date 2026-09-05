@@ -20,6 +20,7 @@
  * new room.
  */
 import { readdirSync, statSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { failed } from "./refused.ts";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { diskAllows, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
@@ -493,6 +494,6 @@ export function openInDesktop(pathIn: unknown): { ok: boolean; with?: string; er
     });
     return { ok: true, with: basename(opener) };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: failed("preview/open", e, "the desktop could not open that file") };
   }
 }

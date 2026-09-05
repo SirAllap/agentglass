@@ -17,6 +17,7 @@
 // it would put our update cycle in a fight with their local edits forever.
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { liveNvimSockets } from "./editor.ts";
@@ -563,7 +564,7 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
     writeFileSync(jsonThemePath(), `${JSON.stringify({ name: themeName, vars: v }, null, 2)}\n`);
     wrote.push(jsonThemePath());
   } catch (e) {
-    return { ok: false, wrote, reloaded, error: String(e) };
+    return { ok: false, wrote, reloaded, error: failed("theme/sync", e, "the theme could not be written to every tool") };
   }
 
   /*
