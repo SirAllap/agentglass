@@ -1164,8 +1164,11 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   const cutoff = Date.now() - RETENTION_DAYS * 86_400_000;
   // One transaction: the fold and the delete are the same decision, and a
   // crash between them would delete a day nobody had summarised.
-  // The fold is the only thing that writes daily_rollup, so this is the only
-  // place its path set can change.
+  // Dropped here as well as validated in rollupPaths(). Not redundant: this is
+  // the write that matters most — a folded day is history the events table no
+  // longer has — and clearing it costs nothing. The validation is what makes
+  // the cache correct for every OTHER writer, which is the assumption that
+  // failed. See rollupPaths().
   rollupPathCache = null;
   return db.transaction(() => {
     const rolled = foldExpiringEvents(cutoff);
@@ -1191,14 +1194,37 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
  * what events still remembers would hide precisely the history the rollup was
  * built to keep — the further back you look, the more of it disappears.
  *
- * The prune is the only writer, so the cache is dropped there rather than
- * timed out.
+ * ── why this is not simply cached, and what that cost ───────────────────
+ * It used to be `if (cache) return cache`, dropped in the prune, on the stated
+ * ground that the prune is the only writer. That was true of the product and
+ * false as an invariant, and the difference was silent: ANY other write to
+ * daily_rollup left the cache holding a list from before it, and a project
+ * missing from that list has its whole folded history filtered out of the
+ * chart — not wrong by a row, absent. The days that vanish are exactly the ones
+ * the rollup exists for: the old ones, whose events are gone, so nothing else
+ * can put them back.
+ *
+ * It surfaced under `bun test`, which shares one process across suites. A suite
+ * that read the rollup while it was empty warmed the cache for every suite
+ * after it, and a suite that then wrote its own rows directly — a fixture, not
+ * a prune — was invisible to its own scope. Green for months, then red on an
+ * unchanged commit when the runner's file order changed. The assumption was
+ * load-bearing and undocumented at the call sites that broke it.
+ *
+ * So the cache is validated instead of trusted. COUNT(*) with MAX(rowid) is one
+ * indexed read and catches inserts, deletes, and a delete-plus-insert that
+ * leaves the count alone — which the count on its own does not.
  */
-let rollupPathCache: string[] | null = null;
+let rollupPathCache: { stamp: string; paths: string[] } | null = null;
 function rollupPaths(): string[] {
-  if (rollupPathCache) return rollupPathCache;
+  const row = db
+    .query<{ n: number; hi: number | null }, []>("SELECT COUNT(*) AS n, MAX(rowid) AS hi FROM daily_rollup")
+    .get();
+  const stamp = `${row?.n ?? 0}:${row?.hi ?? 0}`;
+  if (rollupPathCache && rollupPathCache.stamp === stamp) return rollupPathCache.paths;
   const rows = db.query<{ p: string }, []>("SELECT DISTINCT project_path AS p FROM daily_rollup").all();
-  return (rollupPathCache = rows.map((r) => r.p).filter(Boolean));
+  rollupPathCache = { stamp, paths: rows.map((r) => r.p).filter(Boolean) };
+  return rollupPathCache.paths;
 }
 
 /**
