@@ -994,6 +994,21 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
   };
 
   var lastY = null, carry = 0, vel = 0, lastT = 0, burstY = 0, burstT = 0;
+  /*
+   * A tap, told apart from a scroll by how far the finger went.
+   *
+   * The pane is the thing being read, so it should be the thing you can type
+   * into — and on a phone the only way to say "I want the keyboard" is to
+   * touch what you are looking at. RN cannot see this: the WebView swallows
+   * the gesture, and wrapping it in a Pressable would take the drag away from
+   * the scroller above.
+   *
+   * So it is decided here, where the drag is already being measured, and sent
+   * as an intent rather than as coordinates. SLOP is generous because a thumb
+   * on glass is never still, and the time limit keeps a long press — which is
+   * the selection gesture — from counting.
+   */
+  var tapT = 0, tapMoved = 0, TAP_SLOP = 12, TAP_MS = 400;
   var probe = null;      // a notch out on its own, waiting to be measured
   var calibrate = false; // this gesture has not probed yet
   var probes = 0;
@@ -1179,6 +1194,8 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     if (e.touches.length !== 1) { lastY = null; return; }
     lastY = e.touches[0].clientY;
     lastT = clockOf(e);
+    tapT = clockOf(e);
+    tapMoved = 0;
     carry = 0;
     vel = 0;
     burstY = 0;
@@ -1198,6 +1215,9 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     // suggests, which is why it is written out.
     var dy = lastY - y;
     var dt = now - lastT;
+    // Distance travelled, unsigned: a finger that goes down and comes back is
+    // not still, and the carry above cannot answer it: the scroller eats it.
+    tapMoved += Math.abs(dy);
     lastY = y;
     lastT = now;
     carry += dy;
@@ -1225,10 +1245,13 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     drain();
     if (e.cancelable) e.preventDefault();
   }, { passive: false });
-  surface.addEventListener('touchend', function () {
+  surface.addEventListener('touchend', function (e) {
     lastY = null;
     if (Math.abs(vel) > FLICK) coast(vel);
     vel = 0;
+    // Short and still: somebody meant to touch the pane, not move it.
+    if (tapT && tapMoved <= TAP_SLOP && clockOf(e) - tapT <= TAP_MS) post({ t: 'tap' });
+    tapT = 0;
   }, { passive: true });
   // Cancelled is the gesture being taken away, not released: no coast.
   surface.addEventListener('touchcancel', function () { lastY = null; vel = 0; }, { passive: true });

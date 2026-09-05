@@ -51,6 +51,16 @@ interface Props {
   root?: string;
   /** Reflow the tmux window to this client. See attachArgvFor on the server. */
   fit?: boolean;
+  /**
+   * A finger touched the pane and did not drag it.
+   *
+   * Decided inside the page, because the WebView swallows the gesture and a
+   * Pressable wrapped around it would take the drag away from the scroller.
+   * What arrives is the intent and never a coordinate — the screen above uses
+   * it to hand the keyboard over, which is the only thing a tap on something
+   * you are reading can reasonably mean here.
+   */
+  onTap?: () => void;
   /** How many columns to show. See terminal-html.ts — this is what decides
    *  whether you see the pane or the left-hand corner of it. */
   columns: number;
@@ -117,7 +127,7 @@ interface Props {
 const ptyFrame = (frame: PtyClientFrame): string => JSON.stringify(frame);
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { host, pane, root, fit, columns, palette, onState, onTmux, onLine, onGrid, onPane, onOpened }, ref,
+  { host, pane, root, fit, columns, palette, onState, onTmux, onLine, onGrid, onPane, onOpened, onTap }, ref,
 ) {
   const webview = useRef<WebView>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -186,8 +196,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
    * none of them, which is the shape this needs: the socket's lifetime belongs
    * to the pane, not to whoever happens to be listening.
    */
-  const handlers = useRef({ onState, onTmux, onLine, onGrid, onPane, onOpened });
-  handlers.current = { onState, onTmux, onLine, onGrid, onPane, onOpened };
+  const handlers = useRef({ onState, onTmux, onLine, onGrid, onPane, onOpened, onTap });
+  handlers.current = { onState, onTmux, onLine, onGrid, onPane, onOpened, onTap };
 
   const inject = useCallback((js: string): void => {
     webview.current?.injectJavaScript(`${js};true;`);
@@ -406,6 +416,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (waiting.length) inject(`window.AGX.writeMany(${JSON.stringify(waiting)})`);
       return;
     }
+    if (message.t === "tap") { handlers.current.onTap?.(); return; }
     if (message.t === "in" && typeof message.d === "string") {
       if (ws && ws.readyState === 1) ws.send(ptyFrame({ t: "in", d: message.d }));
       return;

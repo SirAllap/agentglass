@@ -1167,6 +1167,11 @@ export default function TerminalScreen(): React.ReactNode {
   const focusLive = useCallback(function focusLive(): void {
     const now = liveNow.current;
     if (!now.canSend || !now.raw) return;
+    /* The pane is told too, and not only the capture. They are two different
+       claims: the capture is where the KEYBOARD goes, and this is what makes
+       the pane draw itself as the focused thing — a cursor that stays hollow
+       while somebody types into it is the screen disagreeing with the phone. */
+    terminal.current?.focus();
     focusCapture(capture.current, {
       keyboardShown: now.keyboardShown,
       retry: () => scheduleFocus(focusTimer, focusLive),
@@ -1474,6 +1479,7 @@ export default function TerminalScreen(): React.ReactNode {
             columns={columns}
             palette={paneColours}
             onState={onState}
+            onTap={tapPane}
             onTmux={(info) => setPrefix(prefixKey(info.prefix?.[0]))}
             onLine={onLine}
             onOpened={onOpened}
