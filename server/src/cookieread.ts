@@ -24,6 +24,7 @@ import { findProfiles, probeChromium, readFirefox, snapshot, type FoundProfile }
 import { chromiumPassword, deriveKey, readChromium, type ChromiumRead } from "./chromiumcookies.ts";
 import { readFirefoxPlaces, readChromeHistory, readChromeBookmarks, merge as mergePlaces, type Place as PlaceRow } from "./places.ts";
 import { join } from "node:path";
+import { readZenShelf } from "./zenshelf.ts";
 
 /**
  * One Chrome-family profile, decrypted — or null when the key was wrong.
@@ -147,6 +148,28 @@ export async function runCookieReader(argv: string[]): Promise<number> {
       }
       await say({ ok: true, places });
       return 0;
+    }
+    /*
+     * Somebody's Zen sidebar: its spaces, its folders and its pinned pages.
+     *
+     * Here for the same reason as the history above — this is somebody's
+     * browsing, read once by a one-shot with no HTTP route in front of it. Zen
+     * only: the file is Zen's own, and Firefox proper has no sidebar to import.
+     */
+    if (cmd === "shelf") {
+      const id = argv[argv.indexOf("--source") + 1] ?? "";
+      const profile = findProfiles().find((p) => p.id === id);
+      if (!profile) { await say({ ok: false, error: `no such browser profile: ${id}` }); return 1; }
+      if (!id.startsWith("zen:")) { await say({ ok: false, error: `${profile.label} does not keep a sidebar to import` }); return 1; }
+      try {
+        await say({ ok: true, shelf: readZenShelf(profile.dir) });
+        return 0;
+      } catch (e) {
+        // Named, because "it did not work" for a file that is simply not there
+        // yet (a Zen that has never been opened) is a different thing to fix.
+        await say({ ok: false, error: `could not read ${profile.label}'s sidebar: ${e instanceof Error ? e.message : String(e)}` });
+        return 1;
+      }
     }
     await say({ ok: false, error: `unknown cookie command: ${cmd ?? "(none)"}` });
     return 1;

@@ -81,7 +81,9 @@ describe("what it says about itself", () => {
 
   test("it polls, because the state it shows changes without anybody clicking", () => {
     // "waiting" becomes "live" the moment the first event arrives, and nobody
-    // is going to press refresh to find that out.
-    expect(pane).toContain("setInterval(load");
+    // is going to press refresh to find that out. Through usePoll, not a raw
+    // interval — so the same focus gate every other panel's poll respects
+    // applies here too, instead of polling a background window forever.
+    expect(pane).toContain("usePoll(open, load");
   });
 });

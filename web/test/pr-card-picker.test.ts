@@ -21,6 +21,7 @@
  * are addressed to a linter that is not installed.
  */
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 
@@ -68,10 +69,36 @@ describe("the window that went black", () => {
 });
 
 describe("where the card stands, beside the pull request", () => {
-  it("shows the status in the colour its own board gave it", () => {
-    // A board is read by colour before it is read by word; a status torn out of
-    // its colour is one somebody has to stop and parse.
-    expect(FACTS).toContain("<StatusPill status={task.status} color={task.statusColor}");
+  it("shows the status in the colour its own board gave it, and it is a control", () => {
+    /* A board is read by colour before it is read by word; a status torn out of
+       its colour is one somebody has to stop and parse. The pill is the
+       Select's own trigger now (`pill: true` draws a StatusPill), because the
+       sidebar stopped being read-only: "if I only want to change the card
+       status and the assignee… I don't want to go to the card, I want to do it
+       from the PR". */
+    expect(FACTS).toContain("<CardStatusPick task={task} query={query}");
+    const pick = bodyOf("CardStatusPick");
+    expect(pick).toContain("pill: true");
+    expect(pick).toContain("tint: x.color");
+    // The colour the board gave it survives even before the list has answered.
+    expect(pick).toContain("color: task.statusColor ?? \"\"");
+  });
+
+  it("and one press is one write, with the card's own stamp", () => {
+    /* No Done button and nothing to forget. `updated` rides along because
+       ClickUp refuses a write made against a stamp older than the card's —
+       the guard that once let a batch of three apply only its first. */
+    const pick = bodyOf("CardStatusPick");
+    expect(pick).toContain("api.clickupCard(task.id, { status }, task.updated)");
+    const people = bodyOf("CardPeoplePick");
+    expect(people).toContain("off ? { rem: [m.id] } : { add: [m.id] }, task.updated");
+    /* And it is the app's ONE people picker, not a dropdown of names of its
+       own: "that selection modal opens outside the window, and it doesn't follow
+       the standard, which should be this one". See components/PeoplePick. */
+    expect(people).toContain("<PeoplePick");
+    // And what we are holding about the card stops being true the moment it
+    // lands, so it is thrown away rather than left to go stale on screen.
+    expect(pick).toContain("forgetCard(query)");
   });
 
   it("shows who is on it, as faces", () => {
@@ -178,5 +205,51 @@ describe("the reviewer nobody pressed Done for", () => {
 
   it("closes on a resize without writing either", () => {
     expect(PICKER).toContain('window.addEventListener("resize", onClose);');
+  });
+});
+
+/*
+ * And the menu that closed the menu.
+ *
+ * "If I click the status, this modal/selector just closes on me." The card's
+ * status is chosen with the app's own Select, which portals its list to the
+ * body so it can escape the picker's clipping — so the press landed outside the
+ * picker's box and the dismiss-on-outside-click closed the whole thing before
+ * the choice could be made.
+ */
+describe("a menu opened from a menu", () => {
+  it("does not count as clicking away", () => {
+    const select = readFileSync(new URL("../src/components/Select.tsx", import.meta.url), "utf8");
+    // The list and its scrim are both marked, because the press lands on the
+    // scrim as often as on an option.
+    expect((select.match(/data-menu-layer/g) ?? []).length).toBe(2);
+    expect(src).toContain('if (t?.closest?.("[data-menu-layer]")) return;');
+  });
+});
+
+/*
+ * THE FILTER TAKES ITS OWN FOCUS, WITHOUT A CLICK.
+ *
+ * `autoFocus` does not take here: React applies it at commit time, in the
+ * same pass that first renders the input, and this menu renders through
+ * `<Portal>` — which only appends its container to `document.body` in ITS
+ * OWN effect, and child effects fire before parent effects. So the input got
+ * focused while its container was still a detached node, `.focus()` on that
+ * is a silent no-op, and both "Apply labels" and "Request reviewers" opened
+ * with the mouse as the only way in: "without having to move the mouse around
+ * to click on the input". Same root cause `palette-menu-keys.test.ts`
+ * already found and fixed for a different menu, and the same shape of fix:
+ * a ref, focused from an effect deferred past the current commit rather than
+ * the `autoFocus` attribute.
+ */
+describe("the filter takes its own focus", () => {
+  it("does not rely on autoFocus, which the Portal race defeats", () => {
+    expect(PICKER.match(/autoFocus(?=[\s>/])/g)).toBe(null);
+  });
+
+  it("focuses the filter input from an effect deferred to the next frame", () => {
+    expect(PICKER).toContain("const filterInput = useRef<HTMLInputElement>(null);");
+    expect(PICKER).toMatch(/requestAnimationFrame\(\(\) => filterInput\.current\?\.focus\(\)\)/);
+    expect(PICKER).toContain('<input ref={filterInput}');
   });
 });

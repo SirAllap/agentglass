@@ -72,6 +72,35 @@ export function paneTabs(panes: readonly AgentPane[]): Tab[] {
     // offering to go somewhere nobody meant to be.
     if (pane.popup) continue;
     /*
+     * A session on somebody else's tmux server is not in this list.
+     *
+     * `listPanes` walks the socket directory and answers for every server that
+     * has a client, so a tmux the test suite left running — or another agent's
+     * — arrives beside the one you work in. On a desk that is a row you scroll
+     * past; on a phone the strip IS the screen, and half of it pointed at
+     * sessions nobody can use.
+     *
+     * Reproduced before it was fixed, on a rig with two isolated servers:
+     *
+     *     canAttach: true   panes: 2
+     *       agx-probe-9f2  win 0 sh      pane %0  attached true   <- a test's
+     *       work           win 0 editor  pane %0  attached true   <- the real one
+     *
+     * Nothing on that wire told them apart. Not `attached`, both true. Not the
+     * pane id — ids are per SERVER and both were `%0`, which is also why
+     * opening one is a coin flip between two servers. And not the name: three
+     * servers on this machine each held a session called
+     * `agentglass-understudy`, so a prefix test would have been a guess
+     * dressed as a rule.
+     *
+     * The server knows, because it has the socket, and now says so in a
+     * boolean that carries no path. `=== false` and not `!own`: absent is a
+     * third answer — a server too old to say, or one that has never attached
+     * anything and has no server of its own to compare against — and in that
+     * case this keeps what it always kept.
+     */
+    if (pane.own === false) continue;
+    /*
      * Detached sessions are left out, unless an agent is running in one.
      *
      * A tmux server accumulates them — a test that did not clean up, a worktree

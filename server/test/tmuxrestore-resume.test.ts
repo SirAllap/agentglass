@@ -34,8 +34,16 @@ describe("what a restored pane is told to run", () => {
     expect(src).toContain('if (pane.startCommand) return ["sh", "-c", pane.startCommand];');
   });
 
-  it("falls back to resuming the conversation the pane was holding", () => {
-    expect(src).toContain('return [bin, "--resume", id];');
+  it("falls back to resuming the conversation the pane was holding, with its own flags", () => {
+    /*
+     * The flags moved into this line on 2026-09-03 and the reason is the whole
+     * of restore-keeps-the-flags.test.ts: this user starts every session with
+     * `--dangerously-skip-permissions`, and a desk rebuilt without it behaves
+     * differently pane by pane. They go BEFORE the id — the id is the one part
+     * of this command line the file builds itself, and nothing captured may
+     * displace it.
+     */
+    expect(src).toContain('return [bin, ...(pane.agentArgs ?? []), "--resume", id];');
   });
 
   it("will not put anything but a conversation id on that command line", () => {

@@ -229,7 +229,7 @@ export function CheckoutPicker({
               color: "var(--text)",
             }}
           />
-          <div ref={rowsRef} className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
+          <div ref={rowsRef} className="agx-scroll overflow-y-auto overflow-x-hidden pb-1" style={{ minHeight: 0 }}>
             {unlisted && (
               <div className="px-2.5 py-1.5 flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
                 <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>SET</span>

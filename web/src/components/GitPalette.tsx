@@ -100,7 +100,7 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
             borderBottom: "1px solid color-mix(in srgb, var(--text) 14%, transparent)",
             fontFamily: "var(--font-mono, ui-monospace, monospace)",
           }} />
-        <div className="agx-scroll overflow-y-auto py-1">
+        <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1">
           {!hits.length && (
             <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>
               Nothing matches. Every word has to appear somewhere — try fewer.

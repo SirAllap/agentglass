@@ -5,6 +5,7 @@
 // every mutating op is gated by AGENTGLASS_GIT_WRITE_DISABLED=1.
 
 import { resolve, basename, relative, dirname, sep, delimiter, join } from "node:path";
+import { seedWorktree, type SeedReport } from "./worktreeseed.ts";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
@@ -134,8 +135,29 @@ function parseDiff(root: string, text: string, staged: boolean): GitFileChange[]
   return out;
 }
 
+/**
+ * `ls-files --others` walks every directory not already known to be fully
+ * untracked, and on the checkout this panel is left open on that walk is the
+ * single most expensive thing asked of git at idle — repeated on a fixed poll,
+ * for as long as the tab sits there.
+ *
+ * `core.untrackedCache` is git's own answer to exactly this shape of caller,
+ * but it answers by writing into the repo being read — a `git config` key and
+ * an index rewrite, in a checkout that may not be ours to change (this app
+ * only ever reads other people's repositories). So the cache lives here
+ * instead: the result, held in our own process, for as long as nothing this
+ * app knows of could have changed it. `afterMutation()` clears it the instant
+ * one of our own writes could have added or removed an untracked file; the
+ * TTL below is only the fallback for a file dropped in by something we can't
+ * see, like an editor or another terminal.
+ */
+const UNTRACKED_TTL_MS = 5_000;
+const untrackedResultCache = new Map<string, { at: number; files: GitFileChange[] }>();
+
 /** Build all-added GitFileChange entries for untracked files. */
 async function untracked(root: string): Promise<GitFileChange[]> {
+  const hit = untrackedResultCache.get(root);
+  if (hit && Date.now() - hit.at < UNTRACKED_TTL_MS) return hit.files;
   const r = await gitAsync(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
   if (r.code !== 0) return [];
   const now = Date.now();
@@ -159,6 +181,7 @@ async function untracked(root: string): Promise<GitFileChange[]> {
       status: "untracked", staged: false, binary,
     });
   }
+  untrackedResultCache.set(root, { at: now, files: out });
   return out;
 }
 
@@ -486,13 +509,17 @@ const repoCache = new Map<string, { at: number; repos: GitRepoRef[] }>();
 /** Drop cached repo listings touching `root`. Keys are scope-dependent and a
  *  worktree's counts live in its parent's listing too, so this clears the lot:
  *  the list is one directory sweep and is about to be asked for again anyway. */
-export function invalidateRepos(_root?: string): void {
+export function invalidateRepos(root?: string): void {
   repoCache.clear();
   // Committing or staging changes what is dirty, and this is the one place
   // every write in this file passes through.
   dirtyCache.clear();
   // A commit or a checkout moves the tip date too, and both go through run().
   tipCache.clear();
+  // And the untracked-file list: a stage, commit or discard can add or remove
+  // one, and there's no other signal that tells this process so.
+  if (root) untrackedResultCache.delete(root);
+  else untrackedResultCache.clear();
 }
 
 export async function discoverRepos(paths: string[], knownRoots: string[] = [], opts: { ignoreScope?: boolean } = {}): Promise<GitRepoRef[]> {
@@ -2503,7 +2530,14 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
   if (r.ok && newBranch && from.length) {
     run(root, ["config", `branch.${branch}.agentglassbase`, from[0]!]);
   }
+  if (r.ok) seedFrom(root, abs);
   return r;
+}
+
+/** What git does not carry into a new worktree, from the repository's own
+ *  `.worktreeinclude` — see worktreeseed.ts. Tracked paths are git's. */
+export function seedFrom(root: string, worktree: string): SeedReport {
+  return seedWorktree(root, worktree, (rel) => git(root, ["ls-files", "--error-unmatch", "--", rel]).code === 0);
 }
 /**
  * Put a pull request's conflict somewhere you can actually work on it.
@@ -2587,6 +2621,7 @@ export function prepareConflictMerge(rootIn: string, branch: string, base: strin
       ? run(root, ["worktree", "add", abs, branch])
       : run(root, ["worktree", "add", "-b", branch, abs, `origin/${branch}`]);
     if (!add.ok) return { ok: false, error: add.error ?? "could not cut a worktree" };
+    seedFrom(root, abs);
   }
   return mergeInto(abs, base);
 }

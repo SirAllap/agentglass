@@ -30,7 +30,7 @@
  * refused this token" is not the same as "you do not use ClickUp", and hiding
  * the tab would remove the one surface that was going to say so.
  */
-import { PROVIDERS, type ProviderState, type ProviderStatus } from "../../../shared/providers.ts";
+import { PROVIDERS, type ProviderId, type ProviderSpec, type ProviderState, type ProviderStatus } from "../../../shared/providers.ts";
 
 /** The ids that feed the work-you-owe half, read from the catalogue rather
  *  than listed — a list here would be wrong the first time somebody adds a
@@ -63,4 +63,41 @@ export function tracksWork(statuses: ProviderStatus[] | null | undefined): boole
   const known = statuses.filter((p) => TASK_IDS.has(p.id));
   if (!known.length) return null;
   return known.some((p) => setUp(p.state));
+}
+
+/**
+ * Which task provider the Cards tab reads from, and what it is called.
+ *
+ * The tab used to read `/clickup/views` and `/clickup/view` whoever you were,
+ * and print "Open in ClickUp" on every card — a phone paired to a machine that
+ * tracks work in Taskwarrior got an empty board titled after somebody else's
+ * product. The rule here is the one the tab wanted all along:
+ *
+ *   ClickUp connected            → the board, its saved views, its cards
+ *   another tracker set up       → `/tasks/list`, the provider-neutral route
+ *   nothing set up               → `null`, and the tab says so
+ *   no answer                    → `undefined`, and the tab waits
+ *
+ * `connected` beats `error` and, at equal state, ClickUp beats the rest — it
+ * is the one with views to choose from, and a person with both wants the board
+ * on the phone and the local list where the editor is. `error` still counts as
+ * set up, for the reason `tracksWork` gives: a refused token is something you
+ * configured, and the screen that reads it is where you find out.
+ */
+export function taskProvider(statuses: ProviderStatus[] | null | undefined): ProviderSpec | null | undefined {
+  if (!statuses) return undefined;
+  const known = statuses.filter((p) => TASK_IDS.has(p.id) && setUp(p.state));
+  if (!statuses.some((p) => TASK_IDS.has(p.id))) return undefined;
+  if (!known.length) return null;
+  const rank = (p: ProviderStatus): number =>
+    (p.state === "connected" ? 0 : 2) + (p.id === "clickup" ? 0 : 1);
+  const best = [...known].sort((a, b) => rank(a) - rank(b))[0]!;
+  return PROVIDERS.find((p) => p.id === best.id) ?? null;
+}
+
+/** "ClickUp", "Taskwarrior" — the catalogue's spelling, for "Open in …" and
+ *  the like. Falls back to a neutral word rather than an id: `clickup` in a
+ *  button is a code, and nobody should read a code on a phone. */
+export function providerTitle(id: ProviderId | null | undefined): string {
+  return PROVIDERS.find((p) => p.id === id)?.title ?? "the tracker";
 }

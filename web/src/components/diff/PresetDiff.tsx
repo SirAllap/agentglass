@@ -127,7 +127,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        <div className="shrink-0 flex flex-col min-h-0" style={{ width: sidebarW }}>
+        <div className="shrink-0 flex flex-col min-h-0 agx-sidelist" style={{ width: sidebarW }}>
           {changes.length > 12 && (
             <div className="px-3 py-2 shrink-0">
               <input

@@ -645,6 +645,10 @@ const server = spawn({
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_DATA_HOME: join(home, "data"),
     XDG_CACHE_HOME: join(home, "cache"),
+    // And the state dir, which is where the engine's generated tmux.conf lives:
+    // isolating the config alone let a throwaway run rewrite the conf the
+    // operator's own engine runs on. See server/test/tmux-conf-isolation.
+    AGENTGLASS_STATE_DIR: join(home, "state"),
     // Its own tmux socket directory, beside the config/data/cache above and
     // for the same reason: this child is a SERVER, and a server with no
     // TMUX_TMPDIR sweeps and lists /tmp/tmux-<uid> — the sessions the user is

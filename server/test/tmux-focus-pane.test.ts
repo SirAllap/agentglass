@@ -85,9 +85,12 @@ beforeAll(() => {
   delete process.env.TMUX;
 });
 afterAll(() => {
+  /* Killed before the variables go back: a `-L name` socket lives under
+     $TMUX_TMPDIR, so a kill issued afterwards looks in the developer's own
+     directory and quietly does nothing. See tmuxrestore.test.ts. */
+  tmux("kill-server");
   if (prevTmpdir === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = prevTmpdir;
   if (prevTmux === undefined) delete process.env.TMUX; else process.env.TMUX = prevTmux;
-  tmux("kill-server");
 });
 
 beforeEach(() => {

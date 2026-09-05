@@ -164,7 +164,21 @@ describe("what an attaching guest is allowed to be", () => {
       webSecurity: true,
       allowRunningInsecureContent: false,
       enableBlinkFeatures: "",
+      backgroundThrottling: false,
     });
+  });
+
+  test("background throttling is off, so a hidden tab keeps taking its pushes", () => {
+    // Every tab but the frontmost one is `visibility: hidden` in BrowserPanel —
+    // that is how a tab exists without painting. Left throttled, the SAME
+    // hidden state that lets a tab sit in the background also stalls its
+    // timers, and that is where a page's WebSocket delivery usually lives:
+    // a real softphone tab received `incoming-call-reserved` over the wire and
+    // never handed it to page JS until brought to the front. A renderer the
+    // request explicitly asked to throttle is left alone (`false` is
+    // overwritten, `true` is a request this guard refuses same as any other).
+    expect(attach({}, {}).prefs.backgroundThrottling).toBe(false);
+    expect(attach({}, { backgroundThrottling: true }).prefs.backgroundThrottling).toBe(false);
   });
 
   test("the profile it chose is kept", () => {

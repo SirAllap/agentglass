@@ -39,6 +39,7 @@
 // so no Collector is needed. (This line said "JSON only" long after the
 // protobuf decoder landed in otlp_pb.ts.)
 import type { IngestBody } from "../../shared/types.ts";
+import { MAX_REPORTED_COST_USD } from "./ingest.ts";
 
 interface AnyVal {
   stringValue?: string;
@@ -95,6 +96,16 @@ function firstNum(a: Record<string, unknown>, keys: string[]): number {
   }
   return 0;
 }
+/**
+ * Like the coercion firstNum does, but it distinguishes "absent" from zero —
+ * which firstNum cannot, since it answers 0 for both. A reported cost of
+ * exactly $0.00 is a real statement (a fully cached call on some plans), so
+ * the cost reader below needs the difference.
+ */
+function finiteNum(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
 function firstStr(a: Record<string, unknown>, keys: string[]): string | undefined {
   for (const k of keys) {
     const v = a[k];
@@ -118,12 +129,55 @@ const LLM_OPS = new Set(["chat", "text_completion", "completion", "generate_cont
 // because index.ts must stay out of this batch's shape.
 export const MAX_OTLP_EVENTS_PER_REQUEST = 10_000;
 
+/**
+ * What the provider says this call actually cost, in USD, or null if it said
+ * nothing.
+ *
+ * Claude Code's `claude_code.api_request` event reports `cost_usd` — the real
+ * charge, after whatever cache discount and contract rate the account is on.
+ * Re-deriving that from pricing.ts is strictly worse: the table is a snapshot
+ * of list rates and cannot know any of that. So when a record states its own
+ * cost, that number is the answer and the table is not consulted — db.ts
+ * already prefers `reported_cost_usd` over its own estimate, which is the
+ * whole reason that field exists.
+ *
+ * `cost_usd_micros` is the same figure scaled by a million, which exporters
+ * reach for because an OTLP integer survives a round-trip that a fractional
+ * double does not. It is the SAME cost, not a second one, so a record carrying
+ * both is read once — whole dollars win — rather than charged twice.
+ *
+ * None of this is trusted input: /v1/logs and /v1/traces are unauthenticated
+ * (auth.ts exempts them) and never pass through the POST /ingest validation,
+ * so a negative or absurd figure is dropped back to local pricing instead of
+ * being written into somebody's spend.
+ */
+function reportedCostFromAttributes(a: Record<string, unknown>): number | null {
+  const usd = finiteNum(a["cost_usd"]);
+  const micros = finiteNum(a["cost_usd_micros"]);
+  const cost = usd ?? (micros === null ? null : micros / 1_000_000);
+  if (cost === null || cost < 0 || cost > MAX_REPORTED_COST_USD) return null;
+  return cost;
+}
+
 function tokenUsageFromAttributes(a: Record<string, unknown>) {
   const cacheRead = firstNum(a, [
     "gen_ai.usage.cache_read.input_tokens",
     "gen_ai.usage.cache_read_input_tokens",
     "gen_ai.usage.cache_read_tokens",
     "cached_token_count",
+    // Claude Code's own export. Its `claude_code.api_request` event names the
+    // cache buckets bare — no prefix at all — and on a real session they carry
+    // most of the token volume, because every turn replays a cached prompt.
+    // Missing this name did not read as a missing attribute: the record still
+    // landed (the log check accepts anything with `event.name`), so the session
+    // and the model appeared and only the tokens were a rounding error.
+    //
+    // Read as a subset of the prompt count, like every other alias here — see
+    // the note below and the test that pins it. Subtracting can only ever
+    // under-report; treating a bucket as additive when it was not would
+    // over-bill, and the reported-cost path above means this choice does not
+    // touch what a Claude Code turn is charged anyway.
+    "cache_read_tokens",
     // OpenInference. `prompt_details` is a breakdown OF the prompt, so this
     // is treated as a subset of it — the same contract every other alias in
     // this list already has, and what the subtraction below assumes. If that
@@ -137,6 +191,8 @@ function tokenUsageFromAttributes(a: Record<string, unknown>) {
     "gen_ai.usage.cache_creation_input_tokens",
     "gen_ai.usage.cache_creation_tokens",
     "cache_write_token_count",
+    // Claude Code again, same bare spelling and the same subset contract.
+    "cache_creation_tokens",
   ]);
   const totalInput = firstNum(a, [
     "gen_ai.usage.input_tokens",
@@ -153,8 +209,38 @@ function tokenUsageFromAttributes(a: Record<string, unknown>) {
     // provider" rather than "one attribute name is missing".
     "llm.token_count.prompt",
   ]);
+
+  /*
+   * Whether the cache counts are still INSIDE that number depends on who wrote
+   * the record, and the only exporter this can say for certain about is Claude
+   * Code's own — the one that uses the bare, unprefixed names.
+   *
+   * Anthropic reports its input count with the cache buckets already taken out.
+   * Its docs gloss the three fields as "tokens written to cache", "tokens
+   * served from cache" and "uncached tokens (full cost)", and a real transcript
+   * settles it past arguing: `input_tokens: 2` sitting beside
+   * `cache_read_input_tokens: 22124`. A total cannot be smaller than one of its
+   * own parts. Claude Code's OTel export carries that same usage object through
+   * under `cache_read_tokens` / `cache_creation_tokens`, so subtracting there
+   * is not a rounding error — cache reads dominate a real session, the
+   * subtraction floors `input_tokens` at zero, and the tokens charged at full
+   * rate vanish from the bill.
+   *
+   * Everything else keeps the old behaviour, deliberately. OpenAI-compatible
+   * exporters (Codex among them) report the whole prompt with the hits inside
+   * it and have to be split — the rule ingest.ts:99 already applies on the
+   * hooks path, pinned by test/otlp-codex.ts. And a third-party instrumentor
+   * wrapping the Anthropic SDK emits `gen_ai.usage.*`, where the semantic
+   * convention calls the field the prompt total; that is a different claim from
+   * the one measured above, so it is not covered by it. Keying on the vendor
+   * would have swept those in on an assumption. Keying on the spelling keeps
+   * the change to exactly what there is evidence for.
+   */
+  const cacheIsOutAlready =
+    a["cache_read_tokens"] !== undefined || a["cache_creation_tokens"] !== undefined;
+
   return {
-    input_tokens: Math.max(0, totalInput - cacheRead - cacheCreation),
+    input_tokens: cacheIsOutAlready ? totalInput : Math.max(0, totalInput - cacheRead - cacheCreation),
     output_tokens: firstNum(a, [
       "gen_ai.usage.output_tokens",
       "gen_ai.usage.completion_tokens",
@@ -206,11 +292,13 @@ function spanToEvents(span: OtlpSpan, resAttrs: Record<string, unknown>): Ingest
 
   // LLM inference — one event carrying per-call token usage.
   const usage = tokenUsageFromAttributes(a);
+  const reportedCost = reportedCostFromAttributes(a);
   return [
     {
       ...base,
       hook_event_type: "Turn complete",
       timestamp: endMs,
+      ...(reportedCost === null ? {} : { reported_cost_usd: reportedCost }),
       payload: {
         usage,
         gen_ai_system: system,
@@ -262,6 +350,15 @@ export function otlpTracesToEvents(body: unknown): IngestBody[] {
 // one log record per API request / tool decision / tool result / prompt. Map
 // each record to an event by whatever GenAI-ish signal it carries. Tolerant by
 // design — a record with no recognizable signal is ignored.
+//
+// Claude Code's own log export lands here too, and always has: its
+// `claude_code.api_request` record carries `event.name`, which the check below
+// accepts. That is deliberate now rather than incidental — the header's
+// argument against a metrics receiver is about metrics, which have no per-call
+// identity; an api_request record does, and it reports both its token buckets
+// and the cost the account was actually charged. Anyone pointing both the
+// hooks and OTEL_LOGS_EXPORTER at this server will see each turn twice, which
+// is the same warning the header gives and the same answer: pick one.
 interface OtlpLogRecord {
   timeUnixNano?: string | number;
   observedTimeUnixNano?: string | number;
@@ -315,6 +412,7 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
   // including cached tokens. The shared mapper keeps traces and logs on the
   // same official semantics and stores cached input in its own buckets.
   const usage = tokenUsageFromAttributes(a);
+  const reportedCost = reportedCostFromAttributes(a);
   const input = usage.input_tokens;
   const output = usage.output_tokens;
   const cacheRead = usage.cache_read_tokens;
@@ -333,6 +431,7 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
     return {
       ...base,
       hook_event_type: "Turn complete",
+      ...(reportedCost === null ? {} : { reported_cost_usd: reportedCost }),
       payload: {
         usage,
         gen_ai_system: system,

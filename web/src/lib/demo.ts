@@ -439,7 +439,7 @@ export function gitBranches(): { current: string; branches: GitBranch[] } {
   ] };
 }
 export function gitGraph(): { lines: GitGraphLine[] } {
-  const c = (graph: string, hash: string, subject: string, refs = ""): GitGraphLine => ({ graph, hash, author: "David", date: "2h", subject, refs });
+  const c = (graph: string, hash: string, subject: string, refs = ""): GitGraphLine => ({ graph, hash, author: "Ada", date: "2h", subject, refs });
   return { lines: [
     c("* ", "9f2c1a7", "checkout hardening: qty-aware totals", "HEAD -> feat/git-panel"),
     c("* ", "3b7d0e2", "fix: guard empty coupon so it can't double-discount"),
@@ -458,7 +458,7 @@ export function gitWorktrees(): { worktrees: GitWorktree[] } {
   ] };
 }
 export function gitLog(): { commits: GitCommit[] } {
-  const c = (h: string, s: string, d: string, refs = ""): GitCommit => ({ hash: h + "0000000000000000000000000000000000", shortHash: h, subject: s, author: "David", date: d, refs });
+  const c = (h: string, s: string, d: string, refs = ""): GitCommit => ({ hash: h + "0000000000000000000000000000000000", shortHash: h, subject: s, author: "Ada", date: d, refs });
   return { commits: [
     c("9f2c1a7", "checkout hardening: qty-aware totals", "2 hours ago", "HEAD -> feat/git-panel"),
     c("3b7d0e2", "fix: guard empty coupon so it can't double-discount", "5 hours ago"),

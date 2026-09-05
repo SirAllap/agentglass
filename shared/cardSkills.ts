@@ -82,7 +82,7 @@ export function windowName(card: { id: string; customId?: string }): string {
 /**
  * The modes a skill says it takes, read from its own invocation line.
  *
- * `clickup-fix-card` advertises `[CARD-ID or URL] [autonomous | yolo]`, which is
+ * A skill such as `clickup-card-fix` advertises `[CARD-ID or URL] [autonomous | yolo]`, which is
  * the skill telling every reader that it has gears. Offering them means parsing
  * what it already publishes rather than keeping a list here — a list would be
  * wrong the day a skill grows a third mode, and wrong silently.

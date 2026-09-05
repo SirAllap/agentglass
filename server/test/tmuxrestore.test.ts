@@ -27,10 +27,24 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  /*
+   * KILL THE SERVER FIRST, WHILE ITS SOCKET IS STILL FINDABLE.
+   *
+   * This restored TMUX_TMPDIR and *then* asked tmux to stop — and a `-L name`
+   * socket lives under $TMUX_TMPDIR, so by then the command was looking in the
+   * developer's own tmux directory, finding nothing, and failing into the
+   * silent catch. The sandbox server survived every run.
+   *
+   * Measured on this machine: 216 of them, holding 827MB and keeping deleted
+   * worktrees open, the oldest 23 hours old. Removing TMPDIR does not help —
+   * deleting a socket file does not stop the process listening on it, which is
+   * exactly what those 216 were: live servers with a deleted socket.
+   */
+  try { await pane.tmux(["kill-server"]); } catch { /* already gone */ }
   if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
-  try { await pane.tmux(["kill-server"]); } catch { /* already gone */ }
   try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* never made */ }
+  try { rmSync(process.env.AGENTGLASS_STATE_DIR!, { recursive: true, force: true }); } catch { /* never made */ }
 });
 
 test("captureLayout writes the tree of a live session", async () => {

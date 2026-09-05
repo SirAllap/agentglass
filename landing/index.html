@@ -832,11 +832,14 @@
      load-bearing rather than decorative. Three things live here that a
      single "Download" button cannot carry:
 
-       · the release markers — `data-agx="version"`, `data-dl="…"` and
-         `data-size="…"`. scripts/landing-release.mjs fills these in as the
-         site is assembled, so the page names the real version and links the
-         real installers. Without them the deploy logs "nothing to stamp" and
-         everyone is sent to /releases/latest to guess;
+       · the release markers — data-agx, data-dl, data-size and data-na, named
+         here without their values so this paragraph is not mistaken for one of
+         them. scripts/landing-release.mjs fills them in as the site is
+         assembled, so the page names the real version and links the real
+         installers; a platform the release has no build for is stamped dead
+         through the same markers instead of keeping a live-looking button.
+         Move them and the deploy fails rather than shipping a page that sends
+         everyone to /releases/latest to guess;
        · the per-architecture split. The user agent cannot tell an Apple
          silicon Mac from an Intel one, and nothing can tell .deb from
          AppImage. Offer both and let the person decide;
@@ -880,6 +883,34 @@
     background:color-mix(in srgb,var(--primary) 12%,transparent); outline:none;}
   .dlb.pri{background:color-mix(in srgb,var(--primary) 18%,transparent); border-color:var(--primary); color:var(--text); font-weight:600;}
   .dlb.pri .sz{color:var(--text3);}
+  /* A platform the current release has no build for. The stamper writes one of
+     these two in; nothing on the page can guess which, and both of them used to
+     render as an ordinary live button pointing at a release that does not carry
+     the file. `old` still downloads — the last version that had one, and its
+     size label says which version that is. `na` is given no href at all, which
+     is what makes it unclickable and untabbable rather than merely grey. */
+  .dlb.old{border-style:dashed;}
+  /* it still downloads, but it is no longer the recommended thing to click,
+     so it loses the filled-in look that says so */
+  .dlb.old.pri{background:color-mix(in srgb,var(--primary) 7%,transparent); font-weight:500;}
+  .dlb.old .sz{color:var(--warning);}
+  .dlb.na{background:none; font-weight:400; cursor:not-allowed; border-style:dashed;
+    border-color:color-mix(in srgb,var(--text4) 38%,transparent); color:var(--text4);}
+  .dlb.na:hover,.dlb.na:focus-visible{background:none; color:var(--text4);
+    border-color:color-mix(in srgb,var(--text4) 38%,transparent);}
+  .dlb.na .sz{color:var(--text4);}
+  .dlb-na{font-size:10.5px; line-height:1.7; color:var(--text4); margin:-4px 0 1px;}
+  .dlb-na b{color:var(--warning); font-weight:600;}
+  .dlb-na a{color:var(--primary); text-decoration:underline; text-underline-offset:2px;}
+  /* After .dlc.you on purpose: a card with nothing to download is dead even
+     when the user agent says it is the visitor's own machine. */
+  .dlc.na{background:none; border-style:dashed; box-shadow:none;
+    border-color:color-mix(in srgb,var(--text4) 30%,transparent);}
+  /* the same two states on the plain buttons in the closing row, where the
+     version they are handing over is written into the label instead */
+  .btn.old{border-style:dashed;}
+  .btn.na,.btn.na:hover,.btn.na:focus-visible{cursor:not-allowed; background:none; text-shadow:none;
+    color:var(--text4); border-style:dashed; border-color:color-mix(in srgb,var(--text4) 38%,transparent);}
   .dlc-f{font-size:11px; line-height:1.75; color:var(--text4); margin-top:5px;}
   .dlc-f b{color:var(--text3);} .dlc-f i{font-style:italic;}
   .dlc-f a{color:var(--primary); text-decoration:underline; text-underline-offset:2px;}
@@ -3022,7 +3053,13 @@ ccT.textContent = STEPS[0].title; ccB.textContent = STEPS[0].body;
     <article class="dlc" data-os="mac">
       <header class="dlc-h"><span class="dlc-os">macOS</span><span class="dlc-you">your machine</span></header>
       <a class="dlb pri" data-dl="mac-arm" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Apple silicon <span class="sz" data-size="mac-arm">.dmg</span></a>
+      <!-- Empty and hidden on purpose. Only the deploy knows a build did not
+           happen, so only the deploy can write the sentence that says so; a
+           page assembled without the stamper says nothing here rather than
+           something untrue. -->
+      <p class="dlb-na" data-na="mac-arm" hidden></p>
       <a class="dlb" data-dl="mac-x64" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Intel <span class="sz" data-size="mac-x64">.dmg</span></a>
+      <p class="dlb-na" data-na="mac-x64" hidden></p>
       <p class="dlc-f"><b>First run.</b> The build is unsigned, so Gatekeeper quarantines it and reports the app as <i>damaged</i>. It is not. Right-click the app ▸ <b>Open</b>, or clear the flag:</p>
       <code class="dlc-c">xattr -dr com.apple.quarantine /Applications/agentglass.app</code>
     </article>
@@ -3030,7 +3067,9 @@ ccT.textContent = STEPS[0].title; ccB.textContent = STEPS[0].body;
     <article class="dlc" data-os="linux">
       <header class="dlc-h"><span class="dlc-os">Linux</span><span class="dlc-you">your machine</span></header>
       <a class="dlb pri" data-dl="linux-appimage" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">AppImage <span class="sz" data-size="linux-appimage">any distro</span></a>
+      <p class="dlb-na" data-na="linux-appimage" hidden></p>
       <a class="dlb" data-dl="linux-deb" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">.deb <span class="sz" data-size="linux-deb">Debian / Ubuntu</span></a>
+      <p class="dlb-na" data-na="linux-deb" hidden></p>
       <p class="dlc-f"><b>First run.</b> Mark the AppImage executable, or install the .deb:</p>
       <code class="dlc-c">chmod +x agentglass_*.AppImage &amp;&amp; ./agentglass_*.AppImage
 sudo apt install ./agentglass_*.deb</code>
@@ -3039,6 +3078,7 @@ sudo apt install ./agentglass_*.deb</code>
     <article class="dlc" data-os="win">
       <header class="dlc-h"><span class="dlc-os">Windows</span><span class="dlc-you">your machine</span></header>
       <a class="dlb pri" data-dl="win-exe" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Installer <span class="sz" data-size="win-exe">.exe</span></a>
+      <p class="dlb-na" data-na="win-exe" hidden></p>
       <p class="dlc-f"><b>First run.</b> Unsigned, so SmartScreen warns: <b>More info</b> ▸ <b>Run anyway</b>.</p>
       <p class="dlc-f"><b>Known gap.</b> The terminal panel is POSIX-only and does not work here yet (<a target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/issues/98">#98</a>). Everything else runs.</p>
     </article>
@@ -3046,7 +3086,7 @@ sudo apt install ./agentglass_*.deb</code>
 
   <p class="dl-note">
     Rather run it from source, or want the hooks wired for every project? <b>git clone</b>, <b>bun install</b>, <b>bun run dev</b> — see the
-    <a target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass#quickstart">quickstart</a>.
+    <a target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass#install">quickstart</a>.
     Local-first either way: <b>SQLite on your own disk, nothing phones home</b>, and the approval queue is persisted — a crash cannot silently auto-allow.
     Every installer is built by <a target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/actions">CI from a tagged commit</a>, and
     <a target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">every asset is on the release</a> if you want a different one.
@@ -4415,3 +4455,138 @@ sudo apt install ./agentglass_*.deb</code>
 
 
 
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+   THE FUNNEL.
+
+   Four steps, and the whole reason they exist is that "did the write-up
+   land?" has no answer here past the star count. Someone arrives; some of
+   them open the demo; some of those stay in it long enough to read the
+   thing; some download. Which of those three drops is the expensive one is
+   the only question worth asking of this page, and a visit count cannot
+   answer it.
+
+   Nothing here leaves the machine. No provider has been chosen, so no third
+   party is loaded, no beacon is sent, no cookie is written and no identifier
+   exists — the wiring is in and the pipe is not connected. agxTrack() below
+   is the single place that changes on the day it is.
+   ══════════════════════════════════════════════════════════════════════ */
+(function(){
+  "use strict";
+
+  /* ── THE ONE PLACE A PROVIDER GETS PLUGGED IN ──
+     Everything else in this block only decides *when* to call this; nothing
+     else needs to be touched to switch measurement on.
+
+     To switch it on, add one of these inside this function:
+
+       GoatCounter — already the counter this site stamps into <head> when
+       GOATCOUNTER_CODE is set (scripts/landing-analytics.mjs), so it costs no
+       second script. It has no event type of its own; a path is the convention:
+
+         window.goatcounter && goatcounter.count(
+           { path: "e/" + name + (detail.platform ? "/" + detail.platform : ""),
+             title: name, event: true });
+
+       Plausible / Fathom-shaped, if one is ever added to <head>:
+
+         window.plausible && plausible(name, { props: detail });
+
+     Three rules survive whatever goes in. It stays a no-op when the provider
+     is absent, because this page ships to forks where it always will be. It
+     sends no identifier and nothing personal — `detail` carries a platform
+     slug and a step name, and there is no reason for it to carry more. And
+     step 2 can fire while the document is being torn down (the demo link is a
+     same-tab navigation), so a real provider needs sendBeacon or a keepalive
+     fetch there, not a script tag that may not have loaded yet.
+
+     Until then the only thing it does is keep the steps in the tab, where
+     `__agxFunnel` in the console shows the wiring works. That array never
+     leaves the page. */
+  function agxTrack(name, detail){
+    (window.__agxFunnel || (window.__agxFunnel = [])).push(
+      { at: Math.round(performance.now()), step: name, detail: detail || {} });
+  }
+
+  /* The first three steps happen at most once per visit; a second "demo
+     opened" from the same person is not a second person. Downloads are not
+     capped — clicking macOS and then Linux is two real answers. */
+  const done = {};
+  function step(name, detail){
+    if (done[name]) return;
+    done[name] = true;
+    agxTrack(name, detail);
+  }
+
+  step("landing:view");
+
+  /* ── 3 · engaged ──
+     Thirty seconds of the demo actually in front of somebody. Visible time
+     only, so a tab left open all afternoon behind a browser window is not
+     mistaken for interest. One second of drift is fine here; the number is a
+     threshold, not a measurement.
+
+     Only the demo *under the glass* can be timed from this document. A
+     visitor who clicks through to /demo/ leaves it, and that page has to
+     report its own engagement when someone wires a provider up. */
+  const ENGAGED_MS = 30000;
+  let watching = false;
+  function timeEngagement(){
+    if (watching) return;
+    watching = true;
+    let seen = 0;
+    const tick = setInterval(function(){
+      if (document.visibilityState !== "visible") return;
+      seen += 1000;
+      if (seen < ENGAGED_MS) return;
+      clearInterval(tick);
+      step("demo:engaged", { seconds: seen / 1000 });
+    }, 1000);
+  }
+
+  /* ── 2 · the demo opened, by the glass ──
+     The hero drops the real app in behind the lens and lights it only once it
+     has confirmed the framed document is the app and not a 404, which is the
+     same moment a visitor first sees it move. Watched from out here rather
+     than called from in there, so the hero has nothing to know about this. */
+  const glass = document.getElementById("beyond");
+  if (glass) {
+    const watch = new MutationObserver(function(){
+      if (!glass.classList.contains("lit")) return;
+      watch.disconnect();
+      step("demo:open", { how: "glass" });
+      timeEngagement();
+    });
+    watch.observe(glass, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  /* ── 2 · the demo opened, by the link · and 4 · download ──
+     One listener, on the way down, so it still runs for a click that ends in
+     a navigation. The data-dl slug is the label: those attributes are already
+     on the page because the deploy stamps the links through them, so the
+     funnel and the installer it names cannot drift apart.
+
+     A button the stamper marked unavailable reports its click too. Someone
+     reaching for a build that does not exist is the most useful thing this
+     can learn, and it is invisible to any measure that only counts what the
+     server sent. */
+  addEventListener("click", function(e){
+    const a = e.target && e.target.closest ? e.target.closest("a") : null;
+    if (!a) return;
+    const href = a.getAttribute("href") || "";
+    const slot = a.getAttribute("data-dl");
+    if (slot) {
+      agxTrack("download:click", { platform: slot,
+        build: a.classList.contains("na") ? "unavailable"
+             : a.classList.contains("old") ? "older" : "current" });
+      return;
+    }
+    if (/demo\/?$/.test(href)) { step("demo:open", { how: "link" }); return; }
+    // The hero and closing "Download" buttons name no platform — they go to
+    // the release page and let the visitor pick.
+    if (/\/releases(\/|$)/.test(href) && (a.classList.contains("btn") || a.classList.contains("dlb"))) {
+      agxTrack("download:click", { platform: "unstated", build: "current" });
+    }
+  }, true);
+})();
+</script>

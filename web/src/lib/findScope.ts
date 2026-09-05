@@ -168,8 +168,30 @@ export function claimFind(): boolean {
  *  beats the view around it. */
 export function registerEngine(fn: () => FindEngine | null): () => void {
   engines = [...engines, fn];
-  return () => { engines = engines.filter((f) => f !== fn); };
+  enginesAt++;
+  syncEngine();
+  return () => {
+    engines = engines.filter((f) => f !== fn);
+    enginesAt++;
+    syncEngine();
+  };
 }
+
+/*
+ * How many times the set of engines has changed.
+ *
+ * The engine is held rather than looked up per keystroke, and it used to be
+ * rebuilt only when the SCOPE moved — which is wrong for a view that swaps its
+ * own body: the pull-request panel goes from board to table without changing
+ * the element it pushed, so the board's engine stayed live after the board had
+ * unmounted. MEASURED, by him: with the bar open, going Board → Mine answered
+ * 0/1 and found nothing, and typing the same word again fixed it; leaving the
+ * panel and coming back fixed it too, because THAT moved the scope.
+ *
+ * So the engine follows the screen in both of its senses: which view is on top,
+ * and which engines exist.
+ */
+let enginesAt = 0;
 
 function engine(): FindEngine {
   for (let i = engines.length - 1; i >= 0; i--) {
@@ -194,13 +216,16 @@ function engine(): FindEngine {
  * or a dialog opens over one. */
 let live: FindEngine | null = null;
 let liveScope: HTMLElement | null = null;
+/** The `enginesAt` the live engine was built at — see registerEngine. */
+let liveEngines = -1;
 
 /** Rebuild the engine when the thing being searched has changed, and answer the
  *  same question about the new screen. */
 function syncEngine(): void {
   if (!state.open) return;
   const scope = topScope();
-  if (scope === liveScope && live) return;
+  if (scope === liveScope && live && liveEngines === enginesAt) return;
+  liveEngines = enginesAt;
   live?.clear();
   // …and the registry itself, not only through whoever happens to be holding
   // it. See `closeFind` for the marks this is here to prevent.
@@ -215,6 +240,10 @@ function syncEngine(): void {
 export function openFind(seed = ""): void {
   live = engine();
   liveScope = topScope();
+  // Built here, so the next sync knows this one is current — without it the
+  // first register or unregister after opening rebuilds an engine that was one
+  // line old, and the view is searched twice for one keystroke.
+  liveEngines = enginesAt;
   state = { open: true, query: seed, total: 0, at: 0, label: live.label };
   if (seed) runQuery(seed);
   else emit();
@@ -235,6 +264,7 @@ export function closeFind(): void {
   clearHighlights();
   live = null;
   liveScope = null;
+  liveEngines = -1;
   state = { open: false, query: "", total: 0, at: 0 };
   emit();
 }

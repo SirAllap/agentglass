@@ -30,7 +30,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { Stack } from "expo-router";
+import type { DepStatus } from "../../shared/deps.ts";
 import { ask } from "../src/lib/api.ts";
+import { DEP_LOOK, depNeedsAttention, type DepTone } from "../src/model/depLook.ts";
 import { useAgentglass } from "../src/state/host-context.tsx";
 import { usePaletteTick } from "../src/state/use-palette.ts";
 import { Btn, Note, Section, TAP, groupEdge } from "../src/ui.tsx";
@@ -45,7 +47,9 @@ interface Dep {
   /** Why this app cares. The sentence the desktop shows, not a rewrite. */
   what: string;
   required: boolean;
-  status: "ok" | "attention" | "missing";
+  /** The server's union, imported: the local copy was one entry short of it
+   *  (`unsupported`) and the table below threw on the missing key. */
+  status: DepStatus;
   /** A version, or what is wrong with the one that is there. */
   detail?: string;
   /** The command that would install it, for this machine's package manager. */
@@ -55,10 +59,13 @@ interface Dep {
 
 interface Answer { deps?: Dep[]; manager?: string; platform?: string }
 
-const LOOK: Record<Dep["status"], { word: string; ink: string }> = {
-  ok: { word: "installed", ink: C.success },
-  attention: { word: "needs a look", ink: C.warning },
-  missing: { word: "missing", ink: C.error },
+/** The tone `src/model/depLook.ts` assigns, in this palette. Resolved here and
+ *  not there because the palette is the screen's — see usePaletteTick. */
+const INK: Record<DepTone, () => string> = {
+  good: () => C.success,
+  warn: () => C.warning,
+  bad: () => C.error,
+  mute: () => C.text4,
 };
 
 export default function TroubleshootScreen(): React.ReactNode {
@@ -84,13 +91,13 @@ export default function TroubleshootScreen(): React.ReactNode {
     // Anything not fine starts expanded. Somebody on this screen is here
     // because something is broken, and making them tap to find out which is
     // the whole failure it exists to fix.
-    setOpen(new Set((got.value.deps ?? []).filter((d) => d.status !== "ok").map((d) => d.id)));
+    setOpen(new Set((got.value.deps ?? []).filter((d) => depNeedsAttention(d.status)).map((d) => d.id)));
   }, [host]);
 
   useEffect(() => { void load(); }, [load]);
 
   const deps = answer?.deps ?? [];
-  const broken = deps.filter((d) => d.status !== "ok");
+  const broken = deps.filter((d) => depNeedsAttention(d.status));
 
   if (!host) return null;
 
@@ -138,7 +145,8 @@ export default function TroubleshootScreen(): React.ReactNode {
         {answer && !deps.length ? <Note>That computer reported nothing to check.</Note> : null}
 
         {deps.map((dep, i) => {
-          const look = LOOK[dep.status];
+          const look = DEP_LOOK[dep.status] ?? DEP_LOOK.attention;
+          const ink = INK[look.tone]();
           const shown = open.has(dep.id);
           return (
             <Pressable
@@ -164,7 +172,7 @@ export default function TroubleshootScreen(): React.ReactNode {
             >
               <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flex: 1 }}>
                 <View style={{
-                  width: 8, height: 8, borderRadius: 4, backgroundColor: look.ink,
+                  width: 8, height: 8, borderRadius: 4, backgroundColor: ink,
                 }} />
                 <Text numberOfLines={1} style={{ color: C.text, fontSize: T.small, flex: 1 }}>
                   {dep.title}
@@ -172,7 +180,7 @@ export default function TroubleshootScreen(): React.ReactNode {
                     <Text style={{ color: C.text4, fontSize: T.eyebrow }}>  optional</Text>
                   )}
                 </Text>
-                <Text style={{ color: look.ink, fontSize: T.eyebrow }}>
+                <Text style={{ color: ink, fontSize: T.eyebrow }}>
                   {dep.status === "ok" && dep.detail ? dep.detail : look.word}
                 </Text>
               </View>
@@ -183,7 +191,9 @@ export default function TroubleshootScreen(): React.ReactNode {
                       describing one dependency in two ways is how they drift. */}
                   <Text style={{ color: C.text3, fontSize: T.small, lineHeight: 18 }}>{dep.what}</Text>
                   {dep.status !== "ok" && dep.detail ? (
-                    <Text style={{ color: C.warning, fontSize: T.eyebrow }}>{dep.detail}</Text>
+                    // "not used on linux" is a fact, not a warning; it keeps
+                    // the row's own ink rather than borrowing the amber.
+                    <Text style={{ color: look.tone === "mute" ? ink : C.warning, fontSize: T.eyebrow }}>{dep.detail}</Text>
                   ) : null}
                   {dep.install ? (
                     <View style={{

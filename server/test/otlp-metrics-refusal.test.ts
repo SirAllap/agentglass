@@ -18,10 +18,12 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { docSection } from "./docs.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 const TOKEN = "metrics-test-token-not-a-real-one";
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -40,6 +42,9 @@ beforeAll(async () => {
       TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       HOME: process.env.HOME ?? "",
       XDG_CONFIG_HOME: dir,
+      // State (audit log, ledgers, engine conf) jailed too: without this a booted
+      // server writes into the developer's real ~/.local/state/agentglass.
+      AGENTGLASS_STATE_DIR: `${dir}/state`,
       AGENTGLASS_ROOT: dir,
       AGENTGLASS_DB: join(dir, "f.db"),
       AGENTGLASS_SCAN_DISABLED: "1",
@@ -55,7 +60,7 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
   throw new Error("the server did not come up: " + (await new Response(proc.stderr as ReadableStream).text()).slice(0, 400));
-});
+}, SERVER_BOOT_MS);
 
 afterAll(() => {
   try { proc?.kill(); } catch { /* already gone */ }
@@ -135,8 +140,7 @@ describe("what the documentation says about it", () => {
   test("the README no longer lists Claude Code as an OTLP source", () => {
     // The claim was corrected in otlp.ts and left standing in the README, which
     // is the more widely read of the two.
-    const readme = repo("README.md");
-    const section = readme.slice(readme.indexOf("### OpenTelemetry"), readme.indexOf("### Auto-connect installed CLIs"));
+    const section = docSection("### OpenTelemetry", "### Auto-connect installed CLIs");
     expect(section).not.toMatch(/LangChain, LiteLLM, OpenLLMetry, and Claude Code's own OTel export/);
     expect(section).toContain("Not Claude Code's own OTel export");
     // …and says where it *is* covered, rather than only that it is not here.

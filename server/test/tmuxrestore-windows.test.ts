@@ -40,9 +40,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  /* The kill goes first: a `-L name` socket lives under $TMUX_TMPDIR, so
+     restoring the variable before asking tmux to stop pointed the command at
+     the developer's own directory and it failed into the catch. See the note
+     in tmuxrestore.test.ts and the 216 servers that were still running. */
+  try { await pane.tmux(["kill-server"]); } catch { /* already gone */ }
   if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
-  try { await pane.tmux(["kill-server"]); } catch { /* already gone */ }
   try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* never made */ }
   try { rmSync(process.env.AGENTGLASS_STATE_DIR!, { recursive: true, force: true }); } catch { /* never made */ }
 });

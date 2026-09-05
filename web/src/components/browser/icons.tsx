@@ -25,9 +25,25 @@ const svg = {
   strokeLinejoin: "round" as const,
 };
 
+/*
+ * ONE LADDER, NOT TWO.
+ *
+ * These twenty-seven components defaulted to the literal `16` and this file
+ * imported nothing — a second scale, competing with `lib/iconSize.ts`, and the
+ * one everything off-ladder clustered around: of the twenty-four icon sites in
+ * the app that are not on a rung, eleven are in this file's consumer, and
+ * twenty-three of the app's sixty hardcoded sizes live there too. The other two
+ * icon files in this app both import `ICON` and default to `ICON.md`; this one
+ * was the outlier, not the pattern.
+ *
+ * Nothing renders differently: 16 IS `ICON.md`. What changes is that a rung has
+ * a name, so the next size is chosen from a ladder rather than typed.
+ */
+import { ICON } from "../../lib/iconSize.ts";
+
 type P = { size?: number };
 
-export function BackIcon({ size = 16 }: P) {
+export function BackIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M19 12H5" />
@@ -36,7 +52,7 @@ export function BackIcon({ size = 16 }: P) {
   );
 }
 
-export function ForwardIcon({ size = 16 }: P) {
+export function ForwardIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M5 12h14" />
@@ -47,7 +63,7 @@ export function ForwardIcon({ size = 16 }: P) {
 
 /** A circle that does not quite close, with the arrow at the gap — the only
  *  reload shape that reads at 16px. */
-export function ReloadIcon({ size = 16 }: P) {
+export function ReloadIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M20 12a8 8 0 1 1-2.6-5.9" />
@@ -56,7 +72,7 @@ export function ReloadIcon({ size = 16 }: P) {
   );
 }
 
-export function StopIcon({ size = 16 }: P) {
+export function StopIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M6.5 6.5l11 11" />
@@ -65,7 +81,7 @@ export function StopIcon({ size = 16 }: P) {
   );
 }
 
-export function HomeIcon({ size = 16 }: P) {
+export function HomeIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M4 10.5L12 4l8 6.5" />
@@ -76,7 +92,7 @@ export function HomeIcon({ size = 16 }: P) {
 
 /** A reticle. Says "point at a thing" in a way a magnifier does not — that one
  *  already means "find text on this page", two controls to the right. */
-export function TargetIcon({ size = 16 }: P) {
+export function TargetIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <circle cx="12" cy="12" r="6.5" />
@@ -86,7 +102,7 @@ export function TargetIcon({ size = 16 }: P) {
 }
 
 /** A speech bubble with a plus: leave a note on this, for somebody else. */
-export function NoteIcon({ size = 16 }: P) {
+export function NoteIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M20 15.5a2 2 0 0 1-2 2H8.5L4.5 21V6a2 2 0 0 1 2-2H18a2 2 0 0 1 2 2z" />
@@ -95,7 +111,7 @@ export function NoteIcon({ size = 16 }: P) {
   );
 }
 
-export function PenIcon({ size = 16 }: P) {
+export function PenIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M16.5 3.7l3.8 3.8" />
@@ -104,7 +120,7 @@ export function PenIcon({ size = 16 }: P) {
   );
 }
 
-export function SearchIcon({ size = 16 }: P) {
+export function SearchIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <circle cx="10.8" cy="10.8" r="6.3" />
@@ -114,7 +130,7 @@ export function SearchIcon({ size = 16 }: P) {
 }
 
 /** Angle brackets. The universal mark for "the code behind this". */
-export function CodeIcon({ size = 16 }: P) {
+export function CodeIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M8.5 7.5L3.5 12l5 4.5" />
@@ -123,7 +139,7 @@ export function CodeIcon({ size = 16 }: P) {
   );
 }
 
-export function ExternalIcon({ size = 16 }: P) {
+export function ExternalIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M13.5 4.5H19.5V10.5" />
@@ -136,7 +152,7 @@ export function ExternalIcon({ size = 16 }: P) {
 /** Three dots. Drawn as round caps on zero-length strokes so they inherit the
  *  same weight as every other icon here rather than being three circles that
  *  happen to look about right. */
-export function MoreIcon({ size = 16 }: P) {
+export function MoreIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size} strokeWidth={2.6}>
       <path d="M5.6 12h.01M12 12h.01M18.4 12h.01" />
@@ -144,7 +160,7 @@ export function MoreIcon({ size = 16 }: P) {
   );
 }
 
-export function PlusIcon({ size = 16 }: P) {
+export function PlusIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M12 5.5v13M5.5 12h13" />
@@ -183,7 +199,7 @@ export function GlobeIcon({ size = 12 }: P) {
 }
 
 /** The mark on an empty tab, and in the middle of an empty view. */
-export function BlankPageIcon({ size = 16 }: P) {
+export function BlankPageIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size} strokeWidth={1.6}>
       <circle cx="12" cy="12" r="8.5" />
@@ -199,6 +215,98 @@ export function SpinnerIcon({ size = 13 }: P) {
   return (
     <svg {...svg} width={size} height={size} strokeWidth={2.4} className="animate-spin">
       <path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" />
+    </svg>
+  );
+}
+
+/** A folder, for the shelf. Drawn open or shut, because the caret beside it is
+ *  4px of glyph and the folder is what the eye actually lands on. */
+export function FolderIcon({ size = 14, open }: P & { open?: boolean }) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M3 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.2h8a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-14A1.5 1.5 0 0 1 3 17.7z" />
+      {open && <path d="M3.4 18.6L6 11.6h15l-2.6 7" />}
+    </svg>
+  );
+}
+
+/**
+ * A container: one agent's identity, with its pages inside it.
+ *
+ * Not a folder. A folder is where you filed something; a container is a thing
+ * with its own walls — its own cookies, its own logins, its own cache — and
+ * with several agents working at once that distinction is the whole point of
+ * the bar. So: a box, drawn in one piece, with the seam that says it has an
+ * inside.
+ */
+export function ContainerIcon({ size = 13 }: P) {
+  return (
+    <svg {...svg} width={size} height={size} strokeWidth={1.9}>
+      <path d="M12 3.4l7.6 4.2v8.8L12 20.6 4.4 16.4V7.6z" />
+      <path d="M4.4 7.6L12 11.8l7.6-4.2" />
+      <path d="M12 11.8v8.8" />
+    </svg>
+  );
+}
+
+/** A space: the browser's whole set, swapped at once. Two panes, because that
+ *  is what changing one looks like — everything moves. */
+export function SpaceIcon({ size = 13 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="3.5" y="4.5" width="7" height="15" rx="1.5" />
+      <rect x="13.5" y="4.5" width="7" height="15" rx="1.5" />
+    </svg>
+  );
+}
+
+/** A camera, for the screenshot tool. */
+export function CameraIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M3.5 8.5a1.5 1.5 0 0 1 1.5-1.5h2l1.4-2h5.2L15 7h4a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z" />
+      <circle cx="12" cy="13" r="3.4" />
+    </svg>
+  );
+}
+
+/** The bar itself, for the control that hides it: a pane with a rail down one
+ *  side, which is what it is. */
+export function PanelIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <path d="M15 4.5v15" />
+    </svg>
+  );
+}
+
+/** Up and down, for stepping through search matches. Chevrons rather than the
+ *  ▲▼ glyphs: a clickable thing whose whole content is a character is the
+ *  mistake the icon audit exists to stop. */
+export function UpIcon({ size = 14 }: P) {
+  return <svg {...svg} width={size} height={size}><path d="M6 14.5L12 8.5l6 6" /></svg>;
+}
+
+export function DownIcon({ size = 14 }: P) {
+  return <svg {...svg} width={size} height={size}><path d="M6 9.5l6 6 6-6" /></svg>;
+}
+
+/** Keep it: an arrow into a tray. */
+export function SaveIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M12 4v10" /><path d="M8 10.5l4 4 4-4" /><path d="M4.5 17.5v2h15v-2" />
+    </svg>
+  );
+}
+
+/** Two panes sharing the width. */
+export function SplitIcon({ size = 14 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="3.5" y="5" width="17" height="14" rx="2" />
+      <path d="M12 5v14" />
     </svg>
   );
 }

@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 const TOKEN = "machine-token-for-this-test";
 let dir: string, base: string, phone = "", proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -49,6 +50,9 @@ beforeAll(async () => {
       TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       HOME: dir,
       XDG_CONFIG_HOME: dir,
+      // State (audit log, ledgers, engine conf) jailed too: without this a booted
+      // server writes into the developer's real ~/.local/state/agentglass.
+      AGENTGLASS_STATE_DIR: `${dir}/state`,
       AGENTGLASS_ROOT: dir,
       AGENTGLASS_DB: join(dir, "gate.db"),
       AGENTGLASS_TOKEN: TOKEN,
@@ -62,7 +66,7 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
   throw new Error("the server did not come up: " + (await new Response(proc.stderr as ReadableStream).text()).slice(0, 400));
-});
+}, SERVER_BOOT_MS);
 
 afterAll(() => {
   try { proc?.kill(); } catch { /* already gone */ }
@@ -94,9 +98,15 @@ async function hold(id: string, timeoutMs = 30_000): Promise<void> {
   throw new Error("the gate never appeared in the pending queue");
 }
 
-const decide = (id: string, cred: string, decision: "allow" | "deny", reason = "") =>
+/** `origin` because the desk is a browser and the phone is not: a page always
+ *  attaches one to a POST, and `/gate/decide` now requires either that or a
+ *  paired-device credential — the party being held has neither. See
+ *  `mayReleaseAHold` in index.ts and gate-release.test.ts. */
+const decide = (id: string, cred: string, decision: "allow" | "deny", reason = "", origin?: string) =>
   fetch(base + "/gate/decide", {
-    method: "POST", headers: as(cred), body: JSON.stringify({ id, decision, reason }),
+    method: "POST",
+    headers: origin ? { ...as(cred), origin } : as(cred),
+    body: JSON.stringify({ id, decision, reason }),
   }).then((r) => r.json() as Promise<Json>);
 
 const history = () =>
@@ -130,7 +140,8 @@ describe("who answered", () => {
   test("the dashboard on this machine is still a place, because its token is shared", async () => {
     const id = nextId();
     await hold(id);
-    expect((await decide(id, TOKEN, "allow")).ok).toBe(true);
+    // The shell's own scheme, which is what the desktop app's renderer sends.
+    expect((await decide(id, TOKEN, "allow", "", "agentglass://app")).ok).toBe(true);
     expect((await seen(id)).decided_by).toBe("local");
   });
 });

@@ -18,6 +18,23 @@
 import { tmpdir } from "node:os";
 import { resolveTmuxBin, tmuxSocket } from "./tmuxbin.ts";
 import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
+/* The restore layer is bookkeeping ON TOP of this one, and it already imports
+   this file — so it hands its recorder down here instead of us reaching up for
+   it. A static import upwards would be a cycle; a dynamic one made the bundler
+   emit a module-ordering helper it never defined, and the server died at boot
+   with `__promiseAll is not defined` on 2026-08-25. A plain function slot has
+   no module graph to get wrong. */
+let captureNowFn: (() => void) | null = null;
+export function setCaptureHook(fn: () => void): void {
+  captureNowFn = fn;
+}
+function captureNow(): void {
+  try {
+    captureNowFn?.();
+  } catch {
+    /* Bookkeeping may never fail a real operation. */
+  }
+}
 
 /** Our socket name. Overridable so tests get a server of their own and never
  *  race, kill, or inherit the one a running app is using.
@@ -91,6 +108,56 @@ export function engineConsoleArgv(root: string): string[] | null {
   const named = [...base];
   named[at + 1] = `${named[at + 1]}-console`;
   return named;
+}
+
+/**
+ * A bench tab's own engine session.
+ *
+ * The floating bench is a third client on this machine's engine, after the
+ * terminal view and the docked console, and it needs the same thing they each
+ * needed: a session nobody else is attached to. Two clients on one tmux session
+ * mirror each other — that is not a bug to work around, it is what tmux is for,
+ * and it is the wrong answer here twice over. The bench would show whatever the
+ * terminal view is showing, and the two would fight over the size, which on
+ * this machine has meant real sessions being resized under real work.
+ *
+ * One session per TAB rather than one per bench, keyed by a small slot number
+ * the client keeps. That is what makes a tab survive: close the app, open it
+ * again, and tab 2 attaches to `<checkout>-bench2`, still running whatever it
+ * was running. The slot is clamped by the caller before it ever reaches a
+ * session name.
+ */
+export function engineBenchArgv(root: string, slot: number, runs?: string[] | null, env?: Record<string, string>): string[] | null {
+  const base = engineAttachArgv(root);
+  if (!base) return null;
+  const at = base.lastIndexOf("-s");
+  if (at < 0 || !base[at + 1]) return null;
+  const n = Math.min(Math.max(Math.floor(slot) || 1, 1), 99);
+  const named = [...base];
+  named[at + 1] = `${named[at + 1]}-bench${n}`;
+  /*
+   * The session's own command, when the tab is for something in particular.
+   *
+   * tmux takes it as argv — no shell, no quoting, nothing interpreted — so an
+   * editor or an agent CLI becomes the process tmux is holding. That is what
+   * makes a bench tab survive the window: `-A` reattaches to it next time,
+   * still running, instead of starting a second one beside it.
+   *
+   * Ignored on reattach, which is tmux's own rule and the right one here: the
+   * session that exists wins over the command we would have started.
+   */
+  /* Variables for the session's first window, `-e` because a pane inherits
+     the tmux SERVER's environment, not the client's — see engineWindowRunning.
+     Ignored on reattach with the command, by the same rule. */
+  const withEnv = [...named, ...Object.entries(env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`])];
+  return runs && runs.length ? [...withEnv, ...runs] : withEnv;
+}
+
+/** The session name a bench tab attaches to, for the reads that ask what is
+ *  still alive. Derived from the argv builder above rather than spelled twice. */
+export function benchSessionName(root: string, slot: number): string {
+  const n = Math.min(Math.max(Math.floor(slot) || 1, 1), 99);
+  return `${engineSessionName(root)}-bench${n}`;
 }
 
 /**
@@ -219,13 +286,23 @@ export const validPaneName = (n: string): boolean => NAME_RE.test(n);
  * as its own argv entry, never through a shell, and it becomes a DIRECTORY under
  * the restore dir where the scrollback is written. So: nothing that can climb
  * out of that directory, nothing an option parser would read as a flag, no
- * control characters, and a length a filesystem takes. tmux itself already
- * refuses `.` and `:` in a session name.
+ * control characters, and a length a filesystem takes.
+ *
+ * And nothing that is not ONE session to tmux. `:` and `.` are target syntax —
+ * `session:window.pane` — and tmux itself never lets a session be named with
+ * either (new-session and rename-session rewrite them to `_`), so no real
+ * session is ever refused by this line. What it refuses is the string that
+ * passes every equality check as itself and is then resolved by tmux as
+ * something else: killSessionByName compared `"orbit:"` against the session
+ * the client is on and against the lock list, found neither, and ran
+ * `kill-session -t =orbit:` — which tmux reads as "session orbit, window
+ * (empty)" and kills orbit, the very session both checks had been guarding.
+ * A name is either a session's own name or it is not a name.
  */
 export function validSessionName(n: string): boolean {
   if (!n || n.length > 64) return false;
   if (n.startsWith("-")) return false;
-  if (n.includes("/") || n.includes("\\") || n === "." || n === "..") return false;
+  if (n.includes("/") || n.includes("\\") || n.includes(":") || n.includes(".")) return false;
   // eslint-disable-next-line no-control-regex
   return !/[\u0000-\u001f\u007f]/.test(n);
 }
@@ -291,8 +368,74 @@ export async function listPanes(): Promise<string[]> {
  */
 export async function engineWindowRunning(
   root: string, name: string, argv: string[], cwd: string = root,
+  /*
+   * Variables for the new window only, and the reason it is a parameter rather
+   * than the caller exporting them first: a tmux window inherits the SERVER's
+   * environment, not the environment of whoever asked for the window, so
+   * setting a variable here and expecting the pane to see it does not work.
+   *
+   * It also keeps secrets off the command line. The understudy hands its agent
+   * a minted read-only credential; passed as part of the command it would sit
+   * in `ps` output and be printed in the pane a person is watching.
+   */
+  env?: Record<string, string>,
+  /*
+   * WHERE THE WINDOW GOES, and it is the caller's to decide.
+   *
+   * This used to be `engineSessionName(root)` always — one tmux session per
+   * checkout. For a run the clone starts on its own that is right: those belong
+   * in their own session rather than filling somebody's strip with windows they
+   * did not open.
+   *
+   * For a button a person just pressed it is wrong, and it was wrong four
+   * times over before it was said plainly: "when I click resolve on a
+   * conflict… it has to open in the session I have open, it must not
+   * create a new session". A window in another session never appears on
+   * the strip, and the fix that moves the client there instead takes their own
+   * four windows off the screen.
+   *
+   * There was never a technical reason for the split. A window lives in one
+   * session and starts its shell wherever `-c` says; the directory is the
+   * window's, not the session's.
+   */
+  into?: string,
+  /**
+   * SELECT THE NEW WINDOW, or leave it in the background.
+   *
+   * `new-window` without `-d` makes the new window the session's current one,
+   * and every client attached to that session redraws onto it — the app's
+   * Terminal panel and any real `tmux -L agentglass attach` alike. That is
+   * right when a person pressed a button and is waiting to see what happened.
+   *
+   * It is wrong for the clone, which opens one window per task in the session
+   * of the PROJECT — the very session a terminal tab on that checkout is
+   * attached to. One yank per task, mid-typing, and only the first of them can
+   * be traced to anything a person did. The same harm is already written down
+   * two files over: "took four windows of somebody's own work off their screen
+   * without warning".
+   *
+   * So selecting is opt-in. `-P -F` still prints the pane and window ids under
+   * `-d` — tmuxrestore.ts has relied on that all along — so the lease, the
+   * resize and the capture are unaffected either way.
+   */
+  select = false,
 ): Promise<{ paneId: string; windowId: string } | null> {
-  const session = engineSessionName(root);
+  /*
+   * STRICTER THAN `validSessionName`, and only for this parameter.
+   *
+   * That check allows spaces and punctuation, which is right for names this
+   * app already made and must keep addressing. `into` is new surface reaching
+   * `new-window -t`, and a probe passing `"not valid; rm -rf"` created a
+   * session by that name — found by running it, not by reading it. Every real
+   * session here is letters, digits, dot, dash or underscore, so anything else
+   * falls back to the engine's own name rather than being obeyed.
+   */
+  /* No dot: tmux SILENTLY rewrites one to an underscore when it makes the
+     session, so `-t a.b` then addresses a session that does not exist and the
+     window is lost. Measured against a real tmux — no session this app makes
+     has ever contained one. */
+  const namedSession = typeof into === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(into) ? into : "";
+  const session = namedSession || engineSessionName(root);
   if (!validSessionName(session)) return null;
   /* The config, before the first tmux call rather than only on the attach path.
      `tmux()` passes `-f confPath()` whatever the caller is, so a window opened
@@ -313,18 +456,50 @@ export async function engineWindowRunning(
    * returned null: the second pull request review of a day would have opened
    * nothing at all, silently. `has-session` costs one more call and cannot lie.
    */
-  const there = await tmux(["has-session", "-t", `=${session}`]);
-  if (!there.ok) {
-    const made = await tmux(["new-session", "-d", "-s", session, "-c", root]);
-    if (!made.ok) return null;
-  }
   const clean = engineWindowName(name);
-  const out = await tmux([
-    "new-window", "-P", "-F", "#{pane_id}\t#{window_id}", "-t", session, "-c", cwd,
+  /* Everything that describes the window, built once: whichever tmux command
+     ends up making it takes the same flags in the same order. */
+  const shape = [
+    "-P", "-F", "#{pane_id}\t#{window_id}", "-c", cwd,
     ...(clean ? ["-n", clean] : []),
+    ...Object.entries(env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     ...argv,
-  ]);
+  ];
+
+  const there = await tmux(["has-session", "-t", `=${session}`]);
+  /*
+   * THE FIRST WINDOW IS THE RUN, not an empty shell somebody has to close.
+   *
+   * `new-session -d -s x` with no command opens the user's login shell in a
+   * window nobody asked for, and nothing ever closes it: the run's window is
+   * made separately, one command later. So a session created for a run has one
+   * dead window forever — measured on an isolated server, 3 windows for 2 runs
+   * — and it showed up in his strip as a stray `fish` sitting beside the work.
+   * It also keeps the session alive after the real windows are gone.
+   *
+   * The answer is this file's neighbour's: `tmuxrestore` has always created
+   * the session WITH its first real window and used `new-window` only for the
+   * rest. tmux prints the ids for `new-session` exactly as it does for
+   * `new-window`, so the caller cannot tell which path ran — measured on tmux
+   * 3.6a, including `-n` and `-e`, which is what makes the two argument lists
+   * interchangeable.
+   *
+   * `-d` unconditionally on this path, and `select` is not dropped: with no
+   * session there is no client attached to redraw, and the window tmux makes
+   * with the session is that session's current one already.
+   */
+  const out = there.ok
+    ? await tmux(["new-window", ...(select ? [] : ["-d"]), "-t", session, ...shape])
+    : await tmux(["new-session", "-d", "-s", session, ...shape]);
   if (!out.ok) return null;
+  /* Write it down straight away rather than waiting for the sweep. A session
+     that exists for eight seconds before anything records it is a session a
+     reboot in those eight seconds would not bring back — and 2026-08-25 is the
+     reason that sentence is taken seriously here. Coalesced and silent:
+     bookkeeping may never fail a real operation. After the window rather than
+     before it, now that the two are one call: a capture between them would
+     have recorded a session whose only window was the empty one. */
+  if (!there.ok) captureNow();
   const [paneId = "", windowId = ""] = (out.stdout.split("\n")[0] ?? "").trim().split("\t");
   // Both or neither: tmux printing something this does not recognise is not a
   // reason to hand a caller a string that goes on a command line.
@@ -521,8 +696,9 @@ export function forgetPane(name: string): void { lastUsed.delete(name); pinned.d
  * Held in memory, alongside `lastUsed`, and dropped when the pane is — a pin on
  * a process that no longer exists is not a preference anybody holds. A server
  * restart therefore loses pins while the tmux panes survive it; the sweeper's
- * own rule covers that, since a pane it has no record of gets a fresh full
- * interval rather than being reaped immediately.
+ * own rule covers that too, since a pane it has no `lastUsed` record for —
+ * which after a restart is every one of them — is left alone rather than
+ * reaped (see `evictIdlePanes`).
  */
 const pinned = new Set<string>();
 
@@ -598,11 +774,24 @@ export async function panes(list: () => Promise<string[]> = listPanes): Promise<
 
 /** Kill panes idle past the threshold. Returns the names it reclaimed.
  *
- *  A pane we have no record of is left alone rather than reaped: it is either a
- *  chat from before a server restart or something a human started by hand, and
- *  killing an agent mid-work to save memory it might be actively using is a much
- *  worse failure than holding the memory. It gets a record instead, so it is
- *  eligible for eviction one full interval from now.
+ *  Candidates are names `touchPane` has recorded — which, today, means chat
+ *  panes only: it is called from exactly one place, `chatpane.ts`, once a
+ *  turn is actually served on a pane. A session this process never touched is
+ *  left alone unconditionally, not given a delayed grace period, because a
+ *  name alone cannot say what kind of session it is.
+ *
+ *  That matters because `listPanes` enumerates every session on our socket,
+ *  and this app puts more than chat panes on it: the Terminal tab, the docked
+ *  console and the floating bench each get their own long-lived engine
+ *  session per checkout (see `engineSessionName`), and none of those are ever
+ *  `touchPane`d. The old rule gave *any* untouched name a timestamp on first
+ *  sight and reaped it one interval later regardless — which is right for an
+ *  abandoned chat and wrong for a terminal a person is reading but not typing
+ *  in, and killing the session takes every window inside it, including a
+ *  leased run, with it. Gating on the name's *shape* (`validPaneName`) would
+ *  not have fixed this: an engine session is named after its checkout
+ *  directory, and a directory name can easily be as long and UUID-shaped as a
+ *  chat id demands — this worktree's own is, which is luck, not a rule.
  *
  *  A pinned pane is skipped entirely — see `pinned`. */
 export async function evictIdlePanes(
@@ -617,7 +806,7 @@ export async function evictIdlePanes(
     // timestamp it will be judged on the moment it is unpinned.
     if (pinned.has(name)) continue;
     const seen = lastUsed.get(name);
-    if (seen === undefined) { lastUsed.set(name, now); continue; }
+    if (seen === undefined) continue;
     if (now - seen < window) continue;
     await io.kill(name);
     lastUsed.delete(name);

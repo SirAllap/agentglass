@@ -51,21 +51,38 @@ describe("reading a saved list", () => {
   });
 });
 
-describe("when the view answers nothing", () => {
-  it("checks the list before believing it", () => {
+describe("a list board reads BOTH the view and the list", () => {
+  it("merges them, because each is missing what the other has", () => {
     /*
-     * Measured on two real lists: one answers 105 tasks through its default
-     * view, and another — a hundred cards, twelve of them on screen in the
-     * browser — answers ZERO through its own while its other views answer
-     * thirty each. A board that draws "nothing here" over a hundred cards is
-     * the worst answer available, so an empty view is checked rather than
-     * trusted.
+     * The view answers the question on screen and reaches cards whose home is
+     * another list — 63 of one real list's 105. What it also does is apply the
+     * view's own FILTER, and a list's default view usually has one: measured
+     * on that same list, the view answered 105 cards across nine statuses
+     * while the list holds 252 across fourteen. Everything in TO DO, IN
+     * STAGING, IN PRODUCTION, WON'T FIX and COMPLETED was invisible — not
+     * collapsed, absent, with no way to ask for it.
+     *
+     * And the older reason this reads both is still here: one list answers
+     * ZERO through its own default view while its other views answer thirty
+     * each, and a board drawing "nothing here" over a hundred cards is the
+     * worst answer available.
      */
     const src = require("node:fs").readFileSync(new URL("../src/providers.ts", import.meta.url), "utf8") as string;
     const at = src.indexOf("async function listTasksOf");
     const fn = src.slice(at, src.indexOf("\n}", at));
-    expect(fn).toContain("(r.data?.tasks.length ?? 0) > 0");
     expect(fn).toContain("const raw = await rawListTasks(token, listId, me);");
+    expect(fn, "and both are kept, not one chosen").toContain("mergeById(");
+  });
+
+  it("and the raw half asks for the closed ones", () => {
+    /* A status of type `closed` is still a status a person groups by.
+       `include_closed=false` meant COMPLETED — 199 of that list's 252 — was
+       never fetched, so the board could not have drawn the group however it
+       was asked. Whether a done group is SHOWN is a separate decision the
+       panel already makes. */
+    const cu = require("node:fs").readFileSync(new URL("../src/clickup.ts", import.meta.url), "utf8") as string;
+    const at = cu.indexOf("export async function rawListTasks");
+    expect(cu.slice(at, cu.indexOf("\n}", at))).toContain("include_closed=true");
   });
 });
 

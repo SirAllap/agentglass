@@ -103,8 +103,8 @@ describe("pinning", () => {
   });
 
   test("pinning does not resurrect the record of a pane nobody has used", async () => {
-    // A pane this process has never served is left alone for one full interval
-    // whether or not it is pinned — the sweeper's existing rule, unchanged.
+    // A pane this process has never served is left alone, pinned or not — the
+    // sweeper's existing rule, unchanged.
     const t = fakeTmux([STRANGER]);
     pinPane(STRANGER, true);
     expect(await evictIdlePanes(3_000_000 + HOUR, t.io)).toEqual([]);
@@ -127,14 +127,34 @@ describe("what the sweeper still does", () => {
     expect(await evictIdlePanes(t0, t.io)).toEqual([]);
   });
 
-  test("leaves a pane it has never seen, and gives it a full interval", async () => {
-    // Unchanged and load-bearing: after a restart every genuinely live chat
-    // looks exactly like an orphan, and killing an agent mid-work to save
-    // memory is a much worse failure than holding the memory.
+  test("leaves a pane it has never seen alone, indefinitely", async () => {
+    // Load-bearing, and the reason it changed from a delayed grace period to
+    // this: `listPanes` enumerates every session on our tmux socket, not just
+    // chat panes — the Terminal tab, the docked console and the floating
+    // bench each keep their own long-lived engine session there too, and
+    // nothing ever calls `touchPane` for those. A name this process has never
+    // recorded a turn for is not "probably an orphaned chat"; it is just as
+    // likely a session a person is reading right now. Only `touchPane`
+    // vouches for a name, and nothing else may.
     const t0 = 9_000_000;
     const t = fakeTmux([STRANGER]);
     expect(await evictIdlePanes(t0, t.io)).toEqual([]);
-    expect(await evictIdlePanes(t0 + HOUR, t.io)).toEqual([STRANGER]);
+    expect(await evictIdlePanes(t0 + HOUR, t.io)).toEqual([]);
+    expect(await evictIdlePanes(t0 + 10 * HOUR, t.io)).toEqual([]);
+    expect(t.killed).toEqual([]);
+  });
+
+  test("a working session survives thirty minutes of idleness it was never told about", async () => {
+    // The negative that matters here: an engine session for the Terminal tab
+    // or the docked console never calls `touchPane` at all, however long a
+    // person sits reading it. Before this, that silence was read as "idle
+    // since the sweeper first noticed it" and the whole session — the
+    // terminal, any run window inside it — died thirty minutes later.
+    const ENGINE = "agentglass-understudy-the-idle-sweep-can-kill-a-whole-working-70a21e";
+    const t = fakeTmux([ENGINE]);
+    expect(await evictIdlePanes(30 * 60_000, t.io)).toEqual([]);
+    expect(await evictIdlePanes(365 * 24 * HOUR, t.io)).toEqual([]);
+    expect(t.killed).toEqual([]);
   });
 
   test("does nothing at all when eviction is switched off", async () => {

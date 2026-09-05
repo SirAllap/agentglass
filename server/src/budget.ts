@@ -1,6 +1,7 @@
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../shared/types.ts";
 import { spendBetween } from "./db.ts";
-import { readBudgets } from "./config.ts";
+import { readBudgets, inScope } from "./config.ts";
+import { paneForSession, paneAgentNote } from "./panewt.ts";
 
 /**
  * A number you chose, instead of one this app picked.
@@ -107,4 +108,98 @@ export function budgetStatus(
 export function budgetScopeLabel(b: Budget): string {
   const where = b.root ? b.root.split("/").filter(Boolean).pop() || b.root : "everything";
   return b.model ? `${where} · ${b.model}` : where;
+}
+
+/**
+ * Which budget a tool call running in `cwd` has already blown, or null.
+ *
+ * Everything else in this file answers "how are we doing"; this one answers
+ * "should somebody be told before the next call runs", which is the question a
+ * gate can act on and a progress bar cannot. See budgetHoldReason() and the
+ * caller in gate.ts.
+ *
+ * The one thing it must never do is invent a limit. A project with no budget, a
+ * budget whose limit never parsed, a session whose directory could not be
+ * recovered — all of those answer null, because the alternative is a cost
+ * tracker that stops somebody's agents over a number nobody chose, and that is
+ * a worse product than one that only reports.
+ *
+ * `inScope` decides whether a budget covers this directory, rather than a
+ * prefix test written here. A budget on ~/code/orbit has to cover the linked
+ * worktree at ~/code/orbit-WEB-1042 — which is where the work actually happens
+ * and which no prefix test will ever match — and that is exactly the rule
+ * inScope already implements for the workspace scope. It also gives both edges
+ * for free: a budget with no root is "everything" and therefore covers a
+ * directory we could not place, and a budget WITH a root does not cover an
+ * unknown directory, because guessing which project an agent is in is how the
+ * wrong fleet gets stopped.
+ *
+ * When several are over, the one furthest past its limit wins: somebody who is
+ * about to be shown a single number wants the worst one.
+ */
+export function overBudgetFor(
+  cwd: string,
+  statuses: BudgetStatus[] = budgetStatus(),
+): BudgetStatus | null {
+  let worst: BudgetStatus | null = null;
+  for (const s of statuses) {
+    if (s.level !== "over") continue;
+    if (!inScope(cwd, s.budget.root)) continue;
+    if (!worst || s.pct > worst.pct) worst = s;
+  }
+  return worst;
+}
+
+/**
+ * The sentence a person reads while an agent is held at the gate.
+ *
+ * Three facts, and the third is the one every spend warning leaves out: the
+ * limit, what has gone through it, and what happens if they put the phone down.
+ * The gate is fail-open by default — the hold expires and the call proceeds —
+ * so a line that stops after the first two reads like a block, and somebody
+ * would go scrambling to approve a call that was never going to be stopped.
+ * Under AGENTGLASS_GATE_FAILCLOSED the same silence denies it instead, which is
+ * the opposite mistake to make, so the policy in force is what gets said.
+ *
+ * Opens with the same words as the dashboard insight ("Over budget · $x of $y
+ * this month") on purpose: the red bar and the held call are one fact, and two
+ * phrasings of it read as two problems.
+ */
+export function budgetHoldReason(s: BudgetStatus, failClosed = false): string {
+  const head = `Over budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)} for ${budgetScopeLabel(s.budget)}`;
+  return failClosed
+    ? `${head} — agentglass is fail-closed, so if you do nothing this call is denied when the hold expires.`
+    : `${head} — nothing is blocked by the budget itself: if you do nothing this call proceeds when the hold expires.`;
+}
+
+/**
+ * The budget reason for a gated call, or undefined when there is none.
+ *
+ * It lives here rather than in gate.ts because reaching budget.ts from there
+ * adds the edge gate → budget → config, and the gate is imported by a great
+ * many modules. Bun keeps a `require()` of a local module as a static
+ * dependency, so deferring does not undo it: the edge changes WHEN config.ts
+ * and the database layer first initialise for every consumer of the gate, and
+ * the server suite runs in one process — which cost ten tests in a file the
+ * budget work never touched. Holding a call is what the gate is; deciding which
+ * policies are worth holding one for belongs out here.
+ *
+ * Never throws. It reads config.json and queries SQLite, and a throw on this
+ * path would leave /gate answering 500 — allowed by a fail-open hook and DENIED
+ * by a fail-closed one. An annotation must not be able to block a tool call by
+ * crashing.
+ */
+export function budgetHoldFor(session: string, failClosed: boolean): string | undefined {
+  try {
+    // The gate payload carries no cwd. The hook records a pane note that does,
+    // which is how describeSession recovers it too. No pane note means no
+    // project, and no project means no project budget — overBudgetFor refuses
+    // to guess one.
+    const pane = paneForSession(session);
+    const over = overBudgetFor(pane ? paneAgentNote(pane)?.cwd ?? "" : "");
+    return over ? budgetHoldReason(over, failClosed) : undefined;
+  } catch (e) {
+    console.warn("[gate] budget check skipped:", e instanceof Error ? e.message : e);
+    return undefined;
+  }
 }

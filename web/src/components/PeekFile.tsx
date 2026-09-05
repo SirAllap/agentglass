@@ -20,6 +20,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { ptyWsUrl, IS_DEMO } from "../lib/api.ts";
+import { showFile } from "../lib/benchStore.ts";
 import { themeFromCss } from "./TerminalPanel.tsx";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { termOptions } from "../lib/termPrefs.ts";
@@ -32,6 +33,7 @@ import {
   SIZE_MIN, SIZE_MAX, WIDTHS, type MdWidth,
 } from "../lib/mdPrefs.ts";
 import { findRanges, paint as paintFind, clear as clearFind, step as stepFind, reveal as revealFind } from "../lib/mdFind.ts";
+import { groupAt, groupLabel, groupTotals, type ChangeGroup } from "../lib/changeGroups.ts";
 
 export type Peek = {
   root: string;
@@ -62,6 +64,17 @@ export type Peek = {
    * wearing the right name.
    */
   ref?: string;
+  /** Land on this line rather than on the first one — the change you came for. */
+  line?: number;
+  /**
+   * Where the file changed, for the rail down the right.
+   *
+   * A diff tells you a file has four changed places and then hands you a file
+   * with no sign of where they are: "I don't know how to get to that line quickly
+   * and I have no information to move around with". The rail is that information — see
+   * changeGroups.ts for why it is places and not lines.
+   */
+  groups?: ChangeGroup[];
 };
 
 /** Files this app can render instead of edit. Only markdown, deliberately:
@@ -75,6 +88,165 @@ const READABLE = /\.(md|markdown|mdx)$/i;
  *  places disagreeing about what "renderable" means is how a `.py` ended up in
  *  the markdown viewer. */
 export const isRenderable = (path: string) => READABLE.test(path);
+
+/**
+ * Where the file changed, down its right, as places rather than as lines.
+ *
+ * The first version listed one entry per changed line: sixty-three numbers for
+ * a file with four changes in it. "130, 131, 132 … 141" is one thing — a
+ * function somebody added — and a list that says otherwise is a list nobody
+ * reads. So a run of changes is one row carrying its range, how much it changed
+ * and, where the language makes it findable, the name of what it is inside
+ * (see changeGroups.ts). The name is what you are looking for; the number is
+ * what confirms it.
+ *
+ * Three things make it a map rather than a menu:
+ *
+ *   * the strip on the left is the WHOLE file at scale, with a band per change
+ *     and the part you are looking at boxed — so "all at the top" and "spread
+ *     through it" are one glance apart;
+ *   * it follows the cursor, so scrolling in the editor lights the place you
+ *     landed in;
+ *   * and a place unfolds into its own lines for the tenth time out of ten,
+ *     when the range is forty lines and you want the third edit.
+ */
+function ChangeRail({ groups, fileLines, cursor, onGo }: {
+  groups: ChangeGroup[];
+  /** How long the file is, for the strip. 0 when nobody has counted it, and
+   *  then the strip is not drawn rather than drawn to a made-up length. */
+  fileLines: number;
+  /** Where the editor's cursor is, when it can be asked. 0 for "no idea". */
+  cursor: number;
+  onGo: (line: number) => void;
+}) {
+  const [sel, setSel] = useState(0);
+  const [open, setOpen] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+
+  /* The cursor decides, when there is one: the rail follows the editor rather
+     than remembering the last press. Without one it is the last press, which is
+     what it was before anything could ask nvim where it is. */
+  const at = cursor > 0 ? groupAt(groups, cursor) : sel;
+  useEffect(() => { if (cursor > 0) setSel(groupAt(groups, cursor)); }, [cursor, groups]);
+  useEffect(() => {
+    box.current?.querySelector<HTMLElement>('[data-on="1"]')?.scrollIntoView({ block: "nearest" });
+  }, [at]);
+
+  if (!groups.length) return null;
+  const totals = groupTotals(groups);
+  const go = (i: number) => {
+    const n = Math.min(Math.max(i, 0), groups.length - 1);
+    setSel(n);
+    onGo(groups[n]!.from);
+  };
+  const step = (d: 1 | -1) => go((at + d + groups.length) % groups.length);
+  /** Where a line sits in the file, as a percentage — the strip's whole maths. */
+  const pc = (line: number) => Math.max(0, Math.min(100, (line / Math.max(fileLines, 1)) * 100));
+  const here = groups[at];
+
+  return (
+    <div className="shrink-0 flex flex-col"
+      style={{ width: 190, borderLeft: "1px solid color-mix(in srgb, var(--text) 12%, transparent)", background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
+      {/* Where the cursor is, in the file's own words. Blank until the editor
+          answers, rather than a guess that would be wrong half the time. */}
+      {here?.symbol && (
+        <div className="px-2 pt-2 pb-1 text-[10px] leading-tight truncate" style={{ color: "var(--text2)" }} title={here.symbol}>
+          {here.symbol}
+        </div>
+      )}
+      <div className="flex items-center gap-1 px-2 pb-1.5 pt-1" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+        <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>
+          {totals.places} {totals.places === 1 ? "place" : "places"}
+        </span>
+        <span className="ml-auto text-[9.5px] tabular-nums flex gap-1">
+          {totals.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{totals.added}</span>}
+          {totals.removed > 0 && <span style={{ color: "var(--error)" }}>−{totals.removed}</span>}
+        </span>
+      </div>
+
+      <div className="flex-1 min-h-0 flex gap-1 px-1.5 py-1.5">
+        {/* The file at scale. Ten pixels wide, and the only thing on this rail
+            that answers "are the changes together or all over it". */}
+        {fileLines > 0 && (
+          <button className="relative shrink-0 rounded"
+            title="The whole file — press to jump to that part of it"
+            style={{ width: 10, background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const line = Math.round(((e.clientY - r.top) / Math.max(r.height, 1)) * fileLines);
+              const near = groups.reduce((best, g, i) => (Math.abs(g.from - line) < Math.abs(groups[best]!.from - line) ? i : best), 0);
+              go(near);
+            }}>
+            {groups.map((g, i) => (
+              <span key={i} aria-hidden className="absolute left-0 right-0 rounded-sm"
+                style={{
+                  top: `${pc(g.from)}%`,
+                  height: `${Math.max(1.2, pc(g.to) - pc(g.from))}%`,
+                  background: g.added && !g.removed ? "var(--success, #98c379)"
+                    : g.removed && !g.added ? "var(--error)" : "var(--warning)",
+                  opacity: i === at ? 1 : 0.55,
+                }} />
+            ))}
+            {/* Where the cursor is, boxed. */}
+            {cursor > 0 && (
+              <span aria-hidden className="absolute rounded-sm"
+                style={{ top: `calc(${pc(cursor)}% - 1px)`, left: -2, right: -2, height: 3, background: "var(--primary)" }} />
+            )}
+          </button>
+        )}
+
+        <div ref={box} className="agx-scroll flex-1 min-w-0 overflow-y-auto flex flex-col gap-0.5">
+          {groups.map((g, i) => (
+            <div key={`${g.from}-${i}`} className="min-w-0">
+              <button onClick={() => go(i)} data-on={i === at ? "1" : undefined}
+                onDoubleClick={() => setOpen(open === i ? null : i)}
+                title={`${groupLabel(g)}${g.symbol ? ` · ${g.symbol}` : ""} — double-click for the lines`}
+                className="w-full rounded px-1.5 py-1 text-left"
+                style={{
+                  background: i === at ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "transparent",
+                  boxShadow: i === at ? "inset 2px 0 0 var(--primary)" : undefined,
+                }}>
+                <span className="flex items-baseline gap-1.5">
+                  <span className="text-[10.5px] tabular-nums" style={{ color: i === at ? "var(--text)" : "var(--text2)" }}>{groupLabel(g)}</span>
+                  <span className="ml-auto text-[9.5px] tabular-nums shrink-0">
+                    {g.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{g.added}</span>}
+                    {g.removed > 0 && <span style={{ color: "var(--error)" }}> −{g.removed}</span>}
+                  </span>
+                </span>
+                {g.symbol && (
+                  <span className="block text-[9.5px] truncate" style={{ color: i === at ? "var(--text2)" : "var(--text4)" }}>{g.symbol}</span>
+                )}
+              </button>
+              {open === i && g.lines.length > 1 && (
+                <div className="flex flex-wrap gap-0.5 pl-2 pb-1">
+                  {g.lines.map((n) => (
+                    <button key={n} onClick={() => { setSel(i); onGo(n); }}
+                      className="agx-btn rounded text-[9.5px] tabular-nums px-1"
+                      style={{ color: "var(--text3)" }} title={`Line ${n}`}>{n}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between px-2 py-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+        <span className="flex items-center gap-1">
+          <button className="agx-btn rounded grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}
+            title="Previous place (p)" onClick={() => step(-1)}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 14l6-6 6 6" /></svg>
+          </button>
+          <button className="agx-btn rounded grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}
+            title="Next place (n)" onClick={() => step(1)}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 10l6 6 6-6" /></svg>
+          </button>
+        </span>
+        <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>{at + 1} / {groups.length}</span>
+      </div>
+    </div>
+  );
+}
 
 export function PeekFile({ peek, onClose, topPx }: {
   peek: Peek;
@@ -93,6 +265,17 @@ export function PeekFile({ peek, onClose, topPx }: {
   topPx?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  /** Send the editor to a line. Set once the socket is up — see the effect. */
+  const jump = useRef<((line: number) => void) | null>(null);
+  /** How long the file is, for the strip of the whole file. 0 until measured,
+   *  and the strip is simply not drawn until then. */
+  const [fileLines, setFileLines] = useState(0);
+  /** Where the editor's cursor is. 0 for "nothing can be asked" — no nvim, an
+   *  older one, a socket that died — and the rail then works the way it did
+   *  before any of this existed. */
+  const [cursor, setCursor] = useState(0);
+  /** The handle for asking. Arrives in the pty's `ready` frame. */
+  const [editorId, setEditorId] = useState("");
   const [error, setError] = useState<string | null>(null);
   /*
    * Read it, or edit it.
@@ -122,6 +305,29 @@ export function PeekFile({ peek, onClose, topPx }: {
   const proseRef = useRef<HTMLDivElement>(null);
   const findRef = useRef<HTMLInputElement>(null);
   const ranges = useRef<Range[]>([]);
+
+  useEffect(() => {
+    setFileLines(0);
+    if (!peek.groups?.length) return;
+    let live = true;
+    void api.filesMeasure(peek.path).then((r) => { if (live && r.ok && r.lines) setFileLines(r.lines); }).catch(() => { /* no strip, then */ });
+    return () => { live = false; };
+  }, [peek.path, peek.groups]);
+
+  /* Where the cursor is, while this pane is open.
+     Polled rather than pushed: nvim answers an expression over its socket and
+     has no way to call us. Under half a second is what "it follows me" feels
+     like; the call is one short-lived process and it stops with the pane. */
+  useEffect(() => {
+    if (!editorId) return;
+    let live = true;
+    const ask = () => {
+      void api.editorWhere(editorId).then((r) => { if (live && r.ok && r.line) setCursor(r.line); }).catch(() => { /* no idea, then */ });
+    };
+    ask();
+    const timer = setInterval(ask, 450);
+    return () => { live = false; clearInterval(timer); };
+  }, [editorId]);
 
   const canRender = READABLE.test(peek.path);
   /* A ref has no file on disk, so there is nothing for an editor to open. Held
@@ -294,7 +500,7 @@ export function PeekFile({ peek, onClose, topPx }: {
     // window an editor cannot draw into.
     requestAnimationFrame(() => fit.fit());
 
-    const ws = new WebSocket(ptyWsUrl(peek.root, term.cols, term.rows, peek.path, peek.edit));
+    const ws = new WebSocket(ptyWsUrl(peek.root, term.cols, term.rows, peek.path, peek.edit, undefined, false, false, peek.line ?? 0));
     ws.binaryType = "arraybuffer";
 
     /*
@@ -314,6 +520,28 @@ export function PeekFile({ peek, onClose, topPx }: {
       if (!ready || ws.readyState !== WebSocket.OPEN) { pending.push(d); return; }
       ws.send(JSON.stringify({ t: "in", d }));
     };
+    /*
+     * The rail's jumps go through the same socket as the keyboard, because they
+     * ARE the keyboard. Three keystrokes:
+     *
+     *   `<Esc>` — in case the editor is in insert or has half a command typed.
+     *   `:call clearmatches()` — take down anything a previous jump painted.
+     *   `:<n><CR>zt` — the line, and then at the TOP of the window rather than
+     *     wherever it happened to land. "It should come out right at the top": a jump that
+     *     leaves the target in the middle makes you hunt for it a second time.
+     *
+     * What is NOT sent is a highlight over the changed lines. It was, for one
+     * build, and he saw what it does to a place of a hundred and thirty-five
+     * lines: `DiffChange` is a background, so the whole screen went yellow and
+     * the syntax colours underneath it went away. The editor already marks
+     * where you are — his cursorline, his dimming — and that is the marking
+     * this should not compete with.
+     */
+    jump.current = (line: number) => {
+      const at = Math.max(1, Math.floor(line));
+      send(`\u001b:call clearmatches()\r:${at}\rzt`);
+      term.focus();
+    };
     const sendSize = () => {
       if (ready && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
     };
@@ -326,6 +554,9 @@ export function PeekFile({ peek, onClose, topPx }: {
       try { f = JSON.parse(e.data); } catch { return; }
       if (f.t === "ready") {
         ready = true;
+        // The handle for "where is the cursor", when this pty is an nvim we
+        // started with a socket of its own.
+        if (typeof (f as { editor?: string }).editor === "string") setEditorId((f as { editor?: string }).editor!);
         // The size the pty was created with came from a fit that ran before the
         // dialog had been laid out, so the real one is sent the moment there is
         // somebody to receive it.
@@ -503,7 +734,37 @@ export function PeekFile({ peek, onClose, topPx }: {
               </button>
             </span>
           )}
-          <span className={`shrink-0 ${canRender ? "" : "ml-auto"}`} style={{ color: "var(--text3)" }}>
+          {/*
+            * Take it to the bench.
+            *
+            * The division the bench exists for: prose is READ here, and code is
+            * EDITED there. This viewer opens with the document and dies with
+            * it; a bench tab is a tmux session, so the file you send there is
+            * still open — at the same line, with your undo and your jumplist —
+            * after you have been to the terminal and back, or after the app has
+            * been closed. That is the whole difference, and it is why this is a
+            * one-click move rather than a setting.
+            *
+            * Offered for a ref's copy too. The copy is a real file on disk (the
+            * server wrote it out), so it opens there exactly as it does here —
+            * still read-only, because that is what a copy of a commit is.
+            */}
+          <button
+            onClick={() => {
+              showFile(peek.root, peek.path, {
+                line: peek.line,
+                readonly: !peek.edit,
+                ref: peek.ref,
+                title: (peek.label || peek.path).split("/").pop(),
+              });
+              onClose();
+            }}
+            title="Open this file on the bench — it stays open there when you leave this view"
+            className={`agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded ${canRender || atRef ? "" : "ml-auto"}`}
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+            To the bench
+          </button>
+          <span className="shrink-0" style={{ color: "var(--text3)" }}>
             {reading ? "" : peek.edit ? ":wq to save and close" : ":q to close"}
           </span>
           <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }} className="agx-btn shrink-0 rounded" />
@@ -571,7 +832,11 @@ export function PeekFile({ peek, onClose, topPx }: {
            * bottom of its container. Padding the terminal itself is the one
            * place the addon actually looks.
            */
-          <div ref={host} className="agx-peek-term flex-1 min-h-0" />
+          <div className="flex-1 min-h-0 flex">
+            <div ref={host} className="agx-peek-term flex-1 min-h-0" />
+            <ChangeRail groups={peek.groups ?? []} fileLines={fileLines} cursor={cursor}
+              onGo={(n) => jump.current?.(n)} />
+          </div>
         )}
       </div>
     </Portal>

@@ -43,7 +43,7 @@ describe("the rail header and the table header", () => {
     /* `py-1` plus a fixed height is a box that is one of the two depending on
        box-sizing, and it is the shape the table header had while it was
        drifting. */
-    const head = src.slice(src.indexOf('uppercase tracking-[0.16em] sticky top-0'), src.indexOf("agx-stick-head"));
+    const head = src.slice(src.indexOf('${EYEBROW} sticky top-0'), src.indexOf("agx-stick-head"));
     expect(head).not.toContain("py-1");
     expect(head).toContain('alignItems: "center"');
   });
@@ -51,7 +51,7 @@ describe("the rail header and the table header", () => {
   it("stops the table header carrying a rule the rail does not", () => {
     // A top border on one of two side-by-side headers is a line that starts
     // halfway across the panel.
-    const head = src.slice(src.indexOf('uppercase tracking-[0.16em] sticky top-0'), src.indexOf("agx-stick-head"));
+    const head = src.slice(src.indexOf('${EYEBROW} sticky top-0'), src.indexOf("agx-stick-head"));
     expect(head).not.toContain("borderTop");
     expect(head).toContain("borderBottom");
   });

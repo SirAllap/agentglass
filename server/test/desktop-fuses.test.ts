@@ -123,7 +123,8 @@ describe("what gets packed into app.asar", () => {
 
   it("keeps `files` an allowlist, so nothing rides along implicitly", () => {
     // Measured on `bun run dist:dir` with electron-builder 26 out of a bun
-    // workspace: the asar holds main.js, preload.js, guest-guard.js, icons/**
+    // workspace: the asar holds main.js, preload.js, guest-guard.js,
+    // browser-menu.js, power.js, icons/**
     // and package.json, 1.4MB, and no dependency tree. electron-builder says so
     // out loud while packing ("no node modules returned while searching
     // directories") because bun has no CLI for a dependency tree and it falls
@@ -131,7 +132,10 @@ describe("what gets packed into app.asar", () => {
     // package manager at the same time, so it is pinned here: `files` is an
     // allowlist and must stay one.
     expect(pkg.build.files.some((f: string) => f.includes("node_modules"))).toBe(false);
-    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "preload.js", "icons/**"]));
+    // Every file main.js `require`s has to be named here — left out of the
+    // asar the app does not start, and the lock is what turns that from a
+    // discovery at launch into a red test.
+    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "browser-menu.js", "power.js", "preload.js", "icons/**"]));
   });
 });
 
@@ -141,7 +145,7 @@ describe("what gets packed into app.asar", () => {
  * This is a regression lock, not a unit test, and it exists because both
  * constants were measured to fail and each failure is invisible: the app starts,
  * serves its port, answers /health, and never maps a window. `x11` did that on
- * David's GNOME 46 Wayland session (the shipped case). `wayland` does the same
+ * the maintainer's GNOME 46 Wayland session (the shipped case). `wayland` does the same
  * to anyone on an X11 login — and this repo publishes an AppImage and a .deb.
  *
  * A comment cannot stop a one-word "fix". This can.
@@ -168,5 +172,34 @@ describe("the ozone platform", () => {
     // working feature to the next reader while restoring nothing.
     expect(main).toContain("APP_PLACES_ITS_WINDOW");
     expect(main).toMatch(/APP_PLACES_ITS_WINDOW\s*=\s*process\.platform\s*!==\s*"linux"/);
+  });
+});
+
+/*
+ * The renderer's own debugging port, which is a different door from the
+ * three the fuses above shut — it is a Chromium switch this process appends
+ * to itself, not a Node CLI argument. Nothing stops it being read off an
+ * unconditional argv, so the only thing standing between "off" and "a CDP
+ * socket on the window holding the read token and every live session" is
+ * this being gated, not merely present.
+ */
+describe("the renderer debugging port", () => {
+  const main = readFileSync(resolve(ELECTRON_DIR, "main.js"), "utf8");
+
+  it("is never appended unconditionally", () => {
+    // A bare `appendSwitch("remote-debugging-port", ...)` outside the guard
+    // below is exactly the silent-always-on regression this test exists to
+    // catch — grep for the call and require every occurrence to be the one
+    // guarded line.
+    const calls = [...main.matchAll(/appendSwitch\("remote-debugging-port",[^;]*\);/g)];
+    expect(calls.length).toBe(1);
+  });
+
+  it("is gated behind AGENTGLASS_DEBUG_PORT, off unless it is set and positive", () => {
+    const call = main.match(/const DEBUG_PORT[\s\S]{0,200}?appendSwitch\("remote-debugging-port",\s*String\(DEBUG_PORT\)\);\s*\}/);
+    expect(call, "no guarded remote-debugging-port switch in main.js").toBeTruthy();
+    const src = call![0];
+    expect(src).toContain("process.env.AGENTGLASS_DEBUG_PORT");
+    expect(src).toMatch(/if\s*\(\s*DEBUG_PORT\s*>\s*0\s*\)/);
   });
 });

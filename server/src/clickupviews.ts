@@ -140,6 +140,9 @@ export function savedViews(): SavedView[] {
     folderId: f.id,
     folderName: f.name,
     spaceName: f.spaceName,
+    /* Carried through from what the folder was saved with, so the rail can
+       draw a list in the colour the tracker draws it. See SavedView.color. */
+    ...((l as { color?: string }).color ? { color: (l as { color?: string }).color } : {}),
   })));
   const taken = new Set(fromFolders.map((v) => v.id));
   /*
@@ -273,19 +276,40 @@ export function knownCardPrefix(): string {
  * Matched on both ids, because the two halves of the app hold different ones:
  * a pull request carries `ORBIT-1042`, the board's rows carry `86dyn…`.
  */
-export function boardHolding(cardId: string): { viewId: string; task: ProviderTask } | null {
+export function boardHolding(cardId: string, o: { freshMs?: number } = {}): { viewId: string; task: ProviderTask; at: number } | null {
   const want = cardId.trim().toLowerCase();
   if (!want) return null;
   const s = load();
   // Every board you HAVE, which is not the same as every board stored: the
   // built-in "assigned to me" is synthesised rather than saved, and it is the
   // one most likely to be holding the card — it is a whole workspace's worth.
+  /*
+   * HOW OLD THE ANSWER IS, because a stale one is worse than none.
+   *
+   * A cached board said a card was "in development" and assigned to him while
+   * ClickUp had it in "code review" on somebody else — it had simply not been
+   * re-read since. Drawn on a pull request row that is glanced at, a wrong
+   * status is not a smaller version of no status; it is a different fact.
+   *
+   * Callers that only want to know WHERE a card lives (the "go to its board"
+   * jump) do not care and pass nothing. Callers that put the contents on
+   * screen ask for a freshness they are willing to stand behind.
+   */
+  let best: { viewId: string; task: ProviderTask; at: number } | null = null;
   for (const v of savedViews()) {
-    for (const t of s.cache[v.id]?.tasks ?? []) {
-      if (t.id.toLowerCase() === want || (t.customId ?? "").toLowerCase() === want) return { viewId: v.id, task: t };
+    const entry = s.cache[v.id];
+    for (const t of entry?.tasks ?? []) {
+      if (t.id.toLowerCase() === want || (t.customId ?? "").toLowerCase() === want) {
+        const at = entry?.at ?? 0;
+        /* The freshest board wins: the same card can sit on two, read at
+           different times, and the older copy is the one that lies. */
+        if (!best || at > best.at) best = { viewId: v.id, task: t, at };
+      }
     }
   }
-  return null;
+  if (!best) return null;
+  if (o.freshMs && Date.now() - best.at > o.freshMs) return null;
+  return best;
 }
 
 export function putCache(entry: CachedView): void {

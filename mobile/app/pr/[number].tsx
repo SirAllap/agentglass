@@ -296,7 +296,9 @@ export default function PrScreen(): React.ReactNode {
    * collect yet. See src/terminal/handoff.ts.
    */
   const hand = useCallback((recipe: string): void => {
-    if (!detail || !root) return;
+    // The terminal needs `full` and so does the review it would run; a phone
+    // without it is not offered this and, if it gets here, does not go.
+    if (!detail || !root || !mayWrite) return;
     requestHandoff({
       t: "tmux",
       cmd: "review",
@@ -307,7 +309,7 @@ export default function PrScreen(): React.ReactNode {
     setHanding(false);
     setPreview(null);
     router.push("/terminal");
-  }, [detail, root, router]);
+  }, [detail, root, router, mayWrite]);
 
   const key = `${root}#${number}`;
   const notes = draft(key);

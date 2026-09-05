@@ -14,6 +14,7 @@
 import { describe, expect, it } from "bun:test";
 import { engineSessionName } from "../src/tmuxpane.ts";
 import { wantsDeskResume } from "../src/terminal.ts";
+import { FRAME_ARGV, parsePrefix } from "../src/tmuxctl.ts";
 
 describe("naming an engine session after its checkout", () => {
   it("is the directory's own name, so `tmux ls` reads like the rail", () => {
@@ -88,10 +89,27 @@ describe("the labels that say which key to press", () => {
      * said the old one. That reads exactly like a setting that did nothing,
      * and was reported as "I have to restart agentglass anyway".
      */
+    /*
+     * Asserted against the call the sweep makes, not against a line of source.
+     * It used to be the latter, and the line it named survived as the FALLBACK
+     * arm of an `if` — a superstring, so the assertion still passed while the
+     * behaviour it was written for had moved somewhere else entirely.
+     */
+    expect(FRAME_ARGV).toContain("prefix");
+    expect(FRAME_ARGV).toContain("prefix2");
+    const marker = FRAME_ARGV.find((a) => a.endsWith("agx-prefix-end")) ?? "";
+    expect(marker).not.toBe("");
+    // Whatever tmux answers this sweep is what the labels draw next sweep.
+    expect(parsePrefix(["C-a", marker, "w\t$0\t@0"].join("\n"))).toEqual(["C-a"]);
+
     const text = await src.text();
-    expect(text).toContain("if (session.tmux) session.tmuxPrefix = prefixKeys(session.tmux);");
-    // …and it counts as a change, or the sweep would read it and say nothing.
-    expect(text).toContain("session.onEngine === true, session.tmuxPrefix ?? []]);");
+    /* …and it counts as a change, or the sweep would read it and say nothing.
+       Named as the two fields that must be IN the shape rather than as the
+       whole line: the popup flag joined them later (see tmux-popup-frame), and
+       an assertion over the exact line would have failed for the right change
+       while catching nothing. */
+    expect(text).toContain("session.onEngine === true, session.tmuxPrefix ?? []");
+    expect(text).toMatch(/const shape = JSON\.stringify\(\[[^\]]*session\.tmuxPrefix \?\? \[\]/);
   });
 });
 

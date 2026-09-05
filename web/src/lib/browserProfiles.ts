@@ -32,7 +32,10 @@ export const DEFAULT_PROFILE: BrowserProfile = { id: "", name: "Default" };
  * It is a limit on the menu: past a handful, a strip of profile names stops
  * being something you pick from and starts being something you search.
  */
-export const MAX_PROFILES = 8;
+/* Sized for a fleet, not for a person's two or three identities. A profile is
+   a name and an id in a list; what costs anything is a tab awake inside it,
+   and that is capped where it is spent — see MAX_TABS. */
+export const MAX_PROFILES = 64;
 
 /**
  * The shape a partition suffix may take, and the reason it is this narrow.
@@ -56,7 +59,28 @@ export const isProfileId = (id: string): boolean => id === "" || SLUG.test(id);
  */
 export function partitionFor(base: string, profileId: string): string {
   if (!base) return base;
-  return profileId && isProfileId(profileId) ? `${base}-${profileId}` : base;
+  if (!profileId) return base;
+  if (isProfileId(profileId)) return `${base}-${profileId}`;
+  /*
+   * NOT AN ID — AND STILL NOT THE SHARED JAR.
+   *
+   * This fell through to `base` for anything it did not recognise, and `base`
+   * is the person's own cookies. Measured: a tab asking for `pol-proj9175` or
+   * for `review-pr-540` — the name the skill's own example uses — attached to
+   * `persist:agx`, the default. It was labelled with the profile it asked for
+   * the whole time, so `tabs` reported an isolated identity while the requests
+   * carried the person's session. An hour of work in the wrong container, no
+   * error anywhere.
+   *
+   * A name is not an id (ids are slugged, names keep their dashes), so the fix
+   * upstream is to resolve one to the other. This is the floor under that: an
+   * identity we cannot read gets a jar of its own rather than everybody's.
+   */
+  const own = profileId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 15) || "unnamed";
+  /* 15 plus the marker, because the main process only admits a suffix of
+     sixteen — it validates every partition it is handed, and a longer one
+     would be refused there instead of isolating anything. */
+  return `${base}-x${own}`;
 }
 
 /** A slug from what the user typed, distinct from the ones already taken.
@@ -139,12 +163,40 @@ export function saveProfiles(store: Pick<Storage, "getItem" | "setItem"> | null,
  * field that can disagree with the name it belongs to.
  */
 export function profileHue(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
-  // The band around 90–150 reads as "success" everywhere else in this app, and
-  // a browser profile is not a status. Pushed out rather than allowed to lie.
-  return h >= 90 && h <= 150 ? (h + 120) % 360 : h;
+  /*
+   * NEIGHBOURING NAMES MUST NOT GET NEIGHBOURING COLOURS.
+   *
+   * This used to be `h = (h * 31 + charCode) % 360` read straight as a hue,
+   * and the last character of a name moved the answer by ONE degree. Agents
+   * are named in series — aglab2, aglab3, aglab4 — so ten containers came out
+   * ten shades of the same yellow. Measured on a real bar: indistinguishable.
+   *
+   * So: mix the whole string properly (FNV-1a), then step around the wheel by
+   * the golden angle. Two hashes one apart land 137° apart, which is the
+   * opposite of the old behaviour and exactly what a list of aglab1..aglab10
+   * needs.
+   */
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  /*
+   * And the answer is one of fourteen, not one of 360.
+   *
+   * A free hue puts two containers 4° apart as easily as 140° — measured, with
+   * the golden angle alone: aglab6 at 216 and aglab9 at 220, which on screen is
+   * one colour. Two that land on the SAME slot are a smaller problem than two
+   * that land 4° apart: the first reads as "these two share a colour", the
+   * second reads as a rendering artefact and is read wrong.
+   *
+   * Fourteen, spaced by at least 14°, and none of them in the 90–150 band this
+   * app spends on "success" — a container is not a status.
+   */
+  return HUES[h % HUES.length]!;
 }
+
+const HUES = [222, 258, 285, 312, 338, 8, 26, 42, 58, 74, 170, 188, 204, 160];
 
 /**
  * Every partition this browser keeps cookies in.
@@ -161,6 +213,12 @@ export function partitionsFor(base: string, profileIds: readonly string[]): stri
   if (!base) return [];
   const out = [base];
   for (const id of profileIds) {
+    /* Ids only. This list comes from the profile MENU, so anything that is not
+       a minted id is a hand-edited file rather than a profile — and a sweep is
+       the one place where widening on a bad value costs data. `partitionFor`
+       is deliberately more forgiving: it has to put a tab SOMEWHERE, and the
+       one place it must never put it is the person's own jar. */
+    if (!isProfileId(id)) continue;
     const p = partitionFor(base, id);
     if (p !== base && !out.includes(p)) out.push(p);
   }

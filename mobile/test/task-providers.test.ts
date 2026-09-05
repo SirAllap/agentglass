@@ -13,7 +13,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { ProviderId, ProviderState, ProviderStatus } from "../../shared/providers.ts";
-import { tracksWork } from "../src/model/taskProviders.ts";
+import { providerTitle, taskProvider, tracksWork } from "../src/model/taskProviders.ts";
 import { BAR, taskDestinations, type Destination } from "../src/nav/bar.ts";
 
 const at = (id: ProviderId, state: ProviderState): ProviderStatus => ({ id, state });
@@ -98,5 +98,53 @@ describe("taskDestinations", () => {
     taskDestinations(all, false);
     expect(BAR.map((d) => d.route)).toContain("tasks");
     expect(BAR.length).toBe(5);
+  });
+});
+
+describe("taskProvider — which tracker the Cards tab reads", () => {
+  test("ClickUp connected is the board", () => {
+    expect(taskProvider([at("clickup", "connected")])?.id).toBe("clickup");
+    // Even beside a connected local list: the board has views to choose from.
+    expect(taskProvider([at("taskwarrior", "connected"), at("clickup", "connected")])?.id).toBe("clickup");
+  });
+
+  test("another tracker connected, ClickUp never set up: that tracker", () => {
+    /* The bug this fixes: a machine tracking work in Taskwarrior got an empty
+       ClickUp board and an "Open in ClickUp" button. */
+    expect(taskProvider([at("taskwarrior", "connected"), at("clickup", "needs-auth")])?.id).toBe("taskwarrior");
+  });
+
+  test("connected beats a refused token", () => {
+    expect(taskProvider([at("taskwarrior", "connected"), at("clickup", "error")])?.id).toBe("taskwarrior");
+  });
+
+  test("a refused token is still the tracker when nothing else is", () => {
+    // The Cards tab is where "ClickUp refused this token" gets read.
+    expect(taskProvider([at("clickup", "error"), at("taskwarrior", "missing-tool")])?.id).toBe("clickup");
+  });
+
+  test("nothing set up is null; no answer is undefined", () => {
+    expect(taskProvider([at("clickup", "needs-auth"), at("taskwarrior", "missing-tool")])).toBe(null);
+    expect(taskProvider(null)).toBe(undefined);
+    expect(taskProvider(undefined)).toBe(undefined);
+    expect(taskProvider([])).toBe(undefined);
+    expect(taskProvider([at("github", "connected")])).toBe(undefined);
+  });
+
+  test("it answers with the catalogue's row, not a copy", () => {
+    const got = taskProvider([at("taskwarrior", "connected")]);
+    expect(got?.title).toBe("Taskwarrior");
+    expect(got?.kind).toBe("task");
+  });
+});
+
+describe("providerTitle", () => {
+  test("the catalogue's spelling", () => {
+    expect(providerTitle("clickup")).toBe("ClickUp");
+    expect(providerTitle("taskwarrior")).toBe("Taskwarrior");
+  });
+  test("a neutral word, never an id, when there is no provider to name", () => {
+    expect(providerTitle(null)).toBe("the tracker");
+    expect(providerTitle(undefined)).toBe("the tracker");
   });
 });

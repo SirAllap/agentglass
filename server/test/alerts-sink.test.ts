@@ -92,10 +92,63 @@ describe("desktop alert routing", () => {
     expect(fallbacks.length).toBe(0);
   });
 
-  test("an agent notification is normal urgency; a tool error is critical", () => {
+  /*
+   * This test used to assert the bug, in its own title: "a tool error is
+   * critical". Urgency 2 is `requireInteraction` on the desk, `max` on the
+   * phone and `-u critical` on notify-send — a popup that stays until dismissed
+   * by hand. It fired 140 times a day.
+   *
+   * Measured over 8 days of the real database, 465 error events: 464 were
+   * followed by another event from the same session within 60 seconds, all 465
+   * within five minutes, and NOT ONE was the last thing a session ever did. The
+   * agent had always already recovered. The user's report is the same fact from
+   * the other side: "when I go into the conversation I don't see that anything
+   * failed".
+   *
+   * So the order is inverted now, and that is the point of the test: the thing
+   * he must act on outranks the thing he cannot.
+   */
+  test("a blocked agent outranks a failed tool call", () => {
     broadcasts = []; fallbacks = []; census = { attached: 1, live: 1 };
     alerts.maybeAlert({ hook_event_type: "Notification", session_id: "s-notif", source_app: "app", payload: { message: "heads up" } } as any);
     alerts.maybeAlert({ hook_event_type: "PostToolUse", is_error: 1, session_id: "s-err", source_app: "app", tool_name: "Bash", error_text: "boom", payload: {} } as any);
-    expect(broadcasts.map((b) => b.urgency).sort()).toEqual([1, 2]);
+    expect(broadcasts.map((b) => b.urgency)).toEqual([1, 0]);
+  });
+
+  test("the two messages that mean an agent is stopped are promoted", () => {
+    // The only string test in the alert path, and it is safe in the way the
+    // stdout marker scan was not: an unrecognised message falls through to 1
+    // and still lands in the list. A stale string here loses a promotion; a
+    // stale string there invented an urgent popup out of a command that worked.
+    broadcasts = []; fallbacks = []; census = { attached: 1, live: 1 };
+    for (const [i, message] of ["Claude needs your permission to use Bash",
+      "A message from another session needs your approval"].entries()) {
+      alerts.maybeAlert({ hook_event_type: "Notification", session_id: `s-perm-${i}`, source_app: "app", payload: { message } } as any);
+    }
+    expect(broadcasts.map((b) => b.urgency)).toEqual([2, 2]);
+  });
+
+  test("and the one that says nothing is required goes silent", () => {
+    broadcasts = []; fallbacks = []; census = { attached: 1, live: 1 };
+    alerts.maybeAlert({ hook_event_type: "Notification", session_id: "s-limit", source_app: "app", payload: { message: "Usage limit reset — Claude is continuing your task" } } as any);
+    expect(broadcasts.map((b) => b.urgency)).toEqual([0]);
+  });
+
+  test("urgency 0 never reaches the desktop fallback", () => {
+    // The frame still goes: it is a row in the list, with its pane. What it
+    // must not do is spawn notify-send, which draws over whatever he is doing
+    // and, before this, was hardcoded `-u critical` for every urgency.
+    broadcasts = []; fallbacks = []; census = { attached: 1, live: 0 };
+    alerts.maybeAlert({ hook_event_type: "PostToolUse", is_error: 1, session_id: "s-quiet", source_app: "app", tool_name: "Bash", error_text: "boom", payload: {} } as any);
+    expect(broadcasts.length, "still recorded").toBe(1);
+    expect(fallbacks.length, "nothing drawn on his desktop").toBe(0);
+  });
+
+  test("a real blockage still reaches it, and as critical", () => {
+    // The guard against over-correcting. Nothing above may silence this.
+    broadcasts = []; fallbacks = []; census = { attached: 1, live: 0 };
+    alerts.maybeAlert({ hook_event_type: "Notification", session_id: "s-block", source_app: "app", payload: { message: "Claude needs your permission to use Bash" } } as any);
+    expect(fallbacks.length).toBe(1);
+    expect(fallbacks[0]?.urgency).toBe(2);
   });
 });

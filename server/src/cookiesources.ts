@@ -68,6 +68,38 @@ export const LINUX_SOURCES: SourceDef[] = [
   { id: "brave", label: "Brave", kind: "chromium", keyring: "brave", dirs: [".config/BraveSoftware/Brave-Browser", ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"] },
 ];
 
+/**
+ * The same browsers on a Mac, where every one of them keeps its profiles under
+ * `~/Library/Application Support/<vendor>`. Same ids as the Linux list, so a
+ * profile id the picker learnt (`chrome:Default`) means the same store on
+ * either machine; same on-disk shapes too — `profiles.ini` for the Firefox
+ * family, `Default` and `Profile N` beside `Local State` for Chromium's — so
+ * `findProfiles` walks them with the one loop.
+ *
+ * Before this list existed the picker on a Mac looked for `.config/google-chrome`
+ * under the home directory, found nothing, and offered an empty list with no
+ * word about why. The `keyring` names are kept: on a Mac the key is in the
+ * login keychain rather than the Secret Service, and the reader that asks for
+ * it says so when it cannot.
+ */
+export const MAC_SOURCES: SourceDef[] = [
+  { id: "firefox", label: "Firefox", kind: "firefox", dirs: ["Library/Application Support/Firefox"] },
+  { id: "zen", label: "Zen", kind: "firefox", dirs: ["Library/Application Support/zen"] },
+  { id: "librewolf", label: "LibreWolf", kind: "firefox", dirs: ["Library/Application Support/librewolf"] },
+  { id: "chrome", label: "Google Chrome", kind: "chromium", keyring: "chrome", dirs: ["Library/Application Support/Google/Chrome"] },
+  { id: "chromium", label: "Chromium", kind: "chromium", keyring: "chromium", dirs: ["Library/Application Support/Chromium"] },
+  { id: "brave", label: "Brave", kind: "chromium", keyring: "brave", dirs: ["Library/Application Support/BraveSoftware/Brave-Browser"] },
+];
+
+/** The list for a platform. Windows has neither yet and answers with nothing
+ *  rather than with dot-directories that cannot exist there; every other Unix
+ *  keeps the Linux list it always searched. */
+export function sourcesFor(platform: string = process.platform): SourceDef[] {
+  if (platform === "darwin") return MAC_SOURCES;
+  if (platform === "win32") return [];
+  return LINUX_SOURCES;
+}
+
 export interface FoundProfile {
   /** `<source id>:<profile dir name>`, which is what the picker sends back. */
   id: string;
@@ -113,12 +145,15 @@ export function parseProfilesIni(text: string, baseDir: string): { name: string;
   return out;
 }
 
-/** Every profile on this machine with a cookie store actually in it. */
-export function findProfiles(): FoundProfile[] {
+/** Every profile on this machine with a cookie store actually in it.
+ *
+ *  `platform` and `homeDir` are parameters for the suite, which lays a Mac's
+ *  `Library/Application Support` out under a scratch home on a Linux box. */
+export function findProfiles(platform: string = process.platform, homeDir: string = home()): FoundProfile[] {
   const found: FoundProfile[] = [];
-  for (const src of LINUX_SOURCES) {
+  for (const src of sourcesFor(platform)) {
     for (const rel of src.dirs) {
-      const base = join(home(), rel);
+      const base = join(homeDir, rel);
       if (!existsSync(base)) continue;
       const dbName = src.kind === "firefox" ? "cookies.sqlite" : "Cookies";
       const dirs: { name: string; dir: string }[] = [];

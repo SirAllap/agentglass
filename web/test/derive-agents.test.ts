@@ -298,3 +298,53 @@ test("the card keeps the directory and project it last reported", () => {
   expect(card.cwd).toBe("/home/x/code/app-wt");
   expect(card.project).toBe("/home/x/code/app");
 });
+
+// ---------------------------------------------------------------------------
+// A failed tool call is not somebody waiting on you.
+//
+// The chip reads WAITING ON YOU and the panel behind it opens with "everything
+// that is waiting on you, with what can honestly be done about it". An
+// `errored` card was being pushed onto it as "N error(s) — last action
+// PostToolUse · Bash", whose only affordance was "Go to its pane" — and going
+// there showed a session working away with nothing wrong, because by then there
+// wasn't. He checked, and that is how this was found.
+//
+// Measured over 8 days of the real database, 465 error events: 464 had another
+// event from the same session within 60 seconds, all 465 within five minutes,
+// and NOT ONE was the last thing a session ever did. There is no error class
+// left over that needs a human.
+//
+// The states that DO mean he is needed are separate and stay: `waiting` (an
+// agent asked), and `stalled` (a tool open with nothing moving behind it).
+// These pin both halves, because silencing the first without keeping the second
+// would trade sixty useless interruptions for zero useful ones.
+// ---------------------------------------------------------------------------
+
+test("a recent error raises nothing on the WAITING ON YOU panel", () => {
+  const card = only([ev({ is_error: 1, error_text: "boom", timestamp: now - 2000 })]);
+  expect(card.status, "the card is still painted as errored").toBe("errored");
+  expect(deriveAlerts([card]).filter((a) => a.id.startsWith("err:"))).toEqual([]);
+});
+
+test("an agent that asked for something still does", () => {
+  const card = only([ev({
+    hook_event_type: "Notification", tool_name: null, timestamp: now - 1000,
+    payload: { message: "Claude needs your permission to use Bash" },
+  })]);
+  expect(card.status).toBe("waiting");
+  const wait = deriveAlerts([card]).filter((a) => a.id.startsWith("wait:"));
+  expect(wait.length).toBe(1);
+  expect(wait[0]!.text).toContain("permission");
+});
+
+test("and an error does not silence the question underneath it", () => {
+  // The order matters: the card takes its status from the LAST event, so an
+  // agent that asked and then logged a failure must still be listed as asking.
+  // `waiting` is tested above `errored` in deriveAgents for exactly this.
+  const card = only([
+    ev({ is_error: 1, error_text: "boom", timestamp: now - 3000 }),
+    ev({ hook_event_type: "Notification", tool_name: null, timestamp: now - 1000,
+      payload: { message: "Claude needs your permission to use Bash" } }),
+  ]);
+  expect(deriveAlerts([card]).filter((a) => a.id.startsWith("wait:")).length).toBe(1);
+});

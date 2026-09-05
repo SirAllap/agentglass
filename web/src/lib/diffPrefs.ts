@@ -15,6 +15,7 @@
 
 const SPLIT_KEY = "agentglass.diff.split";
 const WRAP_KEY = "agentglass.diff.wrap";
+const NOWS_KEY = "agentglass.diff.noWhitespace";
 
 const read = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const write = (k: string, on: boolean, dflt: boolean) => {
@@ -30,8 +31,14 @@ export const DEFAULT_SPLIT = true;
  *  makes a change scannable, so it is worth asking for rather than assuming. */
 export const DEFAULT_WRAP = false;
 
+/** On, because a whitespace-only change is a real change and a reader who has not
+ *  asked to hide one should not have it hidden. */
+export const DEFAULT_NO_WHITESPACE = false;
+
 export const diffSplit = (): boolean => (read(SPLIT_KEY) === null ? DEFAULT_SPLIT : read(SPLIT_KEY) === "1");
+export const diffNoWhitespace = (): boolean => (read(NOWS_KEY) === null ? DEFAULT_NO_WHITESPACE : read(NOWS_KEY) === "1");
 export const diffWrap = (): boolean => (read(WRAP_KEY) === null ? DEFAULT_WRAP : read(WRAP_KEY) === "1");
 
 export function setDiffSplit(on: boolean): void { write(SPLIT_KEY, on, DEFAULT_SPLIT); }
 export function setDiffWrap(on: boolean): void { write(WRAP_KEY, on, DEFAULT_WRAP); }
+export function setDiffNoWhitespace(on: boolean): void { write(NOWS_KEY, on, DEFAULT_NO_WHITESPACE); }

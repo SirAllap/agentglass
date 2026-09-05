@@ -13,6 +13,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { docContaining } from "./docs.ts";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -28,6 +29,9 @@ describe("the promises SECURITY.md makes about retention", () => {
       for (const m of read(`server/src/${f}`).matchAll(/DELETE\s+FROM\s+(\w+)/gi)) all.push(`${f}:${m[1]}`);
     }
     expect(all.sort()).toEqual([
+      /* Scheduled agent starts (agentschedule.ts): fired or cancelled rows are
+         records and age out; one still waiting is intent and is never swept. */
+      "db.ts:agent_schedule",
       // Not recorded data: one row holding the pid and port of whichever server
       // process owns this database file, released on a clean exit so the next
       // one need not prove the previous is dead. Deleting it removes no event,
@@ -37,14 +41,96 @@ describe("the promises SECURITY.md makes about retention", () => {
       "db.ts:events",
       "db.ts:events_fts",
       "db.ts:gates",
+      /* Ended named agents (agentops.ts): a window that no longer exists. A
+         live one is never swept, its pane being the record that it runs. */
+      "db.ts:named_agent",
       "db.ts:reminders",
+      /* What a session is to the app (the Lantern's chat): a mark that
+         outlives its session by ninety days, then nothing needs it. */
+      "db.ts:session_role",
+      /*
+       * Not recorded data either: one row per hooked session saying it is
+       * currently stopped on a person — set by a wait-shaped Notification,
+       * removed by the next thing the session does. It is a flag about NOW,
+       * with no history behind it to lose; the notification itself, when the
+       * scanner does not own the session, is still in `events` under the same
+       * retention as everything else. Deleting the flag is the session moving
+       * on, which is why it sits here beside db_claim and not in pruneOldRows.
+       */
+      "db.ts:session_wait",
+      /* Twice: the session moving on, and the Lantern's own chat, whose
+         "waiting for your input" is a person mid-conversation — its flag is
+         dropped the moment its hooks say what it is. Same flag, same reason. */
+      "db.ts:session_wait",
       "db.ts:sessions",
+      // The understudy's own two windows: the bare fact of a write ages out at
+      // ninety days, the sealed situation behind a decision at thirty. Both are
+      // retention doing its job, so both belong in pruneOldRows with the rest —
+      // and the check below holds them to it. What is deliberately NOT here is
+      // understudy_ledger's `decision` and `fence` rows, which are the score
+      // itself and have no expiry, exactly as daily_rollup has none.
+      /*
+       * The actuator's three, added when it learned to act and — for a day —
+       * added without any window at all. That is how a store grows without
+       * bound: not by a decision to keep everything, but by tables appearing on
+       * an afternoon when the interesting question was whether it worked.
+       *
+       * Two carry an exception that is the whole point. A PENDING proposal
+       * never expires, because it is the understudy waiting on a person and
+       * expiring it answers for them by doing nothing. An act that has NOT been
+       * undone is never swept, because the recipe is the only way back from
+       * something that happened while they were away.
+       */
+      "db.ts:understudy_acts",
+      /*
+       * The work loop's two, and this is the SECOND time the gap was opened
+       * the same way. The actuator's three arrived with no window and were
+       * given one; then the loop arrived with two more and no window, by the
+       * identical route. So the rule stopped being a comment: a test now
+       * enumerates every understudy table and fails when one has no expiry.
+       *
+       * Same shape of exception, for the same reasons. A RUNNING run is never
+       * swept, because "started, never finished" is the only record that an
+       * agent was killed mid-task. A task still QUEUED never expires, because
+       * it is a person waiting to be worked for, and expiring it answers for
+       * them by doing nothing.
+       */
+      "db.ts:understudy_asked",
+      /* Answered questions expire; an OPEN one never does, for the same reason
+         a queued task never does — it is a person who has not answered yet. */
+      "db.ts:understudy_help",
+      "db.ts:understudy_ledger",
+      "db.ts:understudy_proposals",
+      "db.ts:understudy_shifts",
+      "db.ts:understudy_snapshots",
+      "db.ts:understudy_work",
     ]);
-    // …and all five are inside pruneOldRows, bounded by the cutoff.
+    // …and all eight are inside pruneOldRows, bounded by a cutoff.
     const prune = src.slice(src.indexOf("export function pruneOldRows"));
     const body = prune.slice(0, prune.indexOf("\n}\n"));
-    for (const t of ["events_fts", "events", "sessions", "gates", "reminders"]) {
+    for (const t of ["events_fts", "events", "sessions", "gates", "reminders",
+                     "understudy_snapshots", "understudy_ledger",
+                     "understudy_proposals", "understudy_shifts", "understudy_acts",
+                     "understudy_work", "understudy_asked", "understudy_help", "named_agent", "session_role", "agent_schedule"]) {
       expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(`DELETE FROM ${t}`);
+    }
+
+    /*
+     * The two understudy sweeps sit ABOVE the `if (!RETENTION_DAYS) return`,
+     * and that is the one thing about them worth a tripwire of its own.
+     *
+     * AGENTGLASS_RETENTION_DAYS is the user's to set and 0 is a legitimate
+     * value. If the understudy's expiry were below that early return, somebody
+     * turning event pruning off would silently stop the sealed situations
+     * expiring too — a store of the material the understudy read, growing
+     * without bound, because of a setting about something else. Moving either
+     * DELETE below the guard fails here.
+     */
+    const guard = body.indexOf("if (!RETENTION_DAYS) return");
+    expect(guard, "the RETENTION_DAYS guard moved out of pruneOldRows").toBeGreaterThan(-1);
+    for (const t of ["understudy_snapshots", "understudy_ledger"]) {
+      expect(body.indexOf(`DELETE FROM ${t}`), `${t} now expires only when event retention is on`)
+        .toBeLessThan(guard);
     }
   });
 
@@ -68,12 +154,14 @@ describe("the promises SECURITY.md makes about retention", () => {
       // the name, while `X: "0"` in an env object and `env.X = "0"` both do.
       for (const m of read(f).matchAll(/AGENTGLASS_RETENTION_DAYS\s*[:=]\s*["'`0-9]/g)) setters.push(`${f}: ${m[0]}`);
     }
-    expect(setters, "someone now sets a retention default — update README.md's desktop bullet").toEqual([]);
+    expect(setters, "someone now sets a retention default — update the retention row in docs/CONFIG.md").toEqual([]);
 
-    const readme = read("README.md");
-    expect(readme).not.toContain("defaults `AGENTGLASS_RETENTION_DAYS=0`");
-    // And the table still states the real default the code applies.
-    expect(readme).toContain("| `AGENTGLASS_RETENTION_DAYS` | `8` |");
+    // The claim lives wherever the variable table lives — it started in the
+    // README and now sits in docs/CONFIG.md. What matters is that the table
+    // still states the real default the code applies, not which file holds it.
+    const { text: vars } = docContaining("| `AGENTGLASS_RETENTION_DAYS` |", "the retention row of the variable table");
+    expect(vars).not.toContain("defaults `AGENTGLASS_RETENTION_DAYS=0`");
+    expect(vars).toContain("| `AGENTGLASS_RETENTION_DAYS` | `8` |");
   });
 
   test("the rollup has no expiry and no removal path", () => {
@@ -135,6 +223,16 @@ describe("the promises SECURITY.md makes about retention", () => {
     // the user clears them, chat transcripts live elsewhere. The check below
     // holds it to that.
     "/terminal/tmux-reset",
+    // Empties a custom field on somebody's ClickUp card — their workspace,
+    // their data, and the only way to take a chosen value back (a drop-down set
+    // to the empty string is a 400). Nothing recorded by agentglass is removed;
+    // no database is opened. The check below holds it to that.
+    "/clickup/field/clear",
+    // Deletes a ClickUp comment, in ClickUp, by its id. Same reading as the
+    // task delete above: refusing a card panel the ability to remove a comment
+    // somebody wrote by mistake would be an odd reading of a promise about
+    // telemetry. Ours records nothing about it either way.
+    "/clickup/comment/delete",
   ]);
 
   test("the reviewed exceptions still touch no stored data", () => {

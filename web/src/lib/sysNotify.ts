@@ -1,4 +1,4 @@
-import { SERVER, withToken, authHeaders, api } from "./api.ts";
+import { SERVER, withToken, authHeaders, api, whenServerUp } from "./api.ts";
 
 /**
  * Desktop notifications, mirrored onto the notch.
@@ -324,6 +324,9 @@ export function notifyCapability(): Promise<NotifyCapability> {
 
 async function probeCapability(): Promise<NotifyCapability> {
   try {
+    // Gated: this is a boot read, and a direct fetch skips the api layer's
+    // gate — one refused request per cold launch.
+    await whenServerUp();
     const r = await fetch(SERVER + "/notifications/capability", { headers: authHeaders() });
     // A non-2xx here is the server declining to say — an auth token that is not
     // configured yet, a route from an older build. Also not an answer about
@@ -429,6 +432,32 @@ let history: SystemNote[] = loadHistory();
 let unread = 0;
 const historyListeners = new Set<() => void>();
 
+/*
+ * THE ONES THAT WERE ALREADY ON SCREEN.
+ *
+ * Filing a ClickUp notification against its card started existing today, and
+ * the notifications that made him ask for it were sitting in this list with
+ * their card chip already attached — which is exactly the path that returns
+ * early on arrival. So the list is walked once, at startup, and every note
+ * that already knows its card is filed. Idempotent by the notification's own
+ * id: a note filed twice is one row.
+ *
+ * Deliberately not awaited and deliberately quiet. This is a catch-up for
+ * history, not something a person is waiting on.
+ */
+function fileNotesAlreadyHere(): void {
+  for (const n of history) {
+    const go = n.goto;
+    if (!go || go.kind !== "card") continue;
+    const text = `${n.body || n.summary}`.trim();
+    if (!text) continue;
+    void api.clickupFileNote({ id: n.id, cardId: go.id, label: go.label ?? "", text, at: n.at });
+  }
+}
+/* Once, after the module has settled — the API's own base URL is decided at
+   import time and this must not race it. */
+setTimeout(fileNotesAlreadyHere, 2000);
+
 export const notifyHistory = (): SystemNote[] => history;
 export const notifyUnread = (): number => unread;
 
@@ -516,6 +545,9 @@ export function fireDesktopAlert(a: { title: string; body: string; urgency?: 0 |
    */
   recordNote({ app: OUR_APP, summary: a.title, body: a.body, urgency: a.urgency,
     ...(a.pane ? { goto: { kind: "pane" as const, pane: a.pane } } : {}) });
+  // Recorded above, drawn nowhere. The note is the whole delivery for this
+  // tier — no OS popup, no sound, no badge. See recordNote.
+  if (a.urgency === 0) return;
   try {
     if (typeof Notification === "undefined") return;
     if (Notification.permission !== "granted") return;
@@ -583,10 +615,26 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
     at: Date.now(),
     ...(n.goto ? { goto: n.goto } : {}),
   };
-  history = [note, ...supersede(history, note)].slice(0, HISTORY_MAX);
-  unread++;
+  const kept = supersede(history, note);
+  // The badge counted rows the list had already thrown away, so it climbed past
+  // what it was counting — sixty unread over a list that had never held sixty.
+  // Whatever supersede removed cannot still be waiting to be read.
+  unread = Math.max(0, unread - (history.length - kept.length));
+  history = [note, ...kept].slice(0, HISTORY_MAX);
+  // Urgency 0 is the tier that was defined end to end and then honoured
+  // nowhere: it survived the server, the socket and the frame, and died here on
+  // an `unread++` and a `ding()` that never asked. So a tool error rang the
+  // bell and bumped the badge exactly like an agent blocked on a permission.
+  //
+  // Now it is what it always claimed to be — a row in the list, findable, with
+  // its pane, and silent. This is the line that makes the demotion in
+  // alerts.ts mean anything; without it that change moves a number and nothing
+  // else.
+  if (note.urgency > 0) {
+    unread++;
+    ding();
+  }
   historyChanged();
-  ding();
 }
 let localSeq = 0;
 
@@ -612,6 +660,22 @@ function supersede(list: SystemNote[], next: SystemNote): SystemNote[] {
   }
   if (g.kind === "chat") {
     return list.filter((n) => !(n.goto?.kind === "chat" && n.goto.id === g.id && n.summary === next.summary));
+  }
+  if (g.kind === "pane") {
+    // A pane that keeps failing is one situation, not eighty rows.
+    //
+    // The exclusion above ("a tool error… separate events even when they name
+    // the same thing") was written when a tool error was urgency 2 and each one
+    // was a thing to answer. At 0 they are a log, and the newest line of a log
+    // about one pane says everything the older ones did. Nine sessions still
+    // give nine rows — the key is the pane, so nothing collapses across agents.
+    //
+    // Only within the same app and urgency, so a real blockage on that pane is
+    // never quietly replaced by the next failed grep.
+    return list.filter((n) => !(
+      n.goto?.kind === "pane" && n.goto.pane === g.pane
+      && n.app === next.app && n.urgency === next.urgency
+    ));
   }
   return list;
 }
@@ -763,6 +827,23 @@ async function attachCard(n: SystemNote): Promise<void> {
     cardLookups.set(title, card);
   }
   if (!card) return;
+
+  /*
+   * FILED AGAINST THE CARD, not only linked to it.
+   *
+   * ClickUp's API reports no assignment and no follower, so this sentence is
+   * the only record of it that will ever exist here — "Irra assigned this task
+   * to: javi" was on screen while the card's activity showed nothing. Sent
+   * before the early return below, because a note that already carries its
+   * chip is exactly the one that arrived before any of this existed.
+   *
+   * Idempotent by the notification's own id, so re-sending one costs a row
+   * that is already there.
+   */
+  void api.clickupFileNote({
+    id: n.id, cardId: card.id, label: card.label,
+    text: `${n.body || n.summary}`.trim(), at: n.at,
+  });
 
   // Patched in place: the row is already on screen and the reader may have
   // scrolled past it. Matched by id so a note dismissed in the meantime stays

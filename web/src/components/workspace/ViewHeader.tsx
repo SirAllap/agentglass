@@ -34,7 +34,21 @@ export const viewHeaderStyle: CSSProperties = {
   height: VIEW_HEADER_H,
   minHeight: VIEW_HEADER_H,
   maxHeight: VIEW_HEADER_H,
-  borderColor: "color-mix(in srgb, var(--border) 40%, transparent)",
+  /*
+   * THE BAR IS CHROME AND PAINTS LIKE IT.
+   *
+   * It was transparent, so the row of tabs at the top of a view was the exact
+   * colour of the pane under it and the only thing separating them was a
+   * border at 40% alpha. Every view therefore read as one undivided field
+   * with some text floating near the top of it.
+   *
+   * The same token the rail and the settings navigation use, so the app has
+   * ONE answer to "is this something I operate, or something I am reading" —
+   * and the border goes to full --surface-line, because a seam between those
+   * two is not a suggestion.
+   */
+  background: "var(--surface-nav)",
+  borderColor: "var(--surface-line)",
 };
 
 export function ViewHeader({

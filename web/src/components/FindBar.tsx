@@ -60,17 +60,20 @@ export function FindBar() {
       <span className="tabular-nums text-[10px] shrink-0" style={{ color: nothing ? "var(--error)" : "var(--text4)" }}>
         {st.total ? `${st.at}/${st.total}` : st.query ? "0/0" : ""}
       </span>
-      <Arrow dir={-1} disabled={!st.total} />
-      <Arrow dir={1} disabled={!st.total} />
+      <FindArrow dir={-1} disabled={!st.total} onClick={() => stepFind(-1)} />
+      <FindArrow dir={1} disabled={!st.total} onClick={() => stepFind(1)} />
       <CloseButton onClick={closeFind} title="Close (Esc)" className="rounded hover:bg-white/10 shrink-0"
         style={{ color: "var(--text3)" }} />
     </div>
   );
 }
 
-function Arrow({ dir, disabled }: { dir: 1 | -1; disabled: boolean }) {
+/** Exported because the terminal's own find wears the same face: it searches a
+ *  canvas rather than the document, so it cannot share the logic, and there is
+ *  no reason for it to look like a different feature. */
+export function FindArrow({ dir, disabled, onClick }: { dir: 1 | -1; disabled: boolean; onClick: () => void }) {
   return (
-    <button onClick={() => stepFind(dir)} disabled={disabled}
+    <button onClick={onClick} disabled={disabled}
       title={dir === 1 ? "Next (Enter)" : "Previous (Shift+Enter)"}
       aria-label={dir === 1 ? "Next match" : "Previous match"}
       className="inline-flex items-center justify-center rounded hover:bg-white/10 shrink-0"

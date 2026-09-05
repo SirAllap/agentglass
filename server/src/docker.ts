@@ -9,10 +9,19 @@ import { projectKey, inProject, type ProjectKey } from "../../shared/projectKey.
 import type {
   DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
   DockerOverview, DockerScope, DockerActionResult, DockerCapability,
+  DockerDisk, DockerVolumeDetail,
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
+import { parseFacts, factsFor, healthOf, uptimeOf, type ContainerFacts } from "./dockerfacts.ts";
+import { ownerOf } from "./dockerowner.ts";
+import { parsePorts } from "./dockerports.ts";
+import { forget, ledgerAll, ledgerFor } from "./dockerledger.ts";
+import { diskUsage, mountedBy, peekVolume } from "./dockervolumes.ts";
+import { startVolumeWatch } from "./dockerwatch.ts";
+import { envDiff, type EnvDiffRow } from "./dockerenv.ts";
 import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
 import { withSpawnSlot } from "./spawnpool.ts";
+import { worktreeFamily } from "./worktree.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
@@ -406,7 +415,22 @@ async function images(): Promise<DockerImage[]> {
 async function volumes(): Promise<DockerVolume[]> {
   const r = await dockerAsync(["volume", "ls", "--format", "{{json .}}"]);
   if (r.code !== 0) return [];
-  return jsonLines(r.stdout).map((v) => ({ name: v.Name || "", driver: v.Driver || "" }));
+  const rows = jsonLines(r.stdout).map((v) => ({ name: v.Name || "", driver: v.Driver || "" }));
+
+  /* What agentglass has observed about each one rides along here because it is
+     free: the ledger is a small JSON file this process wrote itself, not a
+     docker call. Sizes are the expensive half and live in /docker/disk. */
+  const led = ledgerAll();
+  const gone = Object.keys(led).filter((name) => !rows.some((v) => v.name === name));
+  // A record that outlives its volume is a lie with a date on it — the name
+  // gets reused by the next `docker volume create` and the panel confidently
+  // names a worktree that never touched it.
+  if (gone.length) forget(gone);
+
+  return rows.map((v) => {
+    const rec = led[v.name];
+    return rec ? { ...v, lastWrite: rec.last, worktrees: rec.seen } : v;
+  });
 }
 
 async function networks(): Promise<DockerNetwork[]> {
@@ -427,7 +451,12 @@ let overviewCache: { at: number; root: string | null; data: DockerOverview } | n
 
 export async function overview(): Promise<DockerOverview> {
   const root = workspaceRoot();
-  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS * backoff()) return overviewCache.data;
+  // Served from cache, and it says so. The data is identical; what changes is
+  // that the panel can now tell the difference between "just gathered" and
+  // "this is what we had two seconds ago", which is the whole of decision 20.
+  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS * backoff()) {
+    return { ...overviewCache.data, freshness: "stale" };
+  }
   const { version, inconclusive } = await probeDaemon();
   if (!version) {
     const down: DockerOverview = {
@@ -444,6 +473,10 @@ export async function overview(): Promise<DockerOverview> {
         : inconclusive
           ? "no answer from docker yet — still trying"
           : "docker not available (is the daemon running?)",
+      at: Date.now(),
+      // The same split the error message makes, in a field the UI can act on:
+      // "still trying" is a spinner, "down" is a message with a fix in it.
+      freshness: inconclusive ? "retrying" : "down",
     };
     // A guess is not worth caching for as long as a fact. Holding an
     // inconclusive verdict for the full window is what kept the error on screen
@@ -451,6 +484,10 @@ export async function overview(): Promise<DockerOverview> {
     if (!inconclusive) overviewCache = { at: Date.now(), root, data: down };
     return down;
   }
+  const started = Date.now();
+  // Idempotent, and only from here: the ledger fills itself while somebody is
+  // looking at Docker, and costs one `docker events` process for the machine.
+  startVolumeWatch();
   const [c, i, v, n] = await Promise.all([containers(), images(), volumes(), networks()]);
   // Only containers are scoped. Images, volumes and networks are host-global
   // resources shared between projects — an image layer isn't "owned" by the
@@ -459,9 +496,89 @@ export async function overview(): Promise<DockerOverview> {
   // Every checkout of the project, so a stack started in a worktree is still
   // this project's stack.
   const { containers: scoped, scope } = applyScope(c, scopeRoots(root).map(dockerScopeKey).filter((k): k is DockerScopeKey => !!k));
-  const data: DockerOverview = { available: true, writeEnabled: DOCKER_WRITE_ENABLED, version, containers: scoped, images: i, volumes: v, networks: n, ...(scope ? { scope } : {}) };
+  // Only the containers that are going to be served get enriched: the work is
+  // proportional to what is on screen, not to what is on the host.
+  const enriched = await enrich(scoped, root);
+  const data: DockerOverview = {
+    available: true, writeEnabled: DOCKER_WRITE_ENABLED, version,
+    containers: enriched, images: i, volumes: v, networks: n,
+    ...(scope ? { scope } : {}),
+    at: started, freshness: "live", tookMs: Date.now() - started,
+  };
   overviewCache = { at: Date.now(), root, data };
   return data;
+}
+
+/* ---------------------------------------------------------------------------
+ * The medium lane.
+ *
+ * `docker ps` cannot say how many times a container has restarted, when it
+ * actually started, why its health check is failing, or which named volumes it
+ * holds — all four live in `docker inspect`. One inspect per container per poll
+ * would be twelve processes every two seconds, which is exactly the kind of
+ * creep that took this file's `ps` call from 19ms to 4.9s once already.
+ *
+ * So: every visible container in ONE inspect, on a clock five times slower than
+ * the poll. None of these numbers move fast — a restart count fifteen seconds
+ * old has never misled anybody, and a health check that has just failed is
+ * already visible in `status`, which is free.
+ * ------------------------------------------------------------------------ */
+const FACTS_TTL_MS = 15_000;
+let factsCache: { at: number; key: string; map: Map<string, ContainerFacts> } | null = null;
+
+/** Test seam: forget the medium lane's answer without waiting for its clock. */
+export function __resetFactsForTest(): void {
+  factsCache = null;
+}
+
+async function containerFacts(ids: string[]): Promise<Map<string, ContainerFacts>> {
+  const wanted = ids.filter((id) => ID_RE.test(id)).sort();
+  if (!wanted.length) return new Map();
+  const key = wanted.join(",");
+  // The key is part of the identity: selecting a different project, or a
+  // container appearing, has to be able to fill in a row that was not in the
+  // last batch instead of waiting out the window with a blank.
+  if (factsCache && factsCache.key === key && Date.now() - factsCache.at < FACTS_TTL_MS * backoff()) return factsCache.map;
+  const r = await dockerAsync(["inspect", ...wanted], 10000);
+  // A failure here costs the extra fields and nothing else: the rows still draw
+  // from `ps`. Keeping the previous map would be worse — it would pin a restart
+  // count to a container that has since been recreated.
+  const map = r.code === 0 ? parseFacts(r.stdout) : new Map<string, ContainerFacts>();
+  factsCache = { at: Date.now(), key, map };
+  return map;
+}
+
+/**
+ * Everything a row needs, added to what `ps` already said.
+ *
+ * Ports, health and uptime are read out of the poll's own answer, so they cost
+ * nothing. The owner costs one file read per distinct checkout (see
+ * dockerowner.ts — `.git/HEAD`, not a `git` spawn). The rest comes from the
+ * medium lane above.
+ */
+async function enrich(list: DockerContainer[], root: string | null): Promise<DockerContainer[]> {
+  if (!list.length) return list;
+  const facts = await containerFacts(list.map((c) => c.id));
+  // Resolved once for the whole batch: worktreeFamily is cached, but asking it
+  // per container would still be twelve map lookups and twelve array builds.
+  const family = root ? worktreeFamily(root) : [];
+  return list.map((c) => {
+    const f = factsFor(facts, c.id);
+    const ports = parsePorts(c.ports);
+    const owner = ownerOf(c.workingDir, family, root);
+    return {
+      ...c,
+      ...(ports.length ? { portList: ports } : {}),
+      health: healthOf(c.status),
+      uptime: uptimeOf(c.status),
+      restarts: f.restarts,
+      startedAt: f.startedAt,
+      healthError: f.healthError,
+      healthFailures: f.healthFailures,
+      ...(f.volumes.length ? { mounts: f.volumes } : {}),
+      ...(owner ? { owner } : {}),
+    };
+  });
 }
 
 const pct = (s?: string) => { const n = parseFloat((s || "").replace("%", "")); return Number.isFinite(n) ? n : 0; };
@@ -594,4 +711,121 @@ export async function top(id: string): Promise<{ ok: boolean; text: string; erro
   // empty table that looks like "no processes".
   if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "the container is not running" };
   return { ok: true, text: r.stdout };
+}
+
+
+/* ---------------------------------------------------------------------------
+ * The slow lane.
+ *
+ * Everything here makes the daemon do real work — `system df -v` walks layers
+ * and volumes, a peek starts a container — so none of it is on a timer. It is
+ * asked for when somebody opens the section that needs it, and the answer
+ * carries the moment it was taken so the panel can say how old it is.
+ * ------------------------------------------------------------------------ */
+
+let diskCache: { at: number; data: DockerDisk } | null = null;
+/** Long: this is a number people read, not one they watch. A minute old is
+ *  fine; paying seconds of daemon time to shave that is not. */
+const DISK_TTL_MS = 60_000;
+
+export function __resetDiskForTest(): void { diskCache = null; }
+
+/**
+ * Disk usage, plus the images nobody meant to keep.
+ *
+ * The orphan pass is the part docker cannot do: an image tagged for a worktree
+ * is only rubbish if that worktree is gone, and only this app knows which
+ * checkouts exist. Named and sized, never deleted — the deleting is a button
+ * with a sentence on it, and that is phase 4's business.
+ */
+export async function disk(force = false): Promise<DockerDisk | null> {
+  if (!force && diskCache && Date.now() - diskCache.at < DISK_TTL_MS) return diskCache.data;
+  const usage = await diskUsage();
+  if (!usage) return null;
+
+  const root = workspaceRoot();
+  /*
+   * Comparing an image tag to a worktree name is not string equality, and
+   * getting that wrong is expensive in the worst direction. Measured here: 40
+   * images of 6.1GB each — 245GB — were reported as belonging to deleted
+   * worktrees because the checkout is `orbit-WEB-1042` and the tag its own
+   * tooling derives is `orbit-web-1042`. Every one of those worktrees existed.
+   *
+   * So both sides are normalised the same way — lowercased, anything that is
+   * not a letter or a digit folded to a single dash — which is what every
+   * BUILD_ID-deriving script does anyway, and what docker requires of a tag.
+   */
+  const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const family = root ? worktreeFamily(root).map((p) => norm(p.split("/").filter(Boolean).pop() ?? p)) : [];
+  const orphans = usage.perImage
+    .filter((i) => i.repository && i.repository !== "<none>" && i.tag && i.tag !== "<none>" && i.tag !== "dev" && i.tag !== "latest")
+    .filter((i) => !i.containers)
+    // A tag that looks like one of this project's worktree names, for a
+    // worktree that is not there any more. Conservative on purpose, and doubly
+    // so now: an image tagged for something we cannot recognise is somebody
+    // else's business, and a tag we cannot MATCH is never called rubbish.
+    .filter((i) => {
+      const tag = norm(i.tag);
+      if (!tag || family.includes(tag)) return false;
+      // It has to look like one of ours: sharing the first segment with a
+      // worktree we know. Without this, every third-party image tagged
+      // anything at all becomes a delete suggestion.
+      return family.some((w) => w.split("-")[0] === tag.split("-")[0]);
+    })
+    /*
+     * `unique`, not `size`. Measured on this machine: 25 images tagged for
+     * worktrees that are gone add up to 149GB of `Size` and free 40.6GB when
+     * deleted, because they share a base layer. A button that promises the
+     * first number is a button that lies by 108GB — and this is the panel that
+     * exists to say what a delete actually costs and gives back.
+     */
+    .map((i) => ({ id: i.id, tag: `${i.repository}:${i.tag}`, bytes: i.unique ?? i.bytes, worktree: i.tag }));
+
+  const data: DockerDisk = {
+    images: usage.images, containers: usage.containers, volumes: usage.volumes,
+    buildCache: usage.buildCache, reclaimable: usage.reclaimable,
+    orphans, volumes_: usage.perVolume, at: Date.now(),
+  };
+  diskCache = { at: Date.now(), data };
+  return data;
+}
+
+/** Per-volume sizes, out of the CACHED disk walk — never a second one. */
+export async function volumeSizes(): Promise<Record<string, { bytes: number | null; links: number }>> {
+  const d = await disk();
+  const out: Record<string, { bytes: number | null; links: number }> = {};
+  for (const v of d?.volumes_ ?? []) out[v.name] = { bytes: v.bytes, links: v.links };
+  return out;
+}
+
+/** One volume, asked about directly: who is holding it, and who wrote it. */
+export async function volumeDetail(name: string): Promise<DockerVolumeDetail> {
+  const [holders, sizes] = await Promise.all([mountedBy(name), volumeSizes()]);
+  const rec = ledgerFor(name);
+  return {
+    name,
+    bytes: sizes[name]?.bytes ?? null,
+    mountedBy: holders,
+    lastWrite: rec?.last ?? null,
+    worktrees: rec?.seen ?? [],
+  };
+}
+
+/** A read-only look inside. */
+export const volumePeek = peekVolume;
+
+
+/**
+ * Two containers' environments, compared.
+ *
+ * Both inspects in parallel — this is a click, not a poll — and the comparison
+ * happens HERE rather than on the client, because that is what keeps credential
+ * values on this side of the wire. See dockerenv.ts.
+ */
+export async function envCompare(a: string, b: string): Promise<{ ok: boolean; rows?: EnvDiffRow[]; error?: string }> {
+  if (!ID_RE.test(a) || !ID_RE.test(b)) return { ok: false, error: "invalid container id" };
+  const [ra, rb] = await Promise.all([inspect(a), inspect(b)]);
+  if (!ra.ok) return { ok: false, error: ra.error ?? "could not read the first container" };
+  if (!rb.ok) return { ok: false, error: rb.error ?? "could not read the second container" };
+  return { ok: true, rows: envDiff(ra.env, rb.env) };
 }

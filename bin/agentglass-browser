@@ -5,30 +5,148 @@ An agent can already fetch a URL from its shell and get the signed-out
 version of everything that matters, because the session lives in a browser
 and not in curl. This talks to the browser in the app window instead.
 
-    agentglass-browser open https://github.com/notifications
-    agentglass-browser read
-    agentglass-browser click "a.notification-list-item-link"
-    agentglass-browser type "#search" "billing bug" --submit
-    agentglass-browser wait ".results"
-    agentglass-browser shot /tmp/page.png
+START HERE, in this order:
+
+    agentglass-browser health                # is anything even listening
+    agentglass-browser open https://example.com/app
+    agentglass-browser observe --shot        # EVERYTHING at once: url, console,
+                                             # network, the interactive tree, forms
+
+Then the whole interaction in ONE call, which is the cheap way to work:
+
+    agentglass-browser do "click #save" "wait #done" --observe
+
+    Starting this process costs ~104ms before it says a word, so six separate
+    verbs spend most of a second on startup alone. `do` spends it once.
+
+THE VERBS, by what you reach for them for:
+
+  look        observe · read · text · html · shot · frames · console · network
+              shot --selector "#status" evidence.png       # just that element
+              shot --highlight "#status" --label "still Online" evidence.png
+  act         click · type · select · check · fill · hover · dblclick ·
+              rightclick · focus · blur · press · scroll
+  wait        wait · waitfor
+  navigate    open · back · forward · reload
+  tabs        tabs · tab · newtab · closetab · profiles
+  identity    whoami · cookies · profiles · session · permissions
+              whoami                              # BEFORE anything else: am I
+                                                  # isolated, and who holds the screen
+              profiles                            # who else is working, and on what
+              open --as agent https://...        # log in once as this identity...
+              session save agent.json             # ...save it...
+              session load agent.json             # ...and reuse it, for ever
+  run code    eval · addInitScript · expose · exposed
+  inspect     cdp · listeners · coverage  (the DevTools protocol, whole)
+  pretend     emulate · resize            (phone, timezone, dark mode, colour blindness)
+  batch       do
+
+YOUR IDENTITY IS DERIVED PER *SESSION*, NOT PER PROCESS. Without `--as`, the
+name comes from the project and the last six characters of the session id — so
+every SUBAGENT of one session derives the SAME name, the same container and the
+same remembered tab, and because `open` navigates a remembered tab instead of
+minting a new one, concurrent siblings repaint one shared page. The harness
+offers no stable per-subagent id to fix this in the seed. So: A PARENT THAT
+FANS OUT GIVES EACH CHILD AN EXPLICIT `--as` NAME. Two agents that pass the
+same `--as` share one container — cookies, storage, login — machine-wide;
+`whoami` and `profiles` are how you see that before it costs you an hour.
+
+WHEN SOMETHING FAILS it tells you why without being asked: the console errors
+and the failed requests from just before it. You do not need a second call.
 
 Stdlib only, so it runs wherever the agent's shell runs. Exit code 0 when
 the browser did the thing, 1 when it did not — an agent branches on that.
 
+Every verb takes --max-tokens N, --out FILE (with --summary) and, on
+observe/console/network, --since-last — because what a page returns is not
+the cost, what stays in YOUR context for the rest of the session is (measured
+82.7% of an agent's spend, over 17 real sessions). See --help on those verbs.
+
 Env:
-    AGENTGLASS_SERVER   base url (default http://localhost:4000)
-    AGENTGLASS_TOKEN    only needed if the server was started with one
+    AGENTGLASS_SERVER            base url (default http://localhost:4000)
+    AGENTGLASS_TOKEN             only needed if the server was started with one
+    AGENTGLASS_BROWSER_STATE_DIR where --since-last remembers its cursor
+                                 (default ~/.cache/agentglass-browser)
 """
 import argparse
 import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 
-SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/")
+try:
+    import fcntl
+except ImportError:  # pragma: no cover — POSIX only, which is where the app runs
+    # Without it the tab map goes back to an unlocked read-modify-write. That
+    # is not a crash, it is the 8%-of-races behaviour measured below; the CLI
+    # is stdlib-only on purpose and must still start where fcntl is absent.
+    fcntl = None
+
+
+def _server_or_die(url):
+    """Where the Bearer token goes. It is sent to whatever AGENTGLASS_SERVER
+    names, and over plain http to a remote host it travels in the clear —
+    every hop between here and there reads it. So: https anywhere, http only
+    to this machine (localhost, or a loopback address). Anything else is one
+    line on stderr and exit 2, before a single request is built."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    host = (u.hostname or "").lower()
+    if u.scheme == "https" and host:
+        return url
+    if u.scheme == "http" and host:
+        loop = host == "localhost"
+        if not loop:
+            try:
+                loop = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                loop = False
+        if loop:
+            return url
+        print(f"agentglass: refusing plain http to {host}: the token would travel in the clear. "
+              f"Use https://, or http:// only to localhost/127.0.0.1/::1 (AGENTGLASS_SERVER={url})", file=sys.stderr)
+        sys.exit(2)
+    print(f"agentglass: AGENTGLASS_SERVER must be https://<host> or http://<loopback>, got {url!r}", file=sys.stderr)
+    sys.exit(2)
+
+
+SERVER = _server_or_die(os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"))
+STATE_DIR = os.environ.get("AGENTGLASS_BROWSER_STATE_DIR") or os.path.expanduser("~/.cache/agentglass-browser")
+
+
+def _write_private(path, data, binary=False):
+    """A file that may hold session material — cookies, storage, a HAR with
+    its request headers, a snapshot of a signed-in page — written 0600. The
+    plain `open(path, "w")` these used took the umask, 0644 on most machines:
+    every account on the box could read the cookies `session save` had just
+    pulled out of the browser. Created with the mode rather than chmod-ed
+    after (the gap between the two is the same gap), and re-tightened when the
+    file already existed, since O_CREAT's mode only applies to a new file."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    with os.fdopen(fd, "wb" if binary else "w") as f:
+        f.write(data)
+
+
+def _said_redacted(res):
+    """The server counts what it masked (`redacted: {spans, fields}`) and every
+    printer here dropped the field: `read` printed title, url and text, and a
+    reader had no way to tell "[redacted]" in the page from "[redacted]" by
+    us. Said once, on stderr, where every answer passes."""
+    if isinstance(res, dict) and isinstance(res.get("redacted"), dict):
+        r = res["redacted"]
+        fields = ", ".join(sorted(k for k in (r.get("fields") or {}) if isinstance(k, str)))
+        print(f"redacted: {r.get('spans', 0)} span(s) in {fields or 'the answer'} — "
+              f"the [redacted] marks are ours, not the page's", file=sys.stderr)
+    return res
 
 
 def call(op, body):
@@ -48,14 +166,551 @@ def call(op, body):
         req.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
-            return json.loads(r.read() or b"{}")
+            return _said_redacted(json.loads(r.read() or b"{}"))
     except urllib.error.HTTPError as e:
         try:
-            return json.loads(e.read() or b"{}")
+            return _said_redacted(json.loads(e.read() or b"{}"))
         except json.JSONDecodeError:
             return {"ok": False, "error": f"server said {e.code}"}
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
+
+
+# ── identity ────────────────────────────────────────────────────────────────
+#
+# Who is driving, and which tab is theirs. Both are remembered here rather than
+# asked for on every call, because "declare your identity on every verb" is a
+# rule that gets kept for ten minutes and then quietly stops being kept — which
+# is exactly what happened: "the agents are using the browser but they are not
+# creating their profiles; I am the one who has to tell them to."
+
+# Said once per process, not once per call: `my_name` is asked three or four
+# times on the way through `main`, and four copies of the same warning reads as
+# four different problems.
+_SAID = set()
+
+
+def _notice(line):
+    """A warning on stderr that does not change the exit code.
+
+    stderr rather than stdout because stdout is the ANSWER — an agent pipes it
+    into `jq` — and a notice mixed into it turns valid JSON into a parse error.
+    """
+    if line in _SAID:
+        return
+    _SAID.add(line)
+    print(line, file=sys.stderr)
+
+
+def _capped(name, source):
+    """24 characters, and SAY SO when it bites.
+
+    §13(b). The cap was silent, so two long, deliberately distinct names that
+    differ only past byte 24 became ONE identity — one container, one cookie
+    jar, one remembered tab — with nothing on either side saying it happened.
+    That is the collision this whole change is about, arrived at by a caller
+    who did everything right.
+    """
+    if len(name) <= 24:
+        return name
+    cut = name[:24]
+    _notice(f'--as: "{name}" is longer than 24 characters and was cut to "{cut}" ({source}). '
+            f"Two names that differ only past character 24 are ONE container, one cookie jar "
+            f"and one tab. Pick a shorter one that is different at the start.")
+    return cut
+
+
+def my_name(explicit=None):
+    """The identity this shell works as.
+
+    Explicit name, then AGENTGLASS_PROFILE, then one derived from the session so
+    that an agent has an identity WITHOUT having thought about it. Derived from
+    the project and a short piece of the session id, so a person looking at the
+    profile menu can tell whose it is and two sessions on one project do not
+    collide.
+
+    PER SESSION, WHICH IS NOT PER PROCESS. Subagents inherit
+    CLAUDE_CODE_SESSION_ID from their parent, so every subagent of one session
+    derives the same name and lands in one container — measured: three
+    subagents of one session each derived the same six-character tail. A parent
+    that fans out hands each child an explicit `--as`.
+    """
+    if explicit:
+        return _capped(explicit, "the name you passed")
+    env = os.environ.get("AGENTGLASS_PROFILE")
+    if env:
+        return _capped(env, "from AGENTGLASS_PROFILE")
+    root = os.environ.get("CLAUDE_PROJECT_ROOT") or os.getcwd()
+    stem = re.sub(r"[^A-Za-z0-9]", "", os.path.basename(root.rstrip("/")))[:12] or "agent"
+    seed = (os.environ.get("CLAUDE_CODE_SESSION_ID")
+            or os.environ.get("TMUX_PANE", "").lstrip("%")
+            or str(os.getppid()))
+    tail = re.sub(r"[^A-Za-z0-9]", "", seed)[-6:] or "0"
+    # No notice on this branch: the stem is already cut to 12 and the tail to
+    # 6, so a derived name cannot reach 24 — warning about a cap that never
+    # fires would train a reader to ignore the one that does.
+    return f"{stem}-{tail}"[:24]
+
+
+# THE PERSON'S OWN CONTAINER IS AN IDENTITY LIKE ANY OTHER.
+#
+# `--shared` promised "the DEFAULT profile, which is the person's own session"
+# and delivered "whichever tab is in front". It set the identity to the empty
+# string, `remember_tab` refuses a falsy name, so `my_tab("")` was always None
+# and the request left with neither `profile` nor `page` — byte-equivalent to
+# an un-addressed call, which the relay resolves to the globally active tab.
+# That tab belongs to whoever last used the browser, agents included.
+#
+# So the person's container gets a slot in the tab map like everybody else,
+# and `--shared open` remembers the tab it lands in, and every `--shared` verb
+# after it names that tab instead of guessing.
+#
+# NOT `profile: "default"` on the wire. The panel resolves a profile name by
+# lookup and MINTS a container when the name is unknown, and the person's own
+# session is the EMPTY profile field rendered with the label "default" — so
+# the literal string would create a brand-new container called "default"
+# beside the session it was meant to enter. `--shared` therefore still sends
+# no profile at all; what changed is that it stops forgetting where it landed.
+#
+# Parentheses on purpose: `my_name` strips everything that is not a letter or
+# a digit before it builds a derived name, so no identity can arrive here by
+# accident. A caller who types `--as "(default)"` gets the person's container,
+# which is what those characters now mean.
+SHARED_KEY = "(default)"
+
+
+def _tabs_path():
+    return os.path.join(STATE_DIR, "my-tabs.json")
+
+
+class _map_lock:
+    """An exclusive lock around ONE read-modify-write of the tab map.
+
+    `os.replace` makes each write atomic. It does not make the cycle atomic,
+    and the cycle is what two agents run at the same time: both read the map,
+    both add their own key, the second write drops the first. Measured on this
+    machine with two processes calling `remember_tab` once each against a fresh
+    state dir, 200 iterations: **16 of 200 lost an identity** — 8%. Confirmed
+    end to end through the CLI with the lock taken back out: 4 of 60.
+
+    Losing a key is not "the caller retries". Under the refusal an identity
+    with no tab now gets, it is a call that STOPS, for a tab that is open and
+    working, because somebody else opened one at the same millisecond.
+
+    A separate `.lock` file rather than the map itself: the map is replaced by
+    `os.replace`, so a lock held on its inode would stop describing the file
+    the next reader opens.
+    """
+
+    def __enter__(self):
+        self.fd = None
+        if fcntl is None:
+            return self
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            self.fd = os.open(_tabs_path() + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except OSError:
+            # An unwritable state dir is the REQ-18 case below: it costs the
+            # automatic targeting, not the call. Do not make it cost the lock.
+            if self.fd is not None:
+                try:
+                    os.close(self.fd)
+                except OSError:
+                    pass
+            self.fd = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self.fd)
+        return False
+
+
+def my_tab(name):
+    """The tab this identity opened, if it still has one."""
+    try:
+        with open(_tabs_path()) as f:
+            return (json.load(f) or {}).get(name) or None
+    except Exception:
+        return None
+
+
+def _write_map(held):
+    tmp = _tabs_path() + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(held, f)
+    os.replace(tmp, _tabs_path())
+
+
+def remember_tab(name, tab_id):
+    """Written after `open`/`newtab` so every later verb can name it.
+
+    Best effort: a state file that cannot be written costs the automatic
+    targeting, not the call. The caller can always pass --page itself.
+
+    BUT IT SAYS SO NOW. This ended `except Exception: pass` under that
+    docstring, so an unwritable cache directory turned targeting off in
+    silence — and silent targeting-off is exactly the state in which the next
+    verb goes somewhere the caller did not choose. One line on stderr, which
+    is not stdout and so cannot corrupt an answer a script is parsing.
+    """
+    if not name or not tab_id:
+        return
+    try:
+        with _map_lock():
+            os.makedirs(STATE_DIR, exist_ok=True)
+            try:
+                with open(_tabs_path()) as f:
+                    held = json.load(f) or {}
+            except Exception:
+                held = {}
+            held[name] = tab_id
+            _write_map(held)
+    except Exception as e:
+        print(f"agentglass-browser: could not remember this tab in {STATE_DIR} ({e}) — "
+              f"automatic targeting is off for {name}; pass --page <tab id> to name it",
+              file=sys.stderr)
+
+
+def forget_tab(name):
+    """After a tab is closed, or found to be gone.
+
+    Called from the "no tab called" error path, from `closetab`, and from
+    `profiles --drop`. It had exactly ONE of those three call sites, so closing
+    your own tab or dropping your own container left the map pointing at
+    something gone — which was harmless only while a stale id fell through to
+    the active tab. It does not fall through any more, so a stale entry is now
+    a refusal the caller cannot act on, and pruning is what makes the next
+    `open` self-heal.
+    """
+    try:
+        with _map_lock():
+            with open(_tabs_path()) as f:
+                held = json.load(f) or {}
+            if held.pop(name, None) is None:
+                return
+            _write_map(held)
+    except Exception:
+        pass
+
+
+def _ago(ms):
+    """"41 seconds ago", or a date once that stops meaning anything.
+
+    A timestamp answers the wrong question. What an agent about to join a
+    container needs to know is whether somebody is in there NOW, and
+    "1788264861111" makes it work that out. Nothing is returned for a missing
+    value: no clock is better than a wrong one.
+    """
+    if not isinstance(ms, (int, float)) or ms <= 0:
+        return None
+    secs = int(time.time() - ms / 1000.0)
+    if secs < 0:
+        return "just now"
+    if secs < 90:
+        return f"{secs} seconds ago"
+    if secs < 5400:
+        return f"{secs // 60} minutes ago"
+    if secs < 172800:
+        return f"{secs // 3600} hours ago"
+    return f"{secs // 86400} days ago"
+
+
+def foreign_container_notice(who, live_tabs, last_ms=None, creator=None):
+    """§13(a). YOU ARE ABOUT TO WORK IN SOMEBODY ELSE'S CONTAINER.
+
+    Minting a container and joining one somebody else made are the same
+    gesture — `--as pol` — and nothing about the answer says which of the two
+    just happened. The panel resolves a container by NAME against a
+    machine-wide list and only mints when the name is absent, so two shells
+    that pick the same name share one cookie jar, one login, and (because
+    `open` navigates a remembered tab rather than minting) one page.
+
+    The signal that this is a JOIN and not a MINT: the container already holds
+    live tabs that this process did not open. `my_tab` is per-process state, so
+    "tabs exist in my container and none of them is mine" is exactly the shape
+    of a collision — and it is the shape the incident had.
+
+    A notice, not a refusal. Two shells of one agent sharing a container on
+    purpose is a documented, useful pattern (`session save` / `session load`),
+    and the caller may well mean it. What was missing was being told.
+    """
+    if not who or live_tabs <= 0:
+        return
+    when = _ago(last_ms)
+    line = (f'--as {who}: that container already exists and holds {live_tabs} '
+            f'tab{"" if live_tabs == 1 else "s"} this process did not open')
+    if creator:
+        line += f", created by {creator}"
+    if when:
+        line += f", last used {when}"
+    _notice(line + ".\n"
+            "  You are JOINING it, not making one: same cookies, same login, same storage, "
+            "and an `open` here can navigate the page somebody else is looking at.\n"
+            f"  Yours would be: agentglass-browser --as {who}-2 open <url>   (or any name nobody has)\n"
+            "  Who holds what: agentglass-browser profiles")
+
+
+def _since_path():
+    return os.path.join(STATE_DIR, "since.json")
+
+
+def load_since(who, cmd):
+    """The cursor `--since-last` remembers for one identity's verb, or 0.
+
+    Kept in a file rather than in this process, because a fresh process is
+    exactly what an agent starts for every call — there is no in-memory
+    session to remember it for.
+
+    KEYED ON THE IDENTITY, NOT JUST THE VERB. It used to be one number per
+    verb in one machine-global file, so every agent on the machine shared four
+    cursors — the live file had exactly four keys (`observe`, `console`,
+    `network`, `exposed`) and its `exposed` cursor was 5.5 days older than its
+    `observe` one, cursors from different sessions and different days sitting
+    in the same slot.
+
+    That is not a tidiness problem. Agent A's ordinary `console` moved the
+    floor under agent B, so B's next `console --since-last` returned the
+    errors since A's call — an empty list, exit code 0, which reads as "no
+    console errors". The error is always in the under-report direction, which
+    is the dangerous one for debugging: B is querying the right tab (the
+    console buffer is per page) with the wrong floor.
+
+    A cursor that cannot be parsed still yields 0, which returns the whole
+    buffer. That costs tokens and loses nothing, and it keeps a read verb from
+    failing because of a cache — this tool's own contract is that a bad state
+    file costs the targeting, not the call.
+    """
+    try:
+        with open(_since_path()) as f:
+            mine = (json.load(f) or {}).get(who) or {}
+        return float(mine.get(cmd, 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def save_since(who, cmd, now):
+    """Remember `now` for next time, for THIS identity's verb.
+
+    Best-effort: a caller that cannot write its own cache directory should
+    still get today's answer, just without tomorrow's diff.
+
+    Written tmp + `os.replace` like the tab map. It used to be a plain
+    truncating `open(path, "w")`, so a process killed mid-write left a
+    half-written cursor file — which `load_since` then reads as 0 for every
+    identity in it, not just the one being written.
+    """
+    if not isinstance(now, (int, float)) or not who:
+        return
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        try:
+            with open(_since_path()) as f:
+                state = json.load(f)
+        except Exception:
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        # The old flat shape put a float under the VERB name at top level.
+        # Anything here that is not a dict is a cursor from before this change
+        # and is replaced rather than migrated: the spec's own note is that the
+        # first `--since-last` after this returns the whole buffer once, which
+        # is self-correcting, and guessing which identity an old cursor
+        # belonged to is not possible.
+        if not isinstance(state.get(who), dict):
+            state[who] = {}
+        state[who][cmd] = now
+        tmp = _since_path() + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, _since_path())
+    except Exception:
+        pass
+
+
+def _size(v):
+    return len(json.dumps(v))
+
+
+def budget_value(value, max_tokens):
+    """Truncate a verb's answer to roughly `max_tokens`, by RELEVANCE rather
+    than by lopping off whatever came last.
+
+    The 3000-line DOM dump is the anti-feature this whole verb exists to
+    avoid, so the order matters: a page's tree is trimmed to what is in the
+    VIEWPORT first (a caller reading a page cares about what it can see, not
+    what is below the fold), console/network logs drop their OLDEST rows
+    first (the most recent is what a caller just triggered), and only a
+    plain text/html blob is cut at all, because there is nothing left in it to
+    prioritise. Nothing is silently dropped: `truncated`/`budgetNote` say
+    exactly what left and how much of it there was.
+    """
+    if not isinstance(value, dict) or not max_tokens:
+        return value
+    budget_chars = max_tokens * 4  # a rough, well-known ratio — good enough to aim a cut, not to promise a count
+    if _size(value) <= budget_chars:
+        return value
+    notes = []
+
+    tree = value.get("tree")
+    if isinstance(tree, list) and tree:
+        vp = value.get("viewport") or {}
+        vw, vh = vp.get("width"), vp.get("height")
+
+        def onscreen(el):
+            at = el.get("at")
+            if not at or vw is None:
+                return True
+            x, y, w, h = at
+            return x < vw and y < vh and x + w > 0 and y + h > 0
+
+        ordered = sorted(range(len(tree)), key=lambda i: (0 if onscreen(tree[i]) else 1, i))
+        value["tree"] = [tree[i] for i in ordered]
+        while _size(value) > budget_chars and len(value["tree"]) > 1:
+            value["tree"].pop()
+        dropped = len(tree) - len(value["tree"])
+        if dropped:
+            notes.append(f"tree: kept {len(value['tree'])} of {len(tree)} (viewport first), dropped {dropped}")
+
+    for key in ("console", "network"):
+        arr = value.get(key)
+        if _size(value) <= budget_chars:
+            break
+        if isinstance(arr, list) and arr:
+            before = len(arr)
+            while _size(value) > budget_chars and len(value[key]) > 0:
+                value[key] = value[key][1:]  # oldest first — the newest is what the caller is asking about
+            dropped = before - len(value[key])
+            if dropped:
+                notes.append(f"{key}: dropped {dropped} oldest of {before}")
+
+    rows = value.get("rows")
+    if _size(value) > budget_chars and isinstance(rows, list) and rows:
+        before = len(rows)
+        while _size(value) > budget_chars and len(value["rows"]) > 0:
+            value["rows"] = value["rows"][1:]
+        dropped = before - len(value["rows"])
+        if dropped:
+            notes.append(f"rows: dropped {dropped} oldest of {before}")
+
+    for key in ("text", "html"):
+        s = value.get(key)
+        if _size(value) <= budget_chars:
+            break
+        if isinstance(s, str) and s:
+            over = _size(value) - budget_chars
+            keep = max(0, len(s) - over - 20)
+            value[key] = s[:keep]
+            if keep < len(s):
+                notes.append(f"{key}: cut to {keep} of {len(s)} chars")
+
+    if notes:
+        value["truncated"] = True
+        value["budgetNote"] = "; ".join(notes)
+    return value
+
+
+def emit(cmd, value, a):
+    """Print an answer the way every verb is documented to: --max-tokens trims
+    it, --out writes it, --summary describes it.
+
+    It lived at the bottom of main() and the verbs that return EARLY — `cdp`,
+    `do` — never reached it. So `cdp --out file.json` printed the whole answer
+    to stdout, wrote nothing, and exited 0: the caller pays for the payload in
+    its context, which is the exact cost --out exists to avoid, and finds no
+    file where it was told one would be."""
+    if getattr(a, "maxTokens", None):
+        value = budget_value(value, a.maxTokens)
+    if getattr(a, "outFile", None):
+        _write_private(a.outFile, json.dumps(value))
+        print(a.outFile)
+        print(summarize(cmd, value))
+        return 0
+    if getattr(a, "summary", False):
+        print(summarize(cmd, value))
+        return 0
+    print(json.dumps(value))
+    return 0
+
+
+def summarize(cmd, value):
+    """One line for `--summary` — the thing worth reading when the rest went
+    to a file instead of your context."""
+    if not isinstance(value, dict):
+        return str(value)[:200]
+    if cmd == "observe":
+        bits = [f"{value.get('title', '')!r}", value.get("url", ""),
+                f"tree:{len(value.get('tree') or [])}",
+                f"console:{len(value.get('console') or [])}",
+                f"network:{len(value.get('network') or [])}"]
+        if value.get("visible") is False:
+            bits.append("NOT VISIBLE")
+        return " ".join(bits)
+    if cmd in ("console", "network"):
+        rows = value.get("rows") or []
+        return f"{len(rows)} rows" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
+    if cmd == "read":
+        return f"{value.get('title', '')!r} {value.get('url', '')} — {len(value.get('text', ''))} chars"
+    if cmd in ("whoami", "profiles"):
+        # The one line that matters here is not a size, it is the three facts
+        # §11 exists for: who am I, do I still hold a tab, and whose container
+        # is on screen. `N bytes of json` answered none of them.
+        you = value.get("you") or {}
+        act = value.get("activeTab") or {}
+        bits = [f"you={you.get('identity') or '(shared)'}",
+                "tab=" + (f"{you.get('tab')} live" if you.get("tabLive") else "NONE"),
+                f"screen={act.get('profile') or '?'}"]
+        if cmd == "profiles":
+            bits.append(f"containers:{len(value.get('names') or [])}")
+        return " ".join(bits)
+    if "html" in value:
+        return f"{len(value.get('html', ''))} chars of html"
+    if "text" in value:
+        return f"{len(value.get('text', ''))} chars"
+    return f"{_size(value)} bytes of json"
+
+
+# How long to keep waiting for a window that is still starting, once the quick
+# look has already failed. Bounded on purpose: nothing opens a pane any more —
+# that was the screen theft — so all this can do is wait and then say so, and an
+# agent blocked for ten seconds is its own kind of theft.
+WAIT_TAIL = float(os.environ.get("AGENTGLASS_BROWSER_WAIT") or 2.5)
+
+
+def windows_ready(seconds=1.6):
+    """Wait for a window to say it can drive a browser.
+
+    The app registers itself a moment after its renderer is up, and a restart is
+    seconds of that moment — so a call landing in it is told "the browser view
+    is not open" about a window that is simply still starting. Switching the app
+    to the browser then is the worst possible answer: it takes the screen off
+    whoever is using it, and it happens EVERY time, which is what was reported —
+    "every reinstall drags me to the browser view… three or four times over".
+
+    So the wait comes first. This is a read; it opens nothing and moves nothing.
+    """
+    deadline = time.time() + seconds
+    while True:
+        req = urllib.request.Request(f"{SERVER}/browser-use/status")
+        token = os.environ.get("AGENTGLASS_TOKEN")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=3) as r:
+                if json.loads(r.read()).get("windows", 0) > 0:
+                    return True
+        except Exception:
+            # Nothing to wait FOR: a server that cannot be asked is not a window
+            # that is starting, and waiting five seconds to find that out is
+            # five seconds an agent spends learning nothing.
+            return False
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.4)
 
 
 def open_browser_view():
@@ -83,13 +738,442 @@ def open_browser_view():
         return False
 
 
+# The verbs whose one argument is obvious, so `do "click #save"` can mean what
+# it looks like. Anything with a second argument — type's text, resize's height
+# — goes through --steps-file, because guessing at a second positional is how a
+# short form starts lying about what it ran.
+# The argument each verb takes in the short form of `do`, under the name the
+# SERVER reads it by. Two of these were wrong and both failed silently in the
+# middle of a chain, which is the worst place for it — the steps before had
+# already run:
+#
+#   "eval": "expr"      the server reads `js`, so every `do "eval ..."` came
+#                       back "js must be a non-empty expression under 20k"
+#                       for an expression that was right there.
+#   "waitfor": "selector"  waitfor takes a CONDITION, not a selector, so
+#                       `do "waitfor #done"` sent "#done" as JavaScript and the
+#                       page answered with a SyntaxError about a private field.
+#                       The help printed that exact example.
+DO_ONE_ARG = {
+    "open": "url", "click": "selector", "wait": "selector", "waitfor": "js",
+    "text": "selector", "html": "selector", "press": "key", "eval": "js",
+    "hover": "selector", "focus": "selector", "blur": "selector", "check": "selector",
+    "dblclick": "selector", "rightclick": "selector",
+}
+
+
+def _at(page, body):
+    """`body`, addressed to `page` — and unchanged when there is no page, which
+    is only ever the deliberate `--shared`."""
+    if page:
+        body = dict(body)
+        body["page"] = page
+    return body
+
+
+def stamped(a, body, who=None):
+    """`body` with the caller written on it: `as`, `how`, and `pageExplicit`
+    when the operator typed `--page`. ONE place, for every request.
+
+    The panel's cross-container check reads `as` and treats its ABSENCE as
+    "cannot tell", which it must: the MCP surface and hand-written clients
+    send none. So a request that never carries it turns the check into a
+    no-op — measured against the installed build, `--page <another
+    container's tab> click body` came back `ok` with the other container's
+    URL in the answer. Four lanes' worth of ownership machinery, unreachable
+    for want of one field.
+
+    And that field was stamped in the main path only. `session`, `permissions`,
+    `cdp` and `do` return three hundred lines earlier, each with a body of its
+    own, and every one of them went out bare — `do` above all, the incident's
+    own vector: a read-only batch has no leading `open` to overwrite the page,
+    so an unattributed one returns another container's page verbatim.
+
+    `how` rides with `as` so the audit can tell `--page t7` (a person meaning
+    somebody else's tab) from the CLI stamping this identity's own t7: the two
+    are the same field on the wire and only this process knows which. And
+    `pageExplicit` is the exemption the cross-container check honours — the
+    operator TYPED the address, as opposed to the CLI filling it in from the
+    tab map.
+    """
+    if who is None:
+        who = acting_as(a)
+    body = dict(body)
+    if who:
+        body.setdefault("as", who)
+    if getattr(a, "page", None):
+        body["pageExplicit"] = True
+    body.setdefault("how", (
+        "explicit-page" if getattr(a, "page", None)
+        else "active-explicit" if getattr(a, "active", False)
+        else "shared" if not who
+        else "own-tab" if body.get("page")
+        else "own-container"))
+    return body
+
+
+def acting_as(a):
+    """The identity this call works as — resolved in ONE place.
+
+    `--shared` is an identity too, and that is the whole of REQ-4: the person's
+    own container is a container, so it gets a slot in the tab map and stops
+    meaning "whatever is in front". `--active` is the flag for that meaning
+    now, and it has no identity at all.
+    """
+    if getattr(a, "active", False):
+        return ""
+    if getattr(a, "shared", False):
+        return SHARED_KEY
+    return my_name(getattr(a, "asProfile", None))
+
+
+def addressed(a, cmd=None):
+    """The tab this call must act on, or `None` when the caller must be refused.
+
+    THE FOUR VERBS THAT RETURN EARLY NEVER ASKED THIS. `session`, `permissions`,
+    `cdp` and `do` answer three hundred lines before identity is resolved, so
+    `--as NAME` was parsed and thrown away for them — and a request that names
+    no tab is not "unspecified" to the relay, it is "the tab in front", whoever
+    owns it. `session save` is the worst of the four: it dumps cookies AND
+    localStorage out of whatever page happens to be there.
+
+    Returns `("", None)` for `--active`, which is the way to say "the tab in
+    front, whoever owns it, deliberately"; `(tab_id, None)` for an identity
+    that has one — `--shared` included, whose identity is the person's own
+    container; and `(None, message)` for an identity that does not, which is a
+    refusal rather than a fall-through.
+    """
+    if getattr(a, "active", False):
+        return "", None
+    if getattr(a, "page", None):
+        return a.page, None
+    who = acting_as(a)
+    mine = my_tab(who)
+    if mine:
+        return mine, None
+    return None, no_tab_refusal(who, cmd or getattr(a, "cmd", "this"))
+
+
+def no_tab_refusal(who, verb):
+    """THE ONE SENTENCE, said in one place.
+
+    There were three copies of it, and they had already drifted: two named
+    `--shared` as the way to reach the front tab, which stopped being true when
+    `--shared` became the person's own container, so the refusal was sending
+    people at the very call that drives another agent's page. A refusal is the
+    only thing a stuck caller reads; it does not get to be out of date.
+    """
+    return (
+        f'{verb}: "{who}" has no tab open, so this would have gone to whichever tab is '
+        f"in front — which may belong to another agent.\n"
+        f"  check first:   agentglass-browser whoami        (this is the tabLive: false it reports)\n"
+        f"  open one:      agentglass-browser {_open_as(who)} open <url>\n"
+        f"  or name a tab: agentglass-browser --page <tab id> {verb} ...\n"
+        f"  or say you mean the active one: agentglass-browser --active {verb} ...\n"
+        f"  (--shared means the person's own container, which is a container "
+        f"like any other and needs a tab open in it too)"
+    )
+
+
+def cursor_key(a):
+    """Whose reading floor `--since-last` is remembering.
+
+    The identity when there is one — `--shared` included, since the person's
+    container has a console buffer of its own like every other container.
+    `--active` names a tab without naming an identity, so it falls back to the
+    one this shell derives for itself: the cursor is about WHO READ, and a
+    caller that deliberately borrows the front tab is still its own reader. It
+    must not land in a shared slot, because a shared slot is the whole defect.
+    """
+    return acting_as(a) or my_name(getattr(a, "asProfile", None))
+
+
+def _open_as(who):
+    """How the caller would open a tab for `who`, in their own words.
+
+    `--as (default)` is not a thing anybody should be told to type; the flag
+    for the person's own container is `--shared`.
+    """
+    return "--shared" if who == SHARED_KEY else f"--as {who}"
+
+
+def do_steps(a):
+    """The steps for `do`, from a file or from the short form."""
+    if a.steps_file:
+        try:
+            with open(a.steps_file) as f:
+                steps = json.load(f)
+        except (OSError, ValueError) as e:
+            print(f"could not read {a.steps_file}: {e}", file=sys.stderr)
+            return None
+        if not isinstance(steps, list):
+            print("--steps-file must hold a JSON list of {op, args}", file=sys.stderr)
+            return None
+        return steps
+    if not a.step:
+        print("do needs steps: do 'click #save' 'wait #done', or --steps-file", file=sys.stderr)
+        return None
+    steps = []
+    for raw in a.step:
+        parts = raw.split(None, 1)
+        op = parts[0]
+        if len(parts) == 1:
+            steps.append({"op": op, "args": {}})
+            continue
+        key = DO_ONE_ARG.get(op)
+        if not key:
+            print(f"{op} takes more than one argument — use --steps-file for it", file=sys.stderr)
+            return None
+        steps.append({"op": op, "args": {key: parts[1]}})
+    return steps
+
+
+def steps_at(steps, page):
+    """Every step of a batch, addressed to `page`.
+
+    THE PAGE ON THE BATCH BODY IS NOT AN ADDRESS. `/browser/do` reads
+    `b.steps` and hands them to `runSteps`, which re-parses each step through
+    `parseAsk` — and `parseAsk` builds a fresh `args` object per op, so a key
+    on the OUTER body reaches nothing (`server/src/index.ts`: the non-lane
+    branch is `runSteps(b.steps, {observe})`, and `b.page` is never read).
+    The address that lands is the one on each step, which `parseAsk` copies
+    for every op outside its `pageOps` set.
+
+    That is the whole of PATH 1 of the incident. `do` sent `{"steps": …}` and
+    returned three hundred lines before identity was resolved, so `--as` — which
+    the offending script passed on EVERY invocation — was discarded in full:
+    measured seconds apart within one script, the six-separate-invocation arm
+    routed `page: t4-39xgg3` on every verb while the `do` arm went bare on all
+    six, and that alternation repeats seven times. Sixty-three bare calls, of
+    which fourteen navigated or clicked in another agent's tab.
+
+    A STEP THAT NAMES ITS OWN PAGE KEEPS IT. `--steps-file` passes file-sourced
+    JSON through verbatim with no key filtering, and a step carrying its own
+    `page` is the only multi-tab batch form that works today. Overwriting it
+    would break the one deliberate use of this while claiming to fix the
+    accidental one.
+    """
+    if not page:
+        return steps
+    out = []
+    for st in steps:
+        if not isinstance(st, dict):
+            # Let the server say what is wrong with it; this is not the place
+            # to invent a second validator for the batch format.
+            out.append(st)
+            continue
+        args = st.get("args")
+        args = dict(args) if isinstance(args, dict) else {}
+        args.setdefault("page", page)
+        out.append({**st, "args": args})
+    return out
+
+
+def print_diagnosis(d):
+    """What a failure carries with it, printed under the refusal (spec 15).
+
+    The refusal itself is the first line and stays exactly what the page said,
+    because a caller greps it and a test pins it. This goes to stderr under it,
+    only when there is something to say: a page that failed before anything
+    could be read attaches nothing, and printing an empty heading in that case
+    would be noise on every early failure.
+    """
+    if not isinstance(d, dict):
+        return
+    errs = d.get("consoleErrors") or []
+    reqs = d.get("failedRequests") or []
+    if not errs and not reqs:
+        return
+    print("", file=sys.stderr)
+    if errs:
+        print("console errors just before this:", file=sys.stderr)
+        for r in errs:
+            where = r.get("source") or ""
+            print("  " + str(r.get("text", ""))[:300] + ("  (" + where + ")" if where else ""), file=sys.stderr)
+    if reqs:
+        print("requests that failed just before this:", file=sys.stderr)
+        for r in reqs:
+            status = r.get("status")
+            print("  {} {} {}".format(status if status else "no answer",
+                                      r.get("method", ""), str(r.get("url", ""))[:200]), file=sys.stderr)
+
+
+STORAGE_READ_JS = (
+    "(() => { const ls = {}; for (const k of Object.keys(localStorage)) ls[k] = localStorage.getItem(k); "
+    "const ss = {}; for (const k of Object.keys(sessionStorage)) ss[k] = sessionStorage.getItem(k); "
+    "return { origin: location.origin, localStorage: ls, sessionStorage: ss }; })()"
+)
+
+
+def session_save(path, page="", a=None):
+    """The 40-minute magic-link dance, replaced by one file. Cookies come
+    through CDP (`Network.getCookies`), not `document.cookie` — the session
+    cookie a real login sets is usually httpOnly, and a page can never read
+    that one back for itself. Storage comes out in playwright's storage-state
+    shape (cookies + origins[].localStorage), with sessionStorage added
+    alongside it — it has no meaning restored into a brand new context, but
+    reloading the SAME tab this file came from should come back exactly as it
+    left.
+
+    IT READS THE CALLER'S OWN TAB, NOT "whatever page is open right now".
+    That sentence is what this docstring used to say, and it was the worst of
+    the four early returns: an unaddressed `session save` dumps the cookies
+    AND the localStorage of whichever tab happens to be in front — the single
+    most valuable thing a hijacked tab holds, written to a file, in silence.
+
+    This is a deliberate behaviour change and it costs one real flow: logging
+    in by hand in the front tab and then saving it. `--shared` (the person's
+    own container) and `--page <tab id>` are the escape hatch for that, and
+    `--active` for the old meaning exactly.
+    """
+    cookies_res = call("cdp", stamped(a, _at(page, {"method": "Network.getCookies"})))
+    if not cookies_res.get("ok"):
+        print(cookies_res.get("error") or "could not read cookies", file=sys.stderr)
+        return 1
+    cookies = ((cookies_res.get("value") or {}).get("result") or {}).get("cookies", [])
+    storage_res = call("eval", stamped(a, _at(page, {"js": STORAGE_READ_JS, "await": False})))
+    if not storage_res.get("ok"):
+        print(storage_res.get("error") or "could not read storage", file=sys.stderr)
+        return 1
+    storage = (storage_res.get("value") or {}).get("value") or {}
+    origin = storage.get("origin", "")
+    state = {
+        "cookies": cookies,
+        "origins": [{
+            "origin": origin,
+            "localStorage": [{"name": k, "value": v} for k, v in (storage.get("localStorage") or {}).items()],
+            "sessionStorage": [{"name": k, "value": v} for k, v in (storage.get("sessionStorage") or {}).items()],
+        }],
+    }
+    _write_private(path, json.dumps(state, indent=2))
+    print(f"{path}: {len(cookies)} cookies, {len(state['origins'][0]['localStorage'])} localStorage keys, "
+          f"{len(state['origins'][0]['sessionStorage'])} sessionStorage keys, from {origin or '(no page open)'}")
+    return 0
+
+
+def session_load(path, page="", a=None):
+    """The reverse of `session save`. Cookies go back through CDP so they
+    keep httpOnly and Secure; storage is written by the page itself, which
+    means the page this loads onto must already be `open` on the origin the
+    file was saved from — a script on one origin was never going to write
+    another one's localStorage, and this does not get to either.
+    """
+    try:
+        with open(path) as f:
+            state = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"could not read {path}: {e}", file=sys.stderr)
+        return 1
+    cookies = state.get("cookies") or []
+    for c in cookies:
+        params = {k: v for k, v in c.items()
+                 if k in ("name", "value", "url", "domain", "path", "secure", "httpOnly", "sameSite", "expires")}
+        if "domain" in params and "url" not in params:
+            # `Network.setCookie` needs a url when there is no domain+path pair
+            # CDP itself would accept unambiguously; getCookies' own answer
+            # never carries one, only domain — build it rather than fail every
+            # cookie this reads back.
+            scheme = "https" if params.get("secure") else "http"
+            params["url"] = f"{scheme}://{str(params['domain']).lstrip('.')}{params.get('path', '/')}"
+        r = call("cdp", stamped(a, _at(page, {"method": "Network.setCookie", "params": params})))
+        if not r.get("ok"):
+            print(f"cookie {c.get('name')}: {r.get('error')}", file=sys.stderr)
+    ls_count = ss_count = 0
+    for o in state.get("origins") or []:
+        ls = {e["name"]: e["value"] for e in o.get("localStorage") or []}
+        ss = {e["name"]: e["value"] for e in o.get("sessionStorage") or []}
+        ls_count += len(ls)
+        ss_count += len(ss)
+        js = (
+            f"(() => {{ const ls = {json.dumps(ls)}; for (const k in ls) localStorage.setItem(k, ls[k]); "
+            f"const ss = {json.dumps(ss)}; for (const k in ss) sessionStorage.setItem(k, ss[k]); return true; }})()"
+        )
+        r = call("eval", stamped(a, _at(page, {"js": js, "await": False})))
+        if not r.get("ok"):
+            print(r.get("error") or "could not write storage", file=sys.stderr)
+            return 1
+    print(f"{path}: {len(cookies)} cookies, {ls_count} localStorage keys, {ss_count} sessionStorage keys restored")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="agentglass-browser", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    # The subcommand list is 35 names long and argparse prints it as one
+    # unreadable run-on line. The grouped map in the description above IS the
+    # index; this stops the wall of text from burying it.
+    ap._positionals.title = "verbs (see the grouped list above)"
+    # Before the verb: `agentglass-browser --show shot out.png`. Off by default
+    # because taking over somebody's window is not a side effect a screenshot
+    # gets to have; AGENTGLASS_BROWSER_SHOW=1 turns it on for a whole process
+    # rather than one call.
+    ap.add_argument("--show", action="store_true",
+                    default=os.environ.get("AGENTGLASS_BROWSER_SHOW", "") not in ("", "0", "false"),
+                    help="bring the browser view to the front: a tab this opens takes the pane, "
+                         "and a hidden pane is opened and the call retried")
+    ap.add_argument("--no-show", action="store_false", dest="show",
+                    help="the opposite, for a shell that has AGENTGLASS_BROWSER_SHOW=1")
+    # On every verb, because the cost is not what a page returns — it is what
+    # RE-ENTERS the caller's context and gets re-read every turn for the rest
+    # of the session. --max-tokens truncates by relevance (viewport, then
+    # newest-first); --out/--summary keep the body out of that context
+    # entirely and hand back a path and a sentence instead.
+    # ── WHO IS ASKING ────────────────────────────────────────────────────
+    #
+    # Several agents drive this browser at once, and the browser is built for
+    # that: "if we want ten different agents working in forty-five completely
+    # different tabs at the same time, I want that to be possible, and without
+    # them stepping on each other".
+    #
+    # The rule was written in the skill and kept by nobody, and it was not
+    # indiscipline: the easy path — a bare `open` — worked perfectly and landed
+    # in the shared profile, which is the person's own cookies. A rule whose
+    # violation costs nothing and shows nothing is not a rule.
+    #
+    # So identity is not something an agent remembers to ask for. It is what it
+    # gets. Explicit name first, then the environment, then one derived from
+    # the session — and `--shared` for the deliberate case of wanting to be in
+    # the same place as everybody else.
+    ap.add_argument("--as", "--profile", dest="asProfile", default=None, metavar="NAME",
+                    help="work as this identity — its own cookies, storage and tabs. "
+                         "Minted on first use. Without it, one is derived from your session")
+    # TWO FLAGS, BECAUSE THEY WERE TWO MEANINGS WEARING ONE NAME.
+    #
+    # `--shared` said "the DEFAULT profile, which is the person's own session"
+    # and did "whichever tab is in front, whoever owns it" — it cleared the
+    # identity, and a request with no identity and no page is what the relay
+    # reads as the active tab. Those are not the same tab and the difference is
+    # the whole incident: an exemption that lands on a random agent's tab is
+    # not an exemption.
+    #
+    # So `--shared` now means the person's container and nothing else, and the
+    # other meaning gets its own word.
+    ap.add_argument("--shared", action="store_true",
+                    help="work in the person's OWN container — the default profile, the one "
+                         "with their logins. Its tab is remembered like any identity's")
+    ap.add_argument("--active", action="store_true",
+                    help="act on whichever tab is in front, whoever owns it. The one way to "
+                         "cross containers on purpose")
+    # On every verb, because the server has accepted `page` on all of them all
+    # along and only six declared it — so thirty-seven verbs could not name the
+    # tab they meant and silently used whichever was in front. That is the
+    # collision, and one global flag is the end of it.
+    ap.add_argument("--page", default=None, metavar="TAB",
+                    help="act on this tab instead of your own (see `tabs`)")
+    ap.add_argument("--max-tokens", dest="maxTokens", type=int, default=None,
+                    help="truncate the answer to roughly this many tokens, keeping what matters first")
+    # dest is "outFile", not "out": `shot` already has its own positional `out`
+    # (where to write the png) and the two must not collide on one namespace key.
+    ap.add_argument("--out", dest="outFile", default=None, help="write the full answer here instead of stdout")
+    ap.add_argument("--observe", action="store_true",
+                    help="on a verb that ACTS, hand back the page it left behind under `after` — "
+                         "one call instead of act-then-look. Costs an observation, so it is opt-in")
+    ap.add_argument("--summary", action="store_true",
+                    help="print one line describing the answer (with --out, alongside the path)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("open", help="go to a page and wait for it to load")
     p.add_argument("url")
-    sub.add_parser("read", help="the page's url, title and visible text")
+    p = sub.add_parser("read", help="the page's url, title and visible text")
     p = sub.add_parser("click", help="click the first element matching a CSS selector")
     p.add_argument("selector")
     p = sub.add_parser("type", help="type into a field, optionally submitting it")
@@ -100,10 +1184,106 @@ def main():
     p.add_argument("selector")
     p = sub.add_parser("shot", help="screenshot the page")
     p.add_argument("out", nargs="?", help="write the png here instead of printing a data url")
+    # A whole-viewport capture that then gets cropped with ImageMagick and
+    # annotated by hand is the thing this exists to end: evidence should point
+    # at what it proves. Three ways to say what the picture CONTAINS, one at a
+    # time — the server refuses two together rather than guessing which wins.
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--selector", help="crop to just this element")
+    g.add_argument("--clip", help="crop to x,y,w,h in CSS pixels")
+    # A box and a caption drawn ON the image, independent of the three modes
+    # above — it can sit inside a selector crop, a clip, a full page or a
+    # plain viewport shot.
+    p.add_argument("--highlight", help="draw a box around this element")
+    p.add_argument("--label", help="a caption next to --highlight's box")
+    # DECLARED, because the code below already reads it. It did not, so every
+    # `shot --out file.png` died on an AttributeError and exited 1 with nothing
+    # written — and `--out` before the verb hit the global one, which skips
+    # `shot` on purpose. Neither spelling produced a file. Both do now.
+    # dest is its own name: the top-level parser already owns `--out` (as
+    # `outFile`), and sharing a namespace with it left this one None at parse
+    # time however it was spelled. Measured — `shot --out x.png` exited 0,
+    # printed base64, and wrote nothing.
+    p.add_argument("--out", dest="shotOut", help="write the png here instead of printing base64")
+    p.add_argument("--omit-background", dest="omitBackground", action="store_true", help="capture with transparent background instead of opaque")
     sub.add_parser("back", help="go back in this page's history")
     sub.add_parser("forward", help="go forward again")
     p = sub.add_parser("text", help="the text of one element, instead of the whole page")
     p.add_argument("selector")
+
+    # Everything at once — reach for this one first. Six verbs polled in turn is
+    # where the time goes, not the network.
+    p = sub.add_parser("observe", help="url, title, visibility, console, network, page tree and form values, in one answer")
+    p.add_argument("--since", type=float, default=None,
+                   help="only console and network newer than this epoch ms (pass the `now` from your last observe)")
+    p.add_argument("--since-last", dest="sinceLast", action="store_true",
+                   help="only what changed since YOUR last observe — remembered locally, no timestamp to pass")
+    p.add_argument("--shot", action="store_true", help="include a screenshot in the same answer")
+
+    p = sub.add_parser("eval", help="run javascript in the page and get the result back")
+    p.add_argument("js", nargs="?")
+    p.add_argument("--file", help="read the script from a file — for anything a shell would mangle: "
+                                  "quotes, newlines, backticks, dollar signs")
+    p.add_argument("--await", dest="await_", action="store_true", help="the expression returns a promise")
+    p.add_argument("--max", type=int, default=None)
+    p = sub.add_parser("addInitScript", help="run javascript before every page's own scripts, from now on")
+    p.add_argument("name", help="re-registering the same name replaces it, rather than stacking")
+    p.add_argument("js")
+    p = sub.add_parser("expose", help="a function the page can call back into — read its calls with `exposed`")
+    p.add_argument("name")
+    p = sub.add_parser("exposed", help="calls the page has made to an exposed function")
+    p.add_argument("--since", type=float, default=None)
+    p.add_argument("--since-last", dest="sinceLast", action="store_true")
+    p.add_argument("--limit", type=int, default=None)
+    p = sub.add_parser("select", help="choose an option in a native <select>, by value or visible text")
+    p.add_argument("selector")
+    p.add_argument("value")
+    p = sub.add_parser("reload", help="reload, ignoring the cache by default")
+    p.add_argument("--keep-cache", dest="keepCache", action="store_true")
+    p = sub.add_parser("cookies", help="read the page's cookies, or set one")
+    p.add_argument("--set", nargs=2, metavar=("NAME", "VALUE"), default=None)
+    p.add_argument("--path", default="/")
+    sub.add_parser("frames", help="iframes, service workers and shadow roots on this page")
+
+    sub.add_parser("tabs", help="what tabs are open, with the active one marked")
+    p = sub.add_parser("tab", help="switch to a tab by index or id")
+    p.add_argument("which", help="index from `tabs`, or a tab id")
+    p = sub.add_parser("newtab", help="open a url in a NEW tab, leaving this one where it is")
+    p.add_argument("url")
+    p = sub.add_parser("closetab", help="close a tab by index or id")
+    p.add_argument("which")
+
+    p = sub.add_parser("console", help="the page's console, including uncaught errors")
+    p.add_argument("--since", type=float, default=None)
+    p.add_argument("--since-last", dest="sinceLast", action="store_true")
+    p.add_argument("--limit", type=int, default=None)
+    p = sub.add_parser("network", help="requests the page made: method, url, status, ms, size")
+    p.add_argument("--since", type=float, default=None)
+    p.add_argument("--since-last", dest="sinceLast", action="store_true")
+    p.add_argument("--limit", type=int, default=None)
+
+    p = sub.add_parser("resize", help="give the page a viewport of your own size")
+    p.add_argument("width", type=int)
+    p.add_argument("height", type=int)
+    p = sub.add_parser("zoom", help="lay the page out as a narrower screen would")
+    p.add_argument("factor", nargs="?", type=float,
+                   help="1 is 100%%, 1.58 is 158%%. Left out, it reports what the page is at — "
+                        "which is how you match a screen instead of guessing at it. "
+                        "This is a device metrics override: it narrows the layout VIEWPORT while "
+                        "the pane keeps its box, so the page comes out laid out for a smaller "
+                        "window. It is NOT the person's Ctrl+/Ctrl- (which scales the page inside "
+                        "the box), and NOT the CSS `zoom` property (which reflows the page and "
+                        "multiplies with whatever the person has set)")
+    p = sub.add_parser("html", help="the markup of one element, not just its text")
+    p.add_argument("selector")
+    p.add_argument("--max", type=int, default=None)
+    p = sub.add_parser("waitfor", help="wait until a javascript expression is true in the page, or until a named condition")
+    p.add_argument("js", nargs="?")
+    p.add_argument("--timeout-ms", dest="timeoutMs", type=int, default=None)
+    p.add_argument("--until", choices=["network-idle", "no-timers"],
+                   help="the two conditions everybody writes by hand: the network gone quiet "
+                        "(and STAYED quiet — between two requests of a chain there is an instant "
+                        "where nothing is in flight), or nothing scheduled to run soon")
     p = sub.add_parser("scroll", help="scroll to an element, by pixels, or to top/bottom")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--selector")
@@ -111,11 +1291,707 @@ def main():
     g.add_argument("--to", choices=["top", "bottom"])
     p = sub.add_parser("press", help="press a key that is not text (Enter, Escape, Tab, arrows...)")
     p.add_argument("key")
+    p = sub.add_parser("fake",
+                       help="force a 404/500/hang on requests whose URL matches a pattern — "
+                            "so a broken API can be reproduced against the real app, not a unit test")
+    p.add_argument("pattern", help="a piece of the URL to match, e.g. /api/board")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--status", type=int, help="the status code to force, e.g. 500")
+    g.add_argument("--timeout", action="store_true", help="the request never resolves — the page waits forever")
+    g.add_argument("--clear", action="store_true", help="stop faking this pattern")
+    p.add_argument("--body", help="the response body to send back (with --status)")
+    p.add_argument("--delay-ms", dest="delayMs", type=int, default=None,
+                   help="wait this long before answering — a slow API, not a dead one")
+    sub.add_parser("health", help="one line: window open, panel mounted, page alive")
+    # §3's other pointer verbs. They were built, tested and reachable by
+    # nothing: the server knew them and neither the CLI nor the MCP had a word
+    # for them, so no agent could ever have called one.
+    for verb, what in (
+        ("dblclick", "double-click an element"),
+        ("rightclick", "right-click an element (opens a page's own context menu, not the browser's)"),
+        ("hover", "hover — the only way to open a menu that appears on hover"),
+        ("focus", "focus an element without clicking it"),
+        ("blur", "take focus off an element, which is what fires a validation on leave"),
+        ("check", "check or uncheck a checkbox or radio, properly, so a framework notices"),
+    ):
+        q = sub.add_parser(verb, help=what)
+        q.add_argument("selector")
+        if verb == "check":
+            q.add_argument("--off", action="store_true", help="uncheck it instead")
+    p = sub.add_parser("fill", help="a whole form in ONE call — every field, then submit if asked")
+    p.add_argument("--field", action="append", default=[], metavar="SELECTOR=VALUE",
+                   help="repeatable: --field '#name=Ada' --field '#email=ada@example.com'")
+    p.add_argument("--submit", action="store_true")
+    p = sub.add_parser(
+        "debug",
+        help="the debugger: breakpoints, DOM breakpoints ('who deleted this row'), where it is "
+             "paused and what is in scope, and stepping")
+    p.add_argument("action", choices=["on", "off", "break", "dom", "where", "resume", "into", "over", "out"])
+    p.add_argument("--url", help="break: the script's url (matched as a pattern, so a cache-buster query still binds)")
+    p.add_argument("--line", type=int, help="break: 1-based line")
+    p.add_argument("--condition", help="break: only stop when this expression is true")
+    p.add_argument("--selector", help="dom: the node to watch")
+    p.add_argument("--on", choices=["subtree-modified", "attribute-modified", "node-removed"],
+                   default="subtree-modified", help="dom: what to stop on")
+    p = sub.add_parser(
+        "audit",
+        help="everything this browser was asked to do, with secrets already taken out — "
+             "or the same list as a script somebody can run again")
+    p.add_argument("--script", action="store_true",
+                   help="emit a runnable bash script of the steps that CHANGED something")
+    p.add_argument("--by", metavar="NAME",
+                   help="only one caller's entries; the whole log is the default, and --as does not narrow it")
+    p = sub.add_parser(
+        "record",
+        help="N frames at an interval, to disk and optionally straight to a GIF — the thing "
+             "that gets assembled by hand with ffmpeg today")
+    p.add_argument("dir", help="absolute directory to write the frames into")
+    p.add_argument("--frames", type=int, default=10, help="1 to 120 (default 10)")
+    p.add_argument("--every", type=int, default=500, metavar="MS", help="gap between frames, 50 to 10000 (default 500)")
+    p.add_argument("--gif", help="absolute path ending in .gif")
+    p.add_argument("--selector", help="record just that element")
+    p = sub.add_parser(
+        "download",
+        help="click something that starts a download and wait for the file — returns the LOCAL "
+             "PATH it landed at, because a download reported done with no path is the same as "
+             "no download (spec §11)")
+    p.add_argument("selector")
+    p.add_argument("dir", help="absolute directory to save the file into")
+    p.add_argument("--timeout-ms", dest="timeoutMs", type=int, default=None)
+    p = sub.add_parser(
+        "events",
+        help="WAIT for something to happen instead of asking twenty times — one call that "
+             "answers the moment there is something, or says nothing happened")
+    p.add_argument("--wait", type=int, default=30, metavar="SECONDS", help="0 to 120 (default 30)")
+    p.add_argument("--since", type=int, metavar="EPOCH_MS", help="only what is newer than this — pass the `now` from the last answer")
+    p.add_argument("--kind", action="append", default=[], choices=["console", "network", "cdp"],
+                   help="repeatable; default is all three")
+    p = sub.add_parser(
+        "intercept",
+        help="pause a request at the NETWORK level and decide what happens to it — catches what the "
+             "page did not make through fetch, which `fake` cannot")
+    p.add_argument("pattern", help="substring or URL pattern to match")
+    p.add_argument("--fulfill", action="store_true", help="answer it yourself")
+    p.add_argument("--status", type=int, default=None, help="with --fulfill")
+    p.add_argument("--body", help="with --fulfill")
+    p.add_argument("--abort", action="store_true", help="fail it")
+    p.add_argument("--reason", help="with --abort")
+    p.add_argument("--clear", action="store_true", help="remove the rule — a paused request blocks the page")
+    p = sub.add_parser("headers", help="extra headers on EVERY request for this session; no args clears them")
+    p.add_argument("--set", action="append", default=[], metavar="NAME=VALUE", help="repeatable")
+    p = sub.add_parser("clipboard", help="read or write the clipboard, through the route that actually works")
+    p.add_argument("--write", help="put this in it")
+    p = sub.add_parser("save", help="the whole page as one file that still renders offline (MHTML)")
+    p.add_argument("out", help="where to write it")
+    p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
+    p.add_argument("selector", help="a CSS selector, or an id from an observation")
+    p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")
+    p.add_argument("--network", choices=["slow-3g", "fast-3g", "4g"])
+    p.add_argument("--cpu", type=float, metavar="RATE", help="slowdown rate, e.g. 4 for four times slower")
+    p.add_argument("--offline", action="store_true", help="a different failure from slow, not the same one")
+    p.add_argument("--off", action="store_true", help="back to normal")
+    p = sub.add_parser("har", help="the network log as a HAR — evidence that outlives the session")
+    p.add_argument("--out", help="write it here instead of printing it")
+    p = sub.add_parser("storage", help="localStorage / sessionStorage — a login is as often a token here as a cookie")
+    p.add_argument("--where", choices=["local", "session", "idb"], default="local",
+                   help="idb lists the databases by NAME — their contents are a page's whole offline "
+                        "cache and would be paid for on every turn afterwards")
+    p.add_argument("--set", metavar="KEY=VALUE")
+    p.add_argument("--remove", metavar="KEY")
+    p = sub.add_parser("permission", help="grant a permission by API instead of by a dialog nobody can click")
+    p.add_argument("origin", help="e.g. https://localhost:8001")
+    p.add_argument("permissions", nargs="+", help="e.g. clipboardReadWrite geolocation")
+    p = sub.add_parser("pdf", help="print the page to PDF — the PRINT stylesheet, not a screenshot")
+    p.add_argument("out", help="where to write it")
+    p.add_argument("--landscape", action="store_true")
+    p.add_argument("--no-background", action="store_true")
+    p = sub.add_parser("drag", help="drag one element onto another — a pointer sequence, not two clicks")
+    p.add_argument("selector")
+    p.add_argument("to", help="where to drop it")
+    p = sub.add_parser("upload", help="put files into a file input — script cannot, the shell can")
+    p.add_argument("selector")
+    p.add_argument("paths", nargs="+", help="absolute paths")
+    p = sub.add_parser("emulate",
+                       help="this page as a phone, in Tokyo, in dark mode — one call. Not cosmetic: "
+                            "colour scheme, timezone and language change what a real app renders")
+    p.add_argument("--width", type=int)
+    p.add_argument("--height", type=int)
+    p.add_argument("--scale", type=float, help="deviceScaleFactor")
+    p.add_argument("--mobile", action="store_true", help="phone viewport AND touch, which is the half people forget")
+    p.add_argument("--user-agent")
+    p.add_argument("--language", help="e.g. es-ES")
+    p.add_argument("--timezone", help="e.g. Europe/Madrid")
+    p.add_argument("--locale", help="e.g. es-ES — Intl inside the page, not the Accept-Language header (that's --language)")
+    p.add_argument("--color-scheme", choices=["light", "dark", "no-preference"])
+    p.add_argument("--reduced-motion", choices=["reduce", "no-preference"])
+    p.add_argument("--vision", choices=["none", "achromatopsia", "blurredVision", "deuteranopia", "protanopia", "tritanopia", "reducedContrast"])
+    p.add_argument("--geo", help="lat,lon")
+    p.add_argument("--reset", action="store_true", help="everything back — an emulation left on is a wrong answer hours later")
+    p = sub.add_parser("clock",
+                       help="§8: advance the page's clock without waiting for it — measured at 3 minutes "
+                            "of real waiting for one screenshot of a 30s timer")
+    p.add_argument("--advance-ms", type=int, help="virtual milliseconds to jump, 0..3600000")
+    p.add_argument("--wait-for", choices=["networkIdle", "noTimers"],
+                   help="networkIdle: pause the jump while a fetch is in flight. "
+                        "noTimers: report, after the jump, whether a timer is still scheduled — "
+                        "a setInterval-polling page never reaches zero here, on purpose")
+    p.add_argument("--seal", action="store_true", help="Math.random() made deterministic, so a run repeats")
+    p.add_argument("--freeze-animations", action="store_true", help="pause CSS/WAAPI animations so a capture is stable")
+    p = sub.add_parser(
+        "settings",
+        help="§13: the browser's settings, as an API — cache policy, ignoring certificate "
+             "errors, blocking images/JS per origin, and about:blank")
+    p.add_argument("action", choices=["get", "set"])
+    p.add_argument("--cache", choices=["normal", "bypass"])
+    p.add_argument("--ignore-cert-errors", dest="ignoreCertErrors", choices=["true", "false"])
+    p.add_argument("--block-origin", metavar="HOST[:PORT]", help="with --block-images and/or --block-js")
+    p.add_argument("--block-images", choices=["true", "false"])
+    p.add_argument("--block-js", choices=["true", "false"])
+    # NOT `--page`: that is now the global "which tab", and this one names the
+    # only internal document this webview renders. One word, two meanings, and
+    # the collision would have sent a tab id where the server wants "blank".
+    p.add_argument("--internal-page", dest="internalPage", choices=["blank"],
+                   help="the only internal page this webview renders")
+    p = sub.add_parser(
+        "profiles",
+        help="containers: isolated contexts with their own cookies, storage and cache. "
+             "MAKE YOUR OWN and drop it when you are done — never work in one somebody else made")
+    p.add_argument("--make", metavar="NAME",
+                   help="a new container. Name it after yourself and the task: `review-pr-540`, "
+                        "not `test`. A person has to be able to tell whose it is")
+    p.add_argument("--drop", metavar="NAME",
+                   help="throw one away with everything in it. A container left behind is a login "
+                        "nobody meant to keep. REFUSED if somebody else created it")
+    p.add_argument("--force", action="store_true",
+                   help="drop a container you did not create anyway. It closes every tab in it "
+                        "and clears its login, so read `profiles` first and know whose it is")
+    p = sub.add_parser(
+        "whoami",
+        help="who you are, whether you still hold a tab, and which container owns the "
+             "screen — the pre-flight, and it touches no page",
+        description="Call this FIRST. `tabLive: false` means every verb that does not "
+                    "name a tab would have gone to whichever tab is in front, which may "
+                    "belong to another agent — open one, or pass --page, or say --shared "
+                    "and mean it.")
+    p = sub.add_parser(
+        "session",
+        help="save/restore cookies + localStorage + sessionStorage to a file — log in "
+             "once, reuse for ever (spec §7)",
+        description="Cookies go through CDP so httpOnly ones are seen, not just "
+                    "document.cookie. Scoped to the page that is open right now — "
+                    "`load` needs that page already `open`ed on the origin the file "
+                    "was saved from, the same way a script on that origin could never "
+                    "write another one's storage either.",
+    )
+    sp = p.add_subparsers(dest="sessionCmd", required=True)
+    sp1 = sp.add_parser("save", help="write the current page's state to FILE")
+    sp1.add_argument("file")
+    sp2 = sp.add_parser("load", help="restore state from FILE onto the current page")
+    sp2.add_argument("file")
+    p = sub.add_parser(
+        "permissions",
+        help="grant camera/mic/clipboard/geolocation for an origin, by API — instead "
+             "of a dialog nobody can click (spec §7)",
+    )
+    p.add_argument("origin", help="e.g. https://example.com")
+    p.add_argument("grant", nargs="+",
+                   choices=["camera", "microphone", "clipboardReadWrite",
+                            "clipboardSanitizedWrite", "geolocation", "notifications", "midi"])
+    p = sub.add_parser("cdp", help="one DevTools protocol command — the whole protocol, not a chosen slice")
+    p.add_argument("method", nargs="?", help='e.g. Debugger.enable, DOMDebugger.setDOMBreakpoint, HeapProfiler.takeHeapSnapshot')
+    p.add_argument("--params", help="JSON object for that command")
+    p.add_argument("--events", action="store_true",
+                   help="drain what CDP sent while nobody was asking: a debugger pause, a DOM breakpoint firing")
+    p = sub.add_parser("listeners", help="which listeners a node has, and which file they came from")
+    p.add_argument("selector")
+    p = sub.add_parser("coverage",
+                       help="which JS and CSS actually RAN — the direct answer to 'did my change even load'")
+    p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
+    p = sub.add_parser("trace", help="DevTools trace — DOM, network and console against one timeline")
+    p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
+    p.add_argument("path", nargs="?", help="path to save the trace to (required for stop)")
+    p = sub.add_parser(
+        "do",
+        help="several verbs in ONE call — starting this process costs ~104ms, so six "
+             "verbs is most of a second spent before touching the page",
+        description="Steps run in order and stop at the first failure, which keeps its "
+                    "own diagnosis. Two forms:\n"
+                    "  do 'click #save' 'wait #done' --observe\n"
+                    "  do --steps-file steps.json      (a JSON list of {op, args})",
+    )
+    p.add_argument("step", nargs="*",
+                   help="a verb and its first argument, quoted: 'click #save'")
+    p.add_argument("--steps-file", help="JSON list of {op, args} — for anything the short form cannot say")
+    p.add_argument("--observe", action="store_true",
+                   help="append the observation after the last step, so the batch answers "
+                        "'what does the page look like now' without another call")
+    # ── THE SAME FLAGS AFTER THE VERB, TOO ──────────────────────────────────
+    #
+    # argparse only sees a global flag BEFORE the subcommand, and nobody writes
+    # it there: `open --as review https://…` is how every example in the skill
+    # reads and how an agent will type it. Added to each verb as well, with
+    # SUPPRESS so that a verb which does NOT carry one leaves the global answer
+    # alone instead of resetting it to None.
+    #
+    # `settings` keeps its own `--internal-page`; `--page` here would be a
+    # second meaning for one word.
+    def add_global(sp, *names, **kw):
+        """Add one global flag to a verb, unless that verb already has it.
+
+        `shot` has its own `--out`, `observe` its own `--shot`/`--observe`:
+        a second one collides on the parser and the whole tool stops starting.
+
+        THE TWO `SUPPRESS`ES WERE NOT THE SAME SUPPRESS, and only one of them
+        had a job. `default=argparse.SUPPRESS` is load-bearing — it is what
+        stops a verb that does not carry the flag from resetting the global
+        answer to `None` (see the comment above). `help=argparse.SUPPRESS`
+        carried no duty at all, and it cost an hour of somebody's work once:
+        two names for one thing, "an agent that learned one checked the other's
+        help, did not find it, and reasonably concluded the second could not
+        take an identity" — then used a bare `open` and landed in the wrong
+        cookie jar. `agentglass-browser open --help` printed four lines and
+        none of them was `--as`.
+        """
+        if any(n in (act.option_strings or []) for act in sp._actions for n in names):
+            return
+        sp.add_argument(*names, default=argparse.SUPPRESS, **kw)
+
+    for name, sp in sub.choices.items():
+        add_global(sp, "--as", "--profile", dest="asProfile", metavar="NAME",
+                   help="work as this identity — its own cookies, storage and tabs")
+        add_global(sp, "--shared", action="store_true",
+                   help="work in the person's own container (the default profile)")
+        add_global(sp, "--active", action="store_true",
+                   help="act on whichever tab is in front, whoever owns it")
+        if name != "settings":
+            # `settings` has an argument of its own called `page` — the internal
+            # page a webview renders, where "blank" is the only allowed value —
+            # so a second meaning for the word here would make every
+            # `settings set --page t17-...` answer `page must be "blank"`.
+            add_global(sp, "--page", metavar="TAB",
+                       help="act on this tab instead of your own (see `tabs`)")
+        add_global(sp, "--max-tokens", dest="maxTokens", type=int,
+                   help="truncate the answer to roughly this many tokens, keeping what matters first")
+        add_global(sp, "--observe", action="store_true",
+                   help="hand back the page this left behind, under `after`")
+        add_global(sp, "--summary", action="store_true",
+                   help="print one line describing the answer")
+        add_global(sp, "--show", action="store_true",
+                   help="bring the browser view to the front: a tab this opens takes the pane, "
+                        "and a hidden pane is opened and the call retried")
+        add_global(sp, "--no-show", action="store_false", dest="show",
+                   help="the opposite, for a shell that has AGENTGLASS_BROWSER_SHOW=1")
+        add_global(sp, "--out", dest="outFile",
+                   help="write the full answer here instead of stdout")
+
     a = ap.parse_args()
 
-    body = {}
-    if a.cmd == "open":
+    # ── WHO IS ASKING, RESOLVED BEFORE ANY VERB CAN RETURN ──────────────────
+    #
+    # This used to live four hundred lines down, past the four verbs that
+    # answer and return — `session`, `permissions`, `cdp`, `do` — so for those
+    # four `--as NAME` was parsed and thrown away. The `do` half of the
+    # incident is exactly that: sixty-three batches went out bare while the
+    # same script's single-verb calls all carried `page: t4-39xgg3`.
+    #
+    # It is not the first thing to be caught out by those early returns.
+    # `--out`/`--max-tokens` "lived at the bottom of main() and the verbs that
+    # return EARLY — cdp, do — never reached it"; that was fixed by extracting
+    # `emit`. Identity was not moved with it. It is moved now, and everything
+    # below reads THESE variables rather than computing its own answer.
+    who = acting_as(a)
+    # `--shared` is an identity (the person's container) but NOT a profile
+    # name: the panel mints a container for any name it does not know, and the
+    # person's session is the EMPTY profile field. So it is remembered like an
+    # identity and sent like nobody. See SHARED_KEY.
+    named_profile = who and who != SHARED_KEY
+    # Whose `--since-last` floor this is. Not the same question as which tab to
+    # act on: `--active` has no identity to target with and still has a reader.
+    cursor = cursor_key(a)
+    if getattr(a, "shared", False) and getattr(a, "active", False):
+        print("--shared and --active mean different tabs — pass one", file=sys.stderr)
+        return 2
+
+    if a.cmd == "session":
+        # Addressed like everything else. `session save` reads cookies AND
+        # localStorage, so an unaddressed one hands over another container's
+        # login — the single most valuable thing a hijacked tab holds.
+        page, refusal = addressed(a, "session")
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 1
+        return session_save(a.file, page, a) if a.sessionCmd == "save" else session_load(a.file, page, a)
+
+    if a.cmd == "permissions":
+        page, refusal = addressed(a, "permissions")
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 1
+        r = call("cdp", stamped(a, _at(page, {"method": "Browser.grantPermissions",
+                                   "params": {"origin": a.origin, "permissions": a.grant}})))
+        if not r.get("ok"):
+            print(r.get("error") or "could not grant those permissions", file=sys.stderr)
+            return 1
+        print(f"granted {', '.join(a.grant)} to {a.origin}")
+        return 0
+
+    if a.cmd == "cdp":
+        page, refusal = addressed(a, "cdp")
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 1
+        if a.events:
+            body = {"events": True}
+        elif not a.method:
+            print("cdp needs a method, or --events", file=sys.stderr)
+            return 2
+        else:
+            body = {"method": a.method}
+            if a.params:
+                try:
+                    body["params"] = json.loads(a.params)
+                except ValueError as e:
+                    print(f"--params must be JSON: {e}", file=sys.stderr)
+                    return 2
+        res = call("cdp", stamped(a, _at(page, body)))
+        if not res.get("ok"):
+            print(res.get("error") or "the DevTools protocol refused that", file=sys.stderr)
+            print_diagnosis(res.get("diagnosis"))
+            return 1
+        # The clone's run found this and fixed it inline here; `emit` is the
+        # same fix moved somewhere it cannot be missed twice — `do` returns
+        # early as well, and the next verb that does will get it for free.
+        return emit("cdp", res.get("value") or {}, a)
+
+    if a.cmd == "do":
+        # A READ-ONLY BATCH IS THE DANGEROUS ONE. `do "read" "text body"` has
+        # no leading `open` to overwrite the page, so on an unaddressed call it
+        # returns the other container's page verbatim into this transcript.
+        page, refusal = addressed(a, "do")
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return 1
+        steps = do_steps(a)
+        if steps is None:
+            return 2
+        # `_at` on the outer body AND `steps_at` on the steps. Only the second
+        # one reaches the browser — `runSteps` never reads the outer `page`,
+        # see `steps_at` — but the two address forms this endpoint accepts
+        # (`{steps}` and `{lanes:[{page, steps}]}`) both put the tab on the
+        # request, and a batch whose body does not say which tab it is for
+        # reads as un-addressed to anything that logs it.
+        res = call("do", stamped(a, _at(page, {"steps": steps_at(steps, page), "observe": a.observe})))
+        for i, st in enumerate(res.get("steps") or []):
+            if st.get("ok"):
+                v = st.get("value")
+                print(f"{i + 1}. {st.get('op')}: {json.dumps(v) if v is not None else 'ok'}")
+            else:
+                print(f"{i + 1}. {st.get('op')}: {st.get('error') or 'failed'}", file=sys.stderr)
+                print_diagnosis(st.get("diagnosis"))
+        return 0 if res.get("ok") else 1
+
+    if a.cmd in ("dblclick", "rightclick", "hover", "focus", "blur"):
+        body = {"selector": a.selector}
+    elif a.cmd == "check":
+        body = {"selector": a.selector, "checked": not a.off}
+    elif a.cmd == "fill":
+        fields = {}
+        for pair in a.field:
+            if "=" not in pair:
+                print(f"--field takes SELECTOR=VALUE, got {pair!r}", file=sys.stderr)
+                return 2
+            k, v = pair.split("=", 1)
+            fields[k] = v
+        if not fields:
+            print("fill needs at least one --field SELECTOR=VALUE", file=sys.stderr)
+            return 2
+        body = {"fields": fields, "submit": a.submit}
+    elif a.cmd == "emulate":
+        body = {}
+        for flag, key in (("width", "width"), ("height", "height"), ("scale", "scale"),
+                          ("user_agent", "userAgent"), ("language", "language"),
+                          ("timezone", "timezone"), ("locale", "locale"), ("color_scheme", "colorScheme"),
+                          ("reduced_motion", "reducedMotion"), ("vision", "vision")):
+            v = getattr(a, flag, None)
+            if v is not None:
+                body[key] = v
+        if a.mobile:
+            body["mobile"] = True
+        if a.reset:
+            body["reset"] = True
+        if a.geo:
+            try:
+                lat, lon = (float(x) for x in a.geo.split(",", 1))
+            except ValueError:
+                print("--geo takes lat,lon", file=sys.stderr)
+                return 2
+            body["geolocation"] = {"lat": lat, "lon": lon}
+    elif a.cmd == "clock":
+        body = {}
+        if a.advance_ms is not None:
+            body["advanceMs"] = a.advance_ms
+        if a.wait_for:
+            body["waitFor"] = a.wait_for
+        if a.seal:
+            body["seal"] = True
+        if a.freeze_animations:
+            body["freezeAnimations"] = True
+        if not body:
+            print("clock needs something to do — --advance-ms, --seal, or --freeze-animations", file=sys.stderr)
+            return 2
+    elif a.cmd == "settings":
+        body = {"action": a.action}
+        if a.action == "set":
+            if a.cache:
+                body["cache"] = a.cache
+            if a.ignoreCertErrors is not None:
+                body["ignoreCertErrors"] = a.ignoreCertErrors == "true"
+            if a.block_origin:
+                block = {"origin": a.block_origin}
+                if a.block_images is not None:
+                    block["images"] = a.block_images == "true"
+                if a.block_js is not None:
+                    block["js"] = a.block_js == "true"
+                body["block"] = block
+            elif a.block_images is not None or a.block_js is not None:
+                print("--block-images/--block-js need --block-origin", file=sys.stderr)
+                return 2
+            if a.internalPage:
+                body["page"] = a.internalPage
+    elif a.cmd in ("newtab", "open"):
+        # Both verbs, one meaning. They took different flag names — `newtab
+        # --profile` and `open --as` — for the same thing, and an agent that
+        # learned one checked the other's help, did not find it, and reasonably
+        # concluded the second could not take an identity. It then used a bare
+        # `open` to resume after a restart, which is the shared profile. A
+        # naming difference is not worth an hour of somebody's work in the
+        # wrong cookie jar.
         body = {"url": a.url}
+    elif a.cmd == "listeners":
+        body = {"selector": a.selector}
+    elif a.cmd == "coverage":
+        body = {"action": a.action}
+    elif a.cmd == "trace":
+        body = {"action": a.action}
+        if a.action == "stop" and a.path:
+            body["path"] = a.path
+    else:
+        body = {}
+    if a.cmd == "observe":
+        body = {}
+        if a.since is not None:
+            body["since"] = a.since
+        elif a.sinceLast:
+            body["since"] = load_since(cursor, "observe")
+        if a.shot:
+            body["shot"] = True
+    elif a.cmd in ("tab", "closetab"):
+        # An index if it looks like one, an id otherwise. `tabs` prints both,
+        # so either is a thing the caller has in front of it.
+        body = {"index": int(a.which)} if a.which.isdigit() else {"id": a.which}
+    elif a.cmd in ("console", "network"):
+        body = {}
+        if a.since is not None:
+            body["since"] = a.since
+        elif a.sinceLast:
+            body["since"] = load_since(cursor, a.cmd)
+        if a.limit is not None:
+            body["limit"] = a.limit
+    elif a.cmd == "eval":
+        if a.file:
+            try:
+                with open(a.file) as f:
+                    a.js = f.read()
+            except OSError as e:
+                print(f"could not read {a.file}: {e}", file=sys.stderr)
+                return 2
+        if not a.js:
+            print("eval needs an expression, or --file", file=sys.stderr)
+            return 2
+        body = {"js": a.js, "await": a.await_}
+        if a.max is not None:
+            body["max"] = a.max
+    elif a.cmd == "addInitScript":
+        body = {"name": a.name, "js": a.js}
+    elif a.cmd == "expose":
+        body = {"name": a.name}
+    elif a.cmd == "exposed":
+        body = {}
+        if a.since is not None:
+            body["since"] = a.since
+        elif a.sinceLast:
+            body["since"] = load_since(cursor, "exposed")
+        if a.limit is not None:
+            body["limit"] = a.limit
+    elif a.cmd == "select":
+        body = {"selector": a.selector, "value": a.value}
+    # THREE VERBS THAT DECLARED THEIR ARGUMENTS AND SENT NONE OF THEM.
+    #
+    # `drag`, `region` and `upload` each take a positional and none of them had
+    # a branch here, so the body went out empty and the server refused with
+    # "drag needs a selector for what to drag" — for a command that had just
+    # been given one. Found by running them against a page built to answer:
+    # every one of the three failed before it ever reached the browser.
+    #
+    # Same family as `shot --out`, `record`, `--page` and `cdp --out`: a flag
+    # or an argument declared on one side of the wire and read on neither. The
+    # lock for it is in server/test/cli-writes-files.test.ts — a verb is only
+    # wired when something EXERCISES it.
+    elif a.cmd == "drag":
+        body = {"selector": a.selector, "to": a.to}
+    # SEVEN VERBS WHOSE FLAGS WERE PARSED AND NEVER SENT.
+    #
+    # Same family as `drag`, `region`, `upload` and `profiles` before them: the
+    # parser declares them, the body goes out empty, and the server refuses
+    # with a sentence about the request it received rather than the one that
+    # was typed — or, worse, treats the empty body as "clear everything".
+    # Measured: `headers --set X-Agx-Probe=4417` answered {"headers": [],
+    # "count": 0} and the probe server never saw the header;
+    # `throttle --network slow-3g` answered "throttle needs network, cpu,
+    # offline: true, or off: true" and a 400 KB fetch took 131ms before and
+    # 139ms after.
+    elif a.cmd == "headers":
+        body = {}
+        if a.set:
+            pairs = {}
+            for one in a.set:
+                if "=" not in one:
+                    print(f"--set takes NAME=VALUE, got {one}", file=sys.stderr)
+                    return 2
+                k, v = one.split("=", 1)
+                pairs[k.strip()] = v
+            body["headers"] = pairs
+        # No --set at all is "clear them", which is what the empty body means
+        # and the one case that was accidentally right.
+    elif a.cmd == "throttle":
+        body = {}
+        if a.off:
+            body["off"] = True
+        elif a.offline:
+            body["offline"] = True
+        else:
+            if a.network:
+                body["network"] = a.network
+            if a.cpu is not None:
+                body["cpu"] = a.cpu
+    elif a.cmd == "clipboard":
+        body = {} if a.write is None else {"write": a.write}
+    elif a.cmd == "storage":
+        body = {"where": a.where}
+        if a.set is not None:
+            if "=" not in a.set:
+                print("--set takes KEY=VALUE", file=sys.stderr)
+                return 2
+            k, v = a.set.split("=", 1)
+            body["set"] = True
+            body["key"] = k
+            body["value"] = v
+        elif a.remove is not None:
+            body["remove"] = True
+            body["key"] = a.remove
+    elif a.cmd == "events":
+        body = {"wait": a.wait}
+        if a.since is not None:
+            body["since"] = a.since
+        if a.kind:
+            body["kinds"] = a.kind
+    elif a.cmd == "audit":
+        body = {"script": True} if a.script else {}
+        if a.by:
+            body["by"] = a.by
+    elif a.cmd == "debug":
+        body = {"action": a.action}
+        if a.action == "break":
+            body["url"] = a.url
+            body["line"] = a.line
+            if a.condition is not None:
+                body["condition"] = a.condition
+        elif a.action == "dom":
+            body["selector"] = a.selector
+            body["on"] = a.on
+    elif a.cmd == "intercept":
+        body = {"pattern": a.pattern}
+        if a.clear:
+            body["clear"] = True
+        elif a.fulfill:
+            body["fulfill"] = True
+            if a.status is not None:
+                body["status"] = a.status
+            if a.body is not None:
+                body["body"] = a.body
+        elif a.abort:
+            body["abort"] = True
+            if a.reason is not None:
+                body["reason"] = a.reason
+    elif a.cmd == "whoami":
+        # No page, no selector, nothing to validate: the whole request is who
+        # this shell is, and the answer is composed by the relay out of the tab
+        # list. `identity`/`tab` are stamped below with every other verb's.
+        body = {}
+    elif a.cmd == "profiles":
+        # THE FLAGS WERE DECLARED AND NEVER SENT. `--make` and `--drop` parsed
+        # fine, the body went out empty, and the panel answered a plain list —
+        # so `profiles --drop mine` looked like it had worked and left the
+        # container, its cookies and its tabs exactly where they were. Measured
+        # by a peer session: 31 containers dropped one by one, 41 still listed.
+        body = {}
+        if getattr(a, "make", None):
+            body["make"] = a.make
+        if getattr(a, "drop", None):
+            body["drop"] = a.drop
+        if getattr(a, "force", False):
+            body["force"] = True
+    elif a.cmd == "region":
+        body = {"selector": a.selector}
+    elif a.cmd == "upload":
+        body = {"selector": a.selector, "paths": a.paths}
+    elif a.cmd == "permission":
+        body = {"origin": a.origin, "permissions": a.permissions}
+    elif a.cmd == "reload":
+        body = {"bypassCache": not a.keepCache}
+    elif a.cmd == "cookies":
+        body = {"set": {"name": a.set[0], "value": a.set[1], "path": a.path}} if a.set else {}
+    elif a.cmd == "frames":
+        body = {}
+    elif a.cmd == "resize":
+        body = {"width": a.width, "height": a.height}
+    elif a.cmd == "zoom":
+        body = {} if a.factor is None else {"factor": a.factor}
+    elif a.cmd == "html":
+        body = {"selector": a.selector}
+        if a.max is not None:
+            body["max"] = a.max
+    elif a.cmd == "waitfor":
+        if not a.js and not a.until:
+            print("waitfor needs an expression, or --until network-idle|no-timers", file=sys.stderr)
+            return 2
+        body = {}
+        if a.until:
+            body["until"] = a.until
+        if a.js:
+            body["js"] = a.js
+        if a.timeoutMs is not None:
+            body["timeoutMs"] = a.timeoutMs
+    elif a.cmd == "shot":
+        body = {}
+        if a.selector:
+            body["selector"] = a.selector
+        if a.clip:
+            parts = a.clip.split(",")
+            if len(parts) != 4 or not all(p.strip().lstrip("-").isdigit() for p in parts):
+                print("--clip wants x,y,w,h — four whole numbers", file=sys.stderr)
+                return 1
+            x, y, w, h = (int(p) for p in parts)
+            body["clip"] = {"x": x, "y": y, "width": w, "height": h}
+        if a.highlight:
+            body["highlight"] = a.highlight
+        if a.label:
+            if not a.highlight:
+                print("--label needs --highlight — it captions the box, not the whole picture", file=sys.stderr)
+                return 1
+            body["label"] = a.label
+        if a.omitBackground:
+            body["omitBackground"] = True
     elif a.cmd in ("click", "wait"):
         body = {"selector": a.selector}
     elif a.cmd == "type":
@@ -131,29 +2007,486 @@ def main():
             body = {"to": a.to}
     elif a.cmd == "press":
         body = {"key": a.key}
+    elif a.cmd == "record":
+        # There was no branch here at all, so `dir` — a POSITIONAL argument, the
+        # one thing this verb cannot work without — was parsed and then never
+        # sent. The server refused every call with "dir must be an absolute
+        # path", which is true of the request it received and impossible to act
+        # on from outside: the path on the command line was absolute, and
+        # existed. Measured: `record /tmp/test-record --frames 3` failed with a
+        # trivially valid path, with and without --gif.
+        body = {"dir": a.dir, "frames": a.frames, "every": a.every}
+        if a.gif:
+            body["gif"] = a.gif
+        if a.selector:
+            body["selector"] = a.selector
+    elif a.cmd == "download":
+        body = {"selector": a.selector, "dir": a.dir}
+        if a.timeoutMs is not None:
+            body["timeoutMs"] = a.timeoutMs
+    elif a.cmd == "fake":
+        if a.clear:
+            body = {"pattern": a.pattern, "clear": True}
+        else:
+            if a.status is None and not a.timeout:
+                print("fake needs --status N or --timeout (or --clear)", file=sys.stderr)
+                return 2
+            body = {"pattern": a.pattern}
+            if a.timeout:
+                body["timeout"] = True
+            else:
+                body["status"] = a.status
+            if a.body is not None:
+                body["body"] = a.body
+            if a.delayMs is not None:
+                body["delayMs"] = a.delayMs
+
+    # `who` and `named_profile` were resolved at the top of main(), before the
+    # first verb could return. Nothing recomputes them here.
+
+    # §11/§13: WHO IS ASKING, said on the wire for the verbs whose ANSWER is
+    # about ownership.
+    #
+    # The relay cannot derive this — the name comes from THIS process's
+    # environment, which the server has never seen — so the two questions it
+    # answers ("is this container mine", "may I drop it") have to be told. It
+    # is an assertion and the relay treats it as one: what it checks is the
+    # half it can, whether the tab this identity claims is still in the
+    # window's list.
+    #
+    # Lost once, at the merge of two lanes that both rewrote this spot, and
+    # caught by `whoami` answering `identity: null` — which is a pre-flight
+    # that cannot answer the question it exists for.
+    if who and a.cmd in ("whoami", "profiles", "open", "newtab"):
+        body["identity"] = who
+    if who and a.cmd in ("whoami", "profiles"):
+        held = my_tab(who)
+        if held:
+            body["tab"] = held
+
+    if a.cmd in ("newtab", "open") and who:
+        mine = my_tab(who)
+        # NAMING A TAB IS THE WHOLE ANSWER. `--page t63 open <url>` set the
+        # identity's `profile` here, and the panel routes an `open` that
+        # carries a profile to "make a tab in that container" — so it minted a
+        # NEW tab, left the one that was named exactly where it was, and
+        # answered with the URL and title of the tab it had just made. The
+        # caller reads that as success. Measured: t63 stayed on
+        # chrome-error://chromewebdata while the answer said "log probe".
+        # `newtab` is untouched: it always makes one, so a page to go to is
+        # not a thing it can be asked for.
+        if a.cmd == "open" and getattr(a, "page", None):
+            pass
+        elif a.cmd == "open" and mine:
+            # Already have one: GO there, do not make another. An agent that
+            # calls `open` fifty times in a session means fifty pages, not
+            # fifty tabs — and fifty tabs is how a browser runs out of room
+            # holding the same page over and over.
+            body["page"] = mine
+        elif named_profile:
+            body["profile"] = who
+        else:
+            # THE EMPTY STRING IS A NAME. That is what makes `--shared` work.
+            #
+            # This used to send NOTHING for the person's own container, on the
+            # reasoning that the empty profile field IS that container. True of
+            # the field, false of the ROUTE: the panel sends an `open` to the
+            # minting path only when it carries a profile that is a string
+            # (`browserBus.ts`, `typeof ask.args.profile === "string"`), and a
+            # bare `open` instead calls `loadURL` on the mounted webview —
+            # whichever tab is in front, whoever owns it — and answers without
+            # an id. So nothing was ever remembered, every later `--shared`
+            # verb was refused for having no tab, and the refusal's own first
+            # remedy was the call that drives another agent's page. Measured
+            # end to end against the real routing rule before this line.
+            #
+            # `""` is a string, so it routes to minting; and `addTab` passes it
+            # through with `??`, which only falls through on null — so the tab
+            # is born in the person's own partition, which is where it belongs.
+            body["profile"] = ""
+
+    if getattr(a, "observe", False):
+        body["observe"] = True
+    # `--page <tab id>` — six verbs declare it and exactly one was sending it,
+    # so `shot --page t2-abc` quietly photographed the ACTIVE tab instead. The
+    # server has accepted `page` on every acting verb all along; nothing was
+    # putting it in the request. Set here rather than in each branch so the
+    # seventh verb to declare it cannot repeat this.
+    # ...EXCEPT for `settings`, whose `page` is not a tab.
+    #
+    # `settings` has an argument of its own called `page` — the internal page a
+    # webview may render, and "blank" is the only allowed value. Putting a tab
+    # id there made every `settings set --page t17-... --cache bypass` answer
+    # `page must be "blank"`, which is a sentence about an argument the caller
+    # never passed. The verb applies to the window's session, not to one tab,
+    # so it has no use for the id at all.
+    if getattr(a, "page", None) and "page" not in body and a.cmd != "settings":
+        body["page"] = a.page
+    # ...AND NEVER on the two pre-flight verbs. `--page` is a global, so
+    # `agentglass-browser --page t17 whoami` parses; sending it would ask a
+    # question about the list while naming one page, which the relay refuses.
+    # Better to answer the question that was actually asked.
+    if a.cmd in ("whoami", "profiles"):
+        body.pop("page", None)
+
+    # ── EVERY VERB GOES TO YOUR OWN TAB ─────────────────────────────────────
+    #
+    # Not "the active tab", which is whatever the person or the last agent left
+    # in front. That default is right for somebody clicking around and wrong for
+    # every agent that has ever used this: it is how two agents end up typing
+    # into each other's page, and how a screenshot comes back showing somebody
+    # else's work.
+    #
+    # `--page` still wins — sometimes you really do mean another tab — and the
+    # tab verbs are about the LIST rather than a page inside one, so they are
+    # left alone. So is `settings`, whose `page` means something else entirely.
+    # §11: `profiles` and `whoami` are about the LIST and about who is holding
+    # the screen — never about a page inside a tab. They are in here so they are
+    # not auto-addressed at this identity's tab, and `page` is stripped from
+    # them below so a stray global `--page` cannot address them either.
+    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings"}
+    # `open` under `--shared` carries neither a page nor a profile ON PURPOSE:
+    # the person's own container IS the empty profile field, so "make me a tab
+    # there" is a request with nothing on it. That is the one shape that looks
+    # un-addressed and is not, and it has to be exempted by hand or `--shared`
+    # loses the only way it has of getting a tab — a refusal nobody can answer
+    # is a refusal that gets worked around.
+    # `open --shared` now carries `profile: ""`, so it is addressed like any
+    # other minting request and needs no exemption of its own. Kept as a name
+    # rather than deleted, because the branch below reads better saying WHY it
+    # is not refusing than saying nothing.
+    minting_shared = a.cmd == "open" and "profile" in body
+    if a.cmd not in TAB_OPS and "page" not in body:
+        mine = my_tab(who)
+        if mine:
+            body["page"] = mine
+        elif who and "profile" not in body:
+            # AN IDENTITY WITH NO TAB REFUSES. IT DOES NOT FALL THROUGH.
+            #
+            # `profile` is the other way a request can be addressed, and the
+            # one `open`/`newtab` use: "make me a tab in this container" is
+            # perfectly targeted, and refusing it would leave an identity with
+            # no tab no way to get one — a refusal you cannot answer, which is
+            # how a guard gets worked around with `--shared` on everything.
+            # Caught by the CLI suite the moment this was written the other
+            # way: twenty tests, every one of which opens before it acts.
+            #
+            # This block used to add nothing here, and a request with no `page`
+            # is not "unspecified" — the relay reads it as "the active tab",
+            # whoever owns it. So an agent that had passed `--as` on every
+            # single call, and believed itself isolated, drove another
+            # container's tab: measured, seven navigations and seven clicks,
+            # `ok: true` every time, with no signal on either side. The victim
+            # cannot see it either — it addresses its tab by id, the tab still
+            # exists, only the page inside changed.
+            #
+            # And this needs nobody to make a mistake. An identity loses its
+            # remembered tab when the tab is closed, when an open failed, when
+            # the state file cannot be read, and when the app restarts — which
+            # invalidates every agent's remembered id at once.
+            #
+            # `--active` is the way to say "the tab in front, on purpose": it
+            # clears `who` above, so it never reaches this branch. `--page`
+            # names a tab explicitly and is already in `body`.
+            print(no_tab_refusal(who, a.cmd), file=sys.stderr)
+            return 1
+            #
+            # `--shared` is NOT that flag any more and reaches this branch like
+            # every other identity. It used to clear `who` and so land here
+            # bare — which is why its own help ("the DEFAULT profile, which is
+            # the person's own session") was false: a request with no identity
+            # and no page is the active tab, whoever owns it.
+            #
+            # …with ONE exemption, `minting_shared` above: `open --shared`
+            # carries neither a page nor a profile on purpose, because the
+            # person's container IS the empty profile field. It is the one
+            # shape that looks un-addressed and is not, and without the
+            # exemption `--shared` would have no way of ever getting a tab —
+            # a refusal nobody can answer is a refusal that gets worked around.
+            if not minting_shared:
+                print(no_tab_refusal(who, a.cmd), file=sys.stderr)
+                return 1
+
+    # WHO IS ASKING, ON EVERY REQUEST — REQ-1's whole point. Written in
+    # `stamped`, because the four verbs that return early above each sent a
+    # body of their own and none of them carried it.
+    body = stamped(a, body, who)
+    # `--show` used to be a retry flag that never crossed the wire, so once
+    # minting stopped taking the pane there was no way to buy the old
+    # behaviour back — the trade the person was promised had no other half.
+    # The panel honours `show` on a mint; this is the one place it is written.
+    if a.cmd in ("open", "newtab") and a.show:
+        body["show"] = True
+        print("--show: the browser pane is brought forward for this tab", file=sys.stderr)
 
     res = call(a.cmd, body)
-    # One retry, and only for the one failure a retry can fix: the pane was not
-    # up. Open it, give the guest a moment to attach, ask again. Any other
-    # failure is reported as it is — retrying a selector that matched nothing
-    # just makes an agent wait twice for the same answer.
-    # Both failures a retry can fix, and they are the same fix: the pane is not
-    # there, or it is there behind something else and therefore painting
-    # nothing. Anything else is reported as it is — retrying a selector that
-    # matched nothing just makes an agent wait twice for the same answer.
-    if not res.get("ok") and any(
-        s in (res.get("error") or "") for s in ("view is not open", "not on screen")
-    ):
+    # A tab of ours that is gone stops being ours, so the next call opens a
+    # fresh one instead of addressing a ghost forever.
+    if body.get("page") and str(res.get("error") or "").startswith("no tab called"):
+        forget_tab(who)
+        # And try once more, in the identity we already have: a tab that has
+        # been closed is a reason to open another one, not a reason to stop.
+        if a.cmd == "open" and who:
+            body.pop("page", None)
+            # …but NOT `profile: "(default)"` for `--shared`. The panel mints a
+            # container for a name it does not know, so retrying the person's
+            # own session under a literal name would build a second container
+            # beside it and hand back a tab in the wrong one — the tab the
+            # caller then remembers as theirs.
+            # The same rule as above: a name for a named container, the empty
+            # string for the person's own. Never the literal "(default)" — the
+            # panel mints a container for any name it does not know, so that
+            # would build a second one beside the person's and hand back a tab
+            # in the wrong place.
+            body["profile"] = who if named_profile else ""
+            res = call(a.cmd, body)
+    # WHAT COUNTS AS "we just minted a tab" IS NOT "the body carried a profile".
+    #
+    # `--shared` mints by sending nothing at all, so keying the remember on
+    # `body["profile"]` left the person's own container the one identity that
+    # never remembered where it landed — which is exactly how `--shared` came
+    # to mean "the active tab" for every verb after the first.
+    # A minting request is one that carried a profile AT ALL — `""` included,
+    # which is the person's own container and the case a truthiness test drops.
+    minted = "profile" in body
+    if a.cmd in ("newtab", "open") and who and minted and not res.get("error"):
+        made = res.get("value") if isinstance(res.get("value"), dict) else res
+        remember_tab(who, (made or {}).get("id"))
+    # AND `tab <id>` CHANGES WHICH ONE IS YOURS.
+    #
+    # Selecting a tab and then capturing without `--page` gave the tab this CLI
+    # last OPENED, not the one just selected — so `tab A; shot` came back as B,
+    # a valid picture of the wrong page, which is the same silent failure as
+    # this morning with the parties swapped. Measured: `tabs` confirmed A was
+    # active, `shot --page A` gave A's 53.233 bytes and a bare `shot` gave B's
+    # 701.679.
+    #
+    # Asking for a tab by name is the clearest statement there is of which one
+    # you mean, so it becomes the one every later verb goes to.
+    # WHAT WAS ASKED FOR, not what the answer calls active.
+    #
+    # The first version of this read the `active` flag off the returned list and
+    # it was always the PREVIOUS tab: the panel replies with the list it has in
+    # hand, and the selection it just made has not reached that list yet. So the
+    # fix recorded the tab we were leaving, which is worse than not recording at
+    # all — measured, `tab t37` and the record still said t38.
+    #
+    # The caller named one. That is not ambiguous and it does not need a round
+    # trip to confirm.
+    if a.cmd == "tab" and who and not res.get("error"):
+        rows = res.get("value") if isinstance(res.get("value"), list) else []
+        if a.which.isdigit():
+            i = int(a.which)
+            row = rows[i] if 0 <= i < len(rows) else None
+            if isinstance(row, dict) and row.get("id"):
+                remember_tab(who, row["id"])
+        else:
+            remember_tab(who, a.which)
+    # ── AND A TAB THAT IS GONE STOPS BEING YOURS ────────────────────────────
+    #
+    # `forget_tab` had ONE call site: the "no tab called" error path, reached
+    # only after a request had already gone out naming a tab that no longer
+    # exists. Closing your own tab, or dropping your own container, left the
+    # map pointing at something gone and nothing noticed until the next verb
+    # failed.
+    #
+    # That was survivable while a stale id fell through to the active tab. It
+    # is not now: the fall-through is a refusal, so a stale entry is a wall the
+    # caller cannot walk round — and pruning here is what lets the next `open`
+    # self-heal by minting a fresh tab under the same identity.
+    #
+    # Pruning EAGERLY had to wait for that refusal, not precede it: before it,
+    # dropping the entry would have removed the victim's only current signal.
+    if a.cmd == "closetab" and who and not res.get("error"):
+        mine = my_tab(who)
+        # By id when the caller named one; by absence from the returned list
+        # when they named an INDEX, which this side cannot resolve to an id.
+        # `None` when the reply carried no list at all, which is the one case
+        # where absence proves nothing. An EMPTY list is a list: closing the
+        # last tab returns `[]`, and guarding this with `and rows` left the
+        # entry alive after `closetab 0` — measured, the next `read` went out
+        # addressed to a dead tab instead of being refused.
+        rows = res.get("value") if isinstance(res.get("value"), list) else \
+            (res.get("value") or {}).get("tabs") if isinstance(res.get("value"), dict) else None
+        gone = mine and (
+            mine == body.get("id")
+            or (isinstance(rows, list)
+                and not any(isinstance(r, dict) and r.get("id") == mine for r in rows))
+        )
+        if gone:
+            forget_tab(who)
+    if a.cmd == "profiles" and getattr(a, "drop", None) and not res.get("error"):
+        # The container is gone, so every tab in it is gone. The identity whose
+        # name it was is the one holding a dead id.
+        forget_tab(a.drop)
+    err = res.get("error") or ""
+    # One retry, and only for the failure a retry can fix WITHOUT taking the
+    # screen off the person using the app.
+    #
+    # "the browser view is not open" means no pane is mounted at all: nothing
+    # can answer, there is no way round it, and telling an agent to ask a human
+    # to click a tab is not an answer. That one is still opened and retried.
+    #
+    # "not on screen" is NOT. It used to be treated as the same thing, and it is
+    # the reason this changed: a screenshot of a pane sitting behind the
+    # terminal came back empty, so the CLI pulled the whole window over to the
+    # browser — every shot, in the middle of somebody's work. The pane captures
+    # while it is hidden now (see ag:captureBrowser), so that error means
+    # something is genuinely wrong and it is reported rather than papered over.
+    # `--show` asks for the old behaviour where a caller really does want the
+    # pane brought to the front.
+    fixable = "view is not open" in err or (a.show and "not on screen" in err)
+    if not res.get("ok") and fixable:
+        # Ask again BEFORE touching anybody's screen. The panel re-registers
+        # itself for a moment whenever its tab changes, and a call that lands in
+        # that gap is told the view is not open when it is — which used to yank
+        # somebody out of the terminal mid-sentence.
+        time.sleep(0.5)
+        res = call(a.cmd, body)
+        err = res.get("error") or ""
+    if not res.get("ok") and "view is not open" in err:
+        # And WAIT for a window that is merely still starting. A restart is a
+        # second or two of "not registered yet", and every call that landed
+        # there used to pull the app over to the browser.
+        #
+        # Only this error. `--show`'s "not on screen" is about a pane behind
+        # another view, which registration has nothing to do with.
+        if windows_ready(WAIT_TAIL):
+            res = call(a.cmd, body)
+            err = res.get("error") or ""
+    # NOTHING BELOW MOVES ANYBODY'S SCREEN UNLESS THEY ASKED FOR IT.
+    #
+    # This used to switch the app to the browser view whenever a call could not
+    # be answered, and that is the single most complained-about behaviour this
+    # tool has: "I am working away quietly in my terminal… and it focuses the
+    # browser on me. I go back to the terminal and it focuses the browser again…
+    # up to four, five, six times."
+    #
+    # It is not a fix for anything either. The browser panel is mounted from
+    # launch whether or not anybody goes to it (KEEP_RUNNING in the workspace),
+    # so "the view is not open" almost always means the window is still
+    # STARTING — a restart, an install — and the answer to that is to wait,
+    # which costs a second and takes nobody's screen. If the wait runs out, the
+    # honest answer is to say so.
+    #
+    # `--show` (or AGENTGLASS_BROWSER_SHOW=1) is the one way to the old
+    # behaviour, for a caller who really does mean "bring it to the front".
+    if not res.get("ok") and a.show and ("view is not open" in err or "not on screen" in err):
         if open_browser_view():
             time.sleep(2)
             res = call(a.cmd, body)
 
     if not res.get("ok"):
         print(res.get("error") or "the browser could not do that", file=sys.stderr)
+        print_diagnosis(res.get("diagnosis"))
         return 1
 
     value = res.get("value") or {}
-    if a.cmd == "text":
+
+    # ── WHAT THE ANSWER SAYS ABOUT WHO ELSE IS IN HERE ──────────────────────
+    #
+    # §13(a). The notice fires wherever the tab list is already in hand, so it
+    # costs nothing: `tabs` IS the list, and `profiles` now carries a count and
+    # a last-activity per container. The condition is the same in both places —
+    # this identity's container holds live tabs that this process did not open,
+    # which is a JOIN wearing the clothes of a MINT.
+    if a.cmd == "tabs" and who and not my_tab(who):
+        held = sum(1 for r in value if isinstance(r, dict) and (r.get("profile") or "default") == who)
+        foreign_container_notice(who, held)
+    if a.cmd in ("open", "newtab") and who and isinstance(value, dict):
+        # AND ON THE VERB THAT MINTS. `open --as NAME` with no remembered tab
+        # either makes the container or joins one that already exists, and the
+        # answer is `ok: true` either way — which is the whole defect.
+        #
+        # Read from the ANSWER rather than from a look-before-you-leap `tabs`
+        # call: the panel replies with the tab list it now holds, so the other
+        # agent's tabs are right there, and a pre-flight would have cost a
+        # second round trip on the single most-used verb (11.0 ms per call
+        # inside a process that has already paid 68.7 ms of startup) plus a
+        # second line in every audit. What it would buy is 11 ms of warning
+        # about a container that is shared either way: `open --as` MAKES a tab
+        # here, it does not navigate somebody else's, so the notice is in time
+        # to stop the work rather than in time to stop the tab.
+        made = value.get("id")
+        rows = value.get("tabs") if isinstance(value.get("tabs"), list) else []
+        held = sum(1 for r in rows
+                   if isinstance(r, dict) and (r.get("profile") or "default") == who
+                   and r.get("id") != made)
+        foreign_container_notice(who, held)
+    if a.cmd == "profiles" and who and isinstance(value, dict) and not my_tab(who):
+        for row in value.get("profiles") or []:
+            if isinstance(row, dict) and row.get("name") == who:
+                foreign_container_notice(who, row.get("tabs") or 0,
+                                         row.get("lastActivityMs"), row.get("creator"))
+    # And a drop that went through on a container nobody had claimed says so:
+    # the ledger starts empty, so "no creator on record" is the ordinary state
+    # of every container that was already on disk — silence there reads as
+    # "it was mine", which is the assumption this whole change is about.
+    if a.cmd == "profiles" and isinstance(value, dict) and value.get("warning"):
+        _notice(f"profiles --drop: {value['warning']}")
+
+    if a.cmd == "save":
+        # To disk: an MHTML of a real page is megabytes, and a payload that
+        # size in an agent's context is paid for on every turn afterwards.
+        _write_private(a.out, value.get("mhtml", ""))
+        print(a.out)
+        return 0
+    if a.cmd == "har" and a.out:
+        _write_private(a.out, json.dumps(value, indent=2))
+        print(a.out)
+        return 0
+    if a.cmd == "pdf":
+        # To disk, not to the answer: a base64 PDF in an agent's context is
+        # paid for on every turn for the rest of the session.
+        raw = base64.b64decode(value.get("pdf", "") or "")
+        if not raw:
+            print("the page produced no PDF", file=sys.stderr)
+            return 1
+        with open(a.out, "wb") as f:
+            f.write(raw)
+        print(a.out)
+        return 0
+
+
+    # ── ONLY A CALL THAT ASKED FOR A CURSOR MOVES ONE ───────────────────────
+    #
+    # This used to advance on EVERY observe/console/network/exposed, under the
+    # comment "whether or not THIS call asked for it — so the next one has a
+    # cursor to read even the first time through". With one cursor per verb for
+    # the whole machine, that meant agent A's ordinary polling silently moved
+    # the floor under agent B: B's next `console --since-last` returned only
+    # what happened after A's call, so B's own uncaught errors came back as an
+    # empty list with exit code 0 — which reads as "no console errors". Always
+    # in the under-report direction, which is the dangerous one for debugging.
+    #
+    # Per-identity keys (see `save_since`) fix the crossing; this fixes the
+    # rest of it. A caller who never asks for a diff never writes one, so
+    # nothing on this machine has a cursor it did not ask for. The cost is that
+    # the FIRST `--since-last` returns the whole buffer once, which is what it
+    # would have done anyway on a fresh state dir.
+    if a.cmd in ("observe", "console", "network", "exposed") and getattr(a, "sinceLast", False):
+        save_since(cursor, a.cmd, value.get("now"))
+
+    # --max-tokens / --out / --summary apply to every verb except `shot`,
+    # which already has its own --out-shaped positional (where to write the
+    # png) and a binary payload there is nothing left to trim.
+    if a.cmd != "shot":
+        if a.maxTokens:
+            value = budget_value(value, a.maxTokens)
+        if a.outFile:
+            _write_private(a.outFile, json.dumps(value))
+            # The path AND a summary — writing to a file only to then print
+            # the whole thing anyway would spend right back what it saved.
+            print(a.outFile)
+            print(summarize(a.cmd, value))
+            return 0
+        if a.summary:
+            print(summarize(a.cmd, value))
+            return 0
+
+    if a.cmd == "health":
+        print(value.get("summary", ""))
+    elif a.cmd == "text":
         # Same reason as `read`: the caller is a model reading a page, and JSON
         # around one string is punctuation it pays for.
         print(value.get("text", ""))
@@ -165,10 +2498,41 @@ def main():
     elif a.cmd == "shot":
         png = value.get("png", "")
         raw = base64.b64decode(png.split(",", 1)[1]) if "," in png else b""
-        if a.out:
-            with open(a.out, "wb") as f:
+        # NEVER WRITE A FILE WITH NO PIXELS IN IT.
+        #
+        # It wrote whatever came back, printed the path and exited 0 — so a
+        # zero-byte PNG looked exactly like a good one, and this tool's own
+        # help tells an agent to branch on the exit code. Two empty files with
+        # evidence names ended up in somebody's proof-of-life folder that way.
+        #
+        # An empty capture is a FAILURE. Saying so costs a retry; not saying so
+        # costs the trust in every capture this tool has ever produced.
+        if not raw:
+            print("the browser produced no pixels — nothing was written", file=sys.stderr)
+            print_diagnosis(res.get("diagnosis"))
+            return 1
+        # Either spelling: `shot --out x.png` and `--out x.png shot`. The
+        # second reaches the global flag, which skips `shot` because a binary
+        # payload is not JSON to trim — but a person typing it means the same
+        # thing both ways, and being told nothing while nothing is written is
+        # the worst possible answer.
+        # THREE spellings, and the POSITIONAL was the one nobody read.
+        #
+        # `shot out.png` is how the help itself writes it, and it printed a
+        # base64 data url to stdout instead — a megabyte of it, into the
+        # context of whoever ran it, with no file at the path they named. The
+        # positional's dest is `out`; the code asked for `shotOut` and
+        # `outFile` and never for that one.
+        dest = (getattr(a, "shotOut", None) or getattr(a, "out", None)
+                or getattr(a, "outFile", None))
+        if dest:
+            # Written whole and then moved into place, so an interrupted write
+            # cannot leave a truncated PNG behind under the name of a good one.
+            tmp = dest + ".part"
+            with open(tmp, "wb") as f:
                 f.write(raw)
-            print(a.out)
+            os.replace(tmp, dest)
+            print(dest)
         else:
             print(png)
     else:

@@ -131,3 +131,129 @@ describe("the rollup carries what the session was first asked to do", () => {
     expect(ids).toEqual(["s1", "s2", "s3", "s4"]);
   });
 });
+
+/*
+ * THE SAME NAME, FOR A HANDFUL OF IDS RATHER THAN A WHOLE PAGE.
+ *
+ * `sessionNames` was written for the Lantern, whose "seen" rows had
+ * nothing to call themselves but a raw tmux pane id — a hook carries a
+ * `sessionId`, and this is what turns that into the same name
+ * `getSessions`/`getSession` already draw the rest of the app's lists with.
+ */
+describe("sessionNames", () => {
+  test("a rename wins over everything else", () => {
+    expect(db.sessionNames(["s2"]).get("s2")).toBe("Nightly sweep");
+  });
+
+  test("the first prompt, when there is no title", () => {
+    expect(db.sessionNames(["s1"]).get("s1")).toBe("Rework the companion");
+  });
+
+  test("nothing for a session with neither — the pane id stays the pane id", () => {
+    expect(db.sessionNames(["s3"]).has("s3")).toBe(false);
+  });
+
+  test("several ids in one call, each answered on its own rule", () => {
+    const names = db.sessionNames(["s1", "s2", "s3"]);
+    expect(names.get("s1")).toBe("Rework the companion");
+    expect(names.get("s2")).toBe("Nightly sweep");
+    expect(names.has("s3")).toBe(false);
+  });
+
+  test("an empty list costs no query and answers empty", () => {
+    expect(db.sessionNames([]).size).toBe(0);
+  });
+
+  test("an id nobody has heard of is simply absent, not an error", () => {
+    expect(db.sessionNames(["never-seen"]).size).toBe(0);
+  });
+});
+
+/*
+ * WHO IS STOPPED ON A PERSON, written the moment the hook says so.
+ *
+ * Lantern greps the screen for "your approval" / "waiting on you". Claude Code
+ * fires a Notification hook when it stops for a person — and that hook is the
+ * ONLY place the fact exists for a session the scanner owns: /ingest answers
+ * those before inserting, and the transcript carries no hook-only
+ * notifications. So the wait is noted from the hook stream itself, and ended
+ * by whatever the session does next.
+ */
+describe("noteWaitFromHook / latestWaits", () => {
+  const T1 = T0 + 10_000;
+  const hook = (session_id: string, hook_event_type: string, message?: string) =>
+    ({ session_id, hook_event_type, payload: message ? { message } : {} });
+
+  test("a permission nobody answered is a wait, and a blockage", () => {
+    db.noteWaitFromHook(hook("w-perm", "Notification", "Claude needs your permission to use Bash"), T1);
+    const w = db.latestWaits(["w-perm"]).get("w-perm");
+    expect(w).toEqual({ kind: "permission", why: "Claude needs your permission to use Bash", since: T1 });
+  });
+
+  test("a turn that ended is a wait of the other kind", () => {
+    db.noteWaitFromHook(hook("w-input", "Notification", "Claude is waiting for your input"), T1);
+    expect(db.latestWaits(["w-input"]).get("w-input")?.kind).toBe("input");
+  });
+
+  test("a session that does anything after is not waiting, whatever it said", () => {
+    db.noteWaitFromHook(hook("w-moved", "Notification", "Claude needs your permission to use Bash"), T1);
+    db.noteWaitFromHook(hook("w-moved", "PostToolUse"), T1 + 5_000);
+    expect(db.latestWaits(["w-moved"]).has("w-moved")).toBe(false);
+  });
+
+  test("a notification that is merely news neither starts nor ends a wait", () => {
+    db.noteWaitFromHook(hook("w-news", "Notification", "usage limit reset at 14:00"), T1);
+    expect(db.latestWaits(["w-news"]).has("w-news")).toBe(false);
+    db.noteWaitFromHook(hook("w-keep", "Notification", "Claude needs your approval"), T1);
+    db.noteWaitFromHook(hook("w-keep", "Notification", "usage limit reset at 14:00"), T1 + 1);
+    expect(db.latestWaits(["w-keep"]).get("w-keep")?.kind).toBe("permission");
+  });
+
+  test("a session with no wait, an unknown session, and an empty ask answer empty", () => {
+    expect(db.latestWaits(["never-seen"]).size).toBe(0);
+    expect(db.latestWaits([]).size).toBe(0);
+    db.noteWaitFromHook(hook("unknown", "Notification", "Claude needs your permission"), T1);
+    expect(db.latestWaits(["unknown"]).size).toBe(0);
+  });
+
+  test("several at once, each on its own newest event", () => {
+    const m = db.latestWaits(["w-perm", "w-input", "w-moved", "s1"]);
+    expect([...m.keys()].sort()).toEqual(["w-input", "w-perm"]);
+  });
+});
+
+/*
+ * A NAME A PERSON COULD RECOGNISE, not whatever arrived first.
+ *
+ * On the first real Lantern, three rows read `<cross-session-message …>` and
+ * one read `/model`: the earliest prompt of those sessions was a message from
+ * another session or a slash command, and `firstPrompts` takes the earliest.
+ * The sessions page keeps that rule; the Lantern walks past those to the
+ * first prompt somebody typed as a request.
+ */
+describe("sessionNames skips prompts that are not a name", () => {
+  beforeAll(() => {
+    db.insertEvent(prompt("n-tag", '<cross-session-message from="uds:/run/x.sock">hola</cross-session-message>', T0 + 1_000) as any);
+    db.insertEvent(prompt("n-tag", "Arregla el scroll del panel", T0 + 2_000) as any);
+    db.insertEvent(prompt("n-cmd", "/model", T0 + 1_000) as any);
+    db.insertEvent(prompt("n-cmd", "sí", T0 + 2_000) as any);
+    db.insertEvent(prompt("n-cmd", "Revisa la PR #264", T0 + 3_000) as any);
+    db.insertEvent(prompt("n-none", "/clear", T0 + 1_000) as any);
+  });
+
+  test("a cross-session tag is not a name; the next real prompt is", () => {
+    expect(db.sessionNames(["n-tag"]).get("n-tag")).toBe("Arregla el scroll del panel");
+  });
+
+  test("a slash command and a bare 'sí' are skipped too", () => {
+    expect(db.sessionNames(["n-cmd"]).get("n-cmd")).toBe("Revisa la PR #264");
+  });
+
+  test("a session with nothing better keeps no name — the pane id is more honest", () => {
+    expect(db.sessionNames(["n-none"]).has("n-none")).toBe(false);
+  });
+
+  test("a title still wins over any prompt", () => {
+    expect(db.sessionNames(["s2"]).get("s2")).toBe("Nightly sweep");
+  });
+});

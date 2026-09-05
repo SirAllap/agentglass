@@ -10,7 +10,8 @@ Usage (from a Claude Code hook command):
     send_event.py --model-name kimi-code/k3
 
 Env:
-    AGENTGLASS_SERVER   server base url (default http://127.0.0.1:4000)
+    AGENTGLASS_SERVER      server base url (default http://127.0.0.1:4000)
+    AGENTGLASS_NO_STATUS_NUDGE  set to swallow the Crew self-report reminder the server may send
 """
 import argparse
 import json
@@ -48,7 +49,6 @@ def _agentglass_local_only(url):
         netloc = "127.0.0.1" + (":%d" % u.port if u.port else "")
         url = urlunparse(u._replace(netloc=netloc))
     return url
-
 
 
 def read_transcript(path):
@@ -124,6 +124,12 @@ def main():
         body["tmux_pane"] = pane
     if chat is not None:
         body["chat"] = chat
+    # What this session is to the app, when it is not a person's agent: the
+    # Lantern's own chat says so in its environment, and the server then never
+    # counts it as waiting on anybody, nor reminds it to say what it is on.
+    role = os.environ.get("AGENTGLASS_ROLE")
+    if role:
+        body["role"] = role
 
     data = json.dumps(body).encode("utf-8")
     # Carry the shared secret when the server has one, the same way gate_event.py
@@ -143,12 +149,28 @@ def main():
         headers=headers,
         method="POST",
     )
+    answer = b""
     try:
         with urllib.request.urlopen(req, timeout=3) as resp:
-            resp.read()
+            answer = resp.read()
     except Exception as e:
         # Never block Claude Code on an observability failure.
         print(f"[agentglass] send failed: {e}", file=sys.stderr)
+
+    # THE CREW REMINDER. On a prompt the server may answer with one line asking
+    # this session to say what it is working on (POST /agents/status); printed
+    # to stdout, which Claude Code shows the session as context for this turn —
+    # the same channel the memory-save reminder already uses. The server
+    # decides when (settings, and whether this session already answered); the
+    # hook only carries it. Never on any other event, and never when the
+    # machine says not to.
+    if event_type == "UserPromptSubmit" and not os.environ.get("AGENTGLASS_NO_STATUS_NUDGE"):
+        try:
+            remind = json.loads(answer.decode("utf-8", "replace")).get("remind") if answer else None
+            if isinstance(remind, str) and remind.strip():
+                print(remind.strip())
+        except Exception:
+            pass  # a reminder that cannot be read must never cost the event it rode in on
 
     # Pass hook input straight through so we don't interfere with the hook chain.
     sys.exit(0)

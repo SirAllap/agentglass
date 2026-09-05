@@ -43,6 +43,9 @@
  * runs, so everything handed to Claude lands one tap from every screen.
  */
 
+import type { DeviceScope } from "../../../shared/types.ts";
+import { canRunAgents } from "../model/scope.ts";
+
 /** A route file under app/(tabs)/, which is also its path. */
 export type TabRoute =
   | "index" | "prs" | "terminal" | "issues" | "tasks"
@@ -99,6 +102,24 @@ export const BAR: Destination[] = [
  */
 export function taskDestinations(all: Destination[], tracksWork: boolean | null): Destination[] {
   return tracksWork === false ? all.filter((d) => d.route !== "tasks") : all;
+}
+
+/**
+ * The destinations, less the terminal when this phone may not open one.
+ *
+ * `/terminal/pty` needs `full` (server/src/auth.ts, FULL_GET), and the row was
+ * offered to every pairing. A `read` phone that pressed it got a pane whose
+ * socket closed on arrival and a screen saying the connection was lost — a
+ * refusal dressed as an outage. The star is the reason the app exists, which
+ * is exactly why it must not be a door that does not open.
+ *
+ * Unlike `taskDestinations`, unknown here is NOT "draw it": the scope is not
+ * an answer from the machine that may still be in the air, it is the record
+ * this phone was paired with and has in hand. No host means no scope means no
+ * terminal, and there is nothing to wait for.
+ */
+export function terminalDestinations(all: Destination[], scope: DeviceScope | null | undefined): Destination[] {
+  return canRunAgents(scope) ? all : all.filter((d) => d.route !== "terminal");
 }
 
 /**

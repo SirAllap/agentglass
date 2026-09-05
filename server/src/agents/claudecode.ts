@@ -72,8 +72,12 @@ export const claudeCode: PaneAgent = {
   missingReason: () =>
     "no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)",
 
-  transcriptFor: (cwd, sessionId) =>
-    join(claudeHome(), "projects", projectSlug(cwd), `${sessionId}.jsonl`),
+  /* `home` overrides where to look, for a caller that launched the CLI with a
+     CLAUDE_CONFIG_DIR of its own. Without it the server would go on reading
+     ~/.claude/projects while the agent wrote its transcript somewhere else,
+     and the turn would never be seen to end. */
+  transcriptFor: (cwd, sessionId, home) =>
+    join(home || claudeHome(), "projects", projectSlug(cwd), `${sessionId}.jsonl`),
 
   argv(spec: LaunchSpec): string[] {
     const bin = this.bin();
@@ -86,6 +90,26 @@ export const claudeCode: PaneAgent = {
     // degrade, it fails the turn.
     if (spec.fresh) argv.push("--session-id", spec.sessionId);
     else argv.push("--resume", spec.sessionId);
+    /*
+     * NO SUBAGENTS for an unattended run.
+     *
+     * Measured across a day: two whole shifts produced nothing because the run
+     * delegated and then waited. Its own words, both times: "I'll wait for the
+     * Explore agent's findings before writing the scope doc", then "I'll wait
+     * for the notifications now instead of polling further" — and the clock
+     * ran out with no file written and the suite green, because a run that
+     * changes nothing has a green suite.
+     *
+     * Delegating is good advice for somebody who can see the delegate come
+     * back. Nobody is watching this one, and it has no way to give up on a
+     * subagent that never returns. A line in the brief telling it to budget
+     * for the delegation was added after the first shift and did not survive
+     * the second, which is how you learn that a rule is not a mechanism.
+     *
+     * Only for `unattended`, so the chats he is sitting in front of keep the
+     * tool — there, a subagent that stalls is a thing he can see and stop.
+     */
+    if (spec.unattended) argv.push("--disallowed-tools", "Task");
     if (spec.mode === "bypassPermissions") argv.push("--dangerously-skip-permissions");
     else argv.push("--permission-mode", spec.mode);
     return argv;

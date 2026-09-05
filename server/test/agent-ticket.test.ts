@@ -72,6 +72,13 @@ describe("the command line an agent request becomes", () => {
   });
 
   it("buys exactly one flag with yolo, and only when asked", () => {
+    /* No prompt means START IT, and not "run me with an empty argument".
+       Measured from the bench: an empty positional was read as the thing to do,
+       the CLI exited, and the tmux session holding the tab went with it. */
+    expect(agentArgv("/bin/claude", { prompt: "", yolo: false, title: "" }, false))
+      .toEqual(["/bin/claude"]);
+    expect(agentArgv("/bin/claude", { prompt: "", yolo: true, title: "review" }, true))
+      .toEqual(["/bin/claude", "--name", "review", "--dangerously-skip-permissions"]);
     expect(agentArgv("/bin/claude", { prompt: "go", yolo: true, title: "" }, false))
       .toEqual(["/bin/claude", "--dangerously-skip-permissions", "go"]);
     expect(agentArgv("/bin/claude", { prompt: "go", yolo: false, title: "" }, false))

@@ -1,0 +1,112 @@
+{
+  // The first linter this repository has had, and the shape of it is a
+  // deliberate answer to what this repository is.
+  //
+  // WHY OXLINT. Fourteen people outside this project have opened a pull request
+  // against it — more contributors than it has users — and until this file
+  // existed nothing mechanical stood between one of their mistakes and a merge.
+  // The candidates were eslint (+ typescript-eslint), biome and oxlint:
+  //
+  //   * eslint means a flat config, a TypeScript parser, a plugin per language
+  //     feature and a lockfile that grows by dozens of packages, and it takes
+  //     tens of seconds on 245k lines. That is a maintenance surface, and there
+  //     is one maintainer.
+  //   * biome lints and FORMATS, and its recommended set is largely style. This
+  //     codebase has a strong hand-written house style — the comments are the
+  //     documentation — and a tool with opinions about how to lay out code would
+  //     rewrite a great deal of it on day one for no defect found.
+  //   * oxlint is one prebuilt binary, one dependency, no parser to configure
+  //     and no formatter attached, and its DEFAULT category is `correctness`:
+  //     rules that flag code which is wrong, not code somebody would have
+  //     written differently. That is exactly the gate this needs.
+  //
+  // WHY IT IS NOT ALL ERRORS. Measured on the tree the day it was added: 227
+  // findings across ~245k lines, none of them in a file this change was allowed
+  // to touch. A gate red on its first run gets turned off, so the rules that
+  // already fire are listed below one at a time, with the count, and every
+  // other correctness rule errors. What is demoted is named; nothing is hidden.
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    // 120 today, and none of them is a bug: unused imports left after a
+    // refactor, a destructured `rest` nobody reads. Worth seeing, not worth
+    // failing a build over until somebody clears them.
+    "no-unused-vars": "warn",
+    // 32, all inside regexes that are correct and over-escaped.
+    "no-useless-escape": "warn",
+    // 13, all of the form `cond && doThing()`.
+    "no-unused-expressions": "warn",
+    // 12, and every one of them is deliberate: this app is a terminal. Its
+    // parsers MATCH control characters for a living — ANSI escapes, the OSC
+    // strings tmux sends, the NUL a browser's cookie file separates fields
+    // with. A rule that fires only on correct code is noise, so it is off
+    // rather than warned.
+    "no-control-regex": "off",
+    // 30 between them, all style dressed as correctness: a spread that could
+    // have been a literal, a `^…` regex that could have been startsWith.
+    "unicorn/no-useless-spread": "warn",
+    "unicorn/no-new-array": "warn",
+    "unicorn/prefer-string-starts-ends-with": "warn",
+    "unicorn/no-useless-fallback-in-spread": "warn",
+    "typescript/no-useless-empty-export": "warn"
+  },
+  "overrides": [
+    {
+      // The five rules that DO find defects, kept at error everywhere except
+      // the handful of files that already trip them. Named file by file on
+      // purpose: a new duplicate case label anywhere in the repository fails
+      // the build, and this list is the to-do that comes with that promise.
+      // Each is worth a look and none was fixed here — the change that added
+      // this file was not allowed into server/src or web/src.
+      "files": [
+        "server/src/index.ts",
+        "server/src/issues.ts",
+        "server/test/otlp-codex.test.ts",
+        "server/test/otlp-openinference.test.ts",
+        "web/src/components/BrowserPanel.tsx",
+        "web/test/pair-secure-context.test.ts"
+      ],
+      "rules": {
+        // Three case labels in server/src/index.ts that can never be reached,
+        // in the switch that routes HTTP. No line numbers here on purpose —
+        // this file outlives them and a stale number reads as a fact.
+        "no-duplicate-case": "warn",
+        // Statements after a `return` in server/src/issues.ts.
+        "no-unreachable": "warn",
+        // two OTLP fixtures, where `a?.b.c` throws rather than short-circuits.
+        "no-unsafe-optional-chaining": "warn",
+        // Two `&&` in BrowserPanel.tsx whose left side is a constant.
+        "no-constant-binary-expression": "warn",
+        // one test that evaluates a string on purpose, to prove it cannot.
+        "no-eval": "warn"
+      }
+    },
+    {
+      // And the other direction. electron/ is the main process: it mints the
+      // auth token, decides what a <webview> is allowed to be, and owns every
+      // IPC channel the renderer can reach. It is the smallest directory here
+      // and the most dangerous one, it has no findings at all, and it is where
+      // an outside contributor is least likely to know what they are changing.
+      // Nothing is demoted for it.
+      "files": ["electron/**"],
+      "rules": {
+        "no-unused-vars": "error",
+        "no-useless-escape": "error",
+        "no-unused-expressions": "error",
+        "unicorn/no-useless-spread": "error",
+        "unicorn/no-new-array": "error",
+        "unicorn/prefer-string-starts-ends-with": "error",
+        "unicorn/no-useless-fallback-in-spread": "error"
+      }
+    }
+  ],
+  "ignorePatterns": [
+    // Build output and vendored trees. Everything else the repository ships is
+    // linted, tests included — a test is code somebody has to trust too.
+    "**/dist/**",
+    "**/dist-app/**",
+    "mobile/android/**",
+    "**/*.generated.ts"
+  ]
+}

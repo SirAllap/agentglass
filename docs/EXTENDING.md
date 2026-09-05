@@ -265,7 +265,7 @@ curl -sS http://localhost:4000/control \
 
 | `cmd` | Fields | Effect |
 | --- | --- | --- |
-| `view` | `to`: `dash`\|`git`\|`diff`\|`pr`\|`tasks`\|`docker`\|`term`\|`chat`\|`browser`\|`files` | switch the window to that view |
+| `view` | `to`: `dash`\|`git`\|`diff`\|`pr`\|`tasks`\|`docker`\|`term`\|`chat`\|`browser`\|`files`\|`understudy` | switch the window to that view |
 | `workspace` | `open?`: boolean | toggle (absent) or set — swaps between the dashboard and the last view, the way `Ctrl+\` does |
 | `esc` | — | close panels / workspace, as Escape does |
 | `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
@@ -398,6 +398,154 @@ hooks / OTLP / POST /ingest
   visible again retries).
 - Initial frame can include recent history + open tool calls so a reload is not
   a blank cockpit.
+
+## 6. Publish a plugin
+
+Everything above this section is the outside-in direction: your harness talks
+to agentglass over HTTP. A plugin is the same idea, packaged so somebody else
+can install it without writing that HTTP client themselves — Settings → Plugins
+copies a folder, shows what it declares, and a human enables it one at a time.
+Nothing runs on install; nothing runs until enabled. This section is the short
+form; the design, the trust boundary and the catalogue format in full are in
+[PLUGINS.md](PLUGINS.md).
+
+### What a plugin is
+
+A git repository with a `plugin.json` manifest at its root. That is the whole
+requirement — no build step, no registration, no account. `plugin.json`:
+
+```json
+{
+  "name": "hello-stream",
+  "publisher": "someone",
+  "description": "Writes a line to its own log whenever an agent finishes a turn.",
+  "entrypoint": "bun run watch.ts",
+  "scope": "read"
+}
+```
+
+| field | what it is |
+|---|---|
+| `name` | letters, numbers, `.`, `-`, `_` — becomes a directory name on disk |
+| `publisher` | shown to the reviewer, not verified |
+| `description` | shown to the reviewer, not verified |
+| `entrypoint` | a shell command, run with `installDir` as its cwd |
+| `scope` | `read`, `answer`, or `full` — see below |
+
+On enable, the server mints a token at that scope and spawns `entrypoint` as
+its own process, with `AGENTGLASS_URL` and `AGENTGLASS_READ_TOKEN` in its
+environment (that variable is always named `AGENTGLASS_READ_TOKEN`, whatever
+the granted scope — the name predates plugins and nothing here renamed it).
+The plugin talks to agentglass exactly the way section 1 and 2 above describe:
+HTTP and the `/stream` WebSocket, from outside the process. What it may call
+is capped by the token's scope, not by anything the plugin's own code decides.
+
+What each scope actually permits, in reviewer language, not the field's name:
+
+- **`read`** — every GET route, including `/stream`: a session's live output
+  as it happens, the same prompts and replies shown on screen, plus costs,
+  diffs and pull requests. Cannot reply to a session or write anything.
+- **`answer`** — everything `read` gets, plus replying to a session that is
+  already running (`/chat/send`, `/chat/pane/key`).
+- **`full`** — everything this machine can do: a terminal, git write access,
+  docker control, merging pull requests.
+
+**No plugin, at any scope, can approve a gate.** `POST /gate/decide` is
+reserved for a credential no process on this machine could mint for itself — a
+paired phone's, or a person at the desktop. A plugin's token was minted by this
+server and sits in a child process's environment on this machine, so it is its
+own kind of caller and the gate refuses it by name, whatever `scope` says. A
+plugin at `answer` can reply to an agent; it cannot release one.
+
+No plugin gets `full` by writing that in its own `plugin.json` and being
+believed — the manifest is what it *asks for*, and the reviewer decides
+whether to grant it. An update that changes the manifest, or changes what the
+entrypoint's files actually contain without touching the manifest at all,
+clears the old approval and asks again.
+
+### How to publish one
+
+1. Write the plugin as its own git repository, `plugin.json` at the root.
+2. Push it wherever — any host `git clone` can reach over `https://`, `ssh://`,
+   or `git@host:path`. No embedded credentials: a plugin address is typed
+   once and reused to update from later, so a URL carrying a password would
+   sit in the installer's config from then on.
+3. Tell people the URL. Pasting it into "Install a plugin" is enough — a
+   catalogue is optional, for when there is more than one plugin to list.
+
+### The worked example
+
+`hello-stream` — two files, nothing more:
+
+```json
+// plugin.json
+{
+  "name": "hello-stream",
+  "publisher": "someone",
+  "description": "Writes a line to its own log whenever an agent finishes a turn. Proof that a plugin can watch the cockpit without being part of it.",
+  "entrypoint": "bun run watch.ts",
+  "scope": "read"
+}
+```
+
+```ts
+// watch.ts — everything it is allowed to do comes from two env vars the
+// host sets when somebody enables it. No import from agentglass: this runs
+// as its own process.
+const URL_BASE = process.env.AGENTGLASS_URL ?? "http://127.0.0.1:4000";
+const TOKEN = process.env.AGENTGLASS_READ_TOKEN ?? "";
+
+const ws = new WebSocket(`${URL_BASE.replace(/^http/, "ws")}/stream?token=${encodeURIComponent(TOKEN)}`);
+ws.addEventListener("message", (e) => {
+  // ... write whatever's useful to its own log file ...
+});
+```
+
+Its log, once enabled, shows the shape a `read` token actually has: a GET it
+was allowed to make, and a write it was not —
+
+```
+GET /terminal/panes -> 200
+POST /understudy/halt -> 403 (a read plugin must not be allowed to do this)
+watching /stream
+```
+
+That 403 is the mechanism working, not a bug in the example: `read` cannot
+halt a run, and nothing the plugin's own code does changes that.
+
+### A catalogue file, if there's more than one plugin
+
+A catalogue is a plain JSON file over `https://`, fetched fresh every time
+somebody browses it — not a registry, not something whose contents get
+cached as trustworthy between reads. An unreachable or malformed catalogue
+reads as exactly that in Settings, never as an empty list.
+
+```json
+{
+  "name": "community-plugins",
+  "owner": "someone",
+  "plugins": [
+    {
+      "id": "someone.hello-stream",
+      "source": { "kind": "git", "url": "https://example.com/someone/hello-stream.git", "ref": null },
+      "description": "Writes a line to its own log whenever an agent finishes a turn.",
+      "categories": ["monitoring"]
+    }
+  ]
+}
+```
+
+One bad entry drops that entry, not the whole catalogue — the same rule a
+manifest is checked by. `ref` is optional (a branch, tag, or commit); a
+missing one installs the repository's default branch.
+
+### Why there is no separate lockfile
+
+`~/.config/agentglass/plugins.json` already records, per installed plugin,
+where it came from (`source` — a git URL, a local path, or a catalogue plus
+the entry inside it), the commit it resolved to, and a content hash of every
+file that shipped. That is every fact a lockfile would exist to pin down.
+A second file would just be this one, copied.
 
 ## Dashboard vs harness (one paragraph)
 

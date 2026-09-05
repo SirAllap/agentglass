@@ -82,7 +82,9 @@ describe("the terminal", () => {
     // instead, and the one picker left is the docked console's, which is a
     // different shell and a different question.
     expect(term.match(/<CheckoutPicker/g)?.length ?? 0).toBe(1);
-    expect(term).toContain("requestWorktreeJump({ view: \"git\", root: at.root })");
+    // The way to a checkout is a door on the pane that is in it — the row that
+    // used to state it for one pane out of four is gone.
+    expect(term).toContain("requestWorktreeJump({ view: \"git\", root: chipWt.root })");
   });
 
   it("still writes the key the docked console falls back to", () => {

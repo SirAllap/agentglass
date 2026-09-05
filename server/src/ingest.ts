@@ -127,8 +127,20 @@ function num(v: unknown): number {
 // genuine session and still finite. Anything past it is corrupt or forged.
 const MAX_SESSION_TOKENS = 1_000_000_000;
 
-// Strong shell-failure markers — chosen to rarely appear in successful output
-// (so a command that merely greps for "error" isn't flagged).
+// Strong shell-failure markers, read on STDERR ONLY.
+//
+// The comment here used to say these "rarely appear in successful output", and
+// that was measured false: over 24h, 104 of 179 flagged events matched a marker
+// and in most of them the command had succeeded and written nothing to stderr —
+// the words were in its ordinary OUTPUT. `git log` printing a commit whose
+// message says "fatal:", a build log quoting "command not found", `cat` of a
+// report about failures. The proof is self-demonstrating: reading THIS array
+// with `sed` flags the read as an error, because the file contains the
+// literals, and the desk gets an urgent popup for it.
+//
+// Stderr is the stream a program uses to say it failed. Stdout is the stream it
+// uses to answer. Scanning the answer for the vocabulary of failure cannot
+// distinguish a program that failed from one that was asked about failure.
 const FAIL_MARKERS = [
   "command not found",
   "no such file or directory",
@@ -164,8 +176,12 @@ export function detectError(type: string, payload: Record<string, unknown>): { i
     }
     const rci = typeof r.returnCodeInterpretation === "string" ? r.returnCodeInterpretation.toLowerCase() : "";
     if (rci && /(error|fail|non-?zero)/.test(rci)) return err((r.stderr as string) || (r.returnCodeInterpretation as string));
-    const marker = firstMarker(r.stderr) || firstMarker(r.stdout);
-    if (marker) return err((r.stderr as string) || (r.stdout as string));
+    // stderr only — see FAIL_MARKERS. A tool that reports a real failure has
+    // already been caught by is_error / success / returnCodeInterpretation
+    // above; this is the last resort for a shell that says nothing but writes
+    // its complaint to the error stream.
+    const marker = firstMarker(r.stderr);
+    if (marker) return err(r.stderr as string);
   }
   return { is_error: 0, error_text: null };
 }

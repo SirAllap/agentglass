@@ -28,8 +28,21 @@ export function Portal({ children, z = 9999, find }: {
    */
   find?: boolean | number;
 }) {
-  const [el] = useState(() => document.createElement("div"));
+  /*
+   * Null where there is no DOM.
+   *
+   * This ran `document.createElement` during RENDER, which is fine in a browser
+   * and throws everywhere else — including under `bun test`, where rendering a
+   * component is the only way to catch the class of bug that has twice shipped
+   * a black window here. Every panel that contains a Select contains this, so
+   * one line in this file was what made all of them untestable.
+   *
+   * A portal with nowhere to go draws nothing, which is the correct answer
+   * rather than a concession: there is no body to escape to.
+   */
+  const [el] = useState<HTMLElement | null>(() => (typeof document === "undefined" ? null : document.createElement("div")));
   useEffect(() => {
+    if (!el) return;
     el.style.position = "relative";
     el.style.zIndex = String(z);
     document.body.appendChild(el);
@@ -38,8 +51,8 @@ export function Portal({ children, z = 9999, find }: {
     };
   }, [el, z]);
   useEffect(() => {
-    if (!find) return;
+    if (!el || !find) return;
     return pushScope(el, typeof find === "number" ? find : 1);
   }, [el, find]);
-  return createPortal(children, el);
+  return el ? createPortal(children, el) : null;
 }

@@ -61,7 +61,7 @@ const TASK = {
   priority: { priority: "high" },
   tags: [{ name: "web" }, { name: "auth" }],
   list: { name: "Sprint 14" },
-  assignees: [{ username: "David" }],
+  assignees: [{ username: "Ada" }],
 };
 
 beforeEach(() => {
@@ -86,7 +86,7 @@ describe("the header", () => {
     // ClickUp personal tokens are sent as-is. `Bearer pk_…` produces a 401 that
     // looks exactly like a wrong token, which is an afternoon of debugging the
     // wrong thing.
-    reply = () => json({ user: { id: 7, username: "David", email: "d@example.invalid" } });
+    reply = () => json({ user: { id: 7, username: "Ada", email: "d@example.invalid" } });
     await CU.whoAmI("pk_12345_TOKEN");
     expect(seen[0]!.auth).toBe("pk_12345_TOKEN");
     expect(seen[0]!.auth).not.toContain("Bearer");
@@ -95,10 +95,10 @@ describe("the header", () => {
 
 describe("who the token belongs to", () => {
   it("reports the account when ClickUp accepts it", async () => {
-    reply = () => json({ user: { id: 7, username: "David", email: "d@example.invalid" } });
+    reply = () => json({ user: { id: 7, username: "Ada", email: "d@example.invalid" } });
     const r = await CU.whoAmI("pk_1_X");
     expect(r.ok).toBe(true);
-    expect(r.data).toEqual({ id: "7", name: "David", email: "d@example.invalid" });
+    expect(r.data).toEqual({ id: "7", name: "Ada", email: "d@example.invalid" });
   });
 
   it("falls back to the email when there is no username", async () => {
@@ -158,7 +158,7 @@ describe("reading tasks", () => {
     expect(t.priority).toBe("high");
     expect(t.tags).toEqual(["web", "auth"]);
     expect(t.list).toBe("Sprint 14");
-    expect(t.assignees).toEqual(["David"]);
+    expect(t.assignees).toEqual(["Ada"]);
     expect(t.url).toContain("abc123");
   });
 
@@ -211,7 +211,7 @@ describe("reading tasks", () => {
 
 describe("the rate limit", () => {
   it("holds off before the wall instead of walking into a 429", async () => {
-    reply = () => json({ user: { id: 7, username: "David", email: "e" } }, {
+    reply = () => json({ user: { id: 7, username: "Ada", email: "e" } }, {
       headers: { "x-ratelimit-remaining": "1", "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 30) },
     });
     await CU.whoAmI("pk_1_X");
@@ -277,14 +277,14 @@ describe("the cached list the panel reads", () => {
     C.setCredential("clickup", { token: "pk_1_X" });
     reply = (req) => {
       const p = new URL(req.url).pathname;
-      if (p.endsWith("/user")) return json({ user: { id: 7, username: "David", email: "e" } });
-      if (p.endsWith("/team")) return json({ teams: [{ id: "9001", name: "Producto" }] });
+      if (p.endsWith("/user")) return json({ user: { id: 7, username: "Ada", email: "e" } });
+      if (p.endsWith("/team")) return json({ teams: [{ id: "9001", name: "Acme" }] });
       return json({ tasks: [TASK] });
     };
     await CU.clickupTasks(true);
     const stored = C.redacted("clickup")!;
     expect(stored.workspaceId).toBe("9001");
-    expect(stored.workspace).toBe("Producto");
+    expect(stored.workspace).toBe("Acme");
     expect(stored.accountId).toBe("7");
 
     // …and the next poll does not ask again.
@@ -314,7 +314,7 @@ describe("connecting, when the tab has already been looked at", () => {
      * time anybody pastes a token the tab has already polled and cached a
      * snapshot saying "ClickUp is not connected". Connecting then succeeded and
      * the card immediately reported that cached failure — "not connected · last
-     * known as David" — where the name could only have come from the credential
+     * known as Ada" — where the name could only have come from the credential
      * that had just been written a moment earlier.
      */
     const P = await import("../src/providers.ts");
@@ -326,15 +326,15 @@ describe("connecting, when the tab has already been looked at", () => {
     // 2. A good token goes in.
     reply = (req) => {
       const path = new URL(req.url).pathname;
-      if (path.endsWith("/user")) return json({ user: { id: 7, username: "David", email: "e" } });
-      if (path.endsWith("/team")) return json({ teams: [{ id: "9001", name: "Producto" }] });
+      if (path.endsWith("/user")) return json({ user: { id: 7, username: "Ada", email: "e" } });
+      if (path.endsWith("/team")) return json({ teams: [{ id: "9001", name: "Acme" }] });
       return json({ tasks: [TASK] });
     };
     const r = await P.connectProvider("clickup", "pk_1_GOOD");
 
     expect(r.ok, r.error).toBe(true);
     expect(r.status!.state, "connect reported the cached failure").toBe("connected");
-    expect(r.status!.detail).toContain("David");
+    expect(r.status!.detail).toContain("Ada");
     expect(r.status!.detail).not.toContain("not connected");
   });
 });
@@ -520,12 +520,12 @@ describe("what the status TYPE decides", () => {
         id: "f1", name: "Squad", type: "drop_down", value: 2,
         type_config: { options: [
           { id: "a", name: "Orange", orderindex: 0 },
-          { id: "b", name: "Purple", orderindex: 1 },
-          { id: "c", name: "Blue", orderindex: 2 },
+          { id: "b", name: "Crimson", orderindex: 1 },
+          { id: "c", name: "Teal", orderindex: 2 },
         ] },
       }],
     });
-    expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Blue" }]);
+    expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Teal", kind: "chip" }]);
   });
 
   it("carries the option's own colour, so the board can be read by colour", () => {
@@ -536,12 +536,12 @@ describe("what the status TYPE decides", () => {
       custom_fields: [{
         id: "f1", name: "Squad", type: "drop_down", value: 1,
         type_config: { options: [
-          { id: "a", name: "Purple", orderindex: 0, color: "#c034eb" },
-          { id: "b", name: "Blue", orderindex: 1, color: "#2ea1e5" },
+          { id: "a", name: "Crimson", orderindex: 0, color: "#c034eb" },
+          { id: "b", name: "Teal", orderindex: 1, color: "#2ea1e5" },
         ] },
       }],
     });
-    expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Blue", color: "#2ea1e5" }]);
+    expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Teal", color: "#2ea1e5", kind: "chip" }]);
   });
 
   it("says nothing about colour for an option nobody coloured", () => {
@@ -551,7 +551,7 @@ describe("what the status TYPE decides", () => {
       id: "x", name: "n",
       custom_fields: [{
         id: "f1", name: "Squad", type: "drop_down", value: 0,
-        type_config: { options: [{ id: "a", name: "Blue", orderindex: 0 }] },
+        type_config: { options: [{ id: "a", name: "Teal", orderindex: 0 }] },
       }],
     });
     expect(t.custom?.[0]).not.toHaveProperty("color");
@@ -770,7 +770,7 @@ describe("finding a card by the number you remember", () => {
   });
 
   it("takes an internal id too", () => {
-    expect(normaliseCardQuery("86e2gw40g", "ABC-")).toBe("86e2gw40g");
+    expect(normaliseCardQuery("86xabc001", "ABC-")).toBe("86xabc001");
   });
 
   it("refuses a bare number when it has never seen this workspace's ids", () => {
@@ -845,7 +845,7 @@ describe("which of a card's lists is the sprint", () => {
     // ClickUp appends the range itself, so the range is the portable half of
     // the signature — a workspace calling them Iterations still gets a column.
     expect(looksLikeSprint("Iteration 4 (1/1/26 - 1/7/26)")).toBe(true);
-    expect(looksLikeSprint("Projects Purple")).toBe(false);
+    expect(looksLikeSprint("Projects Crimson")).toBe(false);
   });
 });
 

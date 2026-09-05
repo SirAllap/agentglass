@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { Fold, SettingRow } from "./SettingRow.tsx";
+import { Fold, SettingRow, Switch } from "./SettingRow.tsx";
 import { Select } from "./Select.tsx";
 import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { pickIndex, readPick, writePick, type PickedAddress } from "../lib/remoteLink.ts";
 import { PairPanel } from "./PairPanel.tsx";
+import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
 
 /**
@@ -71,17 +72,12 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
 
   useEffect(() => {
     if (!open) return;
-    let live = true;
-    const tick = () => {
-      api.remoteStatus().then((r) => { if (live) setSt(r); }).catch(() => { if (live) setSt(null); });
-    };
-    tick();
-    remoteAccessEnabled().then((v) => { if (live) setEnabled(v); });
-    // Polled while the pane is open, which is what turns "a device connected"
-    // into something you watch happen with the phone in your hand.
-    const t = setInterval(tick, 3000);
-    return () => { live = false; clearInterval(t); };
-  }, [open]);
+    load();
+    remoteAccessEnabled().then(setEnabled);
+  }, [open, load]);
+  // Polled while the pane is open, which is what turns "a device connected"
+  // into something you watch happen with the phone in your hand.
+  usePoll(open, load, 3000);
 
   useEffect(() => {
     if (!open) { setStalled(false); return; }
@@ -396,8 +392,11 @@ function Wrap({ children }: { children: React.ReactNode }) {
        box — so the column's one padding rule reaches this page too. Written
        out rather than imported because SettingsModal imports THIS file, and
        the other way round is a cycle. */
-    <div className="pb-5 agx-settings-section">
-      <div className="panel-eyebrow pb-1">Remote access</div>
+    <div className="agx-settings-section">
+      <div className="agx-settings-head">
+        <div className="agx-settings-head-t">Remote access</div>
+        <div className="agx-settings-head-d">Reaching this machine from a phone, and what that phone is allowed to do.</div>
+      </div>
       <div className="agx-settings-rows">{children}</div>
     </div>
   );
@@ -418,21 +417,6 @@ function Alert({ tone, children }: { tone: "warning" | "error"; children: React.
   );
 }
 
-/** The switch itself, so the three places that draw one draw the same one. */
-function Switch({ on, busy }: { on: boolean; busy?: boolean }) {
-  return (
-    <span className="shrink-0 relative rounded-full transition-colors" style={{
-      width: 34, height: 19, opacity: busy ? 0.5 : 1,
-      background: on ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)",
-    }}>
-      <span className="absolute rounded-full transition-transform" style={{
-        width: 15, height: 15, top: 2, left: 2,
-        transform: on ? "translateX(15px)" : "translateX(0)",
-        background: on ? "var(--primary-hover)" : "var(--text3)",
-      }} />
-    </span>
-  );
-}
 
 /**
  * The tailnet name could not be confirmed — said out loud, because the failure

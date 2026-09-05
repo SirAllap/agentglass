@@ -260,7 +260,7 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
  * `font` is the terminal's own face: a command is a thing you type, and it
  * reads as one when it is set in the face it will be typed in.
  */
-export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClose, dropUp }: {
+export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClose, dropUp, quiet }: {
   root: string;
   disabled: boolean;
   font: string;
@@ -280,6 +280,16 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
   /** Open upwards — for the console strip, which sits at the bottom of a panel
    *  and has nothing below it to open into. */
   dropUp?: boolean;
+  /**
+   * In the background: no count, no colour, no pinned strip.
+   *
+   * The terminal's bar wears this one. Commands is used from the Docker console
+   * far more than from the terminal — his words — and the count it carried
+   * ("(331)", or "(none)") is the number that helps least when choosing: the
+   * dropdown has a filter for exactly that. The pinned strip goes with it,
+   * because an empty one sat there inviting a pin nobody wanted.
+   */
+  quiet?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -470,9 +480,11 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
             `dismiss` so the focus goes back to the shell rather than nowhere. */}
         <button onMouseDown={keepTermFocus} onClick={() => (open ? dismiss() : setOpen(true))} disabled={!root || IS_DEMO}
           title="Ready-to-run project commands: Makefile targets & package scripts, with what each one does. Pin the ones you use."
-          className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg font-medium whitespace-nowrap"
-          style={{ color: n ? "var(--primary-hover)" : "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: root && !IS_DEMO ? 1 : 0.5 }}>
-          ⚙ Commands{n ? ` (${n})` : cmds ? " (none)" : " …"}<span className="t-dim2">▼</span>
+          className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+          style={quiet
+            ? { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", opacity: root && !IS_DEMO ? 1 : 0.5 }
+            : { color: n ? "var(--primary-hover)" : "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", fontWeight: 500, opacity: root && !IS_DEMO ? 1 : 0.5 }}>
+          ⚙ Commands{quiet ? "" : n ? ` (${n})` : cmds ? " (none)" : " …"}<span className="t-dim2">▼</span>
         </button>
         {open && (
           // keepTermFocus on the whole popover: a click on its padding, a
@@ -509,7 +521,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                 </form>
               )}
             </div>
-            <div className="agx-scroll overflow-y-auto py-1" style={{ minHeight: 0 }}>
+            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1" style={{ minHeight: 0 }}>
               {!!gitMatches.length && (
                 <div>
                   <div className="px-3 pt-1.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">git — always available</div>
@@ -551,7 +563,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           offset. The row is capped at MAX_PINS, so a crowded bar is a
           truncation problem rather than a scrolling one: chips shrink, the
           label ellipses, and the full command stays in the tooltip. */}
-      <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+      <div className="flex items-center gap-1 min-w-0 overflow-hidden" style={quiet ? { display: "none" } : undefined}>
         {pins.map((cmd) => (
           <span key={cmd} className="group flex items-center min-w-0 rounded-md"
             style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>

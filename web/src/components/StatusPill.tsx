@@ -1,3 +1,4 @@
+import { CHIP_H } from "../lib/priority.tsx";
 /**
  * A tracker status, as its board draws it.
  *
@@ -15,9 +16,14 @@ export function StatusPill({ status, color, dim }: { status: string; color?: str
   if (!status) return null;
   const c = color || "var(--text3)";
   return (
-    <span className="text-[9.5px] tracking-[0.06em] px-1.5 py-0.5 rounded whitespace-nowrap"
+    /* `CHIP_H` and `leading-none`: this let its line-height set its height and
+       came out three pixels taller than the id chip beside it on the board's
+       card. Every chip on a row is the same height now, by number rather than
+       by each one's own padding arithmetic. */
+    <span className="text-[9.5px] tracking-[0.06em] px-1.5 rounded whitespace-nowrap inline-flex items-center leading-none"
       title={status}
       style={{
+        height: CHIP_H,
         color: dim ? "var(--text4)" : c,
         background: `color-mix(in srgb, ${c} ${dim ? 8 : 15}%, transparent)`,
         border: `1px solid color-mix(in srgb, ${c} ${dim ? 18 : 34}%, transparent)`,

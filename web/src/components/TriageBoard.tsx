@@ -12,14 +12,27 @@
 // Nothing is fetched for this. It reads the two lists the panel already loads
 // for the pill counts — see stakeFrom in prLanes.ts — so the board costs what
 // the pill row cost, and the numbers cannot disagree with their source.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { InfoIcon } from "./settingsNavIcons.tsx";
+import { CopyIcon, DoneIcon, StarIcon } from "../lib/glyphIcons.tsx";
+import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
-import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed } from "../lib/prLanes.ts";
+import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
+import { cardOf, onCard } from "../lib/prCardStore.ts";
+import { openCard } from "../lib/openCard.ts";
+import { PriorityFlag, CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
+import { StatusPill } from "./StatusPill.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { stamp } from "../lib/whenStamp.ts";
+import { onSeenChange, readSeen } from "../lib/prNew.ts";
+import { unreadOf, type Unread } from "../lib/prUnread.ts";
+import { UnreadBadge } from "./UnreadBadge.tsx";
+import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
+import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
@@ -51,7 +64,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, pinnedList, root,
+  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, pinnedList, root, repoKey,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -116,6 +129,13 @@ export function TriageBoard({
   /** The checkout these pull requests belong to — needed to ask how far behind
    *  each branch is, which is not on the list payload. See prBehindStore. */
   root?: string;
+  /**
+   * `owner/name`, and it must be the SAME string the conversation writes its
+   * "last looked" marks under — they are keyed by repository because pull request
+   * numbers are per repository. Absent means the badge cannot be trusted to
+   * belong to this project, so nothing is drawn. See prSeenKey.
+   */
+  repoKey?: string;
 }) {
   /* Answers arriving one at a time, each one a re-render of the board and
      nothing else — the cards do not move, a chip appears on one of them. */
@@ -204,45 +224,162 @@ export function TriageBoard({
    * about why it is there.
    */
   const [find, setFind] = useState("");
-  const findRef = useRef<HTMLInputElement>(null);
   const needle = find.trim().toLowerCase();
+  /*
+   * Which of these has been spoken on since you last looked.
+   *
+   * The marks are localStorage, not React state, so a mark that moves — you open
+   * a pull request, read it, come back — has to say so or the badge stays up on
+   * the one thing you know you have read. See onSeenChange.
+   */
+  const [seenTick, bumpSeen] = useState(0);
+  useEffect(() => onSeenChange(() => bumpSeen((n) => n + 1)), []);
+  const unread = useMemo(() => {
+    const seen = readSeen();
+    const m = new Map<number, Unread | null>();
+    for (const p of cards) m.set(p.number, unreadOf(p, repoKey, seen));
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cards, repoKey, seenTick]);
+  const unreadCount = useMemo(() => cards.filter((p) => unread.get(p.number)).length, [cards, unread]);
+  /* Lit rather than filtered, like the find box beside it — see `matches`. */
+  const [onlyUnread, setOnlyUnread] = useState(false);
+  /*
+   * ONE LANE LIT, from the counts row.
+   *
+   * That row was a summary and nothing else, and the note above it said why: a
+   * row of buttons there "would read as filters that shrink the board". The
+   * objection is right and this is not it. Nothing is removed — the same rule
+   * the find box and the unread toggle already follow: the cards that answer
+   * keep their colour and the rest go quiet, in the same lanes, at the same
+   * heights, under counts that still add up.
+   *
+   * Asked for directly, looking at a board of five columns where the row was
+   * the only thing on screen that named all five: "it should do something, like
+   * a button to filter". It should.
+   */
+  const [onlyLane, setOnlyLane] = useState<string | null>(null);
+  /* The rule itself lives in prBoardFind.ts — the app's own find bar drives the
+     same one, so there is one search on this screen rather than two that
+     disagree about what a card is. */
   const matches = useCallback((p: PrSummary) => {
-    if (!needle) return true;
-    const hay = [
-      `#${p.number}`, String(p.number), p.title, p.author, p.headRefName, p.baseRefName,
-      ...(p.labels ?? []).map((l) => l.name),
-      /* The PEOPLE, which is the question this box is actually asked: "where is
-         Javi on this board". It matched the author and stopped, so typing a
-         name dimmed every card — including the one saying "Waiting on
-         javidoe" in as many words. Assignees and requested reviewers both:
-         who owns it and who is being waited on are one question to somebody
-         looking for their own name. */
-      ...(p.assignees ?? []),
-      ...(p.reviewers ?? []).map((r) => r.login),
-    ].join(" ").toLowerCase();
-    return hay.includes(needle);
-  }, [needle]);
-  const hits = useMemo(() => (needle ? cards.filter(matches).length : 0), [needle, cards, matches]);
+    if (onlyUnread && !unread.get(p.number)) return false;
+    return prMatches(p, needle);
+  }, [needle, onlyUnread, unread]);
+  /* What is LIT, which is the number the row beside it prints. A lane filter
+     narrows it the same way the needle does — two ways of lighting the same
+     board, so one count answers for both rather than each keeping its own. */
+  const litIn = useCallback((p: PrSummary, laneId: string) =>
+    matches(p) && (onlyLane === null || onlyLane === laneId), [matches, onlyLane]);
+  const hits = useMemo(() => {
+    if (!needle && !onlyUnread && onlyLane === null) return 0;
+    let n = 0;
+    for (const [laneId, ps] of lanes) for (const p of ps) if (litIn(p, laneId)) n++;
+    return n;
+  }, [needle, onlyUnread, onlyLane, lanes, litIn]);
   /**
    * Lanes opened past their cap, by lane id.
    *
    * The cap keeps the board a glance, and the four it left over used to be a
    * button that sent you to the TABLE — a different surface, sorted
-   * differently, with the lane you were reading nowhere in it. "¿Qué sentido
-   * tiene tener las cards entonces?" is the right question: the rest of a lane
+   * differently, with the lane you were reading nowhere in it. "What is the point
+   * of having the cards, then?" is the right question: the rest of a lane
    * belongs in the lane. The board already holds those rows; only the slice was
    * hiding them.
    */
   const [openLanes, setOpenLanes] = useState<Record<string, boolean>>({});
+  /*
+   * FOLDED LANES, and the arithmetic that made it worth doing.
+   *
+   * The board demands `5 × 268 + 4 × 10 + 32 = 1412` CSS pixels. His screen at
+   * 175% leaves 1170, which is why the cards in his screenshot wrap and the
+   * last one is cut off. A lane folded from 268 to 44 gives back 224 plus its
+   * gap, so TWO folded lanes bring the minimum under 1000 — below his real
+   * width, without a breakpoint and without anything moving on its own.
+   *
+   * FOLDING IS NOT FILTERING, and the board already refused that twice in
+   * writing. Eight printed numbers derive from the flattened partition rather
+   * than from what is drawn — the headline "22 of 391", the "9 can land right
+   * now", each segment count, the footer. If a fold subtracted, all eight go
+   * wrong at once and the footer becomes a lie: those pull requests still want
+   * something from you, you just stopped looking. So a folded lane keeps its
+   * number on its own strip, which is what every other fold in this app does.
+   */
+  const laneIds = useMemo(() => LANES.map((l) => l.id), []);
+  const [folded, setFolded] = useState<string[]>(() => foldedLanes(laneIds));
+  /*
+   * FOLDED, and allowed to be.
+   *
+   * Asked with the count rather than off the stored list alone: a lane folded
+   * while it was empty must come back the moment something lands in it. The
+   * alternative was tried and is worse — "the lane this board exists for" would
+   * sit as a 44px strip with a review waiting behind it, which is the exact
+   * harm `ALWAYS_OPEN` was written to prevent, arrived at by a different route.
+   *
+   * It does move under the hand, and that is the lesser of the two: what moved
+   * is a column reopening because somebody just asked you for a review.
+   */
+  const isFolded = useCallback((id: LaneId) =>
+    folded.includes(id) && foldable(id, lanes.get(id)?.length ?? 0), [folded, lanes]);
+  const toggleFold = useCallback((id: string, count: number) => {
+    /* Refused only in the direction that hides something: unfolding is always
+       allowed, so a lane that filled up while folded can still be opened. */
+    if (!foldable(id, count) && !folded.includes(id)) return;
+    setFolded((cur) => {
+      const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+      setFoldedLanes(next);
+      return next;
+    });
+  }, [folded]);
   const [cur, setCur] = useState<{ lane: number; row: number }>({ lane: 0, row: 0 });
   const frame = useRef<HTMLDivElement>(null);
+  /*
+   * THE KEYS DID NOTHING, AND THE ROW BELOW THE COUNTS SAID THEY DID.
+   *
+   * Reported: "that legend doesn't work at all, it is a lie" — the strip
+   * that reads `1–4 lane · j k card · h l across · ⏎ open · a open it · p pin`.
+   * It was not lying about which keys exist; every one of them is handled in
+   * `onKey` below. They were UNREACHABLE. The handler hangs off this div, the
+   * div is `tabIndex={0}`, and nothing in this file ever focused it — a grep
+   * for `.focus()` on `frame` returned nothing, and the only other use of the
+   * ref was a `scrollIntoView`. Arriving at the board from the view rail left
+   * the focus wherever it had been, so six advertised shortcuts answered to
+   * nobody.
+   *
+   * ON MOUNT IS ON ARRIVAL HERE, and that is not a coincidence worth relying
+   * on quietly: the board is mounted conditionally (`boardShown && repo && …`
+   * in PrPanel) and the whole PR view is unmounted when it is not the view on
+   * screen — `KEEP_RUNNING` in Workspace.tsx holds only the terminal and the
+   * chat. So this effect runs when the board appears and not while it sits
+   * behind another view. If either of those ever changes, this becomes a focus
+   * steal, which is the failure it is guarded against below.
+   *
+   * The guard is the whole risk of the fix. Taking focus from somebody who is
+   * typing is worse than the bug: the next character goes to a board that
+   * reads `p` as "pin this". So a field that is already focused keeps it, and
+   * the keys start working on the next click anywhere else.
+   */
+  useEffect(() => {
+    const held = document.activeElement as HTMLElement | null;
+    const typing = !!held && (
+      held.tagName === "INPUT" || held.tagName === "TEXTAREA" || held.isContentEditable
+    );
+    if (!typing) frame.current?.focus({ preventScroll: true });
+  }, []);
   // Keyboard navigation walks exactly what is drawn — an opened lane included,
   // or j past the cap would step onto a card nobody can see.
   const shown = useCallback((i: number) => {
     const id = cols[i]?.id ?? "review";
-    const all = lanes.get(id) ?? [];
-    return openLanes[id] ? all : all.slice(0, LANE_CAP);
-  }, [lanes, cols, openLanes]);
+    /* A folded lane walks as empty, which is the app's own answer three times
+       over — `DockerPanel.ordered` says it out loud: "so j/k walks what is on
+       screen, skipping collapsed stacks rather than jumping into a container
+       nobody can see". Without this the cursor sits on a card behind a 44px
+       strip: the heal below only rescues an EMPTY lane, and a folded lane with
+       six cards in it reports six. */
+    return walkable(lanes.get(id) ?? [], {
+      folded: isFolded(id), opened: !!openLanes[id], cap: LANE_CAP,
+    });
+  }, [lanes, cols, openLanes, isFolded]);
   const at = shown(cur.lane)[cur.row];
 
   // Keep the cursor on something. Lanes empty and fill as checks land, and a
@@ -259,14 +396,87 @@ export function TriageBoard({
     frame.current?.querySelector<HTMLElement>("[data-cur=\"1\"]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [cur]);
 
+  /*
+   * The app's find bar, driving this board.
+   *
+   * There were two searches on this screen and they did different things: the
+   * one in the corner painted the words it could see and counted 1/1, and this
+   * board's own box lit the cards that answer and counted 1 of 16 — including
+   * the cards whose only match is a reviewer, an assignee or a branch name,
+   * which the first one cannot see at all.
+   *
+   * So the bar now runs THIS one. Ctrl+F anywhere on the board sets the same
+   * needle, dims the same cards and steps the same cursor; the box beside the
+   * lanes is the visible half of it rather than a second feature. Registered as
+   * an engine, which is the seam findScope already has for a view that searches
+   * something other than the document (see FindEngine).
+   *
+   * Everything the engine needs is read through refs: it is called from outside
+   * React, and a closure over this render's `cards` would search the board as
+   * it was when the bar opened.
+   */
+  const cardsRef = useRef(cards);
+  cardsRef.current = cards;
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const colsRef = useRef(cols);
+  colsRef.current = cols;
+  const curRef = useRef(cur);
+  curRef.current = cur;
+  useEffect(() => {
+    /** Every card the board is DRAWING, in reading order, with where it sits. */
+    const drawn = () => {
+      const out: { lane: number; row: number; p: Card }[] = [];
+      for (let lane = 0; lane < colsRef.current.length; lane++) {
+        shownRef.current(lane).forEach((p, row) => out.push({ lane, row, p }));
+      }
+      return out;
+    };
+    const flagsFor = (q: string, list: ReturnType<typeof drawn>) => list.map((x) => prMatches(x.p, q));
+    const here = (list: ReturnType<typeof drawn>) =>
+      list.findIndex((x) => x.lane === curRef.current.lane && x.row === curRef.current.row);
+    let q = "";
+    return registerEngine(() => {
+      /* Only while this board is the thing on screen. The panel keeps it
+         mounted behind other views, and an engine that answered from there
+         would have the find bar searching a board nobody is looking at — which
+         is the exact bug findScope's scope stack exists to prevent, so the
+         answer comes from the same place: is the top scope holding us. */
+      const scope = topScope();
+      const el = frame.current;
+      if (!el || !scope || !(scope === el || scope.contains(el))) return null;
+      return {
+        label: "board",
+        search(next) {
+          q = next;
+          setFind(next);
+          // The board's own count, not a count of words on screen: a card that
+          // matches on a reviewer has nothing on it to paint and is still a hit.
+          return next.trim() ? cardsRef.current.filter((p) => prMatches(p, next)).length : 0;
+        },
+        step(dir) {
+          const list = drawn();
+          const to = stepMatch(flagsFor(q, list), here(list), dir);
+          if (to < 0) return;
+          const hit = list[to]!;
+          setCur({ lane: hit.lane, row: hit.row });
+        },
+        at() {
+          const list = drawn();
+          return matchIndex(flagsFor(q, list), here(list));
+        },
+        clear() { q = ""; setFind(""); },
+      };
+    });
+  }, []);
+
   const onKey = (e: React.KeyboardEvent) => {
-    /* ⌃F before the typing guard, because the whole point of it is to reach the
-       box from wherever you are — including from inside it, where it selects
-       what is already there rather than doing nothing. */
+    /* ⌃F opens the app's own find bar, seeded with whatever is already being
+       searched — the board no longer has a field of its own, and the bar is
+       driving this search either way (see the engine above). */
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
       e.preventDefault();
-      findRef.current?.focus();
-      findRef.current?.select();
+      openFind(find);
       return;
     }
     // Never while somebody is typing in the filter above.
@@ -274,6 +484,12 @@ export function TriageBoard({
     const k = e.key;
     if (k >= "1" && k <= String(cols.length)) {
       const i = Number(k) - 1;
+      const id = cols[i]?.id;
+      /* The digit of a folded lane UNFOLDS it rather than doing nothing. The
+         alternative is a number printed in the legend that answers to nobody,
+         which is the bug the focus fix above exists for — twice in one row
+         would be careless. */
+      if (id && isFolded(id)) { e.preventDefault(); toggleFold(id, lanes.get(id)?.length ?? 0); setCur({ lane: i, row: 0 }); return; }
       if (shown(i).length) { e.preventDefault(); setCur({ lane: i, row: 0 }); }
       return;
     }
@@ -352,23 +568,71 @@ export function TriageBoard({
           */}
         {!waiting && involved > 0 && (
           <div className="shrink-0 flex items-center gap-1.5">
-            <input
-              ref={findRef}
-              value={find}
-              onChange={(e) => setFind(e.target.value)}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Escape") { setFind(""); (e.target as HTMLInputElement).blur(); }
-              }}
-              placeholder="Find in these  ⌃F"
-              spellCheck={false}
-              className="text-[11px] px-2 py-1 rounded-md outline-none"
-              style={{ width: 190, background: "var(--bg2)", color: "var(--text)",
-                border: `1px solid ${find ? "var(--primary)" : "color-mix(in srgb, var(--text) 16%, transparent)"}` }} />
-            {find && (
-              <span className="text-[10.5px] tabular-nums whitespace-nowrap"
+            {/*
+              * "Which of these is somebody waiting on me in", as one press.
+              *
+              * Here rather than up with the lane counts, and that is deliberate:
+              * those state the shape of the board and are not buttons (see the
+              * comment on them). This narrows it — the same job as the box beside
+              * it, and the same honest version of narrowing, which is to light
+              * the answers and quieten the rest rather than to take cards out of
+              * lanes whose counts are printed above them.
+              *
+              * Only when there is something to press it about, or when it is
+              * already on — a toggle that vanishes while engaged is a board
+              * stuck in a state with nothing on screen to leave it.
+              */}
+            {(unreadCount > 0 || onlyUnread) && (
+              <button onClick={() => setOnlyUnread((v) => !v)}
+                aria-pressed={onlyUnread}
+                title={onlyUnread
+                  ? "Show every card again"
+                  : `Light only the ${unreadCount} with something said since you last looked`}
+                className="agx-btn inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10.5px] tabular-nums"
+                style={{
+                  color: unreadCount ? "var(--warning)" : "var(--text3)",
+                  border: `1px solid color-mix(in srgb, ${onlyUnread ? "var(--warning) 70%" : unreadCount ? "var(--warning) 40%" : "var(--text) 16%"}, transparent)`,
+                  background: onlyUnread ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
+                }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+                </svg>
+                {unreadCount} unread
+              </button>
+            )}
+            {/*
+              * No box of its own any more.
+              *
+              * There were two on this screen doing the same job — the app's find
+              * bar in the corner and one here — and now that ⌃F drives THIS
+              * search (see the engine above), a second field is a second place
+              * to type the same thing. What is left is the count, because it
+              * says something the bar cannot: how many of the cards in front of
+              * you answer, out of how many there are. The unread toggle beside
+              * it lights cards the same way and needs the same line.
+              */}
+            {!find && !onlyUnread && onlyLane === null && (
+              <button onClick={() => openFind()}
+                title="Find in these cards — number, title, author, branch, labels, assignees, reviewers"
+                className="agx-btn inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10.5px]"
+                style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+                <span aria-hidden>⌕</span>Find in these<span style={{ color: "var(--text4)" }}>⌃F</span>
+              </button>
+            )}
+            {(find || onlyUnread || onlyLane !== null) && (
+              <span className="text-[10.5px] tabular-nums whitespace-nowrap flex items-center gap-1.5"
                 style={{ color: hits ? "var(--primary)" : "var(--warning)" }}>
+                {find && <span className="font-medium">{find}</span>}
                 {hits} of {involved}
+                {/* One way out of every way in. A lane lit from the row above
+                    is left by pressing that chip again, but the board should not
+                    require you to remember which one you pressed. */}
+                {(find || onlyLane !== null) && (
+                  <button onClick={() => { setFind(""); closeFind(); setOnlyLane(null); }}
+                    title={find ? "Clear the search (Esc)" : "Show every lane again"}
+                    className="agx-btn rounded px-1" style={{ color: "var(--text3)" }}>×</button>
+                )}
               </span>
             )}
           </div>
@@ -389,19 +653,30 @@ export function TriageBoard({
         <div className="shrink-0 flex flex-wrap gap-1 px-4 pb-1.5">
           {cols.map((l) => {
             const n = lanes.get(l.id)?.length ?? 0;
+            const on = onlyLane === l.id;
+            /* An empty lane has nothing to light, so it stays a plain chip:
+               pressing it would put the board in a state where every card is
+               quiet and the way out is the chip you just pressed. */
+            const Tag = n ? "button" : "span";
             return (
-              <span key={l.id} data-seg={l.id}
-                className="inline-flex items-baseline gap-1.5 rounded px-2 py-0.5 text-[10.5px]"
+              <Tag key={l.id} data-seg={l.id}
+                {...(n ? {
+                  onClick: () => setOnlyLane((v) => (v === l.id ? null : l.id)),
+                  "aria-pressed": on,
+                  title: on ? "Show every lane again" : `Light the ${n} in ${l.label.toLowerCase()}, quieten the rest`,
+                } : {})}
+                className={`inline-flex items-baseline gap-1.5 rounded px-2 py-0.5 text-[10.5px]${n ? " agx-btn" : ""}`}
                 style={{
                   color: l.tint,
-                  border: `1px solid color-mix(in srgb, ${l.tint} 45%, transparent)`,
+                  border: `1px solid color-mix(in srgb, ${l.tint} ${on ? "80%" : "45%"}, transparent)`,
+                  background: on ? `color-mix(in srgb, ${l.tint} 16%, transparent)` : "transparent",
                   // An empty lane is still worth a segment — "none asked of you"
                   // is an answer — but it should not compete with a lane of six.
                   opacity: n ? 1 : 0.5,
                 }}>
                 <b className="tabular-nums font-semibold">{n}</b>
-                <span style={{ color: "var(--text3)" }}>{l.label.toLowerCase()}</span>
-              </span>
+                <span style={{ color: on ? l.tint : "var(--text3)" }}>{l.label.toLowerCase()}</span>
+              </Tag>
             );
           })}
           <span className="inline-flex items-baseline rounded px-2 py-0.5 text-[10.5px] tabular-nums"
@@ -449,7 +724,13 @@ export function TriageBoard({
             </div>
           </div>
         ) : (
-          <div className="grid gap-2.5 h-full" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(268px, 1fr))` }}>
+          <div className="grid gap-2.5 h-full" style={{
+            /* A folded lane is a fixed 44px; the rest share what is left. 268
+               stays the floor for the open ones — it is what a card needs
+               before its title starts wrapping, measured at 120px of title box
+               where a 33-character subject already runs to three lines. */
+            gridTemplateColumns: cols.map((l) => (isFolded(l.id) ? "44px" : "minmax(268px, 1fr)")).join(" "),
+          }}>
             {cols.map((l, i) => {
               const all = lanes.get(l.id) ?? [];
               const opened = !!openLanes[l.id];
@@ -463,7 +744,38 @@ export function TriageBoard({
                    from outside — it is the thing that scrolls, so it is the
                    thing a probe has to be able to point at. */
                 <div key={l.id} data-lane={l.id} className="min-w-0 min-h-0 flex flex-col rounded-sm"
-                  style={{ borderTop: `2px solid ${l.tint}` }}>
+                  style={{ borderTop: `2px solid ${l.tint}`, transition: "width 120ms ease" }}>
+                  {isFolded(l.id) ? (
+                    /*
+                     * FOLDED, AND STILL SAYING WHAT IT HOLDS.
+                     *
+                     * The count comes first and stays upright, because it is
+                     * the thing being kept: every fold in this app that hides
+                     * something countable keeps its number on the folded
+                     * header — the browser's spaces, Docker's stacks, the
+                     * diff's files. One of them puts it as law: "the count is
+                     * the whole point of a folded row".
+                     *
+                     * The name is vertical rather than truncated, copied from
+                     * the tasks rail, whose own note is the argument: folded,
+                     * it was "34 pixels of nothing but the button that unfolds
+                     * it — asked about as 'is it normal that nothing shows'. A
+                     * column that is empty when closed teaches people it holds
+                     * nothing."
+                     */
+                    <button onClick={() => toggleFold(l.id, all.length)}
+                      aria-expanded={false}
+                      title={`${all.length} ${l.label} — unfold`}
+                      className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 pt-2 pb-3 overflow-hidden agx-hover"
+                      style={{ color: l.tint }}>
+                      <span className="text-[13px] tabular-nums shrink-0">{waiting ? "—" : all.length}</span>
+                      <span className="truncate" style={{
+                        writingMode: "vertical-rl", transform: "rotate(180deg)",
+                        fontSize: 10.5, letterSpacing: "0.06em", maxHeight: "100%",
+                        textTransform: "uppercase",
+                      }}>{l.label}</span>
+                    </button>
+                  ) : (<>
                   <div className="shrink-0">
                     {/*
                       * One line, always — and that is what the ⓘ is for.
@@ -483,17 +795,65 @@ export function TriageBoard({
                     <h3 className="flex items-center gap-2 m-0 pt-2 pb-2 px-0.5 text-[11px] font-semibold" style={{ color: l.tint }}>
                       <span className="text-[13px] tabular-nums">{waiting ? "—" : all.length}</span>
                       <span className="uppercase tracking-wide truncate">{l.label}</span>
+                      {/*
+                        * A DRAWN ⓘ, not the character.
+                        *
+                        * `ⓘ` at `fontSize: 14` paints about eight pixels of
+                        * actual mark — a glyph fills roughly 60% of the size it
+                        * is set at — so it sat beside a 12px stroked chevron in
+                        * an identical 20×20 box and read as a third the size.
+                        * Two adjacent controls in the same box at different
+                        * sizes is exactly what "some icons are very big, others
+                        * very small" named on the card's own header, fixed
+                        * there and left standing here.
+                        *
+                        * Same fix as the card's: a real icon at a size off the
+                        * app's ladder, matching its neighbour.
+                        */}
                       <span title={l.why} aria-label={l.why} role="note"
                         className="shrink-0 grid place-items-center rounded-full cursor-help"
-                        style={{ width: 20, height: 20, fontSize: 14, color: "var(--text4)" }}>ⓘ</span>
+                        style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text4)" }}>
+                        <InfoIcon size={ICON.xs} />
+                      </span>
                       <span className="ml-auto text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: edge(16) }}>{i + 1}</span>
+                      {/*
+                        * The fold lives HERE and not on the counts row above.
+                        *
+                        * That row is one chip per lane already and would have
+                        * been the obvious place — but a test forbids a button
+                        * in it, and the comment behind that test says why: "a
+                        * row of buttons up here would read as filters that
+                        * shrink the board". The heading is where the count
+                        * already is, and where the ⓘ already sits at the size
+                        * this app's own floor asks for.
+                        *
+                        * The lane the board exists for cannot be folded WHILE
+                        * IT HOLDS SOMETHING, and then it draws no control
+                        * rather than a dead one. At zero it folds like any
+                        * other: an empty lane is asking nothing, and it was
+                        * still taking 268px of a board that does not fit five
+                        * columns — "no puedo plegar la primera columna", said
+                        * under a heading reading `0 NEEDS YOUR REVIEW`.
+                        */}
+                      {foldable(l.id, all.length) && (
+                        <button onClick={() => toggleFold(l.id, all.length)}
+                          aria-expanded
+                          title={`Fold ${l.label} — its ${all.length} stay counted`}
+                          className="shrink-0 grid place-items-center rounded agx-hover"
+                          style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text4)" }}>
+                          <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
+                            strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden focusable="false">
+                            <path d="M10 3.5 5.5 8l4.5 4.5" />
+                          </svg>
+                        </button>
+                      )}
                     </h3>
                   </div>
 
                   {/* `pb-2`: the last thing in a lane sat flush against the
                       bottom edge of the column, and a bordered button there
-                      reads as clipped — "el botón Show fewer está como
-                      comido". Cards had `mb-2` between them and nothing after
+                      reads as clipped — "the Show fewer button looks sort of
+                      eaten away". Cards had `mb-2` between them and nothing after
                       the final one. */}
                   <div className="flex-1 min-h-0 overflow-y-auto agx-scroll pb-2">
                     {waiting ? (
@@ -511,7 +871,9 @@ export function TriageBoard({
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider}
                             cursor={cur.lane === i && cur.row === r}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
-                            onAct={onAct} busy={busy} acting={acting} dim={!matches(p)} root={root} />
+                            onAct={onAct} busy={busy} acting={acting}
+                            dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
+                            unread={unread.get(p.number)} />
                         ))}
                         {/* Counted, and openable HERE. The cap is what keeps
                             the board a glance on a bad week; the rest of the
@@ -545,6 +907,7 @@ export function TriageBoard({
                       Its own scroller, so a long pin list cannot push the lane
                       above it out of reach. */}
                   {i === 0 && !waiting && <PinnedStrip list={pinnedList} onOpen={onOpen} />}
+                  </>)}
                 </div>
               );
             })}
@@ -592,8 +955,157 @@ export function TriageBoard({
   );
 }
 
-function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root }: {
+/**
+ * The header line a card leads with: what a person decided.
+ *
+ * Everything comes off `humanReview`, computed server-side from the reviews the
+ * list already fetches — see its note on PrSummary for why GitHub's own
+ * `reviewDecision` cannot be used (it counts the auto-review bot, so a pull
+ * request nobody had read reported APPROVED).
+ *
+ * `null` when nobody was asked and nobody looked: a header saying "nothing"
+ * steals weight from the ones that say something.
+ */
+/** Has nothing moved here in over a week? `updatedAt` is GitHub's own, which it
+ *  bumps for a push, a comment or a label — so this is "no activity of any
+ *  kind", not merely "no commits". */
+function stalledFor(updatedAt: string): boolean {
+  const at = Date.parse(updatedAt);
+  return Number.isFinite(at) && Date.now() - at > 7 * 86_400_000;
+}
+
+function cardVerdict(p: PrSummary): {
+  tint: string; glyph: string; line: string; aria: string; url?: string; skeleton?: boolean;
+} | null {
+  /* A draft is waiting on nobody, and said so nowhere — it was a label lost
+     among the others. */
+  if (p.isDraft) {
+    return { tint: "var(--text3)", glyph: "\u25CB", line: "Draft \u2014 nobody has been asked",
+      aria: "Draft, nobody has been asked to review" };
+  }
+  /*
+   * NORMALISED, not trusted.
+   *
+   * This shipped reading `v.who.slice(...)` straight off the wire, and the view
+   * died with "Cannot read properties of undefined (reading 'slice')" —
+   * `Pull requests stopped drawing`, the whole page gone, on his screen.
+   *
+   * `humanReview` had just changed from a bare string to an object, and a row
+   * can reach this render with the OLD shape: a page held open across an
+   * install, a cached list, a stream that started before the new server. A
+   * component that assumes the shape of something it received over a wire
+   * turns a version skew into a blank view — and this app already answers that
+   * question everywhere else by checking rather than assuming.
+   */
+  const raw: unknown = p.humanReview;
+  /*
+   * NOTHING YET IS NOT NOTHING.
+   *
+   * The list arrives in two passes: the rows first, then the review, the checks
+   * and the tracker card a moment later. Until the second lands, `humanReview`
+   * is simply absent — and this drew no header, which on a pull request that
+   * HAS been reviewed is indistinguishable from one that has not. "It often
+   * stays like that with no feedback that something is loading", and the honest answer
+   * is that the card was reporting an answer it did not have yet.
+   *
+   * `checksLoaded` is the flag the list already sets for exactly this, and the
+   * card never read it. A quiet line rather than a spinner: twenty of these
+   * blinking at once is worse than the silence it replaces.
+   */
+  /* `=== false`, not `!== true`: `undefined` means this row was never built in
+     two passes at all, and treating that as "still loading" leaves a skeleton
+     on screen for ever on any caller that fetches in one go. */
+  if (!raw && p.checksLoaded === false) {
+    return { tint: "var(--text4)", glyph: "·", line: "", skeleton: true,
+      aria: "Still reading who reviewed this" };
+  }
+  /*
+   * A HEADER EVEN WHEN NOBODY HAS LOOKED.
+   *
+   * This returned null, on the argument that a header saying "nothing" steals
+   * weight from the ones that say something. The argument was right about
+   * weight and wrong about the card: without it the row is visibly shorter than
+   * every other one in the lane, and a column of two shapes is a column you
+   * re-read. Both can be true at once — it is drawn, in the quietest colour
+   * there is, so it holds the shape without asking for attention.
+   *
+   * And it says the actual state rather than a placeholder: nobody has been
+   * asked. On a release branch that is the whole story.
+   */
+  if (!raw) {
+    return { tint: "var(--text4)", glyph: "○", line: "No review asked for yet",
+      aria: "Nobody has been asked to review this" };
+  }
+  const v = typeof raw === "string"
+    /* The old shape: a kind and nothing else. Drawn without a name, which is
+       what it always was, rather than not drawn at all. */
+    ? { kind: raw as "approved" | "changes" | "awaiting" | "commented", who: [] as string[] }
+    : raw as NonNullable<PrSummary["humanReview"]>;
+  const who = Array.isArray(v.who) ? v.who : [];
+  /* A shape this build does not know is "no verdict", not "no header": a
+     malformed field must not change what the card looks like. */
+  if (!v.kind) {
+    return { tint: "var(--text4)", glyph: "○", line: "No review asked for yet",
+      aria: "Nobody has been asked to review this" };
+  }
+
+  const names = who.slice(0, 2).join(" and ") + (who.length > 2 ? ` +${who.length - 2}` : "");
+  const also = v.others ? ` \u00B7 ${v.others} approval${v.others === 1 ? "" : "s"}` : "";
+
+  if (v.kind === "approved") {
+    /* STALE FIRST: an approval with commits on top of it is the dangerous
+       state — the row says green and the reviewer approved something else. */
+    if (v.stale) {
+      return {
+        tint: "var(--warning)", glyph: "\u21BB", url: v.url,
+        line: v.mine ? "You approved, but it has moved since" : names ? `Approved by ${names}, but it has moved since` : "Approved, but it has moved since",
+        aria: names ? `Approved by ${names}, but commits have landed since that review`
+          : "Approved, but commits have landed since that review",
+      };
+    }
+    return {
+      tint: "var(--success)", glyph: "\u2713", url: v.url,
+      line: (v.mine ? "You approved" : names ? `Approved by ${names}` : "Approved") + also,
+      aria: names ? `Approved by ${names}` : "Approved",
+    };
+  }
+  if (v.kind === "changes") {
+    /*
+     * STILL RED, because it still blocks the merge exactly as GitHub shows
+     * it \u2014 a re-request does not withdraw the standing review. What was
+     * missing is the other half of GitHub's own screen: the small \u21bb beside
+     * their name that says a follow-up round has already been asked for.
+     * Without it, applying the review and re-requesting left this line
+     * reading exactly as it had before either happened.
+     */
+    const line = v.askedAgain && v.mine ? "You were asked to look again"
+      : v.mine ? "You asked for changes"
+        : (names ? `Changes requested by ${names}` : "Changes requested") + (v.askedAgain ? " \u2014 asked to look again" : "");
+    return {
+      tint: "var(--error)", glyph: "\u2715", url: v.url,
+      line: line + also,
+      aria: (names ? `Changes requested by ${names}` : "Changes requested") + (v.askedAgain ? ", and asked to look again since" : ""),
+    };
+  }
+  if (v.kind === "awaiting") {
+    /* Your own column is the one place this card is about YOU. */
+    return {
+      tint: "var(--warning)", glyph: "\u25EF",
+      line: v.mine ? "Waiting on you" : names ? `Waiting on ${names}` : "Awaiting review",
+      aria: v.mine ? "Waiting on you to review" : names ? `Waiting on ${names} to review` : "Awaiting review",
+    };
+  }
+  return {
+    tint: "var(--text3)", glyph: "\uD83D\uDCAC", url: v.url,
+    line: names ? `${names} commented, no verdict` : "Commented, no verdict",
+    aria: names ? `${names} commented without giving a verdict` : "Commented without a verdict",
+  };
+}
+
+function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
   p: Card; hasTaskProvider: boolean; pinned: boolean; cursor?: boolean;
+  /** Unread remarks on this one, or null. See prUnread.ts. */
+  unread?: Unread | null;
   /** The pull request whose action is running, so only its card spins. */
   acting?: number | null;
   /**
@@ -643,6 +1155,35 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
    * track rather than a full one.
    */
   const done = c.total > 0 ? Math.round(((c.total - c.pending) / c.total) * 100) : 0;
+  const verdict = cardVerdict(p);
+  /*
+   * THE CARDS THE BOARDS DO NOT HOLD, asked for one at a time.
+   *
+   * `p.card` comes free from the saved boards already on disk, and covers most
+   * of them — measured on his: nineteen of twenty-four. The other five drew no
+   * line at all, which reads as "this pull request has no card" when the truth
+   * is "no board we have cached is holding it".
+   *
+   * `prCardStore` is the answer the sidebar has used all along: keyed by card
+   * reference so two pull requests on one card cost one lookup, two in flight
+   * at a time, a minute of cache. Five stragglers, not four hundred rows —
+   * which is the request-per-row cost the free path exists to avoid.
+   */
+  const askedCard = useSyncExternalStore(onCard, () => (task && !p.card ? cardOf(task.query) : null),
+    () => null);
+  const shown: PrSummary["card"] = p.card ?? (askedCard?.task ? {
+    id: askedCard.task.id,
+    customId: askedCard.task.customId,
+    title: askedCard.task.title,
+    url: askedCard.task.url,
+    status: askedCard.task.status,
+    statusColor: askedCard.task.statusColor,
+    statusKind: askedCard.task.statusKind,
+    priority: askedCard.task.priority,
+    people: askedCard.task.people?.slice(0, 3),
+    /* Read just now, by definition: this path IS the fresh read. */
+    at: askedCard.at,
+  } : undefined);
   return (
     /* `data-pr` because a card is the unit anything outside this file counts —
        a test asking how many landed in a lane, a probe asking which column it
@@ -650,7 +1191,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
        addressable without reading the design. */
     <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number} data-cur={cursor ? "1" : undefined}
       data-dim={dim ? "1" : undefined}
-      className="rounded-lg p-2 mb-2 cursor-pointer agx-btn"
+      className="rounded-lg mb-2 cursor-pointer agx-btn overflow-hidden"
       style={{
         border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : edge(16),
         background: "var(--bg2)",
@@ -673,6 +1214,65 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
        * cards. It is 26px now, in the one place every card has in common, and
        * the whole square is the button rather than the star inside it.
        */}
+      {/*
+        * THE VERDICT IS THE FIRST LINE OF THE CARD.
+        *
+        * It used to be a word in the middle of a grey run of statistics — the
+        * branch name, the diff counts, the check total — and it is the only
+        * thing on this card a PERSON decided. Everything else a machine
+        * measured, and machines change their minds on a re-run.
+        *
+        * A band of its own colour with the name in it, chosen from three mocks:
+        * it is what the pull request's own Overview already does, so the board
+        * and the page say the same thing the same way.
+        *
+        * FIXED HEIGHT and truncating, because a column of cards is scanned down
+        * its left edge: a header that wrapped to two lines on a long login
+        * would start every card below it at a different place. Same reason the
+        * lane's own "why" was cut to one line.
+        */}
+      {verdict && (
+        <div className="flex items-center gap-1.5 px-2 shrink-0"
+          role="note" aria-label={verdict.aria}
+          style={{
+            height: 22, fontSize: 10.5,
+            background: `color-mix(in srgb, ${verdict.tint} 13%, transparent)`,
+            borderBottom: `1px solid color-mix(in srgb, ${verdict.tint} 30%, transparent)`,
+          }}>
+          {/* The glyph as well as the colour: the board's own rule for check
+              state, and the header is the first thing read. */}
+          <span aria-hidden style={{ color: verdict.tint }}>{verdict.glyph}</span>
+          {verdict.skeleton ? (
+            /* A bar the width a verdict tends to be, so the header keeps its
+               height and the card does not jump when the real one lands. */
+            <span aria-hidden className="rounded"
+              style={{ width: 130, height: 8, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
+          ) : (
+            <span className="truncate" style={{ color: "var(--text)", fontWeight: 500 }}>
+              {verdict.line}
+            </span>
+          )}
+          {/* Open line threads: the number that says whether a "changes
+              requested" is one nit or twelve, and whether an approval still
+              has something under it. Only when there are any. */}
+          {(p.openThreads?.open ?? 0) > 0 && (
+            <span className="shrink-0 inline-flex items-center rounded-full px-1.5 tabular-nums"
+              title={`${p.openThreads!.open}${p.openThreads!.more ? "+" : ""} review thread${p.openThreads!.open === 1 ? "" : "s"} still unresolved`}
+              style={{ fontSize: 9.5, lineHeight: "14px", color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              {p.openThreads!.open}{p.openThreads!.more ? "+" : ""} open
+            </span>
+          )}
+          {/* A press lands on the review comment itself rather than on the
+              conversation and a hunt through forty of them. */}
+          {verdict.url && (
+            <button className="agx-btn ml-auto shrink-0 px-1 rounded"
+              style={{ color: "var(--text3)", fontSize: 10 }}
+              title="Open the review itself on GitHub"
+              onClick={(e) => { e.stopPropagation(); window.open(verdict.url, "_blank", "noopener"); }}>↗</button>
+          )}
+        </div>
+      )}
+      <div className="p-2">
       <div className="flex gap-1.5 items-start text-[11.5px]" style={{ color: "var(--text)" }}>
         {/*
           * The number, and pressing it copies it.
@@ -697,8 +1297,28 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
             background: "color-mix(in srgb, var(--border) 14%, transparent)",
           }}>
           #{p.number}
-          <span aria-hidden style={{ fontSize: 9, opacity: 0.7 }}>{copied === p.number ? "✓" : "⧉"}</span>
+          {/*
+            * ONE SHAPE, ONE SIZE, IN BOTH STATES.
+            *
+            * This was `⧉` at `fontSize: 9` swapped for `✓` at the same size —
+            * the smallest ink in the app, and beside a 14px vector two lines
+            * below it in the same row. A character paints about 60% of what its
+            * size promises, so nine landed near five against fourteen: written
+            * as a 1.56× difference, seen as about 2.5×. That pair is what
+            * "some very big, others very small" was pointing at.
+            *
+            * Swapping one glyph for a different one also moved the row, because
+            * two characters are not the same width. A vector of a fixed size is
+            * not.
+            */}
+          {copied === p.number
+            ? <DoneIcon size={ICON.xs} />
+            : <CopyIcon size={ICON.xs} />}
         </button>
+        {/* Beside the number, before the title. The title is what a card IS and
+            this is what it WANTS — and a badge filed after the sentence, down
+            among the labels, is one you find rather than one you see. */}
+        {unread && <UnreadBadge u={unread} />}
         {/* Two lines, then an ellipsis. A four-line title used to push the
             state, the sentence and the button down by two rows, so a lane of
             long titles was a lane you had to scroll — and the cards stopped
@@ -720,10 +1340,12 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           style={{ width: 26, height: 26, lineHeight: 1,
             color: copiedLink ? "var(--success)" : "var(--text3)",
             border: "1px solid transparent", background: "transparent" }}>
+          {/* Was a 13px `✓` standing in for a 14px svg, so the card twitched at
+              the moment you copied — the one moment you are looking at it. */}
           {copiedLink ? (
-            <span style={{ fontSize: 13 }}>✓</span>
+            <DoneIcon size={ICON.sm} />
           ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden
+            <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" aria-hidden
               stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" />
               <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
@@ -735,11 +1357,15 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
           aria-pressed={pinned}
           className="agx-btn shrink-0 -mt-0.5 -mr-0.5 grid place-items-center rounded-md"
-          style={{ width: 26, height: 26, fontSize: 15, lineHeight: 1,
+          style={{ width: 26, height: 26, lineHeight: 1,
             color: pinned ? "var(--primary-hover)" : "var(--text3)",
             border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "1px solid transparent",
             background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-          {pinned ? "★" : "☆"}
+          {/* `★`/`☆` were two different characters at `fontSize: 15`, and they
+              are not the same width in every font — so the row shifted as it
+              toggled. One shape, filled or not, at the size of the link beside
+              it. */}
+          <StarIcon size={ICON.sm} filled={pinned} />
         </button>
       </div>
 
@@ -769,6 +1395,29 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {c.pending > 0 ? `${c.success} of ${c.total} in` : c.verdict === "red" ? `${c.failure} failing`
             : c.total === 0 ? "no checks" : "green"}
         </span>
+        {/*
+          * CONFLICTS, beside the checks.
+          *
+          * A green pull request that conflicts with its base reads as ready to
+          * merge, and it is not. The fact already travels on the summary —
+          * `mergeable` was put there because the board files a row by what it
+          * needs and "it conflicts" is a different need from "a check is red" —
+          * and then the card did not draw it.
+          *
+          * `CONFLICTING` only. `UNKNOWN` is GitHub still working it out, and a
+          * conflict warning that flashes on and off is worse than none.
+          */}
+        {p.mergeable === "CONFLICTING" && (
+          <span className="shrink-0 inline-flex items-center gap-1 rounded px-1"
+            style={{
+              color: "var(--error)",
+              background: "color-mix(in srgb, var(--error) 12%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
+            }}
+            title="Conflicts with the base branch — nothing else can move until they are resolved">
+            <span aria-hidden>⚠</span>conflicts
+          </span>
+        )}
         <span style={{ color: "var(--text4)" }}>→</span>
         {/* Where it lands, tinted when it is not the trunk — a stacked pull
             request read as a trunk one is a mistake you make once. */}
@@ -825,12 +1474,157 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         <span className="flex items-center gap-1 min-w-0 text-[9.5px] ml-1">
           {p.isCurrentBranch && <Tag tint="var(--primary)">here</Tag>}
           {p.isDraft && <Tag>draft</Tag>}
-          {task && <Tag tint="var(--accent, var(--primary))" title={taskLinkTitle(task)}>{task.label}</Tag>}
+          {/*
+            * THE CARD'S STATE, on the same line as its id.
+            *
+            * It had a line of its own, which at the real width of a lane —
+            * around 600px on his screen, not the 268px floor the layout was
+            * written for — left two thirds of that line empty while the card
+            * grew a row taller. "so it doesn't all end up cramped" is not about running
+            * out of room; it is about everything stacking downward when there
+            * is width going spare.
+            */}
+          {/*
+            * ONLY WHEN THE CARD HAS NO LINE OF ITS OWN.
+            *
+            * With both drawn the same id appeared twice on one card, four lines
+            * apart — "don't repeat the clickup card, leave only the new one". The line
+            * below is the better of the two: it carries the state and the
+            * assignee as well as the id.
+            *
+            * This one stays for the case the line cannot cover: a branch that
+            * names a card the saved boards have never seen. Then the id is all
+            * there is, and it is still worth showing.
+            */}
+          {task && !shown && (
+            <CardChip id={task.label} priority={null} title={taskLinkTitle(task)}
+              onOpen={() => openCard(task.query, task.label)} />
+          )}
           {p.labels.slice(0, 1).map((l) => <Tag key={l.name}>{l.name}</Tag>)}
           {p.labels.length > 1 && <span title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 1}</span>}
         </span>
 
       </div>
+
+
+      {/*
+        * THE CARD, ON A LINE OF ITS OWN.
+        *
+        * Asked for exactly here, twice — "maybe a new line on the PR card
+        * between these two", and then again: "between those two lines should go
+        * everything related to the card: ID, status, assignee, and direct
+        * access from a button". The first attempt put it in the tag row
+        * beside the labels, which is not what was asked and read as one more
+        * label.
+        *
+        * Its own row because it answers a different question. The rest of the
+        * card is about the PULL REQUEST — who reviewed it, whether it builds,
+        * where it lands. This is about the WORK: what state it is in, whose it
+        * is. Those two disagree often enough to be worth seeing together, and a
+        * card in `code review` under a pull request nobody has reviewed is the
+        * pair that starts a conversation.
+        *
+        * Drawn only when the saved boards already hold the card, which costs no
+        * request. Absent means "we have not seen it", not "it has no status".
+        */}
+      {/* Same reason as the header: absent and "not read yet" look identical,
+          and a row that quietly drops the tracker card while it loads teaches
+          you not to trust the line at all. */}
+      {!p.card && p.checksLoaded !== true && task && (
+        <div className="flex items-center gap-1.5 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
+          <span className="rounded" style={{ width: 74, height: CHIP_H, background: "color-mix(in srgb, var(--text) 8%, transparent)" }} />
+          <span>reading the card…</span>
+        </div>
+      )}
+      {/* Same reason: the tracker line is second-pass too, and a row that grows
+          one after you have started reading is a row you read twice. */}
+      {/*
+        * A LINE EVEN WITH NO CARD, so every card in a lane is the same shape.
+        *
+        * Cards without a tracker card were a row shorter than the ones with
+        * one, and a column of two heights is a column you re-read. "at least
+        * show something so the cards always have the same layout".
+        *
+        * What goes there is the honest answer to the question the line asks —
+        * "what work is this" — which for a release branch or a chore is "no
+        * card", not silence.
+        */}
+      {!shown && p.checksLoaded !== false && (
+        <div className="flex items-center gap-1.5 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
+          <span aria-hidden style={{ opacity: 0.5 }}>⚐</span>
+          <span>{task ? "card not found on your boards" : "no linked card"}</span>
+        </div>
+      )}
+      {!shown && p.checksLoaded === false && (
+        <div aria-hidden className="flex items-center gap-1.5 mt-1.5">
+          <span className="rounded" style={{ width: 96, height: CHIP_H, background: "color-mix(in srgb, var(--text) 8%, transparent)" }} />
+          <span className="rounded" style={{ width: 70, height: CHIP_H, background: "color-mix(in srgb, var(--text) 8%, transparent)" }} />
+        </div>
+      )}
+      {shown && (() => {
+        const who = shown.people ?? [];
+        /* A card marked done under a pull request still open: the amber dot,
+           with the reason in the tooltip. Not a warning colour on the status
+           itself — that colour is the board's own and means something else. */
+        const odd = shown.statusKind === "done" && p.state === "OPEN";
+        return (
+          <div className="flex items-center gap-1.5 mt-1.5 text-[10px] min-w-0"
+            style={{ color: "var(--text3)" }}>
+            {/* The id, with its priority flag — spaced, not welded to the
+                number, which is how it first shipped. */}
+            <CardChip id={shown.customId ?? shown.id} priority={shown.priority}
+              title={`Open ${shown.customId ?? shown.id} in Tasks — ${shown.status}${shown.priority ? `, ${shown.priority} priority` : ""}`}
+              onOpen={() => openCard(shown!.customId || shown!.id, shown!.customId)} />
+            {odd && (
+              <span aria-hidden className="shrink-0 rounded-full"
+                style={{ width: 5, height: 5, background: "var(--warning)" }}
+                title={`The card says "${shown.status}" while this pull request is still open`} />
+            )}
+            {(() => {
+              /*
+               * THE APP'S OWN STATUS CHIP, not a hand-rolled one.
+               *
+               * This drew the status as coloured uppercase text while the tasks
+               * view drew a bordered chip for the same value on the same
+               * workspace colour — two spellings of one thing, which is the
+               * drift this whole pass exists to stop. `StatusPill` is where
+               * that shape already lives.
+               *
+               * SAID WITH ITS AGE, because the board it came from is refreshed
+               * when somebody opens the tasks view, not on a timer. A cached
+               * reading said "in development, assigned to him" while the
+               * tracker had the card in "code review" on somebody else. Under
+               * an hour it reads as current; older, it dims and carries its age,
+               * so the screen never states as fact something it has not checked.
+               */
+              const age = shown.at ? Date.now() - shown.at : 0;
+              const stale = age > 60 * 60_000;
+              const said = !shown.at ? ""
+                : age < 60_000 ? "just now"
+                  : age < 60 * 60_000 ? `${Math.round(age / 60_000)}m ago`
+                    : `${Math.round(age / 3_600_000)}h ago`;
+              return (
+                <span className="shrink-0 inline-flex items-center gap-1"
+                  title={`The card was in "${shown.status}"${said ? ` when this board was read, ${said}` : ""}`}>
+                  <StatusPill status={shown.status} color={shown.statusColor} dim={stale} />
+                  {stale && <span style={{ color: "var(--text4)" }}>{said}</span>}
+                </span>
+              );
+            })()}
+            {who.length > 0 && (
+              <span className="flex items-center gap-1.5 min-w-0"
+                title={`Card assigned to ${who.map((x) => x.name).join(", ")}`}>
+                <span className="flex items-center shrink-0">
+                  {who.slice(0, 2).map((person, n) => (
+                    <CardFace key={person.id ?? person.name} p={person} n={n} size={14} />
+                  ))}
+                </span>
+                <span className="truncate" style={{ color: "var(--text4)" }}>{who[0]!.name}</span>
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* The sentence that put it in this lane. Without it a board is a list
           whose order you have to re-derive every morning. Two lines, like the
@@ -850,7 +1644,18 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
             rather than floating away from what it dates. */}
         <span className="ml-auto shrink-0 self-end tabular-nums" style={{ color: "var(--text4)" }}
           title={`Last activity on this pull request — ${new Date(p.updatedAt).toString()}`}>
-          {stamp(p.updatedAt)}
+          {/*
+            * AMBER WHEN IT HAS BEEN STILL FOR A WEEK.
+            *
+            * Ten cards saying "8d" read exactly like ten saying "1h", and the
+            * board's whole promise is that you can see what needs you without
+            * reading every row. A week is the point where "it is moving" stops
+            * being true.
+            */}
+          <span style={{ color: stalledFor(p.updatedAt) ? "var(--warning)" : undefined }}
+            title={stalledFor(p.updatedAt) ? "Nothing has moved here in over a week" : undefined}>
+            {stamp(p.updatedAt)}
+          </span>
         </span>
       </div>
 
@@ -903,6 +1708,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
               </span>
             ))}
         </span>
+      </div>
       </div>
     </div>
   );

@@ -7,7 +7,9 @@ import {
   BLANK, DEFAULT_HOME, ENGINE_KEY, HOME_KEY,
   homePage, homePageRaw, searchEngine, setHomePage, setSearchEngine,
   importHistory, setImportHistory, importBookmarks, setImportBookmarks, pickImportRows,
+  zoomPercent, stepZoom, ZOOM_PCT_MIN, ZOOM_PCT_MAX,
 } from "../src/lib/browserPrefs.ts";
+import { readFileSync } from "node:fs";
 
 // bun's test environment has no DOM; the module only ever touches these two.
 const store = new Map<string, string>();
@@ -105,5 +107,63 @@ describe("what rides along with a cookie import", () => {
     const rows = [H(), B()];
     expect(pickImportRows(rows, true, true)).toHaveLength(2);
     expect(pickImportRows(rows, false, false)).toHaveLength(0);
+  });
+});
+
+/*
+ * ZOOM MOVES IN TENS.
+ *
+ * Chromium's own ladder is geometric — every step multiplies by 1.2^0.5 — so it
+ * walks 100, 110, 120, 132, 145, 158, 173. Each step is the same proportion and
+ * no two are the same NUMBER, which is what makes it read as arbitrary from
+ * outside: "sometimes it goes up by five, sometimes by three. That has to be
+ * something consistent."
+ */
+describe("the zoom ladder", () => {
+  const pct = (l: number) => zoomPercent(l);
+  const walk = (from: number, dir: 1 | -1, n: number) => {
+    const out: number[] = []; let l = from;
+    for (let i = 0; i < n; i++) { l = stepZoom(l, dir); out.push(pct(l)); }
+    return out;
+  };
+
+  test("goes up in tens", () => {
+    expect(walk(0, 1, 8)).toEqual([110, 120, 130, 140, 150, 160, 170, 180]);
+  });
+
+  test("and down in tens", () => {
+    expect(walk(0, -1, 7)).toEqual([90, 80, 70, 60, 50, 40, 30]);
+  });
+
+  test("snaps an off-grid level onto the ten with the FIRST press", () => {
+    /* A level can arrive from anywhere — an old stored value from the geometric
+       ladder, a pinch, a session that predates this. Carrying its offset
+       forever would mean 107 → 117 → 127, which is the same complaint one step
+       removed. */
+    const at107 = Math.log(1.07) / Math.log(1.2);
+    expect(pct(stepZoom(at107, 1))).toBe(110);
+    expect(pct(stepZoom(at107, -1))).toBe(100);
+    const at158 = Math.log(1.58) / Math.log(1.2);
+    expect(pct(stepZoom(at158, 1))).toBe(160);
+    expect(pct(stepZoom(at158, -1))).toBe(150);
+  });
+
+  test("stops at the ends instead of walking off them", () => {
+    let l = 0;
+    for (let i = 0; i < 40; i++) l = stepZoom(l, -1);
+    expect(pct(l)).toBe(ZOOM_PCT_MIN);
+    l = 0;
+    for (let i = 0; i < 60; i++) l = stepZoom(l, 1);
+    expect(pct(l)).toBe(ZOOM_PCT_MAX);
+  });
+
+  test("the shell walks the same ladder — two copies that must not drift", () => {
+    /* The main process cannot import this module, so the arithmetic is
+       mirrored there. Both are a handful of lines; what must not happen is one
+       of them changing alone. */
+    const main = readFileSync(new URL("../../electron/main.js", import.meta.url), "utf8");
+    expect(main, "the shell still steps by a constant proportion").not.toContain("ZOOM_STEP");
+    expect(main).toContain("ZOOM_PCT_STEP = 10");
+    expect(main).toContain("stepZoom(");
   });
 });

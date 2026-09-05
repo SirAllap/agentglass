@@ -8,7 +8,7 @@
  * answer with the empty one for a few seconds.
  */
 import { describe, expect, it } from "bun:test";
-import type { PrSummary } from "../../shared/types.ts";
+import type { PrSummary, PrTalk } from "../../shared/types.ts";
 import { keepLoadedChecks } from "../src/lib/prMerge.ts";
 
 const green = { total: 3, success: 3, failure: 0, skipped: 0, pending: 0, allDone: true, verdict: "green", failing: [] };
@@ -35,6 +35,27 @@ describe("merging a list that has not finished loading", () => {
     // a worse lie than either half on its own.
     const [p] = keepLoadedChecks([loaded(1)], [fast(1)]);
     expect([p!.additions, p!.deletions, p!.changedFiles]).toEqual([12, 3, 4]);
+  });
+
+  // Reported from the app, with two screenshots: the conversation said "2 new"
+  // and the card beside it had no badge. The row had been patched from the
+  // previous answer for every field but this one, so it looked complete and knew
+  // nothing about what had been said on it.
+  it("keeps what has been said on it — the badge must not blink off", () => {
+    const talk: PrTalk[] = [{ at: "2026-08-14T16:18:15Z", who: "javidoe", kind: "review", state: "CHANGES_REQUESTED", says: true }];
+    const before = row(1, { checks: green, checksLoaded: true, talk });
+    const [p] = keepLoadedChecks([before], [fast(1)]);
+    expect(p!.talk).toEqual(talk);
+  });
+
+  // The other half of the same rule: an empty conversation is a real answer, and
+  // a row that arrives WITH its second pass saying "nobody has said anything"
+  // must not have yesterday's remarks put back on it.
+  it("does not resurrect remarks a complete answer has dropped", () => {
+    const stale: PrTalk[] = [{ at: "2026-08-14T16:18:15Z", who: "javidoe", kind: "comment" }];
+    const before = row(1, { checks: green, checksLoaded: true, talk: stale });
+    const [p] = keepLoadedChecks([before], [row(1, { checks: green, checksLoaded: true, talk: [] })]);
+    expect(p!.talk).toEqual([]);
   });
 
   it("takes a real answer over a remembered one", () => {

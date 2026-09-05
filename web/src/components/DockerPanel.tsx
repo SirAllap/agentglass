@@ -15,6 +15,17 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { Detail, type DetailSection } from "./docker/Detail.tsx";
+import { Volumes } from "./docker/Volumes.tsx";
+import { Disk } from "./docker/Disk.tsx";
+import { filterStacks, initiallyOpen, stackDots, stackLabel, toStacks, toWorktrees, type StackHealth } from "../lib/dockerStacks.ts";
+import { HAS_BROWSER } from "../lib/desktop.ts";
+import { openExternal } from "../lib/externalUrl.ts";
+import { requestBrowserNav } from "../lib/browserNav.ts";
+import {
+  firstReachable, freshnessLabel, freshnessNote, healthLabel, healthTint,
+  ownerTint, ownerTitle, portLabel, portUrl,
+} from "../lib/dockerRow.ts";
 
 // Strip ANSI CSI (colors, cursor moves, erases) + OSC sequences, not just SGR.
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g; // eslint-disable-line no-control-regex
@@ -24,7 +35,19 @@ const STATE_TINT: Record<string, string> = {
   running: "var(--success)", exited: "var(--text3)", paused: "var(--warning)",
   restarting: "var(--warning)", created: "var(--info)", dead: "var(--error)", removing: "var(--error)",
 };
-type View = "containers" | "images" | "volumes" | "networks";
+type View = "containers" | "images" | "volumes" | "networks" | "disk";
+
+/** The stack strip's colours. Amber for restarting or still starting up, grey
+ *  for stopped — a stopped stack is a normal thing to have. */
+const STACK_TINT: Record<StackHealth, string> = {
+  bad: "var(--error)", warn: "var(--warning)", off: "var(--text4)", ok: "var(--success)",
+};
+/** Which stacks you left collapsed. Per machine, not per project: the answer to
+ *  "do I care about acme-tools" does not change when you switch checkout. */
+const STACKS_OPEN_KEY = "agx.docker.stacksOpen";
+/** Stack or worktree. Remembered, because it is a way of thinking rather than
+ *  a thing you toggle while you work. */
+const GROUP_KEY = "agx.docker.groupBy";
 
 function Bar({ pct, tint }: { pct: number; tint: string }) {
   return (
@@ -34,38 +57,9 @@ function Bar({ pct, tint }: { pct: number; tint: string }) {
   );
 }
 
-/**
- * Container logs, coloured by what each line is.
- *
- * Monochrome output is a wall: the one ERROR you opened the panel for sits in
- * three hundred identical grey lines. This is a level pass, not a syntax
- * highlighter — the structure that matters in a log is severity and time, and
- * a tokeniser would spend far more to say less.
- *
- * Timestamps are dimmed rather than dropped: they are the one column you scan
- * by, and at full contrast they compete with the message they belong to.
- */
-const LEVEL_TINT: [RegExp, string][] = [
-  [/\b(ERROR|ERR|FATAL|CRITICAL|PANIC|Traceback|Exception)\b/, "var(--error)"],
-  [/\b(WARN|WARNING|DeprecationWarning|FutureWarning)\b/, "var(--warning)"],
-  [/\b(INFO|NOTICE)\b/, "var(--info)"],
-  [/\b(DEBUG|TRACE)\b/, "var(--text3)"],
-];
-// Leading ISO-ish stamp, which is what docker prepends with --timestamps.
-const STAMP = /^(\S*\d{4}-\d{2}-\d{2}[T ][\d:.]+Z?)\s?/;
-
-function LogLine({ line }: { line: string }) {
-  const m = STAMP.exec(line);
-  const stamp = m?.[1];
-  const rest = stamp ? line.slice(m![0].length) : line;
-  const tint = LEVEL_TINT.find(([re]) => re.test(rest))?.[1];
-  return (
-    <div style={tint ? { color: tint } : undefined}>
-      {stamp && <span style={{ color: "var(--text4)", opacity: 0.55 }}>{stamp} </span>}
-      {rest}
-    </div>
-  );
-}
+/* The log's own rendering — levels, timestamps, the search highlight — moved
+   to components/docker/LogView.tsx when the log stopped being a string this
+   panel polled and became a feed that view owns. */
 
 /** One container action. Sized and bordered like every other control in the
  *  app, so a row of them reads as a row of buttons. */
@@ -96,7 +90,11 @@ function DockerAction({ onClick, disabled, tint, title, children }: {
  * container you are watching.
  */
 function Stack({ id, label, n, open, active, onToggle, onActivate, children }: {
-  id: View; label: string; n: number; open: boolean; active: boolean;
+  id: View; label: string;
+  /** How many things are in there. Omitted where a count would be a lie: Disk
+   *  is one view, not a list of zero, and "DISK 0" reads as "nothing here". */
+  n?: number;
+  open: boolean; active: boolean;
   onToggle: (id: View) => void; onActivate: (id: View) => void; children: React.ReactNode;
 }) {
   return (
@@ -108,7 +106,7 @@ function Stack({ id, label, n, open, active, onToggle, onActivate, children }: {
         aria-expanded={open}>
         <span className="text-[10px] t-dim2 w-2 shrink-0">{open ? "▾" : "▸"}</span>
         <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{label}</span>
-        <span className="text-[10px] t-dim2 tabular-nums">{n}</span>
+        {n != null && <span className="text-[10px] t-dim2 tabular-nums">{n}</span>}
       </button>
       {open && children}
     </div>
@@ -127,15 +125,65 @@ function StackRow({ label, meta, dim, onClick }: { label: string; meta?: string;
   );
 }
 
-function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, onAction }: {
+/**
+ * How old the picture is.
+ *
+ * Its own component with its own clock on purpose: the label has to count up
+ * every second, and re-rendering the whole panel once a second to move one word
+ * would undo the care the poll takes. Here, a tick repaints eleven characters.
+ */
+function Freshness({ ov }: { ov: DockerOverview | null }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!ov?.at) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [ov?.at]);
+  if (!ov?.at) return null;
+  const note = freshnessNote(ov.freshness, ov.tookMs);
+  const worried = ov.freshness === "retrying" || ov.freshness === "down";
+  return (
+    <span className="text-[9.5px] shrink-0 tabular-nums"
+      title={note ?? `gathered ${freshnessLabel(ov.at)}${ov.tookMs ? ` in ${ov.tookMs}ms` : ""}`}
+      style={{ color: worried ? "var(--warning)" : "var(--text4)" }}>
+      {ov.freshness === "retrying" ? "retrying…" : freshnessLabel(ov.at)}
+    </span>
+  );
+}
+
+/** A small labelled chip, the shape the rest of the app uses for one. */
+function RowChip({ text, tint, title, onClick }: { text: string; tint: string; title?: string; onClick?: () => void }) {
+  return (
+    <span
+      title={title}
+      onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+      className={`text-[9.5px] leading-none px-1.5 py-0.5 rounded-md shrink-0 whitespace-nowrap ${onClick ? "cursor-pointer" : ""}`}
+      style={{
+        color: tint,
+        border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`,
+        background: `color-mix(in srgb, ${tint} 10%, transparent)`,
+      }}>
+      {text}
+    </span>
+  );
+}
+
+function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, onAction, onOpenPort }: {
   c: DockerContainer; stat?: DockerStat; active: boolean; writeEnabled: boolean; busy: boolean;
   dense: boolean;
   onSelect: () => void; onAction: (verb: "start" | "stop" | "restart" | "rm") => void;
+  /** Opening a port belongs to whoever owns the browser, not to a row. */
+  onOpenPort: (url: string) => void;
 }) {
   const running = c.state === "running";
-  // The first published port, which is the one you actually reach the service
-  // on. The full list is in the tooltip; the row is not a table.
-  const port = /(\d+)->/.exec(c.ports || "")?.[1];
+  // The port you can actually reach the service on, read from the parsed list.
+  // The raw string is the fallback for a format the server did not recognise —
+  // which is exactly what this row showed before there was a parser.
+  const port = firstReachable(c.portList);
+  const url = port ? portUrl(port) : null;
+  const legacyPort = /(\d+)->/.exec(c.ports || "")?.[1];
+  const health = healthLabel(c);
+  const tint = healthTint(c.health);
   return (
     <div onClick={onSelect} data-cid={active ? "active" : undefined}
       className={`group grid items-center gap-x-2 pl-2 pr-1.5 rounded-md cursor-pointer ${dense ? "py-0.5" : "py-1"}`}
@@ -146,16 +194,40 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
         gridTemplateColumns: "10px minmax(0,1fr) 46px 46px 52px 50px",
         background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
       }}
-      title={`${c.name}\n${c.image}\n${c.status}${c.ports ? `\n${c.ports}` : ""}`}>
+      title={[
+        c.name, c.image, c.status,
+        c.ports || "",
+        c.owner ? ownerTitle(c.owner) : "",
+        // The probe's own words. This is the line that says what to fix, and
+        // until now reading it meant a trip to `docker inspect`.
+        c.healthError ? `health: ${c.healthError}` : "",
+        c.restarts ? `restarted ${c.restarts}×` : "",
+      ].filter(Boolean).join("\n")}>
       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: STATE_TINT[c.state] ?? "var(--text3)" }} />
 
       <span className="min-w-0 flex flex-col leading-tight">
-        <span className="truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{c.service || c.name}</span>
+        <span className="min-w-0 flex items-center gap-1.5">
+          <span className="truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{c.service || c.name}</span>
+          {/* Only the states worth acting on get a chip. A healthy container
+              already says so with its green dot, and a second green thing on
+              the row would be the panel congratulating itself. */}
+          {health && c.health !== "healthy" && tint && <RowChip text={health} tint={tint} />}
+          {/* The one chip that is about YOU: this container is running fine,
+              it just came out of another checkout. */}
+          {c.owner?.foreign && <RowChip text={c.owner.worktree} tint={ownerTint(c.owner)} title={ownerTitle(c.owner)} />}
+        </span>
         {/* The image was competing with the name on one line and both lost.
             Underneath, dimmer, it reads as what it is — provenance, not
             identity. In dense mode it goes back to the tooltip, which is the
             trade: half the rows, one less thing per row. */}
-        {!dense && <span className="truncate text-[10px] t-dim2">{c.image}</span>}
+        {!dense && (
+          <span className="truncate text-[10px] t-dim2">
+            {c.image}
+            {/* A restart count is only news when it is not zero, and then it is
+                the most important thing on the row. */}
+            {c.restarts ? <span style={{ color: "var(--warning)" }}> · {c.restarts} restarts</span> : null}
+          </span>
+        )}
       </span>
 
       {/* Numbers, not two unlabelled bars. A bar with no scale and no figure
@@ -167,11 +239,23 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
         title={stat ? `memory ${stat.mem}% (${stat.memUsage})` : undefined}>
         {stat && running ? `${stat.mem.toFixed(0)}%` : ""}
       </span>
-      <span className="text-[10px] tabular-nums truncate" style={{ color: running ? "var(--info)" : "var(--text4)" }}>
-        {/* A stopped container has no numbers, and three blank columns read as
-            missing data rather than as "this is not running". */}
-        {running ? (port ? `:${port}` : "") : c.state}
-      </span>
+      {/* A stopped container has no numbers, and three blank columns read as
+          missing data rather than as "this is not running". A port you can open
+          is a button; one you cannot — a database, something only exposed — is
+          text, because a link that goes nowhere is worse than no link. */}
+      {running && url ? (
+        <button type="button"
+          onClick={(e) => { e.stopPropagation(); onOpenPort(url); }}
+          title={`Open ${url}${HAS_BROWSER ? " in the browser tab" : ""}`}
+          className="text-[10px] tabular-nums truncate text-left rounded px-1 -mx-1 min-h-[20px]"
+          style={{ color: "var(--info)" }}>
+          {portLabel(port!)} ↗
+        </button>
+      ) : (
+        <span className="text-[10px] tabular-nums truncate" style={{ color: running ? "var(--info)" : "var(--text4)" }}>
+          {running ? (port ? portLabel(port) : legacyPort ? `:${legacyPort}` : "") : c.state}
+        </span>
+      )}
 
       {/* Real buttons, not floating glyphs. Bare icons at 45% opacity read as
           decoration — they had no edge, no hit area you could see, and an
@@ -199,56 +283,19 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
  *  stays mounted while you're off in the diff, it just stops polling. */
 const CONSOLE_KEY = "agentglass.docker.console";
 
-type DetailTab = "logs" | "info" | "env" | "config" | "top";
-const DETAIL_TABS: DetailTab[] = ["logs", "info", "env", "config", "top"];
 
 const SECTIONS_KEY = "agentglass.docker.sections";
 // Containers open, the rest closed: with 40 images the column is unusable if
 // everything starts expanded, and the counts on the headers already answer the
 // question most of the time.
-const SECTIONS_DEFAULT: Record<View, boolean> = { containers: true, images: false, volumes: false, networks: false };
+const SECTIONS_DEFAULT: Record<View, boolean> = { containers: true, images: false, volumes: false, networks: false, disk: false };
 
 const DENSITY_KEY = "agentglass.docker.dense";
 
 
-/**
- * Env, config and top — the read-only tabs.
- *
- * Env is rendered as key/value rather than the raw `KEY=value` strings docker
- * hands back, because the value is the part you are looking for and it is
- * routinely a URL long enough to hide the name it belongs to.
- */
-function DetailPane({ tab, env, config, top, error }: {
-  tab: "env" | "config" | "top";
-  env: string[] | null; config: string | null; top: string | null; error: string | null;
-}) {
-  if (error) return <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{error}</div>;
-  const text = tab === "config" ? config : tab === "top" ? top : null;
-  if (tab !== "env" && text == null) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
-  if (tab === "env") {
-    if (!env) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
-    if (!env.length) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]">This container has no environment set</div>;
-    return (
-      <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4 text-[11px] flex flex-col gap-1" style={{ color: "var(--text2)" }}>
-        {env.map((line, i) => {
-          const eq = line.indexOf("=");
-          const k = eq === -1 ? line : line.slice(0, eq);
-          const v = eq === -1 ? "" : line.slice(eq + 1);
-          return (
-            <div key={i} className="flex gap-3 min-w-0">
-              <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)", minWidth: 180 }}>{k}</span>
-              <span className="min-w-0 break-all" style={{ color: "var(--text)" }}>{v}</span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-  return (
-    <pre className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre m-0"
-      style={{ ...CODE_FONT_STYLE, background: "var(--bg)", color: "var(--text2)" }}>{text}</pre>
-  );
-}
+/* Env, inspect and processes moved to components/docker/Detail.tsx when the
+   detail stopped being a tab row. They are sections under the log now, and the
+   facts that used to hide behind "Info" are the header. */
 
 /**
  * The binary-missing empty state: install guidance, not the daemon message.
@@ -279,12 +326,21 @@ function DockerMissing({ reason }: { reason?: string }) {
   );
 }
 
-export function DockerView({ active }: { active: boolean }) {
+export function DockerView({ active, onOpenBrowser }: {
+  active: boolean;
+  /** Bring the browser view forward. Absent on the phone and in the web build,
+   *  where a port opens in the real browser instead — see openPort below. */
+  onOpenBrowser?: () => void;
+}) {
   // A shell docked under the logs, for the `make migrate` you always end up
   // needing while watching a container. Its height is remembered and it is
   // keyed on the repo, not on the container, so selecting a different one
   // above never disturbs what is running below.
-  const sidebarW = useSidebarWidth();
+  /* 340, because a container row is a grid and not a list: dot, name, project
+     chip, CPU, MEM, port and two buttons. Measured by dragging the handle
+     down — below this the chip and the percentage print on top of each other.
+     The handle still works; it just cannot make this column unreadable. */
+  const sidebarW = useSidebarWidth(340);
   const { ask, dialog } = useDialogs();
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleH, setConsoleH] = useState<number>(() => {
@@ -316,7 +372,13 @@ export function DockerView({ active }: { active: boolean }) {
   const [dense, setDense] = useState<boolean>(() => { try { return localStorage.getItem(DENSITY_KEY) === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem(DENSITY_KEY, dense ? "1" : "0"); } catch { /* non-fatal */ } }, [dense]);
   const [selId, setSelId] = useState<string | null>(null);
-  const [tab, setTab] = useState<DetailTab>("logs");
+  /* Which of the read-only sections under the log are open. They replace the
+     tab row: the facts that used to hide behind "Info" are the header now, and
+     env / inspect / processes open UNDER the log rather than instead of it —
+     what you want while reading `docker inspect` is usually the log line that
+     made you open it. */
+  const [sections, setSections] = useState<Record<DetailSection, boolean>>({ env: false, config: false, top: false, compare: false });
+  const toggleDetail = useCallback((id: DetailSection) => setSections((cur) => ({ ...cur, [id]: !cur[id] })), []);
   // Fetched per tab rather than all at once: `top` shells out to the container
   // and `inspect` returns a few hundred KB of JSON, and paying for both every
   // time someone clicks a container to read its logs is the wrong trade.
@@ -324,11 +386,9 @@ export function DockerView({ active }: { active: boolean }) {
   const [config, setConfig] = useState<string | null>(null);
   const [top, setTop] = useState<string | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
-  const [logs, setLogs] = useState("");
   const [tail, setTail] = useState(400);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
-  const logRef = useRef<HTMLPreElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   /**
    * Closing the console hands the keyboard back to the panel.
@@ -342,8 +402,6 @@ export function DockerView({ active }: { active: boolean }) {
     setConsoleOpen(false);
     requestAnimationFrame(() => frameRef.current?.focus());
   }, []);
-  const logSeq = useRef(0);          // guards stale log responses
-  const stuckBottom = useRef(true);  // only auto-scroll when the user is at the bottom
 
   const flash = (ok: boolean, msg: string) => { setToast({ ok, msg }); setTimeout(() => setToast(null), 2600); };
 
@@ -358,11 +416,6 @@ export function DockerView({ active }: { active: boolean }) {
   const loadStats = useCallback(async () => {
     try { const { stats } = await api.dockerStats(); const m: Record<string, DockerStat> = {}; for (const s of stats) m[s.id] = s; setStats(m); }
     catch { /* stats are best-effort */ }
-  }, []);
-  const loadLogs = useCallback(async (id: string, n: number) => {
-    const seq = ++logSeq.current; // drop a slow response if the container changed
-    try { const r = await api.dockerLogs(id, n); if (seq !== logSeq.current) return; setLogs(r.ok ? stripAnsi(r.text) : (r.error || "No logs")); }
-    catch (e) { if (seq === logSeq.current) setLogs(String(e)); }
   }, []);
 
   // visible → load overview (cheap), then poll every 5s. Gated on `active`
@@ -394,18 +447,10 @@ export function DockerView({ active }: { active: boolean }) {
     return () => clearInterval(t);
   }, [active, view, loadStats]);
 
-  // logs: poll every 3s while a container's log tab is visible. Keyed by id
-  // (not the container object) so the 5s overview refresh doesn't restart it.
-  useEffect(() => {
-    const id = selected?.id;
-    if (!active || view !== "containers" || tab !== "logs" || !id) return;
-    loadLogs(id, tail);
-    const t = setInterval(() => loadLogs(id, tail), 3000);
-    return () => clearInterval(t);
-  }, [active, view, tab, selected?.id, tail, loadLogs]);
-
-  // keep the log view pinned to the bottom.
-  useEffect(() => { const el = logRef.current; if (el && stuckBottom.current) el.scrollTop = el.scrollHeight; }, [logs]);
+  /* The log used to be polled here every three seconds and repainted whole.
+     It is followed now — LogView owns the stream, the cap, the pause and the
+     scroll — which is why neither the timer nor the buffer live in this file
+     any more. */
 
   // Cleared on selection change so a tab never shows the previous container's
   // environment for the moment before the new one arrives — with two similar
@@ -418,18 +463,22 @@ export function DockerView({ active }: { active: boolean }) {
   // requested for it because no id had been clicked — and, once a selection
   // vanished from the list, fetched one container's env under another's name.
   useEffect(() => { setEnv(null); setConfig(null); setTop(null); setDetailErr(null); }, [selected?.id]);
+  // Fetched when a section is opened, not when a container is selected: `top`
+  // shells out to the container and `inspect` returns a few hundred KB of JSON,
+  // and paying for both every time somebody clicks a row to read its log is the
+  // wrong trade. A closed section costs nothing.
   useEffect(() => {
     const id = selected?.id;
     if (!id) return;
     let live = true;
-    if (tab === "env" || tab === "config") {
-      if (env && config) return;
+    if ((sections.env || sections.config) && !(env && config)) {
       void api.dockerInspect(id).then((r) => {
         if (!live) return;
         if (!r.ok) { setDetailErr(r.error || "docker inspect failed"); return; }
         setEnv(r.env); setConfig(r.config); setDetailErr(null);
       });
-    } else if (tab === "top") {
+    }
+    if (sections.top && top == null) {
       void api.dockerTop(id).then((r) => {
         if (!live) return;
         if (!r.ok) { setDetailErr(r.error || "Not running"); setTop(null); return; }
@@ -437,7 +486,7 @@ export function DockerView({ active }: { active: boolean }) {
       });
     }
     return () => { live = false; };
-  }, [selected?.id, tab, env, config]);
+  }, [selected?.id, sections.env, sections.config, sections.top, env, config, top]);
 
   /**
    * The same verb across a whole compose project.
@@ -470,6 +519,20 @@ export function DockerView({ active }: { active: boolean }) {
     } finally { setBusy(false); }
   };
 
+  /**
+   * Open a container's port.
+   *
+   * In the desktop app it goes to the browser view — a dev server you started
+   * from this app, in a tab of this app, next to the log that is printing its
+   * requests. Everywhere else (the phone, the plain web build) there is no such
+   * tab, and the real browser is the honest answer rather than a dead button.
+   * The same shape the ports panel already uses.
+   */
+  const openPort = useCallback((url: string) => {
+    if (HAS_BROWSER && onOpenBrowser) { requestBrowserNav(url); onOpenBrowser(); return; }
+    openExternal(url);
+  }, [onOpenBrowser]);
+
   const doAction = async (id: string, verb: "start" | "stop" | "restart" | "rm") => {
     if (busy) return;
     if ((verb === "rm" || verb === "stop") && !(await ask({ title: `${verb} this container?`, danger: verb === "rm", confirmLabel: verb }))) return;
@@ -483,20 +546,55 @@ export function DockerView({ active }: { active: boolean }) {
     finally { setBusy(false); }
   };
 
-  // group containers by compose project
-  const groups = useMemo(() => {
-    const m = new Map<string, DockerContainer[]>();
-    for (const c of containers) { const k = c.project || "(standalone)"; (m.get(k) ?? m.set(k, []).get(k)!).push(c); }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [containers]);
-  // visible (grouped) order — so j/k matches what's on screen, not `docker ps` order
-  const ordered = useMemo(() => groups.flatMap(([, cs]) => cs), [groups]);
+  /* Containers as stacks: counts, worst state, owner, and broken ones first.
+     The rules live in lib/dockerStacks.ts because they are opinions worth
+     pinning — a container docker is restarting in a loop reads as "up" in every
+     flat list built from `docker ps`, and that is the one you want caught. */
+  /* Grouped by stack, or pivoted onto the checkouts they came from. The pivot
+     is the question a machine with twenty-five worktrees actually raises: not
+     "what stacks exist" but "what is running out of each of mine". */
+  const [groupBy, setGroupBy] = useState<"stack" | "worktree">(() => {
+    try { return localStorage.getItem(GROUP_KEY) === "worktree" ? "worktree" : "stack"; } catch { return "stack"; }
+  });
+  const [q, setQ] = useState("");
+  const stacks = useMemo(
+    () => filterStacks(groupBy === "worktree" ? toWorktrees(containers) : toStacks(containers), q),
+    [containers, groupBy, q],
+  );
+  const [openStacks, setOpenStacks] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem(STACKS_OPEN_KEY) || "{}") as Record<string, boolean>; }
+    catch { return {}; }
+  });
+  /* A stack that has just broken opens itself, whatever you left it as: the
+     reason to collapse one is that it is fine and you want the room. Applied on
+     the stack SET changing rather than on every poll, so it cannot fight you
+     while you are collapsing things. */
+  const stackKey = stacks.map((s) => `${s.project}:${s.worst}`).join("|");
+  useEffect(() => {
+    setOpenStacks((cur) => {
+      const next = initiallyOpen(stacks, cur);
+      return JSON.stringify(next) === JSON.stringify(cur) ? cur : next;
+    });
+  }, [stackKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleStack = useCallback((project: string) => {
+    setOpenStacks((cur) => {
+      const next = { ...cur, [project]: !(cur[project] ?? true) };
+      try { localStorage.setItem(STACKS_OPEN_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+      return next;
+    });
+  }, []);
+  // visible order — so j/k walks what is on screen, skipping collapsed stacks
+  // rather than jumping into a container nobody can see.
+  const ordered = useMemo(
+    () => stacks.flatMap((s) => ((openStacks[s.project] ?? true) ? s.containers : [])),
+    [stacks, openStacks],
+  );
 
   const moveSel = (dir: 1 | -1) => {
     if (!ordered.length) return;
     const i = Math.max(0, ordered.findIndex((c) => c.id === selected?.id));
     const n = ordered[(i + dir + ordered.length) % ordered.length];
-    if (n) { setSelId(n.id); setTab("logs"); requestAnimationFrame(() => frameRef.current?.querySelector('[data-cid="active"]')?.scrollIntoView({ block: "nearest" })); }
+    if (n) { setSelId(n.id); requestAnimationFrame(() => frameRef.current?.querySelector('[data-cid="active"]')?.scrollIntoView({ block: "nearest" })); }
   };
   const onKey = (e: React.KeyboardEvent) => {
     if (/input|textarea|select/i.test((e.target as HTMLElement)?.tagName ?? "")) return;
@@ -516,6 +614,11 @@ export function DockerView({ active }: { active: boolean }) {
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
                   <h2 className="sr-only">Docker</h2>
                   {ov?.version && <span className="text-[10px] t-dim2">Engine {ov.version}</span>}
+                  {/* How old this picture is. The panel caches and the daemon
+                      can be slow, so without this a snapshot of unknown age
+                      reads as live — and a panel that goes quietly stale is
+                      worse than one that admits it, because you believe it. */}
+                  <Freshness ov={ov} />
                   {/* Scoped to the open project. The fallback case is spelled out
                       rather than shown as an empty list, so an unlabelled stack
                       doesn't read as "docker is broken". */}
@@ -533,6 +636,19 @@ export function DockerView({ active }: { active: boolean }) {
                       column's headers — two ways to switch the same thing, one
                       of which hid three quarters of what docker was doing. */}
                   <div className="ml-auto flex items-center gap-1.5">
+                    {/* One box for "which container is this". It reaches the
+                        things a row only implies — the worktree, the branch,
+                        the published port — so typing 8000 finds whatever is
+                        serving it, which the flat list could never answer. */}
+                    <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter"
+                      className="text-[10px] px-2 py-0.5 rounded-lg outline-none w-[120px]"
+                      style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
+                    <button onClick={() => { const next = groupBy === "stack" ? "worktree" : "stack"; setGroupBy(next); try { localStorage.setItem(GROUP_KEY, next); } catch { /* private mode */ } }}
+                      title={groupBy === "stack" ? "Group by the checkout each container came from" : "Group by compose project"}
+                      className="text-[10px] px-2 py-0.5 rounded-lg min-h-[20px]"
+                      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                      by {groupBy}
+                    </button>
                     {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">Read-only</span>}
                     <button onClick={() => setDense((v) => !v)} title={dense ? "Show each container's image" : "Fit more containers on screen"}
                       className="text-[10px] px-2 py-0.5 rounded-lg"
@@ -561,45 +677,81 @@ export function DockerView({ active }: { active: boolean }) {
                         leave, so you can see there are 12 images without
                         navigating away from the container you are watching.
                         Each collapses independently and remembers it. */}
-                    <div className="shrink-0 agx-scroll overflow-y-auto py-1 flex flex-col" style={{ width: sidebarW }}>
+                    <div className="shrink-0 agx-scroll overflow-y-auto overflow-x-hidden py-1 flex flex-col" style={{ width: sidebarW }}>
                       <Stack id="containers" label="Containers" n={containers.length} open={openSections.containers} onToggle={toggleSection} active={view === "containers"} onActivate={setView}>
-                      {groups.map(([proj, cs]) => (
-                        <div key={proj} className="mb-1">
+                      {stacks.map((st) => {
+                        const open = openStacks[st.project] ?? true;
+                        const { dots, more } = stackDots(st);
+                        const cs = st.containers;
+                        return (
+                        <div key={st.project} className="mb-1">
+                          {/* The stack, as a row with a state of its own. It
+                              used to be a heading with a ratio next to it,
+                              which meant "is my stack up?" was answered by
+                              reading twelve lines. */}
                           <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
-                            <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: "var(--text2)" }}>{proj}</span>
-                            <span className="text-[10px] t-dim2 tabular-nums">{cs.filter((c) => c.state === "running").length}/{cs.length}</span>
-                            {/* Names the columns once per project, in the same
-                                grid the rows use, so the figures below are not
-                                three anonymous numbers. */}
+                            <button onClick={() => toggleStack(st.project)} title={open ? "Collapse" : "Expand"}
+                              className="text-[10px] t-dim2 w-3 shrink-0 min-h-[20px] text-left" aria-expanded={open}>{open ? "▾" : "▸"}</button>
+                            <span className="text-[10px] uppercase tracking-wider font-semibold truncate" style={{ color: "var(--text2)" }}>{st.project}</span>
+                            {/* One dot per container. Twelve containers, one
+                                glance — and the stack sorts itself up here
+                                when one of them is red. */}
+                            <span className="flex items-center gap-0.5 shrink-0" title={cs.map((c) => `${c.service || c.name}: ${c.status}`).join("\n")}>
+                              {dots.map((d, i) => (
+                                <i key={i} className="w-[6px] h-[6px] rounded-full" style={{ background: STACK_TINT[d] }} />
+                              ))}
+                              {more > 0 && <span className="text-[9px] t-dim2 tabular-nums">+{more}</span>}
+                            </span>
+                            <span className="text-[9.5px] tabular-nums shrink-0"
+                              style={{ color: st.worst === "bad" ? "var(--error)" : st.worst === "warn" ? "var(--warning)" : "var(--text3)" }}>
+                              {stackLabel(st)}
+                            </span>
+                            {/* A whole stack running from another checkout is
+                                the state behind most "why isn't my change
+                                showing up". */}
+                            {st.foreign && st.owner && (
+                              <span className="text-[9px] px-1 py-0.5 rounded shrink-0" title={ownerTitle(st.owner)}
+                                style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+                                {st.owner.worktree}
+                              </span>
+                            )}
                             {/* Whole-stack actions, where the stack is named.
                                 Each is hidden when it would do nothing — a
                                 "start all" on twelve running containers is a
                                 button that lies about having an effect. */}
                             {writeEnabled && (
-                              <span className="flex items-center gap-1 ml-2">
+                              <span className="flex items-center gap-1 ml-1">
                                 {cs.some((c) => c.state !== "running") && (
-                                  <DockerAction onClick={() => doGroupAction(cs, "start")} disabled={busy} tint="var(--success)" title={`Start every stopped container in ${proj}`}><PlayIcon /></DockerAction>
+                                  <DockerAction onClick={() => doGroupAction(cs, "start")} disabled={busy} tint="var(--success)" title={`Start every stopped container in ${st.project}`}><PlayIcon /></DockerAction>
                                 )}
                                 {cs.some((c) => c.state === "running") && (
                                   <>
-                                    <DockerAction onClick={() => doGroupAction(cs, "restart")} disabled={busy} tint="var(--warning)" title={`Restart every running container in ${proj}`}>⟳</DockerAction>
-                                    <DockerAction onClick={() => doGroupAction(cs, "stop")} disabled={busy} tint="var(--error)" title={`Stop every running container in ${proj}`}>■</DockerAction>
+                                    <DockerAction onClick={() => doGroupAction(cs, "restart")} disabled={busy} tint="var(--warning)" title={`Restart every running container in ${st.project}`}>⟳</DockerAction>
+                                    <DockerAction onClick={() => doGroupAction(cs, "stop")} disabled={busy} tint="var(--error)" title={`Stop every running container in ${st.project}`}>■</DockerAction>
                                   </>
                                 )}
                               </span>
                             )}
-                            <span className="ml-auto grid gap-x-2 text-[8.5px] t-dim2 uppercase tracking-wider" style={{ gridTemplateColumns: "46px 46px 52px 50px" }}>
-                              <span className="text-right">cpu</span>
-                              <span className="text-right">mem</span>
-                              <span>port</span>
-                              <span />
-                            </span>
+                            {/* Names the columns once per stack, in the same
+                                grid the rows use, so the figures below are not
+                                three anonymous numbers. */}
+                            {open && (
+                              <span className="ml-auto grid gap-x-2 text-[8.5px] t-dim2 uppercase tracking-wider" style={{ gridTemplateColumns: "46px 46px 52px 50px" }}>
+                                <span className="text-right">cpu</span>
+                                <span className="text-right">mem</span>
+                                <span>port</span>
+                                <span />
+                              </span>
+                            )}
                           </div>
-                          <div className="px-1">
-                            {cs.map((c) => <ContainerRow key={c.id} c={c} stat={stats[c.id]} active={selected?.id === c.id} writeEnabled={writeEnabled} busy={busy} dense={dense} onSelect={() => { setSelId(c.id); setTab("logs"); }} onAction={(v) => doAction(c.id, v)} />)}
-                          </div>
+                          {open && (
+                            <div className="px-1">
+                              {cs.map((c) => <ContainerRow key={c.id} c={c} stat={stats[c.id]} active={selected?.id === c.id} writeEnabled={writeEnabled} busy={busy} dense={dense} onSelect={() => setSelId(c.id)} onAction={(v) => doAction(c.id, v)} onOpenPort={openPort} />)}
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                       </Stack>
                       <Stack id="images" label="Images" n={ov.images.length} open={openSections.images} onToggle={toggleSection} active={view === "images"} onActivate={setView}>
                         {ov.images.map((i) => (
@@ -609,7 +761,11 @@ export function DockerView({ active }: { active: boolean }) {
                       </Stack>
                       <Stack id="volumes" label="Volumes" n={ov.volumes.length} open={openSections.volumes} onToggle={toggleSection} active={view === "volumes"} onActivate={setView}>
                         {ov.volumes.map((v) => (
-                          <StackRow key={v.name} onClick={() => setView("volumes")} label={v.name} meta={v.driver} />
+                          <StackRow key={v.name} onClick={() => setView("volumes")} label={v.name}
+                            /* Free — it comes from agentglass's own ledger, not
+                               from docker — and it is the fact that explains a
+                               bundle you did not build. */
+                            meta={v.worktrees && v.worktrees.length > 1 ? `${v.worktrees.length} worktrees` : v.lastWrite?.worktree ?? v.driver} />
                         ))}
                       </Stack>
                       <Stack id="networks" label="Networks" n={ov.networks.length} open={openSections.networks} onToggle={toggleSection} active={view === "networks"} onActivate={setView}>
@@ -617,15 +773,27 @@ export function DockerView({ active }: { active: boolean }) {
                           <StackRow key={n.id} onClick={() => setView("networks")} label={n.name} meta={n.driver} />
                         ))}
                       </Stack>
+                      {/* Disk is a section rather than a number in the header:
+                          `docker system df -v` walks every layer on the
+                          machine, and that is not a thing to pay for on a
+                          timer. Opening it asks; nothing else does. */}
+                      <Stack id="disk" label="Disk" open={openSections.disk} onToggle={toggleSection} active={view === "disk"} onActivate={setView}>
+                        <StackRow onClick={() => setView("disk")} label="What is using the disk, and what is safe to take back" />
+                      </Stack>
                     </div>
                     <SidebarGrip />
                     <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-                    {view !== "containers" ? (
+                    {view === "disk" ? (
+                      <Disk writeEnabled={writeEnabled} ask={ask} onDone={(ok, msg) => { flash(ok, msg); void loadOverview(); }} />
+                    ) : view === "volumes" ? (
+                      // Its own component now: sizes, who is holding it, who
+                      // last wrote to it, and a read-only look inside.
+                      <Volumes volumes={ov.volumes} />
+                    ) : view !== "containers" ? (
                       <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4">
                         <table className="w-full text-[11px]" style={{ color: "var(--text2)" }}>
                           <thead className="text-[9.5px] uppercase tracking-wider t-dim2 text-left">
                             {view === "images" && <tr>{["Repository", "Tag", "Image id", "Size", "Created", "In use"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
-                            {view === "volumes" && <tr>{["Volume", "Driver"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
                             {view === "networks" && <tr>{["Network", "Id", "Driver", "Scope"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
                           </thead>
                           <tbody className="tabular-nums">
@@ -634,9 +802,6 @@ export function DockerView({ active }: { active: boolean }) {
                                 <td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{i.repository}</td><td className="py-1.5 pr-4">{i.tag}</td><td className="py-1.5 pr-4">{i.id.slice(0, 12)}</td><td className="py-1.5 pr-4">{i.size}</td><td className="py-1.5 pr-4">{i.created}</td><td className="py-1.5 pr-4">{i.containers}</td>
                               </tr>
                             ))}
-                            {view === "volumes" && ov.volumes.map((v) => (
-                              <tr key={v.name} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4 break-all" style={{ color: "var(--text)" }}>{v.name}</td><td className="py-1.5 pr-4">{v.driver}</td></tr>
-                            ))}
                             {view === "networks" && ov.networks.map((n) => (
                               <tr key={n.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{n.name}</td><td className="py-1.5 pr-4">{n.id}</td><td className="py-1.5 pr-4">{n.driver}</td><td className="py-1.5 pr-4">{n.scope}</td></tr>
                             ))}
@@ -644,48 +809,17 @@ export function DockerView({ active }: { active: boolean }) {
                         </table>
                       </div>
                     ) : selected ? (
-                        <>
-                          <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: STATE_TINT[selected.state] ?? "var(--text3)" }} />
-                            <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={selected.name}>{selected.name}</span>
-                            <span className="text-[10px] t-dim2 truncate">{selected.status}</span>
-                            <div className="ml-auto flex items-center gap-1">
-                              {/* Runs in the console already docked below, in
-                                  the same shell you would have typed it into.
-                                  A second, container-only terminal would be a
-                                  second set of bugs for no extra reach. */}
-                              {writeEnabled && selected.state === "running" && (
-                                <button onClick={() => { setConsoleOpen(true); runInConsole(consoleRoot(), `docker exec -it ${selected.id.slice(0, 12)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'`); }}
-                                  className="text-[10px] px-2 py-0.5 rounded mr-1"
-                                  style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
-                                  title={`Open a shell inside ${selected.name}`}>Exec</button>
-                              )}
-                              {DETAIL_TABS.map((t) => (
-                                <button key={t} onClick={() => setTab(t)} className="text-[10px] px-2 py-0.5 rounded" style={{ background: tab === t ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: tab === t ? "var(--text)" : "var(--text3)" }}>{t[0].toUpperCase() + t.slice(1)}</button>
-                              ))}
-                              {tab === "logs" && (
-                                <Select value={String(tail)} onChange={(v) => setTail(Number(v))} align="right"
-                                  className="text-[10px] px-1 py-0.5 rounded outline-none"
-                                  style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
-                                  options={[100, 400, 1000, 2000].map((n) => ({ value: String(n), label: `${n} lines` }))} />
-                              )}
-                            </div>
-                          </div>
-                          {tab === "env" || tab === "config" || tab === "top" ? (
-                            <DetailPane tab={tab} env={env} config={config} top={top} error={detailErr} />
-                          ) : tab === "logs" ? (
-                            <pre ref={logRef} onScroll={(e) => { const el = e.currentTarget; stuckBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 28; }} className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre-wrap break-all" style={{ ...CODE_FONT_STYLE, background: "var(--bg)", color: "var(--text2)" }}>{logs
-                              ? logs.split("\n").map((l, i) => <LogLine key={i} line={l} />)
-                              : "…"}</pre>
-                          ) : (
-                            <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4 text-[11.5px] space-y-1.5" style={{ color: "var(--text2)" }}>
-                              {[["Name", selected.name], ["Id", selected.id], ["Image", selected.image], ["State", selected.state], ["Status", selected.status], ["Ports", selected.ports || "—"], ["Compose project", selected.project || "—"], ["Service", selected.service || "—"], ["Uptime", selected.runningFor]].map(([k, v]) => (
-                                <div key={k} className="flex gap-3"><span className="w-32 shrink-0 t-dim2">{k}</span><span className="min-w-0 break-all" style={{ color: "var(--text)" }}>{v}</span></div>
-                              ))}
-                              {stats[selected.id] && <div className="flex gap-3"><span className="w-32 shrink-0 t-dim2">CPU / MEM</span><span style={{ color: "var(--text)" }}>{stats[selected.id].cpu}% · {stats[selected.id].mem}% ({stats[selected.id].memUsage})</span></div>}
-                            </div>
-                          )}
-                        </>
+                        <Detail
+                          c={selected}
+                          stat={stats[selected.id]}
+                          env={env} config={config} top={top} error={detailErr}
+                          writeEnabled={writeEnabled}
+                          tail={tail} onTail={setTail}
+                          onExec={() => { setConsoleOpen(true); runInConsole(consoleRoot(), `docker exec -it ${selected.id.slice(0, 12)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'`); }}
+                          onOpenPort={openPort}
+                          open={sections} onToggle={toggleDetail}
+                          others={containers}
+                        />
                     ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">No containers</div>}
                     </div>
                   </div>

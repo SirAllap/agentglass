@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Start, prompt, watch and list named agents on agentglass's terminal engine.
+
+The launcher and the liveness a script needs to run unattended agents on this
+machine, over the tmux engine agentglass already owns: seat one by name, hand
+it a message, wait for a state, read its screen, press a key, list, stop.
+Nothing here decides WHAT to work on: your script picks the task, makes the
+worktree, and asks this to seat an agent in it by name.
+
+    agentglass-agent start proj1234 --cwd ~/code/app-wt/proj1234 --yolo \
+        --remote-control proj1234 --timeout 180000
+    agentglass-agent prompt proj1234 "$(cat handoff.md)"
+    agentglass-agent wait proj1234 --until working --timeout 90000
+    agentglass-agent read proj1234 --lines 30
+    agentglass-agent send-keys proj1234 enter
+    agentglass-agent list                     # {"ok":true,"result":{"agents":[{"name":...}]}}
+    agentglass-agent stop proj1234
+
+And on a clock — "at 08:00 start this agent, with this prompt, in this checkout":
+
+    agentglass-agent schedule nightly --cwd ~/code/app --at 08:00 --file brief.md --yolo
+    agentglass-agent schedule smoke --cwd ~/code/app --at +30m --prompt "run the smoke suite and report"
+    agentglass-agent schedules                # waiting first, then what fired and how
+    agentglass-agent unschedule <id>
+
+Every answer is one JSON object on stdout, in the shape
+{"ok": bool, "result": {...}} or {"ok": false, "error": "..."}; the exit code
+is 0 when ok and 1 otherwise, so a shell can branch on either. `list` prints
+`result.agents`, each with `name`, `cwd`, `paneId`, `state` (working / idle /
+waiting, from the board), `needsYou` when it is stopped on a person, and
+`branch`. An agent is listed while its pane exists on the engine and not a
+second longer — liveness is the pane, not a heartbeat.
+
+`start` refuses a name that is still running (exit 1, error "an agent by that
+name is still running", the existing agent under result.agent); pick another
+name or stop it. `--yolo` asks for the CLI's skip-permissions flag and is
+granted only if agentglass's Settings allow it (chatBypass); passing the raw
+flag after `--` is refused for the same reason. The prompt goes to `prompt`
+as text, never on the command line — pass it as one argument, quoted, or from
+a file with `--file`.
+
+Environment:
+    AGENTGLASS_SERVER   base url (default http://localhost:4000)
+    AGENTGLASS_TOKEN    the server's token; read from ~/.config/agentglass/token
+                        when unset, which is where the app keeps it
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+
+def _server_or_die(url):
+    """Where the Bearer token goes. It is sent to whatever AGENTGLASS_SERVER
+    names, and over plain http to a remote host it travels in the clear —
+    every hop between here and there reads it. So: https anywhere, http only
+    to this machine (localhost, or a loopback address). Anything else is one
+    line on stderr and exit 2, before a single request is built."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    host = (u.hostname or "").lower()
+    if u.scheme == "https" and host:
+        return url
+    if u.scheme == "http" and host:
+        loop = host == "localhost"
+        if not loop:
+            try:
+                loop = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                loop = False
+        if loop:
+            return url
+        print(f"agentglass: refusing plain http to {host}: the token would travel in the clear. "
+              f"Use https://, or http:// only to localhost/127.0.0.1/::1 (AGENTGLASS_SERVER={url})", file=sys.stderr)
+        sys.exit(2)
+    print(f"agentglass: AGENTGLASS_SERVER must be https://<host> or http://<loopback>, got {url!r}", file=sys.stderr)
+    sys.exit(2)
+
+
+SERVER = _server_or_die(os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"))
+
+
+def token():
+    t = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    if t:
+        return t
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    try:
+        with open(os.path.join(base, "agentglass", "token"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def call(path, body=None, method="POST", timeout=630):
+    req = urllib.request.Request(
+        f"{SERVER}{path}",
+        data=None if body is None else json.dumps(body).encode(),
+        method=method,
+        headers={"Content-Type": "application/json", "Origin": SERVER},
+    )
+    t = token()
+    if t:
+        req.add_header("Authorization", f"Bearer {t}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read() or b"{}")
+        except json.JSONDecodeError:
+            return {"ok": False, "error": f"server said {e.code}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
+
+
+def emit(res):
+    print(json.dumps(res))
+    return 0 if res.get("ok") else 1
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="agentglass-agent", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("start", help="seat an agent by name in a checkout")
+    p.add_argument("name")
+    p.add_argument("--cwd", required=True, help="the checkout (a worktree) it runs in")
+    p.add_argument("--kind", default="claude", help="which CLI: claude (default), codex, ...")
+    p.add_argument("--yolo", action="store_true", help="skip permissions, if Settings allow it")
+    p.add_argument("--remote-control", metavar="NAME", help="Claude's --remote-control NAME")
+    p.add_argument("--prompt", default="", help="a first message on the command line (prefer `prompt` after `start`)")
+    p.add_argument("--timeout", type=int, default=180000, help="ms to wait for the CLI to be up (0: return at once)")
+    p.add_argument("args", nargs="*", help="extra CLI flags, after --")
+
+    p = sub.add_parser("prompt", help="hand the agent a message and press Enter until it is taken")
+    p.add_argument("name")
+    p.add_argument("text", nargs="?", default="", help="the message, as ONE quoted argument")
+    p.add_argument("--file", help="read the message from this file instead")
+    p.add_argument("--timeout", type=int, default=10000, help="ms to wait for the paste to land and be taken")
+
+    p = sub.add_parser("wait", help="block until the agent is in a state")
+    p.add_argument("name")
+    p.add_argument("--until", default="working", help="ready, working, needs-you or gone (comma to accept several)")
+    p.add_argument("--timeout", type=int, default=90000, help="ms")
+
+    p = sub.add_parser("read", help="the agent's screen")
+    p.add_argument("name")
+    p.add_argument("--lines", type=int, default=0, help="only the last N lines (0: the visible screen)")
+    p.add_argument("--text", action="store_true", help="print the screen as text instead of JSON")
+
+    p = sub.add_parser("send-keys", help="press one key: enter, escape, up, down, left, right, tab, space, backspace, ctrl-c")
+    p.add_argument("name")
+    p.add_argument("key")
+
+    p = sub.add_parser("list", help="every live named agent, as JSON")
+    p.add_argument("--all", action="store_true", help="include ended ones, with endedAt")
+
+    p = sub.add_parser("stop", help="kill the agent's window")
+    p.add_argument("name")
+
+    p = sub.add_parser("schedule", help="start an agent later: at a clock time, a date-time, or after a delay")
+    p.add_argument("name")
+    p.add_argument("--cwd", required=True, help="the checkout it will run in")
+    p.add_argument("--at", required=True, help='"08:00" (today or tomorrow), "2026-09-06 08:00", or "+30m" / "+2h"')
+    p.add_argument("--kind", default="claude")
+    p.add_argument("--yolo", action="store_true", help="skip permissions, if Settings allow it (checked again when it fires)")
+    p.add_argument("--prompt", default="", help="its first message")
+    p.add_argument("--file", help="read the first message from this file")
+
+    sub.add_parser("schedules", help="every schedule: waiting first, then what fired and how")
+
+    p = sub.add_parser("unschedule", help="cancel a schedule that has not fired")
+    p.add_argument("id")
+
+    sub.add_parser("health", help="is agentglass listening")
+
+    # Everything after a bare `--` is the agent CLI's, not ours. Split it off
+    # by hand: argparse only learned to hand `-- --flag value` to a trailing
+    # `nargs="*"` positional inside a sub-command in Python 3.13, and 3.12
+    # answers "unrecognized arguments" with exit 2 — which is what the CI
+    # runners run.
+    argv = sys.argv[1:]
+    passthrough = []
+    if "--" in argv:
+        cut = argv.index("--")
+        passthrough = argv[cut + 1:]
+        argv = argv[:cut]
+    a = ap.parse_args(argv)
+
+    if a.cmd == "health":
+        return emit(call("/health", method="GET", timeout=10))
+    if a.cmd == "list":
+        return emit(call("/agents/named" + ("?all=1" if a.all else ""), method="GET", timeout=60))
+    if a.cmd == "start":
+        body = {"name": a.name, "cwd": os.path.abspath(os.path.expanduser(a.cwd)), "kind": a.kind,
+                "yolo": bool(a.yolo), "prompt": a.prompt, "timeout": a.timeout, "args": list(a.args) + passthrough}
+        if a.remote_control:
+            body["remoteControl"] = a.remote_control
+        return emit(call("/agents/named/start", body))
+    if a.cmd == "prompt":
+        text = a.text
+        if a.file:
+            with open(a.file, encoding="utf-8") as f:
+                text = f.read()
+        if not text.strip():
+            return emit({"ok": False, "error": "nothing to send: pass the text or --file"})
+        return emit(call("/agents/named/prompt", {"name": a.name, "text": text, "timeout": a.timeout}))
+    if a.cmd == "wait":
+        return emit(call("/agents/named/wait", {"name": a.name, "until": a.until, "timeout": a.timeout}))
+    if a.cmd == "read":
+        res = call("/agents/named/read", {"name": a.name, "lines": a.lines}, timeout=30)
+        if a.text and res.get("ok"):
+            print(res["result"]["text"])
+            return 0
+        return emit(res)
+    if a.cmd == "send-keys":
+        return emit(call("/agents/named/keys", {"name": a.name, "key": a.key}, timeout=30))
+    if a.cmd == "stop":
+        return emit(call("/agents/named/stop", {"name": a.name}, timeout=30))
+    if a.cmd == "schedule":
+        text = a.prompt
+        if a.file:
+            with open(a.file, encoding="utf-8") as f:
+                text = f.read()
+        return emit(call("/agents/schedule", {"name": a.name, "cwd": os.path.abspath(os.path.expanduser(a.cwd)), "kind": a.kind,
+                                              "yolo": bool(a.yolo), "prompt": text, "when": a.at}, timeout=30))
+    if a.cmd == "schedules":
+        return emit(call("/agents/schedule", method="GET", timeout=30))
+    if a.cmd == "unschedule":
+        return emit(call("/agents/schedule/cancel", {"id": a.id}, timeout=30))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

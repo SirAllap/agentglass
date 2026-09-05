@@ -1,0 +1,10 @@
+{
+  "session_id": "cafe0002-0000-4000-8000-000000000002",
+  "transcript_path": "/home/example/.claude/projects/-srv-notekeeper/cafe0002-0000-4000-8000-000000000002.jsonl",
+  "cwd": "/srv/notekeeper",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "agent_0000000001",
+  "agent_type": "code-reviewer"
+}

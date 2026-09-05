@@ -14,7 +14,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write # uploading installers onto the tag's release
+  # Both for actions/attest-build-provenance: it asks Actions for an OIDC token
+  # and gets a short-lived Sigstore certificate with it, then writes the signed
+  # statement back to this repository's attestation store.
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -47,7 +52,11 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned — see the note in ci.yml. A release binary especially cannot
+          # be built by whatever Bun happened to be newest that morning: this
+          # job compiles the sidecar with `bun build --compile`, so the Bun the
+          # runner picked up IS part of the shipped artefact.
+          bun-version: 1.3.9
 
       # --frozen-lockfile, unlike the other workflows: a release binary has to be
       # the committed lockfile's build, and `bun install` rewriting bun.lock
@@ -93,8 +102,20 @@ jobs:
           # The version this repository's own builds are made with.
           version: 0.16.0
 
+      # `continue-on-error`, and it is a deliberate demotion of this step. The
+      # app already treats the bundled binary as a nicety: shared/deps.ts marks
+      # tmux `required: false`, so without one the pane engine uses the system
+      # tmux and, failing that, chats run a process per turn — slower to start,
+      # otherwise the same app. v0.11.0 is what taught us the cost of the other
+      # arrangement: this step died on the macOS legs four tags running, the
+      # matrix's `fail-fast: false` correctly let the other platforms through,
+      # and the release published with no .dmg at all — for the platform that is
+      # more than half of every download this project has ever served. A tmux
+      # that will not cross-compile may cost the terminal a feature. It must
+      # never cost a platform its installer.
       - name: Build bundled tmux
         if: runner.os != 'Windows'
+        continue-on-error: true
         shell: bash
         run: |
           # First run on a fresh checkout pins the tarball checksums from the
@@ -102,16 +123,38 @@ jobs:
           if grep -q placeholder scripts/tmux-build-checksums.txt; then
             ./scripts/tmux-fill-checksums.sh
           fi
-          mkdir -p electron/staging
           TARGET=${{ matrix.bunTarget }} ./scripts/build-tmux-static.sh
-          cp out/tmux-${{ matrix.bunTarget }} electron/staging/tmux
           ./out/tmux-${{ matrix.bunTarget }} -V
           # A smoke test with the exact flags the engine uses: own socket, own
-          # config, scratch TMUX_TMPDIR, then gone.
+          # config, scratch TMUX_TMPDIR, then gone. It runs against out/ and the
+          # staging copy happens only afterwards — the order matters now that
+          # the step is allowed to fail: staging first would leave a half-built
+          # tmux for electron-builder to package, and "no bundled tmux" is a
+          # state the app handles where "a bundled tmux that dies on launch" is
+          # not.
           tmpdir="$(mktemp -d /tmp/tmux-smoke.XXXXXX)"
-          TMUX_TMPDIR="$tmpdir" electron/staging/tmux -L smoke -f /dev/null new-session -d
-          TMUX_TMPDIR="$tmpdir" electron/staging/tmux -L smoke kill-server
+          TMUX_TMPDIR="$tmpdir" ./out/tmux-${{ matrix.bunTarget }} -L smoke -f /dev/null new-session -d
+          TMUX_TMPDIR="$tmpdir" ./out/tmux-${{ matrix.bunTarget }} -L smoke kill-server
           rm -rf "$tmpdir"
+          mkdir -p electron/staging
+          cp out/tmux-${{ matrix.bunTarget }} electron/staging/tmux
+
+      # Which of the two shapes this installer has, said out loud, because the
+      # step above is now allowed to fail and a folded warning annotation is
+      # easy to miss in a log nobody reads unless something else went wrong.
+      # Nothing downstream needs a guard of its own: electron/build.mjs stages
+      # the binary only `if (existsSync(...))` and says so either way, and
+      # electron/package.json's extraResources copies the whole `staging`
+      # directory rather than naming files inside it.
+      - name: Bundled tmux, or an honest note that there is none
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ -x electron/staging/tmux ]; then
+            echo "bundled tmux staged: $(electron/staging/tmux -V)"
+          else
+            echo "::warning::this build carries no bundled tmux — the app will use the system one, or run a process per turn without it"
+          fi
 
       # The version the artefacts carry, from the tag. It used to be written
       # INTO electron/package.json by a step here, and that quietly cost the
@@ -169,6 +212,29 @@ jobs:
         shell: bash
         run: node electron/build.mjs --check-stamp electron/staging/build-info.json
 
+      # Signed provenance for the exact files a stranger is about to download and
+      # run. GitHub's own Sigstore instance does the signing, so this costs no
+      # certificate and no key of ours, and it gives a suspicious reader
+      # something to check that an unsigned installer otherwise cannot offer:
+      #
+      #   gh attestation verify agentglass_1.2.3_arm64.dmg --repo <owner>/<repo>
+      #
+      # answers which commit, which workflow and which run produced that file.
+      # It is not code signing — macOS Gatekeeper still shows its warning — but
+      # it is the difference between "trust the download" and "verify it".
+      #
+      # Per matrix leg on purpose: the subject has to be hashed on the machine
+      # that built it, before anything else can touch the bytes.
+      - name: Attest the installers
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            electron/dist-app/*.AppImage
+            electron/dist-app/*.deb
+            electron/dist-app/*.dmg
+            electron/dist-app/*.exe
+
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -193,3 +259,83 @@ jobs:
             electron/dist-app/*.dmg
             electron/dist-app/*.exe
           if-no-files-found: warn
+
+  # v0.11.0 shipped three installers and no .dmg, and every single job in this
+  # workflow was allowed to consider that a normal outcome: the macOS leg had
+  # been failing for four tags, `fail-fast: false` (correctly) let the other
+  # platforms through, and nothing afterwards ever asked whether the release the
+  # tag produced is the release the project advertises. It does advertise them
+  # one by one — scripts/landing-release.mjs stamps a download URL and a file
+  # size into a per-platform button on the landing page — so a platform with no
+  # asset is not a smaller release, it is a button that leads to a page with
+  # nothing on it. More than half of this project's lifetime downloads were the
+  # macOS one.
+  #
+  # `fail-fast: false` stays: the other three platforms still have to build. The
+  # change is that the TAG now goes red when one of them is missing, so the gap
+  # is visible on the release the moment it happens instead of in a download
+  # count months later.
+  #
+  # `always()`, because the run this job exists for is precisely the one where a
+  # matrix leg went red — it grades the release, not the jobs above it.
+  release-integrity:
+    needs: build
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the SHA256SUMS upload
+    steps:
+      - name: What the release actually carries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          # `|| true`, and it is the whole point: a tag with nothing attached —
+          # every leg red — is the case this job exists to REPORT. Dying here
+          # would report it as a broken workflow instead of as a broken release.
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir assets \
+            --pattern '*.dmg' --pattern '*.AppImage' --pattern '*.deb' --pattern '*.exe' || true
+          ls -l assets
+
+      # A checksum file so someone who downloads over a captive-portal wifi, or
+      # from a mirror, can tell. Written before the gate below rather than after,
+      # deliberately: an incomplete release is still a release people will
+      # download from, and the assets that DID ship deserve their hashes.
+      # Bare names, no paths, so it works as `sha256sum -c SHA256SUMS` from the
+      # directory the browser dropped the files into.
+      - name: SHA256SUMS over the attached installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: assets
+        run: |
+          shopt -s nullglob
+          files=(*.dmg *.AppImage *.deb *.exe)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::warning::$GITHUB_REF_NAME has no installers attached — nothing to checksum"
+            exit 0
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+
+      # The gate. One check per button the download page offers, matched with
+      # the same patterns scripts/landing-release.mjs uses to fill those buttons
+      # in — if this passes, every slot on that page has a file behind it.
+      - name: Every advertised platform has an installer
+        working-directory: assets
+        run: |
+          have() { ls | grep -Eiq "$1"; }
+          missing=()
+          have '(arm64|aarch64).*\.dmg$' || missing+=("macOS, Apple silicon (.dmg)")
+          have '(x64|x86_64|intel).*\.dmg$' || missing+=("macOS, Intel (.dmg)")
+          have '\.AppImage$'               || missing+=("Linux (.AppImage)")
+          have '\.deb$'                    || missing+=("Linux (.deb)")
+          have '\.exe$'                    || missing+=("Windows (.exe)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            for m in "${missing[@]}"; do
+              echo "::error::$GITHUB_REF_NAME has no installer for $m — its download button leads nowhere"
+            done
+            echo "Fix the platform's build and re-run this workflow on the tag; the release stays incomplete until then." >&2
+            exit 1
+          fi
+          echo "every advertised platform has an installer on $GITHUB_REF_NAME"

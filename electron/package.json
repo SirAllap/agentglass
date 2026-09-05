@@ -12,13 +12,16 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "typecheck": "tsc --noEmit",
     "dist": "node build.mjs && electron-builder",
     "dist:linux": "node build.mjs && electron-builder --linux",
     "dist:dir": "node build.mjs && electron-builder --dir"
   },
   "devDependencies": {
+    "@types/node": "24.13.3",
     "electron": "^43.3.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "typescript": "5.9.3"
   },
   "build": {
     "appId": "app.agentglass.desktop",
@@ -37,6 +40,8 @@
     "files": [
       "main.js",
       "guest-guard.js",
+      "browser-menu.js",
+      "power.js",
       "preload.js",
       "icons/**"
     ],

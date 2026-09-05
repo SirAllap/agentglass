@@ -15,21 +15,15 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { docSection, allDocs } from "./docs.ts";
 
 const repo = (p: string) => readFileSync(new URL("../../" + p, import.meta.url), "utf8");
-const README = repo("README.md");
 
 /** The section of the README this file is about, so a mention somewhere else
  *  does not satisfy a check about what the remote section says. */
 const ALERTS_HEADING = "### Alerts on the phone, and what they honestly cover";
 
-const section = (() => {
-  const from = README.indexOf("### Reaching it when you are not on the same wifi");
-  expect(from, "the remote-access section is gone from the README").toBeGreaterThan(-1);
-  const to = README.indexOf(ALERTS_HEADING, from);
-  expect(to, "the alerts section no longer follows the remote one").toBeGreaterThan(-1);
-  return README.slice(from, to);
-})();
+const section = docSection("### Reaching it when you are not on the same wifi", ALERTS_HEADING);
 
 /**
  * The README used to promise a notification answerable from the lock screen,
@@ -43,11 +37,7 @@ const section = (() => {
  * quietly coming back would make it false while the README went on saying it.
  */
 describe("what the README promises about an alert reaching a phone", () => {
-  const alerts = (() => {
-    const from = README.indexOf(ALERTS_HEADING);
-    expect(from, "the alerts section is gone from the README").toBeGreaterThan(-1);
-    return README.slice(from, README.indexOf("\n---", from));
-  })();
+  const alerts = docSection(ALERTS_HEADING, "\n---");
 
   test("the frame it names is the one the server actually broadcasts", () => {
     expect(alerts).toContain('`{type:"alert"}`');
@@ -69,7 +59,10 @@ describe("what the README promises about an alert reaching a phone", () => {
   });
 
   test("and no push route it says is gone is still being served", () => {
-    expect(README).not.toContain("/push/");
+    // Across the whole of the documentation, not one file of it: the promise
+    // is that this route does not exist, so a page reintroducing it anywhere
+    // is the thing worth catching.
+    for (const { path, text } of allDocs()) expect(text, `${path} mentions a push route again`).not.toContain("/push/");
     expect(repo("server/src/index.ts")).not.toContain('pathname === "/push');
     // The switch that turned it on was in the deleted companion, so a route
     // left behind would be reachable by nothing but a stranger with the token.

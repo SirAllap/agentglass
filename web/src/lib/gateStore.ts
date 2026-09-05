@@ -251,6 +251,25 @@ export function __resetGateStore(): void {
   announced.clear();
   forgotten.clear();
   seeded = false;
+  /*
+   * And STOP THE POLL, which this did not and had to.
+   *
+   * Never stopping is right for the app and is explained where the poll lives:
+   * tying it to a panel's lifetime meant agentglass stopped noticing new holds
+   * the moment you opened the workspace. It is wrong for a test process, where
+   * "never" outlives the file that started it — and a two-second /gate/pending
+   * then lands in whatever suite happens to be running.
+   *
+   * It cost an evening: a `runStore` test failed only in the full suite with
+   * "it kept listening after the last watcher let go", and the read it was
+   * counting was this poll, from a module that test never mentions. Two wrong
+   * hypotheses went by before a stack on every read named it.
+   *
+   * `started` is cleared too, so the next subscriber begins a fresh poll
+   * rather than finding the flag set and never polling again.
+   */
+  if (timer) { clearTimeout(timer); timer = null; }
+  started = false;
 }
 
 // ---------------------------------------------------------------------------

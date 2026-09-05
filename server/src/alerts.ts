@@ -1,7 +1,7 @@
 // Push alerts: fire on notable events (human-in-the-loop waits, errors).
 // Delivery channels are opt-in via env:
 //   AGENTGLASS_WEBHOOK   — POST {text} to this URL (Slack/Discord-compatible)
-//   AGENTGLASS_NOTIFY=1  — run `notify-send` (Linux desktop) if available
+//   AGENTGLASS_NOTIFY=1  — run `notify-send` (Linux desktop) or `osascript` (macOS) if available
 //
 // A client attached to the live socket gets every alert regardless — that is
 // the frame the desktop raises a native notification from, and the one the
@@ -114,7 +114,7 @@ async function deliver(
   pane?: string,
   /** What kind of thing this is, when it is not ordinary news. Travels on the
    *  frame so the app can raise an alarm rather than another row. */
-  extra?: { kind: "reminder"; id: string },
+  extra?: { kind: "reminder"; id: string } | { kind: "understudy" },
 ) {
   if (WEBHOOK && !IS_TEST) {
     try {
@@ -161,13 +161,22 @@ async function deliver(
   if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}), ...(extra ?? {}) });
   if (live > 0) return;
   if (DESKTOP) {
+    // Urgency 0 is a row in a list, not a thing to put on somebody's screen.
+    // With no window open there is no list to put it in either, so it waits
+    // there until one opens rather than being drawn over his work.
+    //
+    // ABOVE the seam on purpose. Behind it is the real `notify-send` in the
+    // app and an injected recorder in the suite, and a guard that only covered
+    // the real one would have left the suite unable to see this rule at all.
+    if (urgency === 0) return;
     if (notifier) { notifier({ title, body, urgency }); return; }
     // No seam installed and this is a test run: say nothing. A suite must never
     // put an approval prompt on somebody's desktop for a hold that never
     // happened, and a test that wants to check this path installs a notifier.
     if (IS_TEST) return;
+    const argv = desktopNotifyArgv(title, body, urgency);
     try {
-      Bun.spawn(["notify-send", "-a", "agentglass", "-u", "critical", "--", title, body], { stdout: "ignore" });
+      Bun.spawn(argv, { stdout: "ignore" });
     } catch (e) {
       // Said once, not on every alert: the cause is a missing binary, so it
       // will be just as true the next thousand times and the log is the only
@@ -175,13 +184,56 @@ async function deliver(
       // not installed" look exactly like "your ping was delivered".
       if (!warnedNoNotifySend) {
         warnedNoNotifySend = true;
-        console.warn("[alerts] AGENTGLASS_NOTIFY=1 but notify-send could not be run:", e);
+        console.warn(`[alerts] AGENTGLASS_NOTIFY=1 but ${argv[0]} could not be run:`, e);
       }
     }
   }
 }
 
 let warnedNoNotifySend = false;
+
+/**
+ * Text as an AppleScript string literal.
+ *
+ * AppleScript strings are double-quoted and know two escapes, `\\` and `\"`,
+ * so those are the two characters that could end the literal early — and a
+ * notification's text is agent output: a tool's stderr, a file path, a
+ * commit subject, anything. Escaped here and never interpolated raw; the
+ * script is one line built from two of these.
+ */
+export function appleScriptString(text: string): string {
+  return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * The command that puts an alert on the desktop when no window is open to
+ * show it — per platform, as an argv.
+ *
+ * Linux: `notify-send`, exactly as before. `-u critical` used to be hardcoded,
+ * so every alert reached the desktop as the freedesktop urgency that never
+ * expires on its own — a tool error and an agent blocked on a permission,
+ * drawn identically and both dismissed by hand. `--` because a title can start
+ * with a dash.
+ *
+ * macOS: `osascript -e 'display notification <body> with title <title>'`.
+ * There is no `notify-send` on a Mac, so the spawn threw ENOENT and the
+ * warning below fired — once, and the alert was gone; the person in the
+ * other room was not told. The text goes in as AppleScript string literals
+ * (`appleScriptString`), never spliced in raw: `osascript -e` runs whatever it
+ * is handed, and the text is not ours. No urgency: Notification Center has no
+ * such knob, and no `--`: `osascript` takes the script after `-e`, not a list
+ * of positional strings. When neither binary exists the spawn fails as it
+ * always did and the same one-line warning says so.
+ *
+ * `platform` is a parameter for the suite, which runs on Linux.
+ */
+export function desktopNotifyArgv(title: string, body: string, urgency: number, platform: string = process.platform): string[] {
+  if (platform === "darwin") {
+    return ["osascript", "-e", `display notification ${appleScriptString(body)} with title ${appleScriptString(title)}`];
+  }
+  const level = urgency === 2 ? "critical" : "normal";
+  return ["notify-send", "-a", "agentglass", "-u", level, "--", title, body];
+}
 
 /**
  * A tool call is being held at the control-plane gate — ping the human.
@@ -226,9 +278,45 @@ export function pushGate(agent: string, tool: string, summary: string, pane?: st
  * it is dismissed instead of expiring it after a few seconds, which is the
  * behaviour anybody setting an alarm is asking for — and the mark is what lets
  * the app raise its own alarm rather than adding a seventeenth grey row to the
- * list behind the bell. Reported exactly that way: "es una alarma que yo he
- * programado, tiene que ser más invasiva".
+ * list behind the bell. Reported exactly that way: "it is an alarm I set
+ * myself, it has to be more intrusive".
  */
+/**
+ * The understudy cannot go on, and needs a person.
+ *
+ * Urgency 2, and the reason is the same one written above `pushReminder`:
+ * freedesktop keeps a CRITICAL notification on screen until it is dismissed
+ * instead of expiring it in a few seconds. This is not news — it is a machine
+ * that has STOPPED and will stay stopped until somebody looks, which is the
+ * exact shape `pushGate` uses for an approval. Anything quieter and the clone
+ * spends the night idle while its report sits behind a bell nobody opened:
+ * "we cannot let this happen, otherwise nobody will want to use the clone".
+ *
+ * One call rather than a delivery path of its own, so it inherits the webhook,
+ * the native notification while a window is open, and `notify-send` when none
+ * is. A parallel path is the bug this file already fixed once.
+ */
+export function pushUnderstudyStuck(what: string, question: string, tried: string) {
+  if (shouldSend(`understudy:${what}`)) {
+    deliver(
+      "🙋 The deputy is stuck",
+      `${question} Tried: ${tried}.`.slice(0, 300),
+      2,
+      /* Where to go, so the alert that says a machine is waiting also takes
+         you to the screen where you can answer it. */
+      "understudy",
+      { kind: "understudy" },
+    );
+  }
+}
+
+/** The Lantern's watch: one loud line per look while something needs a
+ *  person. Critical, so the desktop keeps it on screen; the first waiting
+ *  pane rides along so a click lands where the answer is typed. */
+export function pushLantern(title: string, body: string, pane?: string) {
+  if (shouldSend("lantern:watch")) deliver(title, body, 2, pane);
+}
+
 export function pushReminder(id: string, title: string, when: string) {
   if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id });
 }
@@ -325,13 +413,16 @@ export function maybeAlert(e: WatchEvent) {
   const agent = describeAgent(e);
   const pane = paneForSession(e.session_id) ?? undefined;
 
+  // Kept, and it has never once run. `PermissionRequest` is not in the hook
+  // vocabulary this database has ever seen: zero rows over its whole life,
+  // against nine event types that do appear. The real article arrives as a
+  // `Notification` whose message is "Claude needs your permission", and is
+  // handled one branch below — which is why the promotion there exists.
   if (e.hook_event_type === "PermissionRequest") {
     if (shouldSend(`perm:${e.session_id}`))
       deliver(
         "⏳ Approval needed",
         `${agent} is waiting on a permission request${e.tool_name ? ` (${e.tool_name})` : ""}.`,
-        // The other one an agent is stopped on. Everything below this line is
-        // news rather than a blockage, and says so with a lower urgency.
         2, pane,
       );
     return;
@@ -341,11 +432,44 @@ export function maybeAlert(e: WatchEvent) {
     // The message leads and the agent follows. It was the other way round —
     // the title was the opaque identifier and the message was the body — so a
     // stack of these read as a column of hashes with the actual news underneath.
-    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, 1, pane);
+    //
+    // The one place a string test earns its keep. Everything here is already
+    // true when he looks — an agent that said it is waiting is still waiting —
+    // so the question is only which of them is a BLOCKAGE. Measured over 7
+    // days: 279 "waiting for your input", 6 "needs your permission", 3 "needs
+    // your approval", 2 "usage limit reset". The middle nine are the only ones
+    // he cannot ignore, and they were shipping at the same urgency as the rest.
+    //
+    // Safe in a way the stdout marker scan was not: an unrecognised message
+    // falls through to 1 and still lands in the list with its pane. A stale
+    // string here loses a promotion; a stale string there INVENTED an urgent
+    // interrupt out of a command that had worked.
+    const urgency = /needs your (permission|approval)/i.test(msg) ? 2
+      : /usage limit reset/i.test(msg) ? 0
+        : 1;
+    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, urgency, pane);
     return;
   }
   if (e.is_error) {
+    // Urgency 0: it goes in the list, with its pane, and interrupts nothing.
+    //
+    // A failed tool call does not earn a human, and the measurement is not
+    // close. Over 8 days, 465 error events: 464 were followed by another event
+    // from the same session within 60 seconds and all 465 within five minutes.
+    // ZERO were the last thing a session ever did. The agent had already
+    // recovered before the popup finished animating — which is his report,
+    // exactly: "when I open the conversation I don't see that anything failed".
+    //
+    // At 2 this was `requireInteraction` on the desk, `max` on the phone and
+    // `-u critical` on notify-send: a popup that stays until dismissed by hand,
+    // 140 times a day, for a grep that matched nothing. The notification he
+    // actually needs — an agent waiting on him — was three lines above at 1,
+    // expiring quietly while he cleared the sixty that were not.
+    //
+    // No list of benign error strings, and that is deliberate. Classification
+    // is the trap the marker scan fell into; demotion needs no vocabulary and
+    // cannot go stale.
     if (shouldSend(`err:${e.session_id}:${e.tool_name}`))
-      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`, 2, pane);
+      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`, 0, pane);
   }
 }

@@ -329,7 +329,7 @@ export function ConflictMode(p: ConflictModeProps) {
             bottom, not four hundred rows to scroll past. */}
         <div className="shrink-0 flex flex-col border-r" style={{ width: 236, borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
           <div className="px-3 pt-2.5 pb-1.5 text-[10px] tracking-[0.14em] uppercase" style={{ color: "var(--text3)" }}>In conflict</div>
-          <div className="agx-scroll overflow-y-auto flex-1 min-h-0">
+          <div className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-h-0">
             {(session?.files.length ? session.files : rels).map((rel) => {
               const isLeft = rels.includes(rel);
               const on = rel === sel;

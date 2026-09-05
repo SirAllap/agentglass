@@ -21,6 +21,18 @@ export const LAYER = {
   viewer: 10020,
 
   /**
+   * The floating bench.
+   *
+   * Above the viewer and below the palette, and both halves are the design.
+   * Above the viewer because the bench is where the viewer sends a file to be
+   * edited — a window that opened underneath the thing that raised it would
+   * look like nothing happened. Below the palette because the palette is how
+   * you find the next file to send here, and it has to stay on top of what it
+   * feeds.
+   */
+  bench: 10030,
+
+  /**
    * The file palette.
    *
    * Above the viewer, and that is the whole design rather than a detail: the

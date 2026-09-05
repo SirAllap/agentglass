@@ -86,6 +86,10 @@ const noteRead = db.query<PaneAgentNote, [string]>(
   "SELECT * FROM pane_agent WHERE pane_id = ?",
 );
 
+const recentPanes = db.query<{ pane_id: string; session_id: string; cwd: string; at: number }, [number, number]>(
+  "SELECT pane_id, session_id, cwd, at FROM pane_agent WHERE at >= ? ORDER BY at DESC LIMIT ?",
+);
+
 /**
  * Remember which agent is in which pane.
  *
@@ -276,4 +280,32 @@ export function paneDirs(
   const dirs = [...cwds];
   if (live) for (const d of transcriptDirs(live.transcript_path)) if (!dirs.includes(d)) dirs.push(d);
   return { pane: paneId, dirs };
+}
+
+/**
+ * Every pane an agent's hooks have fired from recently.
+ *
+ * The reverse of `paneAgentNote`, which answers about one pane. This is the
+ * whole list, and it exists because the Lantern had no other way to know an agent
+ * was alive: rows came only from `POST /agents/status`, and nothing on this
+ * machine calls it — no bin, hook, skill or doc mentions the route. Six agents
+ * in tmux and an empty board beside the deputy.
+ *
+ * The sighting was already here. `send_event.py` posts `session_id`,
+ * `tmux_pane` and `cwd` on every hook and `notePaneFromHook` writes them: 296
+ * rows on this machine the day this was added, none of them drawn anywhere.
+ *
+ * WINDOWED, because the table keeps a row per pane for as long as the pane id
+ * is not reused, and a sighting from last week is not evidence that anything is
+ * there now. A day is generous for "is this agent still around" and short
+ * enough that a laptop shut over a weekend does not come back claiming a crowd.
+ */
+export function recentPaneAgents(o: { sinceMs?: number; now?: number; cap?: number } = {}):
+{ paneId: string; sessionId: string; cwd: string; at: number }[] {
+  const now = o.now ?? Date.now();
+  const since = now - (o.sinceMs ?? 24 * 60 * 60_000);
+  try {
+    return recentPanes.all(since, Math.max(1, o.cap ?? 60))
+      .map((r) => ({ paneId: r.pane_id, sessionId: r.session_id, cwd: r.cwd, at: r.at }));
+  } catch { return []; } // a database that cannot answer is not a reason to lose the board
 }

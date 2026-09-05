@@ -34,7 +34,7 @@ import type { InboxGroup, InboxItem } from "../../src/model/inbox.ts";
 import {
   ChevronIcon, InboxIcon, IssuesIcon, PrsIcon, ReposIcon, TasksIcon, TerminalIcon,
 } from "../../src/nav/icons.tsx";
-import { BAR, taskDestinations } from "../../src/nav/bar.ts";
+import { BAR, taskDestinations, terminalDestinations } from "../../src/nav/bar.ts";
 import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { Card, Label, Note, TAP, groupEdge } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
@@ -178,8 +178,9 @@ export default function InboxScreen(): React.ReactNode {
   const [pulling, setPulling] = useState(false);
   /* Asked once per machine and held for a minute — the hook's own file says
      why it is not a fetch inside this component. Null while it is unknown,
-     which draws every destination. */
-  const destinations = taskDestinations(DESTINATIONS, useTracksWork(host));
+     which draws every destination. The terminal is the other cut, and that
+     one waits for nothing: the scope is the pairing this phone holds. */
+  const destinations = terminalDestinations(taskDestinations(DESTINATIONS, useTracksWork(host)), host?.scope);
 
   const reload = inbox.reload;
   const onRefresh = useCallback((): void => {

@@ -12,8 +12,17 @@
  * missing brace inside the script would not have been caught by anything.
  */
 import { describe, expect, test } from "bun:test";
-import { NERD_ICONS_RANGE } from "../src/terminal/nerdfont.generated.ts";
-import { terminalDocument } from "../src/terminal/terminal-html.ts";
+import { announce, built } from "./generated-artifacts.ts";
+
+announce("terminal-document.test.ts");
+
+const { NERD_ICONS_RANGE, terminalDocument } = built
+  ? {
+    ...(await import("../src/terminal/nerdfont.generated.ts")),
+    ...(await import("../src/terminal/terminal-html.ts")),
+  }
+  : { NERD_ICONS_RANGE: [] as unknown as typeof import("../src/terminal/nerdfont.generated.ts")["NERD_ICONS_RANGE"],
+      terminalDocument: (() => "") as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalDocument"] };
 
 const PALETTE = {
   bg: "#0d1117", bg2: "#161b22", bg3: "#21262d", bg4: "#30363d",
@@ -23,7 +32,7 @@ const PALETTE = {
   success: "#3fb950", warning: "#d29922", error: "#f85149", info: "#58a6ff",
 };
 
-const doc = terminalDocument({ palette: PALETTE, columns: 80 });
+const doc = built ? terminalDocument({ palette: PALETTE, columns: 80 }) : "";
 
 /** The app's own script, which is the last one in the document — the first is
  *  the bundled engine and is not what this file is about. */
@@ -34,7 +43,7 @@ function bridgeScript(): string {
   return last!;
 }
 
-describe("the document it hands the WebView", () => {
+describe.skipIf(!built)("the document it hands the WebView", () => {
   test("its script parses", () => {
     // `new Function` compiles without running: it catches a syntax error and
     // does not care that `window` and `atob` are absent here.
@@ -174,7 +183,7 @@ describe("the document it hands the WebView", () => {
  * page now carries a subset of one. Everything below is a property that was
  * measured in the emulator's WebView and would be invisible in a diff.
  */
-describe("the Nerd icon fallback", () => {
+describe.skipIf(!built)("the Nerd icon fallback", () => {
   /** The one @font-face in the document, as text. */
   function fontFace(): string {
     const face = doc.match(/@font-face\s*\{[^}]*\}/);

@@ -42,24 +42,53 @@ export interface BrowserTab {
    *  destroying it and loading the page again in a new one. A new tab in the
    *  other profile is the same thing without pretending it is the same tab. */
   profile: string;
+  /**
+   * The shelf item this tab IS, when it was opened from one.
+   *
+   * Identity, not address. The binding used to be "the tab whose url matches
+   * the kept one", and that is only true until you click a link: opening a kept
+   * page and pressing History inside it moved the tab out of its folder and
+   * into the loose list, which reads as the browser having opened a second tab
+   * — his words, "it opens a new tab... when it should not". A tab keeps its
+   * shelf entry wherever it wanders, and the entry shows where it is.
+   */
+  shelfId?: string;
 }
 
 /**
- * How many pages may be open.
+ * How many pages may be AWAKE at once.
  *
- * Each tab is a live Chromium guest with its own processes — twelve is already
- * a browser's worth of memory inside an app that is also running a fleet of
- * agents. The cap is a refusal with a reason rather than a silent drop.
+ * An awake tab is a live Chromium guest with its own processes — twelve is
+ * already a browser's worth of memory inside an app that is also running a
+ * fleet of agents. An asleep one is a name, an icon and an address: no guest,
+ * no processes, no network.
+ *
+ * So the cap counts guests, not rows. It used to count rows, and that made the
+ * limit fall on the wrong thing entirely — a fleet of agents each keeping one
+ * page in its own profile is forty rows and, at any moment, two or three
+ * guests. Refusing the fortieth because of memory nobody is spending is a
+ * refusal with a false reason in it.
  */
 export const MAX_TABS = 12;
 
+/**
+ * How many rows the strip will hold at all.
+ *
+ * Still bounded — an unbounded list is a leak with a nicer name — but bounded
+ * by what a list costs rather than by what a browser costs. Sized for the
+ * fleet the browser is built for: "if we want ten different agents working
+ * on forty-five completely different tabs at the same time".
+ */
+export const MAX_ROWS = 64;
+
 let seq = 0;
 
-export function newTab(url: string = BLANK, profile = ""): BrowserTab {
+export function newTab(url: string = BLANK, profile = "", shelfId?: string): BrowserTab {
   return {
     id: `t${++seq}-${Math.random().toString(36).slice(2, 8)}`,
     url, title: "", icon: null, loading: false, failed: null,
     canBack: false, canForward: false, profile,
+    ...(shelfId ? { shelfId } : null),
   };
 }
 
@@ -134,15 +163,21 @@ export function closeTab(tabs: BrowserTab[], id: string): { tabs: BrowserTab[]; 
 
 /** Add one after the tab it was opened from — a link opened in a new tab
  *  belongs beside its parent, not at the far end of the strip. */
-export function addTab(tabs: BrowserTab[], url: string, afterId?: string, profile?: string): { tabs: BrowserTab[]; tab: BrowserTab } | { error: string } {
-  if (tabs.length >= MAX_TABS) {
-    return { error: `${MAX_TABS} pages is the limit — each one is a live browser, and this app is also running your agents. Close one first.` };
+export function addTab(tabs: BrowserTab[], url: string, afterId?: string, profile?: string, shelfId?: string): { tabs: BrowserTab[]; tab: BrowserTab } | { error: string } {
+  if (tabs.length >= MAX_ROWS) {
+    return { error: `${MAX_ROWS} pages is the limit. Close one first — or drop a profile you are done with, which closes its pages with it.` };
+  }
+  /* The memory cap, counted where the memory is. A new tab is born awake, so
+     it needs a guest's worth of room; the ones asleep cost nothing and are not
+     in this count. */
+  if (tabs.filter((t) => !t.asleep).length >= MAX_TABS) {
+    return { error: `${MAX_TABS} pages awake at once is the limit — each one is a live browser, and this app is also running your agents. Close one, or let one go to sleep.` };
   }
   // A link opened from a page stays in the profile that page is signed into.
   // Anything else would sign you out mid-flow, which is the one thing profiles
   // must never do by accident.
   const from = afterId ? tabs.find((t) => t.id === afterId) : undefined;
-  const tab = newTab(url, profile ?? from?.profile ?? "");
+  const tab = newTab(url, profile ?? from?.profile ?? "", shelfId);
   const at = afterId ? tabs.findIndex((t) => t.id === afterId) : -1;
   const next = at < 0 ? [...tabs, tab] : [...tabs.slice(0, at + 1), tab, ...tabs.slice(at + 1)];
   return { tabs: next, tab };
@@ -169,4 +204,32 @@ export function stepTab(tabs: BrowserTab[], activeId: string, delta: 1 | -1): st
   const i = tabs.findIndex((t) => t.id === activeId);
   if (i < 0) return tabs[0]!.id;
   return tabs[(i + delta + tabs.length) % tabs.length]!.id;
+}
+
+/**
+ * Is this tab a page, or just a place to type?
+ *
+ * A blank tab holds nothing: no address, no title, no history. It is the state
+ * between pressing Ctrl+T and typing something, and the panel already says so
+ * in the middle of the screen — "Ctrl+T, or the address on the right, to start
+ * browsing". A row for it in the sidebar is the same sentence, said again, in a
+ * list of pages you actually have.
+ */
+export const isBlank = (t: BrowserTab): boolean => (!t.url || t.url === BLANK) && !t.title.trim();
+
+/** The tabs a list should draw. Blank ones are not pages. */
+export const listable = (tabs: BrowserTab[]): BrowserTab[] => tabs.filter((t) => !isBlank(t));
+
+/**
+ * Blank tabs nobody is on, dropped.
+ *
+ * They are not drawn (see `listable`), so a blank tab left in the background is
+ * a tab with no way back to it — the one shape a list must never leave behind.
+ * Nothing is lost: a blank tab has no page in it. The one you are ON survives,
+ * because that is where you are about to type.
+ */
+export function pruneBlank(tabs: BrowserTab[], activeId: string): BrowserTab[] {
+  const kept = tabs.filter((t) => !isBlank(t) || t.id === activeId);
+  // Never nothing: an empty list has no active tab and nowhere to type.
+  return kept.length ? kept : tabs.slice(0, 1);
 }

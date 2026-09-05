@@ -34,4 +34,18 @@ describe("a name the restore will photograph", () => {
   it("keeps the UUID names working, since chat panes still use them", () => {
     expect(validSessionName("92c33be2-4a3f-492a-92c7-c1bb3be11f71")).toBe(true);
   });
+
+  it("is never a tmux TARGET dressed as a name", () => {
+    /*
+     * `:` and `.` are `session:window.pane` syntax, and tmux never lets a
+     * session carry either (it rewrites them to `_`), so refusing them costs no
+     * real session. What they bought an attacker: `"orbit:"` is not equal to
+     * "orbit", so it slipped past killSessionByName's "not the session the
+     * client is on" and "not locked" checks as itself — and tmux then resolved
+     * `-t =orbit:` to orbit, the session both checks were guarding.
+     */
+    for (const n of ["orbit:", "orbit:1", "orbit.0", "orbit:1.0", ":orbit", "a.b"]) {
+      expect(validSessionName(n), JSON.stringify(n)).toBe(false);
+    }
+  });
 });

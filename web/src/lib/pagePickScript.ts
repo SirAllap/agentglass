@@ -29,7 +29,12 @@ export const PICK_GLOBAL = "__agxPick";
  * page must not also receive the click. That is the difference between picking
  * a "Delete" button and pressing it.
  */
-export const installPick = (feedback: boolean): string => `(() => {
+/** What the picker is for this time: inspecting, or handing an element to an
+ *  agent. The screenshot tool used to be a third mode here and is its own
+ *  overlay now — see Shooter.tsx. */
+export type PickMode = "pick" | "feedback";
+
+export const installPick = (mode: PickMode): string => `(() => {
   const G = ${JSON.stringify(PICK_GLOBAL)};
   if (window[G] && window[G].on) return "already";
   const box = document.createElement("div");
@@ -41,9 +46,10 @@ export const installPick = (feedback: boolean): string => `(() => {
   const hint = document.createElement("div");
   hint.setAttribute("data-agx-pick", "1");
   hint.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;left:50%;transform:translateX(-50%);bottom:16px;font:12px ui-sans-serif,system-ui,sans-serif;background:rgba(12,14,18,.94);color:#dfe3ea;padding:7px 14px;border-radius:8px;border:1px solid rgba(255,255,255,.14);box-shadow:0 6px 24px rgba(0,0,0,.5)";
-  hint.textContent = ${feedback
-    ? '"Click an element to tell an agent about it · Esc to stop"'
-    : '"Hover an element, then C to copy it or S to screenshot it · Esc to stop"'};
+  hint.textContent = ${JSON.stringify(
+    mode === "feedback" ? "Click an element to tell an agent about it · Esc to stop"
+    : "Hover an element, then C to copy it or S to screenshot it · Esc to stop",
+  )};
   document.documentElement.appendChild(box);
   document.documentElement.appendChild(tag);
   document.documentElement.appendChild(hint);

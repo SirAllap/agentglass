@@ -237,7 +237,7 @@
    * without knowing it is in a list.
    */
   .agx-settings-rows > * + * {
-    border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   }
 
   /*
@@ -250,15 +250,23 @@
    * container and the title, the eyebrows, the dividers and the rows all end
    * at the same x — which is what a page margin is.
    *
-   * Left, not centred: centring at this width leaves 127px of channel each
-   * side, two thirds of the nav's own width, which turns the nav into a
-   * detached island and moves the left reading edge every time a wide pane
-   * opts out. Left-aligned there is ONE vertical line, shared by the title,
-   * every eyebrow and every label in all 21 panes, and that single line is
-   * most of what makes a settings page scannable.
+   * CENTRED, and it used to be left — the reasoning changed because the
+   * surface did.
+   *
+   * Left was right for a 1010px dialog: centring inside it left 127px of
+   * channel each side, two thirds of the nav's own width, which turned the nav
+   * into a detached island. Settings is a page now and takes the window, so
+   * the slack is no longer 127px of awkward gutter, it is several hundred
+   * pixels of dead screen hanging off one side while the column hugs the nav.
+   *
+   * What made left worth defending is kept: the title, every eyebrow and every
+   * label still share ONE vertical line, because the whole column moves
+   * together. It is simply a line the page centres rather than one glued to
+   * the nav's border.
    */
   .agx-settings-col {
     max-width: var(--agx-settings-col, 760px);
+    margin-inline: auto;
     container-type: inline-size;
     container-name: agx-settings;
   }
@@ -287,7 +295,12 @@
     row-gap: 8px;
     align-items: center;
     width: 100%;
-    padding: 12px 16px;
+    /* 14/18, up from 12/16. Two lines of hint at 12px are 32px of text, so a
+       12px gap between rows was a smaller space than the one INSIDE a row
+       between its label and its hint — which is the arrangement that makes a
+       list of settings read as one paragraph. The horizontal 18 matches the
+       card's heading, so a label and the heading above it share an edge. */
+    padding: 14px 18px;
     text-align: left;
   }
   .agx-settings-row > :last-child { justify-self: end; }
@@ -320,9 +333,263 @@
    * Drawn from the theme's own text colour instead, so it darkens a light
    * ground and lightens a dark one.
    */
-  /* A section whose every row was filtered away takes its heading with it. */
-.agx-settings-section:has(> .agx-settings-rows:empty) { display: none; }
+  /*
+ * SURFACES.
+ *
+ * Every palette in themes.ts ships a tone ramp — --bg, --bg2, --bg3 — and the
+ * settings screen used none of it. The page, the nav and all thirty-nine
+ * groups painted --bg, so the whole window was one flat field and the only
+ * thing answering "where does this group start" was the hairline between two
+ * rows. That is what reads as a book: uniform colour, uniform weight, no shape
+ * to aim at.
+ *
+ * Named by JOB rather than by step, so a pane asks for "a card" and gets
+ * whatever a card means in the palette it happens to be wearing.
+ *
+ * The BORDER and the SHADOW carry more of this than the tone step does, and
+ * they have to: the step is not ours to size. Porcelain's --bg to --bg2 is ten
+ * units of grey and Midnight Purple's is thirty, so a card tinted alone reads
+ * on one and vanishes on the other. Drawn — edge, lift and all — it reads on
+ * both, and the tint is then free to be as quiet as the palette wants.
+ */
+:root {
+  /* The nav leans toward the raised tone rather than away from it. That is the
+     right direction on BOTH kinds of palette, which is the whole reason it is
+     written as a mix instead of a pair of hand-picked colours: on a dark theme
+     --bg2 is lighter and the nav lifts; on a light one --bg2 is darker and the
+     nav sinks. Either way it stops being the same surface as the page. */
+  /* Nearly all the way to --bg2, because the palette's own step is all there
+     is to spend and some palettes are miserly with it: GitHub Dark puts nine
+     units of grey between --bg and --bg2 where Midnight Purple puts thirty.
+     Meeting bg2 uses whatever range the theme actually has; stopping short of
+     it — the first attempt sat at 58% — spent half of nine, which on that
+     palette is four units and invisible. */
+  --surface-nav: color-mix(in srgb, var(--bg2) 88%, var(--bg));
+  --surface-card: var(--bg2);
+  /* One step further for things that sit INSIDE a card and take input — a
+     text box, a code sample, a preview. Without it those land on the card at
+     the card's own tone and read as unstyled rather than as inset. */
+  --surface-inset: color-mix(in srgb, var(--bg3) 78%, var(--bg2));
+  --surface-line: color-mix(in srgb, var(--border) 60%, transparent);
+  --surface-lift: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 26px -18px var(--shadow);
+}
+
+/*
+ * A GROUP DRAWS ITSELF.
+ *
+ * The first pass put the card in the `Section` component, and that was the
+ * mistake: half the settings pages do not go through `Section`. Review
+ * prompts, Recipes, Remote, Activity and the look editor each build the same
+ * two boxes by hand — `.agx-settings-section` wrapping `.agx-settings-rows` —
+ * so the redesign reached the pages I happened to open and skipped the rest.
+ * "You have left a lot out, you are not being consistent" is what that looks
+ * like from the other side, and it is accurate.
+ *
+ * So the rule is on the SHAPE, not on the component. Anything that builds a
+ * settings group gets the card, whether it imported anything or not — and a
+ * page written next month gets it without being told.
+ *
+ * The gap between groups lives here too. It was a `pb-` utility repeated at
+ * every call site, which is the same failure one level down: eight places to
+ * change and seven of them wrong.
+ */
+.agx-settings-col .agx-settings-section {
+  background: var(--surface-card);
+  border: 1px solid var(--surface-line);
+  border-radius: 14px;
+  box-shadow: var(--surface-lift);
+  /* Rows paint their hover to square edges; without this the first and last
+     of them spill over the corner they are meant to sit inside. */
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+/*
+ * A heading, whichever of the two spellings the page used.
+ *
+ * `.agx-settings-head` is what `Section` emits. `.panel-eyebrow` is what the
+ * hand-built pages emit, and it is matched as a DIRECT CHILD of the section on
+ * purpose: the same class is used INSIDE a rows box as a sub-label — "Sound",
+ * "From agentglass", "Anywhere" — and those are correct as eyebrows. Only the
+ * one standing where a group heading stands gets promoted.
+ */
+.agx-settings-col .agx-settings-section > .panel-eyebrow {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--text);
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--surface-line);
+}
+
+/* A drawn surface: tone, edge and lift together, because on a tight ramp the
+   tone alone is not enough and on a wide one the edge alone is not either. */
+.agx-card {
+  background: var(--surface-card);
+  border: 1px solid var(--surface-line);
+  border-radius: 14px;
+  box-shadow: var(--surface-lift);
+}
+
+/*
+ * The Lantern's cards: the same surface with a little light on its top edge,
+ * and a lift on hover so a grid of twenty reads as objects, not as boxes
+ * drawn on the background. The colour of a card that needs you is set inline
+ * from the wait's tone; this only adds the depth.
+ */
+.agx-lantern-card {
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--text) 3.5%, transparent), transparent 42%);
+  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.agx-lantern-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--text) 22%, var(--surface-line));
+  box-shadow: var(--surface-lift), 0 14px 32px -20px var(--shadow);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agx-lantern-card, .agx-lantern-card:hover { transition: none; transform: none; }
+}
+
+/*
+ * A group's heading, INSIDE its card and above the rule.
+ *
+ * It was `panel-eyebrow` — 11px, uppercase, tracked out, in the primary hue —
+ * which is a LABEL, and a label is what you put on something that is already
+ * obviously a box. With no box under it an eyebrow is just the smallest text
+ * on the page announcing the largest thing, so the eye skipped it and the
+ * groups ran together. Sentence case at 13.5px semibold, in --text, is a
+ * heading: bigger than the rows it governs, which is the only rule a heading
+ * has to obey.
+ */
+.agx-settings-head { padding: 16px 18px 14px; }
+.agx-settings-head-t {
+  /*
+   * 15px/650 against a 13.5px row label, and it was 13.5/600 against the same
+   * — a point and a half of difference, which is not a hierarchy, it is a
+   * rounding error. A heading has one job: to be unmistakably bigger than the
+   * things it governs, so the eye can skip the rows and read only the
+   * headings when it is hunting.
+   */
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.agx-settings-head-d {
+  /*
+   * And the description steps DOWN to --text4. Contrast is a ratio, not a
+   * value: pushing the title brighter while its own subtitle sits at --text3
+   * — one step off body text — leaves the pair reading as two lines of the
+   * same paragraph, which is exactly what it looked like.
+   */
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--text4);
+}
+.agx-settings-head + .agx-settings-rows { border-top: 1px solid var(--surface-line); }
+
+/*
+ * The look editor: a portrait that stays put while the pickers scroll past it.
+ *
+ * `position: sticky` on the aside, and the scroller it resolves against is the
+ * settings column's own — which is the whole reason the portrait had to leave
+ * the card. A card clips its corners, `overflow: hidden` makes it a scroll
+ * container, and a sticky child of a container that never scrolls never moves.
+ *
+ * `align-items: start` on the grid, because a grid item stretches to the row
+ * by default and a stretched item is full height — and an element that is
+ * already as tall as its track has nowhere to stick TO. This is the one
+ * declaration that silently turns the whole thing off.
+ */
+/*
+ * A LIST COLUMN beside a reading surface.
+ *
+ * Git, Diff and the preset diff each put a file list to the left of the thing
+ * you are reading, and all three painted nothing — so the list and the diff
+ * were one field with a 1px rule down the middle. Measured across the window:
+ * before the chrome work, 98.4% of every painted pixel was --bg; after it,
+ * 84%; and this column is most of what is left.
+ *
+ * Same token as the rail, the settings navigation and the bar at the top of a
+ * view, because it is the same KIND of thing: somewhere you pick from, next to
+ * somewhere you read. The reading surface itself — a terminal, a diff — stays
+ * on --bg, which is what the palettes were designed around.
+ */
+/* A chip that is a WARNING rather than a label. Here rather than inline
+   because understudy-panel-tokens.test.ts refuses any color literal or
+   color-mix inside web/src/components/understudy — that pane reads its colour
+   from the theme and nowhere else, so a mix belongs in the stylesheet. */
+.agx-chip-warn {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.agx-sidelist {
+  background: var(--surface-nav);
+}
+
+.agx-look {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.agx-look-portrait {
+  position: sticky;
+  /* Clear of the top edge, so the card does not sit flush against the scroll
+     boundary and read as clipped. */
+  top: 8px;
+}
+/* Below this the two columns cost more than the anchoring earns: a 264px
+   portrait beside a picker grid leaves the chips three to a row. It stacks,
+   and the portrait goes back to being the first thing you see. */
+@container agx-settings (max-width: 720px) {
+  .agx-look { grid-template-columns: minmax(0, 1fr); }
+  .agx-look-portrait { position: static; }
+}
+
+/* A group whose every row was filtered away takes its card with it. The rows
+   are a grandchild now that the card wraps them, so this no longer counts
+   levels — written as `> *` it silently stopped matching the day the card
+   went in, and the result is an empty box with a heading over nothing. */
+.agx-settings-section:has(.agx-settings-rows:empty) { display: none; }
 .agx-hover:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+
+/*
+ * The hover a chip could not have.
+ *
+ * `chipTone()` in Chrome.tsx writes `background` as an INLINE style, and an
+ * inline declaration outranks every class Tailwind can emit — so for as long as
+ * the tone painted the chip, `hover:bg-*` on the same element did nothing at
+ * all. Measured before this rule existed: zero `hover:` and zero
+ * `onMouseEnter` in the whole understudy view (2 504 lines), against 41 in
+ * TasksPanel. A row of buttons that never answers the pointer reads as a row of
+ * captions, which is exactly what was reported.
+ *
+ * Unlayered and `!important`, therefore, and deliberately narrow: it fires only
+ * on hover, only on a chip that is not disabled, and it never touches the
+ * pressed tint, which the inline style keeps owning.
+ */
+.agx-chip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 12%, transparent) !important;
+  color: var(--text);
+}
+.agx-chip-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 18%, transparent) !important;
+  color: var(--error);
+}
+/* A tab is not a chip: it has no fill of its own, so the hover IS the surface. */
+.agx-tab:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+/* A whole row that answers the pointer. `.agx-row` is the app's own list-row
+   hover (46 call sites); this is that, for the rows this view hand-rolled. */
+.agx-rowhit:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+/* The box inside a row-sized target: it cannot be hovered on its own (it is
+   pointer-events:none, so the row is the only target), so the row lights it. */
+.agx-rowhit:hover .agx-tick { background: color-mix(in srgb, var(--primary) 14%, transparent); }
   /* horizontal scroll without a visible scrollbar (header controls zone) */
   .agw-noscrollbar { scrollbar-width: none; -ms-overflow-style: none; }
   .agw-noscrollbar::-webkit-scrollbar { display: none; }
@@ -701,8 +968,30 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-stick {
   position: sticky;
   left: 0;
-  z-index: 1;
+  /*
+   * Above everything else in a row, and that number is the fix.
+   *
+   * It was 1, and an assignee's face is `z-index: 4` so that the faces overlap
+   * each other left to right — so a face slid OVER the frozen column instead of
+   * under it, and what you got at the left edge was a title with somebody's
+   * avatar sitting on top of it. A column that things pass BEHIND has to
+   * outrank everything that passes.
+   */
+  z-index: 6;
   background: var(--bg);
+  /*
+   * The row's left padding belongs to the FROZEN cell, not to the row.
+   *
+   * `left: 0` sticks to the scrollport, and the row's own `px-4` scrolls away
+   * with everything else — so the titles crept sixteen pixels left as the board
+   * moved and ended up against the edge. Reported as "there is scroll in the
+   * frozen column", which is exactly what it looked like. The padding is here
+   * and the rows carry only their right one.
+   */
+  padding-left: 16px;
+  /* And it reads as an edge. Without a line the frozen column and the moving
+     ones are one surface, and the eye cannot tell why the text stopped. */
+  box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 45%, transparent);
 }
 .agx-row:hover .agx-stick {
   background: color-mix(in srgb, #fff 5%, var(--bg));
@@ -715,8 +1004,45 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-stick-head {
   position: sticky;
   left: 0;
-  z-index: 2;
+  z-index: 7;
   background: var(--bg);
+  padding-left: 20px;
+  box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+/*
+ * The status heading holds still too.
+ *
+ * "READY FOR ENGINEERING 80 · 8 pts" is about the whole group, not about the
+ * columns — so watching it slide out of the pane while its rows stayed put read
+ * as the heading having come loose from them. Its own layer, above the rows and
+ * below the column heading.
+ */
+.agx-stick-group {
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  background: var(--bg);
+  padding-left: 16px;
+  padding-right: 10px;
+}
+
+/*
+ * AND IT HAS TO LIGHTEN WITH THE ROW IT SITS IN.
+ *
+ * The sticky segment paints an OPAQUE background so it stays readable while
+ * the row scrolls sideways underneath it. That is right, and it means a hover
+ * tint painted on the row behind it never reaches it: the rest of the row
+ * lifts and this part does not, which reads as a darker rectangle drawn around
+ * the chevron and the pill. Reported exactly that way — "there is a darker
+ * box showing; it should all be the same shade of grey".
+ *
+ * The same 5% white Tailwind's `hover:bg-white/5` puts on the row, mixed into
+ * the opaque colour instead of layered over it, so the two halves land on the
+ * same grey.
+ */
+.agx-group-head:hover .agx-stick-group {
+  background: color-mix(in srgb, #fff 5%, var(--bg));
 }
 
 .agx-row-tall {
@@ -818,7 +1144,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
  * Padding alone did not do it: with a hairline as the only thing between one
  * notification and the next, the rows still read as one column of text with
  * rules through it — reported twice, the second time after the padding had
- * already been raised ("el espacio entre tarjetas sigue igual"). What was
+ * already been raised ("the space between cards is still the same"). What was
  * missing is not padding INSIDE a row, it is space BETWEEN rows and a surface
  * that makes each one an object: 6px of gap and a fill of its own, and the
  * hairline goes, because a card that is separated does not also need a rule.
@@ -1155,8 +1481,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
  */
 .agx-settings-col .agx-settings-rows > *,
 .agx-settings-col .panel-eyebrow {
-  padding-left: 16px;
-  padding-right: 16px;
+  padding-left: 18px;
+  padding-right: 18px;
 }
 
 /*
@@ -1179,8 +1505,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   padding-right: 0;
 }
 .agx-settings-col .agx-settings-rows *:has(.agx-settings-row) > *:not(.agx-settings-row):not(:has(.agx-settings-row)) {
-  padding-left: 16px;
-  padding-right: 16px;
+  padding-left: 18px;
+  padding-right: 18px;
 }
 .agx-settings-col .agx-settings-rows *:has(.agx-settings-row) > * + * {
   border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
@@ -1393,8 +1719,17 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
  * glance from across a 27-inch screen, and neither is a colour this UI uses for
  * anything else.
  */
+/* One source of truth for both finds. The terminal's search draws through
+   xterm rather than through `::highlight()` — a canvas, not a document — so it
+   cannot use these rules, but it CAN read these two variables, and a screen
+   where the same search is amber in one pane and something else in the next is
+   a screen you have to learn twice. See FindBar in TerminalPanel. */
+:root {
+  --find-hit: #ffd23f;
+  --find-on: #ff2bd1;
+}
 ::highlight(agx-find) {
-  background: #ffd23f;
+  background: var(--find-hit);
   color: #16130a;
 }
 /* The one you are standing on, told apart by more than brightness: the same
@@ -1405,7 +1740,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    as "this one". Magenta against the amber is unmistakable at a glance, which
    is the whole job of this rule. */
 ::highlight(agx-find-on) {
-  background: #ff2bd1;
+  background: var(--find-on);
   color: #ffffff;
 }
 .agx-prose pre,
@@ -1471,8 +1806,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    the rail were not, so they grew and the page scrolled underneath them —
    reading down the diff dragged the rail's paragraphs off the top with it, and
    there was no way to keep a comment in view while scrolling the code it is
-   about. Reported: «deben tener dos scroll, uno para [el diff] y otro para [el
-   rail]».
+   about. Reported: "they need two scrolls, one for [the diff] and another for
+   [the rail]".
 
    160 rather than the mockup's 200 because the app's chrome above this row is
    shorter than the mockup's, and 160 is already the number the tree column was
@@ -1501,8 +1836,8 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    where the panel starts lower than that guess the tree came out taller than
    the box holding it — so the middle column had a hundred-odd pixels of scroll
    that belonged to nothing, and dragging it took the toolbar and the tree up
-   with it. Reported as "ese scroll raro mueve el listado de files hacia
-   arriba". The percentage resolves now because the row it sits in is a flex
+   with it. Reported as "that odd scroll pushes the file list upwards". The
+   percentage resolves now because the row it sits in is a flex
    child with a definite height — see `flex-1 min-h-0` on it. */
 .agx-tree3 { width: 250px; max-height: var(--agx-tree-max, 60vh); overflow-y: auto; }
 @media (max-width: 1179px) { .agx-tree3 { width: 200px; } }
@@ -1533,4 +1868,250 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   .git-card { transition: none !important; transform: none !important; }
+}
+
+/* Controls that belong to a row but should not decorate it.
+   A conversation with four buttons under every paragraph reads as a control
+   panel; the same four under the paragraph you are pointing at read as
+   "you can do this to it". Focus counts as pointing, or the row would be
+   unreachable from the keyboard. */
+.agx-hover-show { opacity: 0; transition: opacity 120ms ease; }
+*:hover > .agx-hover-show,
+.agx-hover-show:focus-within { opacity: 1; }
+@media (hover: none) { .agx-hover-show { opacity: 1; } }
+
+/* "It is this one" — see lib/flash.ts.
+   A pulse rather than a static highlight: the point is to catch the eye at the
+   end of a scroll and then get out of the way, and something that stays lit has
+   to be dismissed by somebody. The ring is drawn with a shadow so it costs no
+   layout and cannot move the thing it is pointing at. */
+@keyframes agx-flash-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; background-color: transparent; }
+  12%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--find-on) 70%, transparent); background-color: color-mix(in srgb, var(--find-on) 16%, transparent); }
+  55%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--find-on) 45%, transparent); background-color: color-mix(in srgb, var(--find-on) 10%, transparent); }
+}
+.agx-flash {
+  animation: agx-flash-pulse 1.2s ease-in-out 2;
+  border-radius: 8px;
+}
+/* Somebody who has asked for less motion still needs to be told which one: the
+   ring stays, it simply does not throb. */
+@media (prefers-reduced-motion: reduce) {
+  .agx-flash { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--find-on) 60%, transparent); }
+}
+
+/* The × on a row of the browser's sidebar — closing a tab, or taking a page off
+   the shelf. Its own box, so there is an edge to aim at on a row of text, and a
+   reddish one because both of them REMOVE something. Not the app's full error
+   red: neither is a mistake, and a row of alarm-coloured buttons down a sidebar
+   is a sidebar that looks broken. */
+.agx-x {
+  color: color-mix(in srgb, var(--error) 76%, var(--text2));
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.agx-x:hover {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 24%, transparent);
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+}
+.agx-x:active { background: color-mix(in srgb, var(--error) 34%, transparent); }
+@media (prefers-reduced-motion: reduce) { .agx-x { transition: none; } }
+
+/* The bench's own controls: a hit target you can see.
+ *
+ * They live in a bar that is also the window's drag handle, so a control that
+ * gives no sign of where it starts is a control you miss — and a miss there
+ * drags the window. Reported as "sometimes I miss when I click it and it is annoying". The rule
+ * is the one the rest of this app already follows for icon-only buttons: the
+ * glyph is not the target, the box around it is. */
+.agx-bench-hit { transition: background-color .1s ease, color .1s ease; }
+.agx-bench-hit:hover { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--text); }
+.agx-bench-hit:active { background: color-mix(in srgb, var(--primary) 28%, transparent); }
+.agx-bench-hit:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .agx-bench-hit { transition: none; } }
+
+/* The understudy's own fields, and the reason this rule exists at all.
+ *
+ * `agx-input` was written on every input, textarea and select in that feature
+ * and DEFINED NOWHERE. They rendered as the browser's bare controls: no
+ * padding, no border of ours, and a `select` in the system's own blue —
+ * reported as "it feels like it has no room to breathe", which is exactly what a text box
+ * with no padding looks like next to text that has some.
+ *
+ * The shape is the one CompareModal and SearchModal already use, so this is
+ * the existing house style given a name rather than a new one invented for a
+ * single panel. Kept as a class instead of copied inline because it appears in
+ * a dozen places across two files, and a dozen copies is a dozen chances for
+ * one of them to drift.
+ */
+.agx-input {
+  padding: .375rem .5rem;
+  border-radius: .5rem;
+  font-size: 11.5px;
+  background: var(--bg3);
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  color: var(--text);
+  outline: none;
+}
+.agx-input::placeholder { color: var(--text4); }
+.agx-input:focus-visible { border-color: color-mix(in srgb, var(--primary) 65%, transparent); }
+/* A select renders its own arrow and its own popup, and on this dark theme the
+ * system pair is a white box in the middle of the panel. The field is ours;
+ * the popup belongs to the platform and cannot be styled, so the options are
+ * given the same colours rather than left to inherit nothing. */
+select.agx-input { appearance: none; padding-right: 1.4rem; cursor: pointer; }
+select.agx-input option { background: var(--bg2); color: var(--text); }
+textarea.agx-input { line-height: 1.45; resize: vertical; }
+
+/* ── The understudy's list ────────────────────────────────────────────────
+ *
+ * The queue you fill by hand, which is the whole screen now. It used to render
+ * as a footnote under the box that fills it, and the panel showed one "next up"
+ * item with no sense of what came after — so 108 of 108 runs came from a list
+ * nobody could see.
+ */
+.agx-work-item { transition: background 140ms ease; }
+.agx-work-item:hover { background: color-mix(in srgb, var(--bg2) 60%, transparent); }
+/* The × is not an affordance to advertise. Every row would carry one, which
+ * reads as a wall of delete buttons over a list you are meant to be reading. */
+.agx-work-x {
+  opacity: 0;
+  background: none;
+  border: 0;
+  color: var(--text4);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  /* 20×20 at least: an icon-only control this size is a target before it is a
+   * glyph, and inheriting the row's 10.5px would make it neither. */
+  min-width: 20px;
+  min-height: 20px;
+  font-size: 15px;
+  transition: opacity 140ms ease, color 140ms ease;
+}
+.agx-work-item:hover .agx-work-x,
+.agx-work-x:focus-visible { opacity: 1; }
+.agx-work-x:hover { color: var(--error); }
+
+/* A key cap, for the two keystrokes that drive the box above the list. */
+.agx-kbd {
+  background: var(--bg3);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text3);
+}
+
+/* A control that reads as text: for a setting you touch once and then stop
+ * seeing, which is what "which checkouts" turned out to be. */
+.agx-linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  /* NOT `font: inherit`. The shorthand resets every font property, size
+   * included, so a utility class setting the size lost to it and the control
+   * came out at whatever the container happened to be — rendered, one of these
+   * was 20px and read as a heading. The three long-hands keep a button looking
+   * like the text around it without deciding how big that text is. */
+  font-family: inherit;
+  font-weight: inherit;
+  font-style: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  transition: color 140ms ease;
+}
+.agx-linkish:hover { color: var(--text2); }
+
+/* ── The understudy's drawing set ─────────────────────────────────────────
+ *
+ * One surface with its own world, and the reason is in what it does: this
+ * panel authorises work a person will not watch happen, inside a boundary
+ * that has to hold, and keeps a record of what was built and what was
+ * rejected. Drafting solved that presentation problem a century before
+ * software had it, so the panel is drawn as a drawing set — a title block
+ * that never moves, numbered sheets, and a cloud around anything that wants
+ * a person.
+ *
+ * Measured on the build this replaces: 31 sentences of explanation across
+ * three tabs, 36 sources each with its own paragraph, two type sizes doing
+ * the whole hierarchy, and a 78-character worktree path on every history
+ * row. Nothing receded, so nothing could be scanned — "it feels like I am
+ * about to break something".
+ */
+
+/* The block. Three fields, always the same three, always in this order,
+   whether it is idle, cutting, or waiting on somebody. */
+/* Capped, because a title block is read as one object. Rendered at 2460px the
+ * three fields sat two hand-widths apart and stopped being a block at all —
+ * measured on the real panel, not guessed. */
+.agx-tb {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
+  max-width: 64rem;
+  border-bottom: 2px solid var(--border);
+}
+.agx-tb > div { padding: .55rem .85rem; border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.agx-tb > div:last-child { border-right: 0; }
+.agx-tb > div.on { background: color-mix(in srgb, var(--primary) 9%, transparent); box-shadow: inset 0 2px 0 var(--primary); }
+.agx-tb-k { font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--text4); }
+.agx-tb > div.on .agx-tb-k { color: var(--primary); }
+.agx-tb-v { font-size: 13.5px; font-weight: 600; margin-top: .1rem; color: var(--text); letter-spacing: -.01em; }
+.agx-tb-v small { font-weight: 400; color: var(--text3); font-size: 11.5px; }
+
+/* A revision cloud: the scalloped outline a drawing puts around anything
+ * altered since the last issue. Drawn AROUND the row rather than filling it,
+ * so a queue with one question in it still reads as a queue — which a
+ * full-width banner never does. The only place this panel uses --error. */
+/*
+ * A REVISION CLOUD THAT CLOSES.
+ *
+ * The scallop is a repeating 16px mask over the border, and a box of arbitrary
+ * width never holds a whole number of 16px tiles — so the pattern was cut at
+ * the right edge and the bottom, the corners did not meet, and on a wide short
+ * banner the whole thing read as a dashed rectangle somebody had broken.
+ * Reported as "the UI looks a bit broken".
+ *
+ * Two layers instead of one. A faint continuous outline underneath, which
+ * closes the shape at any size, and the scallop over it at full strength. Where
+ * a tile is cut the outline is still there, so the frame is always a frame.
+ */
+.agx-cloud { position: relative; }
+.agx-cloud::before {
+  content: ""; position: absolute; inset: 0; border-radius: 14px;
+  border: 1.5px solid color-mix(in srgb, var(--error) 30%, transparent);
+  pointer-events: none;
+}
+.agx-cloud::after {
+  content: ""; position: absolute; inset: 0; border-radius: 14px;
+  border: 1.5px solid var(--error);
+  /* Smaller tiles than before: the sliver a cut tile leaves is half the size,
+     and the scallop reads as a scallop rather than as long dashes on the wide
+     horizontal edges. */
+  -webkit-mask: radial-gradient(circle at 5px 5px, #000 4.4px, transparent 4.4px) 0 0/10px 10px repeat;
+  mask: radial-gradient(circle at 5px 5px, #000 4.4px, transparent 4.4px) 0 0/10px 10px repeat;
+  pointer-events: none;
+}
+.agx-cloud > * { position: relative; }
+/* The numbered triangle beside it. A diamond, because that is what a drawing
+   uses and because a circle would read as a status dot. */
+.agx-revtag {
+  display: inline-grid; place-items: center; width: 20px; height: 20px;
+  transform: rotate(45deg); border: 1.5px solid var(--error); color: var(--error);
+  font-size: 9.5px; font-weight: 700; flex: 0 0 auto;
+}
+.agx-revtag > span { transform: rotate(-45deg); }
+
+/* A stamp on an issued sheet. Three words replace four states, and `void`
+   carries what `failed` does not: the sheet is kept, it is simply not to be
+   built from. */
+.agx-stamp {
+  font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  padding: .12rem .3rem; border: 1px solid currentColor; flex: 0 0 auto; line-height: 1.3;
 }

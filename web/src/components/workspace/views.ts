@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, UnderstudyIcon, LanternIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 import { IS_DEMO } from "../../lib/demo.ts";
 
@@ -66,6 +66,22 @@ export const VIEWS: ViewDef[] = [
   // so leading with it here would only have renumbered the people who never
   // touched it.
   { id: "files", label: "Files", key: "e", icon: FilesIcon, hint: "Browse and search a checkout — and open a file to edit" },
+  // Appended for the same reason Files was — a number already in somebody's
+  // fingers is not worth taking away — and it ships in the bottom drawer for
+  // the reason set out on `group` above: this is a thing you go and LOOK at.
+  // It is a scorecard. It cannot stage, commit, launch or answer anything, and
+  // a seat among the views you WORK in would be a promise the view does not
+  // keep.
+  { id: "understudy", label: "Clone", key: "u", icon: UnderstudyIcon, hint: "What a stand-in would have done, and how often that matched — it never acts", group: "utility" },
+  /*
+   * Appended, same reason as the two above it. Bottom drawer because it is a
+   * thing you go and LOOK at — and the one view whose icon comes to you: it
+   * lights with a count when an agent is stopped on you, from wherever you
+   * are. It was a tab inside Clone called "Crew", which is where nobody found
+   * it and a name that meant nothing: "it makes no sense to me… something outside
+   * the clone, since it is not only about the clone".
+   */
+  { id: "lantern", label: "Lantern", key: "l", icon: LanternIcon, hint: "Who needs you, what every agent is working on, and the way there — it never acts on its own", group: "utility" },
 ];
 
 export const VIEW_IDS = VIEWS.map((v) => v.id);

@@ -352,7 +352,7 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                         style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                     </div>
 
-                    <div className="agx-scroll overflow-y-auto flex-1 px-2 py-2" style={{ minHeight: 140 }}>
+                    <div className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 px-2 py-2" style={{ minHeight: 140 }}>
                       {/* machine-wide is a real choice, not just the absence of one */}
                       <Row current={workspace === null} icon="🖥" title="All repos/projects" sub="Every repo/project — no scope" onClick={() => choose(null)} disabled={busy} />
 

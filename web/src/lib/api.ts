@@ -1,5 +1,5 @@
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -8,6 +8,112 @@ import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedVie
    because this provider answers 401 for a card that does not exist and a code
    pretending to know which it was would be wrong on the common case. */
 type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; unauthorised?: boolean; task?: ProviderTask };
+
+/** Local agent spend, attributed to the work objects it happened in — see
+ *  server/src/spend.ts, which is where the rule and its limits are written.
+ *  `namedUsd` is the part turns claimed for the branch themselves; `inferredUsd`
+ *  the part attributed only by the directory it ran in, kept apart so a panel
+ *  can say which half it is sure about. Declared here rather than in
+ *  shared/types.ts for the same reason ClickUpWrite above is: it is the shape of
+ *  one endpoint's answer and nothing else consumes it. */
+export type BranchSpend = {
+  branch: string; usd: number; namedUsd: number; inferredUsd: number;
+  sessions: number; lastTs: number; dirs: string[];
+};
+export type RepoSpend = {
+  ok: boolean; error?: string;
+  since: number; seamDay: string | null; beforeSeamUsd: number;
+  branches: BranchSpend[];
+  worktrees: { dir: string; branch: string | null; usd: number; sessions: number; lastTs: number }[];
+};
+
+/* One prompt, several checkouts, tracked as one thing — see server/src/runs.ts,
+   which is where these shapes are decided and where the reasoning for each
+   field is written. Mirrored here rather than moved to shared/types.ts for the
+   same reason BranchSpend above is mirrored from server/src/spend.ts: the web
+   never imports from server/, and the alternative is editing a server module
+   that this change has no other business in. The server is the author; if a
+   field is added there and not here, this file is simply blind to it, which is
+   the failure mode a duplicated type has and it is a quiet one. */
+
+/** Where a leg is in its life. `gone` is the one nobody decided: the worktree
+ *  is not on disk any more, and the leg stays visible saying so rather than
+ *  vanishing out of a comparison. */
+/** Mirrors server/src/runs.ts. `released` is an adopted leg handed back —
+ *  the run has let go and the checkout is untouched. */
+export type LegState = "running" | "won" | "lost" | "gone" | "released";
+/** Who started it. The whole point of the feature is that both appear in one
+ *  run — `adopted` is a pane the user opened by hand, in a checkout this app
+ *  never cut, possibly running another vendor's agent. */
+export type LegOrigin = "spawned" | "adopted";
+
+export type RunLeg = {
+  /** The checkout this leg works in. The join key for everything stored. */
+  worktree: string;
+  /** What is checked out there, or `(detached)` — an adopted pane is under no
+   *  obligation to be on a branch. */
+  branch: string;
+  /** Roster id of the agent. Empty when nothing on this machine could tell,
+   *  which is honest and must be drawn as "unknown", never guessed at. */
+  agent: string;
+  /** The tmux pane it is in. Empty for a spawned leg whose window would not
+   *  open — recorded rather than silently missing. */
+  paneId: string;
+  state: LegState;
+  origin: LegOrigin;
+  startedAt: number;
+};
+
+export type Run = {
+  id: string;
+  /** The repository the run is about. Every leg is a checkout of it. */
+  root: string;
+  prompt: string;
+  legs: RunLeg[];
+  startedAt: number;
+};
+
+/** One vendor's share of a leg's bill, derived from the model each event
+ *  carried rather than from what anybody said they were running. */
+export type ProviderSpend = { provider: string; events: number; costUsd: number };
+
+/** What one leg has actually produced. Its own request, not a field on the run
+ *  list: it is a database query per leg, and the list is what a panel paints
+ *  first. */
+export type LegActivity = {
+  worktree: string;
+  branch: string;
+  agent: string;
+  origin: LegOrigin;
+  state: LegState;
+  sessions: number;
+  events: number;
+  toolCalls: number;
+  errors: number;
+  costUsd: number;
+  /** Usually one row; more than one when a session changed model mid-way, which
+   *  a single number cannot say. */
+  providers: ProviderSpend[];
+  /** Epoch millis of the last event seen there, or 0 for a leg that has not
+   *  produced one yet. */
+  lastSeen: number;
+};
+
+/** What `/run/start` answers. `detail` carries the legs that did not open, on a
+ *  run that otherwise did — a partial start is still a run. */
+export type RunStartResult = { ok: boolean; run?: Run; error?: string; detail?: string };
+/** `/run/adopt` also hands back the leg it just attached, which is the row the
+ *  caller wants to scroll to. `ok` with a `detail` means the pane was already
+ *  in this run — a second press is somebody making sure, not a fault. */
+export type RunAdoptResult = RunStartResult & { leg?: RunLeg };
+/** `/run/finish` refuses a teardown over uncommitted work and names it in
+ *  `dirty`, so the refusal can be shown as a list rather than a sentence. */
+export type RunFinishResult = RunStartResult & { dirty?: string[] };
+
+/** What `/run/activity` answers. `legs` is empty on every failure path, so a
+ *  caller can draw the list without a null check and read `error` beside it. */
+export type RunActivityResult = { ok: boolean; run?: Run; legs: LegActivity[]; error?: string };
+
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -95,6 +201,9 @@ export type SidecarFailure = {
 type ShellBridge = {
   sidecarFailure?: SidecarFailure | null;
   onServerFailed?: (fn: (f: SidecarFailure | null) => void) => () => void;
+  /** Whether the shell has CONFIRMED a server, as opposed to not having seen
+   *  one fail. Asked at call time; see whenServerUp. */
+  sidecarUp?: () => boolean;
 };
 
 const SHELL: ShellBridge | undefined =
@@ -291,6 +400,9 @@ async function turnStream(
  *  it's unreachable. */
 export async function probeAuth(): Promise<"ok" | "unauthorized" | "offline"> {
   try {
+    // Gated like every other boot read: a direct fetch here skipped whenServerUp
+    // and produced one refused request per launch, twice in the measured run.
+    await whenServerUp();
     const r = await fetch(SERVER + "/events/filter-options", { headers: authHeaders() });
     return r.status === 401 ? "unauthorized" : "ok";
   } catch {
@@ -298,11 +410,28 @@ export async function probeAuth(): Promise<"ok" | "unauthorized" | "offline"> {
   }
 }
 
-/** Ask for a token, persist it, and reload so every fetch/WS picks it up. The
- *  recovery path when a server starts requiring a token, or rotates it, after
- *  this tab was loaded. */
+/**
+ * Ask for a token, persist it, and reload so every fetch/WS picks it up. The
+ * recovery path when a server starts requiring a token, or rotates it, after
+ * this tab was loaded.
+ *
+ * THE ONE NATIVE DIALOG THIS APP KEEPS, and `no-native-dialogs.test.ts` names
+ * it rather than letting it pass unremarked.
+ *
+ * Every other confirm and prompt is a React dialog (`useDialogs`), which is
+ * better in every way except one: it needs React to be mounted and the app to
+ * be talking to the server. This function is what runs when neither is true —
+ * a token appeared or changed under a tab that is already open, so every fetch
+ * is refused and the tree cannot render itself out of it. A dialog rendered by
+ * the app that cannot reach the app is not a dialog.
+ *
+ * The replacement is not a nicer prompt; it is a login surface that works with
+ * no session, which is a piece of work rather than a migration. Until then this
+ * is deliberate, and the lint's exception says so out loud.
+ */
 export function reauthPrompt(): void {
   if (typeof window === "undefined") return;
+  // eslint-disable-next-line no-alert -- see the note above; the lint has a named exception too
   const t = window.prompt("This server needs an access token.\nPaste it to reconnect:");
   if (t && t.trim()) {
     try { localStorage.setItem("agentglass_token", t.trim()); } catch { /* private mode */ }
@@ -361,7 +490,18 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
    * different questions — `fresh` says "not the session the desk resumed", and
    * this says "this is the app's shell, and it must outlive the window".
    */
-  isConsole = false) =>
+  isConsole = false,
+  /** Which line to open the file at — the change you were looking at, not the
+   *  top of a nine-hundred-line file. */
+  line = 0,
+  /**
+   * This socket is a tab of the floating bench, and which one.
+   *
+   * A number, not a name: the server builds the tmux session from it, so a tab
+   * can be reattached tomorrow and no client can ever point at a session that
+   * is not its own. 0 means "not the bench" — see engineBenchArgv.
+   */
+  bench = 0) =>
   withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
     // A single-use ticket for an agent to start in this pane — never the prompt
     // itself, which is kilobytes and has no business in a URL. See
@@ -375,16 +515,154 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
     // a temp copy, a file tree is your checkout. The server refuses this for a
     // temp copy however loudly the client asks.
     + (view && edit ? "&edit=1" : "")
+    // A tab of the bench, which is a session of its own on the engine.
+    + (bench ? `&bench=${Math.floor(bench)}` : "")
+    + (view && line > 1 ? `&line=${Math.floor(line)}` : "")
     + (fresh ? "&fresh=1" : "")
     + (isConsole ? "&console=1" : ""));
 
-async function get<T>(path: string): Promise<T> {
-  const r = await fetch(SERVER + path, { headers: authHeaders() });
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
-  return r.json() as Promise<T>;
+/*
+ * The gap between the window appearing and the sidecar listening.
+ *
+ * `electron/main.js` deliberately does not wait for the server before opening
+ * the window — waiting cost 376ms of a 588ms startup warm and up to twelve
+ * seconds cold, and a launch that shows nothing reads as an app that failed.
+ * The comment there justifies it on one claim: "every panel's fetch has a retry
+ * or an honest loading state". This is the half of that claim that was missing.
+ *
+ * Measured from source on 2026-08-26: the sidecar listens 559ms after spawn and
+ * answers /health at 635ms. Every request the renderer fires before then is
+ * refused, and a count of the call sites showed 16 of them turn "I could not
+ * ask" into "the answer is nothing" — `setRepos([])`, `setAgents([])`,
+ * `setEditor({ hasNvim: false })` — which is indistinguishable from a real
+ * empty answer and never re-runs. Reported as "the browser often does not
+ * start"; one launch's console carried 20 of these.
+ *
+ * So the gap is closed once, here, rather than in sixteen `.catch`es.
+ *
+ * A REFUSED CONNECTION is worth asking again; AN ANSWER IS NOT. `fetch` only
+ * throws when the request never reached a server, so that is the whole test —
+ * a 500 or a 404 arrives as a resolved Response and falls through untouched,
+ * because asking a struggling server twice is how a bad minute becomes a bad
+ * ten. GET only, and that is not a limitation: it is the verb whose repetition
+ * cannot mean anything, and the startup burst is all GETs.
+ */
+const COLD_START_WAITS = [110, 190, 300, 480] as const;
+
+/*
+ * And nothing is asked at all until something is listening.
+ *
+ * The retry below makes the app RECOVER. Measured in the real app over CDP, it
+ * does not make the console quiet — Chromium logs every refused request whether
+ * or not the caller asks again, so retrying turned 19 console errors into 31.
+ * Recovering and being quiet are different problems and this is the second one.
+ *
+ * The shell already knows the answer. `ensureServer` polls until /health says
+ * "ours" and then calls `reportSidecar(null)`, which arrives here through
+ * `onSidecarFailure`. What it cannot do is say "already up" to a page that
+ * loaded late — a `null` reads the same whether the sidecar is running or has
+ * simply not been decided yet — so one probe answers that, and the wait only
+ * happens when the probe says nothing is there.
+ *
+ * Cost on a cold start: ONE refused request instead of one per caller.
+ * Cost on a warm start: one /health that was going to be asked anyway.
+ *
+ * Desktop shell only, and deliberately: a phone or a browser tab has nothing
+ * to subscribe to, so gating them would be a wait with no end in sight. There
+ * the retry is the whole net, which is what it was built to be.
+ */
+let serverUp: Promise<void> | null = null;
+export function whenServerUp(): Promise<void> {
+  if (!SHELL?.onServerFailed) return Promise.resolve();
+  if (serverUp) return serverUp;
+  serverUp = (async () => {
+    /*
+     * ASKED OF THE SHELL, NOT OF THE NETWORK.
+     *
+     * This used to spend one probeServer() to find out, and in the cold case
+     * that probe is a refused request — which Chromium logs as a console error
+     * whatever the caller does with it. The shell has known the answer all
+     * along (ensureServer polls until /health says "ours"); it just had no way
+     * to say "already up" as opposed to "nothing has failed yet". Now it does,
+     * and the probe is gone: zero requests to learn something the process next
+     * door already knew.
+     */
+    if (SHELL.sidecarUp?.() === true) return;
+    /*
+     * A verdict that has ALREADY been reached, before waiting for one to arrive.
+     *
+     * `onSidecarFailure` only carries what happens after this page loaded. A
+     * window that opens once the shell has given up — a reload, a second window
+     * — has missed the report, and waiting for it means sitting out the whole
+     * six seconds before making the request that shows the banner its error.
+     * The shell keeps the last one for exactly this, read synchronously, which
+     * is why `sidecarFailure()` exists at all.
+     */
+    if (SHELL.sidecarFailure) return;
+    await new Promise<void>((resolve) => {
+      /*
+       * `off` is declared before `done` reads it, and that is not style.
+       * hook-tdz.test.ts caught the other order: `done` closed over an `off`
+       * created ten lines below it, so a subscription that called back
+       * synchronously would have hit the temporal dead zone and thrown inside
+       * the gate — rejecting the promise every request awaits. That is the
+       * shape of the bug that opened this app onto a black screen once already.
+       */
+      let off: (() => void) | null = null;
+      const done = () => { clearTimeout(timer); off?.(); resolve(); };
+      // Bounded: a sidecar that is never coming has to surface as the errors
+      // the banner reads, not as a cockpit that waits for ever in silence.
+      const timer = setTimeout(done, 6000);
+      // ANY verdict releases the gate, not only the good one. The shell reports
+      // a failure down this same channel, and holding the requests back after
+      // it has said "there is no server" would spend the probe's 1.5s, then six
+      // seconds of waiting, then the retry chain — nearly nine seconds of a
+      // screen doing nothing — to arrive at the error the banner already knew
+      // about. A dead sidecar has to fail fast, not politely.
+      off = onSidecarFailure(() => done());
+    });
+  })();
+  return serverUp;
+}
+
+/** A caller that can change its mind. Only the ones that ask for it get one —
+ *  a request nobody is waiting on any more is the exception, not the rule. */
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  await whenServerUp();
+  let last: unknown;
+  for (let i = 0; i <= COLD_START_WAITS.length; i++) {
+    // Between the gate and the first attempt, and again between retries, is
+    // exactly where a caller gives up — so it is checked here rather than only
+    // being handed to fetch.
+    if (signal?.aborted) throw signal.reason ?? new DOMException("aborted", "AbortError");
+    try {
+      const r = await fetch(SERVER + path, { headers: authHeaders(), ...(signal ? { signal } : {}) });
+      if (!r.ok) throw new Error(`${path} → ${r.status}`);
+      return r.json() as Promise<T>;
+    } catch (e) {
+      // Only the network-level throw. An HTTP error was built above, and it is
+      // an answer, so it leaves immediately. An abort is neither: it is a
+      // `DOMException`, not a `TypeError`, so it already leaves here — and it
+      // must, or a cancelled request would be retried four more times.
+      if (!(e instanceof TypeError)) throw e;
+      last = e;
+      const wait = COLD_START_WAITS[i];
+      if (wait === undefined) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  // Bounded on purpose: a sidecar that is never coming has to surface as a
+  // rejection the banner can show, not as a promise nobody settles.
+  throw last;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
+  // Gated like GET, and only gated: waiting for a listener changes nothing
+  // about what a POST means, where asking twice would. Measured in the real
+  // app, the two that still shouted after GET was gated were both POSTs —
+  // `/theme/sync` on boot and `/browser/ready`, which is the panel the maintainer
+  // reported as not starting.
+  await whenServerUp();
   const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
   return r.json() as Promise<T>;
 }
@@ -414,7 +692,12 @@ const realApi = {
    *  the worktrees it is already showing. See panewt.ts for why the screen
    *  cannot answer this. */
   paneDirs: (windowId: string) =>
-    get<{ ok: boolean; pane: string | null; dirs: string[] }>(`/terminal/pane-dirs?window=${encodeURIComponent(windowId)}`),
+    get<{ ok: boolean; pane: string | null; dirs: string[]; agent?: string }>(`/terminal/pane-dirs?window=${encodeURIComponent(windowId)}`),
+  /** Every pane of the window in one request, so the panel can fill its memory
+   *  for a six-pane grid while nobody is waiting — see the route's note. */
+  paneDirsAll: (windowId: string) =>
+    get<{ ok: boolean; panes: { pane: string; active: boolean; dirs: string[]; agent?: string }[] }>(
+      `/terminal/pane-dirs?all=1&window=${encodeURIComponent(windowId)}`),
   /** Put one in front of whoever is attached to tmux. */
   /** Every resumable agent session for this project, across all its checkouts,
    *  with where each one is running when it is. See agentsessions.ts. */
@@ -559,7 +842,7 @@ const realApi = {
   browserReady: (client: string, on: boolean) => post<{ ok: boolean }>("/browser/ready", { client, on }),
   /** Report what the built-in browser did with an agent's ask. The server is
    *  holding that agent's request open until this lands — see browserdrive.ts. */
-  browserResult: (r: { id: string; ok: boolean; value?: unknown; error?: string }) =>
+  browserResult: (r: { id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
     post<{ ok: boolean; known: boolean }>("/browser/result", r),
   /** Stop offering a project in the picker, or offer it again. Nothing on disk
    *  is touched — see config.ts. */
@@ -668,6 +951,15 @@ const realApi = {
    *  honestly before it's pressed. */
   editorCapability: () => get<{ hasNvim: boolean; editor: string | null }>("/editor/capability"),
   editorTarget: (path: string) => get<{ running: boolean; hasNvim: boolean }>(`/editor/target?path=${encodeURIComponent(path)}`),
+  /** How long a file is — for the strip of the whole file down the editor pane.
+   *  One number, so it is not `filesRead` with the body thrown away. */
+  filesMeasure: (path: string) =>
+    get<{ ok: boolean; lines?: number; error?: string }>(`/files/measure?path=${encodeURIComponent(path)}`),
+  /** Where the cursor is in an editor this app started. The id comes back in
+   *  the pty's `ready` frame; every failure means "no idea", and the rail is
+   *  built to work without it. */
+  editorWhere: (id: string) =>
+    get<{ ok: boolean; line?: number }>(`/editor/where?id=${encodeURIComponent(id)}`),
   editorOpen: (path: string, line: number) =>
     post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string;
       /** Set when the file went to an nvim rooted in a *sibling* checkout of the
@@ -760,7 +1052,73 @@ const realApi = {
   dockerCapability: () => get<DockerCapability>("/docker/capability"),
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
+  /* --- the finder: browsing a place and looking at a file ----------------
+     One pair for both worlds, because the finder's tabs should not behave
+     differently depending on which backend answers them. */
+  browse: (path: string) => get<BrowseReport>(`/browse?path=${encodeURIComponent(path)}`),
+  previewFacts: (path: string) => get<FileFacts>(`/preview/facts?path=${encodeURIComponent(path)}`),
+  /**
+   * The bytes of a file, as a blob URL the browser can draw.
+   *
+   * Fetched rather than pointed at with an `<img src>`: the engine wants the
+   * app's token on every request and an `<img>` cannot carry a header. The
+   * caller owns the URL and must revoke it — see Preview.tsx, which does.
+   */
+  previewBlob: async (path: string): Promise<{ ok: true; url: string; mime: string } | { ok: false; error: string }> => {
+    try {
+      const r = await fetch(`${SERVER}/preview/raw?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
+      if (!r.ok) {
+        const why = await r.json().catch(() => null) as { error?: string } | null;
+        return { ok: false, error: why?.error ?? `the engine refused it (${r.status})` };
+      }
+      const blob = await r.blob();
+      return { ok: true, url: URL.createObjectURL(blob), mime: blob.type };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  },
+  /** What documents SAY, outside the checkout. */
+  /** Hand a file to the desktop's own viewer — a picture belongs to the picture
+   *  viewer, not to the editor the text files open in. */
+  previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
+  diskGrep: (root: string, q: string) => get<GrepReport>(`/disk/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
+
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+  /* The slow lane. Each of these makes the daemon do real work, so they are
+     called when a section is opened — never on the poll. */
+  dockerDisk: (force = false) => get<DockerDisk & { error?: string }>(`/docker/disk${force ? "?force=1" : ""}`),
+  dockerVolume: (name: string) => get<DockerVolumeDetail>(`/docker/volume?name=${encodeURIComponent(name)}`),
+  dockerPeek: (name: string, path = "") => get<DockerPeek>(`/docker/volume/peek?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`),
+  /** Build cache older than `hours`. The safe reclaim: it costs one slower
+   *  build, and nothing else. */
+  dockerPruneCache: (bytes = 60_000_000_000) => post<DockerActionResult>("/docker/prune/cache", { bytes }),
+  /** Remove images by tag or id, one at a time on the server so a single
+   *  refusal does not abandon the rest. */
+  dockerRemoveImages: (refs: string[]) => post<DockerActionResult>("/docker/images/rm", { refs }),
+  /** Why does yours start and mine not. The values of anything
+   *  credential-shaped are compared on the server and never sent. */
+  dockerEnvDiff: (a: string, b: string) => get<{ ok: boolean; rows?: DockerEnvRow[]; error?: string }>(`/docker/env-diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
+  /**
+   * The same log, followed.
+   *
+   * Returns the byte stream itself rather than lines: whoever holds it decides
+   * where a chunk boundary falls and how much to keep (see dockerLogFeed.ts).
+   * A refusal comes back as a reason, not a throw — "too many streams are open"
+   * is something the viewer should say, not something it should crash on.
+   */
+  dockerLogStream: async (id: string, tail: number, signal: AbortSignal): Promise<ReadableStream<Uint8Array> | { error: string }> => {
+    try {
+      const r = await fetch(`${SERVER}/docker/logs/stream?id=${encodeURIComponent(id)}&tail=${tail}`, { headers: authHeaders(), signal });
+      if (!r.ok) {
+        const why = await r.json().catch(() => null) as { error?: string } | null;
+        return { error: why?.error ?? `the engine refused the stream (${r.status})` };
+      }
+      return r.body ?? { error: "the engine sent no stream" };
+    } catch (e) {
+      // An abort is the tab closing; anything else is worth showing.
+      return { error: (e as Error)?.name === "AbortError" ? "closed" : String(e) };
+    }
+  },
 
   // --- local tasks ---
   tasksList: (force = false) => get<TasksListResponse>(`/tasks/list${force ? "?force=1" : ""}`),
@@ -812,11 +1170,30 @@ const realApi = {
   recipeRender: (id: string, values: Record<string, string>) =>
     get<{ ok: boolean; error?: string; steps?: string[]; confirm?: boolean; missing?: string[] }>(
       `/recipes/render?id=${encodeURIComponent(id)}&values=${encodeURIComponent(JSON.stringify(values))}`),
+  /** Who is working on what: what each agent said, joined with the panes,
+   *  worktrees and deputy runs this app already reads. */
+  agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
+  /** Whether hooked sessions get asked what they are working on, and how
+   *  often — the Lantern's one setting. */
+  lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
+  lanternSettingsSave: (f: { nudge?: boolean; minutes?: number; watch?: boolean; watchMinutes?: number; cacheTtlMinutes?: number }) =>
+    post<{ ok: boolean; persisted?: boolean; error?: string; nudge?: boolean; minutes?: number; watch?: boolean; watchMinutes?: number; cacheTtlMinutes?: number }>("/lantern/settings", f),
+  /** A ticket for the Lantern's chat — its first message composed on the
+   *  server from the field as it is now — and the checkout it will run in. */
+  lanternTicket: (cwd = "") =>
+    post<{ ok: boolean; ticket?: string; cwd?: string; needs?: number; error?: string }>("/lantern/ticket", { cwd }),
+  /** What each tmux window is being used for, by window id — the label under
+   *  the strip's stable `AI0N` names. */
+  tabHints: () => get<{ ok: boolean; hints?: Record<string, string> }>("/terminal/tab-hints"),
   clickupViews: () => get<ClickUpBoards>("/clickup/views"),
   /** Which card a mirrored ClickUp desktop notification is about, by its title.
    *  Answered from the watcher's own file, so it costs no ClickUp call. */
   clickupCardForNote: (title: string) =>
     get<{ card: { id: string; label: string } | null }>(`/clickup/card-for-note?title=${encodeURIComponent(title)}`),
+  /** File a mirrored ClickUp notification against its card, so it shows in
+   *  that card's activity. Idempotent by the notification's own id. */
+  clickupFileNote: (n: { id: string; cardId: string; label: string; text: string; at: number }) =>
+    post<{ ok: boolean }>("/clickup/card-note", n).catch(() => ({ ok: false })),
   clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
   clickupView: (id?: string, force = false) =>
     get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
@@ -827,7 +1204,10 @@ const realApi = {
    *  second answer already carries the lists inside each folder. */
   clickupSpaces: () => get<{ ok: boolean; error?: string; spaces?: { id: string; name: string }[] }>("/clickup/spaces"),
   clickupFolders: (spaceId: string) =>
-    get<{ ok: boolean; error?: string; folders?: { id: string; name: string; lists: { id: string; name: string }[] }[] }>(
+    /* `folderless` marks the one entry that is not a folder: the lists sitting
+       directly in the space, gathered under a single heading so this shape
+       stays one shape. See clickupFolders in server/src/clickup.ts. */
+    get<{ ok: boolean; error?: string; folders?: { id: string; name: string; lists: { id: string; name: string }[]; folderless?: boolean }[] }>(
       `/clickup/folders?space=${encodeURIComponent(spaceId)}`),
   /** Add a folder whole. `spaceName` is only the heading to file it under —
    *  ClickUp's folder endpoint does not repeat it and a call to learn it would
@@ -858,6 +1238,9 @@ const realApi = {
   clickupPrs: (card: string, field: string, root: string) =>
     get<{ ok: boolean; prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; error?: string }>(
       `/clickup/prs?${new URLSearchParams({ card, field, root })}`),
+  /** Ask the server to read the search's expensive half now. Fire and forget:
+   *  it answers at once and does the work behind the answer. */
+  clickupWarm: () => get<{ ok: boolean }>("/clickup/warm").catch(() => ({ ok: false })),
   clickupFind: (q: string) =>
     get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/clickup/find?q=${encodeURIComponent(q)}`),
   /** Merge the base into the pull request's branch in a worktree of its own, so
@@ -898,6 +1281,66 @@ const realApi = {
    *  its cache, so this can be asked before every lookup. */
   clickupWhere: (id: string) =>
     get<{ ok: boolean; viewId?: string; task?: ProviderTask }>(`/clickup/where?id=${encodeURIComponent(id)}`),
+  /** Text search across the workspace. Slow the first time by nature — see the
+   *  server's own note — so the caller is expected to say so. */
+  /** The one call in this file worth cancelling: it sweeps hundreds of cards
+   *  and was measured at sixteen seconds on a real workspace, which is long
+   *  enough to change your mind in. */
+  /**
+   * The same search, read as it arrives.
+   *
+   * One JSON object per line: `{tasks}` for each batch the server has matched,
+   * then `{done, scanned}`. The whole-answer version below still exists for
+   * callers that want one value; this is the one the list uses, because a
+   * sweep of a real workspace takes tens of seconds and a reader should be
+   * looking at the first matches long before the last page lands.
+   */
+  clickupSearchStream: async (
+    q: string, force: boolean,
+    onSome: (tasks: ProviderTask[]) => void,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; scanned?: number; error?: string; partial?: boolean; since?: number; capped?: boolean }> => {
+    try {
+      const r = await fetch(`${SERVER}/clickup/search/stream?q=${encodeURIComponent(q)}${force ? "&force=1" : ""}`,
+        { headers: authHeaders(), signal });
+      /* Cancelled by the caller — a new query while this one was in the air.
+         Reporting that as a failure put "That search could not run" on screen
+         while the search that replaced it was still running. */
+      if (signal?.aborted) return { ok: true };
+      if (!r.ok || !r.body) return { ok: false, error: `search failed (${r.status})` };
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let end: { ok: boolean; scanned?: number; error?: string; partial?: boolean; since?: number; capped?: boolean } = { ok: true };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        /* Lines, because a chunk can split one in half — and the last piece of
+           `buf` is kept for the next chunk rather than parsed as if complete. */
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const l of lines) {
+          if (!l.trim()) continue;
+          try {
+            const o = JSON.parse(l) as { tasks?: ProviderTask[]; done?: boolean; scanned?: number; error?: string; partial?: boolean; since?: number; capped?: boolean };
+            if (o.tasks?.length) onSome(o.tasks);
+            if (o.done) end = o.error ? { ok: false, error: o.error } : { ok: true, scanned: o.scanned, partial: o.partial === true, since: o.since, capped: o.capped === true };
+          } catch { /* a line we cannot read is not a reason to stop reading */ }
+        }
+      }
+      return end;
+    } catch (e) {
+      /* An abort is the caller's own doing; anything else is a failure. The
+         signal is checked as well as the name, because what a torn-down stream
+         throws differs between the browser, Bun and the packaged shell. */
+      if (signal?.aborted || (e as { name?: string })?.name === "AbortError") return { ok: true };
+      return { ok: false, error: "That search could not run" };
+    }
+  },
+  clickupSearch: (q: string, force = false, signal?: AbortSignal) =>
+    get<{ ok: boolean; tasks?: ProviderTask[]; scanned?: number; at?: number; error?: string; refs?: number; partial?: boolean; since?: number; capped?: boolean; more?: boolean }>(
+      `/clickup/search?q=${encodeURIComponent(q)}${force ? "&force=1" : ""}`, signal),
   clickupTask: (id: string) =>
     get<{ ok: boolean; error?: string } & Partial<TaskDetail>>(`/clickup/task?id=${encodeURIComponent(id)}`),
   /** `user` puts somebody ELSE on the card; without it, you. */
@@ -914,8 +1357,68 @@ const realApi = {
    */
   clickupCard: (id: string, changes: { add?: number[]; rem?: number[]; status?: string }, updated?: number) =>
     post<ClickUpWrite>("/clickup/card", { id, updated, ...changes }),
-  clickupField: (id: string, field: string, value: string) =>
-    post<ClickUpWrite>("/clickup/field", { id, field, value }),
+  /** ClickUp's own flag. `null` takes it off, which is a value the picker offers. */
+  clickupPriority: (id: string, priority: string | null, updated?: number) =>
+    post<ClickUpWrite>("/clickup/priority", { id, priority, updated }),
+  /** `kind` is the field's own type: a date's value is milliseconds and ClickUp
+   *  refuses it as a string, so the caller says which it means. */
+  clickupField: (id: string, field: string, value: string, kind?: string) =>
+    post<ClickUpWrite>("/clickup/field", { id, field, value, kind }),
+  /** Empty a custom field. Not `clickupField(id, f, "")`: a drop-down set to the
+   *  empty string is a 400, and taking a choice back is its own verb. */
+  clickupFieldClear: (id: string, field: string) =>
+    post<ClickUpWrite>("/clickup/field/clear", { id, field }),
+  /**
+   * The card's own fields, in one write.
+   *
+   * Absent means "leave it alone" and `null` means "clear it" — the two are
+   * different edits and the panel needs both, because a due date set by mistake
+   * has to come off. Sprint points are `points`, which is a native field
+   * (measured) rather than one of the custom ones.
+   */
+  clickupEdit: (
+    id: string,
+    patch: { name?: string; description?: string; due?: number | null; start?: number | null; points?: number | null; estimate?: number | null; archived?: boolean },
+    updated?: number,
+  ) => post<ClickUpWrite>("/clickup/task", { id, updated, ...patch }),
+  /** A tag, by name — ClickUp has no id for them. */
+  clickupTag: (id: string, tag: string, on: boolean) =>
+    post<ClickUpWrite>("/clickup/tag", { id, tag, on }),
+  /** The sprints this card could move to, and the one it is in. Asked when the
+   *  picker opens: it costs two calls and a board is read far more often than a
+   *  card changes sprint. */
+  /** GitHub's notification inbox. `force` skips the server's own 45s cache —
+   *  what the Refresh button sends, never the poll. */
+  prsInbox: (force = false) =>
+    get<{ ok: boolean; items: InboxItem[]; at: number; error?: string }>(`/prs/inbox${force ? "?force=1" : ""}`),
+  /** Read, unsubscribe, or mark a whole repository read. The id is the THREAD's
+   *  — see ghinbox.ts — and `repo` only for the last one. */
+  prsInboxAct: (body: { act: "read" | "unsubscribe" | "repo-read"; id?: string; repo?: string }) =>
+    post<{ ok: boolean; error?: string }>("/prs/inbox/act", body),
+  clickupSprints: (id: string) =>
+    get<{ ok: boolean; error?: string; lists?: { id: string; name: string }[]; current?: { id: string; name: string } | null }>(`/clickup/sprints?id=${encodeURIComponent(id)}`),
+  /** Move a card to another list. A sprint IS a list, so this is how a card
+   *  changes sprint; `from` is the list it leaves, and without it the card ends
+   *  up in both. */
+  clickupMove: (id: string, list: string, from?: string) =>
+    post<ClickUpWrite>("/clickup/move", { id, list, ...(from ? { from } : null) }),
+  clickupCreate: (list: string, card: { name: string; description?: string; assignees?: number[]; priority?: string | null; points?: number | null; due?: number | null; status?: string }) =>
+    post<{ ok: boolean; error?: string; unauthorised?: boolean; data?: { id: string; url: string } }>("/clickup/create", { list, ...card }),
+  clickupChecklistAdd: (id: string, name: string) =>
+    post<ClickUpWrite>("/clickup/checklist", { id, name }),
+  clickupChecklistItemAdd: (checklist: string, name: string) =>
+    post<ClickUpWrite>("/clickup/checklist/item", { checklist, name }),
+  clickupChecklistCheck: (checklist: string, item: string, done: boolean) =>
+    post<ClickUpWrite>("/clickup/checklist/check", { checklist, item, done }),
+  /** These four take the COMMENT's id, not the card's. */
+  clickupCommentEdit: (id: string, text: string) =>
+    post<ClickUpWrite>("/clickup/comment/edit", { id, text }),
+  clickupCommentReply: (id: string, text: string) =>
+    post<ClickUpWrite>("/clickup/comment/reply", { id, text }),
+  clickupCommentResolve: (id: string, on: boolean) =>
+    post<ClickUpWrite>("/clickup/comment/resolve", { id, on }),
+  clickupCommentDelete: (id: string) =>
+    post<ClickUpWrite>("/clickup/comment/delete", { id }),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
     get<RemindersResponse>(`/tasks/reminders?window=${window}`),
   remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
@@ -953,6 +1456,54 @@ const realApi = {
     post<IssueActionResult>("/issues/comment", { root, number, body }),
   issueState: (root: string, number: number, close: boolean) =>
     post<IssueActionResult>("/issues/state", { root, number, close }),
+
+  // --- runs: one prompt, several checkouts, one comparison ---
+  /** Every run of this repository, with each leg already checked against the
+   *  disk it claims to be on — the server does that reconciliation on read, so
+   *  a leg whose worktree somebody deleted by hand comes back `gone` rather
+   *  than as a row pointing at nothing. Cheap: a JSON file and a `stat` per
+   *  leg, no git and no database. */
+  runs: (root = "") => get<{ runs: Run[] }>(`/runs?root=${encodeURIComponent(root)}`),
+  /**
+   * What each leg has produced, and what it cost.
+   *
+   * Written out rather than handed to `get` because the interesting failure has
+   * a body: a run that no longer exists answers 404 with the server's own "no
+   * such run", and `get` would throw that away and report the status. The
+   * distinction matters here more than elsewhere — a run can be finished from
+   * another window while this panel is open, and "that run is over" is a
+   * different thing to put on screen than "the server is not answering". Same
+   * shape as previewBlob and dockerLogStream, which read their refusals for the
+   * same reason.
+   */
+  runActivity: async (id: string): Promise<RunActivityResult> => {
+    try {
+      const r = await fetch(`${SERVER}/run/activity?id=${encodeURIComponent(id)}`, { headers: authHeaders() });
+      const body = await r.json().catch(() => null) as Partial<RunActivityResult> | null;
+      if (!r.ok || !body?.ok) {
+        return { ok: false, legs: [], error: body?.error ?? `the server refused it (${r.status})` };
+      }
+      return { ok: true, run: body.run, legs: body.legs ?? [], error: undefined };
+    } catch (e) {
+      return { ok: false, legs: [], error: (e as Error)?.message || String(e) };
+    }
+  },
+  /** Cut a checkout per leg and open a pane running the agent in each. Capped
+   *  at 8 legs by the server; `yolo` is asked for, not granted — the server
+   *  folds it through the same permission the chat engines use. */
+  runStart: (root: string, prompt: string, legs: { agent: string; from?: string; yolo?: boolean }[]) =>
+    post<RunStartResult>("/run/start", { root, prompt, legs }),
+  /** Attach a pane this app never started. The capability nothing that spawns
+   *  its own terminals can offer, and retroactive: the events that pane has
+   *  already produced are filed under the directory it ran in, so adopting it
+   *  starts looking rather than starts collecting. */
+  runAdopt: (id: string, pane: string, agent = "") =>
+    post<RunAdoptResult>("/run/adopt", { id, pane, agent }),
+  /** Call it: one leg won, the rest lost. Only the legs this app CUT are torn
+   *  down — an adopted pane is somebody else's afternoon and is left exactly
+   *  where it is. Refused over uncommitted work unless told twice. */
+  runFinish: (id: string, winner = "", force = false) =>
+    post<RunFinishResult>("/run/finish", { id, winner, force }),
 
   // --- what this machine is doing: ports, processes, disk ---
   /** Every listening TCP socket, with the process behind the ones we own. */
@@ -996,6 +1547,30 @@ const realApi = {
       `/files/refs?root=${encodeURIComponent(root)}`),
   filesGrep: (root: string, q: string, ref?: string) =>
     get<GrepReport>(`/files/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
+
+  // --- and searching the machine, which is not a checkout ---
+  /** Where a machine search may be rooted, and a menu of places to start. */
+  diskPlaces: () => get<DiskPlaces>("/disk/places"),
+  /** Files and folders under `root` whose path contains `q`. Bounded by
+   *  disk.ts, not by the open project — that is the whole point of it. */
+  diskFind: (root: string, q: string) =>
+    get<FindReport>(`/disk/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
+
+  // --- the floating bench ---
+  /** This checkout's note. Empty is the normal state, not an error. */
+  benchNote: (root: string) =>
+    get<{ ok: boolean; text: string; at?: number; error?: string }>(`/bench/note?root=${encodeURIComponent(root)}`),
+  benchNoteSave: (root: string, text: string) =>
+    post<{ ok: boolean; text: string; at?: number; error?: string }>("/bench/note", { root, text }),
+  /** Which of this checkout's bench tabs still have a session on the engine. */
+  /** End a bench slot's tmux session — the Lantern's tab on close. */
+  benchEnd: (root: string, slot: number) => post<{ ok: boolean; ended?: boolean; error?: string }>("/bench/end", { root, slot }),
+  benchLive: (root: string) =>
+    get<{ ok: boolean; slots: number[]; error?: string }>(`/bench/live?root=${encodeURIComponent(root)}`),
+  /** Put a file in front of you in this checkout's bench editor. `live: false`
+   *  means there is no editor yet — connect the tab and one starts with it. */
+  benchEdit: (root: string, path: string, line = 0, readonly = false) =>
+    post<{ ok: boolean; live: boolean; error?: string }>("/bench/edit", { root, path, line, readonly }),
   /** Where this server is reachable from another device, whether one has
    *  arrived, and which firewall is the likely reason if none has. */
   remoteStatus: () => get<RemoteStatus>("/remote/status"),
@@ -1003,6 +1578,42 @@ const realApi = {
    *  as well as refusing what it sends next; only this machine may call it. */
   remoteDevice: (address: string, blocked: boolean) =>
     post<{ ok: boolean; address?: string; blocked?: boolean; closed?: number; error?: string }>("/remote/device", { address, blocked }),
+
+  // --- plugins. See server/src/plugins.ts and docs/PLUGINS.md. ---
+  plugins: () => get<PluginsStatus>("/plugins"),
+  pluginMaster: (enabled: boolean) =>
+    post<{ ok: boolean; master?: boolean; error?: string }>("/plugins/master", { enabled }),
+  /** A local path or a pasted git URL. No plugin code runs here — only its
+   *  manifest is read. */
+  pluginInstall: (source: string) =>
+    post<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }>("/plugins/install", { source }),
+  /** Refuses unless what is on disk now is what this call is about to
+   *  approve — the caller must have shown the CURRENT manifest first. */
+  pluginEnable: (name: string) =>
+    post<{ ok: boolean; error?: string }>("/plugins/enable", { name }),
+  pluginDisable: (name: string) =>
+    post<{ ok: boolean }>("/plugins/disable", { name }),
+  pluginRemove: (name: string) =>
+    post<{ ok: boolean }>("/plugins/remove", { name }),
+  /** Re-clones a git-backed install at its recorded URL/ref. Same review
+   *  gate as a fresh install: an update that changes the declaration loses
+   *  its approval rather than re-enabling itself. */
+  pluginUpdate: (name: string) =>
+    post<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }>("/plugins/update", { name }),
+  /** The catalogues he has added — a plain list of URLs. */
+  pluginCatalogues: () => get<{ catalogues: string[] }>("/plugins/catalogues"),
+  pluginCatalogueAdd: (url: string) =>
+    post<{ ok: boolean; error?: string }>("/plugins/catalogues/add", { url }),
+  pluginCatalogueRemove: (url: string) =>
+    post<{ ok: boolean }>("/plugins/catalogues/remove", { url }),
+  /** Fetched fresh, never cached — a stale list read as live is the one
+   *  thing this must not do. `ok: false` covers an unreachable or malformed
+   *  catalogue equally; the caller shows the error either way. */
+  pluginCatalogueFetch: (url: string) =>
+    get<{ ok: true; catalogue: Catalogue } | { ok: false; error: string }>(`/plugins/catalogue?url=${encodeURIComponent(url)}`),
+  pluginInstallFromCatalogue: (catalogueUrl: string, pluginId: string) =>
+    post<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }>(
+      "/plugins/install-from-catalogue", { catalogueUrl, pluginId }),
 
   // --- pairing a device: the machine's half. See server/src/pairing.ts.
   //
@@ -1058,8 +1669,28 @@ const realApi = {
    *  is the GraphQL id, and `on:false` takes the reaction back off. */
   prReactTo: (root: string, nodeId: string, content: string, on: boolean) =>
     post<PrActionResult>("/prs/react", { root, nodeId, content, on }),
+  /** Which files moved between two commits of this pull request, asked of the LOCAL
+   *  clone — see filesSince for why GitHub's compare endpoint is not the source. */
+  prFilesSince: (root: string, from: string, to: string) =>
+    get<{ ok: boolean; paths?: string[]; missing?: string; error?: string }>(
+      `/prs/files-since?${new URLSearchParams({ root, from, to })}`),
+  /** The repository's CODEOWNERS, read from the checkout rather than from GitHub —
+   *  so it answers on a branch that changed it before that change is merged. */
+  /** The sentences you write over and over on other people's pull requests. */
+  savedReplies: () => get<{ ok: boolean; replies?: { id: string; title: string; text: string }[] }>("/saved-replies"),
+  saveReply: (r: { id?: string; title: string; text: string }) =>
+    post<{ ok: boolean; error?: string; replies?: { id: string; title: string; text: string }[] }>("/saved-replies/save", r),
+  removeReply: (id: string) =>
+    post<{ ok: boolean; replies?: { id: string; title: string; text: string }[] }>("/saved-replies/remove", { id }),
+  prCodeowners: (root: string) =>
+    get<{ ok: boolean; path?: string; rules?: { pattern: string; owners: string[] }[]; error?: string }>(
+      `/prs/codeowners?${new URLSearchParams({ root })}`),
   prEditComment: (root: string, nodeId: string, body: string, kind: "issue" | "review" = "issue") =>
     post<PrActionResult>("/prs/comment-edit", { root, nodeId, body, kind }),
+  /** Fold a comment away, or put it back. Not a delete: GitHub keeps it, records the
+   *  reason, and anybody can unfold it — see hideComment. */
+  prHideComment: (root: string, nodeId: string, on: boolean, reason = "OUTDATED") =>
+    post<PrActionResult>("/prs/comment-hide", { root, nodeId, on, reason }),
   prDeleteComment: (root: string, nodeId: string, kind: "issue" | "review" = "issue") =>
     post<PrActionResult>("/prs/comment-delete", { root, nodeId, kind }),
   /** GitHub's own viewed tick, so it survives leaving the panel. */
@@ -1104,6 +1735,9 @@ const realApi = {
   prCounts: (root: string, state: "open" | "closed" | "all") =>
     get<{ ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }>(
       `/prs/counts?root=${encodeURIComponent(root)}&state=${state}`),
+  /** What this project's agents have spent, by branch and by checkout. One
+   *  request for the whole repository — the board looks each row up in it. */
+  prSpend: (root: string) => get<RepoSpend>(`/prs/spend?root=${encodeURIComponent(root)}`),
   prDetail: (root: string, number: number, force = false) =>
     get<{ ok: boolean; detail?: PrDetail; error?: string; stale?: boolean }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
   prDiff: (root: string, number: number, force = false) =>
@@ -1114,6 +1748,21 @@ const realApi = {
    *  rides as ?token= (see withToken) — omit it and every avatar 401s when a
    *  token is configured. */
   prAssetUrl: (raw: string) => withToken(`${SERVER}/prs/asset?url=${encodeURIComponent(raw)}`),
+  /** Which agent CLIs this machine has — for a choice of successor. */
+  agentKinds: () => get<{ ok: boolean; agents: { id: string; title: string; installed: boolean }[] }>("/terminal/agents"),
+  /** A session's conversation, summarised into a brief and seated as another agent's first message. */
+  agentHandoff: (session: string, kind: string, cwd?: string) =>
+    post<{ ok: boolean; ticket?: string; cwd?: string; kind?: string; title?: string; error?: string }>("/agents/handoff", { session, kind, cwd }),
+  /** Scheduled agent starts — see server/src/agentschedule.ts. */
+  agentSchedules: () => get<{ ok: boolean; result?: { schedules: import("../components/LanternSchedule.tsx").AgentSchedule[] } }>("/agents/schedule"),
+  agentSchedule: (f: { name: string; cwd: string; when: string; prompt?: string; yolo?: boolean; kind?: string }) =>
+    post<{ ok: boolean; error?: string; result?: { schedule: import("../components/LanternSchedule.tsx").AgentSchedule } }>("/agents/schedule", f),
+  agentUnschedule: (id: string) => post<{ ok: boolean; error?: string }>("/agents/schedule/cancel", { id }),
+  /** The checkouts the open project allows an agent to be seated in. */
+  agentCheckouts: () => get<{ allowed?: string[] }>("/understudy/work/ask"),
+  /** The nudge line for a pull request; `send` posts it down the alerts' webhook too. */
+  prNudge: (root: string, number: number, send: boolean) =>
+    post<{ ok: boolean; text?: string; channel?: boolean; sent?: boolean; error?: string }>("/prs/nudge", { root, number, send }),
   prReview: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string) =>
     post<PrActionResult>("/prs/review", { root, number, verb, body }),
   /** A verdict plus every line comment queued while reading the diff, in one
@@ -1236,6 +1885,44 @@ const realApi = {
 };
 
 // In demo mode every call resolves against the fabricated dataset — no server.
+/**
+ * A field for the demo's Lantern, shaped like a real afternoon: two stopped
+ * on you, three working, a few idle — every fact a kind the server records
+ * (see SessionFacts / GitFacts), none of it real.
+ */
+function demoLanternField(): import("../components/LanternView.tsx").LanternRow[] {
+  const now = Date.now();
+  const m = (n: number) => now - n * 60_000;
+  return [
+    { name: "orbit-1042 export retries", from: "seen", state: "waiting", paneId: "%12", session: "d1", worktree: "/home/you/code/orbit-wt/orbit-1042", branch: "feat/orbit-1042", landed: false, landedInto: "main",
+      needsYou: { kind: "permission", why: "Claude needs your permission to use Bash: bun test src/export", since: m(7) }, saidAt: m(7), doing: "reproducing the failing export before the fix",
+      facts: { model: "claude-opus-5", tools: 412, errors: 3, turns: 96, cost: 41.2, startedAt: m(190), lastSeen: m(7), lastTool: { name: "Bash", what: "Run the export suite against the fixture", at: m(7) }, lastAsk: { text: "Reproduce first, then fix the retry that drops the last page", at: m(60) }, permissionMode: "acceptEdits" },
+      git: { dirty: 4, ahead: 2, lastCommit: { subject: "test(export): pin the dropped last page", at: m(25) }, at: now } },
+    { name: "PR #166 review", from: "seen", state: "waiting", paneId: "%9", session: "d2", worktree: "/home/you/code/orbit", branch: "main", landed: true, landedInto: "main",
+      needsYou: { kind: "input", why: "Claude is waiting for your input", since: m(31) }, saidAt: m(31),
+      facts: { model: "claude-fable-5-1", tools: 58, errors: 0, turns: 14, cost: 6.8, startedAt: m(80), lastSeen: m(31), lastTool: { name: "Read", what: "src/billing/invoice.ts", at: m(33) }, lastAsk: { text: "Review #166 for the double-charge path only", at: m(78) }, permissionMode: "default" },
+      git: { dirty: 0, ahead: 0, lastCommit: { subject: "Merge pull request #165 from orbit/feat/plans", at: m(400) }, at: now } },
+    { name: "the deputy", from: "seen", state: "working", doing: "clone: retention sweep for the audit tables", worktree: "/home/you/code/orbit-wt/clone-1", branch: "clone/retention-sweep", landed: false, landedInto: "main", startedAt: m(12), paneId: "%21",
+      facts: { model: "claude-sonnet-5", tools: 133, errors: 1, turns: 22, cost: 3.9, startedAt: m(12), lastSeen: m(0), lastTool: { name: "Edit", what: "server/src/db.ts", at: m(0) }, permissionMode: "bypassPermissions" },
+      git: { dirty: 2, ahead: 1, lastCommit: { subject: "feat(db): sweep audit rows past ninety days", at: m(3) }, at: now } },
+    { name: "orbit-1039 calendar sync", from: "said", state: "working", doing: "wiring the webhook retry with backoff", saidAt: m(2), paneId: "%14", session: "d4", worktree: "/home/you/code/orbit-wt/orbit-1039", branch: "feat/orbit-1039", landed: false, landedInto: "main",
+      facts: { model: "claude-opus-5", tools: 980, errors: 12, turns: 240, cost: 118.4, startedAt: m(600), lastSeen: m(1), lastTool: { name: "Bash", what: "Run the webhook tests with the retry fixture", at: m(1) }, lastAsk: { text: "Backoff must cap at five minutes and log every attempt", at: m(40) }, permissionMode: "bypassPermissions" },
+      git: { dirty: 9, ahead: 7, lastCommit: { subject: "feat(calendar): retry the webhook with capped backoff", at: m(9) }, at: now } },
+    { name: "Find out why the search is slow", from: "seen", state: "working", paneId: "%3", session: "d5", worktree: "/home/you/code/orbit", branch: "main", landed: true, landedInto: "main", saidAt: m(0),
+      facts: { model: "claude-fable-5-1", tools: 2389, errors: 1, turns: 42, cost: 589.9, startedAt: m(3000), lastSeen: m(0), lastTool: { name: "Grep", what: "indexOf\\(|search\\(", at: m(0) }, lastAsk: { text: "Why does the search reindex on every keystroke?", at: m(4) }, permissionMode: "bypassPermissions" },
+      git: { dirty: 0, ahead: 0, lastCommit: { subject: "Merge pull request #165 from orbit/feat/plans", at: m(400) }, at: now } },
+    { name: "heartbeat-retry-circuit-breaker", from: "seen", state: "idle", paneId: "%16", session: "d6", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(140),
+      facts: { model: "claude-opus-5", tools: 1911, errors: 61, turns: 1299, cost: 174.2, startedAt: m(4000), lastSeen: m(140), lastTool: { name: "mcp__plugin_engram_engram__mem_save", what: "Heartbeat retry: the breaker opens after three misses", at: m(140) }, lastAsk: { text: "PR #17972 — VR agents can appear twice in the roster", at: m(200) } },
+      git: { dirty: 0, ahead: 0, at: now } },
+    { name: "deployment", from: "seen", state: "idle", paneId: "%25", session: "d7", worktree: "/home/you/code/orbit", branch: "main", saidAt: m(300),
+      facts: { model: "claude-sonnet-5", tools: 105, errors: 0, turns: 113, cost: 17.2, startedAt: m(900), lastSeen: m(300), lastTool: { name: "Bash", what: "Tail the deploy log until the health check passes", at: m(300) } },
+      git: { dirty: 0, ahead: 0, at: now } },
+    { name: "cards-to-work", from: "said", state: "idle", doing: "queued: the three returned cards", saidAt: m(95), paneId: "%13", session: "d8", worktree: "/home/you/code/orbit-wt/cards", branch: "chore/cards-to-work", landed: false, landedInto: "main", left: "branch chore/cards-to-work, 2 commits",
+      facts: { model: "claude-opus-5", tools: 77, errors: 0, turns: 30, cost: 9.1, startedAt: m(500), lastSeen: m(95) },
+      git: { dirty: 0, ahead: 2, lastCommit: { subject: "chore(cards): take the three returned ones", at: m(96) }, at: now } },
+  ];
+}
+
 const demoApi: typeof realApi = {
   recent: () => D(demo.recent()),
   // The demo is a showcase of the whole fleet, so it is never scoped.
@@ -1243,7 +1930,8 @@ const demoApi: typeof realApi = {
   // No tmux behind a demo build, so there is never a pane to point at — which
   // lands the panel on the sentence it already has for that case.
   agentPanes: () => D({ ok: false, reason: "not in the demo", panes: [] as AgentPane[] }),
-  paneDirs: () => D({ ok: true, pane: null, dirs: [] as string[] }),
+  paneDirs: () => D({ ok: true, pane: null, dirs: [] as string[], agent: "" }),
+  paneDirsAll: (_w: string) => D({ ok: true, panes: [] as { pane: string; active: boolean; dirs: string[]; agent?: string }[] }),
   agentSessions: (_root: string) => D({ ok: true, sessions: [] as AgentSessionRow[] }),
   focusPane: (_p: { sessionId: string; windowId: string; paneId: string }) => D({ ok: false, error: "not in the demo" }),
   stats: (windowMs: number, provider?: string) => D(demo.stats(windowMs, provider)),
@@ -1297,7 +1985,7 @@ const demoApi: typeof realApi = {
   }),
   browserUseInstall: () => D({ ok: false, error: "unavailable in the demo" }),
   browserReady: (_client: string, _on: boolean) => D({ ok: true }),
-  browserResult: (_r: { id: string; ok: boolean; value?: unknown; error?: string }) => D({ ok: true, known: false }),
+  browserResult: (_r: { id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
   // There is no git behind a demo build, so the Diff view lands on its own
@@ -1346,6 +2034,8 @@ const demoApi: typeof realApi = {
   gitCommandLog: (_since?: number) => D({ entries: [] as GitLogEntry[] }),
   editorCapability: () => D({ hasNvim: false, editor: null as string | null }),
   editorTarget: (_path: string) => D({ running: false, hasNvim: false }),
+  filesMeasure: (_p: string) => D({ ok: false }),
+  editorWhere: (_i: string) => D({ ok: false }),
   editorOpen: (_path: string, _line: number) => D({ ok: false, error: "no editor in the demo" }),
   gitLog: (_root: string, _limit?: number) => D(demo.gitLog()),
   gitCommitDiff: (_root: string, hash: string) => D(demo.gitCommitDiff(hash)),
@@ -1407,10 +2097,37 @@ const demoApi: typeof realApi = {
   dockerCapability: () => D({ available: true, version: "27.0.3" } as DockerCapability),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
+  browse: (path: string) => D({ ok: false, path, parent: null, entries: [], more: 0, hiddenSkipped: 0, error: "the demo has no filesystem" } as BrowseReport),
+  previewFacts: (path: string) => D({ ok: false, path, name: "", kind: "binary", mime: "", bytes: 0, mtime: 0, error: "the demo has no filesystem" } as FileFacts),
+  previewBlob: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
+  previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
+  diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
+  dockerDisk: () => D({ images: 0, containers: 0, volumes: 0, buildCache: 0, reclaimable: 0, orphans: [], volumes_: [], at: Date.now() } as DockerDisk),
+  dockerVolume: (name: string) => D({ name, bytes: null, mountedBy: [], lastWrite: null, worktrees: [] } as DockerVolumeDetail),
+  dockerPeek: () => D({ ok: false, error: "the demo has no volumes to look inside" } as DockerPeek),
+  dockerPruneCache: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
+  dockerRemoveImages: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
+  dockerEnvDiff: () => D({ ok: false, error: "the demo has one of everything" }),
+  // The demo has no daemon to follow: the viewer falls back to the snapshot,
+  // which is exactly what it does when a real engine refuses a stream.
+  dockerLogStream: async (): Promise<ReadableStream<Uint8Array> | { error: string }> => ({ error: "the demo has no live logs" }),
   updateNotes: (_tag?: string) => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
   remoteStatus: () => D({ exposed: false, bind: "127.0.0.1", port: 4000, trustLan: false, tokenRequired: false, webUi: true, urls: [], addresses: [], clients: { count: 0, lastAt: null, addresses: [], liveCount: 0 }, devices: [], firewall: null } as RemoteStatus),
   remoteDevice: (_address: string, _blocked: boolean) => D({ ok: false, error: "not available in the demo" }),
+  plugins: () => D({ master: true, plugins: [] } as PluginsStatus),
+  pluginMaster: (_enabled: boolean) => D({ ok: false, error: "not available in the demo" }),
+  pluginInstall: (_source: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  pluginEnable: (_name: string) => D({ ok: false, error: "not available in the demo" }),
+  pluginDisable: (_name: string) => D({ ok: false }),
+  pluginRemove: (_name: string) => D({ ok: false }),
+  pluginUpdate: (_name: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  pluginCatalogues: () => D({ catalogues: [] }),
+  pluginCatalogueAdd: (_url: string) => D({ ok: false, error: "not available in the demo" }),
+  pluginCatalogueRemove: (_url: string) => D({ ok: false }),
+  pluginCatalogueFetch: (_url: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  pluginInstallFromCatalogue: (_catalogueUrl: string, _pluginId: string) =>
+    D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
   // Pairing needs a machine on the other end of it. The demo has none, and a
   // QR that cannot lead anywhere is worse than an absent one.
   pairTicket: () => D({ ok: false, error: "not available in the demo" }),
@@ -1473,6 +2190,12 @@ const demoApi: typeof realApi = {
   // page calls out as new was dead in the demo that page links to.
   prCapability: (_force?: boolean) => D(demo.prCapability()),
   prApplySuggestion: () => D(demoPrAction()),
+  prHideComment: (_r: string, _n: string, _o: boolean, _w?: string) => D(demoPrAction()),
+  prFilesSince: (_r: string, _f: string, _t: string) => D({ ok: true, paths: [] }),
+  prCodeowners: (_r: string) => D({ ok: true, rules: [] }),
+  savedReplies: () => D({ ok: true, replies: [] }),
+  saveReply: (_r: { id?: string; title: string; text: string }) => D({ ok: false, error: "not available in the demo" }),
+  removeReply: (_i: string) => D({ ok: true, replies: [] }),
   prFileSlice: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }),
   prFacets: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; data?: { authors: string[]; assignees: string[]; labels: { name: string; color: string }[]; milestones: string[]; bases: string[] }; error?: string }),
   prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean, _after?: string, _q?: string) => D<PrListResponse>(demo.prList(root, filter)),
@@ -1482,10 +2205,23 @@ const demoApi: typeof realApi = {
   prCheckJobs: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; jobs?: PrCheckJob[]; error?: string }),
   prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
+  /* The demo has no local event history, and a spend chip invented for it would
+     be the one number on the page that is a fiction. `ok: false` draws nothing. */
+  prSpend: (_r: string) => D({ ok: false, error: "not available in the demo", since: 0, seamDay: null, beforeSeamUsd: 0, branches: [], worktrees: [] } as RepoSpend),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
   prDiff: (_root: string, number: number, _force?: boolean) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
   prFileTemp: (_r: string, _n: number, _p: string) => D({ ok: false as const, error: "not available in the demo" }),
+  agentKinds: () => D({ ok: true, agents: [{ id: "claude", title: "Claude Code", installed: true }, { id: "codex", title: "Codex", installed: true }] }),
+  agentHandoff: (_s: string, _k: string, _c?: string) => D({ ok: false, error: "not available in the demo" }),
+  agentSchedules: () => D({ ok: true, result: { schedules: [
+    { id: "s1", name: "nightly-tests", cwd: "/home/you/code/orbit", kind: "claude", prompt: "Run the full suite, fix what is red, one commit per fix. Do not push.", yolo: true, due: Date.now() + 9 * 3_600_000, created: Date.now() - 3_600_000, firedAt: null, cancelledAt: null, result: "" },
+    { id: "s0", name: "morning-triage", cwd: "/home/you/code/orbit", kind: "claude", prompt: "Read the overnight failures and leave a note per cause.", yolo: false, due: Date.now() - 5 * 3_600_000, created: Date.now() - 26 * 3_600_000, firedAt: Date.now() - 5 * 3_600_000, cancelledAt: null, result: "started as morning-triage in pane %31" },
+  ] } }),
+  agentSchedule: (_f: object) => D({ ok: false, error: "not available in the demo" }),
+  agentUnschedule: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  agentCheckouts: () => D({ allowed: ["/home/you/code/orbit"] }),
+  prNudge: (_r: string, _n: number, _s: boolean) => D({ ok: false, error: "not available in the demo" }),
   prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
   prReviewWith: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string, _c: unknown[]) => D(demoPrAction()),
   prComment: (_r: string, _n: number, _b: string) => D(demoPrAction()),
@@ -1543,20 +2279,27 @@ const demoApi: typeof realApi = {
   recipeRender: (_i: string, _v: Record<string, string>) => D({ ok: false, error: "not available in the demo" }),
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
+  agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
+  lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
+  lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
+  lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),
+  tabHints: () => D({ ok: true, hints: {} }),
   clickupViews: () => D({ views: [], connected: false, writeEnabled: false }),
   clickupCardForNote: () => D({ card: null }),
+  clickupFileNote: () => D({ ok: false }),
   clickupSetWrites: (_o: boolean) => D({ ok: false }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
   clickupSpaces: () => D({ ok: true, spaces: [] as { id: string; name: string }[] }),
-  clickupFolders: (_s: string) => D({ ok: true, folders: [] as { id: string; name: string; lists: { id: string; name: string }[] }[] }),
+  clickupFolders: (_s: string) => D({ ok: true, folders: [] as { id: string; name: string; lists: { id: string; name: string }[]; folderless?: boolean }[] }),
   clickupAddFolder: (_i: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveFolder: (_i: string) => D({ ok: true }),
   clickupListViews: (_l: string) => D({ ok: true, views: [] as { id: string; name: string }[], links: [] as { id: string; name: string; type: string }[] }),
   clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),
+  clickupWarm: () => D({ ok: false }),
   clickupFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   // The one pull request in the demo that is behind its base is #461, and it
   // said so with no number and nothing about this machine — which is exactly
@@ -1583,12 +2326,31 @@ const demoApi: typeof realApi = {
   prConflict: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prConflictFiles: (_r: string, _n: number) => D({ ok: false, conflicts: [] as string[], clean: false, error: "not available in the demo" }),
   clickupWhere: (_i: string) => D({ ok: false }),
+  clickupSearchStream: async (_q: string, _f: boolean, _o: (t: ProviderTask[]) => void, _s?: AbortSignal) =>
+    ({ ok: false, error: "not available in the demo" }),
+  clickupSearch: (_q: string, _f?: boolean, _s?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
   clickupTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupAssign: (_i: string, _o: boolean, _u?: number, _w?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupMembers: (_l: string) => D({ ok: false, error: "not available in the demo" }),
   clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupCard: (_i: string, _c: { add?: number[]; rem?: number[]; status?: string }, _u?: number) => D({ ok: false, error: "not available in the demo" }),
-  clickupField: (_i: string, _f: string, _v: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupPriority: (_i: string, _p: string | null, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupField: (_i: string, _f: string, _v: string, _k?: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupFieldClear: (_i: string, _f: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupEdit: (_i: string, _p: Record<string, unknown>, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupTag: (_i: string, _t: string, _o: boolean) => D({ ok: false, error: "not available in the demo" }),
+  prsInbox: () => D({ ok: true, items: [] as InboxItem[], at: 0 }),
+  prsInboxAct: (_b: { act: string }) => D({ ok: false, error: "not available in the demo" }),
+  clickupSprints: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupMove: (_i: string, _l: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupCreate: (_l: string, _c: { name: string }) => D({ ok: false, error: "not available in the demo" }),
+  clickupChecklistAdd: (_i: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupChecklistItemAdd: (_c: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupChecklistCheck: (_c: string, _i: string, _d: boolean) => D({ ok: false, error: "not available in the demo" }),
+  clickupCommentEdit: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupCommentReply: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupCommentResolve: (_i: string, _o: boolean) => D({ ok: false, error: "not available in the demo" }),
+  clickupCommentDelete: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
   reminderAck: (_i: string) => D({ ok: false }),
@@ -1614,6 +2376,15 @@ const demoApi: typeof realApi = {
   issueClaim: (_r: string, _n: number, _c?: string) => D({ ok: false, error: "not available in the demo" }),
   issueComment: (_r: string, _n: number, _b: string) => D({ ok: false, error: "not available in the demo" }),
   issueState: (_r: string, _n: number, _c: boolean) => D({ ok: false, error: "not available in the demo" }),
+  /* No runs in the demo, and an empty list is the honest answer rather than a
+     refusal: nobody has started one. It is also the day-one state of the real
+     thing, so whatever the panel draws here is what a new user sees. */
+  runs: (_root = "") => D({ runs: [] as Run[] }),
+  runActivity: (_id: string) => D({ ok: false, legs: [] as LegActivity[], error: "not available in the demo" }),
+  runStart: (_r: string, _p: string, _l: { agent: string; from?: string; yolo?: boolean }[]) =>
+    D({ ok: false, error: "not available in the demo" }),
+  runAdopt: (_i: string, _p: string, _a?: string) => D({ ok: false, error: "not available in the demo" }),
+  runFinish: (_i: string, _w?: string, _f?: boolean) => D({ ok: false, error: "not available in the demo" }),
   // Fabricated, like the rest of the demo: a fictional dev machine with the
   // Acme Shop services listening and a plausible load. Clearly a showcase, not
   // this machine — the demo ships to GitHub Pages with no server behind it.
@@ -1636,6 +2407,17 @@ const demoApi: typeof realApi = {
   filesExist: (_r: string, rels: string[]) => D({ ok: true, here: rels }),
   filesRefs: (_r: string) => D({ ok: true, local: ["main", "feat/checkout-rewrite"], remote: ["origin/main", "origin/release"], head: "main" }),
   filesGrep: (_r: string, _q: string) => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "not available in the demo" }),
+  /* The demo has no machine to search — and saying so is the point: an empty
+     result list would read as "your home directory is empty". */
+  diskPlaces: () => D({ ok: false, home: "", roots: [], places: [], error: "the demo has no machine to search" }),
+  diskFind: (_r: string, _q: string) => D({ ok: false, files: [], dirs: [], truncated: false, via: "", error: "the demo has no machine to search" }),
+  /* The demo has no disk to keep a note on and no tmux to run a tab in. Said,
+     rather than answered with an empty note that would swallow what was typed. */
+  benchNote: (_r: string) => D({ ok: false, text: "", error: "the demo keeps no notes" }),
+  benchNoteSave: (_r: string, _t: string) => D({ ok: false, text: "", error: "the demo keeps no notes" }),
+  benchEnd: (_r: string, _s: number) => D({ ok: false, error: "not available in the demo" }),
+  benchLive: (_r: string) => D({ ok: true, slots: [] as number[] }),
+  benchEdit: (_r: string, _p: string) => D({ ok: false, live: false, error: "the demo has no editor to send a file to" }),
 };
 
 export const api = IS_DEMO ? demoApi : realApi;

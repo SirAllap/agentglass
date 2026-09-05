@@ -418,9 +418,25 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
     delete process.env.TMUX;
     try {
       expect(existsSync(VANISHED)).toBe(false);
-      // Where tmux would really go, and therefore what has to be refused.
-      expect(ctl.tmuxSocketAllowed([])).toBe(false);
-      expect(ctl.tmuxSocketAllowed(["-L", "default"])).toBe(false);
+      /*
+       * THE PREMISE OF THIS TEST CHANGED, and the new one is stronger.
+       *
+       * It used to be that `socketDir()` answered the machine's real directory
+       * when the named one was missing — so a bare `tmux` would have landed on
+       * his servers, and refusing was the only protection available. That
+       * fallback is gone: a TMUX_TMPDIR that is set is used whether or not it
+       * exists, because whoever set it meant somewhere else, and tmux itself
+       * creates the directory it is pointed at.
+       *
+       * So a bare `tmux` is no longer a way back to his sockets, and there is
+       * nothing left to refuse about it. What must still be refused is the
+       * thing that names his directory OUT LOUD — a path spelled by hand — and
+       * that is asserted right below.
+       */
+      expect(ctl.tmuxSocketAllowed([])).toBe(true);
+      expect(ctl.tmuxSocketAllowed(["-L", "default"])).toBe(true);
+      // Naming his socket directory explicitly is still refused, missing
+      // TMUX_TMPDIR or not: that one cannot be a mistake about where you are.
       expect(ctl.tmuxSocketAllowed(["-S", join(`/tmp/tmux-${UID}`, "default")])).toBe(false);
       // Discovery too, and this is the half that makes the order matter.
       // `socketDir()` no longer answers the absent path — it falls back — so

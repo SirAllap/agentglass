@@ -31,6 +31,17 @@ export type Alarm = {
   /** The reminder's id, so Done and Snooze act on the exact one. */
   id: string;
   title: string;
+  /**
+   * WHAT IS RINGING. A reminder is something a person set for themselves; the
+   * deputy is a machine that has stopped and is waiting on one.
+   *
+   * They took the same card for one afternoon and every part of it was wrong
+   * for the second: it said REMINDER over a deputy's message, "Done" called
+   * `reminderAck` on an id no reminder has, and "Open the task →" took him to
+   * a ClickUp card. Reported in three messages, the last of which was "Que
+   * cojones".
+   */
+  kind?: "reminder" | "deputy";
   /** What the notification said underneath — "in 15 minutes", the time it was
    *  set for. Shown because an alarm without its own time reads as a bug. */
   when: string;

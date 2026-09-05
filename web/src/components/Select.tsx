@@ -158,11 +158,18 @@ export function Select({
         <AnimatePresence>
           {open && (
             <>
-              <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={close} />
+              {/* Marked, because a menu that opens OVER another surface must
+                  not read as a click outside it. A picker with a Select in it
+                  was closing the moment you pressed the status: this list is
+                  portalled to the body, so every dismiss-on-outside-click saw
+                  the press land somewhere else entirely. Reported as "if I press
+                  the status, this modal/selector just closes on the spot". */}
+              <div data-menu-layer className="fixed inset-0" style={{ zIndex: 9998 }} onClick={close} />
               <motion.div
                 initial={{ opacity: 0, y: -8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, scale: 0.96 }}
                 transition={{ type: "spring", stiffness: 420, damping: 32 }}
                 ref={listRef}
+                data-menu-layer
                 role="listbox"
                 aria-label={title ?? "Options"}
                 className="fixed p-1.5 rounded-xl flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar"

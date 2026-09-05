@@ -20,12 +20,14 @@ const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.
 
 describe("a search falls through to the table", () => {
   it("derives what is shown from the query, not only from the stored setting", () => {
-    expect(src).toContain("const boardShown = boardOn && !searching;");
+    // The inbox is a third surface and wins over both, so it is in the gate
+    // too — but the rule this pins is unchanged: a search is a table.
+    expect(src).toContain("const boardShown = boardOn && !searching && !inboxOn;");
     expect(src).toContain("const searching = query.trim().length > 0;");
   });
 
   it("gates the board on what is shown", () => {
-    expect(src).toContain("{boardShown && repo && !listState.needsAuth ? (");
+    expect(src).toContain("boardShown && repo && !listState.needsAuth ? (");
     // The old gate is what shipped the bug. If it comes back, so does the bug.
     expect(src).not.toContain("{boardOn && repo && !listState.needsAuth ? (");
   });
@@ -33,21 +35,38 @@ describe("a search falls through to the table", () => {
   it("lights the pill by what is on screen", () => {
     /*
      * A lit pill over a table is the panel saying where you are and being
-     * wrong. Three style properties read it; all three have to agree.
+     * wrong, so the lit state must read `boardShown` — what is DRAWN — and
+     * never `boardOn`, which is only what was last picked.
+     *
+     * One property rather than the three this used to spell out: the pills are
+     * a shared `Pill` now, so `on` is the single thing that decides colour,
+     * background and border. Fewer places to disagree is the point of the
+     * component; pinning the three literal style lines only pinned the old
+     * markup.
      */
-    expect(src.split("boardShown ? \"var(--bg)\"").length - 1).toBe(1);
-    expect(src.split("background: boardShown ?").length - 1).toBe(1);
-    expect(src).toContain("border: `1px solid ${boardShown ? \"var(--primary)\"");
+    expect(src).toContain("<Pill on={boardShown}");
+    expect(src).not.toContain("<Pill on={boardOn}");
   });
 
   it("gives the pill a way back, because clearing the box is the only one", () => {
-    expect(src).toContain("if (searching) setQuery(\"\"); setBoard(true);");
+    // By shape: the same handler now also has to leave the inbox, and the
+    // order it does that in is not what this is about.
+    /* Bounded by the NEXT pill, not by the first `/>`: the first one closes the
+       icon nested inside this pill, so that slice ended before the handler and
+       the assertion below passed over nothing. Third time this exact cut has
+       been got wrong in this repository. */
+    const from = src.indexOf("<Pill on={boardShown}");
+    const board = src.slice(from, src.indexOf("<Pill on={inboxOn}", from));
+    expect(board).toContain('if (searching) setQuery("")');
+    expect(board).toContain("setBoard(true)");
   });
 
-  it("does not light a scope pill while the board is showing", () => {
-    // The scopes are the table's; with the board up none of them is active,
-    // and with a search up one of them is.
-    expect(src).toContain("const on = !boardShown && activeView?.id === v.id;");
+  it("does not light a scope pill while the board — or the inbox — is showing", () => {
+    /* The scopes are the table's; with either other surface up none of them is
+       active, and with a search up one of them is. `inboxOn` joined this the day
+       the inbox stopped being a toggle: it hides the table too, so a scope lit
+       under it was the same lie. */
+    expect(src).toContain("const on = !boardShown && !inboxOn && activeView?.id === v.id;");
   });
 });
 
@@ -158,8 +177,8 @@ describe("the three columns", () => {
      * That guess is wrong on any screen where the panel starts lower than 160px
      * — his does, by about a hundred — and a tree taller than the box holding it
      * gives the middle column scroll that belongs to nothing. Dragging it took
-     * the toolbar and the file list up with it: "ese scroll raro mueve el
-     * listado de files hacia arriba".
+     * the toolbar and the file list up with it: "that odd scroll pushes the
+     * file list upwards".
      *
      * The row is a flex child with `flex-1 min-h-0` now, which is a definite
      * height, so the percentage resolves and the cap is the column itself.
@@ -358,18 +377,14 @@ describe("the strip, at the mockup's wording", () => {
     expect(src).toContain("{queued} queued");
   });
 
-  it("draws labels as words, not as boxes — in the strip, and only there", () => {
-    /*
-     * Scoped to the strip's own cell on purpose. The row list and the sidebar
-     * keep their coloured chips: those have room, and there a colour is how you
-     * find a label without reading. It is the row of nine cells that has to
-     * read as one line.
-     */
-    const cell = src.slice(src.indexOf('<Field label="Labels" max={300}>'));
-    const strip = cell.slice(0, cell.indexOf("</Field>"));
-    expect(strip).not.toContain("<Chip");
-    expect(strip).toContain('<span className="uppercase tracking-wide truncate">{l.name}</span>');
-    // The other surfaces are untouched, and this says so out loud.
+  /*
+   * THE STRIP'S OWN LABELS CELL IS GONE — moved to the sidebar, which already
+   * edits the same list one press away: "this one too, since it is all in
+   * this panel". See pr-reviewer-faces.test.ts for the assertion that it stays
+   * gone; what is left to pin here is that the surfaces which DID keep their
+   * coloured chips are still untouched.
+   */
+  it("still draws labels as coloured chips everywhere that isn't the strip", () => {
     expect(src).toContain("{shownLabels.map((l) => <Chip key={l.name}");
   });
 });
@@ -443,9 +458,9 @@ describe("the open pull request survives what happens to the list behind it", ()
 /*
  * Loading, as one rule instead of six.
  *
- * Reported after a morning of one-at-a-time fixes: "hace cosas raras y da
- * saltos cuando carga cosas por completo… me parece que no lo estás planeando
- * bien". He was right. The rule these pin: nothing is asserted twice, nothing
+ * Reported after a morning of one-at-a-time fixes: "it does odd things and
+ * jumps around when it loads everything at once… I don't think you are planning
+ * this well". He was right. The rule these pin: nothing is asserted twice, nothing
  * moves once it is on screen, and no wait is unbounded.
  */
 describe("waiting for a pull request", () => {
@@ -491,7 +506,7 @@ describe("feedback on a request in flight", () => {
      * Every action here is a round trip through `gh`, and the only feedback was
      * the button going grey — the same grey it wears when it is disabled for a
      * reason that has nothing to do with you. Reported as the worst thing about
-     * the app: "tenemos que dar feedback en las peticiones async, SIEMPRE".
+     * the app: "we have to give feedback on async requests, ALWAYS".
      */
     expect(src).toContain("pending?: boolean;");
     expect(src).toContain("setBusyWhat(label);");

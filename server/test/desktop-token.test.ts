@@ -74,11 +74,15 @@ describe("currentToken", () => {
 
 describe("sidecarEnv", () => {
   const build = (opts: { remote: boolean; env?: Record<string, string> }) =>
-    lift("sidecarEnv", ["process", "remoteEnabled", "currentToken", "DIST"])(
+    lift("sidecarEnv", ["process", "remoteEnabled", "currentToken", "DIST", "withBundledBin", "PACKAGED"])(
       proc(opts.env ?? {}),
       () => opts.remote,
       () => "the-shared-secret",
       "/somewhere/web",
+      // PATH is somebody else's question (desktop-mac-bin-path.test.ts); here it
+      // passes through untouched.
+      (current: string | undefined) => current,
+      false,
     )(4000);
 
   it("spawns the sidecar with a token when remote access is OFF", () => {

@@ -17,11 +17,15 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { normalizeOrigin } from "../src/lib/pairing.ts";
+import { announce, installed, pairing } from "./npm-deps.ts";
+
+announce("pair-origin.test.ts");
+
+const { normalizeOrigin } = pairing;
 
 const source = readFileSync(join(import.meta.dir, "..", "app", "pair.tsx"), "utf8");
 
-describe("what the field accepts", () => {
+describe.skipIf(!installed)("what the field accepts", () => {
   test("the three ways people write the same computer all normalise", () => {
     expect(normalizeOrigin("192.168.1.20:4000")).toBe("http://192.168.1.20:4000");
     expect(normalizeOrigin("http://192.168.1.20:4000/")).toBe("http://192.168.1.20:4000");
@@ -36,7 +40,7 @@ describe("what the field accepts", () => {
   });
 });
 
-describe("and what the app keeps", () => {
+describe.skipIf(!installed)("and what the app keeps", () => {
   test("every read of the address goes through the normaliser", () => {
     /*
      * The assertion that would have caught it. `const where = origin` is the

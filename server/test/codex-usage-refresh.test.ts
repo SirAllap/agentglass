@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { usageRefreshModel } from "../src/codexusage.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 describe("usageRefreshModel", () => {
   test("takes the last entry — parseModels sorts by Codex's own priority", () => {
@@ -49,6 +50,9 @@ describe("the route, with Codex switched off", () => {
       TMUX_TMPDIR: TMUX_TEST_TMPDIR,
         HOME: dir,
         XDG_CONFIG_HOME: dir,
+        // State (audit log, ledgers, engine conf) jailed too: without this a booted
+        // server writes into the developer's real ~/.local/state/agentglass.
+        AGENTGLASS_STATE_DIR: `${dir}/state`,
         AGENTGLASS_ROOT: dir,
         AGENTGLASS_DB: join(dir, "f.db"),
         AGENTGLASS_SCAN_DISABLED: "1",
@@ -62,7 +66,7 @@ describe("the route, with Codex switched off", () => {
       await Bun.sleep(100);
     }
     throw new Error("the server did not come up");
-  });
+  }, SERVER_BOOT_MS);
 
   afterAll(() => {
     try { proc?.kill(); } catch { /* already gone */ }

@@ -1,0 +1,13 @@
+{
+  "session_id": "cafe0002-0000-4000-8000-000000000002",
+  "transcript_path": "/home/example/.claude/projects/-srv-notekeeper/cafe0002-0000-4000-8000-000000000002.jsonl",
+  "cwd": "/srv/notekeeper",
+  "permission_mode": "acceptEdits",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_use_id": "toolu_0000000000000011",
+  "tool_input": {
+    "command": "pytest -q tests/test_cart.py",
+    "description": "run the cart tests"
+  }
+}

@@ -11,6 +11,7 @@
 // act — AGENTGLASS_TRUST_LAN=1 on top of a token — rather than something a
 // browser on a colleague's machine gets for free.
 import { isIP } from "node:net";
+import { lookup } from "node:dns/promises";
 
 export function privateHost(hRaw: string, trustLan: boolean): boolean {
   const h = hRaw.replace(/^\[|\]$/g, ""); // a URL keeps IPv6 brackets
@@ -181,4 +182,152 @@ function forwardedFor(headers: { get(name: string): string | null }): string | n
 export function originOf(peer: Peer): "loopback" | "remote" {
   if (peer.source === "proxy") return "remote";
   return peer.address && isLoopbackAddr(peer.address) ? "loopback" : "remote";
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Outbound: what this server may be talked into fetching.
+ *
+ * Two routes take a URL from outside and fetch it with this process's network
+ * position — `/plugins/catalogue?url=` and `/clickup/file`, whose address is
+ * whatever the tracker returned for an attachment. Both checked the scheme and
+ * neither checked the HOST, and both followed redirects blind. With
+ * `redirect: "follow"` the FIRST server chooses the second URL, so an https
+ * catalogue whose answer is a 302 to `http://127.0.0.1:<port>/…` is fetched by
+ * this server against itself — and the same shape reaches a router's admin
+ * page or a cloud metadata address from any machine that can see them. The
+ * test drives exactly that hop through a fake fetch and asserts it is never
+ * made.
+ *
+ * `privateHost` above answers the inbound question ("may this caller be
+ * trusted as local?") and its `trustLan` switch widens trust. The outbound
+ * question is the opposite one, so it gets its own function with no switch:
+ * anything private, link-local, unspecified, or a name that resolves there,
+ * is refused, and LAN trust never opens it.
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * A literal host this server must not fetch from, judged without a resolver:
+ * loopback, RFC1918, CGNAT, unique-local, link-local (169.254/16 is where cloud
+ * metadata lives, fe80::/10 the IPv6 twin), the unspecified address, and the
+ * IPv4-mapped IPv6 spellings of all of them. A hostname is not judged here —
+ * `10.evil.example` is a name, not an address — so a name is resolved by
+ * `unfetchableHost` below and every answer judged by this.
+ */
+export function privateAddress(hRaw: string): boolean {
+  let h = hRaw.replace(/^\[|\]$/g, "").toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  const mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) h = mapped[1]!;
+  const v = isIP(h);
+  if (v === 4) {
+    const [a, b] = h.split(".").map(Number) as [number, number];
+    if (a === 0 || a === 127 || a === 10) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+  if (v === 6) {
+    if (h === "::" || h === "::1") return true;
+    if (/^f[cd]/.test(h)) return true;      // fc00::/7 unique-local
+    if (/^fe[89ab]/.test(h)) return true;   // fe80::/10 link-local
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Why a host may not be fetched, or null.
+ *
+ * A literal address is judged as it is. A name is resolved — every address,
+ * not the first — and refused if ANY answer is private: a name with one public
+ * and one private record is a name whose owner wants the private one used. A
+ * name that does not resolve is refused too, since a fetch of it would fail
+ * anyway and the refusal says why. Resolution is a real DNS round trip, so
+ * this is async and the caller pays it once per hop, not per byte.
+ */
+export async function unfetchableHost(hRaw: string): Promise<string | null> {
+  const h = hRaw.replace(/^\[|\]$/g, "");
+  if (!h) return "no host";
+  if (privateAddress(h)) return `${h} is a private or local address`;
+  if (isIP(h)) return null;
+  try {
+    const answers = await lookup(h, { all: true, verbatim: true });
+    if (!answers.length) return `${h} does not resolve`;
+    for (const a of answers) if (privateAddress(a.address)) return `${h} resolves to ${a.address}, a private or local address`;
+    return null;
+  } catch {
+    return `${h} does not resolve`;
+  }
+}
+
+/**
+ * An `allow` for guardedFetch that admits https on the named domains and their
+ * subdomains, and nothing else. The `.` in the suffix test is the whole rule:
+ * a bare `endsWith("clickup.com")` also admits `notclickup.com`, which is
+ * somebody else's host — the same trap clickup.ts:parseViewUrl documents.
+ */
+export function hostsOnly(domains: string[]): (u: URL) => string | null {
+  const roots = domains.map((d) => d.toLowerCase());
+  return (u: URL) => {
+    if (u.protocol !== "https:") return "fetched over https only";
+    const h = u.hostname.toLowerCase();
+    return roots.some((d) => h === d || h.endsWith(`.${d}`)) ? null : `${h} is not a host this may fetch from`;
+  };
+}
+
+export interface GuardedFetch {
+  /** The final response, when every hop passed. */
+  res?: Response;
+  /** Why it stopped, when one did not. */
+  error?: string;
+}
+
+/**
+ * `fetch` that checks every hop rather than trusting the first.
+ *
+ * `redirect: "follow"` hands the decision about the second URL to the first
+ * server, which is the whole of the blind-SSRF shape. So redirects are manual:
+ * each `Location` is resolved against the current URL, run through the same
+ * `allow` the caller applied to the original (scheme, host allowlist) and
+ * through `unfetchableHost`, and only then fetched. Five hops is more than any
+ * legitimate download chain uses and few enough to stop a loop.
+ *
+ * `fetchImpl` and `hostCheck` exist for the test: a fetch that answers a 302 to
+ * a private address without a network, and a host check that judges literals
+ * without a resolver, let the test prove the second hop is never made without
+ * depending on what this machine's DNS says about an invented name.
+ */
+export interface GuardedFetchOptions {
+  maxHops?: number;
+  fetchImpl?: typeof fetch;
+  hostCheck?: (host: string) => Promise<string | null>;
+}
+
+export async function guardedFetch(
+  urlIn: string,
+  init: RequestInit,
+  allow: (u: URL) => string | null,
+  opts: GuardedFetchOptions = {},
+): Promise<GuardedFetch> {
+  const maxHops = opts.maxHops ?? 5;
+  const doFetch = opts.fetchImpl ?? fetch;
+  const hostCheck = opts.hostCheck ?? unfetchableHost;
+  let url: URL;
+  try { url = new URL(urlIn); } catch { return { error: "not a URL" }; }
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const bad = allow(url) ?? await hostCheck(url.hostname);
+    if (bad) return { error: hop === 0 ? bad : `redirected to ${url.host}: ${bad}` };
+    const res = await doFetch(url.toString(), { ...init, redirect: "manual" });
+    if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+      if (hop === maxHops) return { error: "too many redirects" };
+      try { url = new URL(res.headers.get("location")!, url); } catch { return { error: "redirected to something that is not a URL" }; }
+      continue;
+    }
+    return { res };
+  }
+  return { error: "too many redirects" };
 }

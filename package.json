@@ -16,6 +16,7 @@
     "desktop:dist": "cd electron && bun run dist",
     "desktop:dist:linux": "cd electron && bun run dist:linux",
     "install:all": "bun install",
+    "lint": "oxlint",
     "setup": "python3 hooks/install_hooks.py",
     "setup:undo": "python3 hooks/install_hooks.py --uninstall",
     "connect": "python3 hooks/connect_otel.py",
@@ -25,6 +26,7 @@
     "postinstall": "node -e \"console.log('agentglass: run [bun run setup] to wire Claude Code hooks, [bun run connect] for OTel CLIs, [bun run connect:opencode] for OpenCode')\""
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "concurrently": "^9.1.0",
+    "oxlint": "1.79.0"
   }
 }

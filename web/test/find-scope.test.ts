@@ -107,6 +107,46 @@ describe("the bar's state machine", () => {
     expect(findState()).toMatchObject({ open: true, query: "risk", total: 3, at: 1 });
   });
 
+  /*
+   * The engine follows the screen even when the SCOPE does not move.
+   *
+   * Reported by him on the pull-request panel: with the bar open, going from
+   * the board to the Mine table answered 0/1 and found nothing, and typing the
+   * same word again fixed it — because the panel swaps its body without
+   * changing the element it pushed, so the board's engine stayed live after the
+   * board had unmounted. Leaving the panel and coming back fixed it too, which
+   * is the tell: that path moves the scope.
+   */
+  it("rebuilds when an engine appears or goes, not only when the scope moves", () => {
+    const board = fake(16);
+    const off = keep(registerEngine(() => board.engine));
+    openFind("curr");
+    expect(findState()).toMatchObject({ total: 16, at: 1 });
+
+    // The board unmounts. Nothing else about the screen changed.
+    off();
+    // The board was told to take its highlights down, and the bar re-asked
+    // whoever is left — here, nobody, so the DOM finder answers for an empty
+    // document.
+    expect(board.calls).toContain("clear");
+    expect(findState().total).toBe(0);
+
+    // And back again: the same query, answered by the board, with no retyping.
+    const again = fake(16);
+    keep(registerEngine(() => again.engine));
+    expect(again.calls).toEqual(["search:curr"]);
+    expect(findState()).toMatchObject({ query: "curr", total: 16, at: 1 });
+  });
+
+  it("does not search twice for one keystroke when an engine registers late", () => {
+    // openFind builds the engine itself; the sync that follows must recognise
+    // it as current rather than tearing it down and asking again.
+    const { engine, calls } = fake(2);
+    keep(registerEngine(() => engine));
+    openFind("risk");
+    expect(calls).toEqual(["search:risk"]);
+  });
+
   it("wraps at both ends, so holding Enter walks the screen", () => {
     const { engine } = fake(2);
     keep(registerEngine(() => engine));

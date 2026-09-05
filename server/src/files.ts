@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
 import { inScope } from "./config.ts";
+import { diskAllows } from "./disk.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 
 export interface FileEntry {
@@ -98,13 +99,21 @@ const MAX_LINE = 400;
  * read at all (the workspace scope), and `rel` has to stay inside it after
  * resolution — `..`, an absolute path and a symlink-shaped name are all just
  * strings until `resolve` has had them.
+ *
+ * There is a second way to be allowed, and only one: a document under your own
+ * home directory, which is what the finder's machine tab searches. It is
+ * spelled out in disk.ts rather than here, and it is asked TWICE — of the root,
+ * and of the path that came out of resolving `rel` against it. Once would be
+ * enough for `..` and is not enough for a symlink, which is the whole reason
+ * that check resolves them.
  */
 function inside(rootIn: unknown, relIn: unknown): { root: string; abs: string; rel: string } | { error: string } {
   const root = safeAbs(rootIn);
   if (!root) return { error: "no directory given" };
   try { if (!statSync(root).isDirectory()) return { error: "not a directory" }; }
   catch { return { error: "no such directory" }; }
-  if (!inScope(root)) return { error: "outside the open project — open the parent folder to work across repos" };
+  const scoped = inScope(root);
+  if (!scoped && !diskAllows(root)) return { error: "outside the open project — open the parent folder to work across repos" };
   const rel = typeof relIn === "string" ? relIn : "";
   if (rel.includes("\0")) return { error: "invalid path" };
   const abs = resolve(root, rel);
@@ -112,6 +121,7 @@ function inside(rootIn: unknown, relIn: unknown): { root: string; abs: string; r
   // startsWith would say it is.
   const back = relative(root, abs);
   if (back.startsWith("..") || back.startsWith(sep) || resolve(root, back) !== abs) return { error: "outside the checkout" };
+  if (!scoped && !diskAllows(abs)) return { error: "outside what this search may read" };
   return { root, abs, rel: back };
 }
 

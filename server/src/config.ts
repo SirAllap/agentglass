@@ -24,6 +24,19 @@ import { worktreeFamily } from "./worktree.ts";
  * and `open-tool memo` failed on a machine with real projects and passed in CI,
  * where the file does not exist.
  */
+/**
+ * Has somebody pointed this process at a config dir that is not the machine's?
+ *
+ * The question a generated file has to ask before it writes to a SHARED path:
+ * an isolated instance materialises different settings, and writing them to the
+ * one file the real engine reads is how a probe changed the developer's tmux
+ * prefix from under him. See tmuxconf's confPath.
+ */
+export function configDirRedirected(): boolean {
+  const asked = process.env.XDG_CONFIG_HOME;
+  return !!asked && asked !== join(homedir(), ".config");
+}
+
 export function configPath(): string {
   return join(
     process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -104,6 +117,21 @@ interface Config {
   /** Set when the validation gate rejected the generated conf. The pane
    *  engine degrades (chat still works) and the settings panel shows why. */
   tmuxConfBroken?: { broken: boolean; reason: string };
+  /** Ask each hooked session, now and then, to say what it is working on —
+   *  the line the Lantern draws under its name. On unless stated: the view
+   *  is a list of pane ids without it. See lanternNudge(). */
+  lanternNudge?: boolean;
+  /** How often that reminder may repeat for one session, in minutes. */
+  lanternNudgeMinutes?: number;
+  /** The Lantern's watch: re-read the field every N minutes and notify when
+   *  somebody is still stopped on a person, a worker's window vanished, or
+   *  work that was claimed has gone quiet. On by default. See lanternwatch.ts. */
+  lanternWatch?: boolean;
+  lanternWatchMinutes?: number;
+  /** How long the provider keeps a prompt cache warm after a turn, in minutes
+   *  — 5 on most plans, 60 on some. The Lantern's cards count it down, since
+   *  it decides whether the next turn is cheap now or cheap in five minutes. */
+  cacheTtlMinutes?: number;
 }
 
 function load(path: string): Config {
@@ -674,6 +702,18 @@ export function writeTmuxSettings(fields: {
   tmuxTerminal?: "engine" | "desk";
   tmuxConfBroken?: { broken: boolean; reason: string } | undefined;
 }): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig(fields, "tmux settings");
+}
+
+/**
+ * Write these fields into config.json, leaving every other key as it was.
+ *
+ * `undefined` deletes a key. One implementation for every settings pane that
+ * writes here: the tmux pane had this inline, and the second pane to need it
+ * would have been a second copy of the same read-check-merge-write, with the
+ * same three failure messages worded slightly differently.
+ */
+function mergeConfig(fields: Record<string, unknown>, what: string): { ok: boolean; persisted: boolean; error?: string } {
   const path = configPath();
   if (realConfigOffLimits(path)) {
     return { ok: false, persisted: false, error: "not persisted: tests write settings only under os.tmpdir()" };
@@ -683,12 +723,12 @@ export function writeTmuxSettings(fields: {
     if (existsSync(path)) {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save tmux settings` };
+        return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save ${what}` };
       }
       existing = parsed as Record<string, unknown>;
     }
   } catch (e) {
-    return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save tmux settings (${e instanceof Error ? e.message : e})` };
+    return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save ${what} (${e instanceof Error ? e.message : e})` };
   }
   try {
     mkdirSync(dirname(path), { recursive: true });
@@ -702,4 +742,64 @@ export function writeTmuxSettings(fields: {
   } catch (e) {
     return { ok: false, persisted: false, error: `could not write ${path}: ${e instanceof Error ? e.message : e}` };
   }
+}
+
+/*
+ * THE LANTERN REMINDER.
+ *
+ * Translated from Herdr's Lantern plugin, which gets a real "what is this
+ * agent working toward" onto its board by handing every agent it seats a
+ * rule to narrate `Goal: … Next: …` into its own output. Here the ask goes
+ * through the hook every session already runs: on a prompt, the server may
+ * answer with a one-line reminder to `POST /agents/status`, and the session
+ * reads it the way it reads the memory-save reminder. On by default, because
+ * the Lantern without it is a list of pane ids.
+ */
+export const LANTERN_NUDGE_DEFAULT_MIN = 20;
+export const LANTERN_NUDGE_MIN_MIN = 5;
+export const LANTERN_NUDGE_MAX_MIN = 180;
+
+export function lanternNudge(): boolean {
+  return config().lanternNudge !== false;
+}
+
+export function lanternNudgeMinutes(): number {
+  const n = config().lanternNudgeMinutes;
+  if (typeof n !== "number" || !Number.isFinite(n)) return LANTERN_NUDGE_DEFAULT_MIN;
+  return Math.min(LANTERN_NUDGE_MAX_MIN, Math.max(LANTERN_NUDGE_MIN_MIN, Math.round(n)));
+}
+
+export const LANTERN_WATCH_DEFAULT_MIN = 15;
+export const CACHE_TTL_DEFAULT_MIN = 5;
+export function cacheTtlMinutes(): number {
+  const n = config().cacheTtlMinutes;
+  if (typeof n !== "number" || !Number.isFinite(n)) return CACHE_TTL_DEFAULT_MIN;
+  return Math.min(120, Math.max(1, Math.round(n)));
+}
+export function lanternWatch(): boolean {
+  return config().lanternWatch !== false;
+}
+export function lanternWatchMinutes(): number {
+  const n = config().lanternWatchMinutes;
+  if (typeof n !== "number" || !Number.isFinite(n)) return LANTERN_WATCH_DEFAULT_MIN;
+  return Math.min(LANTERN_NUDGE_MAX_MIN, Math.max(LANTERN_NUDGE_MIN_MIN, Math.round(n)));
+}
+
+export function writeLanternSettings(fields: { lanternNudge?: boolean; lanternNudgeMinutes?: number; lanternWatch?: boolean; lanternWatchMinutes?: number; cacheTtlMinutes?: number }):
+{ ok: boolean; persisted: boolean; error?: string } {
+  const out: Record<string, unknown> = {};
+  if (fields.lanternNudge !== undefined) out.lanternNudge = fields.lanternNudge === true;
+  if (fields.lanternWatch !== undefined) out.lanternWatch = fields.lanternWatch === true;
+  if (fields.cacheTtlMinutes !== undefined) {
+    const n = Number(fields.cacheTtlMinutes);
+    if (!Number.isFinite(n)) return { ok: false, persisted: false, error: "the cache window has to be a number of minutes" };
+    out.cacheTtlMinutes = Math.min(120, Math.max(1, Math.round(n)));
+  }
+  for (const key of ["lanternNudgeMinutes", "lanternWatchMinutes"] as const) {
+    if (fields[key] === undefined) continue;
+    const n = Number(fields[key]);
+    if (!Number.isFinite(n)) return { ok: false, persisted: false, error: "the interval has to be a number of minutes" };
+    out[key] = Math.min(LANTERN_NUDGE_MAX_MIN, Math.max(LANTERN_NUDGE_MIN_MIN, Math.round(n)));
+  }
+  return mergeConfig(out, "lantern settings");
 }

@@ -30,6 +30,15 @@ export function isFindChord(e: {
   return !!e.ctrlKey && !!e.shiftKey;
 }
 
+/** Ctrl+Shift+Space (Cmd+Shift+Space on macOS): the pluck palette — the paths,
+ *  links, hashes and ids on the screen, lettered. Space with both modifiers is
+ *  nothing to any shell or CLI this app has met. */
+export function isPluckChord(e: { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean }): boolean {
+  if (e.key !== " " && e.key !== "Spacebar") return false;
+  if (e.altKey || !e.shiftKey) return false;
+  return !!e.metaKey || !!e.ctrlKey;
+}
+
 /**
  * Chords the app claims before the shell sees them.
  *

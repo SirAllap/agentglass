@@ -81,6 +81,80 @@ export function describeFailure(e: unknown): string {
  *  computer, and no amount of retrying fixes it — the phone has to pair again. */
 export const REVOKED = "revoked";
 
+/**
+ * The body the server puts on a refusal. Every gate in `server/src/index.ts`
+ * answers `json({ ok: false, error }, status)`; the scope gate adds `scope` and
+ * `needs`, and nothing else is promised.
+ */
+interface Refusal {
+  error?: unknown;
+  scope?: unknown;
+  needs?: unknown;
+}
+
+/**
+ * The one 403 that means "pair again", spelled the way the server spells it.
+ *
+ * A blocked device is refused above the auth gate with this sentence, and a
+ * blocked device is as gone as a revoked one — the person at the computer
+ * turned it away. Matched on the words rather than on the status because the
+ * status is shared with three refusals that mean the opposite (see `isRevoked`).
+ */
+const DISCONNECTED = /disconnected from this machine/i;
+
+/**
+ * Is this refusal the end of the pairing, or just the end of this request?
+ *
+ * Every non-2xx used to log the phone out. Measured against the server, the
+ * statuses that arrive on a correctly paired phone are:
+ *
+ *   401  the token is unknown — revoked, or the server was reinstalled
+ *   403  "this device was disconnected from this machine" — blocked at the desk
+ *   403  "this device is paired for "read" access, and /x needs "act""
+ *   403  "cross-origin write blocked" — the CSRF gate, see `ask`
+ *   403  "terminal is disabled" — a server setting
+ *   409, 429, 500  the route's own trouble
+ *
+ * Only the first two are about the credential. Treating the rest as revoked
+ * dropped the keystore record on a scope refusal, so a phone paired for reading
+ * that opened the Docker card landed on the pairing screen with nothing wrong
+ * with its pairing.
+ */
+export function isRevoked(status: number, body: Refusal | null): boolean {
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  return typeof body?.error === "string" && DISCONNECTED.test(body.error);
+}
+
+/**
+ * The refusal's body, as JSON when it is JSON and as text when it is not.
+ *
+ * Read once, because a body can only be read once, and the two callers in
+ * `ask` (deciding whether the pairing is over, and telling the screen why the
+ * request failed) both need it.
+ */
+async function readRefusal(response: Response): Promise<{ body: Refusal | null; text: string }> {
+  const text = (await response.text().catch(() => "")).slice(0, 2000);
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === "object") return { body: parsed as Refusal, text };
+  } catch { /* not JSON — a proxy's HTML, or nothing */ }
+  return { body: null, text };
+}
+
+/** What the screen is told when a request is refused. The server's own
+ *  sentence when it sent one; the status when it did not. */
+function refusalMessage(status: number, body: Refusal | null, text: string): string {
+  if (typeof body?.error === "string" && body.error) return body.error;
+  // JSON with no sentence in it is not improved by printing the braces.
+  if (body) return `The computer answered ${status}`;
+  // An HTML error page from a proxy is not a sentence anybody can read on a
+  // phone, so anything that is not JSON is only kept when it is short and flat.
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat && !flat.startsWith("<") && flat.length <= 200) return flat;
+  return `The computer answered ${status}`;
+}
+
 export async function ask<T>(
   host: Host,
   path: string,
@@ -98,18 +172,27 @@ export async function ask<T>(
       method: init?.method ?? "GET",
       headers: {
         authorization: `Bearer ${host.token}`,
+        /*
+         * The server's CSRF gate (`trustedCaller`) refuses a write that
+         * arrives with no Origin unless it came over loopback — which a phone
+         * never does. A browser attaches the header itself; this is not a
+         * browser, and without the line every POST from off-box answered 403
+         * "cross-origin write blocked". The paired address is the same host
+         * the request is going to, so it passes the header's own test.
+         */
+        origin: host.origin,
         ...(init?.body === undefined ? {} : { "content-type": "application/json" }),
       },
       body: init?.body === undefined ? undefined : JSON.stringify(init.body),
       signal: controller.signal,
     });
 
-    if (response.status === 401 || response.status === 403) {
-      return { ok: false, error: REVOKED, status: response.status };
-    }
     if (!response.ok) {
-      const text = (await response.text().catch(() => "")).slice(0, 200);
-      return { ok: false, error: text || `The computer answered ${response.status}`, status: response.status };
+      const { body, text } = await readRefusal(response);
+      if (isRevoked(response.status, body)) {
+        return { ok: false, error: REVOKED, status: response.status };
+      }
+      return { ok: false, error: refusalMessage(response.status, body, text), status: response.status };
     }
     return { ok: true, value: (await response.json()) as T };
   } catch (e) {

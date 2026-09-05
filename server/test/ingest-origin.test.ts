@@ -35,6 +35,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 const TOKEN = "test-machine-token-not-a-real-one";
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -54,6 +55,9 @@ beforeAll(async () => {
       TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       HOME: process.env.HOME ?? "",
       XDG_CONFIG_HOME: dir,
+      // State (audit log, ledgers, engine conf) jailed too: without this a booted
+      // server writes into the developer's real ~/.local/state/agentglass.
+      AGENTGLASS_STATE_DIR: `${dir}/state`,
       AGENTGLASS_ROOT: dir,
       AGENTGLASS_DB: join(dir, "f.db"),
       AGENTGLASS_SCAN_DISABLED: "1",
@@ -71,7 +75,7 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
   throw new Error("server did not start");
-});
+}, SERVER_BOOT_MS);
 
 afterAll(() => {
   proc?.kill();
@@ -103,6 +107,16 @@ test("and so do the local OTel exporters", async () => {
     const r = await post(p, { resourceSpans: [] });
     expect(r.status, p).toBe(200);
   }
+});
+
+test("a session saying what it works on needs no credential either, from here", async () => {
+  // The Lantern reminder asks a hooked session to curl this. Found on a server
+  // started with a token: the curl answered 401, so the one thing the board
+  // asked for could not be done on the machine that asked. Same class as
+  // /ingest — a local sender with no secret to carry — and less than it.
+  const r = await post("/agents/status", { name: "orbit-1042", doing: "the migration", worktree: dir });
+  expect(r.status).toBe(200);
+  await post("/agents/status", { name: "orbit-1042", done: true });
 });
 
 test("while a credentialled route from the same place is still 401", async () => {

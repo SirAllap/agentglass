@@ -14,8 +14,14 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { editFor } from "../src/terminal/mirror.ts";
-import { terminalDocument } from "../src/terminal/terminal-html.ts";
+import { announce, built } from "./generated-artifacts.ts";
 import { C } from "../src/theme.ts";
+
+announce("mirror.test.ts");
+
+const { terminalDocument } = built
+  ? await import("../src/terminal/terminal-html.ts")
+  : { terminalDocument: (() => "") as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalDocument"] };
 
 const DEL = "\x7f";
 
@@ -57,7 +63,7 @@ describe("the keystrokes that turn one line into another", () => {
   });
 });
 
-describe("reading the typed line off the screen", () => {
+describe.skipIf(!built)("reading the typed line off the screen", () => {
   /** The regex the page carries, pulled out of the document it builds. Read
    *  from the source rather than copied, so this cannot pass against a rule the
    *  page no longer uses. */

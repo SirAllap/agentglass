@@ -9,7 +9,7 @@ import { floorTiers } from "./contrast.ts";
 // Grouping into dark/light is by --bg luminance (see ThemeSwitcher), so a new
 // entry needs no flag — just put a dark bg in the dark run and a light one below.
 
-import { SERVER, authHeaders, IS_DESKTOP } from "./api.ts";
+import { SERVER, authHeaders, IS_DESKTOP, whenServerUp } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
 import { applyAccent } from "./accent.ts";
 import { BASE, cssVars } from "../../../shared/palettes.ts";
@@ -156,11 +156,14 @@ function syncTheme(t: Theme) {
   // remote access on) answered 401 and dropped the sync on the floor. Without
   // this, tmux and nvim silently kept whatever palette was last written while a
   // token was not yet required — days stale, and never a visible error.
-  void fetch(`${SERVER}/theme/sync`, {
+  // Gated: this fires on boot, before the sidecar is listening, and a direct
+  // fetch does not go through the api layer's gate. One refused request per
+  // launch, for a call whose whole job is fire-and-forget.
+  void whenServerUp().then(() => fetch(`${SERVER}/theme/sync`, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ name: t.name, vars: t.vars }),
-  }).catch(() => { /* no server (the static demo), or it declined */ });
+  })).catch(() => { /* no server (the static demo), or it declined */ });
 }
 
 /* System / Dark / Light — the mode toggle above the palette grid.

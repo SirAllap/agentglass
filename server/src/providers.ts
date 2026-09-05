@@ -172,7 +172,7 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
    * button to get here lives — so a snapshot saying "ClickUp is not connected"
    * is sitting in a sixty-second cache. Without this, connecting succeeds and
    * the card immediately reports the cached failure back: "not connected · last
-   * known as David", which is both wrong and baffling, since the name could
+   * known as Ada", which is both wrong and baffling, since the name could
    * only have come from the credential that was just written.
    *
    * Disconnect already did this for the mirror-image reason. Connect needs it
@@ -271,6 +271,7 @@ export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: 
     const view: SavedView = {
       id: `list:${parsed.listId}`, name: l.data.name || "List",
       listId: parsed.listId, listName: l.data.name, url, addedAt: Date.now(),
+      ...(l.data.color ? { color: l.data.color } : {}),
     };
     addView(view);
     return { ok: true, view };
@@ -278,14 +279,22 @@ export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: 
 
   const meta = await viewMeta(token, parsed.viewId!);
   if (!meta.ok || !meta.data) return { ok: false, error: notFound(meta) ? lost : (meta.error ?? "ClickUp did not recognise that view") };
+  /* The list this view hangs off — from the address when it was there, and
+     otherwise from the view itself. The slug form of a view id carries no list
+     inside it, so without asking, a pasted view had no list at all: no
+     statuses, no custom fields, no colour. */
+  const listId = parsed.listId || meta.data.listId;
   let listName: string | undefined;
-  if (parsed.listId) {
-    const l = await listMeta(token, parsed.listId);
+  let colour: string | undefined;
+  if (listId) {
+    const l = await listMeta(token, listId);
     listName = l.data?.name;
+    colour = l.data?.color;
   }
   const view: SavedView = {
     id: parsed.viewId!, name: meta.data.name,
-    listId: parsed.listId, listName, url, addedAt: Date.now(),
+    listId, listName, url, addedAt: Date.now(),
+    ...(colour ? { color: colour } : {}),
   };
   addView(view);
   return { ok: true, view };
@@ -410,7 +419,10 @@ interface RefreshOutcome { ok: boolean; error?: string; unauthorised?: boolean }
 
 /** One refresh per board at a time, however many callers arrive. Two windows
  *  opening the same board must not become two workspace-wide queries. */
-const inFlight = new Map<string, Promise<RefreshOutcome>>();
+/* The read in the air for a board, and whether a PERSON asked for it. Both,
+   because "one at a time per board" and "Refresh must actually try" are
+   different promises and the second one was quietly losing to the first. */
+const inFlight = new Map<string, { p: Promise<RefreshOutcome>; forced: boolean }>();
 
 /**
  * What to do after a board fails to read.
@@ -453,6 +465,20 @@ export function __resetViewCache(): void { inFlight.clear(); cooling.clear(); }
  */
 const ephemeralViews = new Map<string, string>();
 const ephemeralNames = new Map<string, string>();
+/*
+ * The address of a file this server has already handed out.
+ *
+ * `/clickup/file` proxies attachments so a browser will play them, and a proxy
+ * that fetches whatever URL a caller sends is a hole with the app's own
+ * network position behind it. So the id is looked up in the attachments we
+ * cached for a card: if we never offered it, there is nothing to fetch.
+ */
+const filesOffered = new Map<string, string>();
+export function rememberFiles(files: { id: string; url: string }[]): void {
+  for (const f of files) if (f.id && f.url) filesOffered.set(f.id, f.url);
+}
+export const attachmentUrl = (id: string): string | undefined => filesOffered.get(id);
+
 export function rememberListViews(listId: string, views: { id: string; name: string }[]): void {
   for (const v of views) { ephemeralViews.set(v.id, listId); ephemeralNames.set(v.id, v.name); }
 }
@@ -545,7 +571,24 @@ function recount(viewId: string): void {
  *  outcome, because the caller's job is to keep showing the old rows. */
 function refresh(view: SavedView, token: string, force = false): Promise<RefreshOutcome> {
   const running = inFlight.get(view.id);
-  if (running) return running;
+  /*
+   * Join what is already running — EXCEPT a forced read joining an unforced
+   * one.
+   *
+   * Refresh exists to get past a failure, and handing it a background read
+   * that is already in the air makes it inherit that read's answer: you press
+   * it, you wait the full twelve seconds, and you are told exactly what was
+   * already on the screen. Reported as a board that "never updates".
+   *
+   * There is nearly always one in the air to inherit on the built-in board:
+   * its read takes twelve seconds and the settle loop behind the panel asks
+   * every one and a half, so any stale board has a revalidation running
+   * essentially all the time.
+   *
+   * A second forced press still joins the first — that one is already the
+   * fresh attempt this one wanted.
+   */
+  if (running && (running.forced || !force)) return running.p;
   const p = doRefresh(view, token, force)
     .then((r) => {
       if (r.ok) cooling.delete(view.id);
@@ -560,8 +603,10 @@ function refresh(view: SavedView, token: string, force = false): Promise<Refresh
       return r;
     })
     .catch((e): RefreshOutcome => ({ ok: false, error: String((e as Error)?.message ?? e).slice(0, 160) }))
-    .finally(() => inFlight.delete(view.id));
-  inFlight.set(view.id, p);
+    /* Only if it is still OURS: a forced read can now start while an unforced
+       one is finishing, and the loser must not delete the winner's entry. */
+    .finally(() => { if (inFlight.get(view.id)?.p === p) inFlight.delete(view.id); });
+  inFlight.set(view.id, { p, forced: force });
   return p;
 }
 
@@ -729,11 +774,58 @@ async function listTasksOf(token: string, listId: string, me?: string) {
      * costs one extra call in exactly two cases: a list that really is empty,
      * and this one.
      */
-    if (r.ok && (r.data?.tasks.length ?? 0) > 0) return r;
+    /*
+     * BOTH, MERGED — because each one is missing something the other has.
+     *
+     * The view answers the question on screen and reaches cards whose home is
+     * another list. What it also does is apply the view's own FILTER, and a
+     * list's default view usually has one: measured on a real list, the view
+     * answered 105 cards across nine statuses while the list holds 252 across
+     * fourteen. Everything in TO DO, IN STAGING, IN PRODUCTION, WON'T FIX and
+     * COMPLETED was invisible — not collapsed, absent, with no way to ask for
+     * it. "I need every status to show up in the lists… otherwise, what is
+     * the point."
+     *
+     * The raw list is the other half: it has no filter and it reaches the
+     * closed ones, and it misses the cards this list only borrows. So both are
+     * read and merged by id, and the board finally holds what ClickUp's own
+     * page holds.
+     *
+     * One extra call per board read. That is the price of the answer being
+     * right, and it is paid once per read rather than per card.
+     */
     const raw = await rawListTasks(token, listId, me);
-    if (raw.ok && (raw.data?.tasks.length ?? 0) > 0) return raw;
+    const merged = mergeById(r.data?.tasks, raw.data?.tasks);
+    if (merged.length) {
+      return {
+        ok: true as const,
+        error: undefined,
+        unauthorised: undefined,
+        data: {
+          tasks: merged,
+          /* Truncated if EITHER half was: a board that dropped a page is
+             partial whichever half dropped it. */
+          truncated: !!(r.data?.truncated || raw.data?.truncated),
+        },
+      };
+    }
     if (r.ok) return r;
     return raw;
   }
   return rawListTasks(token, listId, me);
+}
+
+/**
+ * Two answers about the same list, as one list of cards.
+ *
+ * The view's order is kept — that is the sort a person set on it — and anything
+ * only the raw list knows about is appended. Keyed by id, because the same card
+ * legitimately appears in both and must appear once here.
+ */
+function mergeById(a?: ViewTasksResponse["tasks"], b?: ViewTasksResponse["tasks"]): ViewTasksResponse["tasks"] {
+  const seen = new Set<string>();
+  const out: ViewTasksResponse["tasks"] = [];
+  for (const t of a ?? []) { if (t?.id && !seen.has(t.id)) { seen.add(t.id); out.push(t); } }
+  for (const t of b ?? []) { if (t?.id && !seen.has(t.id)) { seen.add(t.id); out.push(t); } }
+  return out;
 }

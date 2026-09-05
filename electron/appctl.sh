@@ -355,3 +355,35 @@ stop_app() {
 
   [ -z "$(app_pids)" ]
 }
+
+# How many runs the deputy has going right now — 0 when nobody answers.
+#
+# `grep -o` exits 1 when it matches nothing, and this script runs under
+# `set -euo pipefail`, so the honest answer "none" used to abort the caller
+# before it printed anything: the install refused EXACTLY when it was safe,
+# with no message, and a whole afternoon of work sat unpacked because of it.
+#
+# Counted with awk rather than `grep -c`: the run table arrives as one line, so
+# grep would answer 1 for any number of runs, and "is anything running" is the
+# only question here — but a wrong count is what gets printed at a person.
+deputy_runs() {
+  local body n
+  body=$(curl -sf -m 4 "http://127.0.0.1:${AGENTGLASS_PORT:-4000}/understudy/work/next?token=${AGENTGLASS_TOKEN:-}" 2>/dev/null) || { echo 0; return 0; }
+  n=$(printf '%s' "$body" | awk -v RS='"state":"running"' 'END{ print (NR > 0 ? NR - 1 : 0) }')
+  echo "${n:-0}"
+}
+
+# Stopping the app kills the agent inside a run, and what it leaves is a branch
+# with half a change on it and a row nobody can complete. Refused rather than
+# warned: the damage is silent, and it shows up an hour later on somebody
+# else's screen. AGENTGLASS_INSTALL_ANYWAY=1 is the way past it for a person
+# who has decided the run does not matter.
+refuse_if_deputy_busy() {
+  [ -z "${AGENTGLASS_INSTALL_ANYWAY:-}" ] || return 0
+  local runs
+  runs=$(deputy_runs)
+  [ "${runs:-0}" -gt 0 ] || return 0
+  echo "refusing to install: the deputy has $runs run(s) going — stopping the app now kills the agent mid-change." >&2
+  echo "  wait for it, halt it in the app, or AGENTGLASS_INSTALL_ANYWAY=1 make desktop-install" >&2
+  return 1
+}

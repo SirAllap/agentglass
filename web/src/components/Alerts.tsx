@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { Alert, AgentCard } from "../lib/derive.ts";
 import { collectAttention } from "../lib/attention.ts";
@@ -7,6 +7,7 @@ import { listGates, subscribeGates, answerGate } from "../lib/gateStore.ts";
 import type { Insight, PendingGate, GateRecord } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
 import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { fmtAgo } from "../lib/format.ts";
 
 const LEVEL: Record<Alert["level"], { color: string; icon: string }> = {
@@ -17,7 +18,7 @@ const LEVEL: Record<Alert["level"], { color: string; icon: string }> = {
 const SEV: Record<Insight["severity"], string> = { bad: "var(--error)", warn: "var(--warning)", info: "var(--info)" };
 const KIND_ICON: Record<Insight["kind"], string> = { loop: "↻", spend: "🔥", errors: "✕", burn: "⚡" };
 
-export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Alert[]; agents?: AgentCard[]; onSelectApp?: (app: string) => void; bump?: number }) {
+export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }: { alerts: Alert[]; agents?: AgentCard[]; onSelectApp?: (app: string) => void; bump?: number; active?: boolean }) {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [acting, setActing] = useState<Record<string, boolean>>({});
 
@@ -31,13 +32,27 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
    */
   const gates = useSyncExternalStore(subscribeGates, listGates, listGates);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () => api.insights().then((r) => alive && setInsights(r.insights)).catch(() => {});
-    load();
-    const id = setInterval(load, 15_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [bump]);
+  /*
+   * Polled while this panel is the view on screen, and not otherwise.
+   *
+   * The dashboard stays mounted behind whatever you switched to, so these two
+   * fifteen-second reads went on asking for as long as the app was open. The
+   * repo's own `usePoll` is a better gate than `if (!active) return` would be:
+   * it also stops while the DOCUMENT is hidden, which is the shape this machine
+   * spends most of its day in — the cockpit open on the dashboard, on another
+   * GNOME workspace — and it refreshes the moment the window comes back.
+   *
+   * The immediate load stays beside it, because `usePoll` has no leading call
+   * and arriving at a blank panel for fifteen seconds is not an improvement.
+   */
+  // A ref, not state: it is read by a reply that lands after this panel is
+  // gone, and the point is that the closure sees the CURRENT value rather than
+  // the one captured at the render that started the request.
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const loadInsights = () => { api.insights().then((r) => alive.current && setInsights(r.insights)).catch(() => {}); };
+  useEffect(() => { if (active) loadInsights(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [active, bump]);
+  usePoll(active, loadInsights, 15_000);
 
   /*
    * The gates you didn't decide.
@@ -49,21 +64,21 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
    * important one to say out loud, so the recent ones stay visible here.
    */
   const [autoResolved, setAutoResolved] = useState<GateRecord[]>([]);
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      api
-        .gateHistory(25)
-        .then((r) => {
-          if (!alive) return;
-          const cutoff = Date.now() - 30 * 60_000;
-          setAutoResolved(r.gates.filter((g) => g.resolution !== "human" && (g.decided_at ?? 0) > cutoff).slice(0, 3));
-        })
-        .catch(() => {});
-    load();
-    const id = setInterval(load, 15_000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
+  // The thirty-minute cutoff is recomputed on every load, so pausing the poll
+  // cannot leave a stale card on screen: the next load after you come back
+  // drops anything that aged out while nobody was looking.
+  const loadHistory = () => {
+    api
+      .gateHistory(25)
+      .then((r) => {
+        if (!alive.current) return;
+        const cutoff = Date.now() - 30 * 60_000;
+        setAutoResolved(r.gates.filter((g) => g.resolution !== "human" && (g.decided_at ?? 0) > cutoff).slice(0, 3));
+      })
+      .catch(() => {});
+  };
+  useEffect(() => { if (active) loadHistory(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [active]);
+  usePoll(active, loadHistory, 15_000);
 
   /*
    * The answer, and what happens when it does not take.

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts";
-import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
+import { WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
 import { emitControl } from "./controlBus.ts";
 import { emitBrowserAsk } from "./browserBus.ts";
+import { emitUnderstudy } from "./understudyBus.ts";
 import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
+import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNotify.ts";
 import { raiseAlarm } from "./alarm.ts";
 import { nudgeReminders } from "./reminderStore.ts";
 
@@ -208,6 +210,26 @@ export function useLive(paused = false): LiveData {
         emitControl(frame.data);
         return;
       }
+      if (frame.type === "understudy") {
+        /*
+         * The understudy's scorecard, recomputed. Announced the moment it
+         * lands, not through the 220ms buffer above.
+         *
+         * The buffer exists for one shape of traffic: a busy fleet emitting
+         * dozens of `event` frames a second, where coalescing turns dozens of
+         * renders into five. This frame is the opposite shape — one object, a
+         * recompute apart, and thirteen rows wide. Buffering it would add up to
+         * 220ms of latency to something that never bursts, and it could not
+         * ride that buffer anyway: `pending` is an array of WatchEvent, keyed by
+         * `id` for dedupe, and a scorecard is neither.
+         *
+         * Read-only, like the git nudge above it and unlike `control`: it says
+         * what a stand-in WOULD have done and commands nothing, which is why it
+         * is allowed to ride the same socket every browser tab holds open.
+         */
+        emitUnderstudy(frame.data);
+        return;
+      }
       if (frame.type === "alert" && frame.data?.kind === "reminder" && frame.data.id) {
         /* An alarm the user set. It does NOT go through fireDesktopAlert's list:
            a reminder that arrives as another grey row has failed at the only job
@@ -217,6 +239,28 @@ export function useLive(paused = false): LiveData {
         raiseAlarm({ id: frame.data.id, title: frame.data.title.replace(/^⏰\s*/, ""), when: frame.data.body, at: Date.now() });
         fireDesktopAlert(frame.data);
         void nudgeReminders();
+        return;
+      }
+      if (frame.type === "alert" && frame.data?.kind === "understudy") {
+        /*
+         * THE CLONE IS STOPPED AND NEEDS A PERSON.
+         *
+         * Same treatment as an alarm, for the same reason: a machine that has
+         * stopped and will stay stopped until somebody looks has failed at the
+         * only job it had if its report arrives as another grey row. It takes
+         * the screen AND goes out as an OS notification at critical urgency, so
+         * it survives the window being behind something else — or closed.
+         *
+         * "It should warn me somehow… but not the usual notifications."
+         */
+        raiseAlarm({
+          id: `deputy-${Date.now()}`,
+          kind: "deputy",
+          title: frame.data.title.replace(/^🙋\s*/, ""),
+          when: frame.data.body,
+          at: Date.now(),
+        });
+        fireDesktopAlert(frame.data);
         return;
       }
       if (frame.type === "alert") {
@@ -253,6 +297,29 @@ export function useLive(paused = false): LiveData {
           // A mention is somebody asking you something; the rest is news.
           urgency: c.kind === "mention" ? 2 : 1,
           goto: { kind: "card", id: c.id, label: c.label },
+        });
+        return;
+      }
+      if (frame.type === "talk") {
+        /*
+         * A person said something on a pull request you have a stake in.
+         *
+         * In the bell rather than as an OS pop-up, like the card notes above:
+         * this is news and it has somewhere to go. Except a block — see
+         * talkUrgency — which is the one of these that is an instruction.
+         *
+         * Nothing is filtered here beyond the switch: the server has already
+         * dropped the machines and held the latch, so what arrives is one
+         * message about one pull request, from a person.
+         */
+        const t = frame.data;
+        if (!talkShouldNotify(t)) return;
+        recordNote({
+          app: "agentglass",
+          summary: talkSummary(t),
+          body: talkBody(t),
+          urgency: talkUrgency(t),
+          goto: { kind: "pr", repo: t.repo, number: t.number },
         });
         return;
       }
@@ -382,7 +449,32 @@ export function useLive(paused = false): LiveData {
       return () => { disposed.current = true; stop(); if (timer.current) clearTimeout(timer.current); };
     }
 
-    connect();
+    /*
+     * The FIRST socket waits for a server; every reconnection after it does not.
+     *
+     * The sidecar is not listening at t=0 — measured at 559ms — and Chromium
+     * logs a refused socket whether or not the backoff picks it up again, the
+     * same reason the fetch layer stopped asking early.
+     *
+     * WHY THE WAIT IS HERE AND NOT INSIDE `connect`. Making `connect` async put
+     * an await between "decide to connect" and `wsRef.current = ws`, and three
+     * things reconnect on their own during that gap: the visibility handler and
+     * the online handler both read `!ws || CLOSED` — true while the ref is null
+     * — and the server-changed handler nulls the ref itself. Two sockets.
+     * `onclose` would survive that, because it checks `wsRef.current !== ws`;
+     * `onmessage` does not check anything, so BOTH sockets deliver and every
+     * frame is handled twice. That is a browser command from an agent run
+     * twice and a phone's toggle applied and immediately undone — not console
+     * noise. Keeping `connect` synchronous keeps the assignment in the same
+     * tick as the decision, and the race cannot exist.
+     *
+     * `then(first, first)`: a latch that rejected must still open the socket
+     * and fall into the normal backoff, rather than leave the app alive and
+     * silent. `!wsRef.current` covers a tab that woke during the wait and
+     * connected already.
+     */
+    const first = () => { if (!disposed.current && !wsRef.current) connect(); };
+    void whenServerUp().then(first, first);
     // Catch up the moment the tab becomes visible again — and, if the stream
     // died or gave up while we were away, reconnect right now instead of waiting
     // out a backoff. An auth wall is left alone: the token is still wrong until

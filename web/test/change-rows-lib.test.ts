@@ -141,6 +141,26 @@ describe("the smaller rules", () => {
     expect(filterRows(rows, "")).toHaveLength(2);
   });
 
+  /*
+   * The contract behind "Open its changes in File changes".
+   *
+   * Four buttons hand this list a worktree's FOLDER NAME as the filter — the
+   * terminal's header, two in its worktree picker, and the pull request's own — so
+   * the folder has to select that checkout's rows and nothing else. It works
+   * because the filter reads `repoRoot`, which is the whole path.
+   */
+  it("a worktree's folder name selects that checkout, and not its neighbours", () => {
+    const rows = [
+      row({ key: "a", repoRoot: "/home/dev/code/orbit", branch: "main", path: "src/app.ts" }),
+      row({ key: "b", repoRoot: "/home/dev/code/orbit-1042", branch: "orbit-1042-counter", path: "src/plan.ts" }),
+      row({ key: "c", repoRoot: "/home/dev/code/orbit-1099", branch: "orbit-1099-rail", path: "src/rail.ts" }),
+    ];
+    expect(filterRows(rows, "orbit-1042").map((r) => r.key)).toEqual(["b"]);
+    // And the parent checkout is a substring of both children, which is why a jump
+    // sends the child's name rather than the repository's.
+    expect(filterRows(rows, "orbit").map((r) => r.key)).toEqual(["a", "b", "c"]);
+  });
+
   it("shortens a deep folder without losing which one it is", () => {
     expect(folderOf("src/app.ts")).toBe("src");
     expect(folderOf("a/b/c/d/app.ts")).toBe("…/c/d");

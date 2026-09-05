@@ -19,9 +19,18 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { terminalDocument, terminalTheme } from "../src/terminal/terminal-html.ts";
+import { announce, built } from "./generated-artifacts.ts";
 import { paletteFor } from "../../shared/palettes.ts";
 import { C } from "../src/theme.ts";
+
+announce("pane-line.test.ts");
+
+const { terminalDocument, terminalTheme } = built
+  ? await import("../src/terminal/terminal-html.ts")
+  : {
+      terminalDocument: (() => "") as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalDocument"],
+      terminalTheme: (() => ({})) as unknown as typeof import("../src/terminal/terminal-html.ts")["terminalTheme"],
+    };
 
 /*
  * Where to find a browser, in the order it is worth looking.
@@ -47,7 +56,10 @@ const CHROME = [
   "/opt/pw-browsers/chromium/chrome-linux/chrome",
 ].filter((p): p is string => !!p)
   .find((p) => Bun.file(p).size !== 0 || Bun.which(p));
-const HAVE_CHROME = !!CHROME;
+// Also gated on the generated terminal bundle: `terminalDocument` needs it,
+// and a Chrome the whole file spawns for tests that then error out on a
+// missing import is worse than not spawning one.
+const HAVE_CHROME = !!CHROME && built;
 const CDP = 9457;
 /*
  * The two sockets this file needs are asked for by number 0 — whatever is free

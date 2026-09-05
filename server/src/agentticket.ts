@@ -40,6 +40,11 @@ export interface AgentRequest {
   yolo: boolean;
   /** The session name, already through `sessionTitle`. */
   title: string;
+  /** What this session IS to the app, when it is not a person's agent. The
+   *  Lantern's chat is the one so far: an observer, never counted as needing
+   *  anybody. Set only by the routes that mint such a ticket, never from the
+   *  wire, and carried to the pane as AGENTGLASS_ROLE so its hooks say so. */
+  role?: "lantern";
   /**
    * Which CLI, as an id from shared/agentKinds.ts.
    *

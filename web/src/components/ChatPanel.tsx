@@ -34,6 +34,7 @@ import { sessionIsLive, resumableAgent } from "../lib/derive.ts";
 import { ctxLimitOf } from "../lib/contextWindow.ts";
 import { sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   engineFor,
@@ -737,18 +738,18 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
    * loses both answers. Polled rather than pushed because it is two words of
    * JSON and it must be right within a couple of seconds of a turn ending, when
    * a queued message is waiting to go out.
+   *
+   * Gated on `open` and routed through `usePoll` like every other panel's
+   * refresh: this used to run its own ungated `setInterval`, so a chat tab left
+   * open on an unfocused window polled at full rate forever for nobody.
    */
-  useEffect(() => {
-    let stop = false;
-    const read = () => {
-      api.chatActive()
-        .then((r) => { if (!stop) setActiveTurns(r.ids); })
-        .catch(() => { /* keep the last answer; guessing a new one is the bug */ });
-    };
-    read();
-    const t = setInterval(read, 3000);
-    return () => { stop = true; clearInterval(t); };
+  const readActiveTurns = useCallback(() => {
+    api.chatActive()
+      .then((r) => setActiveTurns(r.ids))
+      .catch(() => { /* keep the last answer; guessing a new one is the bug */ });
   }, []);
+  useEffect(() => { if (open) readActiveTurns(); }, [open, readActiveTurns]);
+  usePoll(open, readActiveTurns, 3000);
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);

@@ -17,6 +17,7 @@
  * something are all effect-borne and cannot be seen from here. They are not
  * asserted, rather than asserted emptily.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -321,16 +322,43 @@ describe("the summary bar", () => {
     }
   });
 
-  it("is a summary and not a second navigation", () => {
+  it("filters by LIGHTING a lane, and never by removing a card", () => {
     /*
-     * Nothing between the segments and the first lane may be pressable. A row
-     * of buttons up there would be a second way to reach the lanes 1–5 already
-     * reach, and would read as filters that shrink the board.
+     * This row used to forbid buttons outright, and the note behind that was
+     * half right: "a row of buttons up here would read as filters that shrink
+     * the board". Shrinking is the harm — eight printed numbers derive from the
+     * flattened partition, so a card that stops being drawn makes the counts
+     * above disagree with what is under them.
+     *
+     * Pressing one is not shrinking. The find box and the unread toggle on this
+     * same screen already narrow the honest way: the cards that answer keep
+     * their colour, the rest go quiet, nothing moves and nothing leaves. Asked
+     * for looking at a board whose only row naming all five lanes did nothing —
+     * "it should do something, like a button to filter".
+     *
+     * So the claim changes from "not pressable" to the property that was ever
+     * worth holding: every card still drawn, in the same lane, after a press.
      */
     const html = full();
-    const above = html.slice(html.indexOf('data-seg="review"'), html.indexOf('data-lane="review"'));
-    expect(above).not.toContain("<button");
-    expect(above).not.toContain("onclick");
+    const before = (html.match(/data-pr="/g) ?? []).length;
+    expect(before, "a board with cards to keep").toBeGreaterThan(0);
+
+    /* The chips are buttons now — the empty ones deliberately are not, because
+       lighting a lane with nothing in it leaves a board where every card is
+       quiet and the way out is the chip you just pressed. */
+    const row = html.slice(html.indexOf('data-seg="review"'), html.indexOf('data-lane="review"'));
+    expect(row, "a lane with cards is pressable").toContain("<button");
+    expect(row).toContain('data-seg="land"');
+  });
+
+  it("and an empty lane is not one of those buttons", () => {
+    // `review` is empty in this fixture; `land` is not.
+    const html = render({ mine: [pr(1)], review: [], total: 40 });
+    const seg = (id: string) => {
+      const i = html.indexOf(`data-seg="${id}"`);
+      return html.slice(html.lastIndexOf("<", i), i);
+    };
+    expect(seg("review"), "nothing to light").not.toContain("button");
   });
 
   it("is not drawn while the lists are still arriving", () => {
@@ -350,8 +378,8 @@ describe("the pinned strip", () => {
   });
 
   it("lists what is pinned, whoever opened it", () => {
-    const html = render({ pinnedList: [{ number: 17375, title: "Somebody else's work" }] });
-    expect(html).toContain("#17375");
+    const html = render({ pinnedList: [{ number: 375, title: "Somebody else's work" }] });
+    expect(html).toContain("#375");
     // The apostrophe is escaped by the renderer; assert on a fragment that is
     // not, so the test is about the strip rather than about HTML entities.
     expect(html).toContain("Somebody else");
@@ -508,19 +536,39 @@ describe("finding a card on the board", () => {
      * counts above start disagreeing with what is under them — and the shape is
      * the reason this is a board and not a list.
      *
-     * Read from the source: nothing is dimmed until somebody types, and there
-     * is no typing in `renderToStaticMarkup`.
+     * Read from the source, because nothing is dimmed until somebody types and
+     * there is no typing in `renderToStaticMarkup`.
+     *
+     * By SHAPE and not by an exact line. The first version pinned the literal
+     * `dim={!matches(p)}` and went red the day a second way of lighting the
+     * board — one lane, from the counts row — was added beside the first: the
+     * expression is now two conditions across two lines and means exactly the
+     * same thing. A lock that fails when a line is reformatted is one somebody
+     * deletes. What has to hold is that `dim` is COMPUTED per card and that
+     * every card is still rendered.
      */
-    expect(board).toContain("dim={!matches(p)}");
+    const call = board.slice(board.indexOf("dim={"), board.indexOf("root={root}", board.indexOf("dim={")));
+    expect(call, "dim is derived from the search, per card").toContain("matches(p)");
     expect(board).toContain('...(dim ? { opacity: 0.32, filter: "saturate(0.25)" } : null),');
     // Never a filtered list: every card is still rendered.
     expect(board).not.toContain(".filter(matches)</");
+    expect(board).not.toContain(".filter(matches).map");
   });
 
-  it("searches only what the card shows", () => {
-    // Matching on something invisible is how a search comes back with a card
-    // whose row says nothing about why it is there.
-    expect(board).toContain("`#${p.number}`, String(p.number), p.title, p.author, p.headRefName, p.baseRefName,");
+  it("searches by the rule the app's find bar uses, not one of its own", () => {
+    /*
+     * The rule itself moved to prBoardFind.ts and has a suite of its own —
+     * because the app's find bar drives the SAME one now, and two searches on
+     * one screen answering differently is what this was. What is checked here
+     * is the wiring: the board asks that module, and it hands the bar an engine
+     * so Ctrl+F dims cards instead of painting words.
+     */
+    expect(board).toContain('from "../lib/prBoardFind.ts"');
+    expect(board).toContain("return prMatches(p, needle)");
+    expect(board).toContain("registerEngine(");
+    // And only while this board is what is on screen — the panel keeps it
+    // mounted behind other views.
+    expect(board).toContain("const scope = topScope();");
   });
 });
 
@@ -569,8 +617,23 @@ describe("the number on a card", () => {
   });
 
   it("wears the same chip the masthead does, so it reads as pressable", () => {
-    // Plain grey text is a label, and nobody presses a label.
-    expect(board).toContain('{copied === p.number ? "✓" : "⧉"}');
+    /*
+     * This asserted the literal `{copied === p.number ? "✓" : "⧉"}` until the
+     * card's header was measured. The mark stayed; the way it is drawn did not.
+     *
+     * `⧉` was set at `fontSize: 9`, the smallest ink in the app, two lines
+     * above a 14px vector in the same row — and a character paints about 60% of
+     * what its size promises, so nine landed near five against fourteen.
+     * Reported as "some icons are very big, others very small". It also swapped
+     * one CHARACTER for a different one on copy, and two characters are not the
+     * same width, so the card moved at the moment you pressed it.
+     *
+     * What has to hold is the promise, not the codepoint: the chip still says
+     * what it does before you try it, and still says it happened afterwards.
+     */
+    expect(board).toContain("copied === p.number");
+    expect(board).toContain("<DoneIcon size={ICON.xs} />");
+    expect(board).toContain("<CopyIcon size={ICON.xs} />");
     expect(board).toContain("border: `1px solid color-mix(in srgb, ${copied === p.number ? \"var(--success) 50%\" : \"var(--border) 55%\"}, transparent)`,");
   });
 });
@@ -607,5 +670,65 @@ describe("taking a card away with you", () => {
     expect(board).toContain('navigator.clipboard?.writeText(p.url || "")');
     // Same 26px box as the star it sits next to.
     expect(board.split("width: 26, height: 26").length - 1).toBe(2);
+  });
+});
+
+/*
+ * The keyboard row under the counts advertises six shortcuts. They have to work.
+ *
+ * Reported: "that legend doesn't work at all, it's a lie" — the strip
+ * that reads `1–4 lane · j k card · h l across · ⏎ open · a open it · p pin`.
+ * It was not wrong about which keys exist; every one of them is handled in
+ * `onKey`. They were UNREACHABLE. The handler hangs off a `tabIndex={0}` div
+ * and NOTHING in the file ever focused it: a grep for `.focus()` on `frame`
+ * returned nothing, and the ref's only other use was a `scrollIntoView`.
+ * Arriving at the board left the focus wherever it had been, so six advertised
+ * shortcuts answered to nobody.
+ *
+ * His first instinct was to delete the row and drive the board with the mouse.
+ * With the measurement in front of him — not broken, unreachable — he chose
+ * the other way: "better keep the row, and make them work".
+ *
+ * Read from the source rather than rendered, and that is not laziness: an
+ * effect does not run under `renderToStaticMarkup`, which is how this file
+ * renders. What has to hold is the shape — that the focus happens, and that it
+ * is guarded — and a server render cannot see either.
+ */
+describe("the shortcuts the legend promises", () => {
+  const SRC = readFileSync(new URL("../src/components/TriageBoard.tsx", import.meta.url), "utf8");
+  /** Comments here name the very things these assertions are about. */
+  const bare = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("the frame that owns the keys actually receives focus", () => {
+    expect(bare).toContain("frame.current?.focus(");
+  });
+
+  it("and does not steal it from somebody who is typing", () => {
+    /* The whole risk of the fix. Taking focus from a field means the next
+       character lands on a board that reads `p` as "pin this". */
+    expect(bare).toMatch(/INPUT|TEXTAREA/);
+    expect(bare).toContain("isContentEditable");
+    expect(bare).toMatch(/if \(!typing\)/);
+  });
+
+  it("without scrolling the page to reach it", () => {
+    // `focus()` scrolls its target into view by default, and the board is a
+    // horizontal strip of scrollers: reaching for it would move two of them.
+    expect(bare).toContain("preventScroll: true");
+  });
+
+  it("the legend still names the keys it claims", () => {
+    // If a shortcut is ever removed, this row has to lose it in the same
+    // commit — a legend is a promise, and that is what made this a bug.
+    for (const k of ["lane", "card", "across", "open", "pin"]) {
+      expect(SRC, `the legend lost "${k}"`).toContain(`</K> ${k}<`);
+    }
+  });
+
+  it("and every key it names is handled", () => {
+    // The other half of the same promise, from the other end.
+    for (const k of ['"j"', '"k"', '"h"', '"l"', '"p"', '"a"']) {
+      expect(bare, `no handler for ${k}`).toContain(k);
+    }
   });
 });

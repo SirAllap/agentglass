@@ -21,14 +21,18 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TICKET_TTL_MS as SERVER_TTL } from "../../server/src/pairing.ts";
-import { TICKET_TTL_MS, fmtLeft, leftOnTicket, readPairingCode } from "../src/lib/pairing.ts";
+import { announce, installed, pairing } from "./npm-deps.ts";
+
+announce("pair-paste.test.ts");
+
+const { TICKET_TTL_MS, fmtLeft, leftOnTicket, readPairingCode } = pairing;
 
 const source = readFileSync(join(import.meta.dir, "..", "app", "pair.tsx"), "utf8");
 /** The same file with its block comments taken out. The prose is allowed to
  *  quote the sentence this screen no longer says; the code is not. */
 const code = source.replace(/\/\*[\s\S]*?\*\//g, "");
 
-describe("one string, both fields", () => {
+describe.skipIf(!installed)("one string, both fields", () => {
   test("the URL behind the QR carries the address as well as the ticket", () => {
     expect(readPairingCode("http://127.0.0.1:4010/?pair=Xd-YMvOT4ZRw")).toEqual({
       ticket: "Xd-YMvOT4ZRw",
@@ -68,7 +72,7 @@ describe("one string, both fields", () => {
   });
 });
 
-describe("the clock is the computer's, not this phone's", () => {
+describe.skipIf(!installed)("the clock is the computer's, not this phone's", () => {
   // A whole second, because an HTTP `Date` has no milliseconds — the header is
   // the computer's clock rounded down, and the arithmetic has to be written
   // against that rather than against a number that survives a round trip.
@@ -104,7 +108,7 @@ describe("the clock is the computer's, not this phone's", () => {
   });
 });
 
-describe("mm:ss", () => {
+describe.skipIf(!installed)("mm:ss", () => {
   test("counts the way a person reads a clock", () => {
     expect(fmtLeft(120_000)).toBe("2:00");
     expect(fmtLeft(107_000)).toBe("1:47");
@@ -117,7 +121,7 @@ describe("mm:ss", () => {
   });
 });
 
-describe("what the screen is wired to", () => {
+describe.skipIf(!installed)("what the screen is wired to", () => {
   test("the ticket field is not a bare setTicket", () => {
     // The bug, in one line. `onChangeText={setTicket}` is what shipped, and it
     // is why pasting the link into the field it belongs in did nothing.

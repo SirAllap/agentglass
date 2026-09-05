@@ -370,14 +370,46 @@ export function Pill({ on, tone = "neutral", onClick, children, title }: {
   );
 }
 
-/** Empty state, with room around it. */
-export function Empty({ what, busy }: { what: string; busy?: boolean }) {
+/**
+ * Empty state, with room around it.
+ *
+ * `what` is a NOUN and the component builds the sentence around it — four of
+ * the five understudy call sites passed a whole phrase instead, and what
+ * rendered was "Reading Reading the ledger……" and "no Nothing recorded yet.
+ * Every decision it can see gets a row here — … — in this repository". A prop
+ * that is silently a sentence in some callers and a noun in others cannot
+ * produce a grammatical string, so the two jobs are now two props.
+ *
+ * `where` exists because not every list is a repository: the ledger and the
+ * disagreements are the understudy's own, and "in this repository" was wrong
+ * on a panel that has none. `note` is the long explanation, which belongs
+ * under the empty state rather than inside its sentence.
+ *
+ * `role="status"`: the busy form is swapped for content with no user action,
+ * and that swap used to be silent.
+ */
+export function Empty({ what, busy, where = "in this repository", note }: {
+  /** A short noun: "decisions", "the scorecard", "pull requests". */
+  what: string;
+  busy?: boolean;
+  /** Where it is missing FROM. Pass "" for a list that is not scoped to one. */
+  where?: string;
+  /** One sentence of explanation, printed under the state. */
+  note?: string;
+}) {
   return (
-    <div className="grid place-items-center gap-1 py-16">
+    <div className="grid place-items-center gap-1 py-16 px-4 text-center" role="status" aria-busy={busy}>
       <span className="text-[13px]" style={{ color: "var(--text2)" }}>
         {busy ? `Reading ${what}…` : `Nothing here`}
       </span>
-      {!busy && <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>no {what} in this repository</span>}
+      {!busy && (
+        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+          no {what}{where ? ` ${where}` : ""}
+        </span>
+      )}
+      {!busy && note && (
+        <p className="m-0 mt-1 text-[11px] leading-relaxed max-w-[52ch]" style={{ color: "var(--text4)" }}>{note}</p>
+      )}
     </div>
   );
 }

@@ -41,6 +41,13 @@ function useThemeTick(): number {
   return n;
 }
 
+/** How many times a failed load is retried, and how long after each. Short
+ *  enough that a server coming back up is caught while somebody is still looking
+ *  at the comment; few enough that a grammar shiki simply does not have is asked
+ *  for three times and then left alone. */
+const RETRIES = 2;
+const RETRY_MS = [400, 1500];
+
 export function CodeBlock({ code, tag, className, style }: {
   code: string;
   /** The word after the fence, if there was one. */
@@ -52,19 +59,53 @@ export function CodeBlock({ code, tag, className, style }: {
   const tick = useThemeTick();
   const [lines, setLines] = useState<ThemedToken[][] | null>(null);
 
+  /*
+   * Colouring is attempted more than once, and that is a fix rather than a
+   * belt-and-braces.
+   *
+   * Every piece of this is fetched at the moment a block first needs it — shiki's
+   * core, the grammar, the theme — from the local server. So the ordinary way to
+   * lose colour is a load that failed once: the window outlived a server restart
+   * (which is what installing a build does), or a chunk request lost a race with
+   * the first paint. The block then sat grey until the app was restarted, because
+   * nothing ever asked again: this effect had run, caught, and had no reason to
+   * fire a second time.
+   *
+   * Reported that way, with a screenshot of a comment in flat grey and the same
+   * comment coloured after a restart. The other half of the fix is in
+   * highlight.ts, which no longer remembers a failure at all; this half is what
+   * gets the block that was on screen when it happened.
+   *
+   * Twice, then quiet. A permanent failure — a grammar shiki does not have, a
+   * policy that blocks the chunk — is a thing to stop asking about, not something
+   * to retry behind somebody's back for the life of the window.
+   */
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!lang) { setLines(null); return; }
     let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     void (async () => {
       const hl = await getHighlighter();
       await ensureLanguage(hl, lang);
       const chosen = pref(THEME_KEY, "auto");
       const { name } = await ensureTheme(hl, chosen === "auto" ? shikiTheme() : chosen, pref(BOLD_KEY, "1") !== "0");
-      if (!name || !alive) return;
+      if (!name) throw new Error("no theme could be registered");
+      if (!alive) return;
       setLines(hl.codeToTokens(code, { lang: lang as never, theme: name }).tokens);
-    })().catch(() => { /* plain text is the fallback, and it is already on screen */ });
-    return () => { alive = false; };
-  }, [code, lang, tick]);
+    })().catch(() => {
+      /* Plain text is on screen and stays on screen — colour is an improvement on
+         legible text, never a precondition for it. */
+      if (!alive || attempt >= RETRIES) return;
+      timer = setTimeout(() => setAttempt((n) => n + 1), RETRY_MS[attempt] ?? 1200);
+    });
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+    // `attempt` is a dependency on purpose: bumping it is what runs this again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, lang, tick, attempt]);
+  /* Back to nothing when the code or the theme changes, so a block that has
+     given up on one language tries again for the next. */
+  useEffect(() => { setAttempt(0); }, [code, lang, tick]);
 
   return (
     <pre className={className} style={style}>

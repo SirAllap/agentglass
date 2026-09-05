@@ -1,0 +1,15 @@
+# THE PRELOAD HAS TO BE FOUND FROM WHERE PEOPLE ACTUALLY RUN THE TESTS.
+#
+# `server/bunfig.toml` carries the same line, and bun reads a bunfig from the
+# directory it was STARTED in — so `cd server && bun test` was isolated and
+# `bun test server/` from the repository root, which is how every agent, every
+# script and every person in this repo runs it, was not.
+#
+# What that cost, measured this morning: the deputy's fence read `agentglass`,
+# one test file ran from the root, and it read `""`. The suite had been emptying
+# the owner's own setting a dozen times a night, and the deputy declining every
+# task with "it has nowhere to work" was that, not the deputy.
+#
+# See server/test/tmpsweep.ts for what the preload does and why it lives there.
+[test]
+preload = ["./server/test/tmpsweep.ts"]

@@ -7,7 +7,7 @@
 // picks it up the moment it exists.
 //
 // It carries the repo as well as the number because a number alone is not an
-// identity — `#16175` names a different pull request in every repository, and
+// identity — `#1175` names a different pull request in every repository, and
 // the panel is pointed at one repo at a time. The panel decides what to do when
 // they disagree; this only reports what was asked for.
 
@@ -15,6 +15,10 @@ export type PrJump = {
   /** `owner/name`, as the notification's own verdict carried it. */
   repo: string;
   number: number;
+  /** Go to the place somebody named you, once it is open, and flash it. Sent by
+   *  the inbox for a `mention` row: it knows THAT you were mentioned and nothing
+   *  about where, which is what left you at the top of a long conversation. */
+  mention?: boolean;
   /** Increments per request, so asking for the same PR twice is two requests.
    *  Without it, closing a PR and clicking the same notification again would
    *  look like the request that has already been served. */
@@ -31,8 +35,8 @@ export function subscribePrJump(fn: () => void): () => void {
 
 export function prJump(): PrJump | null { return pending; }
 
-export function requestPrJump(repo: string, number: number): void {
-  pending = { repo, number, n: (pending?.n ?? 0) + 1 };
+export function requestPrJump(repo: string, number: number, opts: { mention?: boolean } = {}): void {
+  pending = { repo, number, ...opts, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }
 

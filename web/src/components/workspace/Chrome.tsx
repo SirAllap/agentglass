@@ -20,12 +20,29 @@
  * cannot express should add it HERE, where the next view will find it.
  */
 
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 
-/** The one shape. Exported as a string as well, because a handful of call sites
- *  need to put it on an element this module does not own (a label, an anchor). */
-export const CHIP = "text-[11px] px-2 py-1 rounded-lg whitespace-nowrap transition-colors";
+/**
+ * The one shape — and the class that gives it a body.
+ *
+ * Exported as a string as well, because a handful of call sites need to put it
+ * on an element this module does not own (a label, an anchor).
+ *
+ * `agx-chip` is not decoration. `chipTone()` writes `background` as an INLINE
+ * style, and an inline style beats every `hover:` class Tailwind can emit, so
+ * for as long as the tone was the only thing painting a chip there was no way
+ * to give one a hover state at all. Measured before this changed: zero `hover:`
+ * rules and zero `onMouseEnter` across the whole understudy view, against 41 in
+ * TasksPanel. The rule lives unlayered in index.css and carries `!important`
+ * for exactly that reason; see the comment there.
+ *
+ * `min-h-[28px]` rather than `py-1`: 11px type at line-height 1.5 plus 4px of
+ * padding measured 24.5px, which clears WCAG 2.2's 24px floor by half a pixel
+ * and is why these were reported as easy to miss with the mouse. 28 is the
+ * repo's own HIT constant rounded to the type.
+ */
+export const CHIP = "agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-center gap-1.5 rounded-lg whitespace-nowrap transition-colors";
 
 /**
  * The fill and hairline a control carries when it is not a toggle.
@@ -60,6 +77,28 @@ export function chipTone(on: boolean): CSSProperties {
   };
 }
 
+/**
+ * Whether a chip draws a body when it is doing nothing.
+ *
+ * A toggle is transparent until it is on, because the tint IS the state. Every
+ * other chip is a button, and a button that is transparent grey text is
+ * indistinguishable from the caption beside it — which is how this view ended
+ * up with three decorative `<span className="chip">` carrying a 1px border
+ * sitting next to a real `<Chip>` carrying none. The affordance was inverted:
+ * what you could not click looked more clickable than what you could.
+ *
+ * So a chip with no `on`/`pressed` gets the surface, and one with a state does
+ * not. `resting` forces it on for a toggle that still needs to look pressable
+ * when it is off.
+ */
+function chipBody(hasState: boolean, resting: boolean): CSSProperties {
+  if (hasState && !resting) return {};
+  return {
+    background: "color-mix(in srgb, var(--text) 5%, transparent)",
+    border: "1px solid color-mix(in srgb, var(--text) 11%, transparent)",
+  };
+}
+
 type ChipProps = {
   on?: boolean;
   onClick?: () => void;
@@ -68,19 +107,66 @@ type ChipProps = {
   /** For a control that is one of a set — a tab, a mode. Sets `aria-pressed`. */
   pressed?: boolean;
   disabled?: boolean;
+  /**
+   * Draw the surface even though this chip has an on/off state.
+   *
+   * For a set where every option is pressable and the row must read as a
+   * control rather than as words — the posture rungs, the window filter.
+   */
+  resting?: boolean;
+  /**
+   * Emphasis WITHOUT `aria-pressed`.
+   *
+   * "Set this up for me" is a one-shot action, not a toggle, and passing `on`
+   * to tint it announced it to a screen reader as a pressed toggle button.
+   */
+  primary?: boolean;
+  /** The one that cannot be undone by pressing it again — Halt, remove. */
+  danger?: boolean;
+  /**
+   * The accessible name, when the visible label is not it.
+   *
+   * A locked option needs "Worktree tie — locked, not enough scored decisions
+   * yet" read out; the padlock beside it is `aria-hidden` and the reason lived
+   * only in `title`, which most readers never announce.
+   */
+  ariaLabel?: string;
   className?: string;
   style?: CSSProperties;
 };
 
-export function Chip({ on, onClick, title, children, pressed, disabled, className = "", style }: ChipProps) {
+export function Chip({
+  on, onClick, title, children, pressed, disabled, resting, primary, danger, ariaLabel,
+  className = "", style,
+}: ChipProps) {
+  const hasState = pressed !== undefined || on !== undefined;
+  const tone: CSSProperties = primary
+    ? {
+      background: "color-mix(in srgb, var(--primary) 18%, transparent)",
+      border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)",
+      color: "var(--primary)",
+    }
+    : danger
+      ? {
+        background: "color-mix(in srgb, var(--error) 10%, transparent)",
+        border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)",
+        color: "var(--error)",
+      }
+      : { ...chipBody(hasState, !!resting), ...chipTone(!!on) };
   return (
     <button
+      type="button"
       onClick={onClick}
       title={title}
+      aria-label={ariaLabel}
       disabled={disabled}
-      {...(pressed !== undefined || on !== undefined ? { "aria-pressed": !!(pressed ?? on) } : {})}
-      className={`${CHIP} ${className}`.trim()}
-      style={{ ...chipTone(!!on), ...(disabled ? { opacity: 0.5 } : null), ...style }}
+      {...(hasState ? { "aria-pressed": !!(pressed ?? on) } : {})}
+      className={`${CHIP}${danger ? " agx-chip-danger" : ""} ${className}`.trim()}
+      // `cursor` and not only `opacity`: Tailwind's preflight sets
+      // `button { cursor: pointer }` unconditionally, so a disabled chip kept
+      // promising a click it could not honour, and two files in the understudy
+      // view hand-rolled `cursor:not-allowed` to compensate.
+      style={{ ...tone, ...(disabled ? { opacity: 0.5, cursor: "not-allowed" } : null), ...style }}
     >
       {children}
     </button>
@@ -104,10 +190,78 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
   label: string;
 }) {
   return (
-    <div className="flex items-center gap-1 shrink-0" role="group" aria-label={label}>
+    // gap-1.5, not gap-1: four transparent labels 4px apart was the primary
+    // navigation of a whole view, and 4px is inside the distance a pointer
+    // slips between two 28px targets.
+    <div className="flex items-center gap-1.5 shrink-0" role="group" aria-label={label}>
       {options.map((o) => (
-        <Chip key={o.id} on={value === o.id} onClick={() => onChange(o.id)} title={o.title}>{o.label}</Chip>
+        <Chip key={o.id} on={value === o.id} resting onClick={() => onChange(o.id)} title={o.title}>{o.label}</Chip>
       ))}
+    </div>
+  );
+}
+
+/**
+ * A real tab bar, for a control that swaps the body of a view.
+ *
+ * `Segmented` is a `role="group"` of `aria-pressed` buttons, which is right for
+ * a filter — "Board / Needs my review / Mine" narrows one list. It is wrong for
+ * the understudy's Scorecard / Disagreements / Ledger / Teach, which replace
+ * the panel entirely: measured, that was four separate tab stops with no arrow
+ * keys, no `aria-selected`, and a swapped panel that was not a `tabpanel`.
+ *
+ * The pattern is not invented here — ViewRail already ships roving tabIndex
+ * plus arrow handling for the same job, and this is that, at the size of a
+ * header control.
+ *
+ * The selected tab is drawn with an underline rather than a fill, so the whole
+ * strip reads as one control with no gaps to fall between, and every tab is
+ * 32px tall: this is navigation, and navigation gets the largest target on the
+ * bar rather than the same one as everything else.
+ */
+export function Tabs<T extends string>({ value, options, onChange, label, panelId }: {
+  value: T;
+  options: readonly { id: T; label: ReactNode; title?: string }[];
+  onChange: (v: T) => void;
+  label: string;
+  /** The id of the element these tabs swap, for `aria-controls`. */
+  panelId?: string;
+}) {
+  const move = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
+    const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : e.key === "Home" ? -i : e.key === "End" ? options.length - 1 - i : 0;
+    if (!d) return;
+    e.preventDefault();
+    const next = options[(i + d + options.length) % options.length];
+    if (!next) return;
+    onChange(next.id);
+    const el = e.currentTarget.parentElement?.children[(i + d + options.length) % options.length];
+    if (el instanceof HTMLElement) el.focus();
+  };
+  return (
+    <div className="flex items-stretch shrink-0" role="tablist" aria-label={label}>
+      {options.map((o, i) => {
+        const on = value === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            aria-controls={panelId}
+            // Roving: the strip is one tab stop, and the arrows move inside it.
+            tabIndex={on ? 0 : -1}
+            title={o.title}
+            onClick={() => onChange(o.id)}
+            onKeyDown={(e) => move(e, i)}
+            className="agx-tab text-[12px] px-3 min-h-[32px] inline-flex items-center whitespace-nowrap transition-colors"
+            style={on
+              ? { color: "var(--primary)", fontWeight: 700, boxShadow: "inset 0 -2px 0 0 var(--primary)" }
+              : { color: "var(--text3)" }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

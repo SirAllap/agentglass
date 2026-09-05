@@ -15,7 +15,7 @@ test("nothing is pending until something asks", () => {
 });
 
 test("the repo travels with the number", () => {
-  // A number alone is not an identity: #16175 names a different pull request in
+  // A number alone is not an identity: #1175 names a different pull request in
   // every repository, and the panel is pointed at one repo at a time.
   requestPrJump("acme/orbit", 16175);
   expect(prJump()).toMatchObject({ repo: "acme/orbit", number: 16175 });

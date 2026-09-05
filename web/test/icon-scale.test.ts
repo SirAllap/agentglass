@@ -87,6 +87,37 @@ describe("no icon renders below the floor", () => {
     expect(bad, "use a rung from ICON (lib/iconSize.ts), or mark it `icon-floor-exempt: <why>`").toEqual([]);
   });
 
+  test("and no CALL SITE asks for less than the floor", () => {
+    /*
+     * The hole the other two left, and it was wide.
+     *
+     * The test above only matches a DECLARATION — its regex wants the number
+     * right after the `=`, and it is guarded by `function |{ size`. So
+     * `<DownIcon size={9} />` sailed through both: a brace after the `=` and
+     * no `function` on the line. The file's own note admitted it "cannot see a
+     * size arriving through a variable"; it could not see one arriving in a
+     * prop either, which is how icons at 9 and 11 px shipped with this suite
+     * green.
+     *
+     * A variable still gets through, and that is honest rather than fixed —
+     * `size={n}` cannot be resolved by reading one line. What is caught now is
+     * every literal, which is what all the real ones were.
+     */
+    const bad: string[] = [];
+    for (const { rel, text } of FILES) {
+      const lines = text.split("\n");
+      lines.forEach((ln, i) => {
+        for (const m of ln.matchAll(/\bsize=\{(\d+(?:\.\d+)?)\}/g)) {
+          const px = Number(m[1]);
+          if (px >= ICON.xs) continue;
+          if (EXEMPT.test(ln) || EXEMPT.test(lines[i - 1] ?? "")) continue;
+          bad.push(`${rel}:${i + 1} → ${px}px`);
+        }
+      });
+    }
+    expect(bad, "use a rung from ICON (lib/iconSize.ts), or mark it `icon-floor-exempt: <why>`").toEqual([]);
+  });
+
   test("no icon component defaults below ICON.xs", () => {
     const bad: string[] = [];
     for (const { rel, text } of FILES) {

@@ -109,7 +109,10 @@ export default function IssueScreen(): React.ReactNode {
    * phone that wrote its own would be a second place the wording lives.
    */
   const start = useCallback(async (): Promise<void> => {
-    if (!host || !detail || !root) return;
+    // `mayWrite` again, under the button that already hides on it: the server
+    // would refuse `/issues/start` and the terminal both, and a phone that
+    // asked anyway would be shown a pane it cannot open. See model/scope.ts.
+    if (!host || !detail || !root || !mayWrite) return;
     setStarting(true);
     setError(null);
     const answer = await ask<IssueStartResult>(host, "/issues/start", {
@@ -139,7 +142,7 @@ export default function IssueScreen(): React.ReactNode {
     });
     void load();
     router.push("/terminal");
-  }, [host, detail, root, router, load]);
+  }, [host, detail, root, router, load, mayWrite]);
 
   const now = Date.now();
   /**

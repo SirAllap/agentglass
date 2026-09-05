@@ -28,6 +28,9 @@ export interface IngestBody {
   /** The tmux pane the agent is running in (`%3`), when the sender is inside
    *  one. Only the hook can know this — see panewt.ts. */
   tmux_pane?: string;
+  /** What the session is to the app, from its pane's AGENTGLASS_ROLE: the
+   *  Lantern's own chat is an observer, never an agent stopped on a person. */
+  role?: string;
   /** Optional transcript array (assistant/user messages with `usage`). */
   chat?: unknown[];
   summary?: string;
@@ -352,6 +355,9 @@ export interface TmuxWindow {
   name: string;
   active: boolean;
   flags: string;
+  /** tmux's own description of how the window is split (`#{window_layout}`),
+   *  kept so a restore brings it back split the same way. */
+  layout?: string;
   /**
    * A prompt tmux would have drawn, handed to the panel instead.
    *
@@ -502,11 +508,29 @@ export type PtyServerFrame =
   | {
       t: "tmux"; active: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; session?: string | null;
       prefix?: string[]; client?: { cols: number; rows: number } | null;
+      /**
+       * Every session on this socket with a window in it.
+       *
+       * The tab strip shows the session its own client is attached to, so a
+       * window opened elsewhere is invisible — and switching the client onto
+       * it takes somebody's own four windows off the screen. This is what lets
+       * the strip OFFER the others instead: the person chooses.
+       */
+      sessions?: { id: string; name: string; windows: number; locked?: boolean }[];
       /** This shell is on agentglass's OWN tmux, not the machine's. The panel
        *  hides "Use tmux's bar" there: that server keeps its status line off by
        *  design — the config gate refuses any config that turns it on — so the
        *  button would offer a bar that cannot arrive. */
       engine?: boolean;
+      /**
+       * A tmux popup — the scratch — is drawn over this terminal right now.
+       *
+       * A popup is a second client on the same server and tmux paints it INTO
+       * this screen: same windows, same panes, same geometry, different pixels.
+       * So anything the app draws on a pane has to stand down while it is up,
+       * or it hovers over a popup on a pane nobody can see.
+       */
+      popup?: boolean;
     }
   /**
    * A window this socket was asked to open, and the pane it landed on.
@@ -557,6 +581,11 @@ export type PtyClientFrame =
   | { t: "resize"; cols: number; rows: number }
   /** Show or hide tmux's own status line while the panel is drawing its own. */
   | { t: "tmux"; cmd: "status"; visible?: boolean }
+  /** The browser tab this panel lives in went hidden or came back — see
+   *  `document.hidden` in TerminalPanel.tsx. Lets the server pause the 500ms
+   *  tmux tab-strip sweep for a tab strip nobody can see, without touching
+   *  the session itself. */
+  | { t: "visible"; hidden: boolean }
   /** Focus-follows-mouse inside tmux. The narrowest command here on purpose:
    *  it is the only one sent without a click behind it. */
   | { t: "tmux"; cmd: "selectpane"; pane: string }
@@ -634,7 +663,12 @@ export type PtyClientFrame =
    * other argument are the server's.
    */
   | { t: "tmux"; cmd: "resume"; id: string; cwd: string; split?: boolean; yolo?: boolean }
-  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit"; window?: string; name?: string;
+  /* `session` shows another tmux session in this strip. It is a `switch-client`,
+     the same call the app used to make BY ITSELF when it opened a window
+     elsewhere — which took four windows of somebody's own work off their screen.
+     Asked for by a person it is the opposite: they know where they are going,
+     and the strip they came from is one choice away. */
+  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession"; window?: string; name?: string;
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
        *  than to trust. */
@@ -1012,7 +1046,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks" | "understudy" | "lantern";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -1049,8 +1083,666 @@ export interface BrowserAskFrame {
    *  compiler notices when it drifts: the server assigns one to the other. */
   op:
     | "open" | "read" | "click" | "type" | "wait" | "shot"
-    | "back" | "forward" | "scroll" | "press" | "text";
+    | "back" | "forward" | "scroll" | "press" | "text"
+    /* The tab verbs. The panel has had tabs since it had a panel; these are
+       what let an agent reach them — see BrowserOp for why `open` still
+       replaces the current view. */
+    | "tabs" | "tab" | "newtab" | "closetab"
+    | "console" | "network" | "resize" | "zoom" | "html" | "waitfor" | "observe"
+    | "eval" | "select" | "reload" | "cookies" | "frames"
+    /* §3's actionability half: click's other verbs, and a whole form as one
+       call. See browserDrive.ts's `actionable()` for the gate all but
+       focus/blur share. */
+    | "dblclick" | "rightclick" | "hover" | "focus" | "blur" | "check" | "fill"
+    /* §4 of the browser spec, the two verbs it names as the thing that
+       unblocks everything else after `eval`. `addInitScript` runs before the
+       page's own scripts, on every navigation, until removed or replaced by
+       name; `expose` is a name the page can call back into, read back with
+       `exposed`. */
+    | "addInitScript" | "expose" | "exposed"
+    /* §5: the DevTools protocol relayed whole, plus the two readings the spec
+       names — which listeners a node has and where they come from, and which
+       lines of JS and CSS actually ran. `cdp` counts as ACTING, because the
+       protocol can navigate, click and evaluate. */
+    | "cdp" | "listeners" | "coverage"
+    /* §9: which isolated contexts exist. Tabs share a session, so "two actors
+       at once" — one watching a panel while the other changes its state — is
+       exactly what tabs alone cannot do; profiles are the isolation, and the
+       panel has had them all along. */
+    | "profiles"
+    /* §10: "this page, as a phone, in Tokyo, in dark mode" is one thought, so
+       it is one verb. Not cosmetic — colour scheme, timezone and language
+       change what a real app renders. */
+    | "emulate"
+    /* §1: wait for something to happen instead of asking twenty times. The
+       polling moves to the server, where it costs a loop instead of a process
+       start and a context entry per turn. */
+    | "events"
+    /* §12: N frames at an interval, straight to disk and optionally a GIF —
+       the thing that gets assembled by hand with ffmpeg today. */
+    | "record"
+    /* §11: click something that starts a download and wait for the file —
+       never dispatched to the panel itself (the polling and the filesystem
+       live server-side, same as `record`), listed here for the same reason
+       `record` and `events` are: the ask is still typed against this union
+       on its way through the relay. */
+    | "download"
+    /* §16's audit log, and §12's "export the session as an executable script"
+       — the same list read twice. A GET route nothing outside the app could
+       reach is not an exportable log. */
+    | "audit"
+    /* §5's debugger as one verb with an action. The protocol is reachable
+       whole through `cdp`; this wraps the part that is genuinely awkward
+       there — a pause is an EVENT, and reading a paused frame's scope is a
+       three-call chain whose arguments come out of the previous answer. */
+    | "debug"
+    /* §13: the browser's own settings as an API — proxy, certificates, cache
+       policy, blocking per origin — rather than as a screen only a person can
+       reach. */
+    | "settings"
+    /* §3 and §11: a drag is a pointer sequence, not two clicks; a file input
+       cannot be filled from script at all and needs the shell. */
+    | "drag" | "upload"
+    /* §7 and §10: the rest of a session (a login is as often a token in
+       localStorage as a cookie), permissions granted by API rather than by a
+       dialog nobody can click, and print-to-PDF. */
+    | "storage" | "permission" | "pdf"
+    /* §6: the other half of a broken API is a SLOW one, and a HAR is the
+       evidence that outlives the session. */
+    | "throttle" | "har"
+    /* §12: DOM, network and console against one timeline, navigable
+       afterwards — what happened, as an artefact rather than a reconstruction. */
+    | "trace"
+    /* §2: the tree of one subtree instead of the page — a modal is fifteen
+       nodes inside three hundred, and the rest is paid for every turn. */
+    | "region"
+    /* §11: the clipboard through the route that works, and the page as one
+       file that still renders offline. */
+    | "clipboard" | "save"
+    /* §6: extra headers for the session, not for one call — a page makes
+       dozens of requests and a header on the one you named proves nothing. */
+    | "headers"
+    /* §6: pause a request at the network level and decide what happens to it —
+       which catches what the page did not make through fetch. */
+    | "intercept"
+    /* §8: three minutes of real waiting, measured, for one screenshot of a
+       thirty-second timer. `advanceMs` is `Emulation.setVirtualTimePolicy`;
+       `seal` and `freezeAnimations` are the rest of what a REPEATABLE capture
+       needs alongside the jump, in the same verb rather than three calls a
+       caller has to remember to make together every time. */
+    | "clock"
+    /* §6: force a 404, a 500 or a hang on requests matching a URL pattern —
+       "the board freezes when the API is down" could only be proved in a
+       unit test without this. A lie told to the page on purpose, so every
+       faked row in `network`/`observe` carries `fake: true` rather than
+       looking like a real failure. */
+    | "fake"
+    /* One line: window open, panel mounted, page alive — see §15 of the
+       browser spec. Answered even when there is nothing to drive, which is
+       the point of it. */
+    | "health";
   args: Record<string, unknown>;
+}
+
+/**
+ * How far the understudy is allowed to go for one class of decision.
+ *
+ * A ladder, not a switch, and nothing on it ever climbs itself. `shadow` is
+ * the whole of v1: the understudy writes down what it would have done and is
+ * scored against what actually happened, and that is all it does. `guided`
+ * would mean it proposes and a human presses; `auto-undo` that it acts where
+ * the act is reversible and says so; `auto` that it acts. The last three exist
+ * in the type today because the scorecard has to be able to SAY which rung a
+ * class is being offered, and a promotion that has to invent its own vocabulary
+ * later is a promotion nobody can review now.
+ */
+export type UnderstudyMode = "shadow" | "guided" | "auto-undo" | "auto";
+
+/**
+ * ═══ THE TWO AXES ═══
+ *
+ * "Directed / supervised / autonomous" was the first shape of this and it is
+ * one dial doing two jobs. How much INITIATIVE a thing takes and how much
+ * REACH it has are independent questions, and collapsing them makes two
+ * perfectly sensible settings inexpressible: "only speaks when spoken to, but
+ * may push to a shared branch" and "starts work by itself, but can never
+ * produce anything more than a draft" are both things a person might want, and
+ * neither survives a single scale.
+ *
+ * They are also different KINDS of question. Initiative is a matter of taste —
+ * how much interruption you want. Reach is a matter of blast radius, and it is
+ * the one that decides whether a mistake costs a keystroke or a job. Putting
+ * them on one dial means every time you want a bit more help you also buy a bit
+ * more danger, which is exactly the trade nobody should be forced into.
+ *
+ * So: a stance, a reach, and the floor of the two.
+ */
+
+/**
+ * INITIATIVE — who starts, and who says yes.
+ *
+ * Seven rungs rather than three, because the interesting distinctions all live
+ * in the middle. The gap between "it mentions what it would do" and "it
+ * prepares the work and waits" is the difference between a hint and a queue,
+ * and that is precisely the granularity a person wants when they are deciding
+ * how much of their attention to sell.
+ *
+ *  off        Records nothing at all. Not a pause — the seams do not fire.
+ *  watching   Records and predicts silently. Scored, says nothing. (v1's only rung.)
+ *  asked      Answers when you ask it. Starts nothing.
+ *  offering   Volunteers in place — "I would do X here" — where the decision is
+ *             already being made. Nothing queues, nothing waits, ignoring it
+ *             costs nothing.
+ *  queued     Prepares the work for real and puts it in a queue. Every item
+ *             waits for a person to approve it, one at a time.
+ *  undo       Does it, captures the undo FIRST, and tells you. You audit after
+ *             rather than before.
+ *  acting     Does it.
+ *
+ * The rungs are ordered and the order is load-bearing: a class may sit at or
+ * below the global stance and never above it.
+ */
+export type UnderstudyStance =
+  | "off"
+  | "watching"
+  | "asked"
+  | "offering"
+  | "queued"
+  | "undo"
+  | "acting";
+
+export const STANCES: readonly UnderstudyStance[] = [
+  "off", "watching", "asked", "offering", "queued", "undo", "acting",
+];
+
+/**
+ * REACH — what it is allowed to touch, whatever its stance.
+ *
+ * A hard cap and a separate decision. Each rung strictly contains the ones
+ * before it, so this is a ceiling and not a menu.
+ *
+ *  read      Looks. Produces nothing that outlives the answer.
+ *  draft     Produces text — a commit message, a PR body, a reply — that goes
+ *            nowhere until a person takes it. The safe default for real help.
+ *  own       May change files inside a worktree IT created. Nothing it did not
+ *            make, and nothing anybody else is standing in.
+ *  shared    May touch a branch other people use. Gated on the safety seals,
+ *            because this is the first rung where a mistake reaches somebody
+ *            else's afternoon.
+ *  outward   Text may reach another human, or a system of record. Refused in
+ *            this build at the route table, not here — a push, a task-tracker
+ *            write, a review posted under the user's name. This rung exists so
+ *            the refusal has a name, not so it can be selected.
+ */
+export type UnderstudyReach = "read" | "draft" | "own" | "shared" | "outward";
+
+export const REACHES: readonly UnderstudyReach[] = ["read", "draft", "own", "shared", "outward"];
+
+/** Where the pair currently sits, plus the per-class exceptions. */
+export interface UnderstudyPosture {
+  stance: UnderstudyStance;
+  reach: UnderstudyReach;
+  /**
+   * Per class, a stance no higher than the global one.
+   *
+   * The point of the override is asymmetric: it exists to hold a class BACK.
+   * A person who is happy for commit messages to be queued is not thereby happy
+   * for merges to be, and the honest way to say that is one dial for the mood
+   * and thirteen brakes for the specifics.
+   */
+  perClass: Record<string, UnderstudyStance>;
+  /** The highest rung this build can reach at all, whatever is selected. */
+  ceiling: UnderstudyStance;
+  /** The highest reach this build allows, whatever is selected. */
+  reachCeiling: UnderstudyReach;
+}
+
+/** One place the understudy may be taught from. */
+export interface UnderstudySource {
+  id: string;
+  /** What it is, for a person: "Your conventions", "Project memory". */
+  label: string;
+  /** Where it lives. Shown so nobody has to guess what was read. */
+  path: string;
+  kind: "rules" | "precedents";
+  /** Files found. 0 means the path exists and holds nothing we can read. */
+  files: number;
+  /** Rough size, bytes, for the ones worth warning about. */
+  bytes: number;
+  /** Present on disk right now. */
+  found: boolean;
+  /** The user has said yes to this one. Nothing is read without it. */
+  allowed: boolean;
+  /** Discovered by us, or typed in by the user. */
+  added: boolean;
+  /** Why it is worth reading, in one sentence, for the consent screen. */
+  what: string;
+  /**
+   * Filed in the CLOSED partition rather than the open one.
+   *
+   * Not a judgement about whose work it is — it is all the user's work. It
+   * decides where a row may travel: retrieval never crosses a partition, so a
+   * prediction bound for a public repository can never surface something that
+   * came out of a private one. That is the protection, and it is about where a
+   * name may end up rather than about who did the work.
+   */
+  sensitive: boolean;
+  /** In the set we would suggest starting from. Deliberately conservative. */
+  recommended: boolean;
+}
+
+/** What an ingest run did, kept so the panel can say what it learned. */
+export interface UnderstudyLearned {
+  at: number;
+  /** Rules compiled, and how many carry enough precedents to be backed. */
+  rules: number;
+  backed: number;
+  /** Precedents banked. */
+  precedents: number;
+  /** Files read, and files skipped because the exclusion list matched. */
+  filesRead: number;
+  filesSkipped: number;
+  /** Windows refused because a private term was found in them. */
+  quarantined: number;
+  /** Per source, what came out of it. */
+  bySource: { id: string; label: string; rules: number; precedents: number; skipped: number }[];
+}
+
+/**
+ * Why a class might never climb, regardless of how well it scores.
+ *
+ * `earn` is the ordinary case: agreement is measured and the class becomes
+ * eligible to be offered. `key` is a class whose act is answering on somebody
+ * else's behalf — a permission prompt — which stays in shadow for the whole of
+ * v1 no matter what it scores. `sealed` is a class that stays in shadow for
+ * ever by decision rather than by score, because the thing it would touch is
+ * somebody else's record of what the work is.
+ *
+ * The distinction is kept in the data rather than in the panel's head, because
+ * "this one is at 0.81 and still shadow" is the question the scorecard will be
+ * asked most often, and the answer has to be visible next to the number.
+ */
+export type UnderstudyLock = "earn" | "key" | "sealed";
+
+/** One class of decision, as the scorecard shows it. */
+export interface UnderstudyClassRow {
+  /** `C1`…`C13`. Stable — it is the key the ledger rows are filed under. */
+  id: string;
+  label: string;
+  lock: UnderstudyLock;
+  /** Where the class actually is. In v1 this is `shadow` for all thirteen. */
+  mode: UnderstudyMode;
+  /**
+   * The thresholds are met and a human could be asked to promote it.
+   *
+   * Being offered is not being on, and the wording is load-bearing: nothing in
+   * the understudy flips itself, so this flag is the strongest statement the
+   * server ever makes about autonomy.
+   */
+  offered: boolean;
+  /**
+   * Scored decisions — the denominator. Only rows whose provenance was `typed`
+   * or `clicked` count. An agent tolerating something is not the user agreeing
+   * with it, and counting it would let the understudy grade its own homework.
+   */
+  n: number;
+  /** Of those `n`, how many the prediction matched. */
+  hits: number;
+  /** `hits / n`, or 0 when `n` is 0. The honest ratio, which is not the gate. */
+  raw: number;
+  /** wilsonLower(hits, n) — see shared/wilson.ts. This is the gate. */
+  lb: number;
+  /**
+   * Credit the class has banked: agreements in a row since the last differ.
+   *
+   * Nothing spends it — it is a reading, not a currency. It is here because a streak
+   * is the part of the record a person actually reads — "it has been right the
+   * last forty times" lands where a bound of 0.63 does not.
+   */
+  bank: number;
+  /**
+   * Why it is not being offered, as finished sentences the panel prints
+   * verbatim — one per reason, in the order a reader should meet them: the lock
+   * first when there is one, then too few decisions, then the raw rate, then
+   * the bound.
+   *
+   * This field was specified as short categorical codes, on the reasoning that
+   * a panel which has to parse a sentence to draw a chip draws the wrong chip
+   * in another language. That reasoning is right and it is why the codes are
+   * still here — they are just not in THIS field. `n`, `hits`, `raw`, `lb`,
+   * `mode`, `offered` and `lock` sit on the same row, and every chip the panel
+   * draws is drawn from those. Nothing parses `blocked`.
+   *
+   * What is left over once the chips are drawn is the explanation, and an
+   * explanation assembled in the panel would have had to re-derive the
+   * thresholds to phrase itself — putting `80`, `0.70` and `0.60` in the
+   * renderer, which is exactly the duplication `understudy-no-thresholds.test.ts`
+   * exists to forbid. The server owns the gate, so the server owns the sentence
+   * that says why the gate is shut, and the panel stays a thing that cannot
+   * disagree with it.
+   */
+  blocked: string[];
+  /**
+   * The two gates, already decided, so the panel can DRAW them.
+   *
+   * A class is offered when it has enough of the user's own decisions and
+   * agrees with him often enough and the interval around that agreement is
+   * tight enough. Showing only the total made the most informative state in the
+   * feature unreadable — a class with plenty of data that is still refused
+   * because it does not think like him — so the row draws a track per gate.
+   *
+   * Every one of these four is computed on the server for the same reason
+   * `blocked` is: a track the panel filled in by comparing `n` to 80 itself
+   * would be the thresholds living in two places, which is what
+   * understudy-no-thresholds.test.ts exists to prevent. The panel is handed the
+   * bar, told whether it was cleared, and draws exactly that.
+   */
+  countMet: boolean;
+  /** The number of scored decisions this class needs. The bar, not a constant. */
+  countBar: number;
+  agreementMet: boolean;
+  /**
+   * What "your usual" would have scored on exactly the same rows.
+   *
+   * The number that decides whether any of this is worth keeping. A class where
+   * somebody does the same thing nine times in ten is a class where a constant
+   * scores 0.9 — and a predictor that also scores 0.9 has learned nothing about
+   * the person, only that they have a setting. The GAP is the model's share.
+   */
+  baseRaw: number;
+  baseN: number;
+  /**
+   * Where the agreement bar sits on a 0–100 track, for the notch. Null when the
+   * class has no agreement gate to clear.
+   */
+  agreementBarAt: number | null;
+}
+
+/**
+ * Everything the understudy view draws, in one frame.
+ *
+ * Pushed over the single /stream socket like every other frame here — panels
+ * do not open their own sockets — and it carries the whole scorecard rather
+ * than a delta, because the scorecard is thirteen rows and a diff of thirteen
+ * rows costs more to reason about than it saves on the wire.
+ */
+export interface UnderstudyFrame {
+  /** When the server computed this, epoch ms. */
+  asOf: number;
+  /**
+   * Something stopped the understudy and it is recording nothing.
+   *
+   * Separate from `enabled` on purpose: `enabled` is a preference the user
+   * expressed, `halted` is a fact about the process. A view that shows an empty
+   * scorecard has to be able to say which of the two it is looking at.
+   */
+  halted: boolean;
+  enabled: boolean;
+  /** The ceiling no class may pass, whatever it has earned. `shadow` in v1. */
+  level: UnderstudyMode;
+  classes: UnderstudyClassRow[];
+  /**
+   * The whole scorecard as one number: agreements over scored decisions,
+   * across every class, as a percentage. `null` when nothing is scored yet.
+   *
+   * Computed HERE and not in the panel, for the reason
+   * web/test/understudy-no-thresholds.test.ts exists: a panel that divides
+   * `hits` by `n` itself is a second opinion about what agreement means, and
+   * the two agree right up until somebody changes which rows count. The
+   * denominator is already narrower than it looks — only decisions the person
+   * typed or clicked are scored at all.
+   *
+   * The RAW ratio, deliberately, not the interval's lower bound. The bound is
+   * the gate and it belongs per class, where a promotion is decided; this is
+   * the honest headline, and the feature is named after it.
+   */
+  agreement: number | null;
+  /**
+   * How many more scored decisions the nearest class needs before it could be
+   * offered — the smallest remaining gap across the classes that can still
+   * earn one. `null` when none can, or when they all already have.
+   */
+  toNextRung: number | null;
+  /**
+   * How the seal discipline is holding, counted over the same window.
+   *
+   * The seal is what makes a score mean anything: the situation is hashed and
+   * written before the user can answer it, so a prediction cannot be fitted to
+   * an answer already known. These four numbers are how you check that from
+   * outside. `late` predictions are kept and scored — dropping them would
+   * quietly select for the easy situations — and `unsealed` actuals are
+   * counted precisely because they are the failure that flatters the score.
+   */
+  seals: {
+    /** Situations sealed. */
+    sealed: number;
+    /** Of those, how many got a prediction at all. */
+    predicted: number;
+    /** Predictions that landed after the user had already answered. */
+    late: number;
+    /** Actuals that arrived with no seal in front of them. */
+    unsealed: number;
+    /*
+     * WHEN each failure last happened, 0 for never — the difference between a
+     * hole and a scar.
+     *
+     * A coverage gap poisons its counter for as long as the window is wide,
+     * and until these existed nothing on the panel could tell a seam that is
+     * still broken from one that was fixed hours ago. Both showed the same red
+     * number, so the honest indicator became one people learn to ignore, which
+     * is the worst thing a safety indicator can become.
+     */
+    lastUnsealed: number;
+    lastLate: number;
+  };
+}
+
+/*
+ * The backtest: the same measurement, taken from decisions already made.
+ *
+ * The live scorecard needs eighty scored decisions per class, which is weeks of
+ * ordinary work. A git history already holds hundreds of real ones, dated, in
+ * the same categorical shape — so they are replayed oldest-first, each predicted
+ * from strictly what came before it.
+ *
+ * It is reported BESIDE the live figure and never merged into it. The live one
+ * counts what the person typed or clicked; this counts what they had already
+ * done. Two populations, two claims, and averaging them would destroy both.
+ */
+export interface UnderstudyBacktestClass {
+  cls: string;
+  n: number;
+  /** How often the model matched what they actually did. */
+  raw: number;
+  /** How often the dumbest possible rule would have matched. */
+  base: number;
+  /** The difference — the only part of `raw` that belongs to the model. */
+  edge: number;
+  declined: number;
+}
+
+export interface UnderstudyBacktest {
+  at: number;
+  repos: string[];
+  decisions: number;
+  classes: UnderstudyBacktestClass[];
+}
+
+/*
+ * A drafted action, waiting on a person.
+ *
+ * The whole thing is written down before anybody agrees to it — the route, the
+ * body that would be sent, why, and the evidence it stood on — because the
+ * question this answers is not "would it have guessed my answer" but "would it
+ * have done the right thing", and that cannot be answered from a percentage.
+ */
+export interface UnderstudyProposalEvidence {
+  kind: "rule" | "precedent";
+  text: string;
+  from: string;
+}
+
+export interface UnderstudyProposal {
+  id: number;
+  cls: string;
+  label: string;
+  title: string;
+  route: string;
+  method: string;
+  args: Record<string, unknown>;
+  /** What it is about — the branch, the number — not what it would send. */
+  subject: string;
+  repo: string;
+  partition: string;
+  why: string;
+  evidence: UnderstudyProposalEvidence[];
+  confidence: number;
+  createdAt: number;
+  state: "pending" | "approved" | "discarded" | "done" | "failed";
+  decidedAt: number | null;
+  decidedBy: string;
+  result: string;
+}
+
+/*
+ * A shift: the understudy standing in, for a bounded while.
+ *
+ * The limits are fixed when the person hands over, not consulted as it goes —
+ * an end time, a budget of actions, a scope. And why it stopped is recorded,
+ * because the first question on coming back is "what did it do and why did it
+ * quit", and a shift that cannot answer the second half is unauditable.
+ */
+export interface UnderstudyShift {
+  id: number;
+  goal: string;
+  startedAt: number;
+  endsAt: number;
+  maxActions: number;
+  actions: number;
+  state: "running" | "done" | "stopped";
+  stoppedAt: number | null;
+  stoppedReason: string;
+  scope: string;
+  msLeft: number;
+  actionsLeft: number;
+}
+
+/*
+ * Something it did on its own, and how to put it back.
+ *
+ * The undo recipe is recorded at the moment of acting rather than derived when
+ * somebody asks for it — a repository moves on, and a reversal worked out later
+ * is a guess about a world that has changed since.
+ */
+export interface UnderstudyAct {
+  id: number;
+  shiftId: number;
+  proposalId: number | null;
+  cls: string;
+  title: string;
+  repo: string;
+  at: number;
+  ok: boolean;
+  result: string;
+  undoKind: string;
+  undoArg: Record<string, unknown>;
+  undoneAt: number | null;
+  /** In words, for somebody reading what happened while they were out. */
+  undoSays: string;
+}
+
+/*
+ * One task the work loop took on, start to finish.
+ *
+ * DECLARED HERE rather than in the server module that writes it, because the
+ * panel draws these rows and a shape copied into a second file is a shape that
+ * drifts. `server/src/understudy-work.ts` imports this one.
+ */
+export interface UnderstudyWorkRun {
+  id: number;
+  shiftId: number | null;
+  source: string;
+  itemId: string;
+  title: string;
+  repo: string;
+  /** The disposable checkout it worked in. A failed run leaves it on disk on
+   *  purpose, so this is where somebody goes to look. */
+  worktree: string;
+  branch: string;
+  /** What its branch pointed at the last time anything looked, so a branch that
+   *  is later merged and DELETED can still be recognised as landed work rather
+   *  than as a task nobody ever started. */
+  tipSha?: string;
+  /** The tmux pane its agent is in. The handle used to be the window's NAME,
+   *  and tmux renames a window when the program inside sets a title — one
+   *  failed match and a working run was declared dead. */
+  paneId?: string;
+  startedAt: number;
+  finishedAt: number | null;
+  /** `uncommitted`: the tests passed on the working tree but nothing was
+   *  committed — the exact shape of a run that finished and then sat waiting
+   *  for a background process instead of stopping to record what it did. The
+   *  work is not lost (the worktree is kept, same as `failed`); it is just
+   *  not on the branch yet.
+   *  `empty`: the other half of that same failure. No commit, a clean tree
+   *  (there was never anything to be uncommitted), and its own last words did
+   *  not argue for that being correct — the shape of a run that stopped after
+   *  "investigating" and never came back. Not `failed`: nothing went wrong.
+   *  Not `done`: nothing was delivered. Kept distinct so a person sees it
+   *  instead of a queue that reads it as success. */
+  state: "running" | "done" | "failed" | "abandoned" | "uncommitted" | "empty";
+  /** What the tests said, verdict first. Not what the agent claimed. */
+  outcome: string;
+}
+
+/** Something a source is offering. Empty `repo` means nobody has said which
+ *  checkout it belongs in, which is a refusal rather than a default. */
+export interface UnderstudyWorkItem {
+  id: string;
+  source: string;
+  title: string;
+  detail: string;
+  repo: string;
+  weight: number;
+  url?: string;
+  /**
+   * The file this task owes, when what it owes is a file rather than a commit.
+   *
+   * A run that writes code is judged by the tests and by whether it committed.
+   * A study, a design, an audit legitimately touches nothing in the repository,
+   * so both of those pass on a run that produced nothing at all — measured on
+   * the task-provider design run, which sat waiting on two subagents that never
+   * returned, wrote no file, and recorded itself as `done`.
+   */
+  deliverable?: string;
+}
+
+/** A row on the queue he fills by hand — the only source that can say which
+ *  checkout the work belongs in. */
+/**
+ * The understudy asking a person for something.
+ *
+ * The measured failure this exists for is silence: of 108 runs, 26 ended having
+ * delivered nothing and not one of them said what it needed. An open row is a
+ * question still waiting; `tried` is what it already attempted, so an answer
+ * does not have to begin by reconstructing the attempt.
+ */
+export interface UnderstudyHelp {
+  id: number;
+  runId: number | null;
+  title: string;
+  question: string;
+  tried: string;
+  repo: string;
+  at: number;
+  answeredAt: number | null;
+}
+
+export interface UnderstudyAsked {
+  id: number;
+  title: string;
+  detail: string;
+  repo: string;
 }
 
 /** WebSocket frames. */
@@ -1072,6 +1764,10 @@ export type WsFrame =
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
   | { type: "ci"; data: CiVerdict }
+  /** Somebody said something on a pull request you have a stake in. One frame
+   *  per pull request per poll — the server holds the latch, exactly as it does
+   *  for `ci` — and never a bot. See PrTalkNote. */
+  | { type: "talk"; data: PrTalkNote }
   /** A ClickUp card of yours was assigned or moved — see CardNote. */
   | { type: "card"; data: CardNote }
   /** One of agentglass's own push alerts (a gate hold, a permission wait, a tool
@@ -1081,7 +1777,11 @@ export type WsFrame =
   | { type: "alert"; data: AlertNote }
   /** A UI-navigation command from POST /control, rebroadcast to every client.
    *  It changes what is *shown*, never the fleet. */
-  | { type: "control"; data: ControlCmd };
+  | { type: "control"; data: ControlCmd }
+  /** The understudy scorecard, recomputed and pushed whole. It reports what
+   *  the understudy WOULD have done and how often that matched; it commands
+   *  nothing, which is why it rides the same read-only socket. */
+  | { type: "understudy"; data: UnderstudyFrame };
 
 export interface AlertNote {
   title: string;
@@ -1107,7 +1807,11 @@ export interface AlertNote {
    * the surfaces that receive it treat it as an alarm: it takes the screen, it
    * makes a sound, and it does not go away until it is answered.
    */
-  kind?: "reminder";
+  /** What kind of thing this is, when it is not ordinary news. "reminder" is an
+   *  alarm somebody set; "understudy" is the clone saying it is stopped and
+   *  needs a person — both are raised as a card that takes the screen rather
+   *  than as another row behind the bell. */
+  kind?: "reminder" | "understudy";
   /** The reminder's id, so the alarm can acknowledge or snooze the exact one. */
   id?: string;
 }
@@ -1125,7 +1829,7 @@ export interface CardNote {
    * that named you.
    *
    * A mention is an id match on a `tag` block, not a search for your name — a
-   * workspace with two Davids in it makes that difference the whole feature.
+   * workspace with two people called Ada in it makes that difference the whole feature.
    */
   kind: "assigned" | "status" | "comment" | "mention";
   /** ClickUp's own id, which is what opens the card. */
@@ -1162,6 +1866,38 @@ export interface CiVerdict {
    * review decision in hand and the notification path does not.
    */
   approved: boolean;
+}
+
+/**
+ * A person spoke on a pull request of yours, or on one you were asked to look
+ * at. Derived from the list poll rather than received: GitHub's own
+ * notifications are an inbox, not an event feed you can subscribe to from a
+ * desktop app, and its unread state is per notification and gone the moment you
+ * glance at the page from anywhere else.
+ *
+ * One of these per pull request per poll, no matter how much arrived — the
+ * newest remark, plus how many others came with it. A review carrying nine line
+ * comments is one thing that happened, and nine pop-ups is how a notification
+ * feature teaches people to turn it off.
+ */
+export interface PrTalkNote {
+  /** `owner/name`, so the note can be clicked through to the pull request. */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** The newest remark. */
+  who: string;
+  kind: "comment" | "review";
+  /** A review's verdict — the thing that was asked for by name: whether it is
+   *  changes requested, an approval, or just a comment. */
+  state?: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  /** Line comments that came with that review. */
+  lines?: number;
+  at: string;
+  /** Other remarks that arrived in the same poll, so one note can say so
+   *  instead of five notes saying it separately. */
+  more?: number;
 }
 
 // --- commit composer (live git working-tree) ---------------------------------
@@ -1314,8 +2050,8 @@ export interface GitGraphLine {
    * `git log --graph`'s own ASCII art, kept only for a row git gave us with no
    * commit on it. The graph is DRAWN from `parents` now: on a repository with
    * twenty-seven branches this string is forty characters of `| | * | \ \ |`
-   * that pushed the subject off the right-hand edge, which is what "se rompe
-   * todo" was.
+   * that pushed the subject off the right-hand edge, which is what "everything
+   * breaks" was.
    */
   graph: string;
   hash?: string;
@@ -1586,6 +2322,59 @@ export interface DockerContainer {
   workingDir: string | null;
   runningFor: string;
   size: string;
+
+  /* ---- what a row needs to be read at a glance ---------------------------
+   * Everything below is ADDITIVE and optional on the wire: an older companion,
+   * the demo adapter and a cached shape from a previous version all keep
+   * working, and anything that could not be worked out is absent rather than
+   * faked. None of it adds a call to the poll — where each one comes from, and
+   * what it costs, is written in server/src/dockerfacts.ts.
+   * ---------------------------------------------------------------------- */
+
+  /** `ports`, read (server/src/dockerports.ts). Absent when the column was
+   *  empty or in a shape this version does not know — the raw string stays, so
+   *  the worst case is exactly what the panel showed before. */
+  portList?: DockerPort[];
+  /** Out of the status sentence, so free. `null` means the container declares
+   *  no health check at all, which is not the same as "not healthy". */
+  health?: "healthy" | "unhealthy" | "starting" | null;
+  /** The status without its health parenthesis: "Up 4 hours". */
+  uptime?: string;
+  /** From a batched `docker inspect` on a slower clock (the medium lane in
+   *  server/src/docker.ts). Absent until that lane has run once. */
+  restarts?: number;
+  startedAt?: string | null;
+  /** The last failing probe's own output — the line that says WHY something is
+   *  unhealthy, which today costs a trip nobody makes. */
+  healthError?: string | null;
+  healthFailures?: number;
+  /** The checkout the stack was brought up from, resolved against the
+   *  worktrees of the open project. */
+  owner?: DockerOwnerRef;
+  /** Named volumes this container mounts, from the same batched inspect. */
+  mounts?: { name: string; rw: boolean; destination: string }[];
+}
+
+/** One mapping out of the ports column. See server/src/dockerports.ts. */
+export interface DockerPort {
+  host: number | null;
+  hostEnd: number | null;
+  hostIp: string | null;
+  container: number;
+  containerEnd: number;
+  proto: "tcp" | "udp";
+  /** Worth offering to open in a browser. A guess that only decides whether an
+   *  affordance appears, never whether the port is shown. */
+  web: boolean;
+}
+
+/** The checkout a container came out of. `foreign` is the one worth a colour:
+ *  it is running, it just isn't the project you have open. */
+export interface DockerOwnerRef {
+  worktree: string;
+  branch: string | null;
+  foreign: boolean;
+  path: string;
 }
 export interface DockerStat {
   id: string;
@@ -1605,7 +2394,75 @@ export interface DockerImage {
   containers: string;
   dangling: boolean;
 }
-export interface DockerVolume { name: string; driver: string; }
+export interface DockerVolume {
+  name: string;
+  driver: string;
+  /* ---- additive, and each one absent rather than faked -------------------
+   * The ledger half (who wrote it, which checkouts have) is free: it is a JSON
+   * file agentglass keeps itself, so it rides along with the poll. The size is
+   * NOT free — `docker system df -v` makes the daemon walk every layer — so it
+   * arrives from /docker/disk when somebody opens the volumes section.
+   * ---------------------------------------------------------------------- */
+  bytes?: number | null;
+  /** Containers docker says are holding it. From the same `system df -v`. */
+  links?: number;
+  /** The last container observed to finish writing to it, and where it came
+   *  from. Absent when agentglass never saw one — which is a real answer, and
+   *  usually means the volume is safe to delete. */
+  lastWrite?: { worktree: string; branch: string | null; at: string; via: string } | null;
+  /** Every checkout ever seen writing to it. Length > 1 is the fact that
+   *  explains "why is my app serving somebody else's bundle". */
+  worktrees?: string[];
+}
+
+/** One volume, asked about directly. */
+export interface DockerVolumeDetail {
+  name: string;
+  bytes: number | null;
+  mountedBy: { name: string; state: string }[];
+  lastWrite: DockerVolume["lastWrite"];
+  worktrees: string[];
+}
+
+/** What `docker system df` says, plus what agentglass can work out about it. */
+export interface DockerDisk {
+  images: number;
+  containers: number;
+  volumes: number;
+  buildCache: number;
+  reclaimable: number;
+  /** Images tagged for a worktree that no longer exists on disk. Not deleted,
+   *  not hidden — named, with their size, because that is the pile nobody
+   *  remembers making. */
+  orphans: { id: string; tag: string; bytes: number | null; worktree: string }[];
+  /** Every volume's size, from the same walk. Carried here rather than fetched
+   *  per volume: `system df -v` is the expensive call, and asking it once per
+   *  row would be thirty of them. */
+  volumes_: { name: string; bytes: number | null; links: number }[];
+  at: number;
+}
+
+/** One variable, as two containers have it. A credential's value is compared
+ *  on the server and never travels: `masked` says so, and `change` still tells
+ *  you it differs. */
+export interface DockerEnvRow {
+  name: string;
+  change: "only-a" | "only-b" | "changed" | "same";
+  a?: string;
+  b?: string;
+  masked: boolean;
+}
+
+/** A look inside a volume: one read-only `ls`, capped. */
+export interface DockerPeek {
+  ok: boolean;
+  entries?: { name: string; dir: boolean; bytes: number | null; when: string }[];
+  /** The image the look was taken with, so it is obvious nothing was pulled. */
+  image?: string;
+  error?: string;
+  /** The command to run by hand, when there is no local image to look with. */
+  hint?: string;
+}
 export interface DockerNetwork { id: string; name: string; driver: string; scope: string; }
 /** Present only when the cockpit is open for one project, so the panel can say
  *  which slice of the host it is showing — and admit when the filter found
@@ -1626,6 +2483,23 @@ export interface DockerOverview {
   networks: DockerNetwork[];
   scope?: DockerScope;
   error?: string;
+
+  /**
+   * How old this answer is, and whether it is still being refreshed.
+   *
+   * The overview is cached and the poll can queue behind a slow daemon, so
+   * without these the panel shows a snapshot of unknown age as if it were live
+   * — and a panel that goes quietly stale is worse than one that says
+   * "reintentando", because the first one you believe. `at` is the epoch
+   * millisecond the data was gathered, not the moment it was served.
+   */
+  at?: number;
+  /** live: just gathered · stale: served from cache · retrying: the daemon did
+   *  not answer in time and this is the last good answer · down: no data. */
+  freshness?: "live" | "stale" | "retrying" | "down";
+  /** How long the gather took, so a daemon that is merely slow can be told from
+   *  one that is gone. */
+  tookMs?: number;
 }
 export interface DockerActionResult { ok: boolean; error?: string; output?: string; }
 
@@ -2080,6 +2954,53 @@ export type PrBranchSummary = Pick<PrSummary,
   "number" | "title" | "author" | "state" | "isDraft" |
   "headRefName" | "baseRefName" | "url" | "updatedAt" | "reviewDecision">;
 
+/**
+ * One thing a PERSON said on a pull request, as the list can afford to know it.
+ *
+ * The conversation panel already answers "what has been said since I last
+ * looked", and it answers it from the full detail — one GraphQL walk per pull
+ * request, which is not something a board of twelve cards can do. So the list's
+ * own second pass carries the last few remarks per pull request, timestamps and
+ * authors only: enough for a card to say "two new", not enough to draw them.
+ *
+ * Bots are not here at all. On a live pull request the machines outnumber the
+ * people two to one — the same reason the conversation has a Humans filter — and
+ * a badge that lights up for a coverage report is a badge nobody reads.
+ */
+export interface PrTalk {
+  /** ISO 8601, as GitHub gave it. */
+  at: string;
+  who: string;
+  kind: "comment" | "review";
+  /** What a review decided. Absent on a plain conversation comment. */
+  state?: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  /**
+   * Line comments that arrived with this review.
+   *
+   * GitHub records a review for every batch of line comments, so a reply on one
+   * line is a `COMMENTED` review with an empty body — see `reviewSpeaks`. The
+   * count is how the board's number agrees with the conversation's: that panel
+   * counts each line comment, so a review carrying three of them is three
+   * things to read, not one.
+   */
+  lines?: number;
+  /**
+   * Whether the review itself says anything — a body, or a verdict other than
+   * "commented". False for a pure batch of line comments, whose remarks are
+   * counted by `lines` and would otherwise be counted twice.
+   */
+  says?: boolean;
+  /**
+   * Yours.
+   *
+   * Kept rather than dropped, because "since my own last word" is the mark a
+   * pull request has before this browser has ever opened it — the same fallback
+   * the conversation uses (`bootstrapSince`), and without your own remarks here
+   * the board could not work it out.
+   */
+  mine?: boolean;
+}
+
 export interface PrSummary {
   number: number;
   title: string;
@@ -2103,6 +3024,104 @@ export interface PrSummary {
    *  the same second pass as `checks` — until then it is empty, which reads as
    *  "not yet" rather than "nobody was asked". */
   reviewers?: PrReviewer[];
+  /**
+   * What a PERSON decided, which is not what `reviewDecision` says.
+   *
+   * GitHub counts any reviewer with write access, and on this machine that
+   * includes the auto-review bot: a pull request nobody has read comes back
+   * `reviewDecision: "APPROVED"` because `claude` approved it. The board drew
+   * that as a green tick beside a card whose only human had commented —
+   * reported straight away: "this one is approved by claude... by a bot... that
+   * doesn't count".
+   *
+   * Computed server-side from the reviews the list query ALREADY fetches
+   * (`SEL_TALK`), so it costs no request. Absent until the second pass lands,
+   * like `reviewers` and `checks` beside it.
+   */
+  /** Line threads still open on this pull request, from the same request as
+   *  the verdict. `more` when the count stopped at the first hundred. */
+  openThreads?: { open: number; more: boolean };
+  humanReview?: {
+    kind: "approved" | "changes" | "awaiting" | "commented";
+    /** Whose verdict it is — or, for `awaiting`, who is being waited on. */
+    who: string[];
+    /** When it was decided (the newest of the set), ISO. Absent for `awaiting`. */
+    at?: string;
+    /** The review comment itself, so a press can land on it rather than on the
+     *  conversation and a hunt through forty comments. */
+    url?: string;
+    /**
+     * Commits landed AFTER the verdict, so it no longer covers the code.
+     *
+     * GitHub says this on the pull request's own page ("N files have changed
+     * since your review") and the board did not, so an approval of something
+     * else read as a green light.
+     */
+    stale?: boolean;
+    /** The reader is one of them — said in the second person, because your own
+     *  name in the third person is a line you read twice. */
+    mine?: boolean;
+    /** How many people landed on the OTHER verdict. A pull request with one
+     *  approval and one rejection is not "changes requested" alone. */
+    others?: number;
+    /** They already spoke, and were asked to look again since — GitHub's ↻.
+     *  The verdict still blocks the merge exactly as GitHub shows it; this is
+     *  the other half of that same screen, that a re-request already went
+     *  out and the ball is with them again, not with the reader. */
+    askedAgain?: boolean;
+  } | null;
+  /**
+   * The tracker card this pull request came from, when we already know it.
+   *
+   * A pull request's own row said its card's ID and nothing else — not what
+   * state the work is in, not how urgent it is — while the tasks view three
+   * clicks away knew both. "it would be super mega ideal if the linked cards
+   * carried information about their current status".
+   *
+   * FROM THE CACHE ONLY, and that is what makes it affordable. `boardHolding`
+   * walks the saved boards this app already keeps on disk and matches on
+   * `customId`; measured on a real board, eleven of fourteen pull requests
+   * found their card there with no ClickUp request at all. The other three are
+   * simply absent — the field is optional and a missing card draws nothing,
+   * which is honest: "we have not seen it" is not "it has no status".
+   *
+   * A per-card lookup for the stragglers would be one request each on a list of
+   * four hundred rows, which is the cost this deliberately does not pay.
+   */
+  card?: {
+    id: string;
+    customId?: string;
+    title: string;
+    url?: string;
+    status: string;
+    statusColor?: string;
+    /** `done` when the card is in a closed state — for the pair that reads
+     *  wrong: a finished card under a pull request still open. */
+    statusKind?: "open" | "done" | "other";
+    priority: "urgent" | "high" | "normal" | "low" | null;
+    /**
+     * Who the card is on — ClickUp's own people, not GitHub logins.
+     *
+     * Drawn first with `<Avatar login={...}>`, which asks GitHub for a portrait
+     * of "Antonio García" and gets a blank circle back: a name on a tracker
+     * board is not a username on a forge. The tracker already hands over the
+     * photo, the initials and the colour it assigned each person, and the tasks
+     * view has drawn them that way all along.
+     */
+    people?: { id?: number; name: string; initials: string; color?: string; avatar?: string; me?: boolean }[];
+    /**
+     * WHEN THAT BOARD WAS LAST READ, in epoch ms.
+     *
+     * The cache is refreshed when somebody opens the tasks view, not on a
+     * timer, so a row can be hours old — and it showed a card as "in
+     * development, assigned to him" while ClickUp had it in "code review" on
+     * somebody else. A wrong status is not a smaller version of no status.
+     *
+     * Shipped rather than hidden: the reading is still useful, and the screen
+     * says how old it is instead of presenting it as current.
+     */
+    at?: number;
+  };
   checks: PrCheckRollup;
   /**
    * Whether GitHub can merge this without a human resolving something.
@@ -2134,6 +3153,16 @@ export interface PrSummary {
    *  a row that has not had its second pass must say "loading" rather than
    *  "no checks" — those are different claims. */
   checksLoaded?: boolean;
+  /**
+   * The last few human remarks, so a card can say how many are unread.
+   *
+   * Arrives on the second pass, off the same batched query as the checks.
+   * `undefined` means nobody has asked yet — which is not the same fact as an
+   * empty array, and a badge must not appear or disappear on the difference. See
+   * PrTalk, and `carryOver`, which holds the previous answer while the fast pass
+   * is on screen.
+   */
+  talk?: PrTalk[];
 }
 
 /** Why the merge button is grey. A disabled control that can't say why is the
@@ -2959,6 +3988,62 @@ export interface FindReport {
   via: string;
   error?: string;
 }
+/** A folder the machine search may be rooted at — see server/src/disk.ts.
+ *  `places` is a menu, `roots` is the boundary; the two are not the same list. */
+export interface DiskPlace { path: string; label: string }
+export interface DiskPlaces { ok: boolean; home: string; roots: string[]; places: DiskPlace[]; error?: string }
+
+/* --- browsing a place, and looking at a file ------------------------------
+ * Mirrors server/src/browse.ts, which is the authority. One pair of shapes for
+ * BOTH worlds the finder can see — the open checkout and the home folders —
+ * because the split between them was invisible to whoever was using it. */
+
+export type BrowseKind = "dir" | "file" | "link";
+
+export interface BrowseEntry {
+  name: string;
+  kind: BrowseKind;
+  /** Bytes for a file; null for a folder, which shows `items` instead. */
+  bytes: number | null;
+  items: number | null;
+  /** Epoch millis; rendered relative on the client, where the clock is. */
+  mtime: number;
+  hidden: boolean;
+}
+
+export interface BrowseReport {
+  ok: boolean;
+  path: string;
+  /** Null at the boundary, which is what stops `..` from walking out of it. */
+  parent: string | null;
+  entries: BrowseEntry[];
+  more: number;
+  /** How many entries the dotted-path rule left out — said rather than hidden. */
+  hiddenSkipped: number;
+  error?: string;
+}
+
+export type PreviewKind = "image" | "image-convert" | "text" | "pdf" | "video" | "audio" | "binary" | "dir";
+
+export interface FileFacts {
+  ok: boolean;
+  path: string;
+  name: string;
+  kind: PreviewKind;
+  mime: string;
+  bytes: number;
+  mtime: number;
+  /** Read from the file's own header — no decoder, no dependency. */
+  width?: number;
+  height?: number;
+  /** The head of a text file, so a preview needs no second call. */
+  text?: string;
+  textTruncated?: boolean;
+  /** For an image the browser cannot draw: the tool on this machine that
+   *  could convert it, or null when there is none. */
+  converter?: string | null;
+  error?: string;
+}
 export interface GrepHit { rel: string; line: number; text: string; at: number; len: number }
 export interface GrepReport { ok: boolean; hits: GrepHit[]; files: number; truncated: boolean; via: string; error?: string }
 
@@ -3069,6 +4154,31 @@ export interface AgentPane {
    *  agents may share — null when nothing ever reported one, which is every
    *  agent not started under a hook-wired CLI. */
   agentSession: string | null;
+  /**
+   * This pane is on the tmux server agentglass itself works on.
+   *
+   * A machine has several. `listPanes` walks the socket directory and answers
+   * for every server somebody is attached to, so a tmux the test suite left
+   * running — or another agent's — arrives beside the one you work in, and on
+   * the wire the two are indistinguishable: the socket is a filesystem path
+   * and the panes route strips it on purpose. Measured on a rig with two
+   * servers, one real and one a test's: both sessions came back `attached:
+   * true`, and both panes were `%0`, because pane ids are per SERVER.
+   *
+   * Names are no help either. Three servers on this machine each held a
+   * session called `agentglass-understudy`.
+   *
+   * So the server says which is its own, and says only that — a boolean
+   * carries the distinction without carrying the path. The phone drops the
+   * rest; the desk ignores it, since its terminal panel is on that server by
+   * construction.
+   *
+   * Optional because absent is a THIRD answer, the same way `attached` is: a
+   * server too old to say, whose panes the phone keeps rather than hides. It
+   * is also absent-meaning-unknown when this app has never attached anything
+   * and has no server of its own to compare against. Hence `=== false`.
+   */
+  own?: boolean;
 }
 
 /**
@@ -3350,4 +4460,98 @@ export interface ReviewRecipesResponse {
   ok: boolean;
   recipes?: ReviewRecipe[];
   error?: string;
+}
+
+/**
+ * One row of GitHub's notification inbox.
+ *
+ * Read through `gh api /notifications` — see server/src/ghinbox.ts. The id is
+ * the THREAD's, which is what every write takes and is not the pull request's
+ * number; `number` is the pull request or issue this is about, absent for a
+ * subject that has none (a release, a check suite).
+ */
+export interface InboxItem {
+  id: string;
+  unread: boolean;
+  /** GitHub's own word: mention, review_requested, author, subscribed… */
+  reason: string;
+  /** PullRequest, Issue, Release, Discussion, CheckSuite. */
+  type: string;
+  repo: string;
+  title: string;
+  at: number;
+  number?: number;
+}
+
+/**
+ * A plugin as the reviewer sees it. Mirrors server/src/plugins.ts'
+ * `PublicPlugin` — the running/pid pair is live process state, never
+ * persisted, so a restart with nothing running is the honest default rather
+ * than a stale "on".
+ */
+/** Where a plugin came from — mirrors `InstallSource` in
+ *  server/src/plugin-sources.ts. A marketplace install carries both the
+ *  catalogue it was found in and the plugin entry inside it. */
+export type InstallSource =
+  | { kind: "local-path"; path: string }
+  | { kind: "git"; url: string; ref: string | null }
+  | {
+      kind: "marketplace";
+      marketplace: { url: string; ref: string | null; resolvedCommit: string | null };
+      plugin: { url: string; ref: string | null };
+    };
+
+export interface PublicPlugin {
+  name: string;
+  publisher: string;
+  description: string;
+  entrypoint: string;
+  scope: DeviceScope;
+  source: InstallSource;
+  installDir: string;
+  manifestHash: string;
+  /** Hash of everything under `installDir` except `.git`. */
+  contentHash: string;
+  /** Folds the declared capability set and `contentHash` together — what
+   *  `enablePlugin` actually gates on. See `consentFingerprint`. */
+  fingerprint: string;
+  /** The commit a git/marketplace source resolved to, or `null` for a
+   *  local-path install. */
+  resolvedCommit: string | null;
+  /** The hash reviewed when a human last enabled this, or `null` if it has
+   *  never been reviewed. Differs from `manifestHash` exactly when the
+   *  install on disk asks for something the last approval did not cover. */
+  approvedHash: string | null;
+  approvedFingerprint: string | null;
+  enabled: boolean;
+  installedAt: number;
+  /** Has a human ever approved a version of this plugin, whether or not that
+   *  approval still holds. Distinguishes "never reviewed" from "an update
+   *  asked for something different since it was approved". */
+  hadApproval: boolean;
+  running: boolean;
+  pid: number | null;
+}
+
+export interface PluginsStatus {
+  master: boolean;
+  plugins: PublicPlugin[];
+}
+
+/** One entry in somebody else's catalogue. Mirrors `CataloguePlugin` in
+ *  server/src/plugin-catalogue.ts. */
+export interface CataloguePlugin {
+  id: string;
+  source: { kind: "git"; url: string; ref: string | null };
+  description: string;
+  categories: string[];
+}
+
+/** A fetched catalogue document. Mirrors `Catalogue` in
+ *  server/src/plugin-catalogue.ts — fetched fresh every browse, never cached
+ *  as something to trust between reads. */
+export interface Catalogue {
+  name: string;
+  owner: string;
+  plugins: CataloguePlugin[];
 }

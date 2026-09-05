@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
 import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "./lib/worktreeJump.ts";
 import type { SystemNote } from "./lib/sysNotify.ts";
 import { setAlertGoto } from "./lib/sysNotify.ts";
+import { setPaneJump } from "./lib/paneJump.ts";
 import { useStats } from "./lib/useStats.ts";
 import { deriveAgents, deriveAlerts, buildTitles, buildRollups, providersSeen } from "./lib/derive.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
@@ -19,10 +20,25 @@ import { FindBar } from "./components/FindBar.tsx";
 import { AlarmCard } from "./components/AlarmCard.tsx";
 import { currentScale } from "./lib/uiScale.ts";
 import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
+import { zoomTaken } from "./lib/zoomOwner.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
 import { useAlertSound } from "./lib/useSound.ts";
 import { TopBar } from "./components/TopBar.tsx";
-import { DashboardView } from "./components/DashboardView.tsx";
+/*
+ * The dashboard arrives in its own chunk.
+ *
+ * It is 520 KB of the main bundle and 1.32 MB of heap once parsed — charts, the
+ * timeline, the heatmap — for a view that is one of eight and not the one most
+ * sessions open on. Splitting it costs a fetch the first time somebody presses
+ * ⌘1 and saves that from every launch that never does.
+ *
+ * Be honest about the size of this: zero idle CPU and about 20 ms of launch. It
+ * is hygiene, not an answer to "the app got heavy". `LazyPanel` carries the half
+ * that could actually hurt — a chunk fetch that fails must not leave a view
+ * stuck on a loading state for ever.
+ */
+const DashboardView = lazy(() => import("./components/DashboardView.tsx").then((m) => ({ default: m.DashboardView })));
+import { LazyPanel } from "./components/LazyPanel.tsx";
 import { EventModal } from "./components/EventModal.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { HelpLegend } from "./components/HelpLegend.tsx";
@@ -33,8 +49,12 @@ import { VIEW_IDS, visibleIds, isVisibleView, moveView, loadRail, subscribeRail,
 import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
+import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
+import { FloatingBench } from "./components/bench/FloatingBench.tsx";
+import { toggleBench, showFile } from "./lib/benchStore.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
+import { clearPeek, peekRequest, subscribePeek } from "./lib/openPeek.ts";
 import { requestFilesReveal } from "./lib/filesReveal.ts";
 import { onOpenSettings, openSettings } from "./lib/openSettings.ts";
 import { runBootRecipes } from "./components/RecipesPane.tsx";
@@ -92,6 +112,16 @@ export default function App() {
    */
   const [filesOpen, setFilesOpen] = useState(false);
   const [peek, setPeek] = useState<Peek | null>(null);
+  /* Files opened from a view that is not this one — File changes, Source
+     control. They are modals over everything, so the request comes through a
+     slot rather than through props. See openPeek.ts. */
+  const peekAsk = useSyncExternalStore(subscribePeek, peekRequest, () => null);
+  useEffect(() => {
+    if (!peekAsk) return;
+    const { n: _n, ...rest } = peekAsk;
+    clearPeek();
+    setPeek(rest);
+  }, [peekAsk]);
   /* Opening a file from another branch has to fetch it first, and a click that
      answers nothing for a beat reads as a click that missed. Named for what is
      happening rather than a bare boolean: the note says which file. */
@@ -179,7 +209,7 @@ export default function App() {
   useEffect(() => onOpenPrs((j) => { setPrJump(j); goView("pr"); }), [goView]);
   /* The other half: a sender that knows exactly which pull request it means
      gets the panel's jump, which selects and opens, instead of a search. */
-  useEffect(() => onOpenPr(({ repo, number }) => { requestPrJump(repo, number); goView("pr"); }), [goView]);
+  useEffect(() => onOpenPr(({ repo, number, mention }) => { requestPrJump(repo, number, { mention }); goView("pr"); }), [goView]);
   useEffect(() => onOpenCard((j) => { setCardJump(j); goView("tasks"); }), [goView]);
   useEffect(() => onOpenIssue((j) => { setIssueJump(j); goView("tasks"); }), [goView]);
   /** Which machine tab is open, or none. One piece of state for both surfaces:
@@ -565,11 +595,16 @@ export default function App() {
    * pointing at the thing you want bigger.
    */
   const zoom = useCallback((dir: 1 | -1 | 0) => {
-    const r = zoomAtPointer(dir);
-    // `n` increments so holding the key reads as one adjustment rather than a
-    // stack of identical toasts — see ZoomToast.
-    setZoomed((cur) => ({ ...r, n: (cur?.n ?? 0) + 1 }));
-    if (r.what === "app") setScale(currentScale());
+    /* Awaited because zooming a PAGE is a round trip to that guest's DevTools
+       session — the terminal and the window still answer in the same tick. The
+       toast is raised when the real number comes back rather than before it,
+       so it never shows a percentage the page is not at. */
+    void zoomAtPointer(dir).then((r) => {
+      // `n` increments so holding the key reads as one adjustment rather than a
+      // stack of identical toasts — see ZoomToast.
+      setZoomed((cur) => ({ ...r, n: (cur?.n ?? 0) + 1 }));
+      if (r.what === "app") setScale(currentScale());
+    });
   }, []);
 
   /*
@@ -593,6 +628,10 @@ export default function App() {
     let last = 0;
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
+      /* Something on screen is a better answer to "zoom" than the window is — the
+         image viewer, while it is open. It is asked BEFORE preventDefault, or the
+         gesture would be swallowed here and never reach it. See zoomOwner. */
+      if (zoomTaken()) return;
       e.preventDefault();
       if (!e.deltaY) return;
       const now = Date.now();
@@ -666,18 +705,35 @@ export default function App() {
         // App actions after views, and rebindAppChord refuses a chord a view
         // already holds — so the two can never both answer, whichever order
         // this is read in.
-        if (appActionForChord(chord) === "files.palette") {
+        const action = appActionForChord(chord);
+        if (action === "files.palette") {
           e.preventDefault();
           setFilesOpen((o) => !o);
           return;
+        }
+        if (action === "bench.toggle") {
+          e.preventDefault();
+          toggleBench();
+          return;
+        }
+        if (action === "pane.git" || action === "pane.diff" || action === "pane.pr" || action === "pane.card") {
+          /* Only when there is one to open: with no terminal on screen, or a
+             pane whose branch has no pull request and no card, the key falls
+             through to whatever else wants it rather than being eaten by a view
+             that cannot answer. */
+          if (openFocusedPaneDoor(action.slice(5) as PaneDoor)) { e.preventDefault(); return; }
         }
       }
 
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
         const k = e.key;
-        if (k === "=" || k === "+") { e.preventDefault(); zoom(1); return; }
-        if (k === "-" || k === "_") { e.preventDefault(); zoom(-1); return; }
-        if (k === "0") { e.preventDefault(); zoom(0); return; }
+        /* Same question as the wheel above: with a screenshot open, ⌘= means the
+           screenshot. Asked before preventDefault so the keys reach whoever holds it. */
+        if (!zoomTaken()) {
+          if (k === "=" || k === "+") { e.preventDefault(); zoom(1); return; }
+          if (k === "-" || k === "_") { e.preventDefault(); zoom(-1); return; }
+          if (k === "0") { e.preventDefault(); zoom(0); return; }
+        }
 
         // Workspace navigation, and the reason it carries a modifier: these
         // have to work while the caret sits in the chat composer or a commit
@@ -942,6 +998,9 @@ export default function App() {
   // The notification and the bell row lead to the same place, because they are
   // the same news arriving twice.
   useEffect(() => { setAlertGoto(goFromNote); return () => setAlertGoto(null); }, [goFromNote]);
+  // The Crew board's rows go where a notification about that pane goes — the
+  // same resolver, registered once more under the name that surface knows.
+  useEffect(() => { setPaneJump((pane) => { void goFromNote({ kind: "pane", pane }); }); return () => setPaneJump(null); }, [goFromNote]);
 
   return (
     <div className="h-screen overflow-hidden flex flex-col relative">
@@ -980,12 +1039,21 @@ export default function App() {
         prJump={prJump}
         cardJump={cardJump}
         issueJump={issueJump}
-        view={wsView} onView={setWsView}
+        // goView, not the bare setter. Workspace uses this for every "open X"
+        // a panel offers — a chat seeded from Tasks, a review from a pull
+        // request, the Lantern's "Ask about the field" — and a bare
+        // setWsView("chat") on a rail where Chat is hidden is corrected by the
+        // effect above to the first visible view. Measured: with Chat hidden,
+        // "Ask about the field" landed on Git's Changes tab, and so would every
+        // other of those buttons. goView brings the hidden view back first,
+        // which is the only honest answer to "open it".
+        view={wsView} onView={goView}
         onSkills={() => setSkillsOpen(true)}
         onSettings={() => setSettingsOpen(true)}
         onMachine={setMachine}
         chatFocusId={chatFocus}
         dashboard={(active) => (
+          <LazyPanel label="The dashboard">
           <DashboardView
             active={active}
             events={events} visibleEvents={visibleEvents}
@@ -998,6 +1066,7 @@ export default function App() {
             onSelectEvent={setSelected}
             onSelectSession={setSessionView}
           />
+          </LazyPanel>
         )}
       />
 
@@ -1022,7 +1091,13 @@ export default function App() {
           has nothing to do with which view is open — that is the difference
           between an alarm and a panel's own banner, and the banner in Tasks was
           only ever seen by somebody already looking at Tasks. */}
-      <AlarmCard onOpenTasks={() => goView("tasks")} />
+      <AlarmCard onOpenTasks={() => goView("tasks")} onOpenDeputy={() => goView("understudy")} />
+
+      {/* The bench: a window and a loose button, over every view. Mounted at
+          the shell for the same reason the palette is — it is reached from a
+          chord, from a diff and from a pull request, and none of those is a
+          view it could live inside. */}
+      <FloatingBench />
 
       {/* Find a file from anywhere. Mounted at the shell rather than in a view
           so the chord reaches it from the dashboard, a terminal or a diff — and
@@ -1033,8 +1108,24 @@ export default function App() {
         docOpen={peek !== null}
         onHeight={setPaletteH}
         onOpenFile={async (root, rel, branch, ref) => {
-          // On this checkout: the file itself, in the editor, writable.
-          if (!ref) { setPeek({ root, path: `${root}/${rel}`, label: rel, edit: true, branch }); return; }
+          /*
+           * On this checkout, the division the bench exists for.
+           *
+           * Prose is READ — a spec, a status report, a note — and the viewer is
+           * where reading happens: rendered markdown, a reading width, find
+           * inside the document. Code is CHANGED, and that belongs on the
+           * bench, where the file stays open in a tmux session with your undo
+           * and your jumplist after you have been to the terminal and back.
+           *
+           * Both faces still reach the other: the viewer has a "To the bench"
+           * button, and a bench tab is one `:e` away from anything else.
+           */
+          if (!ref) {
+            const abs = `${root}/${rel}`;
+            if (isRenderable(rel)) { setPeek({ root, path: abs, label: rel, edit: true, branch }); return; }
+            showFile(root, abs, { title: rel.split("/").pop() });
+            return;
+          }
           // On another branch, and worth rendering — a document, read as one.
           if (isRenderable(rel)) { setPeek({ root, path: `${root}/${rel}`, label: rel, edit: false, branch, ref }); return; }
           /*
