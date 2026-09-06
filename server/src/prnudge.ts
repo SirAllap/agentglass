@@ -11,8 +11,7 @@
  * outbound channel this app has, and a nudge is one more line down it.
  */
 import type { PrDetail } from "../../shared/types.ts";
-
-const WEBHOOK = process.env.AGENTGLASS_WEBHOOK;
+import { webhookDestination } from "./egress.ts";
 
 export function nudgeText(d: Pick<PrDetail, "number" | "title" | "url" | "humanReview" | "reviewers" | "isDraft">): string {
   const v = d.humanReview;
@@ -26,12 +25,15 @@ export function nudgeText(d: Pick<PrDetail, "number" | "title" | "url" | "humanR
   return `${at}PR #${d.number} "${d.title}" ${ask}\n${d.url}`;
 }
 
-export function nudgeChannel(): { configured: boolean } { return { configured: !!WEBHOOK }; }
+export function nudgeChannel(): { configured: boolean } {
+  return { configured: webhookDestination().configured };
+}
 
 export async function sendNudge(text: string): Promise<{ sent: boolean; error?: string }> {
-  if (!WEBHOOK) return { sent: false, error: "no channel: set AGENTGLASS_WEBHOOK to a Slack- or Discord-compatible webhook" };
+  const channel = webhookDestination();
+  if (!channel.configured) return { sent: false, error: channel.error };
   try {
-    const r = await fetch(WEBHOOK, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+    const r = await fetch(channel.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
     return r.ok ? { sent: true } : { sent: false, error: `the channel said ${r.status}` };
   } catch (e) {
     return { sent: false, error: String((e as Error)?.message ?? e).slice(0, 200) };

@@ -12,6 +12,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { WalkthroughResult, WalkthroughInputFile } from "../../shared/types.ts";
 import { stripSecrets } from "../../shared/scrub.ts";
+import { outboundDestination } from "./egress.ts";
 
 // Haiku by default: the task is a one-liner per file, so a small fast model is
 // plenty and keeps latency + token cost low. Override with the env var to trade
@@ -30,8 +31,32 @@ const CLI_TIMEOUT_MS = 120_000;
 const claudeBin = () => Bun.which("claude");
 const hasApiKey = () => !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 
-/** Enabled if either the local Claude Code CLI is on PATH or an API key is set. */
-export const WALKTHROUGH_ENABLED = !!claudeBin() || hasApiKey();
+/** The explicit kill switch wins over provider discovery. */
+export function walkthroughEnabled(
+  env: Record<string, string | undefined> = process.env,
+  localClaude: string | null = claudeBin(),
+): boolean {
+  return env.AGENTGLASS_WALKTHROUGH_DISABLED !== "1"
+    && (!!localClaude || !!(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN));
+}
+
+/** Enabled if a provider exists and the feature has not been disabled. */
+export const WALKTHROUGH_ENABLED = walkthroughEnabled();
+
+/**
+ * Keep the SDK's normal Anthropic endpoint unless a validated override exists.
+ * Passing the checked value into the constructor prevents a later implicit
+ * environment lookup from bypassing this boundary.
+ */
+export function anthropicClientOptions(
+  env: Record<string, string | undefined> = process.env,
+): { baseURL?: string } {
+  const raw = env.ANTHROPIC_BASE_URL;
+  if (!raw) return {};
+  const destination = outboundDestination(raw, "ANTHROPIC_BASE_URL", ["api.anthropic.com"], env);
+  if (!destination.ok) throw new Error(destination.error);
+  return { baseURL: destination.url };
+}
 
 const SYSTEM = [
   "You review bursts of file changes made by AI coding agents in a repository.",
@@ -209,7 +234,7 @@ async function viaClaudeCli(sent: SentFile[]): Promise<WalkthroughResult> {
 
 /** Fallback path: Anthropic SDK with structured outputs (needs an API key). */
 async function viaApi(sent: SentFile[]): Promise<WalkthroughResult> {
-  const client = new Anthropic();
+  const client = new Anthropic(anthropicClientOptions());
   const res = await client.messages.create({
     model: MODEL,
     max_tokens: 16000,
@@ -228,7 +253,9 @@ export async function generateWalkthrough(files: WalkthroughInputFile[]): Promis
       available: false,
       reviewFocus: "",
       files: [],
-      error: "no local `claude` CLI and no ANTHROPIC_API_KEY — install Claude Code or set a key to enable walkthroughs",
+      error: process.env.AGENTGLASS_WALKTHROUGH_DISABLED === "1"
+        ? "walkthroughs are disabled by AGENTGLASS_WALKTHROUGH_DISABLED=1"
+        : "no local `claude` CLI and no ANTHROPIC_API_KEY — install Claude Code or set a key to enable walkthroughs",
     };
   }
   // Filtered once, before either path can see it: the two transports are
