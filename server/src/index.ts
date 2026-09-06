@@ -5,6 +5,7 @@ import type { ServerWebSocket } from "bun";
 import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
+import { pricingProvenance, startPricingRefresh } from "./pricing.ts";
 import { db } from "./db.ts";
 import {
   insertEvent,
@@ -7320,6 +7321,7 @@ const server = Bun.serve<WsData>({
         ),
         server_started_at: STARTED_AT,
         retention_days: RETENTION_DAYS,
+        pricing: pricingProvenance(),
       });
     }
     /*
@@ -8129,6 +8131,7 @@ console.log(`   POST events → http://localhost:${server.port}/ingest`);
 console.log(`   WebSocket   → ws://localhost:${server.port}/stream`);
 console.log(`   Stats API   → http://localhost:${server.port}/stats`);
 console.log(`   Retention   → ${RETENTION_DAYS ? `${RETENTION_DAYS} days` : "unlimited"}`);
+startPricingRefresh();
 const ws = workspaceRoot();
 console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().

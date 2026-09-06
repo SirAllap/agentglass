@@ -299,9 +299,14 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                     initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
                     className="flex items-center justify-between mb-4 px-1"
                   >
-                    <div className="flex items-baseline gap-2.5">
+                    <div className="flex flex-wrap items-baseline gap-2.5">
                       <span className="text-[17px] font-semibold" style={{ color: "var(--text)" }}>Statistics</span>
                       <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 45%, transparent)" }}>{windowLabel(windowMs)}</span>
+                      {stats?.pricing && (
+                        <span className="text-[10px] t-dim2">
+                          prices: {stats.pricing.source}{stats.pricing.provider ? ` · ${stats.pricing.provider}` : ""} · updated {stats.pricing.updated_at}
+                        </span>
+                      )}
                     </div>
                     <CloseButton onClick={onClose} hit={32} className="rounded-full" style={{ background: "color-mix(in srgb, white 8%, transparent)", backdropFilter: "blur(10px)", border: "1px solid color-mix(in srgb, white 12%, transparent)" }} />
                   </motion.div>

@@ -114,6 +114,7 @@ are:
 | `AGENTGLASS_SCAN_DISABLED` | — | `1` → turn off the machine-wide transcript scanner (rely on hooks / OTel only). |
 | `AGENTGLASS_RETENTION_DAYS` | `8` | Days of **raw events** to keep (pruned hourly, with resolved gates and answered reminders). Covers the full 7d stats window. Expiring days are folded into a daily rollup first, so spend history outlives the rows. `0` = keep events for ever, and also keep the Clone's shifts, acts and runs for ever. It does **not** move the Clone's and Lantern's own windows (30 and 90 days, fixed) — see SECURITY.md, *What agentglass stores*. |
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
+| `AGENTGLASS_PRICING_REFRESH` | — | `1` (or `true`/`yes`/`on`) → refresh exact model prices from LiteLLM at boot and daily. The bundled table remains the offline fallback; `AGENTGLASS_PRICING` disables the refresh and stays authoritative. |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` here (a Slack/Discord-shaped incoming webhook) for alerts, Lantern watch notices and PR nudges sent with `send: true`. Loopback and the two hosts it exists for (`hooks.slack.com`, `discord.com`) work directly; any other destination requires `AGENTGLASS_ALLOW_REMOTE=1`. The host it resolved to is logged once at boot — the host, never the path, which is where a webhook URL keeps its credential. What travels is the notification's title and body — agent names, a checkout's base name, a PR's number, title, URL and reviewer logins — never a transcript, a diff or a token. Blanked out of every Clone run. |
 | `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. Does **not** gate the phone, which hears every alert on the socket it already holds and decides for itself — see [Alerts on the phone](WORKSPACE.md#alerts-on-the-phone-and-what-they-honestly-cover). |
 | `AGENTGLASS_SERVER` | `http://127.0.0.1:4000` | Used by the hook/seed scripts. Refused unless it points at this machine — see the next row. A `localhost` value is accepted and rewritten to `127.0.0.1` before connecting: the server binds IPv4-only, so on a host that resolves `localhost` to `::1` first, every event pays a refused connect before falling back. |
@@ -179,9 +180,10 @@ matter for a desktop-launched app, which inherits no shell environment and so
 cannot be configured by `export` at all.
 
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
-> tokens and matched against `model_name` by substring. Anthropic (Claude) rates
-> are verified; other providers are marked *approx* — verify current rates and
-> tune, or point `AGENTGLASS_PRICING` at your own JSON.
+> tokens and matched against `model_name` by substring. Set
+> `AGENTGLASS_PRICING_REFRESH=1` to prefer validated exact-model rates from
+> LiteLLM, with the bundled table retained for offline and unmatched models.
+> `AGENTGLASS_PRICING` remains the final authority when you supply one.
 
 ### Every other `AGENTGLASS_*` the code reads
 
