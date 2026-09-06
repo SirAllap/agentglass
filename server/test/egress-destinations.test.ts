@@ -88,3 +88,61 @@ describe("walkthrough kill switch", () => {
     expect(walkthroughEnabled({}, null)).toBe(false);
   });
 });
+
+/*
+ * AGENTGLASS_WEBHOOK is documented as "a Slack- or Discord-shaped incoming
+ * webhook", so gating exactly those two hosts behind AGENTGLASS_ALLOW_REMOTE
+ * would gate the feature on its own purpose — every existing install would go
+ * quiet on upgrade, with a line on stderr as the only explanation.
+ *
+ * The line drawn instead is by payload: the webhook carries notification text
+ * to a channel somebody pasted a URL for, while ANTHROPIC_BASE_URL carries
+ * repository code. So the two service hosts are trusted here and nowhere else.
+ */
+describe("the hosts the webhook exists for", () => {
+  const webhook = (url: string, allow?: string) => webhookDestination(
+    allow ? { AGENTGLASS_WEBHOOK: url, AGENTGLASS_ALLOW_REMOTE: allow } : { AGENTGLASS_WEBHOOK: url },
+  );
+
+  test("Slack and Discord need no opt-in", () => {
+    for (const url of [
+      "https://hooks.slack.com/services/T000/B000/xxxx",
+      "https://discord.com/api/webhooks/1/xxxx",
+      "https://discordapp.com/api/webhooks/1/xxxx",
+    ]) {
+      expect(webhook(url).configured, url).toBe(true);
+    }
+  });
+
+  test("anything else still does", () => {
+    expect(webhook("https://hooks.example.test/x").configured).toBe(false);
+    expect(webhook("https://hooks.example.test/x", "1").configured).toBe(true);
+    // A host that merely ends in a trusted name is not that host.
+    expect(webhook("https://hooks.slack.com.evil.test/x").configured).toBe(false);
+  });
+
+  test("the trusted list does not leak into the walkthrough's destination", () => {
+    // Different payload, different rule: repository code goes to Anthropic or
+    // nowhere, whatever the webhook is allowed to reach.
+    expect(outboundDestination(
+      "https://hooks.slack.com/services/T000/B000/xxxx",
+      "ANTHROPIC_BASE_URL",
+      ["api.anthropic.com"],
+      {},
+    ).ok).toBe(false);
+  });
+});
+
+describe("what counts as this machine", () => {
+  test("the whole loopback range, not just 127.0.0.1", () => {
+    // A server bound to 127.0.0.2 is as local as one on 127.0.0.1, and a guard
+    // that disagrees with the OS about that refuses a working local setup.
+    for (const host of ["127.0.0.1", "127.0.0.2", "127.1.2.3"]) {
+      expect(outboundDestination(`http://${host}:4000/hook`, "TEST_URL", [], {}).ok, host).toBe(true);
+    }
+    // Neighbouring addresses that only look loopback are still remote.
+    for (const host of ["127.0.0.1.evil.test", "128.0.0.1", "10.0.0.1"]) {
+      expect(outboundDestination(`http://${host}:4000/hook`, "TEST_URL", [], {}).ok, host).toBe(false);
+    }
+  });
+});
