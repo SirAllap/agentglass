@@ -794,7 +794,7 @@ export interface SearchHit {
 export interface Insight {
   id: string;
   severity: "info" | "warn" | "bad";
-  kind: "loop" | "spend" | "errors" | "burn";
+  kind: "loop" | "spend" | "errors" | "burn" | "cache";
   title: string;
   detail: string;
   session: string | null; // "source_app:session8"
