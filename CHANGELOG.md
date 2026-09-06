@@ -19,6 +19,8 @@ Where this is going — themes, not dates. The living version is the issue track
 - Per-project gate policies and hook profiles — [#14](https://github.com/SirAllap/agentglass/issues/14)
 - Keep model prices fresh without hand-editing the table — [#9](https://github.com/SirAllap/agentglass/issues/9)
 
+The optional LiteLLM price refresh now updates exact model rates at boot and daily, keeps bundled offline fallback, preserves user overrides, and reports its provenance in Statistics.
+
 **Later / exploring**
 - An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
 - Tasks per project, and a decision log mined from transcripts — [#12](https://github.com/SirAllap/agentglass/issues/12), [#13](https://github.com/SirAllap/agentglass/issues/13)
