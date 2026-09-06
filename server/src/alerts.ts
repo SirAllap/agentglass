@@ -19,9 +19,17 @@
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 import { paneForSession, paneAgentNote } from "./panewt.ts";
 import { listPanes } from "./tmuxctl.ts";
+import { webhookDestination } from "./egress.ts";
 
-const WEBHOOK = process.env.AGENTGLASS_WEBHOOK;
+const WEBHOOK = webhookDestination();
 const DESKTOP = process.env.AGENTGLASS_NOTIFY === "1";
+
+// A configured channel is visible at boot without ever printing its path,
+// which commonly contains the webhook credential itself.
+if (process.env.AGENTGLASS_WEBHOOK) {
+  if (WEBHOOK.configured) console.info(`[alerts] webhook destination: ${WEBHOOK.host}`);
+  else console.warn(`[alerts] webhook disabled: ${WEBHOOK.error}`);
+}
 
 // A connected client can raise a NATIVE OS notification, which Electron routes
 // to macOS and Windows too — the cross-platform replacement for notify-send,
@@ -116,9 +124,9 @@ async function deliver(
    *  frame so the app can raise an alarm rather than another row. */
   extra?: { kind: "reminder"; id: string } | { kind: "understudy" },
 ) {
-  if (WEBHOOK && !IS_TEST) {
+  if (WEBHOOK.configured && !IS_TEST) {
     try {
-      await fetch(WEBHOOK, {
+      await fetch(WEBHOOK.url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: `*${title}*\n${body}` }),
