@@ -9,7 +9,7 @@ import { floorTiers } from "./contrast.ts";
 // Grouping into dark/light is by --bg luminance (see ThemeSwitcher), so a new
 // entry needs no flag — just put a dark bg in the dark run and a light one below.
 
-import { SERVER, authHeaders, IS_DESKTOP, whenServerUp } from "./api.ts";
+import { SERVER, authHeaders, whenServerUp } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
 import { applyAccent } from "./accent.ts";
 import { BASE, cssVars } from "../../../shared/palettes.ts";
@@ -151,6 +151,11 @@ export function pickTheme(id: string) {
 }
 
 function syncTheme(t: Theme) {
+  // Browser harnesses exercise real picker paths, so keeping page-load sync out
+  // of main.tsx is necessary but not sufficient. WebDriver is the browser's
+  // explicit automation signal; honour it before opening the machine-wide
+  // boundary so a smoke run cannot repaint tmux or nvim.
+  if (navigator.webdriver) return;
   // authHeaders, not a bare content-type: `/theme/sync` sits behind the same
   // token gate as every other route, so a token-protected server (any box with
   // remote access on) answered 401 and dropped the sync on the floor. Without
@@ -215,7 +220,9 @@ export function watchSystemTheme(): void {
   try {
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
       if (themeMode() !== "system") return;
-      applyTheme(systemIsDark() ? SERIOUS_DARK : SERIOUS_LIGHT, { sync: IS_DESKTOP });
+      // An OS event is not a fresh request to repaint processes outside this
+      // document. The next explicit picker choice may sync the resolved theme.
+      applyTheme(systemIsDark() ? SERIOUS_DARK : SERIOUS_LIGHT);
     });
   } catch { /* no matchMedia (headless) */ }
 }

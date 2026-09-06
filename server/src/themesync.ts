@@ -24,6 +24,7 @@ import { liveNvimSockets } from "./editor.ts";
 // One rule for "may a tmux command reach this socket", not a second copy of it
 // here. tmuxctl.ts does not import this file, so the edge is one-way.
 import { tmuxSocketAllowed, tmuxSocketConfined } from "./tmuxctl.ts";
+import { resolveTmuxBin, tmuxSocket } from "./tmuxbin.ts";
 
 /*
  * Resolved per call, not once at import.
@@ -536,6 +537,11 @@ setw -g copy-mode-current-match-style "bg=${v.primary},fg=${v.bg}"
 
 export type SyncResult = { ok: boolean; wrote: string[]; reloaded: string[]; error?: string };
 
+/** The only live tmux server a theme pick may repaint. */
+export function themeTmuxTarget(): string[] {
+  return ["-L", tmuxSocket()];
+}
+
 /**
  * Write both files and nudge whatever is running to pick them up.
  *
@@ -593,14 +599,15 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
    *                         above are therefore blind. TMUX_TMPDIR is the only
    *                         signal that survives that spawn.
    *
-   * A bare `tmux`, so it goes wherever a bare `tmux` goes — the socket `$TMUX`
-   * names, or /tmp/tmux-<uid>/default. Until today the only thing stopping it
-   * was that these suites point XDG_CONFIG_HOME at a scratch directory, making
-   * `existsSync(TMUX_THEME)` false a few lines up: a coincidence, not a guard,
-   * and one that ends the moment a suite themes something for its own reasons.
+   * The target is explicit: AgentGlass's named engine socket. A bare tmux
+   * command follows `$TMUX` or the default socket and repaints the user's own
+   * sessions. It also bypasses the engine's binary resolver, which can select a
+   * client compatible with the server already running on this named socket.
    */
-  if (!isTest() && tmuxSocketAllowed([]) && tmuxSocketConfined([])) try {
-    const p = Bun.spawn(["tmux", "source-file", TMUX_THEME], { stdout: "ignore", stderr: "ignore" });
+  const tmuxTarget = themeTmuxTarget();
+  const tmuxBin = resolveTmuxBin();
+  if (tmuxBin && !isTest() && tmuxSocketAllowed(tmuxTarget) && tmuxSocketConfined(tmuxTarget)) try {
+    const p = Bun.spawn([tmuxBin, ...tmuxTarget, "source-file", TMUX_THEME], { stdout: "ignore", stderr: "ignore" });
     const t = setTimeout(() => { try { p.kill(); } catch { /* gone */ } }, 2000);
     if ((await p.exited) === 0) reloaded.push("tmux");
     clearTimeout(t);
