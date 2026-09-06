@@ -23,7 +23,7 @@ import { join, dirname } from "node:path";
 import { liveNvimSockets } from "./editor.ts";
 // One rule for "may a tmux command reach this socket", not a second copy of it
 // here. tmuxctl.ts does not import this file, so the edge is one-way.
-import { tmuxSocketAllowed, tmuxSocketConfined } from "./tmuxctl.ts";
+import { socketPath, tmuxSocketAllowed, tmuxSocketConfined } from "./tmuxctl.ts";
 import { resolveTmuxBin, tmuxSocket } from "./tmuxbin.ts";
 
 /*
@@ -542,6 +542,43 @@ export function themeTmuxTarget(): string[] {
   return ["-L", tmuxSocket()];
 }
 
+/** Is this socket the engine's own — the one furniture this app draws lives on? */
+export function themeEngineSocket(socket: string[]): boolean {
+  return socketPath(socket) === socketPath(themeTmuxTarget());
+}
+
+/**
+ * May a repaint reach this tmux server without anybody asking for it?
+ *
+ * The engine's socket, always: those panes are drawn by this app. Any other
+ * server is the user's, and the answer is whatever they already told us by
+ * pasting `SNIPPETS.tmux` into their own config — an opt-in they wrote, that we
+ * only ever read.
+ */
+export function themeRepaintAllowed(socket: string[]): boolean {
+  return themeEngineSocket(socket) || snippetStatus().tmux;
+}
+
+/**
+ * Does this request come from a browser that nobody is sitting at?
+ *
+ * The browser-side check in `web/src/lib/themes.ts` reads `navigator.webdriver`,
+ * which WebDriver sets and a plain CDP attach does not — and every harness in
+ * `scripts/` is a plain CDP attach: measured, `navigator.webdriver === false`
+ * for a Chrome launched `--headless=new --remote-debugging-port=…`. The same
+ * browser announces itself in the one field it cannot hide from us:
+ *
+ *   Mozilla/5.0 (X11; Linux x86_64) … HeadlessChrome/141.0.0.0 Safari/537.36
+ *
+ * So this is the fence #455 asked for, on the server, beside the `NODE_ENV=test`
+ * one — the client-side check stays as the cheaper first line. A real browser
+ * driven by a person never carries these tokens; a harness would have to forge
+ * a User-Agent to get past it, which is no longer an accident.
+ */
+export function automatedThemeClient(userAgent: string | null | undefined): boolean {
+  return /headless|phantomjs|puppeteer|playwright|selenium|webdriver/i.test(userAgent ?? "");
+}
+
 /**
  * Write both files and nudge whatever is running to pick them up.
  *
@@ -672,17 +709,33 @@ export function tmuxConfPath(): string {
 /**
  * Push the generated theme into one specific tmux server.
  *
- * `syncTheme` already does this on the default socket when the palette changes,
- * which covers "the user picked a new theme". It does not cover the other
- * direction: a tmux *server* that started after the last sync — a reboot, a
- * `kill-server`, or a tmux-continuum restore — comes up with none of it, and
- * everything the panel does not draw itself (the message row, the prompt, the
- * pane borders) falls back to whatever tmux ships with. That is a black bar in
- * the middle of a themed panel, and nothing in the app explains why.
+ * `syncTheme` repaints the engine's own socket when the palette changes, which
+ * covers "the user picked a new theme" for the panes this app draws. It does
+ * not cover the other direction: a tmux *server* that started after the last
+ * sync — a reboot, a `kill-server`, or a tmux-continuum restore — comes up with
+ * none of it, and everything the panel does not draw itself (the message row,
+ * the prompt, the pane borders) falls back to whatever tmux ships with. That is
+ * a black bar in the middle of a themed panel, and nothing in the app explains
+ * why.
  *
  * Sourcing our own generated file is the same act the theme switch already
  * performs, at the moment it is actually needed, and `-q` makes it silent when
  * the file is not there yet.
+ *
+ * WHOSE server, though, is the question #455 was really about. The panel calls
+ * this from `followSession` (`terminal.ts`) every time it follows a session,
+ * and the socket it passes comes from `socketOf()` off a real client's argv —
+ * `[]` for the ordinary spellings, which is the user's own server. Repainting
+ * the engine's socket is this app dressing its own furniture; repainting the
+ * user's server is the white-out they filed, and it is worse after the sync
+ * boundary moved, because the file on disk is no longer kept current for that
+ * socket: what lands is the palette last written, not the one on screen.
+ *
+ * So the user's own server is opt-in, and the opt-in already exists and is
+ * theirs to give: the `source-file` line in SNIPPETS, pasted into their own
+ * tmux.conf. `snippetStatus().tmux` reads it, never writes it. With the
+ * snippet, this file is what their config asked for and a repaint is what they
+ * signed up for; without it, we stay inside the engine's socket.
  */
 export function applyThemeTo(socket: string[]): boolean {
   const TMUX_THEME = tmuxThemePath();
@@ -705,6 +758,7 @@ export function applyThemeTo(socket: string[]): boolean {
    * then covers the child that cannot see NODE_ENV at all — see its note.
    */
   if (isTest() || !tmuxSocketAllowed(socket) || !tmuxSocketConfined(socket)) return false;
+  if (!themeRepaintAllowed(socket)) return false;
   if (!existsSync(TMUX_THEME)) return false;
   try {
     const p = Bun.spawnSync(["tmux", ...socket, "source-file", "-q", TMUX_THEME], {

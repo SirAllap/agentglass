@@ -137,6 +137,80 @@ describe("syncTheme never edits the user's own config", () => {
     }
   });
 
+  /*
+   * #455, the route #564 did not close: `followSession` in terminal.ts calls
+   * applyThemeTo on whatever socket the panel is following, which for the
+   * ordinary `tmux attach` spellings is the user's own server — no pick, no
+   * gesture, and after the sync boundary moved, a palette that is no longer
+   * kept current for that socket. The engine's own socket stays automatic;
+   * the user's server waits for the opt-in they write themselves.
+   */
+  describe("an unasked repaint stays inside the engine's socket", () => {
+    const xdgTmux = join(config, "tmux", "tmux.conf");
+    const withConf = (body: string | null, run: () => void) => {
+      const saved = existsSync(xdgTmux) ? readFileSync(xdgTmux, "utf8") : null;
+      try {
+        if (body === null) { mkdirSync(join(config, "tmux"), { recursive: true }); writeFileSync(xdgTmux, "# nothing of ours\n"); }
+        else { mkdirSync(join(config, "tmux"), { recursive: true }); writeFileSync(xdgTmux, body); }
+        run();
+      } finally {
+        if (saved === null) writeFileSync(xdgTmux, "# nothing of ours\n"); else writeFileSync(xdgTmux, saved);
+      }
+    };
+
+    test("the engine's own socket is repainted with no opt-in at all", () => {
+      withConf(null, () => {
+        expect(ts.themeEngineSocket(ts.themeTmuxTarget())).toBe(true);
+        expect(ts.themeRepaintAllowed(ts.themeTmuxTarget())).toBe(true);
+      });
+    });
+
+    test("the user's own server is not — a bare socket is exactly what terminal.ts passes", () => {
+      withConf(null, () => {
+        expect(ts.themeEngineSocket([])).toBe(false);
+        expect(ts.themeRepaintAllowed([])).toBe(false);
+        expect(ts.themeRepaintAllowed(["-L", "someone-elses"])).toBe(false);
+      });
+    });
+
+    test("and is, once they have pasted the snippet into their own config", () => {
+      withConf(`set -g mouse on\n${ts.SNIPPETS.tmux}\n`, () => {
+        expect(ts.themeRepaintAllowed([])).toBe(true);
+      });
+    });
+  });
+
+  /*
+   * The browser-side fence in web/src/lib/themes.ts reads navigator.webdriver,
+   * which a plain CDP attach leaves false — measured on a Chrome launched the
+   * way every script in scripts/ launches it. The User-Agent it sends is the
+   * part it cannot keep to itself, and #455 asked for the refusal to live here,
+   * on the server, beside the NODE_ENV=test one.
+   */
+  describe("an automated browser is refused server-side", () => {
+    const HEADLESS = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/141.0.0.0 Safari/537.36";
+    const CHROME = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
+    test("headless Chrome — the exact User-Agent our own harnesses send", () => {
+      expect(ts.automatedThemeClient(HEADLESS)).toBe(true);
+    });
+
+    test("the other automation stacks that announce themselves", () => {
+      for (const ua of ["Playwright/1.4", "python-selenium/4", "WebDriver", "PhantomJS/2.1", "puppeteer"]) {
+        expect(ts.automatedThemeClient(ua)).toBe(true);
+      }
+    });
+
+    test("a browser someone is sitting at is not refused", () => {
+      expect(ts.automatedThemeClient(CHROME)).toBe(false);
+      expect(ts.automatedThemeClient("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605.1.15")).toBe(false);
+      // Absent is not automated: a phone or a CLI may send nothing, and the
+      // route is already behind the token and the origin gate.
+      expect(ts.automatedThemeClient(null)).toBe(false);
+      expect(ts.automatedThemeClient("")).toBe(false);
+    });
+  });
+
   test("snippetStatus reports opt-in state read-only, without editing anything", () => {
     // os.homedir() ignores $HOME on POSIX, so tmuxConfPath() resolves against the
     // real home — which is exactly why the guarantee matters: snippetStatus only
