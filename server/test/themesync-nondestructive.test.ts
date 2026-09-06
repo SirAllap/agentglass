@@ -126,6 +126,17 @@ describe("syncTheme never edits the user's own config", () => {
     expect(ts.applyThemeTo([])).toBe(false);
   });
 
+  test("live reload targets the AgentGlass engine socket, never the default socket", () => {
+    const saved = process.env.AGENTGLASS_TMUX_SOCKET;
+    process.env.AGENTGLASS_TMUX_SOCKET = "agx-theme-test";
+    try {
+      expect(ts.themeTmuxTarget()).toEqual(["-L", "agx-theme-test"]);
+    } finally {
+      if (saved === undefined) delete process.env.AGENTGLASS_TMUX_SOCKET;
+      else process.env.AGENTGLASS_TMUX_SOCKET = saved;
+    }
+  });
+
   test("snippetStatus reports opt-in state read-only, without editing anything", () => {
     // os.homedir() ignores $HOME on POSIX, so tmuxConfPath() resolves against the
     // real home — which is exactly why the guarantee matters: snippetStatus only
