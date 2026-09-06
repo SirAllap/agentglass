@@ -24,6 +24,9 @@ Where this is going — themes, not dates. The living version is the issue track
 - Tasks per project, and a decision log mined from transcripts — [#12](https://github.com/SirAllap/agentglass/issues/12), [#13](https://github.com/SirAllap/agentglass/issues/13)
 - Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
 
+**Built since v0.15.0**
+- Cache rebuild insights identify a large prompt cache recreated after expiry, keep model and main/subagent lineages separate, and price only the cache-write premium over a cache read — [#293](https://github.com/SirAllap/agentglass/issues/293)
+
 
 ## Released
 
