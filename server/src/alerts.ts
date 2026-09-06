@@ -21,6 +21,11 @@ import { paneForSession, paneAgentNote } from "./panewt.ts";
 import { listPanes } from "./tmuxctl.ts";
 import { webhookDestination } from "./egress.ts";
 
+// Resolved once, here, because the boot line below reports it and a boot line
+// that describes a destination the process is no longer using would be worse
+// than none. `prnudge.ts` re-reads per call instead: a nudge is a person
+// pressing a button, and the answer it gives them ("no channel", "that host
+// needs AGENTGLASS_ALLOW_REMOTE=1") should describe the environment now.
 const WEBHOOK = webhookDestination();
 const DESKTOP = process.env.AGENTGLASS_NOTIFY === "1";
 
