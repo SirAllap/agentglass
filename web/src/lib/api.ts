@@ -1184,7 +1184,6 @@ const realApi = {
     post<{ ok: boolean; ticket?: string; cwd?: string; needs?: number; error?: string }>("/lantern/ticket", { cwd }),
   /** What each tmux window is being used for, by window id — the label under
    *  the strip's stable `AI0N` names. */
-  tabHints: () => get<{ ok: boolean; hints?: Record<string, string> }>("/terminal/tab-hints"),
   clickupViews: () => get<ClickUpBoards>("/clickup/views"),
   /** Which card a mirrored ClickUp desktop notification is about, by its title.
    *  Answered from the watcher's own file, so it costs no ClickUp call. */
@@ -2283,7 +2282,6 @@ const demoApi: typeof realApi = {
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),
-  tabHints: () => D({ ok: true, hints: {} }),
   clickupViews: () => D({ views: [], connected: false, writeEnabled: false }),
   clickupCardForNote: () => D({ card: null }),
   clickupFileNote: () => D({ ok: false }),
