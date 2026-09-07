@@ -1,41 +1,36 @@
 /*
- * tmux and nvim kept a days-stale palette: the theme was broadcast only on a
- * deliberate switcher click (pickTheme → sync), never when the cockpit restored
- * the saved theme on boot. So the machine's terminals stayed on whatever was
- * last clicked while the app itself moved on.
- *
- * These guard the boot re-sync, and — the part that matters for safety — that it
- * fires only from the desktop shell. A phone or a paired browser reaches the
- * same server; neither may repaint the host's terminals just by loading.
+ * Theme output reaches processes outside the browser. Restoring a saved value,
+ * following an OS change, or loading the app in a harness is not consent to
+ * repaint those processes; only a fresh picker action crosses that boundary.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const src = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
 
-describe("the cockpit re-syncs the theme on boot", () => {
+describe("passive theme changes stay in the browser", () => {
   const main = src("../src/main.tsx");
+  const themes = src("../src/lib/themes.ts");
 
-  test("boot applies the saved theme WITH sync, not silently", () => {
-    expect(main).toMatch(/applyTheme\(\s*initialTheme\(\),\s*\{\s*sync:/);
+  test("boot restores the saved theme without a machine broadcast", () => {
+    expect(main).toMatch(/applyTheme\(\s*initialTheme\(\)\s*\)/);
+    expect(main).not.toMatch(/applyTheme\(\s*initialTheme\(\),\s*\{\s*sync:/);
   });
 
-  test("and only from the desktop shell — never a blanket broadcast", () => {
-    // A bare `sync: true` here would let a phone or a paired browser repaint the
-    // host's tmux/nvim just by opening the cockpit.
-    expect(main).toContain("IS_DESKTOP");
-    expect(main, "boot does a blanket broadcast").not.toMatch(/initialTheme\(\),\s*\{\s*sync:\s*true\s*\}/);
+  test("OS scheme changes repaint the document without broadcasting", () => {
+    const watcher = themes.slice(themes.indexOf("export function watchSystemTheme"), themes.indexOf("export function initialTheme"));
+    expect(watcher).toContain("applyTheme(");
+    expect(watcher).not.toContain("sync:");
   });
-});
 
-describe("IS_DESKTOP marks the local desktop shell", () => {
-  const api = src("../src/lib/api.ts");
+  test("an automated browser cannot cross the sync boundary", () => {
+    const sync = themes.slice(themes.indexOf("function syncTheme"), themes.indexOf("/* System / Dark / Light"));
+    expect(sync).toMatch(/if \(navigator\.webdriver\) return/);
+    expect(sync.indexOf("navigator.webdriver")).toBeLessThan(sync.indexOf("whenServerUp"));
+  });
 
-  test("is exported, derived from the shell's injected apiOrigin", () => {
-    expect(api).toMatch(/export const IS_DESKTOP\b/);
-    // DESKTOP_API is window.agentglass.apiOrigin, present only in the packaged
-    // shell — a phone or paired browser never has it.
-    expect(api).toMatch(/IS_DESKTOP[^\n]*=\s*!!\s*DESKTOP_API/);
+  test("an explicit picker action still synchronizes the chosen palette", () => {
+    expect(themes).toMatch(/export function pickTheme[\s\S]*?applyTheme\(id, \{ sync: true \}\)/);
   });
 });
 

@@ -17,6 +17,7 @@
 // only ever touch a process this user owns.
 
 import { existsSync, readdirSync, readFileSync, readlinkSync, statSync, statfsSync } from "node:fs";
+import { failed } from "./refused.ts";
 
 /** One listening TCP socket. */
 export interface PortEntry {
@@ -269,7 +270,7 @@ export function killPort(pidIn: unknown): { ok: boolean; error?: string; detail?
     process.kill(pid, "SIGTERM");
     return { ok: true, detail: `Asked ${pid} to stop` };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: failed("machine/kill", e, "that process could not be stopped") };
   }
 }
 

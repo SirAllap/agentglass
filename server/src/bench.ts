@@ -20,6 +20,7 @@
  * the app's own data directory, keyed by the checkout's path.
  */
 import { createHash } from "node:crypto";
+import { failed } from "./refused.ts";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -101,7 +102,7 @@ export function writeNote(rootIn: unknown, textIn: unknown): NoteReport {
     writeFileSync(file, text, { mode: 0o600 });
     return { ok: true, text, at: Date.now() };
   } catch (e) {
-    return { ok: false, text: "", error: String(e) };
+    return { ok: false, text: "", error: failed("bench/note", e, "the note could not be saved") };
   }
 }
 

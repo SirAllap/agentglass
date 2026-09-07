@@ -355,11 +355,14 @@ unwelcome, the panel is still correct without it — a person with no photo is
 drawn as their initials on their own colour, which is what happens today for
 anyone who never uploaded one.
 
-**One feature sends your code off this machine, and it is the only one that
-does so unasked by a switch.** The AI **Explain** walkthrough hands your changed
-lines to a model — the local `claude` CLI, or the Anthropic API if you have set a
-key — so it can describe them. That is what the button is for, and it runs only
-when you press it. Two more paths exist and both are off until you turn them on:
+**One feature sends your code off this machine.** The AI **Explain**
+walkthrough hands your changed lines to a model — the local `claude` CLI, or the
+Anthropic API if you have set a key — so it can describe them. That is what the
+button is for, and it runs only when you press it. It has a switch of its own,
+`AGENTGLASS_WALKTHROUGH_DISABLED=1`, and where it sends is checked before either
+transport is chosen: a custom `ANTHROPIC_BASE_URL` is refused unless
+`AGENTGLASS_ALLOW_REMOTE=1` says otherwise, on the local CLI path as much as the
+API one. Two more paths exist and both are off until you turn them on:
 `AGENTGLASS_WEBHOOK` (what travels through it is listed under
 [What leaves through the webhook](#what-leaves-through-the-webhook)), and the
 Clone's judge, which hands `claude -p` the material it is comparing — through
@@ -707,6 +710,14 @@ three cases, and this is everything that travels:
 No transcript, no diff and no token goes through it, and the variable is blanked
 out of every Clone run so an unattended agent cannot post through it either.
 
+Where it may point is checked once, at boot, and the host it resolved to is
+printed then — so nothing is being sent somewhere you do not know about.
+Loopback and the two hosts the feature exists for (`hooks.slack.com`,
+`discord.com`) are accepted as they are; any other destination needs
+`AGENTGLASS_ALLOW_REMOTE=1`, and without it the channel is refused rather than
+posted to. What is logged is the host, never the path — a webhook URL's path
+*is* its credential.
+
 ## Hardening knobs
 
 Each capability has its own switch — see the README's configuration table for
@@ -723,6 +734,7 @@ the full list and defaults:
 | `AGENTGLASS_DISK_DISABLED` | the finder's **Machine** tab: searching and reading documents under your home directory |
 | `AGENTGLASS_EDITOR_DISABLED` | opening a file in your editor from the app |
 | `AGENTGLASS_SCAN_DISABLED` | the machine-wide transcript scanner |
+| `AGENTGLASS_WALKTHROUGH_DISABLED` | the AI **Explain** walkthrough, whatever provider is available |
 | `AGENTGLASS_BROWSER_READONLY` | every acting verb of the built-in browser when an agent drives it — clicks, typing, `eval`, `cdp`, init scripts, uploads — leaving reads and screenshots |
 | `AGENTGLASS_BUDGET_WRITE_DISABLED` | changing spend budgets from the app (`POST /budgets/set`) |
 | `AGENTGLASS_TASK_WRITE_DISABLED` | writes to your Taskwarrior list from the Tasks view |
@@ -731,11 +743,9 @@ the full list and defaults:
 | `AGENTGLASS_CLICKUP_WRITE=1` | *(opposite sense)* turns **on** writes to a ClickUp board, which are off by default |
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
-Two things are **not** individually switchable, and it is worth knowing which:
-the AI **Explain** walkthrough (it follows `AGENTGLASS_COMMIT_DISABLED`'s
-surface but has no knob of its own) and the `/control` UI-navigation endpoint,
-which is unswitchable by design — it grants no capability the keyboard does not
-already have.
+One thing is **not** individually switchable, and it is worth knowing which:
+the `/control` UI-navigation endpoint, which is unswitchable by design — it
+grants no capability the keyboard does not already have.
 
 Beyond the knobs, **scope is itself a boundary**: with a project open, git
 writes, the terminal, chat, pull-request actions and editor opens are all

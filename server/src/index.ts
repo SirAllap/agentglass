@@ -85,7 +85,7 @@ import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
-import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme } from "./themesync.ts";
+import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme, automatedThemeClient } from "./themesync.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
@@ -5065,6 +5065,14 @@ const server = Bun.serve<WsData>({
     if (pathname === "/theme/current") return json({ theme: currentTheme() });
     if (pathname === "/theme/sync" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
+      /* This route writes files a person's tmux and nvim read, so an automated
+         page load must not reach it — see #455, where a harness that loaded the
+         cockpit left the machine's terminals white. The browser refuses first
+         (navigator.webdriver in web/src/lib/themes.ts), and that check cannot
+         see a plain CDP attach, which is what every script in scripts/ is. */
+      if (automatedThemeClient(req.headers.get("user-agent"))) {
+        return json({ ok: false, wrote: [], reloaded: [], error: "automated client: a theme reaches tmux and nvim only from a browser someone is using" });
+      }
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       return json(await syncTheme(b.vars ?? {}, String(b.name ?? "custom")));

@@ -12,6 +12,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { WalkthroughResult, WalkthroughInputFile } from "../../shared/types.ts";
 import { stripSecrets } from "../../shared/scrub.ts";
+import { outboundDestination } from "./egress.ts";
 
 // Haiku by default: the task is a one-liner per file, so a small fast model is
 // plenty and keeps latency + token cost low. Override with the env var to trade
@@ -30,8 +31,76 @@ const CLI_TIMEOUT_MS = 120_000;
 const claudeBin = () => Bun.which("claude");
 const hasApiKey = () => !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 
-/** Enabled if either the local Claude Code CLI is on PATH or an API key is set. */
-export const WALKTHROUGH_ENABLED = !!claudeBin() || hasApiKey();
+/** The explicit kill switch wins over provider discovery. */
+export function walkthroughEnabled(
+  env: Record<string, string | undefined> = process.env,
+  localClaude: string | null = claudeBin(),
+): boolean {
+  return env.AGENTGLASS_WALKTHROUGH_DISABLED !== "1"
+    && (!!localClaude || !!(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN));
+}
+
+/** Enabled if a provider exists and the feature has not been disabled. */
+export const WALKTHROUGH_ENABLED = walkthroughEnabled();
+
+/**
+ * WHERE THE DIFFS ARE ALLOWED TO GO, decided once for both transports.
+ *
+ * ANTHROPIC_BASE_URL is read by the Anthropic SDK *and* by the local `claude`
+ * CLI, so a check that lives inside either path only covers half the feature —
+ * and the half it misses is the one that runs by default, since the CLI is the
+ * primary provider. Anthropic's own endpoint is trusted; anything else is a
+ * remote destination for repository code and needs AGENTGLASS_ALLOW_REMOTE=1.
+ *
+ * Refuses rather than falling back to the default endpoint: a person who set
+ * this variable meant it, and quietly sending their diffs somewhere other than
+ * where they said is the wrong way to be safe.
+ */
+export function anthropicDestination(
+  env: Record<string, string | undefined> = process.env,
+): { ok: true; url?: string } | { ok: false; error: string } {
+  const raw = env.ANTHROPIC_BASE_URL;
+  if (!raw) return { ok: true };
+  const destination = outboundDestination(raw, "ANTHROPIC_BASE_URL", ["api.anthropic.com"], env);
+  return destination.ok ? { ok: true, url: destination.url } : { ok: false, error: destination.error };
+}
+
+/** The same decision where a caller wants the value or nothing at all. The
+ *  sentence it throws is this repository's own, so a caller may hand it on. */
+export function checkedBaseUrl(
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const destination = anthropicDestination(env);
+  if (!destination.ok) throw new Error(destination.error);
+  return destination.url;
+}
+
+/**
+ * Keep the SDK's normal Anthropic endpoint unless a validated override exists.
+ * Passing the checked value into the constructor prevents a later implicit
+ * environment lookup from bypassing this boundary.
+ */
+export function anthropicClientOptions(
+  env: Record<string, string | undefined> = process.env,
+): { baseURL?: string } {
+  const url = checkedBaseUrl(env);
+  return url ? { baseURL: url } : {};
+}
+
+/**
+ * The environment the local CLI inherits.
+ *
+ * Same boundary as the SDK path, applied where the spawn is built: an
+ * unchecked destination throws here rather than being handed to a process that
+ * would honour it. AGENTGLASS_INTERNAL marks the call so agentglass's own hooks
+ * skip it (no phantom "walkthrough" session shows up in the dashboard).
+ */
+export function walkthroughEnv(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string | undefined> {
+  const url = checkedBaseUrl(env);
+  return { ...env, AGENTGLASS_INTERNAL: "1", ...(url ? { ANTHROPIC_BASE_URL: url } : {}) };
+}
 
 const SYSTEM = [
   "You review bursts of file changes made by AI coding agents in a repository.",
@@ -178,9 +247,7 @@ async function viaClaudeCli(sent: SentFile[]): Promise<WalkthroughResult> {
     stdin: new TextEncoder().encode(prompt),
     stdout: "pipe",
     stderr: "pipe",
-    // Mark this as an internal call so agentglass's own hooks skip it (no
-    // phantom "walkthrough" session shows up in the dashboard).
-    env: { ...process.env, AGENTGLASS_INTERNAL: "1" },
+    env: walkthroughEnv(),
   });
   // Kill a hung CLI rather than await it forever; the timer is cleared once the
   // process settles, so a normal run pays nothing for it.
@@ -209,7 +276,7 @@ async function viaClaudeCli(sent: SentFile[]): Promise<WalkthroughResult> {
 
 /** Fallback path: Anthropic SDK with structured outputs (needs an API key). */
 async function viaApi(sent: SentFile[]): Promise<WalkthroughResult> {
-  const client = new Anthropic();
+  const client = new Anthropic(anthropicClientOptions());
   const res = await client.messages.create({
     model: MODEL,
     max_tokens: 16000,
@@ -228,8 +295,16 @@ export async function generateWalkthrough(files: WalkthroughInputFile[]): Promis
       available: false,
       reviewFocus: "",
       files: [],
-      error: "no local `claude` CLI and no ANTHROPIC_API_KEY — install Claude Code or set a key to enable walkthroughs",
+      error: process.env.AGENTGLASS_WALKTHROUGH_DISABLED === "1"
+        ? "walkthroughs are disabled by AGENTGLASS_WALKTHROUGH_DISABLED=1"
+        : "no local `claude` CLI and no ANTHROPIC_API_KEY — install Claude Code or set a key to enable walkthroughs",
     };
+  }
+  // Above the choice of transport, because both of them read
+  // ANTHROPIC_BASE_URL: a check inside one is half a check.
+  const destination = anthropicDestination();
+  if (!destination.ok) {
+    return { available: false, reviewFocus: "", files: [], error: destination.error };
   }
   // Filtered once, before either path can see it: the two transports are
   // different ways off this machine, not different trust levels.

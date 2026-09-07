@@ -19,9 +19,22 @@
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 import { paneForSession, paneAgentNote } from "./panewt.ts";
 import { listPanes } from "./tmuxctl.ts";
+import { webhookDestination } from "./egress.ts";
 
-const WEBHOOK = process.env.AGENTGLASS_WEBHOOK;
+// Resolved once, here, because the boot line below reports it and a boot line
+// that describes a destination the process is no longer using would be worse
+// than none. `prnudge.ts` re-reads per call instead: a nudge is a person
+// pressing a button, and the answer it gives them ("no channel", "that host
+// needs AGENTGLASS_ALLOW_REMOTE=1") should describe the environment now.
+const WEBHOOK = webhookDestination();
 const DESKTOP = process.env.AGENTGLASS_NOTIFY === "1";
+
+// A configured channel is visible at boot without ever printing its path,
+// which commonly contains the webhook credential itself.
+if (process.env.AGENTGLASS_WEBHOOK) {
+  if (WEBHOOK.configured) console.info(`[alerts] webhook destination: ${WEBHOOK.host}`);
+  else console.warn(`[alerts] webhook disabled: ${WEBHOOK.error}`);
+}
 
 // A connected client can raise a NATIVE OS notification, which Electron routes
 // to macOS and Windows too — the cross-platform replacement for notify-send,
@@ -116,9 +129,9 @@ async function deliver(
    *  frame so the app can raise an alarm rather than another row. */
   extra?: { kind: "reminder"; id: string } | { kind: "understudy" },
 ) {
-  if (WEBHOOK && !IS_TEST) {
+  if (WEBHOOK.configured && !IS_TEST) {
     try {
-      await fetch(WEBHOOK, {
+      await fetch(WEBHOOK.url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: `*${title}*\n${body}` }),

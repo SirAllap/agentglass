@@ -22,6 +22,7 @@
 // message.
 
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { failed } from "./refused.ts";
 import { dirname, join, resolve, sep } from "node:path";
 import { ownedByMe, cwdOf } from "./machine.ts";
 
@@ -323,6 +324,6 @@ export function removeStaleLock(pathIn: unknown, roots: string[]): { ok: boolean
     rmSync(target);
     return { ok: true, detail: `removed ${found.name}` };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: failed("git/lock", e, "the lock file could not be removed") };
   }
 }

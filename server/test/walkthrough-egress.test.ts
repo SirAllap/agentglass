@@ -19,7 +19,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isSecretFile, trimFiles } from "../src/walkthrough.ts";
+import { anthropicDestination, isSecretFile, trimFiles, walkthroughEnv } from "../src/walkthrough.ts";
 import { stripSecrets } from "../../shared/scrub.ts";
 
 describe("files whose contents are a credential", () => {
@@ -163,5 +163,78 @@ describe("the filter runs before either transport can see the files", () => {
     // the one feature that uploads.
     const doc = readFileSync(join(import.meta.dir, "..", "..", "SECURITY.md"), "utf8");
     expect(doc).toContain("Explain");
+  });
+});
+
+/*
+ * The destination is the other half of "what leaves this machine", and it was
+ * checked in only one of the two places that reads it.
+ *
+ * `ANTHROPIC_BASE_URL` is honoured by the Anthropic SDK and by the local
+ * `claude` CLI alike. A guard inside the SDK path therefore covered the
+ * fallback and left the primary transport open: with `claude` on PATH — the
+ * common case — the diffs went wherever the variable pointed, and nothing in
+ * the egress module was ever consulted.
+ *
+ * So the decision moved above the choice of transport, and the spawn builds
+ * its environment from the checked value rather than from `process.env`.
+ */
+describe("where the diffs are allowed to go", () => {
+  const src = readFileSync(join(import.meta.dir, "..", "src", "walkthrough.ts"), "utf8");
+  const body = (name: string) => {
+    const start = src.indexOf(`function ${name}(`);
+    return src.slice(start, src.indexOf("\n}\n", start));
+  };
+
+  test("Anthropic's own endpoint needs no opt-in, a proxy does", () => {
+    expect(anthropicDestination({ ANTHROPIC_BASE_URL: "https://api.anthropic.com" }))
+      .toEqual({ ok: true, url: "https://api.anthropic.com/" });
+    const refused = anthropicDestination({ ANTHROPIC_BASE_URL: "https://proxy.example.test" });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error).toContain("AGENTGLASS_ALLOW_REMOTE=1");
+    expect(anthropicDestination({
+      ANTHROPIC_BASE_URL: "https://proxy.example.test",
+      AGENTGLASS_ALLOW_REMOTE: "1",
+    }).ok).toBe(true);
+  });
+
+  test("the CLI's environment carries the checked value, or the spawn never happens", () => {
+    // The variable the CLI reads is rebuilt from the checked destination, not
+    // copied through: an unchecked one stops here rather than reaching a
+    // process that would honour it.
+    expect(() => walkthroughEnv({ ANTHROPIC_BASE_URL: "https://proxy.example.test" }))
+      .toThrow("AGENTGLASS_ALLOW_REMOTE=1");
+    const allowed = walkthroughEnv({
+      ANTHROPIC_BASE_URL: "https://proxy.example.test",
+      AGENTGLASS_ALLOW_REMOTE: "1",
+    });
+    expect(allowed.ANTHROPIC_BASE_URL).toBe("https://proxy.example.test/");
+    // The marker the hooks look for survives the rebuild.
+    expect(walkthroughEnv({}).AGENTGLASS_INTERNAL).toBe("1");
+    expect(walkthroughEnv({}).ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
+  test("the spawn takes that environment and not the raw one", () => {
+    // The line this replaces was `env: { ...process.env, AGENTGLASS_INTERNAL: "1" }`,
+    // which is the whole bug: the CLI inherited an unchecked destination.
+    expect(body("viaClaudeCli")).toContain("env: walkthroughEnv()");
+    expect(body("viaClaudeCli")).not.toContain("...process.env");
+  });
+
+  test("and the check runs before a transport is chosen", () => {
+    // Both transports read the variable, so a per-transport check is half a
+    // check. generateWalkthrough decides once, above `claudeBin()`.
+    const gen = body("generateWalkthrough");
+    expect(gen).toContain("anthropicDestination()");
+    expect(gen.indexOf("anthropicDestination()")).toBeLessThan(gen.indexOf("claudeBin()"));
+  });
+
+  test("SECURITY.md lists the walkthrough's kill switch among the knobs", () => {
+    // The file used to say this feature had no knob of its own. It has one now,
+    // and documentation naming a guarantee that no longer holds is worse than
+    // none — it is believed.
+    const doc = readFileSync(join(import.meta.dir, "..", "..", "SECURITY.md"), "utf8");
+    expect(doc).toContain("AGENTGLASS_WALKTHROUGH_DISABLED");
+    expect(doc).not.toContain("has no knob of its own");
   });
 });
