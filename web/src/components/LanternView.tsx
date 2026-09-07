@@ -45,6 +45,9 @@ export interface LanternRow {
   branch?: string;
   left?: string;
   paneId?: string;
+  /** What this session called itself before, newest first — see BoardRow.
+   *  wasCalled. One card per session; these are the names it folded in. */
+  wasCalled?: string[];
   /** Whether git already has this branch. Absent when nobody asked — which is
    *  not the same as "nobody merged it", and must not be drawn as if it were. */
   landed?: boolean;
@@ -230,6 +233,16 @@ export function AgentCard({ r, onJump, quiet, cacheTtlMs, kinds }: { r: LanternR
           <div className="flex items-center gap-2 min-w-0">
             <span className={`${quiet ? "text-[12px]" : "text-[13.5px]"} font-semibold truncate`} style={{ color: w || r.state === "working" ? "var(--text)" : "var(--text2)" }} title={r.name}>{r.name}</span>
             {r.role === "lantern" && <Pill tone="var(--text4)" title="The Lantern's own chat">lantern</Pill>}
+            {/* The names this session posted under before. One card per
+                session hides four rows that used to be on screen; this is the
+                line that says where they went, rather than letting them
+                vanish between two looks at the same grid. */}
+            {r.wasCalled?.length ? (
+              <Pill tone="var(--text4)"
+                title={`Same session, earlier names: ${r.wasCalled.join(", ")}`}>
+                +{r.wasCalled.length} earlier {r.wasCalled.length === 1 ? "name" : "names"}
+              </Pill>
+            ) : null}
             <span className="ml-auto shrink-0 flex items-center gap-1.5">
               {!w && <Pill tone={tone} title={r.state === "working" ? "something ran in the last ten minutes" : "nothing has run for ten minutes"}>{r.state}</Pill>}
               {model && <Pill tone="var(--text3)" title={f?.model}>{model}</Pill>}
