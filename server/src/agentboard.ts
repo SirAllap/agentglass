@@ -484,12 +484,18 @@ export function merged(p: {
      * in it. Two agents in one directory cannot be told apart from here, and
      * guessing between them is how the last four wrong buttons happened.
      */
+    /* And the same liveness test the seen rows get — a said row was taking any
+       sighting of its own session, including one whose pane died with the last
+       restart, so the button was drawn onto a pane that is not there. Same
+       freshness gate, for the same reason: a pane id means nothing on another
+       tmux server, and a recent hook is an agent that is running somewhere. */
+    const findable = (h: HookSeen) => alive.size === 0 || alive.has(h.paneId) || h.at > now - FRESH_MS;
     const hook = s.session
-      ? [...freshest.values()].filter((h) => h.sessionId === s.session)
+      ? [...freshest.values()].filter((h) => h.sessionId === s.session && findable(h))
         .sort((a, b) => b.at - a.at)[0]
       : s.worktree
       ? (() => {
-        const here = [...freshest.values()].filter((h) => h.cwd === s.worktree)
+        const here = [...freshest.values()].filter((h) => h.cwd === s.worktree && findable(h))
           .sort((a, b) => b.at - a.at);
         return new Set(here.map((h) => h.sessionId)).size === 1 ? here[0] : undefined;
       })()
@@ -503,6 +509,7 @@ export function merged(p: {
     const oneAgentHere = new Set(
       [...freshest.values()].filter((h) => s.worktree && h.cwd.startsWith(s.worktree)).map((h) => h.sessionId),
     ).size <= 1;
+    /* tmux's own pane is live by definition — it came from the list. */
     const paneId = hook?.paneId ?? (s.session || !oneAgentHere ? undefined : pane?.paneId);
     /* The session behind this claim: the one it named, else the hook this
        machine placed in the same checkout. Both are how the wait is looked up

@@ -729,6 +729,25 @@ describe("one card per agent", () => {
     expect(rows.map((r) => r.paneId)).toEqual(["%39"]);
   });
 
+  test("a named row does not get a Go button onto a pane that is gone", () => {
+    /*
+     * Found on the installed board: four cards whose `Go` pointed at panes
+     * tmux no longer had. The liveness test was only applied to the anonymous
+     * `seen` rows, so a row that said its name took any sighting of its own
+     * session — including the one whose pane died with the last restart, which
+     * an install causes on purpose.
+     */
+    const hooks = [hook("%14", "s-mine", "/code/app", AT - 60 * 60_000)];
+    Board.saidBy({ name: "pull-check", doing: "pulling", worktree: "/code/app", session: "s-mine", at: AT });
+    const rows = Board.merged({
+      said: Board.board(), hooks, panes: [pane("%99", "/code/other")], now: AT,
+    });
+    /* The row stays — the agent said something and that is the card. It is the
+       button that goes, because there is nowhere for it to land. */
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.paneId).toBeUndefined();
+  });
+
   test("but an agent on a SECOND tmux server is not dead, it is elsewhere", () => {
     /*
      * Pane ids are per server: `%3` exists on every tmux running, and `panes`

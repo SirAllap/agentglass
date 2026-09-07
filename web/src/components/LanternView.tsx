@@ -233,23 +233,31 @@ export function AgentCard({ r, onJump, quiet, cacheTtlMs, kinds }: { r: LanternR
           <div className="flex items-center gap-2 min-w-0">
             <span className={`${quiet ? "text-[12px]" : "text-[13.5px]"} font-semibold truncate`} style={{ color: w || r.state === "working" ? "var(--text)" : "var(--text2)" }} title={r.name}>{r.name}</span>
             {r.role === "lantern" && <Pill tone="var(--text4)" title="The Lantern's own chat">lantern</Pill>}
-            {/* The names this session posted under before. One card per
-                session hides four rows that used to be on screen; this is the
-                line that says where they went, rather than letting them
-                vanish between two looks at the same grid. */}
-            {r.wasCalled?.length ? (
-              <Pill tone="var(--text4)"
-                title={`Same session, earlier names: ${r.wasCalled.join(", ")}`}>
-                +{r.wasCalled.length} earlier {r.wasCalled.length === 1 ? "name" : "names"}
-              </Pill>
-            ) : null}
             <span className="ml-auto shrink-0 flex items-center gap-1.5">
               {!w && <Pill tone={tone} title={r.state === "working" ? "something ran in the last ten minutes" : "nothing has run for ten minutes"}>{r.state}</Pill>}
               {model && <Pill tone="var(--text3)" title={f?.model}>{model}</Pill>}
               {since ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} title={new Date(since).toLocaleString()}>{fmtAgo(since)}</span> : null}
             </span>
           </div>
-          <Where r={r} />
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Where r={r} />
+            {/*
+             * The names this session posted under before.
+             *
+             * On the metadata line and not beside the title: up there it
+             * competed with the one thing the card is read by, and turned
+             * `limpieza-worktrees-2026-09-07` into `limpieza-worktree…` to
+             * make room for itself. A card that hides its own name to explain
+             * its history has the priority backwards. Down here there is room,
+             * and it sits with the rest of what this row IS.
+             */}
+            {r.wasCalled?.length ? (
+              <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}
+                title={`Same session, earlier names: ${r.wasCalled.join(", ")}`}>
+                · was {r.wasCalled[0]}{r.wasCalled.length > 1 ? ` +${r.wasCalled.length - 1}` : ""}
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
 
