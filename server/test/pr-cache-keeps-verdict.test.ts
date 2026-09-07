@@ -36,7 +36,8 @@ describe("a partial answer never caches a blank", () => {
   });
 
   test("the tracker line and the head commit are held the same way", () => {
-    const card = { id: "ORBIT-1042", url: "https://example.invalid/c" };
+    const card = { id: "ORBIT-1042", title: "Rework the sidebar", status: "in review",
+      priority: null, url: "https://example.invalid/c" } as PrSummary["card"];
     const out = carryOver(row({ card, headSha: "abc123" }), row({}));
     expect(out.card).toEqual(card);
     expect(out.headSha).toBe("abc123");

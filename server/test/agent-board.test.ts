@@ -721,12 +721,24 @@ describe("one card per agent", () => {
     expect(rows[0]!.paneId).toBe("%3");
   });
 
-  test("a pane tmux no longer has is not an agent", () => {
+  test("a stale sighting whose pane tmux no longer has is not an agent", () => {
     /* 304 sightings on this machine, 290 of whose panes were gone. Two
        survived the 24-hour window and were drawn as idle agents. */
-    const hooks = [hook("%39", "s-live", "/code/app"), hook("%36", "s-dead", "/code/app")];
+    const hooks = [hook("%39", "s-live", "/code/app"), hook("%36", "s-dead", "/code/app", AT - 60 * 60_000)];
     const rows = Board.merged({ said: [], hooks, panes: [pane("%39", "/code/app")], now: AT });
     expect(rows.map((r) => r.paneId)).toEqual(["%39"]);
+  });
+
+  test("but an agent on a SECOND tmux server is not dead, it is elsewhere", () => {
+    /*
+     * Pane ids are per server: `%3` exists on every tmux running, and `panes`
+     * is one server's list. Reading absence from it as death would empty the
+     * board of every agent somebody started on another socket. A sighting
+     * from the last ten minutes stands wherever its pane is.
+     */
+    const hooks = [hook("%39", "s-here", "/code/app"), hook("%7", "s-other-server", "/code/app")];
+    const rows = Board.merged({ said: [], hooks, panes: [pane("%39", "/code/app")], now: AT });
+    expect(rows.map((r) => r.paneId).sort()).toEqual(["%39", "%7"]);
   });
 
   test("but a tmux that did not answer deletes nobody", () => {

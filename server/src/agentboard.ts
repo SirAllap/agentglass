@@ -351,7 +351,22 @@ export function merged(p: {
   const alive = new Set(panes.map((x) => x.paneId));
   const seenBySession = new Map<string, Set<string>>();
   for (const h of freshest.values()) {
-    if (alive.size > 0 && !alive.has(h.paneId)) continue;
+    /*
+     * AND A PANE ID IS ONLY MEANINGFUL ON THE SERVER THAT ISSUED IT.
+     *
+     * `panes` is ONE tmux server's list; `hooks` are whatever fired, on any
+     * server on the machine, and `%3` exists on all of them. So "not in the
+     * list" is not proof of death — it is also what a live agent on a second
+     * tmux server looks like from here, and dropping those would empty the
+     * board of exactly the agents somebody started somewhere else.
+     *
+     * The freshness gate is what makes it safe: a hook that fired in the last
+     * ten minutes is an agent that was running ten minutes ago, wherever it
+     * is, and it stays. Only a stale sighting whose pane this machine cannot
+     * find is dropped — which is the case that was drawing `%36` and `%38`,
+     * quiet for hours, as idle agents somebody could click Go on.
+     */
+    if (alive.size > 0 && !alive.has(h.paneId) && h.at <= now - FRESH_MS) continue;
     const tree = trees.find((t) => t.path && h.cwd.startsWith(t.path));
     const branch = tree?.branch ?? "";
     const wait = p.waiting?.get(h.sessionId);
