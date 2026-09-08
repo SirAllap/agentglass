@@ -1091,7 +1091,11 @@ export default function App() {
           has nothing to do with which view is open — that is the difference
           between an alarm and a panel's own banner, and the banner in Tasks was
           only ever seen by somebody already looking at Tasks. */}
-      <AlarmCard onOpenTasks={() => goView("tasks")} onOpenDeputy={() => goView("understudy")} />
+      {/* The stopped-clone alarm used to land on the Clone's view. That view is
+          gone — its bank became the orchestrator's memory — so it lands on the
+          Lantern, which is where an agent stopped on a person actually shows,
+          with a Go button onto its pane. */}
+      <AlarmCard onOpenTasks={() => goView("tasks")} onOpenDeputy={() => goView("lantern")} />
 
       {/* The bench: a window and a loose button, over every view. Mounted at
           the shell for the same reason the palette is — it is reached from a

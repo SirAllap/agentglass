@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, UnderstudyIcon, LanternIcon, SeatIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, LanternIcon, SeatIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 import { IS_DEMO } from "../../lib/demo.ts";
 
@@ -75,22 +75,6 @@ export const VIEWS: ViewDef[] = [
   // It is a scorecard. It cannot stage, commit, launch or answer anything, and
   // a seat among the views you WORK in would be a promise the view does not
   // keep.
-  /*
-   * OUT OF THE RAIL, and not deleted.
-   *
-   * Measured on the machine this was built for: the precedent bank holds
-   * 10,580 rows and is the half worth keeping, while the ledger it sat next to
-   * had 145,807 rows of which 879 were ever scored, and the work loop had not
-   * run for a week. The bank is not lost — it became the orchestrator's memory
-   * (seatmemory.ts), which is what it was for. What is gone is a rail seat for
-   * a scoreboard nobody reads.
-   *
-   * `hidden` rather than removed: the Teach tab is the only way to consent to a
-   * source and re-ingest, the tables are untouched, and the restore menu brings
-   * the view back for anybody who wants it. A DROP is the one thing git cannot
-   * undo, and this is not that.
-   */
-  { id: "understudy", label: "Clone", key: "u", icon: UnderstudyIcon, hint: "What it knows about you, and what it would have done — its bank is now the orchestrator's memory", group: "hidden" },
   /*
    * Appended, same reason as the two above it. Bottom drawer because it is a
    * thing you go and LOOK at — and the one view whose icon comes to you: it

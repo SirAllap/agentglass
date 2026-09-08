@@ -95,6 +95,7 @@ import { ciOnlyApproved, setCiOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { setTalkNotify, talkNotify, type TalkNotify } from "../lib/talkNotify.ts";
 import { RETENTION, setUnderstudyEnabled, useUnderstudy } from "./understudy/UnderstudyPanel.tsx";
 import { Appearance, closedCount } from "./understudy/Appearance.tsx";
+import { Teach } from "./understudy/Teach.tsx";
 import { Persona } from "./understudy/persona/Persona.tsx";
 import { setCosmetic, useCosmetic } from "./understudy/persona/cosmeticStore.ts";
 import { emitControl } from "../lib/controlBus.ts";
@@ -502,7 +503,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      both defensible: it is a store of what you did, and it is a thing that
      watches agents work. It is here because the question people arrive with is
      "what is that face in the rail", and the face is about the work. */
-  { id: "understudy", label: "Clone", group: "Agents & work", kw: "clone shadow scorecard predict agreement watch score classes autonomy portrait persona art look how it looks", what: "The thing that watches you work and keeps score — and what it is never allowed to do.", status: true, icon: UnderstudyIcon },
+  { id: "understudy", label: "Knowledge", group: "Agents & work", kw: "knowledge clone learn sources teach precedents decisions bank recall exclusions never see private terms consent portrait persona art look how it looks scorecard watch score", what: "Where the orchestrator learns how you decide — what it may read, what it must never see, and the face it wears.", status: true, icon: UnderstudyIcon },
   /*
    * One page for everything outside this app.
    *
@@ -1140,12 +1141,24 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
   const on = !!frame?.enabled;
   return (
     <>
-      <Section title="Watching">
+      {/*
+       * WHAT IT LEARNS FROM, first — because that is what this page is for now.
+       *
+       * This used to be the Clone's settings page, under the Clone's view, and
+       * the consent list lived in the view rather than here. The view is gone
+       * and the bank it filled became the orchestrator's memory, so the thing
+       * that decides what the orchestrator knows about you belongs on a
+       * settings page and not behind a tab in a scoreboard.
+       */}
+      <Section title="What the orchestrator learns from">
+        <Teach active={open} />
+      </Section>
+      <Section title="Keeping score">
         <Toggle
           label="Let the clone watch"
           hint={frame?.halted
             ? "Halted — it is enabled and stopped. Switching it on again is what lowers the fence; there is no timer."
-            : "It writes down what it would have done and is scored against what you did. It never acts, and in this build it cannot be given anything to do."}
+            : "Separate from the knowledge above, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way."}
           on={on}
           onClick={() => {
             void setUnderstudyEnabled(!on).then((r) => {
@@ -1153,9 +1166,6 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
               void refreshUnderstudy();
             });
           }} />
-        <Row label="Open the scorecard"
-          hint="Thirteen classes of decision, where each one stands, and the sentences saying what is in the way."
-          onClick={() => { emitControl({ cmd: "view", to: "understudy" }); onLeave(); }} />
       </Section>
       {err && <div className="px-3.5 pb-3 text-[12px]" style={{ color: "var(--error)" }}>{err}</div>}
       <UnderstudyLook classes={frame?.classes ?? []} />

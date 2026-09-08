@@ -4,6 +4,8 @@ import { jumpToPane } from "../lib/paneJump.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { edge, wash } from "./git/ui.tsx";
 import { api, type SeatAnswer, type SeatTask } from "../lib/api.ts";
+import { Persona } from "./understudy/persona/Persona.tsx";
+import { useCosmetic } from "./understudy/persona/cosmeticStore.ts";
 
 /**
  * THE ORCHESTRATOR — the chair, and who is in it.
@@ -63,6 +65,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [openRules, setOpenRules] = useState(false);
+  const cos = useCosmetic();
   const [adding, setAdding] = useState("");
   const [proof, setProof] = useState("");
 
@@ -144,7 +147,21 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
          * woken. All of it in one card, because they are one thought.
          */}
         <section className="rounded-lg overflow-hidden" style={{ background: "var(--surface2, var(--bg2))", border: edge(live ? 26 : 14) }}>
-          <div className="px-4 pt-3.5 pb-3 flex flex-col gap-2">
+          {/*
+           * THE FACE, next to the sentence.
+           *
+           * It was drawn for the Clone, which had no surface left, and this is
+           * the one screen where a face means something rather than decorating:
+           * the whole view answers "is somebody minding this project", and a
+           * portrait beside its last word says who. Dimmed when the chair is
+           * empty — the same fact, in the same place, without a second badge.
+           */}
+          <div className="px-4 pt-3.5 pb-3 flex gap-3.5">
+          <div className="shrink-0 pt-0.5" style={{ opacity: live ? 1 : 0.42, filter: live ? undefined : "grayscale(0.6)" }}
+            title={live ? "Somebody is in this seat" : "The chair is empty"}>
+            <Persona px={52} cos={cos} label={live ? "The orchestrator" : "The empty seat"} />
+          </div>
+          <div className="flex flex-col gap-2 min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Its last word</span>
               <span className="flex-1" />
@@ -167,6 +184,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
             {!live && seat?.lastLine ? (
               <p className="text-[10.5px]" style={{ color: "var(--text4)" }}>Said before the chair was emptied. Taking the seat again starts a fresh reading.</p>
             ) : null}
+          </div>
           </div>
           {/* Facts once there are any. Before that the same strip says what
               the seat will DO — four dashes under an empty chair teach nobody

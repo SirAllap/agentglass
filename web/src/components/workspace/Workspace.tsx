@@ -35,7 +35,6 @@ import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
-import { UnderstudyView } from "../understudy/UnderstudyPanel.tsx";
 import { LanternView } from "../LanternView.tsx";
 import { SeatView } from "../SeatView.tsx";
 import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
@@ -280,11 +279,6 @@ function BodyImpl({ id, active, openChat, openChatWith, openBrowser, openLantern
     case "term": return <TermView active={active} />;
     case "chat": return <ChatView active={active} focusId={chatFocusId} />;
     case "browser": return <BrowserView active={active} />;
-    /* Nothing is passed but `active`, and that is the shape of the whole
-       feature rather than an oversight: the clone reads a scorecard off
-       the socket and has nothing to hand to another view — no chat to seed, no
-       pull request to jump to. A view that only watches needs no errands. */
-    case "understudy": return <UnderstudyView active={active} />;
     /* One errand, and only one: the Lantern is the field this post reads, so
        the seat carries a way across to it rather than drawing the board a
        second time. */
