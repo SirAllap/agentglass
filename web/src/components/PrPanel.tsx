@@ -54,7 +54,7 @@ import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, toggleChecklistItem, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
-import { afterViewed, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
+import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
@@ -7845,6 +7845,10 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, pending, moved, dep
         const pend = pending(f.path);
         return (
           <button key={f.path} onClick={() => onPick(f.path)}
+            /* The marked row, findable from outside without a ref through a
+               recursive component. The tree brings it back into its own view
+               when the scrollspy moves the mark — see `keepRowInView`. */
+            data-sel={on ? "1" : undefined}
             // Alt-click opens it whole, which is the gesture that costs nothing
             // to learn because it costs nothing to not know.
             onAuxClick={(e) => { if (e.button === 1 && onPeek) { e.preventDefault(); onPeek(f.path); } }}
@@ -8401,6 +8405,13 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
   const barRef = useRef<HTMLDivElement>(null);
   /** The frame the running jump has booked, so the next one can take it back. */
   const alignRaf = useRef(0);
+  /** True while `scrollToFileStable` is driving the scroller frame by frame, so
+   *  the scrollspy below does not read a position that is still on its way. */
+  const jumping = useRef(false);
+  /** The scrollspy's own frame token, so a flick of the wheel schedules one
+   *  measurement rather than one per scroll event. */
+  const spyRaf = useRef(0);
+  const treeRef = useRef<HTMLElement | null>(null);
   const [barH, setBarH] = useState(76);
   useEffect(() => {
     const el = barRef.current;
@@ -8438,6 +8449,17 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
     // would otherwise overlap, and two aligners with different targets writing
     // to the same scrollTop every frame is a shudder, not a scroll.
     cancelAnimationFrame(alignRaf.current);
+    /*
+     * The scrollspy stands down while this runs, and only while THIS runs.
+     *
+     * The aligner aims at `[data-file="active"]`, which the render derives from
+     * `sel` — so a spy that renamed `sel` from a half-finished frame would move
+     * the target the aligner is chasing, and the two would walk each other down
+     * the file list. The jumps that aim at a hunk or a thread need no such
+     * guard: they scroll to a fixed element, and a spy noticing you landed in
+     * another file is the right answer, not a fight.
+     */
+    jumping.current = true;
     let ticks = 0, still = 0, lastTop = NaN;
     const align = () => {
       const el = getEl();
@@ -8474,6 +8496,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       // ~24 frames whatever happens, which is a third of a second nobody sees.
       ticks++;
       if (ticks < 60 && (ticks < 24 || still < 3)) alignRaf.current = requestAnimationFrame(align);
+      else jumping.current = false;
     };
     alignRaf.current = requestAnimationFrame(align);
   };
@@ -8706,6 +8729,82 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
   const showing = oneFile ? (sel ?? shownFiles[0]?.path ?? null) : sel;
   useEffect(() => { onShowing?.(showing); }, [showing, onShowing]);
 
+  /*
+   * Something is always selected, and it is always a file that is still listed.
+   *
+   * Two things this settles. Opening Files used to mark nothing until you
+   * clicked — the rail on the right read "Nothing selected" beside a diff that
+   * was plainly showing a file. And `sel` outlives the list it names: it is not
+   * reset when the pull request changes, and filtering (a search, "since your
+   * review", hiding viewed files) can drop the file it points at, leaving the
+   * tree with no mark and the rail describing a file that is not on screen.
+   *
+   * The first of `shownFiles` in both cases, which in this list means the first
+   * one you would read — `treeOrder`, not GitHub's order.
+   */
+  useEffect(() => {
+    if (!shownFiles.length) return;
+    if (sel && shownFiles.some((f) => f.path === sel)) return;
+    onSel(shownFiles[0].path);
+  }, [shownFiles, sel, onSel]);
+
+  /*
+   * WHICH FILE YOU ARE LOOKING AT, while you scroll.
+   *
+   * The tree marked whatever was last clicked and then sat there: eight files
+   * deep into a pull request the rail on the right was still explaining the
+   * first one, and nothing on screen said which of the eight the diff under the
+   * cursor belonged to.
+   *
+   * The one that has crossed the floor, not the one covering the most of the
+   * screen. Area sounds fairer and reads worse: half a page into a long file
+   * the previous one still owns more pixels, so the mark lags by half a screen
+   * — and the floor is exactly where `scrollToFileStable` parks a file, so
+   * scrolling to a file by hand and jumping to it with `j` agree on what
+   * "here" means.
+   *
+   * Measured on a frame rather than per event: a wheel flick is dozens of
+   * scroll events and each one would walk every file's rectangle.
+   */
+  const spy = useCallback(() => {
+    if (oneFile || jumping.current) return;
+    cancelAnimationFrame(spyRaf.current);
+    spyRaf.current = requestAnimationFrame(() => {
+      const frame = frameRef.current;
+      const sc = frame && vScrollerOf(frame);
+      if (!sc) return;
+      const floor = sc.getBoundingClientRect().top + (barRef.current?.offsetHeight ?? 76);
+      const cards = [...frame.querySelectorAll<HTMLElement>("[data-path]")];
+      const i = fileAtFloor(cards.map((el) => el.getBoundingClientRect().top), floor);
+      const hit = i < 0 ? null : cards[i].dataset.path ?? null;
+      if (hit && hit !== sel) onSel(hit);
+    });
+  }, [oneFile, shownFiles, sel, onSel]);
+  useEffect(() => () => cancelAnimationFrame(spyRaf.current), []);
+
+  /*
+   * The marked row, brought back into the tree's own view — and NOTHING else moved.
+   *
+   * Deliberately not `scrollIntoView`: that walks every scrollable ancestor,
+   * and the tree's nearest one is the frame holding the diff. Asking the tree
+   * to show a row would scroll the diff, which would move the scrollspy's
+   * answer, which would mark another row. The whole loop is avoided by writing
+   * this one element's `scrollTop` and no other's.
+   *
+   * `block: "nearest"` by hand: a row already on screen is left exactly where
+   * it is, because a list that re-centres itself under a still cursor is a list
+   * that feels like it is fighting you.
+   */
+  useEffect(() => {
+    const tree = treeRef.current;
+    const row = tree?.querySelector<HTMLElement>('[data-sel="1"]');
+    if (!tree || !row) return;
+    const box = tree.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    if (r.top < box.top) tree.scrollTop -= box.top - r.top;
+    else if (r.bottom > box.bottom) tree.scrollTop += r.bottom - box.bottom;
+  }, [showing]);
+
   const toggleFold = (p: string) => setFolded((cur) => {
     const next = new Set(cur);
     if (next.has(p)) next.delete(p); else next.add(p);
@@ -8853,7 +8952,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
        * the tab always came back at the top. Reported as "the scroll position of
        * the open file is never kept".
        */
-      onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); }}
+      onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); spy(); }}
       className="agx-col3 agx-scroll text-[11px] flex flex-col gap-2 outline-none">
       {/* One bar, and it stays put: filter, view mode, progress. Everything that
           used to be repeated on each file's own toolbar lives here once.
@@ -8994,7 +9093,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
         {/* Always present in one-file mode: it is the only way to reach the
             other eight, so hiding it below five files would strand you. */}
         {(oneFile || shownFiles.length > 4) && (
-          <aside className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
+          <aside ref={treeRef} className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
             style={{ borderRight: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
             {/* `showing`, not `sel`.
                 
