@@ -345,12 +345,48 @@ async function resumeIdOf(name: string, windowId: string, paneId: string): Promi
  * nothing at all, which is the same loss by a different route. `rename` within
  * one directory is atomic: a reader sees the old file or the new one.
  */
+/*
+ * THE SAME RULE, ONE FLOOR DOWN: A SESSION'S WINDOWS.
+ *
+ * "Merge, never replace" was written for sessions and applied only to
+ * sessions, and the gap cost a morning of somebody's real work. What happened,
+ * in order: the tmux server died; the engine made the session again, empty,
+ * with one window; the ten second sweeper photographed one window; the merge
+ * saw the session in the live set, let the fresh photograph win whole, and the
+ * six windows that had been recorded were gone from the file before the
+ * restore ever ran. Nothing in the loss was ambiguous to a person and every
+ * step of it was correct at its own level.
+ *
+ * A window missing from the photograph is only AMBIGUOUS while this process
+ * has not yet had its go at putting the desk back. After that, a person
+ * closing a tab is exactly what a shrinking photograph means, and resurrecting
+ * it would be its own bug. So the keep is bounded by `settled`, not by a
+ * timer: it covers the boot, and it covers nothing else.
+ *
+ * Matched by name, then by the working directory of the first pane, because
+ * the ids in the file belong to the tmux server that died.
+ */
+function mergeWindows(old: CapturedWindow[], freshWins: CapturedWindow[]): CapturedWindow[] {
+  if (settled) return freshWins;
+  const key = (w: CapturedWindow) => `${w.name ?? ""}\u0000${w.panes[0]?.path ?? ""}`;
+  const have = new Set(freshWins.map(key));
+  const missing = old.filter((w) => !have.has(key(w)));
+  return missing.length ? [...freshWins, ...missing] : freshWins;
+}
+
 function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
   const seenNow = new Map(fresh.map((s) => [s.name, s]));
   const before = readRestoreState();
   const kept: CapturedSession[] = [];
+  const carried = new Map<string, CapturedWindow[]>();
   for (const old of before?.sessions ?? []) {
-    if (seenNow.has(old.name)) continue;      // the fresh one wins
+    if (seenNow.has(old.name)) {
+      /* The fresh photograph of a live session wins — except for the windows
+         it has not had a chance to bring back yet. */
+      const wins = mergeWindows(old.windows, seenNow.get(old.name)!.windows);
+      if (wins.length !== seenNow.get(old.name)!.windows.length) carried.set(old.name, wins);
+      continue;
+    }
     if (forgotten.has(old.name)) continue;    // explicitly closed
     /* Nor carried forward: every file written before this rule still names the
        nine mirrors, and keeping them for fourteen days would mean fourteen days
@@ -362,7 +398,7 @@ function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
     if (now - lastSeen > KEEP_UNSEEN_MS) continue;
     kept.push({ ...old, lastSeen });
   }
-  const sessions = [...fresh.map((s) => ({ ...s, lastSeen: now })), ...kept];
+  const sessions = [...fresh.map((s) => ({ ...s, windows: carried.get(s.name) ?? s.windows, lastSeen: now })), ...kept];
   const state: RestoreState = { capturedAt: now, sessions };
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
@@ -413,6 +449,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    * restore finishes, against a desk that is whole.
    */
   if (restoring) { captureWanted = true; return null; }
+  if (capturingHalted()) return null;
   const names = await listPanes();
   /*
    * An empty socket is not "no sessions" — it is far more often tmux not
@@ -491,7 +528,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
  */
 export function captureLayoutSync(now = Date.now()): void {
   try {
-    if (restoring) return;
+    if (restoring || capturingHalted()) return;
     const bin = resolveTmuxBin();
     if (!bin) return;
     const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "-f", confPath(), "list-sessions", "-F", "#{session_name}"],
@@ -650,10 +687,35 @@ let crashLoop: { at: number; launches: number } | null = null;
 export function noteCrashLoop(launches: number): void {
   crashLoop = { at: Date.now(), launches };
 }
+
+/*
+ * AND THE FILE IS ACTUALLY LEFT ALONE.
+ *
+ * The boot that declines to restore prints "Not restoring or re-capturing:
+ * the saved session layout is left untouched" — and then started the ten
+ * second sweeper anyway, which photographed the crash-loop desk and wrote it
+ * over the good one. The half of the promise that mattered was the half the
+ * code did not keep: a crash loop is precisely when the live desk is least
+ * like the desk somebody wants back.
+ */
+const capturingHalted = (): boolean => crashLoop !== null;
 export function crashLoopWarning(): { at: number; launches: number } | null { return crashLoop; }
+/** For tests: this flag halts every capture in the process, so a suite that
+ *  sets it has to put it back. */
+export function __clearCrashLoop(): void { crashLoop = null; }
 
 let restoring = false;
 let captureWanted = false;
+/*
+ * WHETHER THIS PROCESS HAS HAD ITS GO AT PUTTING THE DESK BACK.
+ *
+ * Until it has, a photograph is not evidence that a window is gone — see
+ * `writeMerged`. After it has, the desk is whatever a person has made of it
+ * and the camera is believed. False at boot, true from the end of the first
+ * restore pass, and never false again in this process.
+ */
+let settled = false;
+export function __resetRestoreSettled(): void { settled = false; }
 
 /** Whether a restore pass is in flight — a capture during one would be a
  *  photograph of a half-built desk. */
@@ -665,6 +727,7 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
     return await restorePass(mode);
   } finally {
     restoring = false;
+    settled = true;
     /* Whatever asked for a capture while this was running gets one now,
        against a desk that is whole. */
     if (captureWanted) { captureWanted = false; void captureLayout(); }
@@ -688,7 +751,47 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
     if (isEphemeralSession(s.name)) continue;
     if (!validSessionName(s.name)) continue;
     const have = await tmux(["has-session", "-t", `=${s.name}`]);
-    if (have.ok) continue; // already back, or a live session never died
+    if (have.ok) {
+      /*
+       * THE SESSION IS BACK AND STILL MISSING MOST OF ITSELF.
+       *
+       * "Already back" was read as "nothing to do", and that is the shape the
+       * damage arrived in: the tmux server died, the engine made the session
+       * again — empty, one window — and this loop then skipped it, because a
+       * session by that name existed. Six windows of somebody's real work were
+       * never asked for. `has-session` answers a question nobody was asking.
+       *
+       * So the missing windows are built, matched by name and by the working
+       * directory of their first pane. Nothing is torn down and nothing is
+       * reordered: a window that is there is left exactly as it is.
+       */
+      /*
+       * ONLY WHILE THE DESK IS STILL COMING BACK.
+       *
+       * A live session in steady state is the owner's working desk, and this
+       * file's oldest promise is that a restore only ever builds what is
+       * missing from a desk nobody has yet — never adds a window to one
+       * somebody is sitting at. `settled` is that line: false until this
+       * process has finished its first pass, true forever after, so the repair
+       * happens at boot and the promise holds every other minute of the day.
+       */
+      if (settled) continue;
+      const live = await windowTree(s.name).catch(() => [] as TmuxWindowDetail[]);
+      const key = (n: string | undefined, path: string | undefined) => `${n ?? ""}\u0000${path ?? ""}`;
+      const here = new Set(live.map((w) => key(w.name, w.panes[0]?.path)));
+      /* Only when the desk is genuinely short of what was recorded. A session
+         a person has since rearranged is not a session to rebuild. */
+      for (const w of s.windows) {
+        if (here.has(key(w.name, w.panes[0]?.path))) continue;
+        const nw = await tmux(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${s.name}:`,
+          ...(w.name ? ["-n", w.name] : []), "-c", w.panes[0]?.path || ".", ...runArgs(mode, w.panes[0])]);
+        const wid = printed(nw);
+        made.push({ session: s.name, window: w, id: wid });
+        if (!wid) continue;
+        await restorePanes(s.name, wid, w.panes.slice(1), mode);
+      }
+      continue;
+    }
     const first = s.windows[0];
     if (!first) continue;
     const cwd0 = first.panes[0]?.path || ".";
