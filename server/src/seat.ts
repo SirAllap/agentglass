@@ -32,6 +32,7 @@
 import * as AgentOps from "./agentops.ts";
 import type * as AgentBoard from "./agentboard.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
+import { claudeModels } from "./claudemodels.ts";
 import { chatBypassAllowed, inScope, workspaceRoot } from "./config.ts";
 import { db } from "./db.ts";
 import { fieldReadout, boardNow } from "./lantern.ts";
@@ -42,10 +43,28 @@ import { queueReadout } from "./seatqueue.ts";
 
 /** What a seat is allowed to do. Ordered: each level is the one before it
  *  plus one verb, so a check is a comparison and not a set membership. */
-/** What a seat costs by default. Named rather than left empty: an empty model
- *  means "whatever this machine's CLI defaults to", which for a reader that
- *  wakes on every change is the wrong end of the price list. */
-export const DEFAULT_SEAT_MODEL = "claude-fable-5-1";
+/**
+ * What a seat costs when nobody chose.
+ *
+ * Not a hard-coded id: the catalogue this app ships moves, and a constant that
+ * names a model the catalogue no longer offers puts "(not in this list)" next
+ * to the default in the picker — measured, on the first build that had one.
+ * So it is a PREFERENCE, resolved against whatever is offered today: the
+ * cheapest capable tier first, because a seat reads a board and writes a
+ * sentence a few times an hour and is not the model you sit in front of.
+ *
+ * An empty answer is allowed and means "let the CLI decide", which is the only
+ * honest thing to say when the catalogue is empty.
+ */
+const SEAT_MODEL_PREFERENCE = [/fable/i, /haiku/i, /sonnet/i];
+
+export function defaultSeatModel(offered = claudeModels().map((m) => m.id)): string {
+  for (const want of SEAT_MODEL_PREFERENCE) {
+    const hit = offered.find((id) => want.test(id) && !id.includes("["));
+    if (hit) return hit;
+  }
+  return offered[0] ?? "";
+}
 
 export const POWERS = ["speak", "nudge", "assign"] as const;
 export type Power = (typeof POWERS)[number];
@@ -172,6 +191,17 @@ export function houseBlock(powers: Power, wakeHours: number): string {
     "",
     "## How this app works with you",
     "",
+    /*
+     * The three rules every published orchestrator converged on, and none of
+     * them were ours: the bank before the opinion, evidence instead of prose,
+     * and absence as a checkpoint rather than an answer. Orca's skill states
+     * the third best — "a timeout or empty result is a checkpoint, not a
+     * failure" — and the failure it prevents is the one people report most:
+     * a worker killed mid-task reports as completed, with no deliverable.
+     */
+    "- BEFORE you propose, queue or decide anything, ask what this person already decided: `agentglass-agent recall \"<the question, in your words>\"`. It answers out of thousands of recorded decisions, and it says when it has nothing — then decide on the facts and say you had no precedent.",
+    "- \"Done\" is evidence YOU observed: a commit that exists, a diff, a test run you read. Never an agent's own word for it, and never prose where a fact belongs. What you did not verify, you report as unverified.",
+    "- Silence is not an answer. An agent that has not replied is neither finished nor failed — it is unknown. Never conclude, retry, or hand its work to somebody else on a timeout alone: say it is unknown, and if it stays unknown say it needs a person.",
     "- Report each round by running `agentglass-agent say` from this checkout with YOUR sentence as its one argument — never the words below, which are only the shape:",
     "    agentglass-agent say \"2 stopped on you: db-fix wants permission (12m), tab-strip quiet 1h. 3 moving.\"",
     "  That sentence is what a person reads in the Orchestrator view; nothing else you print reaches them.",
@@ -259,7 +289,7 @@ export async function openSeat(p: {
      chosen", and an empty string is not nullish — with `??` the default below
      would be skipped and the CLI would fall back to the most expensive model
      on the machine. */
-  const model = p.model || row?.model || DEFAULT_SEAT_MODEL;
+  const model = p.model || row?.model || defaultSeatModel();
   const kind = p.kind ?? row?.kind ?? "claude";
   const { prompt } = await seatPrompt(root, powers, p.wakeHours ?? 4);
   const name = seatName(root);

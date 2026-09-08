@@ -203,7 +203,23 @@ describe("what a seat costs when nobody chose", () => {
     Seat.setSeatSettings(root, "", "speak");
     const row = Seat.seatRow(root)!;
     expect(row.model).toBe("");
-    expect(row.model || Seat.DEFAULT_SEAT_MODEL).toBe(Seat.DEFAULT_SEAT_MODEL);
+    expect(row.model || Seat.defaultSeatModel()).toBe(Seat.defaultSeatModel());
+  });
+
+  test("the default is resolved against what is offered, never a hard-coded id", () => {
+    /* A constant naming a model the catalogue has moved past puts "(not in
+       this list)" beside the default in the picker. Measured on the first
+       build that had a picker. */
+    expect(Seat.defaultSeatModel(["claude-opus-5", "claude-fable-5", "claude-haiku-4-5"])).toBe("claude-fable-5");
+    expect(Seat.defaultSeatModel(["claude-opus-5", "claude-haiku-4-5"])).toBe("claude-haiku-4-5");
+    /* A long-context variant is the same model with a bigger bill: not the one
+       to reach for by default. */
+    expect(Seat.defaultSeatModel(["claude-fable-5[1m]", "claude-fable-5"])).toBe("claude-fable-5");
+    /* Nothing cheap on offer: the first thing rather than a made-up id. */
+    expect(Seat.defaultSeatModel(["claude-opus-5"])).toBe("claude-opus-5");
+    /* And an empty catalogue means "let the CLI decide", said as an empty
+       string rather than as a guess. */
+    expect(Seat.defaultSeatModel([])).toBe("");
   });
 
   test("a chosen one is kept", () => {
@@ -219,5 +235,25 @@ describe("the house block's example cannot be copied blind", () => {
     const block = Seat.houseBlock("speak", 4);
     expect(block).not.toContain("<the line>");
     expect(block).toContain("agentglass-agent say");
+  });
+});
+
+describe("the three rules every published orchestrator converged on", () => {
+  test("ask the bank before deciding", () => {
+    expect(Seat.houseBlock("speak", 4)).toContain("agentglass-agent recall");
+  });
+
+  test("done is evidence, never the worker's prose", () => {
+    const b = Seat.houseBlock("assign", 4);
+    expect(b).toContain("evidence YOU observed");
+    expect(b).toContain("unverified");
+  });
+
+  test("silence is unknown — not finished, and not failed", () => {
+    /* Orca's rule, and the one that prevents the most-reported failure: a
+       worker killed mid-task reports as completed with no deliverable. */
+    const b = Seat.houseBlock("assign", 4);
+    expect(b).toContain("Silence is not an answer");
+    expect(b).toContain("unknown");
   });
 });

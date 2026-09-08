@@ -1415,6 +1415,14 @@ CREATE TABLE IF NOT EXISTS seat_task (
 );
 `);
 db.run(`CREATE INDEX IF NOT EXISTS seat_task_root ON seat_task (root, done_at, taken_at)`);
+/* WHAT WOULD PROVE IT IS DONE, written when the work is asked for and not
+ * argued about afterwards. Every published orchestration contract carries this
+ * field under some name — Orca calls it "observable acceptance" — because the
+ * failure it prevents is the one everybody reports: a worker that stops early
+ * reports "done" in prose, and without a named artefact nobody can tell that
+ * apart from the real thing. An ALTER rather than a column above, so a
+ * database made yesterday gains it too. */
+try { db.exec("ALTER TABLE seat_task ADD COLUMN proof TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
 
 /* What a run's branch pointed at when something last looked at it.
  *

@@ -222,30 +222,45 @@ export function CloseIcon({ size = ICON.md }: P) {
 /** A lantern: it lights when somebody needs you. The flame is the one filled
  *  shape on the rail — everything else here is strokes — because a flame
  *  drawn as an outline is a leaf. */
-/** The orchestrator: a chair seen from the side. Not a person, not a crown —
- *  the thing the view is about is whether somebody is IN it. */
-export function SeatIcon({ size = ICON.md }: P) {
+/*
+ * The orchestrator: one filled node with three it is holding.
+ *
+ * A chair was the first try and it read as a bracket at 16px — the size the
+ * rail actually draws. This is the hub every diagram of this idea uses, and it
+ * survives the size because it is three dots and three lines: the centre is
+ * FILLED when somebody is in the seat, which is the one fact the view exists
+ * to answer, and the ring is open when it is empty.
+ */
+export function SeatIcon({ size = ICON.md, seated = true }: P & { seated?: boolean }) {
   return (
     <svg {...svg} width={size} height={size}>
-      <path d="M7 4.5v7.5" />
-      <path d="M7 12h9" />
-      <path d="M16 12V8.5" />
-      <path d="M16 12v8" />
-      <path d="M7 12v8" />
-      <path d="M9.5 8.5h6" />
+      <path d="M12 9.4V6.2" />
+      <path d="M13.6 13.1l2.6 1.6" />
+      <path d="M10.4 13.1l-2.6 1.6" />
+      <circle cx="12" cy="4.4" r="1.9" />
+      <circle cx="17.8" cy="15.8" r="1.9" />
+      <circle cx="6.2" cy="15.8" r="1.9" />
+      <circle cx="12" cy="11.4" r="2.4" fill={seated ? "currentColor" : "none"} />
     </svg>
   );
 }
 
+/*
+ * The Lantern: a source and the cone it throws.
+ *
+ * It was a lantern — a body of six strokes with a flame inside — and the body
+ * crowded itself below 16px. This is the same idea with four: a lit centre and
+ * the beam under it. It also says the truer thing, since what this view does
+ * every fifteen minutes is sweep a field rather than sit on a table.
+ */
 export function LanternIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
-      <path d="M9 3.5h6" />
-      <path d="M12 3.5v2" />
-      <path d="M7.5 5.5h9l1 3h-11z" />
-      <path d="M8.5 8.5v8.5a1.5 1.5 0 0 0 1.5 1.5h4a1.5 1.5 0 0 0 1.5-1.5V8.5" />
-      <path d="M8.5 18.5h7" />
-      <path d="M12 15.6c-1.3 0-2-.9-2-1.9 0-1.2 1.1-1.8 1.4-3 .5 1 .6 1.5 1.1 1.8.3-.4.4-.7.4-1 .8.7 1.1 1.4 1.1 2.2 0 1-.7 1.9-2 1.9z" fill="currentColor" stroke="none" />
+      <path d="M12 3.6v2.6" />
+      <path d="M5.6 6.4l1.9 1.9" />
+      <path d="M18.4 6.4l-1.9 1.9" />
+      <path d="M6.2 20l5-8.6h1.6l5 8.6z" />
+      <circle cx="12" cy="9.9" r="2.6" fill="currentColor" stroke="none" />
     </svg>
   );
 }

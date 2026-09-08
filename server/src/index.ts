@@ -1371,6 +1371,7 @@ import { hookSaysSeat, isSeatSession, noteSeatSession } from "./seatrole.ts";
 import * as Seat from "./seat.ts";
 import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
 import * as SeatQueue from "./seatqueue.ts";
+import { recall } from "./seatmemory.ts";
 import * as AgentOps from "./agentops.ts";
 import { nudgeText, nudgeChannel, sendNudge } from "./prnudge.ts";
 import * as Schedule from "./agentschedule.ts";
@@ -6738,7 +6739,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/seat" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
-      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root) });
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -6771,8 +6772,11 @@ const server = Bun.serve<WsData>({
        * claims and finishes. Nothing here picks WHAT to work on — the seat
        * does that, out loud, and this only records that it did.
        */
+      /* The bank, asked on the seat's behalf. A POST because the question is
+         free text and a query string is the wrong place for a sentence. */
+      if (verb === "recall") return json({ ok: true, ...recall(String(b.question ?? "")) });
       if (verb === "task") {
-        const r = SeatQueue.addTask({ root, title: String(b.title ?? ""), detail: String(b.detail ?? ""), weight: Number(b.weight ?? 0) });
+        const r = SeatQueue.addTask({ root, title: String(b.title ?? ""), detail: String(b.detail ?? ""), proof: String(b.proof ?? ""), weight: Number(b.weight ?? 0) });
         return json(r, r.ok ? 200 : 400);
       }
       if (verb === "task/drop") {

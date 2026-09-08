@@ -696,13 +696,17 @@ export interface SeatAnswer {
   doctrineText: string;
   /** The project's queue: what it has been asked to see done, and who has it. */
   tasks: SeatTask[];
+  /** What this build offers, and what it would seat with if nobody chose.
+   *  From the server so the picker and the seating cannot disagree. */
+  models: { id: string; label: string }[];
+  defaultModel: string;
 }
 
 /** One line of the seat's queue. `takenBy` is a named agent, never a pane —
  *  tmux recycles pane ids and a row that outlived one would point at somebody
  *  else's work. */
 export interface SeatTask {
-  id: string; root: string; title: string; detail: string; weight: number; created: number;
+  id: string; root: string; title: string; detail: string; proof: string; weight: number; created: number;
   takenAt: number | null; takenBy: string; doneAt: number | null; outcome: string; attempts: number;
 }
 
@@ -1210,8 +1214,8 @@ const realApi = {
     post<{ ok: boolean; path?: string; error?: string }>("/seat/doctrine", { root, text }),
   /** The floor under the seat's waking, in hours — read and written with the
    *  Lantern's settings because it rides the same look. */
-  seatTaskAdd: (root: string, title: string, detail = "", weight = 0) =>
-    post<{ ok: boolean; error?: string }>("/seat/task", { root, title, detail, weight }),
+  seatTaskAdd: (root: string, title: string, proof = "", detail = "", weight = 0) =>
+    post<{ ok: boolean; error?: string }>("/seat/task", { root, title, proof, detail, weight }),
   seatTaskDrop: (root: string, id: string) => post<{ ok: boolean; error?: string }>("/seat/task/drop", { root, id }),
   seatWake: () => get<{ ok: boolean; hours: number }>("/seat/wake"),
   seatWakeSave: (hours: number) => post<{ ok: boolean; error?: string }>("/seat/wake", { hours }),
@@ -2321,12 +2325,12 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
-  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [] } as SeatAnswer),
+  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], models: [], defaultModel: "" } as SeatAnswer),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),
   seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
   seatDoctrineSave: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
-  seatTaskAdd: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  seatTaskAdd: (_r: string, _t: string, _p?: string) => D({ ok: false, error: "not available in the demo" }),
   seatTaskDrop: (_r: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   seatWake: () => D({ ok: true, hours: 4 }),
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),

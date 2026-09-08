@@ -158,3 +158,29 @@ describe("what the seat is told about its queue", () => {
     expect(Q.queueReadout(ROOT)).toContain("Nothing is waiting");
   });
 });
+
+describe("what would prove it done travels with the work", () => {
+  test("the readout names the proof, and names its absence", () => {
+    /* An orchestration contract without an observable acceptance is a contract
+       whose "finished" is prose — the failure every published one exists to
+       prevent, and the one people report most in practice. */
+    Q.addTask({ root: ROOT, title: "with proof", proof: "bun test server/test/export.test.ts is green" });
+    Q.addTask({ root: ROOT, title: "without proof" });
+    const text = Q.queueReadout(ROOT);
+    expect(text).toContain("done when: bun test server/test/export.test.ts is green");
+    expect(text).toContain("NOT STATED");
+  });
+
+  test("the id is in the readout, so the seat can claim what it just read", () => {
+    const t = add("claimable");
+    expect(Q.queueReadout(ROOT)).toContain(`[${t.id}]`);
+  });
+
+  test("an unstated proof is allowed rather than refused", () => {
+    /* Refusing it would push people to type something to get past the field,
+       and a made-up proof is worse than an admitted absence. */
+    const r = Q.addTask({ root: ROOT, title: "no proof yet" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.task.proof).toBe("");
+  });
+});

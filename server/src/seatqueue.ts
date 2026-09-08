@@ -24,6 +24,8 @@
 import { randomBytes } from "node:crypto";
 import { db } from "./db.ts";
 
+const line = (t: string) => String(t ?? "").replace(/\s+/g, " ").trim();
+
 /** The same number the clone uses, for the same reason: how many unattended
  *  goes before a person is asked, as one number and not two that drift. */
 export const MAX_ATTEMPTS = 2;
@@ -33,6 +35,9 @@ export interface SeatTask {
   root: string;
   title: string;
   detail: string;
+  /** What would prove it done — a test, a file, an output. Empty is allowed
+   *  and is itself a fact the seat is told about. */
+  proof: string;
   weight: number;
   created: number;
   takenAt: number | null;
@@ -43,17 +48,17 @@ export interface SeatTask {
 }
 
 interface Row {
-  id: string; root: string; title: string; detail: string; weight: number; created: number;
+  id: string; root: string; title: string; detail: string; proof: string; weight: number; created: number;
   taken_at: number | null; taken_by: string; done_at: number | null; outcome: string; attempts: number;
 }
 
 const toTask = (r: Row): SeatTask => ({
-  id: r.id, root: r.root, title: r.title, detail: r.detail, weight: r.weight, created: r.created,
+  id: r.id, root: r.root, title: r.title, detail: r.detail, proof: r.proof ?? "", weight: r.weight, created: r.created,
   takenAt: r.taken_at, takenBy: r.taken_by, doneAt: r.done_at, outcome: r.outcome, attempts: r.attempts,
 });
 
-const insert = db.query<never, [string, string, string, string, number, number]>(`
-  INSERT INTO seat_task (id, root, title, detail, weight, created) VALUES (?, ?, ?, ?, ?, ?)
+const insert = db.query<never, [string, string, string, string, string, number, number]>(`
+  INSERT INTO seat_task (id, root, title, detail, proof, weight, created) VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 const byRoot = db.query<Row, [string]>(`SELECT * FROM seat_task WHERE root = ? ORDER BY done_at IS NOT NULL, weight DESC, created ASC`);
 const byId = db.query<Row, [string]>(`SELECT * FROM seat_task WHERE id = ?`);
@@ -73,12 +78,12 @@ const finishQ = db.query<never, [number, string, string]>(`UPDATE seat_task SET 
 const releaseQ = db.query<never, [string]>(`UPDATE seat_task SET taken_at = NULL, taken_by = '' WHERE id = ? AND done_at IS NULL`);
 const dropQ = db.query<never, [string]>(`DELETE FROM seat_task WHERE id = ?`);
 
-export function addTask(p: { root: string; title: string; detail?: string; weight?: number; now?: number }):
+export function addTask(p: { root: string; title: string; detail?: string; proof?: string; weight?: number; now?: number }):
 { ok: true; task: SeatTask } | { ok: false; error: string } {
   const title = String(p.title ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
   if (!title) return { ok: false, error: "a task needs a title" };
   const id = `st_${randomBytes(8).toString("hex")}`;
-  insert.run(id, p.root, title, String(p.detail ?? "").slice(0, 4000), Math.max(0, Math.min(10, Math.round(p.weight ?? 0))), p.now ?? Date.now());
+  insert.run(id, p.root, title, String(p.detail ?? "").slice(0, 4000), line(p.proof ?? "").slice(0, 400), Math.max(0, Math.min(10, Math.round(p.weight ?? 0))), p.now ?? Date.now());
   return { ok: true, task: toTask(byId.get(id)!) };
 }
 
@@ -140,10 +145,14 @@ export function queueReadout(root: string): string {
   const stuck = all.filter((t) => !t.doneAt && !t.takenAt && t.attempts >= MAX_ATTEMPTS);
   const lines: string[] = [];
   lines.push(open.length ? `Waiting (${open.length}):` : "Nothing is waiting to be handed out.");
-  lines.push(...open.map((t) => `- ${t.title}${t.detail ? ` — ${t.detail.slice(0, 120)}` : ""}`));
+  /* The proof rides with every line. A queue that says WHAT without saying
+     what would prove it done is a queue whose "finish" is somebody's prose. */
+  const withProof = (t: SeatTask) =>
+    `- [${t.id}] ${t.title}${t.detail ? ` — ${t.detail.slice(0, 120)}` : ""}\n    done when: ${t.proof || "NOT STATED — say so, and agree one before you hand it out"}`;
+  lines.push(...open.map(withProof));
   if (out.length) {
     lines.push("", `Out with somebody (${out.length}):`);
-    lines.push(...out.map((t) => `- ${t.title} → ${t.takenBy || "unnamed"}`));
+    lines.push(...out.map((t) => `- [${t.id}] ${t.title} → ${t.takenBy || "unnamed"}\n    done when: ${t.proof || "NOT STATED"}`));
   }
   if (stuck.length) {
     lines.push("", `Beaten ${MAX_ATTEMPTS} times — do NOT hand these out again, say they need a person:`);

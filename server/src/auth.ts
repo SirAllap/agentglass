@@ -347,13 +347,13 @@ export function seatTokenCount(): number { return seatTokens.size; }
  * understudy's reads — every view, minus the ones that are a shell wearing a
  * GET.
  */
-const SEAT_POST_NUDGE = new Set(["/agents/named/prompt", "/agents/named/read", "/agents/named/wait", "/seat/say"]);
+const SEAT_POST_NUDGE = new Set(["/agents/named/prompt", "/agents/named/read", "/agents/named/wait", "/seat/say", "/seat/recall"]);
 const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys"]);
 
 export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string): boolean {
   if (method === "GET" || method === "HEAD") return !FULL_GET.has(pathname);
   if (method !== "POST") return false;
-  if (pathname === "/seat/say") return true;
+  if (pathname === "/seat/say" || pathname === "/seat/recall") return true;
   if (READ_POST.has(pathname)) return true;
   if (powers === "speak") return false;
   if (SEAT_POST_NUDGE.has(pathname)) return true;

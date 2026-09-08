@@ -28,7 +28,10 @@ export type ViewDef = {
    * Which drawer a view is actually IN is the user's, and lives in the rail
    * layout below; this is only where it starts.
    */
-  group?: "utility";
+  /** Which drawer this ships in. "utility" is the bottom one; "hidden" is the
+   *  rail's back pocket — the view still exists and is still reachable from the
+   *  restore menu, it just does not take a seat by default. */
+  group?: "utility" | "hidden";
 };
 
 /** Order is the rail's order, and ⌘1..⌘N index into it.
@@ -72,7 +75,22 @@ export const VIEWS: ViewDef[] = [
   // It is a scorecard. It cannot stage, commit, launch or answer anything, and
   // a seat among the views you WORK in would be a promise the view does not
   // keep.
-  { id: "understudy", label: "Clone", key: "u", icon: UnderstudyIcon, hint: "What a stand-in would have done, and how often that matched — it never acts", group: "utility" },
+  /*
+   * OUT OF THE RAIL, and not deleted.
+   *
+   * Measured on the machine this was built for: the precedent bank holds
+   * 10,580 rows and is the half worth keeping, while the ledger it sat next to
+   * had 145,807 rows of which 879 were ever scored, and the work loop had not
+   * run for a week. The bank is not lost — it became the orchestrator's memory
+   * (seatmemory.ts), which is what it was for. What is gone is a rail seat for
+   * a scoreboard nobody reads.
+   *
+   * `hidden` rather than removed: the Teach tab is the only way to consent to a
+   * source and re-ingest, the tables are untouched, and the restore menu brings
+   * the view back for anybody who wants it. A DROP is the one thing git cannot
+   * undo, and this is not that.
+   */
+  { id: "understudy", label: "Clone", key: "u", icon: UnderstudyIcon, hint: "What it knows about you, and what it would have done — its bank is now the orchestrator's memory", group: "hidden" },
   /*
    * Appended, same reason as the two above it. Bottom drawer because it is a
    * thing you go and LOOK at — and the one view whose icon comes to you: it
@@ -129,9 +147,9 @@ const LEGACY_ORDER_KEY = "agentglass.workspace.order";
 /** What the rail looks like before anyone touches it. Also the server snapshot
  *  for useSyncExternalStore, where localStorage does not exist. */
 export const SHIPPED_RAIL: RailLayout = {
-  work: VIEWS.filter((v) => v.group !== "utility"),
+  work: VIEWS.filter((v) => !v.group),
   utility: VIEWS.filter((v) => v.group === "utility"),
-  hidden: [],
+  hidden: VIEWS.filter((v) => v.group === "hidden"),
 };
 
 /**
@@ -194,9 +212,9 @@ function buildRail(): RailLayout {
     const flat = pick(legacy);
     for (const v of VIEWS) if (!taken.has(v.id)) { taken.add(v.id); flat.push(v); }
     return {
-      work: flat.filter((v) => v.group !== "utility"),
+      work: flat.filter((v) => !v.group),
       utility: flat.filter((v) => v.group === "utility"),
-      hidden: [],
+      hidden: flat.filter((v) => v.group === "hidden"),
     };
   }
 
@@ -205,11 +223,17 @@ function buildRail(): RailLayout {
   const hidden = pick(stored.hidden);
   // A view that shipped after this layout was saved lands in its own drawer, at
   // the end — visible, because a view nobody has had the chance to reject
-  // should not arrive already hidden.
+  // should not arrive already hidden. Unless it SHIPS hidden, which is a
+  // different statement: that one is not new to this person, it is one this
+  // version stopped giving a seat to.
+  //
+  // And a view already placed by a saved layout stays where that person put it.
+  // Shipping something hidden must not reach into a rail somebody arranged;
+  // they can drag it out, or reset.
   for (const v of VIEWS) {
     if (taken.has(v.id)) continue;
     taken.add(v.id);
-    (v.group === "utility" ? utility : work).push(v);
+    (v.group === "utility" ? utility : v.group === "hidden" ? hidden : work).push(v);
   }
   return { work, utility, hidden };
 }

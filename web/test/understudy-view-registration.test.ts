@@ -93,7 +93,13 @@ describe("the understudy view is registered in all four places", () => {
     expect(entry).toContain('label: "Clone"');
     expect(entry).toContain('key: "u"');
     expect(entry).toContain("icon: UnderstudyIcon");
-    expect(entry).toContain('group: "utility"');
+    /* Ships HIDDEN since 2026-09-08, and the number is the reason: the bank it
+       exists for holds 10,580 rows and is now the orchestrator's memory, while
+       the ledger beside it had 145,807 rows of which 879 were ever scored and
+       the work loop had not run in a week. The view is not deleted and neither
+       are its tables — the Teach tab is still the only way to consent to a
+       source — it just no longer takes a rail seat by default. */
+    expect(entry).toContain('group: "hidden"');
     // A hint with something in it: the rail's tooltip and the shortcuts sheet
     // both read it, and an empty one leaves a tab nobody can identify.
     const hint = /hint:\s*"([^"]+)"/.exec(entry);

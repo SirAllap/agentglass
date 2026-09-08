@@ -4,7 +4,6 @@ import { jumpToPane } from "../lib/paneJump.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { edge, wash } from "./git/ui.tsx";
 import { api, type SeatAnswer, type SeatTask } from "../lib/api.ts";
-import type { AgentModel } from "../../../shared/types.ts";
 
 /**
  * THE ORCHESTRATOR — the chair, and who is in it.
@@ -32,10 +31,10 @@ const POWERS: { id: "speak" | "nudge" | "assign"; label: string; what: string }[
 
 const here = (p: string) => p.replace(/^\/home\/[^/]+\//, "~/");
 
-/** What a seat costs when nobody has chosen — the same constant the server
- *  seats with, repeated here so the dropdown shows what will actually run
- *  rather than the first option in the list. */
-const DEFAULT_SEAT_MODEL = "claude-fable-5-1";
+/* What a seat would run on if nobody chose is the SERVER's answer, carried on
+   the seat payload. A constant repeated here went stale the moment the model
+   catalogue moved, and the picker then labelled its own default "not in this
+   list". */
 
 /** A small chip in the house style: a wash of its tone, never a solid block. */
 function Chip({ tone, title, children }: { tone: string; title?: string; children: React.ReactNode }) {
@@ -65,7 +64,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [openRules, setOpenRules] = useState(false);
   const [adding, setAdding] = useState("");
-  const [models, setModels] = useState<AgentModel[]>([]);
+  const [proof, setProof] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -78,9 +77,6 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   useEffect(() => {
     void load();
     void api.seatWake().then((r) => { if (r.ok) setWake(r.hours); }).catch(() => {});
-    /* The chat's own list, not a second one: two model dropdowns that could
-       disagree about what this machine offers is one too many. */
-    void api.chatEnabled().then((r) => setModels(r.models ?? [])).catch(() => {});
     /* The seat says a line a few times an hour at most; this reads one row and
        one tmux list, so noticing one within a quarter minute is plenty. */
     const t = setInterval(() => { void load(); }, 15_000);
@@ -97,6 +93,10 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const out = tasks.filter((t) => !t.doneAt && t.takenAt);
   const stuck = tasks.filter((t) => !t.doneAt && !t.takenAt && t.attempts >= 2);
   const done = tasks.filter((t) => t.doneAt);
+  const models = data?.models ?? [];
+  /* What is actually set, which is the row's choice or the server's default —
+     never a value this file invented. */
+  const chosen = seat?.model || data?.defaultModel || "";
   /* Nothing came back, or what came back was a refusal: everything below is
      unknown, not empty. */
   const unread = data === null || data.ok === false;
@@ -209,11 +209,18 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
             )}
           </div>
 
+          {/* Two fields, because a task with no stated proof is a task whose
+              "done" is somebody's prose — the failure every orchestration
+              contract published so far exists to prevent. Not required: an
+              unstated proof is allowed and the seat is told it is missing. */}
           <form className="flex items-center gap-2"
-            onSubmit={(e) => { e.preventDefault(); const t = adding.trim(); if (!t) return; void act("task", async () => { const r = await api.seatTaskAdd(root, t); if (r.ok) setAdding(""); return r; }); }}>
+            onSubmit={(e) => { e.preventDefault(); const t = adding.trim(); if (!t) return; void act("task", async () => { const r = await api.seatTaskAdd(root, t, proof.trim()); if (r.ok) { setAdding(""); setProof(""); } return r; }); }}>
             <input value={adding} onChange={(e) => setAdding(e.target.value)} placeholder="Ask the seat to see something done…"
-              className="flex-1 rounded-md px-2.5 py-1.5 text-[12px]"
+              className="flex-[3] min-w-0 rounded-md px-2.5 py-1.5 text-[12px]"
               style={{ background: "var(--surface2, var(--bg2))", border: edge(18), color: "var(--text)" }} />
+            <input value={proof} onChange={(e) => setProof(e.target.value)} placeholder="done when… (a test, a file, an output)"
+              className="flex-[2] min-w-0 rounded-md px-2.5 py-1.5 text-[12px]"
+              style={{ background: "var(--surface2, var(--bg2))", border: edge(18), color: "var(--text3)" }} />
             <button type="submit" disabled={!adding.trim() || !!busy || !root}
               className="agx-btn text-[11px] px-2.5 py-1.5 rounded disabled:opacity-50"
               style={{ color: "var(--text2)", border: edge(20) }}>Add</button>
@@ -233,8 +240,12 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   return (
                     <li key={t.id} className="rounded-lg px-3 py-2 flex items-baseline gap-2.5"
                       style={{ background: "var(--surface2, var(--bg2))", border: `1px solid ${beaten ? wash("--warning", 34) : "var(--border, rgba(255,255,255,0.08))"}` }}>
-                      <span className="text-[12px] flex-1 min-w-0 truncate" title={t.detail || t.title}
+                      <span className="text-[12px] flex-1 min-w-0 truncate" title={[t.detail, t.proof && `done when: ${t.proof}`].filter(Boolean).join("\n\n") || t.title}
                         style={{ color: t.doneAt ? "var(--text4)" : "var(--text)", textDecoration: t.doneAt ? "line-through" : undefined }}>{t.title}</span>
+                      {!t.doneAt && !t.proof && (
+                        <span className="text-[10px] shrink-0" style={{ color: "var(--warning)" }}
+                          title="Nothing says what would prove this done, so 'finished' will be somebody's word for it">no proof</span>
+                      )}
                       {t.doneAt
                         ? <span className="text-[10.5px] shrink-0" style={{ color: "var(--text4)" }} title={t.outcome}>done {fmtAgo(t.doneAt)} ago</span>
                         : t.takenAt
@@ -300,14 +311,14 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
           </div>
           <div className="flex items-center gap-2 pt-1">
             <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>Model</span>
-            <select value={seat?.model || DEFAULT_SEAT_MODEL} disabled={!!busy || !root}
+            <select value={seat?.model || data?.defaultModel || ""} disabled={!!busy || !root}
               onChange={(e) => void act("model", () => api.seatSettingsSave(root, { model: e.target.value }))}
               className="rounded px-2 py-1 text-[11px]"
               style={{ background: "var(--surface2, var(--bg2))", border: edge(18), color: "var(--text2)" }}>
               {/* The current value always has an option, even when this machine
                   no longer offers it: a select whose value is absent silently
                   shows the first entry, which reads as "it is set to that". */}
-              {[...(models.some((m) => m.id === (seat?.model || DEFAULT_SEAT_MODEL)) ? [] : [{ id: seat?.model || DEFAULT_SEAT_MODEL, label: `${seat?.model || DEFAULT_SEAT_MODEL} (not in this machine's list)` }]), ...models]
+              {[...(chosen && !models.some((m) => m.id === chosen) ? [{ id: chosen, label: `${chosen} (not in this build's list)` }] : []), ...models]
                 .map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
             </select>
             <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
