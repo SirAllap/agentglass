@@ -20,7 +20,7 @@
  * going quiet for an hour, or a window vanishing.
  */
 import * as AgentOps from "./agentops.ts";
-import { seatWakeHours } from "./config.ts";
+import { inScope, seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
 import { everySeat, seatName } from "./seat.ts";
 import { releaseVanished } from "./seatqueue.ts";
@@ -68,7 +68,6 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
   const seats = (deps.seats ?? (() => everySeat()))();
   const send = deps.prompt ?? ((name: string, text: string) => promptByName(name, text));
   const floorMs = seatWakeHours() * 3_600_000;
-  const fp = fingerprint(f);
   const woken: string[] = [];
   /* Work handed to an agent whose window is gone is work nobody is doing, and
      a row left claimed is hidden from the queue for ever. Freed here, on the
@@ -83,6 +82,11 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
     /* A row with `ended_at` set is a project whose chair is empty. Its
        settings are kept; nobody is in it to wake. */
     if (s.endedAt !== null) continue;
+    /* Whose field this is. A seat for one repository woken because an agent in
+       another one stopped would spend a turn reporting on work that is none of
+       its business — and, with powers, offer to unstick it. */
+    const mine = f.filter((x) => x.worktree && inScope(x.worktree, s.root));
+    const fp = fingerprint(mine);
     const last = told.get(s.root);
     const changed = !last || last.fingerprint !== fp;
     const overdue = !last || now - last.at >= floorMs;
@@ -92,7 +96,7 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
        field in its opening prompt, and waking it to say so would be a turn
        spent repeating what it is already reading. */
     if (!last) continue;
-    await send(seatName(s.root), changed ? wakeLine(f, last.fingerprint) : "Nothing has changed since your last round. Say so in one line, or say what you notice.");
+    await send(seatName(s.root), changed ? wakeLine(mine, last.fingerprint) : "Nothing has changed since your last round. Say so in one line, or say what you notice.");
     woken.push(s.root);
   }
   return woken;

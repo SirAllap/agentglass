@@ -19,10 +19,13 @@ process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
 
 const { fingerprint, wakeLine, wakeSeats, __resetSeatWake } = await import("../src/seatwake.ts");
 
-const waiting = (name: string, since = 1_000): Finding => ({ kind: "waiting", name, since, line: `${name} needs your permission — 7m: Bash` });
-const gone = (name: string, since = 1_000): Finding => ({ kind: "gone", name, since, line: `${name}'s window is gone` });
-
 const ROOT = "/home/a/code/orbit";
+/* Every finding carries the checkout it came from: a seat is per project and
+   the board is not. Default to this project's, so a test that is about the
+   clock does not have to say so. */
+const waiting = (name: string, since = 1_000, worktree = ROOT): Finding => ({ kind: "waiting", name, since, worktree, line: `${name} needs your permission — 7m: Bash` });
+const gone = (name: string, since = 1_000, worktree = ROOT): Finding => ({ kind: "gone", name, since, worktree, line: `${name}'s window is gone` });
+
 const seats = () => [{ root: ROOT, endedAt: null as number | null }];
 
 describe("what counts as a change", () => {
@@ -108,5 +111,41 @@ describe("the line the seat is woken with", () => {
 
   test("says the field is clear when it is, rather than saying nothing", () => {
     expect(wakeLine([], fingerprint([waiting("a")]))).toContain("clear");
+  });
+});
+
+describe("a seat is woken for its own project only", () => {
+  beforeEach(() => __resetSeatWake());
+
+  test("an agent stopped in another repository is not this seat's business", async () => {
+    const sent: string[] = [];
+    const prompt = async (_n: string, t: string) => { sent.push(t); };
+    await wakeSeats([], { seats, prompt, now: 0 });
+    /* Somebody stops, in a checkout that is nothing to do with this project. */
+    const woken = await wakeSeats([waiting("other-repo-agent", 1_000, "/home/a/code/elsewhere")], { seats, prompt, now: 60_000 });
+    expect(woken).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  test("a checkout inside this project IS its business", async () => {
+    /* This proves the plain containment half. The other half — a linked
+       worktree, which is a SIBLING of the root (`~/code/orbit-ORBIT-1042` next
+       to `~/code/orbit`) and not a child — is `inScope`'s worktree family, and
+       it needs a real git checkout to exercise; it is covered where `inScope`
+       itself is tested. Named here so nobody reads this test as proving both. */
+    const sent: string[] = [];
+    const prompt = async (_n: string, t: string) => { sent.push(t); };
+    await wakeSeats([], { seats, prompt, now: 0 });
+    const woken = await wakeSeats([waiting("mine", 1_000, `${ROOT}/packages/api`)], { seats, prompt, now: 60_000 });
+    expect(woken).toEqual([ROOT]);
+    expect(sent[0]).toContain("mine");
+  });
+
+  test("a finding with no checkout at all is left out rather than guessed in", async () => {
+    const sent: string[] = [];
+    const prompt = async (_n: string, t: string) => { sent.push(t); };
+    await wakeSeats([], { seats, prompt, now: 0 });
+    const woken = await wakeSeats([{ kind: "gone", name: "nowhere", since: 1, line: "gone" }], { seats, prompt, now: 60_000 });
+    expect(woken).toEqual([]);
   });
 });

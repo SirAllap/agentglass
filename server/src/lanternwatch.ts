@@ -46,6 +46,10 @@ export interface Finding {
   name: string;
   line: string;
   pane?: string;
+  /** The checkout the agent is in, when it is known. Carried so a per-project
+   *  reader (seatwake.ts) can tell whose field this belongs to — the board is
+   *  machine-wide and a seat is not. */
+  worktree?: string;
   /** Sort key: the oldest wait first, then the longest silence. */
   since: number;
 }
@@ -82,7 +86,7 @@ export function findings(p: {
          nobody coming back to it. A permission or a gate is urgent at once. */
       if (r.needsYou.kind === "input" && now - r.needsYou.since < FORGOTTEN_AFTER_MS) continue;
       out.push({
-        kind: "waiting", name: r.name, pane: r.paneId, since: r.needsYou.since,
+        kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou.since,
         line: `${r.name} ${waitWord(r.needsYou)} — ${ago(r.needsYou.since, now)}${r.needsYou.why ? `: ${r.needsYou.why}` : ""}`.slice(0, 200),
       });
       continue;
@@ -92,7 +96,7 @@ export function findings(p: {
        never claimed a task is not forgotten work — it is a shell. */
     if (r.state === "idle" && r.doing && r.saidAt && now - r.saidAt >= FORGOTTEN_AFTER_MS) {
       out.push({
-        kind: "forgotten", name: r.name, pane: r.paneId, since: r.saidAt,
+        kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt,
         line: `${r.name} said it was on "${r.doing}" and has been quiet for ${ago(r.saidAt, now)} — done, or stuck?`.slice(0, 200),
       });
     }
@@ -101,7 +105,7 @@ export function findings(p: {
     const alive = new Set(p.namedNow.map((a) => a.name));
     for (const a of p.namedBefore) {
       if (!alive.has(a.name)) {
-        out.push({ kind: "gone", name: a.name, since: a.startedAt, line: `${a.name}'s window is gone (started ${ago(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
+        out.push({ kind: "gone", name: a.name, worktree: a.cwd, since: a.startedAt, line: `${a.name}'s window is gone (started ${ago(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
       }
     }
   }

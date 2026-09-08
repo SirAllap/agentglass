@@ -4,6 +4,7 @@ import { jumpToPane } from "../lib/paneJump.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { edge, wash } from "./git/ui.tsx";
 import { api, type SeatAnswer, type SeatTask } from "../lib/api.ts";
+import type { AgentModel } from "../../../shared/types.ts";
 
 /**
  * THE ORCHESTRATOR — the chair, and who is in it.
@@ -30,6 +31,11 @@ const POWERS: { id: "speak" | "nudge" | "assign"; label: string; what: string }[
 ];
 
 const here = (p: string) => p.replace(/^\/home\/[^/]+\//, "~/");
+
+/** What a seat costs when nobody has chosen — the same constant the server
+ *  seats with, repeated here so the dropdown shows what will actually run
+ *  rather than the first option in the list. */
+const DEFAULT_SEAT_MODEL = "claude-fable-5-1";
 
 /** A small chip in the house style: a wash of its tone, never a solid block. */
 function Chip({ tone, title, children }: { tone: string; title?: string; children: React.ReactNode }) {
@@ -59,6 +65,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [openRules, setOpenRules] = useState(false);
   const [adding, setAdding] = useState("");
+  const [models, setModels] = useState<AgentModel[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -71,6 +78,9 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   useEffect(() => {
     void load();
     void api.seatWake().then((r) => { if (r.ok) setWake(r.hours); }).catch(() => {});
+    /* The chat's own list, not a second one: two model dropdowns that could
+       disagree about what this machine offers is one too many. */
+    void api.chatEnabled().then((r) => setModels(r.models ?? [])).catch(() => {});
     /* The seat says a line a few times an hour at most; this reads one row and
        one tmux list, so noticing one within a quarter minute is plenty. */
     const t = setInterval(() => { void load(); }, 15_000);
@@ -287,6 +297,22 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                 </button>
               );
             })}
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>Model</span>
+            <select value={seat?.model || DEFAULT_SEAT_MODEL} disabled={!!busy || !root}
+              onChange={(e) => void act("model", () => api.seatSettingsSave(root, { model: e.target.value }))}
+              className="rounded px-2 py-1 text-[11px]"
+              style={{ background: "var(--surface2, var(--bg2))", border: edge(18), color: "var(--text2)" }}>
+              {/* The current value always has an option, even when this machine
+                  no longer offers it: a select whose value is absent silently
+                  shows the first entry, which reads as "it is set to that". */}
+              {[...(models.some((m) => m.id === (seat?.model || DEFAULT_SEAT_MODEL)) ? [] : [{ id: seat?.model || DEFAULT_SEAT_MODEL, label: `${seat?.model || DEFAULT_SEAT_MODEL} (not in this machine's list)` }]), ...models]
+                .map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+            <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
+              A seat reads a board and writes a sentence a few times an hour — it is not the model you sit in front of.
+            </span>
           </div>
         </section>
 

@@ -30,8 +30,9 @@
  * agentops.ts learned about permission flags arriving as parameters.
  */
 import * as AgentOps from "./agentops.ts";
+import type * as AgentBoard from "./agentboard.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
-import { chatBypassAllowed, workspaceRoot } from "./config.ts";
+import { chatBypassAllowed, inScope, workspaceRoot } from "./config.ts";
 import { db } from "./db.ts";
 import { fieldReadout, boardNow } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
@@ -41,6 +42,11 @@ import { queueReadout } from "./seatqueue.ts";
 
 /** What a seat is allowed to do. Ordered: each level is the one before it
  *  plus one verb, so a check is a comparison and not a set membership. */
+/** What a seat costs by default. Named rather than left empty: an empty model
+ *  means "whatever this machine's CLI defaults to", which for a reader that
+ *  wakes on every change is the wrong end of the price list. */
+export const DEFAULT_SEAT_MODEL = "claude-fable-5-1";
+
 export const POWERS = ["speak", "nudge", "assign"] as const;
 export type Power = (typeof POWERS)[number];
 export const isPower = (s: unknown): s is Power => typeof s === "string" && (POWERS as readonly string[]).includes(s);
@@ -166,7 +172,9 @@ export function houseBlock(powers: Power, wakeHours: number): string {
     "",
     "## How this app works with you",
     "",
-    `- Report each round with ONE line: \`agentglass-agent say \"<the line>\"\`, run from this checkout. That line is what a person reads in the Orchestrator view; nothing else you print reaches them.`,
+    "- Report each round by running `agentglass-agent say` from this checkout with YOUR sentence as its one argument — never the words below, which are only the shape:",
+    "    agentglass-agent say \"2 stopped on you: db-fix wants permission (12m), tab-strip quiet 1h. 3 moving.\"",
+    "  That sentence is what a person reads in the Orchestrator view; nothing else you print reaches them.",
     `- ${may}`,
     "- You never merge, never push, and never open a pull request. When something is ready you say it is ready and who it is ready for.",
     `- DO NOT build a loop or a schedule of your own. This app re-reads the field on its own clock and will prompt you when something changes, and at least every ${wakeHours} h if nothing does. A round you run for yourself is a round nobody asked for.`,
@@ -175,16 +183,35 @@ export function houseBlock(powers: Power, wakeHours: number): string {
   ].join("\n");
 }
 
+/**
+ * The field, narrowed to one project.
+ *
+ * The board is machine-wide, and the seat is not: an orchestrator for one
+ * repository being handed every agent on the laptop would report on work that
+ * is none of its business and, worse, offer to unstick it. A row belongs to
+ * this project when its checkout does — measured with `inScope`, which knows
+ * the worktree FAMILY, because the worktrees of a project are siblings of its
+ * root and not children of it (`~/code/orbit-ORBIT-1042` next to `~/code/orbit`).
+ *
+ * A row with no checkout at all is left OUT rather than guessed in: a screen
+ * that guesses is a screen that lies, and the cost of leaving one out is that
+ * the seat does not mention it, while the cost of guessing it in is the seat
+ * prompting somebody else's agent.
+ */
+export function fieldFor(root: string, rows: AgentBoard.BoardRow[]): AgentBoard.BoardRow[] {
+  return rows.filter((r) => r.worktree && inScope(r.worktree, root));
+}
+
 /** Doctrine + field + house block, in the order the seat reads them. */
 export async function seatPrompt(root: string, powers: Power, wakeHours: number): Promise<{ prompt: string; doctrine: string }> {
   const { text } = readDoctrine(root);
-  const rows = await boardNow().catch(() => []);
+  const rows = fieldFor(root, await boardNow().catch(() => []));
   const prompt = [
     `${SEAT_PROMPT_MARK}: ${root}.`,
     "",
     text.trim(),
     houseBlock(powers, wakeHours),
-    "## The field as it is right now",
+    `## The agents working in ${root} right now`,
     "",
     fieldReadout(rows),
     "",
@@ -224,7 +251,15 @@ export async function openSeat(p: {
   if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0 }), agent: there, already: true };
 
   const powers: Power = p.powers ?? row?.powers ?? "speak";
-  const model = p.model ?? row?.model ?? "";
+  /* A seat reads a board and writes a sentence a few times an hour. It is not
+     the model you sit in front of, and left to the CLI's default it would be
+     the most expensive one on the machine — so the default is named here, and
+     a person can change it. */
+  /* `||`, not `??`: a row written by the settings route carries "" for "not
+     chosen", and an empty string is not nullish — with `??` the default below
+     would be skipped and the CLI would fall back to the most expensive model
+     on the machine. */
+  const model = p.model || row?.model || DEFAULT_SEAT_MODEL;
   const kind = p.kind ?? row?.kind ?? "claude";
   const { prompt } = await seatPrompt(root, powers, p.wakeHours ?? 4);
   const name = seatName(root);

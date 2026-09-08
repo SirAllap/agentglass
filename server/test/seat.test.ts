@@ -190,3 +190,34 @@ describe("settings live on the row, so they outlast a seating", () => {
     expect(Seat.seatRow(root)?.powers).toBe("nudge");
   });
 });
+
+describe("what a seat costs when nobody chose", () => {
+  const root = join(dir, "proj-model");
+  beforeEach(() => { db.query("DELETE FROM seat").run(); });
+
+  test("an unchosen model is the named default, not the CLI's", () => {
+    /* The settings route writes "" for "not chosen", and "" is not nullish:
+       with `??` the default was skipped and the seat would have started on
+       whatever this machine's CLI falls back to — which for a reader woken on
+       every change is the wrong end of the price list. */
+    Seat.setSeatSettings(root, "", "speak");
+    const row = Seat.seatRow(root)!;
+    expect(row.model).toBe("");
+    expect(row.model || Seat.DEFAULT_SEAT_MODEL).toBe(Seat.DEFAULT_SEAT_MODEL);
+  });
+
+  test("a chosen one is kept", () => {
+    Seat.setSeatSettings(root, "claude-haiku-4-5", "speak");
+    expect(Seat.seatRow(root)?.model).toBe("claude-haiku-4-5");
+  });
+});
+
+describe("the house block's example cannot be copied blind", () => {
+  test("it carries a real sentence, not a placeholder", () => {
+    /* Measured on his install: the seat ran the example verbatim and its first
+       report read "<the line>". An example with a slot in it is a command. */
+    const block = Seat.houseBlock("speak", 4);
+    expect(block).not.toContain("<the line>");
+    expect(block).toContain("agentglass-agent say");
+  });
+});
