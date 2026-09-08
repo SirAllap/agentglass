@@ -1,4 +1,6 @@
 import type { StatsSummary } from "../../shared/types.ts";
+import { statSync } from "node:fs";
+import { outboundDestination } from "./egress.ts";
 
 // Model pricing, USD per 1,000,000 tokens.
 //
@@ -141,6 +143,9 @@ type PricingProvenance = NonNullable<StatsSummary["pricing"]>;
 
 export const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+/** The host that URL names, trusted for this one read the way the webhook
+ *  trusts the two chat services it exists for. Nothing else is. */
+export const PRICING_SERVICE_HOSTS = ["raw.githubusercontent.com"] as const;
 const BUNDLED_UPDATED_AT = "2026-07-28";
 const LITELLM_MAX_BYTES = 5 * 1024 * 1024;
 const LITELLM_MIN_MODELS = 100;
@@ -155,11 +160,27 @@ function matchTable(table: ModelPrice[], model: string): ModelPrice | null {
   return null;
 }
 
-function perMillion(value: unknown, optional = false): number | null {
-  if (value === undefined && optional) return 0;
+function perMillion(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
   return value * 1_000_000;
 }
+
+/**
+ * What a cache token costs when the catalogue does not price one.
+ *
+ * Absent is not free, and reading it as zero would quietly replace a rate we
+ * verified by hand with nothing. Counted in today's catalogue: 843 rows carry a
+ * discounted `cache_read` and no `cache_creation` — OpenAI's and Gemini's shape,
+ * where writing to the cache costs the ordinary input rate and only the read is
+ * cheaper — and 1,971 rows publish neither, which is a provider that prices no
+ * caching at all. Ordinary input is the honest answer to both, and it is the
+ * floor in every case: no provider bills a cache write below its input rate.
+ *
+ * An explicit `0` is left alone — 37 rows mean it, and meaning it is different
+ * from not saying.
+ */
+const cacheRate = (value: unknown, input: number): number | null =>
+  value === undefined || value === null ? input : perMillion(value);
 
 /** Validate the remote shape before any of it can replace the active catalogue. */
 export function mapLiteLlmPricing(raw: unknown): Map<string, ModelPrice> {
@@ -170,9 +191,10 @@ export function mapLiteLlmPricing(raw: unknown): Map<string, ModelPrice> {
     const row = value as Record<string, unknown>;
     const input = perMillion(row.input_cost_per_token);
     const output = perMillion(row.output_cost_per_token);
-    const cacheWrite = perMillion(row.cache_creation_input_token_cost, true);
-    const cacheRead = perMillion(row.cache_read_input_token_cost, true);
-    if (input === null || output === null || cacheWrite === null || cacheRead === null) continue;
+    if (input === null || output === null) continue;
+    const cacheWrite = cacheRate(row.cache_creation_input_token_cost, input);
+    const cacheRead = cacheRate(row.cache_read_input_token_cost, input);
+    if (cacheWrite === null || cacheRead === null) continue;
     const name = rawName.toLowerCase();
     mapped.set(name, {
       match: [],
@@ -195,6 +217,8 @@ export class PricingCatalog {
   constructor(
     private readonly bundled: ModelPrice[],
     private readonly user: ModelPrice[] | null = null,
+    /** When the user's own file was last written — not when this process
+     *  started, which says nothing about the numbers in it. */
     private readonly userLoadedAt = new Date().toISOString().slice(0, 10),
   ) {}
 
@@ -212,6 +236,15 @@ export class PricingCatalog {
     this.liveAt = updatedAt;
   }
 
+  /**
+   * Which numbers are in use and how old they are.
+   *
+   * `updated_at` is "as of", and each source has to earn the word: the bundled
+   * table dates from when it was last checked by hand, the user's file from
+   * when they last wrote it, and a live catalogue from when we fetched it —
+   * which is not the day LiteLLM last changed a rate, and the panel says "as
+   * of" rather than "updated" so it does not claim to be.
+   */
   provenance(): PricingProvenance {
     if (this.user) return { source: "user", updated_at: this.userLoadedAt };
     if (this.liveAt) return { source: "live", provider: "litellm", updated_at: this.liveAt };
@@ -220,6 +253,8 @@ export class PricingCatalog {
 }
 
 let userTable: ModelPrice[] | null = null;
+/** The date the panel shows for a user table: the file's own, not today's. */
+let userTableAt = new Date().toISOString().slice(0, 10);
 
 // Allow a JSON override file so users tune prices without editing source.
 try {
@@ -228,13 +263,19 @@ try {
     const f = Bun.file(path);
     // top-level await is fine in Bun module scope
     const custom = (await f.json()) as ModelPrice[];
-    if (Array.isArray(custom) && custom.length) userTable = custom;
+    if (Array.isArray(custom) && custom.length) {
+      userTable = custom;
+      // mtime, so a table written months ago says so instead of looking fresh
+      // at every restart. Best-effort: a file we could read but cannot stat
+      // keeps today's date rather than losing the table over a label.
+      try { userTableAt = new Date(statSync(path).mtimeMs).toISOString().slice(0, 10); } catch { /* keep the default */ }
+    }
   }
 } catch (e) {
   console.warn("[pricing] failed to load AGENTGLASS_PRICING, using defaults:", e);
 }
 
-const catalog = new PricingCatalog(PRICE_TABLE, userTable);
+const catalog = new PricingCatalog(PRICE_TABLE, userTable, userTableAt);
 
 export function pricingProvenance(): PricingProvenance {
   return catalog.provenance();
@@ -246,7 +287,18 @@ export async function refreshLiteLlmPricing(
   now = Date.now(),
 ): Promise<boolean> {
   try {
-    const response = await fetcher(LITELLM_PRICING_URL, {
+    /*
+     * Through egress.ts rather than around it. The URL is a constant and the
+     * whole feature is off unless someone sets AGENTGLASS_PRICING_REFRESH, so
+     * nothing here needs the opt-in today — but that function is the one place
+     * that answers "may this process talk to that host", and a call that skips
+     * it is a call that meets no gate on the day the constant is edited or
+     * pointed at a mirror. GitHub's raw host is trusted the way the webhook
+     * trusts Slack's and Discord's: it is the host this feature exists for.
+     */
+    const destination = outboundDestination(LITELLM_PRICING_URL, "the LiteLLM price catalogue", PRICING_SERVICE_HOSTS);
+    if (!destination.ok) throw new Error(destination.error);
+    const response = await fetcher(destination.url, {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(10_000),
       redirect: "error",

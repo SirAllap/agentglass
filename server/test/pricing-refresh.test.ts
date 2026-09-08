@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  LITELLM_PRICING_URL,
   PRICE_TABLE,
   PricingCatalog,
   mapLiteLlmPricing,
@@ -102,5 +103,86 @@ describe("LiteLLM pricing refresh", () => {
     expect(ok).toBe(false);
     expect(catalog.provenance().source).toBe("bundled");
     expect(catalog.priceFor("claude-sonnet-4")?.label).toBe("Sonnet");
+  });
+});
+
+/*
+ * An absent cache rate is the common case, not the exception: in the catalogue
+ * as it stands, 843 rows price a discounted read and no write (OpenAI's and
+ * Gemini's shape) and 1,971 price neither. Reading those as free replaced rates
+ * verified by hand with zero, understated every cached turn on those models,
+ * and — because the rebuild insight prices `cache_write - cache_read` — made
+ * that card disappear for them.
+ */
+describe("a cache rate the catalogue does not give", () => {
+  test("falls back to the input rate, which is the floor a cache write can cost", () => {
+    const mapped = mapLiteLlmPricing({
+      "openai/gpt-shape": {
+        input_cost_per_token: 0.000_00125,
+        output_cost_per_token: 0.000_01,
+        cache_read_input_token_cost: 0.000_000_125,
+      },
+      "vendor/no-caching-at-all": {
+        input_cost_per_token: 0.000_000_15,
+        output_cost_per_token: 0.000_000_6,
+      },
+    });
+
+    expect(mapped.get("openai/gpt-shape")).toMatchObject({ input: 1.25, cache_write: 1.25, cache_read: 0.125 });
+    expect(mapped.get("vendor/no-caching-at-all")).toMatchObject({ cache_write: 0.15, cache_read: 0.15 });
+  });
+
+  test("an explicit zero is meant and is kept", () => {
+    const mapped = mapLiteLlmPricing({
+      "vendor/free-writes": {
+        input_cost_per_token: 0.000_001,
+        output_cost_per_token: 0.000_002,
+        cache_creation_input_token_cost: 0,
+        cache_read_input_token_cost: 0,
+      },
+    });
+
+    expect(mapped.get("vendor/free-writes")).toMatchObject({ cache_write: 0, cache_read: 0 });
+  });
+
+  test("a rate that is present and nonsense still drops the model", () => {
+    expect(mapLiteLlmPricing({
+      "vendor/negative-cache": {
+        input_cost_per_token: 0.000_001,
+        output_cost_per_token: 0.000_002,
+        cache_read_input_token_cost: -1,
+      },
+    }).size).toBe(0);
+  });
+});
+
+/*
+ * egress.ts is the one place that answers "may this process talk to that host".
+ * This read goes through it — not because the constant needs the opt-in today,
+ * but so that editing the constant cannot quietly route the fetch somewhere
+ * that meets no gate at all.
+ */
+describe("the refresh asks the egress boundary first", () => {
+  test("the catalogue URL is the trusted host, and it is reached", async () => {
+    const catalog = new PricingCatalog(PRICE_TABLE);
+    let asked: string | URL | Request | null = null;
+    const ok = await refreshLiteLlmPricing(catalog, async (url) => {
+      asked = url;
+      return new Response(JSON.stringify(remoteRows()));
+    });
+
+    expect(ok).toBe(true);
+    expect(String(asked)).toBe(LITELLM_PRICING_URL);
+  });
+
+  test("it is refused where AGENTGLASS_ALLOW_REMOTE would be needed and is absent", async () => {
+    const catalog = new PricingCatalog(PRICE_TABLE);
+    // The guard reads process.env at call time, so a URL off the trusted host is
+    // the way to exercise the refusal without editing the environment.
+    const { outboundDestination } = await import("../src/egress.ts");
+    const refused = outboundDestination("https://example.invalid/prices.json", "test", [], {});
+
+    expect(refused.ok).toBe(false);
+    expect(catalog.provenance().source).toBe("bundled");
   });
 });

@@ -304,7 +304,9 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                       <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 45%, transparent)" }}>{windowLabel(windowMs)}</span>
                       {stats?.pricing && (
                         <span className="text-[10px] t-dim2">
-                          prices: {stats.pricing.source}{stats.pricing.provider ? ` · ${stats.pricing.provider}` : ""} · updated {stats.pricing.updated_at}
+                          {/* "as of", not "updated": for a live catalogue the date is when we
+                              fetched it, not when the provider last changed a rate. */}
+                          prices: {stats.pricing.source}{stats.pricing.provider ? ` · ${stats.pricing.provider}` : ""} · as of {stats.pricing.updated_at}
                         </span>
                       )}
                     </div>
