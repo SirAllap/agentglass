@@ -1357,6 +1357,34 @@ CREATE TABLE IF NOT EXISTS named_agent (
 );
 `);
 
+/*
+ * THE ORCHESTRATOR'S SEAT — one row per project, whether or not anybody is
+ * sitting in it (seat.ts).
+ *
+ * Keyed by checkout root rather than by name, because the seat is a property
+ * of a project and not of a machine: the rules a project runs by, the model it
+ * is worth paying for, and how much the seat is allowed to do are all answers
+ * that change between one repository and the next. The row survives the agent
+ * — `ended_at` closes a seating, the row keeps the settings and the last thing
+ * the seat said, so opening it again does not start from a blank doctrine.
+ *
+ * Liveness is NOT this row: like every named agent, the seat is alive while
+ * its pane exists, and `named_agent` holds that fact.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat (
+  root TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'claude',
+  model TEXT NOT NULL DEFAULT '',
+  powers TEXT NOT NULL DEFAULT 'speak',
+  started_at INTEGER NOT NULL DEFAULT 0,
+  ended_at INTEGER,
+  last_line TEXT NOT NULL DEFAULT '',
+  last_turn_at INTEGER NOT NULL DEFAULT 0
+);
+`);
+
 /* What a run's branch pointed at when something last looked at it.
  *
  * Added after a merged branch was deleted by hand and the run that made it was
