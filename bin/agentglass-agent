@@ -49,6 +49,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -115,6 +116,31 @@ def call(path, body=None, method="POST", timeout=630):
             return {"ok": False, "error": f"server said {e.code}"}
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
+
+
+def text_call(path, timeout=30):
+    """A GET whose answer is meant to be read, not parsed.
+
+    The field readout exists because the thing reading it pays to read: a model
+    that re-reads its whole context every turn should not be handed JSON it has
+    to summarise back to itself. So the server writes the lines and this prints
+    them.
+    """
+    req = urllib.request.Request(f"{SERVER}{path}", method="GET", headers={"Origin": SERVER})
+    t = token()
+    if t:
+        req.add_header("Authorization", f"Bearer {t}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return True, r.read().decode("utf-8", "replace").rstrip()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace").strip()
+        try:
+            return False, json.loads(body).get("error") or f"server said {e.code}"
+        except json.JSONDecodeError:
+            return False, body or f"server said {e.code}"
+    except urllib.error.URLError as e:
+        return False, f"no agentglass at {SERVER} ({e.reason})"
 
 
 def emit(res):
@@ -212,6 +238,10 @@ def main():
     p.add_argument("--as", dest="who", help="your name (default: $AGENTGLASS_AGENT_NAME, else the tmux window)")
     p.add_argument("--project", help="the project (default: the current directory)")
 
+    p = sub.add_parser("field", help="who is working in this project, what state, and since when — a few lines")
+    p.add_argument("--project", help="the project (default: the current directory)")
+    p.add_argument("--json", action="store_true", help="the rows as JSON instead of the readout")
+
     p = sub.add_parser("inbox", help="every unread report, in one call, and marks them read")
     p.add_argument("--project", help="the project (default: the current directory)")
     p.add_argument("--peek", action="store_true", help="read without marking them read")
@@ -289,6 +319,14 @@ def main():
         # as, then the tmux window you are in, then the checkout you are in.
         who = a.who or os.environ.get("AGENTGLASS_AGENT_NAME") or os.environ.get("TMUX_WINDOW_NAME") or os.path.basename(root)
         return emit(call("/seat/report", {"root": root, "agent": who, "text": text}, timeout=30))
+    if a.cmd == "field":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        q = urllib.parse.urlencode({"root": root, **({"format": "json"} if a.json else {})})
+        if a.json:
+            return emit(call("/seat/field?" + q, method="GET", timeout=30))
+        ok, out = text_call("/seat/field?" + q)
+        print(out)
+        return 0 if ok else 1
     if a.cmd == "inbox":
         root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
         return emit(call("/seat/inbox", {"root": root, "peek": bool(a.peek)}, timeout=30))
