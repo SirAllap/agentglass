@@ -233,6 +233,41 @@ export interface BoardRow extends AgentRow {
  *  claim about earlier, and the screen says so rather than pretending. */
 export const FRESH_MS = 10 * 60_000;
 
+/*
+ * IS THIS PATH INSIDE THAT CHECKOUT — on a path boundary, never on characters.
+ *
+ * `cwd.startsWith(worktree)` was the test in four places, and on this machine
+ * it is wrong in the ordinary case: `~/code/app` and `~/code/app-fixes` are two
+ * different worktrees of one repository, and the second one's path starts with
+ * the first one's. So a hook in `app-fixes` was lent to the card for `app`,
+ * which is how one agent came to be drawn as several and how a card came to
+ * show a branch it had never been on.
+ *
+ * Equal, or followed by a separator. Nothing else counts.
+ */
+export function under(path: string | undefined, base: string | undefined): boolean {
+  if (!path || !base) return false;
+  const b = base.endsWith("/") ? base.slice(0, -1) : base;
+  return path === b || path.startsWith(`${b}/`);
+}
+
+/**
+ * The INNERMOST checkout holding a path.
+ *
+ * A repository with a worktree inside it — `~/code/app` and
+ * `~/code/app/vendor/thing` — answers `under` twice, and the first match in
+ * the list is whichever git happened to print first. The longest one is the
+ * one the work is actually in.
+ */
+export function deepest<T extends { path?: string }>(trees: T[], path: string): T | undefined {
+  let best: T | undefined;
+  for (const t of trees) {
+    if (!under(path, t.path)) continue;
+    if (!best || (t.path?.length ?? 0) > (best.path?.length ?? 0)) best = t;
+  }
+  return best;
+}
+
 /**
  * One row per agent, from every source at once.
  *
@@ -308,7 +343,7 @@ export function merged(p: {
     return said ? { landed: said.landed, ...(said.into ? { landedInto: said.into } : null) } : null;
   };
 
-  const branchOf = (path: string) => trees.find((t) => t.path && path.startsWith(t.path))?.branch ?? "";
+  const branchOf = (path: string) => deepest(trees, path)?.branch ?? "";
   const rows = new Map<string, BoardRow>();
 
   /*
@@ -369,7 +404,7 @@ export function merged(p: {
      * quiet for hours, as idle agents somebody could click Go on.
      */
     if (alive.size > 0 && !alive.has(h.paneId) && h.at <= now - FRESH_MS) continue;
-    const tree = trees.find((t) => t.path && h.cwd.startsWith(t.path));
+    const tree = deepest(trees, h.cwd);
     const branch = tree?.branch ?? "";
     const wait = p.waiting?.get(h.sessionId);
     if (h.sessionId) {
@@ -425,7 +460,7 @@ export function merged(p: {
        name match would be neater and is not available: tmux renames a window
        when the program inside sets a title, which is the bug that cost a
        morning of the deputy's runs. */
-    const pane = s.worktree ? panes.find((x) => x.cwd && x.cwd.startsWith(s.worktree!)) : undefined;
+    const pane = s.worktree ? panes.find((x) => under(x.cwd, s.worktree!)) : undefined;
     const fresh = (s.saidAt ?? 0) > now - FRESH_MS;
     /*
      * A CLAIM THIS MACHINE CANNOT SEE ANY MORE IS NOT "WORKING".
@@ -509,7 +544,7 @@ export function merged(p: {
      * the same ambiguity as above, arriving by the other door.
      */
     const oneAgentHere = new Set(
-      [...freshest.values()].filter((h) => s.worktree && h.cwd.startsWith(s.worktree)).map((h) => h.sessionId),
+      [...freshest.values()].filter((h) => s.worktree && under(h.cwd, s.worktree)).map((h) => h.sessionId),
     ).size <= 1;
     /* tmux's own pane is live by definition — it came from the list. */
     const paneId = hook?.paneId ?? (s.session || !oneAgentHere ? undefined : pane?.paneId);
@@ -517,7 +552,23 @@ export function merged(p: {
        machine placed in the same checkout. Both are how the wait is looked up
        and how the reminder knows it has been answered. */
     const session = s.session || hook?.sessionId;
-    const wait = session ? p.waiting?.get(session) : undefined;
+    /*
+     * A "NEEDS YOU" WITH NOWHERE TO GO IS NOT A NEEDS YOU.
+     *
+     * The wait is real — the session's last hook event was Claude Code saying
+     * it stopped for the next prompt. What is no longer real is the agent:
+     * its pane is gone, so the row is a red dot with no Go button behind it,
+     * and it sits at the top of a screen sorted by who has been waiting
+     * longest. Measured on this machine: two rows claiming a person was
+     * needed, one of them for 27 hours, neither of them anywhere.
+     *
+     * Only when this machine actually LOOKED. With no panes read there is
+     * nothing to contradict the wait, and inventing a contradiction out of an
+     * empty list is the mistake that once deleted a live agent — see
+     * `stillThere` above, same rule.
+     */
+    const somewhereToGo = !!paneId || p.panes === undefined || p.panes.length === 0;
+    const wait = session && somewhereToGo ? p.waiting?.get(session) : undefined;
     const wasCalled = alsoKnownAs.get(s.name);
     rows.set(s.name, {
       ...s,

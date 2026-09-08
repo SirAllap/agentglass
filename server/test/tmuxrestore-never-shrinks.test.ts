@@ -113,7 +113,12 @@ test("the file is written atomically, so a crash mid-write cannot truncate it", 
   const src = readFileSync(new URL("../src/tmuxrestore.ts", import.meta.url), "utf8");
   const writes = src.split("\n").filter((l) => l.includes("writeFileSync(") && l.includes("layoutPath()"));
   expect(writes, "layout.json is written straight, without a rename").toEqual([]);
+  /* One swap for every writer, and the rename lives inside it — along with the
+     copy that keeps the generation being replaced. */
   expect(src).toContain("renameSync(tmp, layoutPath())");
+  expect(src).toContain("copyFileSync(layoutPath(), previousLayoutPath())");
+  const renames = src.split("\n").filter((l) => l.includes("renameSync(tmp, layoutPath())"));
+  expect(renames, "layout.json is renamed in more than one place").toHaveLength(1);
 });
 
 test("a capture asked for mid-restore is deferred, not taken", () => {
@@ -216,4 +221,24 @@ test("a name that only LOOKS like a mirror is a session like any other", async (
 
   expect(layout()!.sessions.map((s) => s.name), "a heuristic on the prefix would eat a real session").toContain(decoy);
   await pane.tmux(["kill-session", "-t", `=${decoy}`]);
+});
+
+test("a layout.json that will not parse falls back to the generation before it", async () => {
+  /*
+   * The failure this closes used to be total: one file, overwritten in place,
+   * and a truncated or empty one reads as "nothing was ever captured" — which
+   * is the same loss as deleting it. Both of the ways it got into that state
+   * have been fixed since, and both fixes were written after the loss they
+   * describe, so the spare stays.
+   */
+  await restore.captureLayout();
+  const dir = join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore");
+  const good = layout()!;
+  expect(good.sessions.length).toBeGreaterThan(0);
+  /* A second capture is what puts the good one aside as the spare. */
+  await restore.captureLayout();
+  writeFileSync(join(dir, "layout.json"), "{ truncated");
+  const back = restore.readRestoreState();
+  expect(back?.sessions.map((s) => s.name), "a corrupt file read as nothing at all")
+    .toContain(LIVE);
 });

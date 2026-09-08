@@ -165,7 +165,7 @@ import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAll
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
+import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, basename } from "node:path";
 import { tmpdir } from "node:os";
@@ -1367,7 +1367,7 @@ import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
 import * as AgentBoard from "./agentboard.ts";
-import { boardNow, lanternChat, noteLanternSession, hookSaysLantern, isLanternSession } from "./lantern.ts";
+import { boardNow, fieldReadout, lanternChat, noteLanternSession, hookSaysLantern, isLanternSession } from "./lantern.ts";
 import { hookSaysSeat, isSeatSession, noteSeatSession } from "./seatrole.ts";
 import * as Seat from "./seat.ts";
 import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
@@ -3080,6 +3080,14 @@ const server = Bun.serve<WsData>({
     if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
+    }
+    /* The gate is its own switch and never a flag on the one above: telemetry
+       may not stop a tool call, and this exists to hold one. */
+    if (pathname === "/hooks/gate" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: Record<string, unknown> = {};
+      try { b = (await req.json()) as Record<string, unknown>; } catch { /* no body is "turn it on" */ }
+      return json(applyGate(b.on === false ? "uninstall" : "install"));
     }
 
     /**
@@ -6763,6 +6771,23 @@ const server = Bun.serve<WsData>({
       let b: { hours?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
       const r = writeSeatSettings({ seatWakeHours: Number(b.hours) });
       return json({ ...r, hours: seatWakeHours() }, r.ok ? 200 : 400);
+    }
+    /*
+     * THE FIELD, IN A FEW LINES, FOR SOMEBODY WHO PAYS TO READ.
+     *
+     * The second thing the orchestrator asked for: whether each agent is idle,
+     * working or dead and since when, "sin capture-pane ni ListAgents de 80
+     * filas". `/seat` answers that and a great deal more — the doctrine, the
+     * brief, the queue, a photograph of a pane — and the model reading it
+     * re-reads its whole context every turn. So the same facts, as text, with
+     * nothing else in the envelope.
+     */
+    if (pathname === "/seat/field" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const rows = Seat.fieldFor(gate.root, await boardNow().catch(() => []));
+      if (url.searchParams.get("format") === "json") return json({ ok: true, root: gate.root, field: rows });
+      return new Response(fieldReadout(rows), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     if (pathname === "/seat" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());

@@ -3483,6 +3483,14 @@ export interface PrActionResult { ok: boolean; error?: string; detail?: string }
 export interface HookSetupStatus {
   /** Our forwarder is present in settings.json right now. */
   installed: boolean;
+  /**
+   * The GATE hook is wired right now — a separate switch from the forwarder,
+   * because it is a separate bargain: telemetry may never stop a tool call,
+   * and the gate exists to hold one until a person decides.
+   */
+  gate: boolean;
+  /** The gate script ships with this build. False = the switch is unavailable. */
+  gateBundled: boolean;
   /** The hook scripts are shipped with this build (a source checkout, or a
    *  packaged install that carries hooks/). False = install is unavailable. */
   bundled: boolean;

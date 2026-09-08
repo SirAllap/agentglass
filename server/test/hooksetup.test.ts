@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { applyHooks, hookStatus, hooksDir, hookCommand, _internal } from "../src/hooksetup.ts";
+import { applyHooks, applyGate, hookStatus, hooksDir, hookCommand, _internal } from "../src/hooksetup.ts";
 
 const { doInstall, doUninstall, isOurs, EVENTS, MARKER } = _internal;
 
@@ -237,5 +237,95 @@ describe("golden parity with install_hooks.py", () => {
     // Same structure, same commands, same everything. (Both resolve send_event.py
     // to the same absolute repo path, so even the command strings match.)
     expect(tsOut).toEqual(pyOut);
+  });
+});
+
+/*
+ * THE GATE, WHICH IS A DIFFERENT BARGAIN AND SO A DIFFERENT SWITCH.
+ *
+ * The forwarder is telemetry and may never stop a tool call — that is what its
+ * trailing `|| exit 0` buys. The gate holds one until a person decides, and an
+ * outward one is held closed. The orchestrator running a real project on this
+ * machine named the gap exactly: the rule was held "por cultura, no por
+ * herramienta". The tool existed; there was no switch.
+ *
+ * What has to stay true: turning one on never turns the other on, each undoes
+ * itself and nobody else, and the Python installer and this one agree.
+ */
+describe("the gate switch", () => {
+  test("turns on and off without touching the forwarder or anybody else", () => {
+    writeSettings({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }] } });
+    const on = applyGate("install");
+    expect(on.ok).toBe(true);
+    const cfg = readSettings() as any;
+    const pre = cfg.hooks.PreToolUse as any[];
+    expect(pre.some((e) => e.hooks[0].command.includes("gate_event.py"))).toBe(true);
+    expect(pre.some((e) => e.hooks[0].command === "guard.sh"), "somebody else's hook went").toBe(true);
+    /* Telemetry is NOT installed by asking for the gate. */
+    expect(pre.some((e) => e.hooks[0].command.includes(MARKER))).toBe(false);
+    expect(hookStatus().gate).toBe(true);
+
+    applyGate("uninstall");
+    const after = (readSettings() as any).hooks.PreToolUse as any[];
+    expect(after.some((e) => e.hooks[0].command.includes("gate_event.py"))).toBe(false);
+    expect(after.some((e) => e.hooks[0].command === "guard.sh")).toBe(true);
+    expect(hookStatus().gate).toBe(false);
+  });
+
+  test("the gate command does NOT swallow its exit status", () => {
+    /* `|| exit 0` is what makes the forwarder advisory. A gate whose refusal
+       is swallowed is not a gate — this is the one line of difference and the
+       whole reason the two are separate. */
+    writeSettings({});
+    applyGate("install");
+    const cmd = ((readSettings() as any).hooks.PreToolUse as any[])[0].hooks[0].command as string;
+    expect(cmd).toContain("gate_event.py");
+    expect(cmd).not.toContain("exit 0");
+  });
+
+  test("installing the forwarder does not bring the gate with it", () => {
+    writeSettings({});
+    applyHooks("install");
+    expect(hookStatus().installed).toBe(true);
+    expect(hookStatus().gate, "telemetry quietly acquired the power to stop a tool call").toBe(false);
+  });
+
+  test("and the two switches do not tread on each other", () => {
+    writeSettings({});
+    applyHooks("install");
+    applyGate("install");
+    expect(hookStatus().installed).toBe(true);
+    expect(hookStatus().gate).toBe(true);
+    applyGate("uninstall");
+    expect(hookStatus().installed, "turning the gate off took the forwarder with it").toBe(true);
+    expect(hookStatus().gate).toBe(false);
+  });
+});
+
+describe("golden parity with install_hooks.py --gate", () => {
+  const py = spawnSync("python3", ["--version"]);
+  const havePython = py.status === 0;
+  const repoHooks = hooksDir();
+
+  test.if(havePython && !!repoHooks)("TS applyGate writes what the Python installer writes", () => {
+    const seed = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }] } };
+    writeSettings(seed);
+    applyGate("install");
+    const tsOut = readSettings();
+
+    const proj = mkdtempSync(join(tmpdir(), "agx-pygate-"));
+    mkdirSync(join(proj, ".claude"), { recursive: true });
+    writeFileSync(join(proj, ".claude", "settings.json"), JSON.stringify(seed, null, 2));
+    const run = spawnSync("python3", [join(repoHooks!, "install_hooks.py"), "--gate", "--project", proj], { encoding: "utf8" });
+    expect(run.status, run.stderr).toBe(0);
+    const pyOut = JSON.parse(readFileSync(join(proj, ".claude", "settings.json"), "utf8"));
+    expect(pyOut).toEqual(tsOut);
+
+    /* And either one undoes the other. */
+    const undo = spawnSync("python3", [join(repoHooks!, "install_hooks.py"), "--gate", "--uninstall", "--project", proj], { encoding: "utf8" });
+    expect(undo.status, undo.stderr).toBe(0);
+    applyGate("uninstall");
+    expect(JSON.parse(readFileSync(join(proj, ".claude", "settings.json"), "utf8"))).toEqual(readSettings());
+    rmSync(proj, { recursive: true, force: true });
   });
 });

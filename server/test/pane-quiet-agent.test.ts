@@ -109,10 +109,21 @@ beforeAll(async () => {
       AGENTGLASS_TMUX_SOCKET: SOCKET,
       TMUX_TMPDIR: TMUX_TEST_TMPDIR,
       AGENTGLASS_CLAUDE_HOME: join(jail, "clone-claude"),
-      /* Seconds, not minutes: the behaviour under test is the SHAPE — warn,
-         then stop, both well under the budget — not the length. */
-      AGENTGLASS_PANE_QUIET_MS: "3000",
-      AGENTGLASS_PANE_QUIET_STOP_MS: "6000",
+      /*
+       * Seconds, not minutes: the behaviour under test is the SHAPE — warn,
+       * then stop, both well under the budget — not the length.
+       *
+       * Widened from 3s/6s after this file turned up as an intermittent inside
+       * the full suite while passing 3/3 on its own. The margin is what the
+       * test rests on: the "working" stub writes a transcript line every 200
+       * ms, so the stop threshold is the number of ticks it may miss before a
+       * busy machine makes a working agent look silent. Six seconds is thirty
+       * ticks and was not enough with four hundred other files running; twelve
+       * is sixty, and still less than half the 30s budget the same test asserts
+       * the working case runs to.
+       */
+      AGENTGLASS_PANE_QUIET_MS: "5000",
+      AGENTGLASS_PANE_QUIET_STOP_MS: "12000",
       TMUX: "",
     },
   });

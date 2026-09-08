@@ -325,6 +325,15 @@ export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): stri
   const line = (r: AgentBoard.BoardRow) => {
     const bits = [r.name];
     if (r.needsYou) bits.push(`${waitWord(r.needsYou)} for ${ago(r.needsYou.since, now)} — "${r.needsYou.why}"`);
+    /*
+     * AND SINCE WHEN, because "idle" without a time is not an answer.
+     *
+     * Asked for in those words by the orchestrator that reads this: it wanted
+     * to know whether an agent is idle, working or dead AND how long it has
+     * been that way, without spending a `capture-pane` per agent to find out.
+     * The board already knows; it was simply not saying.
+     */
+    else if (r.saidAt) bits.push(r.state === "working" ? `moving, last ${ago(r.saidAt, now)} ago` : `quiet for ${ago(r.saidAt, now)}`);
     if (r.doing) bits.push(`on: ${r.doing}`);
     if (r.worktree || r.branch) bits.push([here(r.worktree), r.branch].filter(Boolean).join(" @ "));
     if (r.paneId) bits.push(`pane ${r.paneId}`);
