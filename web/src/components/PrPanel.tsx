@@ -4448,6 +4448,42 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onCancelAutoMerge={() => act("Auto-merge cancelled", () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }))}
                           onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
                           onGoThreads={() => setTab("conversation")}
+                          /*
+                           * The review, in THIS panel.
+                           *
+                           * It used to be `openExternal` — reported, and fairly: a
+                           * button that reads "go to it" beside a verdict this app
+                           * is already showing should not answer by launching the
+                           * system browser onto github.com. The whole review is a
+                           * row in the Conversation tab, twenty pixels away.
+                           *
+                           * Same two gotchas as the quote jump above: force the
+                           * segment to "all" first, or a Conversation filtered to
+                           * Humans scrolls to nothing; and defer TWO frames — one
+                           * for the tab to render and one for its content to lay
+                           * out, because a single frame finds an element whose
+                           * height is still zero.
+                           */
+                          onGoReview={(nodeId, url) => {
+                            if (!nodeId) { openExternal(url); return; }
+                            setConvWho("all");
+                            setTab("conversation");
+                            requestAnimationFrame(() => requestAnimationFrame(() => {
+                              const el = document.querySelector(`[data-node="${CSS.escape(nodeId)}"]`);
+                              /*
+                               * Outside only when there is genuinely nothing here to
+                               * land on — checked against the DOM rather than against
+                               * the review list, because a review can be in `reviews`
+                               * and still have no row: the timeline drops one that
+                               * said nothing, and the bot lanes are foldable. A
+                               * button that silently does nothing is worse than one
+                               * that leaves.
+                               */
+                              if (!(el instanceof HTMLElement)) { openExternal(url); return; }
+                              el.scrollIntoView({ block: "center", behavior: "smooth" });
+                              flashElement(el);
+                            }));
+                          }}
                           movedSince={movedHere.length}
                           onGoMoved={() => { setTab("files"); setWantSince((n) => n + 1); }}
                           awaitingChecks={awaitingChecks}
@@ -4806,7 +4842,7 @@ function ConflictActions({ root, number, branch, base, disabled }: {
   );
 }
 
-function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
+function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -4834,6 +4870,9 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
    *  the phone — and the button then behaves as it always did. */
   onReviewInTerminal?: (recipe?: string) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
+  /** Take me to that review inside this panel, by the node id of its row —
+   *  falling back to `url` outside when this panel has no row for it. */
+  onGoReview: (nodeId: string | undefined, url: string) => void;
   /** Open Files with the "since your review" filter already on. */
   onGoMoved: () => void;
   /** How many of this review's files have changed since your own last review — see
@@ -5091,12 +5130,23 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
                     <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>{v.note}</span>
                   )}
                 </span>
-                {v.url && (
-                  <button className="agx-btn shrink-0 rounded px-1.5 py-0.5 text-[11px]"
-                    style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
-                    title="Open the review itself on GitHub"
-                    onClick={() => openExternal(v.url!)}>Go to it ↗</button>
-                )}
+                {v.url && (() => {
+                  /*
+                   * The same review, as a row this panel already draws.
+                   *
+                   * Matched on the URL rather than by parsing `#pullrequestreview-…`
+                   * out of it: `humanReview.url` and `PrReview.url` are the one
+                   * string GitHub gave for that submission, so equality is exact and
+                   * there is no fragment format to keep in step with.
+                   */
+                  const node = d.reviews?.find((r) => r.url && r.url === v.url)?.nodeId;
+                  return (
+                    <button className="agx-btn shrink-0 rounded px-1.5 py-0.5 text-[11px]"
+                      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
+                      title="Go to that review in the conversation"
+                      onClick={() => onGoReview(node, v.url!)}>Go to it</button>
+                  );
+                })()}
               </div>
             );
           })()}
