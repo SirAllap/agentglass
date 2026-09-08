@@ -61,3 +61,37 @@ describe("the window log", () => {
     expect(main).toContain("fs.statSync(file).size > WINDOW_LOG_MAX");
   });
 });
+
+/*
+ * AND THE SERVER'S OWN LAST WORDS, which used to live nowhere.
+ *
+ * The sidecar's stderr was kept in memory to paint in the banner at the top of
+ * the window, and nowhere else. So a crash explained itself exactly once, in a
+ * strip that a popover can cover — and restarting the app, which is what the
+ * banner tells you to do, threw the explanation away. Reported after a SIGILL
+ * from the runtime: by the time anybody went looking there was nothing on the
+ * machine to read.
+ */
+describe("a server that dies leaves its words behind", () => {
+  test("the failure is written to a file, not only to the banner", () => {
+    expect(main).toContain("function writeSidecarLog(failure) {");
+    expect(main).toContain('path.join(app.getPath("userData"), "server.log")');
+    // From reportSidecar, which is the one place that learns of a failure.
+    expect(main).toContain("if (failure) writeSidecarLog(failure);");
+  });
+
+  test("it appends, because the second crash is often the one that names the cause", () => {
+    expect(main).toContain("fs.appendFileSync(file,");
+    expect(main).toMatch(/writeSidecarLog[\s\S]*?fs\.appendFileSync/);
+  });
+
+  test("it is capped, so a sidecar dying in a loop cannot fill a disk", () => {
+    expect(main).toContain("const SERVER_LOG_MAX =");
+    expect(main).toContain("fs.statSync(file).size > SERVER_LOG_MAX");
+  });
+
+  test("it never throws — a log nobody can write must not break the app that is already failing", () => {
+    const body = main.slice(main.indexOf("function writeSidecarLog"));
+    expect(body.slice(0, body.indexOf("\n}\n"))).toContain("try {");
+  });
+});
