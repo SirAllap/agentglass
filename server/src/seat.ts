@@ -35,6 +35,7 @@ import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { chatBypassAllowed, inScope, workspaceRoot } from "./config.ts";
 import { db } from "./db.ts";
+import { projectRootOf } from "./git.ts";
 import { fieldReadout, boardNow } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
 import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
@@ -178,9 +179,28 @@ export function seatable(rootIn: unknown): { root: string } | { error: string } 
      are looking at. Measured by running it: without this line a new install
      answered "that is not a project this app knows" about its own checkout. */
   if (root === workspaceRoot()) return { root };
-  const known = knownProjects().some((p) => p.path === root);
-  if (!known) return { error: "that is not a project this app knows" };
-  return { root };
+  if (knownProjects().some((p) => p.path === root)) return { root };
+  /*
+   * A WORKTREE IS THE PROJECT.
+   *
+   * The workers this seat hands work to are told, in the brief, to cut a
+   * worktree per task — so the directory an agent reports from is almost never
+   * the directory the chair sits in. Without this fold, `agentglass-agent
+   * report` from a worktree either bounces ("not a project this app knows") or,
+   * worse, quietly opens a SECOND tray keyed by the worktree path, and the
+   * seat waits for a report that arrived somewhere it never looks.
+   *
+   * `projectRootOf` is the reader already used for exactly this: it strips
+   * `.worktrees/` and folds the rest through `--git-common-dir`. The folded
+   * root still has to be a project this app knows, so a random directory is
+   * refused as before.
+   */
+  const folded = projectRootOf(root);
+  if (folded && folded !== root) {
+    if (folded === workspaceRoot()) return { root: folded };
+    if (knownProjects().some((p) => p.path === folded)) return { root: folded };
+  }
+  return { error: "that is not a project this app knows" };
 }
 
 /**
