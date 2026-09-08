@@ -481,6 +481,9 @@ export function shoulder(screen: string): string {
     /MEMORY REMINDER/i,
     /^\s*[·*✻✽✢✳✶]?\s*\w+…\s*\(\d+s/,     /* the spinner and its counter */
     /^\s*⏵⏵/,                                  /* the permission-mode footer */
+    /^\s*⎿?\s*Tip:/,                           /* the CLI's own advice to its user */
+    /^\s*⎿?\s*\[Image #\d+\]\s*$/,             /* a picture's placeholder: the pane
+                                                  drew it, a text capture cannot */
     /shift\+tab to cycle/i,
     /^\s*[─━┄┈]{3,}/,                          /* the rules the TUI draws, and the
                                                   one carrying the pane's own name

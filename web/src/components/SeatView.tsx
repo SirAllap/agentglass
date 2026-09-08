@@ -205,12 +205,18 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
         {error && <span className="text-[10.5px]" style={{ color: "var(--error)" }}>{error}</span>}
       </ViewHeader>
 
-      <div className="flex-1 min-h-0 overflow-y-auto agx-scroll" style={{ background: "var(--bg)" }}>
-        {/* `min-h-full`: the right column is a surface, and a surface that
-            stops where its content does leaves a hard edge across the page. */}
-        <div className="grid min-h-full" style={{ gridTemplateColumns: "minmax(0,1.7fr) minmax(0,1fr)" }}>
+      {/*
+       * EACH COLUMN SCROLLS ON ITS OWN.
+       *
+       * One scroller over both put the seat's own sentence — the reason to
+       * open this view — off the top of the screen as soon as somebody read
+       * down a field of twenty agents. The header stays, the sentence stays,
+       * and the long list moves under them.
+       */}
+      <div className="flex-1 min-h-0 overflow-hidden" style={{ background: "var(--bg)" }}>
+        <div className="grid h-full" style={{ gridTemplateColumns: "minmax(0,1.7fr) minmax(0,1fr)" }}>
           {/* ── what it said, and the work ─────────────────────────── */}
-          <div className="flex flex-col gap-5 px-5 py-4 min-w-0" style={{ borderRight: "1px solid var(--border)" }}>
+          <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 overflow-y-auto agx-scroll" style={{ borderRight: "1px solid var(--border)" }}>
             <div className="flex gap-3.5 items-start">
               <Dial live={live} wokenAt={data?.wokenAt ?? null} floorHours={data?.floorHours ?? 4} cos={cos} />
               <div className="flex flex-col gap-1.5 min-w-0 pt-0.5">
@@ -396,7 +402,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
           </div>
 
           {/* ── the field, and the day ─────────────────────────────── */}
-          <div className="flex flex-col gap-5 px-5 py-4 min-w-0" style={{ background: "var(--bg2)" }}>
+          <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 overflow-y-auto agx-scroll" style={{ background: "var(--bg2)" }}>
             <section className="flex flex-col gap-1">
               <h2 className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>The field it keeps</h2>
               <p className="text-[10.5px] pb-1.5" style={{ color: "var(--text3)" }}>
