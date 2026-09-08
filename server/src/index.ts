@@ -2930,39 +2930,6 @@ const server = Bun.serve<WsData>({
      * and dated rather than hidden, because "nobody has touched this in an
      * hour" is the answer somebody is usually looking for.
      */
-    /*
-     * WHAT THE TAB IS FOR, IN THREE WORDS.
-     *
-     * The strip's names are stable (`AI01`, `AI02`) and stability is exactly
-     * what makes them say nothing: "I want them to always be AI0X... or for it
-     * to match the task being worked on", and the answer to that
-     * `or` is both. The number is the address; this is the label under it.
-     *
-     * Its own route rather than a field on the terminal frame, which is swept
-     * twice a second per attached client: a sentence an agent publishes every
-     * few minutes does not belong in a poll that fast, and the frame's pane
-     * format is read positionally by three parsers.
-     */
-    if (pathname === "/terminal/tab-hints") {
-      const board = AgentBoard.merged({ runs: Work.runningRuns().map((r) => ({
-        title: r.title, worktree: r.worktree, branch: r.branch, startedAt: r.startedAt,
-      })) }).filter((a) => a.doing && a.worktree);
-      const hints: Record<string, string> = {};
-      if (board.length) {
-        const r = await tmux(["list-panes", "-a", "-F", "#{window_id}\t#{pane_current_path}"]);
-        for (const line of (r.ok ? r.stdout : "").split("\n")) {
-          const [win = "", cwd = ""] = line.split("\t");
-          if (!win.startsWith("@") || !cwd || hints[win]) continue;
-          /* Longest worktree first, so a checkout inside another checkout is
-             answered by the inner one. */
-          const owner = board
-            .filter((a) => cwd.startsWith(a.worktree!))
-            .sort((a, b) => b.worktree!.length - a.worktree!.length)[0];
-          if (owner?.doing) hints[win] = owner.doing.slice(0, 120);
-        }
-      }
-      return json({ ok: true, hints });
-    }
     if (pathname === "/agents/board") {
       /* Every source at once — see lantern.ts, which the terminal's "Ask
          about the field" reads too, so the view and the chat cannot disagree. */

@@ -2943,6 +2943,32 @@ function decentPrompt(p: string): boolean {
   if (!t || t.length < 3) return false;
   if (t.startsWith("<") || t.startsWith("/") || t.startsWith("!")) return false;
   if (/^(y|yes|no|ok|si|sí|vale|dale)\b/i.test(t) && t.length < 12) return false;
+  /*
+   * A QUESTION ABOUT A SCREENSHOT IS NOT A NAME.
+   *
+   * These three were on the Lantern, as the titles of three cards:
+   *
+   *   "que son estos?? [Image #1] [Image #2]"
+   *   "Ayudame a instalar Thought for 24s Partly — and the distinction matters"
+   *   "Quiero que mires cómo hiciste la última mes para que cuando cierra la…"
+   *
+   * The first is a person pointing at a picture — the picture carried the
+   * subject and the words carried none of it. The second is a pasted
+   * transcript, whose first line happens to be a sentence. The third is a
+   * sentence long enough that the eighty characters it is cut to end
+   * mid-clause. All three are what somebody typed; none is what anybody would
+   * call the session, and a grid of cards is read by its titles.
+   *
+   * The pane id is the fallback, and it is the better answer here: "%44" says
+   * "this session has not named itself", which is true and short. A bad name
+   * says something false at the width of a card.
+   */
+  if (/\[Image #\d+\]|\bimage-cache\b|<system-reminder|```/i.test(t)) return false;
+  /* A paragraph is not a title: a name that has to be cut mid-word is one the
+     eye cannot use, and every session has a pane id that fits. */
+  if (t.length > 120) return false;
+  /* Three words of actual words. "esto?" and "mira esto" name nothing. */
+  if (t.split(/\s+/).filter((w) => /\p{L}{2,}/u.test(w)).length < 3) return false;
   return true;
 }
 

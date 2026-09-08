@@ -11,6 +11,7 @@
  * on the engine with this same board as its first message. Two copies of the
  * assembly would be two boards that could disagree.
  */
+import { existsSync } from "node:fs";
 import { tmux } from "./tmuxpane.ts";
 import * as AgentBoard from "./agentboard.ts";
 import * as Work from "./understudy-work.ts";
@@ -261,7 +262,20 @@ export async function boardNow(): Promise<LanternCard[]> {
      it was marked) is not a second agent: dropped before the merge, so the
      chat is one row, its pane's, and never "lantern" beside "Lantern". */
   const said = AgentBoard.board().filter((a) => !isLanternSession(a.session));
-  const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting }).map((r) =>
+  /*
+   * WHICH NAMED CHECKOUTS ARE ACTUALLY GONE — asked of the filesystem, once
+   * per distinct path, because the board drops a day-old row that names one.
+   *
+   * The question has to be this literal. Inferring it from "git does not list
+   * it and tmux showed no pane there" deleted `laptop-lid-closed-remote`,
+   * whose directory is `~`: never a git worktree, never absent. A row is only
+   * ever removed for a path this returned false for.
+   */
+  const gone = new Set<string>();
+  for (const wt of new Set(said.map((a) => (a.worktree ?? "").trim()).filter(Boolean))) {
+    if (!existsSync(wt)) gone.add(wt);
+  }
+  const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }).map((r) =>
     isLanternSession(r.session) ? { ...r, role: "lantern" as const, needsYou: undefined, state: r.state === "waiting" ? "idle" : r.state } : r);
 
   /* The card's facts. Sessions in one query each; git per distinct worktree,

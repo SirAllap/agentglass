@@ -17,6 +17,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { keepLoadedChecks } from "../src/lib/prMerge.ts";
+import type { PrSummary } from "../../shared/types.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 
@@ -59,5 +61,64 @@ describe("what survives a refresh", () => {
        derived check above cannot catch it. Without it a carried row would
        still claim to be waiting. */
     expect(clientFields()).toContain("checksLoaded");
+  });
+});
+
+/*
+ * A REFRESH MAY NOT UN-KNOW A FIELD IT DID NOT ASK ABOUT.
+ *
+ * The rule at the top of prMerge.ts, applied to the case that broke it: GitHub
+ * answers HTTP 200 with `{data, errors}` when only part of a query fails, so a
+ * row arrives complete in every respect EXCEPT the field that timed out. The
+ * second pass ran — `checksLoaded: true` — and the verdict is missing, which
+ * is indistinguishable on the card from "nobody has reviewed this". Every
+ * header on the board reset to "No review asked for yet" after a while, and
+ * again on returning to the view.
+ */
+describe("a partial answer does not blank a card", () => {
+  const row = (n: number, extra: Record<string, unknown> = {}) =>
+    ({ number: n, title: `#${n}`, checksLoaded: true, ...extra }) as unknown as PrSummary;
+  const verdict = { kind: "approved" as const, who: ["reviewer-one"] };
+
+  test("a second pass that came back without the verdict keeps the one on screen", () => {
+    const prev = [row(1, { humanReview: verdict, additions: 40 })];
+    /* The shape GitHub actually sends: the pass ran, one field did not. */
+    const next = [row(1, { additions: 40 })];
+    const [out] = keepLoadedChecks(prev, next) as unknown as Record<string, unknown>[];
+    expect(out!.humanReview).toEqual(verdict);
+  });
+
+  test("but a real answer replaces it, including a real \"nobody\"", () => {
+    /* `null` is GitHub saying nobody reviewed it — an answer, and it wins.
+       Only an ABSENT field is "this pass did not learn it". */
+    const prev = [row(1, { humanReview: verdict })];
+    const next = [row(1, { humanReview: null })];
+    const [out] = keepLoadedChecks(prev, next) as unknown as Record<string, unknown>[];
+    expect(out!.humanReview).toBeNull();
+  });
+
+  test("a changed verdict is not held back by the old one", () => {
+    const changed = { kind: "changes" as const, who: ["reviewer-two"] };
+    const prev = [row(1, { humanReview: verdict })];
+    const next = [row(1, { humanReview: changed })];
+    const [out] = keepLoadedChecks(prev, next) as unknown as Record<string, unknown>[];
+    expect(out!.humanReview).toEqual(changed);
+  });
+
+  test("a caller with one pass at all is still left alone", () => {
+    /* `undefined` checksLoaded means nobody promised two passes here; patching
+       such a row from history would invent data the caller never had. */
+    const prev = [row(1, { humanReview: verdict })];
+    const next = [{ number: 1, title: "#1" } as unknown as PrSummary];
+    const [out] = keepLoadedChecks(prev, next) as unknown as Record<string, unknown>[];
+    expect(out!.humanReview).toBeUndefined();
+  });
+
+  test("and the whole first-pass row is still carried as before", () => {
+    const prev = [row(1, { humanReview: verdict, additions: 40, checks: { green: 1 } })];
+    const next = [row(1, { checksLoaded: false })];
+    const [out] = keepLoadedChecks(prev, next) as unknown as Record<string, unknown>[];
+    expect(out!.humanReview).toEqual(verdict);
+    expect(out!.additions).toBe(40);
   });
 });

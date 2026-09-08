@@ -239,6 +239,12 @@ describe("sessionNames skips prompts that are not a name", () => {
     db.insertEvent(prompt("n-cmd", "sí", T0 + 2_000) as any);
     db.insertEvent(prompt("n-cmd", "Revisa la PR #264", T0 + 3_000) as any);
     db.insertEvent(prompt("n-none", "/clear", T0 + 1_000) as any);
+    /* The three that were on the Lantern as card titles. */
+    db.insertEvent(prompt("n-img", "que son estos?? [Image #1] [Image #2]", T0 + 1_000) as any);
+    db.insertEvent(prompt("n-img", "Recorta la barra lateral", T0 + 2_000) as any);
+    db.insertEvent(prompt("n-paste", "Ayudame a instalar Thought for 24s Partly \u2014 and the distinction matters for what you are about to do, so read the whole of it before you touch anything at all in this repository", T0 + 1_000) as any);
+    db.insertEvent(prompt("n-paste", "Sube la version a 0.16", T0 + 2_000) as any);
+    db.insertEvent(prompt("n-short", "mira esto", T0 + 1_000) as any);
   });
 
   test("a cross-session tag is not a name; the next real prompt is", () => {
@@ -255,5 +261,25 @@ describe("sessionNames skips prompts that are not a name", () => {
 
   test("a title still wins over any prompt", () => {
     expect(db.sessionNames(["s2"]).get("s2")).toBe("Nightly sweep");
+  });
+
+  /*
+   * A QUESTION ABOUT A SCREENSHOT IS NOT A NAME.
+   *
+   * All three of these were card titles on a real board. The words carried
+   * none of the subject — the picture did, or the paste did — and a grid of
+   * cards is read by its titles. The pane id is the better answer: "%44" says
+   * "this session has not named itself", which is true and short.
+   */
+  test("a prompt whose subject was in an image is not a name", () => {
+    expect(db.sessionNames(["n-img"]).get("n-img")).toBe("Recorta la barra lateral");
+  });
+
+  test("a pasted paragraph is not a name either", () => {
+    expect(db.sessionNames(["n-paste"]).get("n-paste")).toBe("Sube la version a 0.16");
+  });
+
+  test("and two words name nothing", () => {
+    expect(db.sessionNames(["n-short"]).has("n-short")).toBe(false);
   });
 });
