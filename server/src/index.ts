@@ -46,6 +46,7 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { parseControlCmd } from "./control.ts";
+import { outwardAction, outwardLine } from "./outward.ts";
 import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation} from "./browserdrive.ts";
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
@@ -3162,13 +3163,31 @@ const server = Bun.serve<WsData>({
       try { b = await req.json(); } catch { return json({ decision: "allow", reason: "bad request" }); }
       const ti = b.tool_input ?? {};
       const summary = String(ti.command || ti.file_path || ti.path || ti.pattern || ti.query || ti.description || b.tool_name || "").slice(0, 300);
+      /*
+       * OUTWARD ACTIONS ARE HELD CLOSED, AND SHOW THEIR TEXT.
+       *
+       * The rule every arrangement of agents on this machine runs by is that
+       * anything a colleague can see belongs to the person, and until now that
+       * line was held by each agent remembering it. This is the tool: a push,
+       * a pull request, a comment, a review, a merge, a ticket or a message in
+       * a channel is recognised (outward.ts), the line a person decides from
+       * says WHAT it does and quotes what would be sent, and nobody answering
+       * means it does NOT happen — the fail-open default exists so an absent
+       * human never blocks work, and work that has already left the machine
+       * cannot be blocked afterwards.
+       */
+      const out = outwardAction(String(b.tool_name || ""), ti);
+      const hold = out
+        ? [outwardLine(out), out.text ? `“${out.text.replace(/\s+/g, " ").trim().slice(0, 240)}”` : ""].filter(Boolean).join(" · ")
+        : budgetHoldFor(String(b.session_id || "unknown"), gateFailClosed());
       const decision = await submitGate(
         // The hook picks the id so it can re-attach to this exact request after
         // a dropped connection (see /gate/status). Shape-checked in gate.ts;
         // anything else falls back to a server-generated one.
         { id: typeof b.id === "string" ? b.id : undefined, source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
         Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000),
-        budgetHoldFor(String(b.session_id || "unknown"), gateFailClosed())
+        hold,
+        out ? true : undefined,
       );
       return json(decision);
     }
