@@ -33,12 +33,31 @@ describe("a chair set to speak", () => {
   test("can still say its line: reporting is the whole job", () => {
     expect(seatAllows("speak", "POST", "/seat/say")).toBe(true);
   });
+
+  test("reads its own tray, at every level", () => {
+    /* The tray is the seat's post. A chair that may not read what its agents
+       sent it is not a chair, and `speak` is exactly the level whose whole job
+       is to read and report. */
+    expect(seatAllows("speak", "POST", "/seat/inbox")).toBe(true);
+    expect(seatAllows("speak", "POST", "/seat/report")).toBe(true);
+  });
+
+  test("but may not say one thing to twenty agents", () => {
+    /* A broadcast is N prompts. Refusing `prompt` and allowing the plural of
+       it would be the fence with the gate left open. */
+    expect(seatAllows("speak", "POST", "/agents/named/broadcast")).toBe(false);
+  });
 });
 
 describe("a chair set to nudge", () => {
   test("may unstick an agent that is already running", () => {
     expect(seatAllows("nudge", "POST", "/agents/named/prompt")).toBe(true);
     expect(seatAllows("nudge", "POST", "/agents/named/read")).toBe(true);
+  });
+
+  test("may say one thing to all of them at once", () => {
+    expect(seatAllows("nudge", "POST", "/agents/named/broadcast")).toBe(true);
+    expect(seatAllows("assign", "POST", "/agents/named/broadcast")).toBe(true);
   });
 
   test("may not start one, and may not stop one", () => {

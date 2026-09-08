@@ -347,7 +347,14 @@ export function seatTokenCount(): number { return seatTokens.size; }
  * understudy's reads — every view, minus the ones that are a shell wearing a
  * GET.
  */
-const SEAT_POST_NUDGE = new Set(["/agents/named/prompt", "/agents/named/read", "/agents/named/wait", "/seat/say", "/seat/recall"]);
+const SEAT_POST_NUDGE = new Set([
+  "/agents/named/prompt", "/agents/named/read", "/agents/named/wait",
+  /* One message to N agents is N prompts, so it sits with `prompt` and not a
+     step above it: it reaches only agents that are already running, and it
+     opens nobody. A seat that may unstick one may unstick five. */
+  "/agents/named/broadcast",
+  "/seat/say", "/seat/recall",
+]);
 const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys"]);
 
 export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string): boolean {
@@ -356,7 +363,12 @@ export function seatAllows(powers: "speak" | "nudge" | "assign", method: string,
   /* Saying its line and asking the bank are not acts: allowed at every level.
      Seating another orchestrator is NOT on this list at any level — a seat
      that could open seats is a seat that can spend without a ceiling. */
-  if (pathname === "/seat/say" || pathname === "/seat/recall") return true;
+  /* Its own tray is the same kind of thing: `report` writes what an agent
+     said, `inbox` hands the seat what is waiting. Draining marks those rows
+     read, which is a change — but it is a change to the seat's own post, and a
+     chair that may not read its mail is not a chair. */
+  if (pathname === "/seat/say" || pathname === "/seat/recall"
+    || pathname === "/seat/report" || pathname === "/seat/inbox") return true;
   if (READ_POST.has(pathname)) return true;
   if (powers === "speak") return false;
   if (SEAT_POST_NUDGE.has(pathname)) return true;
