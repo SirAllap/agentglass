@@ -27,6 +27,7 @@ import { spawn } from "bun";
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { privateTmuxDir } from "./tmuxTmp.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const home = mkdtempSync(join(tmpdir(), "agx-platform-"));
@@ -43,6 +44,13 @@ const server = spawn({
     XDG_DATA_HOME: join(home, "data"),
     XDG_CACHE_HOME: join(home, "cache"),
     AGENTGLASS_STATE_DIR: join(home, "state"),
+    // Its own socket directory. This child is a SERVER: it runs the boot sweep
+    // at module scope and resolves tmux against `$TMUX_TMPDIR/tmux-<uid>`, so
+    // with no TMUX_TMPDIR it reaches into /tmp/tmux-<uid> — the sockets holding
+    // the sessions somebody is working in. See scripts/tmuxTmp.ts, and
+    // server/test/tmux-test-isolation.test.ts, which fails the build for any
+    // file that spawns the server without this and duly failed for this one.
+    TMUX_TMPDIR: privateTmuxDir(home),
     AGENTGLASS_TOKEN: "",
     // The transcript sweep reads the operator's own ~/.claude, which is neither
     // this app's doing nor reproducible on a runner.
