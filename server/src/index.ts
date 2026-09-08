@@ -1370,6 +1370,7 @@ import { boardNow, lanternChat, noteLanternSession, hookSaysLantern, isLanternSe
 import { hookSaysSeat, isSeatSession, noteSeatSession } from "./seatrole.ts";
 import * as Seat from "./seat.ts";
 import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
+import { readBrief, writeBrief } from "./seatbrief.ts";
 import * as SeatQueue from "./seatqueue.ts";
 import { recall } from "./seatmemory.ts";
 import * as AgentOps from "./agentops.ts";
@@ -6805,6 +6806,37 @@ const server = Bun.serve<WsData>({
       if (verb === "doctrine") {
         const r = writeDoctrine(root, typeof b.text === "string" ? b.text : "");
         return json(r, r.ok ? 200 : 400);
+      }
+      /* The rules the seat HANDS OUT, as opposed to the ones it runs by. Two
+         files because they govern different people. */
+      if (verb === "brief") {
+        const r = writeBrief(root, typeof b.text === "string" ? b.text : "");
+        return json(r, r.ok ? 200 : 400);
+      }
+      /*
+       * ORCHESTRATE — "put somebody in this project's chair", from anywhere.
+       *
+       * The same seating the view's button does, reachable from a session in
+       * another project entirely, because that is how the ask arrives: a
+       * person working in one repository says "give this one an orchestrator"
+       * and should not have to go and find the view. Idempotent by the same
+       * rule as the button: an occupied chair answers with its occupant.
+       */
+      if (verb === "orchestrate") {
+        if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+        const powers = Seat.isPower(b.powers) ? b.powers : undefined;
+        const model = typeof b.model === "string" ? b.model : undefined;
+        const seeded = { doctrine: readDoctrine(root), brief: readBrief(root) };
+        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        if (!r.ok) return json(r, 400);
+        return json({
+          ok: true, already: r.already, seat: r.seat, agent: r.agent,
+          /* Where its two rule files are, and whether this seating wrote them:
+             a caller that just created an orchestrator wants to know there is
+             something to edit, and where. */
+          doctrine: seeded.doctrine.path, doctrineSeeded: seeded.doctrine.seeded,
+          brief: seeded.brief.path, briefSeeded: seeded.brief.seeded,
+        });
       }
       return json({ ok: false, error: "no such seat verb" }, 404);
     }

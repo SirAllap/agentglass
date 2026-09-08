@@ -38,6 +38,7 @@ import { db } from "./db.ts";
 import { fieldReadout, boardNow } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
 import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
+import { REPORT_SHAPE, briefPath, readBrief } from "./seatbrief.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
 import { BUCKETS, pulses } from "./seatpulse.ts";
@@ -185,13 +186,15 @@ export async function seated(root: string): Promise<AgentOps.NamedAgent | null> 
  * the field and will wake it when something changes), and it must report
  * through one line rather than leave a person to read a pane.
  */
-export function houseBlock(powers: Power, wakeHours: number): string {
+export function houseBlock(powers: Power, wakeHours: number, root = ""): string {
   const may = powers === "speak"
     ? "You may not start, stop or prompt any agent. If one is stuck, say so — do not push it."
     : powers === "nudge"
       ? "You may prompt an agent that is ALREADY running, to unstick it (`agentglass-agent prompt --name <n> \"…\"`). You may not start or stop one."
       : [
         "You may prompt an agent that is already running, and start or stop named agents (`agentglass-agent start|prompt|stop`).",
+        `When you OPEN one, its first message is this project's worker brief — the file beside your rules — and nothing else you write replaces it: \`claude --dangerously-skip-permissions "$(cat ${root ? briefPath(root) : "the brief file beside your rules"})"\`, or \`agentglass-agent start <name> --cwd <checkout> --yolo\` and then send it. Every agent gets the same rules, which is what makes their reports comparable.`,
+        `Ask for the report in one shape and no other: ${REPORT_SHAPE}. A report you have to read twice is a report that cost twice.`,
         "When you hand a queued item to an agent, claim it first — `agentglass-agent claim <task-id> --to <agent-name>` — and say how it went with `agentglass-agent finish <task-id> \"<outcome>\"`.",
         "An item this app says has been beaten twice is NOT to be handed out again: say it needs a person.",
       ].join(" ");
@@ -248,7 +251,7 @@ export async function seatPrompt(root: string, powers: Power, wakeHours: number)
     `${SEAT_PROMPT_MARK}: ${root}.`,
     "",
     text.trim(),
-    houseBlock(powers, wakeHours),
+    houseBlock(powers, wakeHours, root),
     `## The agents working in ${root} right now`,
     "",
     fieldReadout(rows),
@@ -387,7 +390,7 @@ export interface FieldRow {
 /** Everything the view needs for one project, in one answer. */
 export async function seatStatus(root: string): Promise<{
   root: string; doctrine: string; seat: Seat | null; agent: AgentOps.NamedAgent | null; live: boolean;
-  field: FieldRow[]; wokenAt: number | null; screen: string;
+  field: FieldRow[]; wokenAt: number | null; screen: string; brief: string; briefText: string;
 }> {
   const agent = await seated(root);
   /* The last few lines of its pane. The Clone had this and it was the best
@@ -410,5 +413,6 @@ export async function seatStatus(root: string): Promise<{
   return {
     root, doctrine: doctrinePath(root), seat: seatRow(root), agent, live: agent !== null,
     field, wokenAt: lastWoken(root), screen,
+    brief: briefPath(root), briefText: readBrief(root).text,
   };
 }

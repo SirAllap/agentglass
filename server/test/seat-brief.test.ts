@@ -1,0 +1,94 @@
+/*
+ * THE WORKER'S BRIEF — the half that was missing, and why it is a file.
+ *
+ * Modelled on an interview with an orchestrator that has run for a day on a
+ * real project. It has no doctrine file at all; what makes it work is the
+ * paragraph it sends to every agent and the fixed shape it demands back. So
+ * these tests are about that paragraph existing, being editable, and carrying
+ * the four rules that were paid for rather than designed.
+ */
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const dir = mkdtempSync(join(tmpdir(), "agx-brief-"));
+process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
+
+const { briefPath, briefTemplate, readBrief, writeBrief, REPORT_SHAPE, MAX_BRIEF } = await import("../src/seatbrief.ts");
+const { doctrinePath } = await import("../src/seatdoctrine.ts");
+const Seat = await import("../src/seat.ts");
+
+const ROOT = join(dir, "orbit");
+
+describe("two files, because they govern two different people", () => {
+  test("the brief sits beside the doctrine and is not the same file", () => {
+    expect(briefPath(ROOT)).not.toBe(doctrinePath(ROOT));
+    expect(briefPath(ROOT).startsWith(doctrinePath(ROOT).replace(/\.md$/, ""))).toBe(true);
+  });
+
+  test("it is seeded once and read back after", () => {
+    const first = readBrief(ROOT);
+    expect(first.seeded).toBe(true);
+    writeBrief(ROOT, "# mine\n\nonly my rules\n");
+    const second = readBrief(ROOT);
+    expect(second.seeded).toBe(false);
+    expect(second.text).toBe("# mine\n\nonly my rules\n");
+  });
+
+  test("an empty one is refused, and the file on disk survives the refusal", () => {
+    const root = join(dir, "empty");
+    readBrief(root);
+    expect(writeBrief(root, "  ").ok).toBe(false);
+    expect(readFileSync(briefPath(root), "utf8")).toContain("report to the orchestrator");
+    expect(writeBrief(root, "x".repeat(MAX_BRIEF + 1)).ok).toBe(false);
+  });
+});
+
+describe("the rules in it that were paid for", () => {
+  const text = briefTemplate("/home/a/code/orbit");
+
+  test("the one rule everything follows from", () => {
+    expect(text).toContain("If what a colleague can see changes, it is not yours");
+  });
+
+  test("a peer cannot lift the gate", () => {
+    /* Measured on a real machine: an instruction relayed by another agent was
+       refused by the agents it reached, and the owner backed them. */
+    expect(text.toLowerCase()).toContain("peer cannot lift that gate");
+  });
+
+  test("approved is not a review until you can say who", () => {
+    expect(text).toContain("not a review until you can say WHO");
+  });
+
+  test("check the branch has what the change needs", () => {
+    expect(text).toContain("check the branch actually has what");
+  });
+
+  test("an idle agent with a watcher bills like a working one", () => {
+    expect(text).toContain("idle agent with a\n  watcher");
+  });
+
+  test("and it names the report shape, once", () => {
+    expect(text).toContain(REPORT_SHAPE);
+    expect(REPORT_SHAPE).toContain("STATE / BLOCKED / NEED / COST");
+  });
+});
+
+describe("the seat is told to hand it out", () => {
+  test("only where it may open agents", () => {
+    /* A chair that may not start anything has nobody to brief, and a rule it
+       cannot act on is noise in the most expensive context on the machine. */
+    expect(Seat.houseBlock("speak", 4, ROOT)).not.toContain("worker brief");
+    expect(Seat.houseBlock("assign", 4, ROOT)).toContain("worker brief");
+  });
+
+  test("with the path to this project's own copy", () => {
+    expect(Seat.houseBlock("assign", 4, ROOT)).toContain(briefPath(ROOT));
+  });
+
+  test("and with one report shape, not two spellings of it", () => {
+    expect(Seat.houseBlock("assign", 4, ROOT)).toContain(REPORT_SHAPE);
+  });
+});
