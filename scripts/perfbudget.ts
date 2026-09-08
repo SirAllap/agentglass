@@ -71,34 +71,62 @@ const port = 4960 + Math.floor(Math.random() * 30);
 const S = `http://127.0.0.1:${port}`;
 const R = encodeURIComponent(repo);
 
+/**
+ * The database this run measures against.
+ *
+ * Half of what the panels poll reads `events`, and the cost of those queries is
+ * in the rows. An empty database made every one of them look free: a query that
+ * walks the table per candidate row measured 11ms here and 46 seconds against a
+ * day of real turns, and this check passed it. `loadtest.ts` already said as
+ * much — "an empty DB is why `make perf` never reproduced the stutter" — but it
+ * works from a copy of a real 186MB database, so it is not a check a
+ * contributor can run. This one now seeds its own.
+ *
+ * `AGX_PERF_EVENTS=0` skips it, for a run that only cares about the git side.
+ */
+const SEED_EVENTS = Number(process.env.AGX_PERF_EVENTS ?? 20_000);
+/** The environment both children get: the seeder writes the database the server
+ *  then opens, so every isolation knob below has to be the same for both. */
+const childEnv = {
+  ...process.env,
+  AGENTGLASS_PORT: String(port),
+  AGENTGLASS_ROOT: repo,
+  AGENTGLASS_DB: join(home, "perf.db"),
+  XDG_CONFIG_HOME: join(home, "config"),
+  XDG_DATA_HOME: join(home, "data"),
+  XDG_CACHE_HOME: join(home, "cache"),
+  // And the state dir, which is where the engine's generated tmux.conf lives:
+  // isolating the config alone let a throwaway run rewrite the conf the
+  // operator's own engine runs on. See server/test/tmux-conf-isolation.
+  AGENTGLASS_STATE_DIR: join(home, "state"),
+  // Its own tmux socket directory, beside the config/data/cache above and
+  // for the same reason: this child is a SERVER, and a server with no
+  // TMUX_TMPDIR sweeps and lists /tmp/tmux-<uid> — the sessions the user is
+  // working in. See scripts/tmuxTmp.ts for what was measured reaching them.
+  TMUX_TMPDIR: privateTmuxDir(home),
+  AGENTGLASS_TOKEN: "",
+  // The transcript sweep reads whatever is in the operator's ~/.claude, which
+  // is neither this app's doing nor reproducible on a CI runner.
+  AGENTGLASS_SCAN_DISABLED: "1",
+  // Arm the server's parent-death watchdog. The finally below kills it on a
+  // clean exit, but if this script is SIGKILLed the server is reparented to
+  // init and would otherwise linger holding the port — the watchdog reaps it.
+  AGENTGLASS_DIE_WITH_PARENT: "1",
+};
+
+if (SEED_EVENTS > 0) {
+  const seed = spawnSync("bun", [join(ROOT, "scripts", "seedEvents.ts"), join(home, "perf.db"), repo, String(SEED_EVENTS)],
+    { encoding: "utf8", env: childEnv });
+  if (seed.status !== 0) {
+    console.log(`✗ perf: could not seed the fixture database\n${seed.stderr ?? ""}`);
+    process.exit(1);
+  }
+  process.stdout.write(seed.stdout ?? "");
+}
+
 const server = spawn({
   cmd: ["bun", join(ROOT, "server", "src", "index.ts")],
-  env: {
-    ...process.env,
-    AGENTGLASS_PORT: String(port),
-    AGENTGLASS_ROOT: repo,
-    AGENTGLASS_DB: join(home, "perf.db"),
-    XDG_CONFIG_HOME: join(home, "config"),
-    XDG_DATA_HOME: join(home, "data"),
-    XDG_CACHE_HOME: join(home, "cache"),
-    // And the state dir, which is where the engine's generated tmux.conf lives:
-    // isolating the config alone let a throwaway run rewrite the conf the
-    // operator's own engine runs on. See server/test/tmux-conf-isolation.
-    AGENTGLASS_STATE_DIR: join(home, "state"),
-    // Its own tmux socket directory, beside the config/data/cache above and
-    // for the same reason: this child is a SERVER, and a server with no
-    // TMUX_TMPDIR sweeps and lists /tmp/tmux-<uid> — the sessions the user is
-    // working in. See scripts/tmuxTmp.ts for what was measured reaching them.
-    TMUX_TMPDIR: privateTmuxDir(home),
-    AGENTGLASS_TOKEN: "",
-    // The transcript sweep reads whatever is in the operator's ~/.claude, which
-    // is neither this app's doing nor reproducible on a CI runner.
-    AGENTGLASS_SCAN_DISABLED: "1",
-    // Arm the server's parent-death watchdog. The finally below kills it on a
-    // clean exit, but if this script is SIGKILLed the server is reparented to
-    // init and would otherwise linger holding the port — the watchdog reaps it.
-    AGENTGLASS_DIE_WITH_PARENT: "1",
-  },
+  env: childEnv,
   stdout: "ignore",
   stderr: "inherit",
 });
@@ -132,8 +160,29 @@ const POLLED = [
   `/events/filter-options`,
   `/sessions?limit=100`,
   `/stats?window=3600000`,
+  // The alerts panel polls this every 15s whenever it is open, and it is served
+  // inline off the same synchronous SQLite handle as everything else — so a
+  // slow insight is the whole server not answering, terminal included.
+  `/insights`,
   `/skills`,
 ];
+
+/**
+ * Per-route timings, so a failure can name the endpoint instead of only the
+ * symptom. Wall time under concurrency, not a clean per-route measurement — a
+ * route that queued behind a slow neighbour looks slow too — which is why this
+ * reports and the loop delay decides. A route ceiling of its own would fire on
+ * a legitimately large repo under AGX_PERF_ROOT, and a check that cries about
+ * those gets muted.
+ */
+const routeMs = new Map<string, number[]>();
+const hit = async (path: string) => {
+  const a = performance.now();
+  try { await fetch(S + path).then((r) => r.text()); } catch { /* between requests */ }
+  const took = performance.now() - a;
+  const seen = routeMs.get(path);
+  if (seen) seen.push(took); else routeMs.set(path, [took]);
+};
 
 let failed = false;
 try {
@@ -156,7 +205,7 @@ try {
   const MEASURE_MS = 6_000;
   let rounds = 0;
   while (performance.now() - t0 < MEASURE_MS) {
-    await Promise.all(POLLED.map((p) => fetch(S + p).then((r) => r.text()).catch(() => "")));
+    await Promise.all(POLLED.map(hit));
     rounds++;
     await Bun.sleep(400);
   }
@@ -167,6 +216,17 @@ try {
   const p = (q: number) => ms[Math.min(ms.length - 1, Math.floor((q / 100) * ms.length))] ?? 0;
   console.log(`served ${POLLED.length} endpoints × ${rounds} rounds over ${((performance.now() - t0) / 1000).toFixed(1)}s`);
   console.log(`loop meanwhile: ${ms.length} samples · p50 ${p(50).toFixed(1)}ms · p95 ${p(95).toFixed(1)}ms · p99 ${p(99).toFixed(1)}ms · max ${(ms.at(-1) ?? 0).toFixed(0)}ms`);
+
+  // The three worst endpoints, always — a green run shows what is closest to
+  // the line, and a red one shows where to look first.
+  const worst = [...routeMs.entries()]
+    .map(([path, xs]) => {
+      const sorted = [...xs].sort((a, b) => a - b);
+      return { path, p99: sorted[Math.min(sorted.length - 1, Math.floor(0.99 * sorted.length))] ?? 0 };
+    })
+    .sort((a, b) => b.p99 - a.p99)
+    .slice(0, 3);
+  console.log(`slowest routes: ${worst.map((w) => `${w.path.split("?")[0]} ${w.p99.toFixed(0)}ms`).join(" · ")}`);
 
   if (ms.length < 50) {
     console.log(`\n✗ perf: only ${ms.length} samples — the probe never got going, so this proved nothing`);

@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.tsx";
 import { PairScreen } from "./PairScreen.tsx";
-import { adoptServer, IS_DESKTOP } from "./lib/api.ts";
+import { adoptServer } from "./lib/api.ts";
 import { ticketFromUrl, clearTicketFromUrl } from "./lib/pairing.ts";
 import { followServerChanges } from "./lib/desktop.ts";
 import { applyTheme, initialTheme, watchThemeStorage, watchSystemTheme } from "./lib/themes.ts";
@@ -10,13 +10,10 @@ import { restoreScale } from "./lib/uiScale.ts";
 import "./index.css";
 import "./fonts.ts"; // bundled monospace faces — see fonts.ts
 
-// Re-broadcast on boot, not only on a deliberate pick: the persisted theme IS
-// the user's last deliberate choice, and without this the machine's tmux/nvim
-// kept whatever palette was synced the last time the switcher was clicked —
-// days stale — while the cockpit itself moved on. Gated to the desktop shell so
-// a phone or a paired browser opening the cockpit never repaints the host's
-// terminals; see IS_DESKTOP.
-applyTheme(initialTheme(), { sync: IS_DESKTOP });
+// Restoring browser state paints this document only. Machine-wide theme output
+// requires a fresh picker gesture; a page load may be a smoke test or another
+// automated client and must not repaint a user's running tools.
+applyTheme(initialTheme());
 watchThemeStorage();
 // When the mode is "System", follow the OS between the two serious defaults live.
 watchSystemTheme();
