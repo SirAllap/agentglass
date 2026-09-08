@@ -66,12 +66,33 @@ export function keepLoadedChecks(prev: PrSummary[], next: PrSummary[]): PrSummar
   const out = next.map((p) => {
     // `undefined` means this row was never built in two passes — a caller with
     // one pass is not missing anything and must not be patched from history.
-    if (p.checksLoaded !== false) return p;
+    if (p.checksLoaded === undefined) return p;
     const old = had.get(p.number);
     if (!old) return p;
+    const older = old as unknown as Record<string, unknown>;
+    const now = p as unknown as Record<string, unknown>;
+    /*
+     * FIELD BY FIELD, NOT ALL OR NOTHING.
+     *
+     * This used to carry the whole list across only for a row that said
+     * `checksLoaded: false`, on the reading that a completed second pass knows
+     * everything it is going to know. It does not. GitHub answers HTTP 200
+     * with `{data, errors}` when part of a query fails, so a row comes back
+     * complete in every respect EXCEPT the one field that timed out — the
+     * second pass ran, `checksLoaded` is true, and `humanReview` is missing.
+     * Reported as every review header on the board resetting to "No review
+     * asked for yet" after a while, and again on returning to the view.
+     *
+     * The rule at the top of this file already covered it and the code did
+     * not: a refresh may add and it may correct, but it may not un-know. So
+     * what carries over is any second-pass field this answer does not have,
+     * whatever the row claims about how far it got.
+     */
+    const missing = SECOND_PASS.filter((k) => now[k] === undefined && older[k] !== undefined);
+    if (p.checksLoaded !== false && !missing.length) return p;
     changed = true;
     const merged = { ...p } as Record<string, unknown>;
-    for (const k of SECOND_PASS) merged[k] = (old as unknown as Record<string, unknown>)[k];
+    for (const k of p.checksLoaded === false ? SECOND_PASS : missing) merged[k] = older[k];
     return merged as unknown as PrSummary;
   });
   // Same array when nothing was carried over, so a re-render is not provoked by
