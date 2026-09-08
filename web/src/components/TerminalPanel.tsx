@@ -2622,23 +2622,18 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     s.ws.send(ptyFrame({ t: "tmux", ...body }));
   }, [sess]);
   /*
-   * WHAT EACH TAB IS FOR, under a name that deliberately says nothing.
+   * NO LABEL UNDER THE TAB NAME. Removed, not fixed.
    *
-   * `AI01` is an address: stable, short, and the same thing an hour later. The
-   * price of that is that it carries no information at all, which is why the
-   * ask was "AI0X... or have it match the task being worked on" —
-   * and the answer to that `or` is both, the number as the name and this as the
-   * label under it.
+   * The idea was that `AI01` is an address and says nothing, so a line of what
+   * the agent is doing would earn its place beside it. In practice every tab
+   * printed the SAME sentence — the owner was matched with
+   * `cwd.startsWith(worktree)`, so every window in one checkout resolved to
+   * whichever agent sorted first, and five tabs all read "Investigando p…".
    *
-   * Every twenty seconds, not with the frame: the frame is swept twice a
-   * second per attached client, and a sentence an agent publishes every few
-   * minutes has no business in a poll that fast.
+   * The prefix match is fixable and the label still went, because the ask was
+   * to remove it: "realmente esa description la puedes quitar, no me hace
+   * falta que una tab tenga ese texto". The strip is read by its addresses.
    */
-  const [tabHints, setTabHints] = useState<Record<string, string>>({});
-  usePoll(true, useCallback(async () => {
-    const r = await api.tabHints().catch(() => null);
-    if (r?.hints) setTabHints(r.hints);
-  }, []), 20_000);
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -3291,14 +3286,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           ) : (
                             <>
                               <span>{w.name || "shell"}</span>
-                              {/* Dim, after the name, and clipped to a few
-                                  words: this is a label, and a label that
-                                  competes with the address it labels has cost
-                                  the strip the thing it was readable for. */}
-                              {!!tabHints[w.id] && (
-                                <span className="truncate max-w-[16ch]" style={{ color: "var(--text4)" }}
-                                  title={tabHints[w.id]}>{tabHints[w.id]}</span>
-                              )}
                             </>
                           )}
                           {zoomed && <span className="text-[10px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="A pane in this window is zoomed">⤢</span>}

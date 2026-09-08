@@ -45,6 +45,9 @@ export interface LanternRow {
   branch?: string;
   left?: string;
   paneId?: string;
+  /** What this session called itself before, newest first — see BoardRow.
+   *  wasCalled. One card per session; these are the names it folded in. */
+  wasCalled?: string[];
   /** Whether git already has this branch. Absent when nobody asked — which is
    *  not the same as "nobody merged it", and must not be drawn as if it were. */
   landed?: boolean;
@@ -236,7 +239,25 @@ export function AgentCard({ r, onJump, quiet, cacheTtlMs, kinds }: { r: LanternR
               {since ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} title={new Date(since).toLocaleString()}>{fmtAgo(since)}</span> : null}
             </span>
           </div>
-          <Where r={r} />
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Where r={r} />
+            {/*
+             * The names this session posted under before.
+             *
+             * On the metadata line and not beside the title: up there it
+             * competed with the one thing the card is read by, and turned
+             * `limpieza-worktrees-2026-09-07` into `limpieza-worktree…` to
+             * make room for itself. A card that hides its own name to explain
+             * its history has the priority backwards. Down here there is room,
+             * and it sits with the rest of what this row IS.
+             */}
+            {r.wasCalled?.length ? (
+              <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}
+                title={`Same session, earlier names: ${r.wasCalled.join(", ")}`}>
+                · was {r.wasCalled[0]}{r.wasCalled.length > 1 ? ` +${r.wasCalled.length - 1}` : ""}
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
 
