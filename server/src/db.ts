@@ -1448,6 +1448,39 @@ CREATE TABLE IF NOT EXISTS seat_line (
 db.run(`CREATE INDEX IF NOT EXISTS seat_line_root ON seat_line (root, at DESC)`);
 
 /*
+ * REPORTS FROM THE AGENTS DOING THE WORK.
+ *
+ * The orchestrator this feature was modelled on asked for exactly one thing
+ * first: "una bandeja donde el reporte de cada uno llegue en el formato fijo
+ * sin que yo lo pegue cinco veces". Today each worker messages it, and the
+ * report lands in the most expensive context on the machine as prose that has
+ * to be read, re-read and remembered.
+ *
+ * So a report is a ROW, in the four fields the brief asks for. The seat drains
+ * them in one call instead of five, the view shows what is unread, and a
+ * report arriving is a change — which is what wakes the seat, so nobody polls.
+ *
+ * `read_at` rather than a delete: what an agent said is the record of what it
+ * said, and the seat having read it is a different fact from it not existing.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_report (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  root TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  session TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT '',
+  blocked TEXT NOT NULL DEFAULT '',
+  need TEXT NOT NULL DEFAULT '',
+  cost TEXT NOT NULL DEFAULT '',
+  raw TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  read_at INTEGER
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_report_root ON seat_report (root, read_at, at DESC)`);
+
+/*
  * AN ORCHESTRATOR THAT WAS ALREADY WORKING.
  *
  * The seat opens an agent and owns it. But the first orchestrator this feature
@@ -2139,6 +2172,9 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
      rows are NOT swept: an item still waiting is a person's intent, and a
      finished one is the record of what was asked and what came back. */
   db.run(`DELETE FROM seat_line WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+  /* A worker's report, kept the same ninety days as the seat's own lines: it is
+     the other half of the same conversation. */
+  db.run(`DELETE FROM seat_report WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A role outlives its session by ninety days, then nothing needs it. */
   db.run(`DELETE FROM session_role WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A schedule that fired or was cancelled is a record, kept ninety days; one

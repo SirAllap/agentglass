@@ -3,7 +3,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { edge, wash } from "./git/ui.tsx";
-import { api, type SeatAnswer, type SeatTask, type SeatFieldRow } from "../lib/api.ts";
+import { api, type SeatAnswer, type SeatTask, type SeatFieldRow, type SeatReportRow } from "../lib/api.ts";
 import { Persona } from "./understudy/persona/Persona.tsx";
 import { useCosmetic } from "./understudy/persona/cosmeticStore.ts";
 
@@ -128,6 +128,8 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const [adding, setAdding] = useState("");
   const [proof, setProof] = useState("");
   const [showDone, setShowDone] = useState(false);
+  const [saying, setSaying] = useState("");
+  const [sentTo, setSentTo] = useState("");
   const cos = useCosmetic();
 
   const load = useCallback(async () => {
@@ -162,6 +164,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const models = data?.models ?? [];
   const chosen = seat?.model || data?.defaultModel || "";
   const lines = data?.lines ?? [];
+  const reports: SeatReportRow[] = data?.reports ?? [];
   const now = Date.now();
   /* Nothing came back, or what came back was a refusal: everything below is
      unknown, not empty. */
@@ -276,6 +279,62 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   style={{ color: "var(--text3)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                   {data?.screen}
                 </pre>
+              </section>
+            )}
+
+            {/*
+              * THE TRAY — what the agents actually sent, in the shape the brief
+              * asks for.
+              *
+              * The report was already the seat's cheapest way to know: four
+              * fields instead of a paragraph, in one call instead of five
+              * messages. Drawing it here costs a person nothing and answers the
+              * question this screen exists for — who is stuck — without opening
+              * anybody's pane. Blocked and needs are the two lines worth a
+              * colour; state and cost are the record.
+              */}
+            {reports.length > 0 && (
+              <section className="flex flex-col gap-1">
+                <div className="flex items-baseline gap-2.5">
+                  <h2 className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>What they sent</h2>
+                  <span className="text-[11px]" style={{ color: "var(--text3)" }}>
+                    {(data?.unread ?? 0) > 0
+                      ? `${data?.unread} the seat has not read yet`
+                      : "the seat has read all of these"}
+                  </span>
+                </div>
+                <ul className="flex flex-col">
+                  {reports.map((r) => (
+                    <li key={r.id} className="flex items-start gap-2.5 py-1.5">
+                      <span aria-hidden className="shrink-0 rounded-full"
+                        title={r.readAt ? "the seat has read this" : "waiting for the seat"}
+                        style={{
+                          /* Off the spacing scale on purpose: this centres the
+                             dot on the cap height of the 12px name beside it,
+                             which is an optical alignment to a glyph and not a
+                             gap between two things. */
+                          marginTop: 6,
+                          width: 6, height: 6,
+                          background: r.readAt ? "transparent" : "var(--primary)",
+                          border: r.readAt ? "1px solid var(--text4)" : undefined,
+                        }} />
+                      <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                        <span className="flex items-baseline gap-2 min-w-0">
+                          <span className="text-[12px] shrink-0" style={{ color: "var(--text2)" }}>{r.agent}</span>
+                          <span className="text-[12.5px] leading-snug min-w-0" style={{ color: "var(--text)" }}>
+                            {r.state || "said nothing about its state"}
+                          </span>
+                        </span>
+                        {r.blocked && <span className="text-[11px] leading-snug" style={{ color: "var(--error)" }}>blocked: {r.blocked}</span>}
+                        {r.need && <span className="text-[11px] leading-snug" style={{ color: "var(--warning)" }}>needs: {r.need}</span>}
+                      </span>
+                      <span className="shrink-0 flex items-baseline gap-2 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text4)" }}>
+                        {r.cost ? <span title="what it says this has cost so far">{r.cost}</span> : null}
+                        <span>{fmtAgo(r.at)}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </section>
             )}
 
@@ -427,6 +486,47 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   : "Nobody is working in this project right now."}
                 {onLantern && <> <button type="button" onClick={onLantern} className="agx-btn" style={{ color: "var(--primary)" }}>Lantern →</button></>}
               </p>
+              {/*
+                * ONE MESSAGE, EVERYBODY.
+                *
+                * The same paragraph pasted five times is five turns of the most
+                * expensive context on the machine, and that is what this
+                * replaces. It sends as YOU, not as the seat — the seat's own
+                * powers decide what the seat may do, and this is the person at
+                * the keyboard talking to their own agents.
+                */}
+              {field.length > 0 && (
+                <form className="flex gap-2 pb-1"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const t = saying.trim();
+                    if (!t) return;
+                    void act("broadcast", async () => {
+                      const r = await api.agentsBroadcast(t);
+                      if (r.ok) {
+                        setSaying("");
+                        const got = r.result?.sent.filter((x) => x.outcome === "sent" || x.outcome === "queued").length ?? 0;
+                        const asked = r.result?.asked ?? 0;
+                        /* Named counts, not "sent": an agent whose pane is gone
+                           takes the message nowhere, and a person told "sent"
+                           would wait for an answer that cannot come. */
+                        setSentTo(got === asked ? `said to all ${asked}` : `said to ${got} of ${asked}`);
+                      }
+                      return r;
+                    });
+                  }}>
+                  <input value={saying} onChange={(e) => { setSaying(e.target.value); setSentTo(""); }}
+                    placeholder={`Say something to all ${field.length}`}
+                    className="flex-1 min-w-0 rounded-md px-2.5 py-1.5 text-[12px]"
+                    style={{ background: "var(--bg)", border: edge(18), color: "var(--text)" }} />
+                  <button type="submit" disabled={!saying.trim() || !!busy}
+                    className="agx-btn shrink-0 text-[11px] px-2.5 py-1.5 rounded disabled:opacity-50"
+                    style={{ color: "var(--text2)", border: edge(20) }}>
+                    {busy === "broadcast" ? "Sending…" : "Say to all"}
+                  </button>
+                </form>
+              )}
+              {sentTo && <p className="text-[10.5px] pb-1.5" style={{ color: "var(--text3)" }}>{sentTo}</p>}
               {field.map((r) => {
                 const tone = toneOf(r);
                 return (

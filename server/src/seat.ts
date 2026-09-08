@@ -41,6 +41,7 @@ import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
 import { REPORT_SHAPE, briefPath, readBrief } from "./seatbrief.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
+import { inboxReadout, recentReports, unreadCount, type SeatReport } from "./seatreport.ts";
 import { BUCKETS, pulses } from "./seatpulse.ts";
 import { lastWoken } from "./seatwoken.ts";
 
@@ -268,6 +269,8 @@ export function houseBlock(powers: Power, wakeHours: number, root = ""): string 
         "You may prompt an agent that is already running, and start or stop named agents (`agentglass-agent start|prompt|stop`).",
         `When you OPEN one, its first message is this project's worker brief — the file beside your rules — and nothing else you write replaces it: \`claude --dangerously-skip-permissions "$(cat ${root ? briefPath(root) : "the brief file beside your rules"})"\`, or \`agentglass-agent start <name> --cwd <checkout> --yolo\` and then send it. Every agent gets the same rules, which is what makes their reports comparable.`,
         `Ask for the report in one shape and no other: ${REPORT_SHAPE}. A report you have to read twice is a report that cost twice.`,
+        "- One message to many: `agentglass-agent broadcast \"…\"` sends to every named agent, or `--to a,b,c` to some. Every name's outcome comes back, so a send that reached four of five is not read as five.",
+        "- Their reports arrive in a tray, not in your context. `agentglass-agent inbox` hands you everything unread in one call and marks it read; you are woken when one arrives.",
         "When you hand a queued item to an agent, claim it first — `agentglass-agent claim <task-id> --to <agent-name>` — and say how it went with `agentglass-agent finish <task-id> \"<outcome>\"`.",
         "An item this app says has been beaten twice is NOT to be handed out again: say it needs a person.",
       ].join(" ");
@@ -333,6 +336,10 @@ export async function seatPrompt(root: string, powers: Power, wakeHours: number)
        woken with a message, and a round that begins by asking the server what
        it already knows spends a tool call on a list this app can just hand
        over. */
+    "## Reports waiting for you",
+    "",
+    inboxReadout(root),
+    "",
     "## The queue for this project",
     "",
     queueReadout(root),
@@ -513,7 +520,8 @@ export interface FieldRow {
 /** Everything the view needs for one project, in one answer. */
 export async function seatStatus(root: string): Promise<{
   root: string; doctrine: string; seat: Seat | null; agent: AgentOps.NamedAgent | null; live: boolean;
-  field: FieldRow[]; wokenAt: number | null; screen: string; brief: string; briefText: string;
+  field: FieldRow[]; wokenAt: number | null; screen: string; unread: number; reports: SeatReport[];
+  brief: string; briefText: string;
 }> {
   const agent = await seated(root);
   const screen = shoulder(agent ? (await AgentOps.screenOf(agent.paneId, 60).catch(() => null)) ?? "" : "");
@@ -531,7 +539,16 @@ export async function seatStatus(root: string): Promise<{
   }));
   return {
     root, doctrine: doctrinePath(root), seat: seatRow(root), agent, live: agent !== null,
-    field, wokenAt: lastWoken(root), screen,
+    field, wokenAt: lastWoken(root), screen, unread: unreadCount(root),
+    /*
+     * THE TRAY IS THE SEAT'S, AND THIS IS A WINDOW ONTO IT.
+     *
+     * Recent, not unread, and nothing here marks anything read: draining is
+     * how the seat learns what its agents said, and a person clearing the tray
+     * from a screen would take a report the seat never got to see. So the view
+     * reads over its shoulder and leaves the post alone.
+     */
+    reports: recentReports(root, 8),
     brief: briefPath(root), briefText: readBrief(root).text,
   };
 }

@@ -112,12 +112,22 @@ of it. If you did not verify something, say you did not.
 
 ## How you report
 
-Every message back to the orchestrator, in this shape, ${REPORT_SHAPE}:
+Send it with \`agentglass-agent report\`, from your checkout, in this shape,
+${REPORT_SHAPE}:
+
+    agentglass-agent report "STATE the retry drops the last page, reproduced
+    BLOCKED nothing
+    NEED nothing
+    COST 40 minutes, one worktree"
 
     STATE    what is true now, in one or two lines
     BLOCKED  what is stopping you, or "nothing"
     NEED     the one decision or thing you need, or "nothing"
     COST     roughly what this has taken so far
+
+It goes to a tray the orchestrator drains in one call, and it wakes it. That
+is the whole reason for the shape: a paragraph costs the person reading it far
+more than it costs you to write four lines.
 `;
 }
 

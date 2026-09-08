@@ -1373,6 +1373,7 @@ import * as Seat from "./seat.ts";
 import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
 import { readBrief, writeBrief } from "./seatbrief.ts";
 import * as SeatQueue from "./seatqueue.ts";
+import * as SeatInbox from "./seatreport.ts";
 import { recall } from "./seatmemory.ts";
 import * as AgentOps from "./agentops.ts";
 import { nudgeText, nudgeChannel, sendNudge } from "./prnudge.ts";
@@ -6795,6 +6796,21 @@ const server = Bun.serve<WsData>({
       /* The bank, asked on the seat's behalf. A POST because the question is
          free text and a query string is the wrong place for a sentence. */
       if (verb === "recall") return json({ ok: true, ...recall(String(b.question ?? "")) });
+      /*
+       * THE INBOX. `report` is what a worker sends; `inbox` is the seat
+       * draining it in one call rather than reading five messages. Both are
+       * allowed at every power level: reporting and reading are not acts.
+       */
+      if (verb === "report") {
+        const r = SeatInbox.addReport({ root, agent: String(b.agent ?? ""), session: String(b.session ?? ""), text: String(b.text ?? "") });
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "inbox") {
+        /* Draining marks them read, which is why this is a POST: it changes
+           what the next caller sees. `peek` reads without claiming. */
+        const reports = b.peek === true ? SeatInbox.unreadReports(root) : SeatInbox.drainReports(root);
+        return json({ ok: true, reports, unread: SeatInbox.unreadCount(root) });
+      }
       if (verb === "task") {
         const r = SeatQueue.addTask({ root, title: String(b.title ?? ""), detail: String(b.detail ?? ""), proof: String(b.proof ?? ""), weight: Number(b.weight ?? 0) });
         return json(r, r.ok ? 200 : 400);
@@ -6961,6 +6977,33 @@ const server = Bun.serve<WsData>({
       const verb = pathname.slice("/agents/named/".length);
       let b: Record<string, unknown>;
       try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const timeoutMs0 = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
+      /*
+       * BROADCAST — one message, N agents.
+       *
+       * The orchestrator's own words for why: it was pasting the same
+       * paragraph five times, and each paste is a turn of the most expensive
+       * context on the machine. Every name is attempted and every outcome is
+       * reported: a partial send that read as a success would leave somebody
+       * waiting for an instruction that never arrived.
+       */
+      if (verb === "broadcast") {
+        const names = Array.isArray(b.names) ? b.names.filter((n): n is string => typeof n === "string") : [];
+        const text = typeof b.text === "string" ? b.text : "";
+        if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
+        const live = (await AgentOps.listAgents()).filter((a) => a.endedAt === null);
+        const want = names.length ? live.filter((a) => names.includes(a.name)) : live;
+        const missing = names.filter((n) => !live.some((a) => a.name === n));
+        const sent: { name: string; outcome: string }[] = [];
+        for (const a of want) {
+          const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000).catch(() => "gone");
+          sent.push({ name: a.name, outcome: String(outcome) });
+        }
+        return json({
+          ok: sent.some((x) => x.outcome === "sent" || x.outcome === "queued"),
+          result: { sent, missing, asked: want.length },
+        });
+      }
       if (!AgentOps.validName(b.name)) return json({ ok: false, error: "name: letters, digits, dot, dash or underscore, 64 at most" }, 400);
       const name = b.name;
       const timeoutMs = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));

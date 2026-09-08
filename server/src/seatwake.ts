@@ -24,6 +24,7 @@ import { inScope, seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
 import { everySeat, seatName } from "./seat.ts";
 import { releaseVanished } from "./seatqueue.ts";
+import { unreadCount } from "./seatreport.ts";
 import { noteWoken, wokenFor, __resetWoken } from "./seatwoken.ts";
 
 /* What each seat was last told lives in seatwoken.ts, a leaf: the view reads
@@ -86,7 +87,12 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
        another one stopped would spend a turn reporting on work that is none of
        its business — and, with powers, offer to unstick it. */
     const mine = f.filter((x) => x.worktree && inScope(x.worktree, s.root));
-    const fp = fingerprint(mine);
+    /* A report waiting is part of what the field says, and the count is in the
+       fingerprint so a fifth report wakes the seat exactly as a fifth stopped
+       agent does. Its own words for why this matters: it was pasting five
+       reports by hand. */
+    const waiting = unreadCount(s.root);
+    const fp = `${fingerprint(mine)}#${waiting}`;
     const last = wokenFor(s.root);
     const changed = !last || last.fingerprint !== fp;
     const overdue = !last || now - last.at >= floorMs;
@@ -96,7 +102,10 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
        field in its opening prompt, and waking it to say so would be a turn
        spent repeating what it is already reading. */
     if (!last) continue;
-    await send(seatName(s.root), changed ? wakeLine(mine, last.fingerprint) : "Nothing has changed since your last round. Say so in one line, or say what you notice.");
+    const line = changed
+      ? (waiting ? `${waiting} report${waiting === 1 ? "" : "s"} waiting: run \`agentglass-agent inbox\`. ` : "") + wakeLine(mine, last.fingerprint.split("#")[0] ?? "")
+      : "Nothing has changed since your last round. Say so in one line, or say what you notice.";
+    await send(seatName(s.root), line);
     woken.push(s.root);
   }
   return woken;
