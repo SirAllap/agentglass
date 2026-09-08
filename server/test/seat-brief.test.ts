@@ -136,3 +136,50 @@ describe("adopting an orchestrator that was already working", () => {
     expect(Seat.seatRow(ROOT2)?.lastLine).toBeDefined();
   });
 });
+
+describe("over its shoulder shows work, not furniture", () => {
+  /*
+   * Measured on a real pane: the last eight non-empty lines were the input
+   * box, a spinner, a permission footer and a hook printing MEMORY REMINDER.
+   * Eight lines of chrome and not one of work, which is a panel with no
+   * reason to exist.
+   */
+  const PANE = [
+    "  ⏺ Read src/export.ts",
+    "  ⏺ Bash(bun test server/test/export.test.ts)",
+    "    4 pass, 0 fail",
+    "",
+    "└ UserPromptSubmit says: MEMORY REMINDER: It's been over 15 minutes since your last save.",
+    "· Billowing… (29s · ↓ 213 tokens · still thinking with xhigh effort)",
+    "────────────────────────────────────────",
+    "❯ ",
+    "────────────────────────────────────────",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+  ].join("\n");
+
+  test("keeps what the agent did", () => {
+    const out = Seat.shoulder(PANE);
+    expect(out).toContain("bun test server/test/export.test.ts");
+    expect(out).toContain("4 pass, 0 fail");
+  });
+
+  test("drops the box, the spinner, the footer and the hook", () => {
+    const out = Seat.shoulder(PANE);
+    expect(out).not.toContain("MEMORY REMINDER");
+    expect(out).not.toContain("Billowing");
+    expect(out).not.toContain("bypass permissions");
+    expect(out).not.toContain("❯");
+  });
+
+  test("a pane with nothing but chrome says nothing at all", () => {
+    /* An empty box is more honest than a box full of furniture, and the view
+       does not draw one. */
+    expect(Seat.shoulder("❯ \n  ⏵⏵ bypass permissions on\n")).toBe("");
+    expect(Seat.shoulder("")).toBe("");
+  });
+
+  test("cuts at the LAST box, so a quoted one does not hide the work", () => {
+    const out = Seat.shoulder(["❯ old prompt", "  ⏺ did the thing", "❯ "].join("\n"));
+    expect(out).toContain("did the thing");
+  });
+});

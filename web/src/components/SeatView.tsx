@@ -249,9 +249,15 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                       className="agx-btn text-[10.5px]" style={{ color: "var(--primary)" }}>Open it</button>
                   )}
                 </div>
-                <pre className="px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap overflow-x-auto"
-                  style={{ color: "var(--text3)", maxHeight: 160 }}>
-                  {(data?.screen ?? "").split("\n").filter((l) => l.trim() !== "").slice(-8).join("\n")}
+                {/* No sideways scroll: a pane is 200 columns and this box is
+                    not, so a long line WRAPS. The first version had
+                    `overflow-x: auto` and gave a person a horizontal scrollbar
+                    to read one line of somebody else's terminal, which nobody
+                    is going to do. The server has already cut the chrome out
+                    (see `shoulder`), so this only draws. */}
+                <pre className="px-3 py-2 text-[11px] leading-relaxed"
+                  style={{ color: "var(--text3)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {data?.screen}
                 </pre>
               </section>
             )}

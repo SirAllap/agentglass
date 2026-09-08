@@ -454,6 +454,45 @@ export function setSeatSettings(root: string, model: string, powers: Power): voi
   settings.run(root, seatName(root), model, powers);
 }
 
+/**
+ * WHAT THE SEAT IS DOING, cut out of its pane.
+ *
+ * The first version showed the last few non-empty lines, which on a Claude
+ * pane is the input box, the status line and whatever a hook printed —
+ * "MEMORY REMINDER", a spinner, an empty prompt. Everything except the thing
+ * a person opened this to see. Measured on a real one: eight lines of chrome
+ * and not one of work.
+ *
+ * So: cut at the input box (its glyph is the CLI's own, the same one
+ * chatpane.ts waits on) and keep what is ABOVE it, which is what the agent
+ * last did. Drop the hook chatter and the spinner rows, because they are the
+ * app talking to itself rather than the agent working. If nothing survives,
+ * say nothing: an empty box is more honest than a box full of furniture, and
+ * the view does not draw one.
+ */
+export function shoulder(screen: string): string {
+  if (!screen.trim()) return "";
+  const lines = screen.split("\n");
+  /* The LAST box, not the first: a transcript can quote one. */
+  let cut = lines.length;
+  for (let i = lines.length - 1; i >= 0; i--) if (/^\s*[❯>]\s/.test(lines[i]!)) { cut = i; break; }
+  const NOISE = [
+    /UserPromptSubmit says:/i,
+    /MEMORY REMINDER/i,
+    /^\s*[·*✻✽✢✳✶]?\s*\w+…\s*\(\d+s/,     /* the spinner and its counter */
+    /^\s*⏵⏵/,                                  /* the permission-mode footer */
+    /shift\+tab to cycle/i,
+    /^\s*[─━┄┈]{3,}/,                          /* the rules the TUI draws, and the
+                                                  one carrying the pane's own name
+                                                  at the end of it */
+    /^\s*╭|^\s*╰|^\s*│\s*$/,                 /* the box it draws them in */
+  ];
+  const kept = lines.slice(0, cut)
+    .map((l) => l.replace(/\s+$/, ""))
+    .filter((l) => l.trim() !== "" && !NOISE.some((re) => re.test(l)));
+  return kept.slice(-6).join("\n");
+}
+
 /** One row of the field, as the view draws it: who, what state, and the last
  *  hour of what they actually did. */
 export interface FieldRow {
@@ -474,11 +513,7 @@ export async function seatStatus(root: string): Promise<{
   field: FieldRow[]; wokenAt: number | null; screen: string; brief: string; briefText: string;
 }> {
   const agent = await seated(root);
-  /* The last few lines of its pane. The Clone had this and it was the best
-     thing in it: watching the seat recall a precedent and hand out a task is
-     the moment the idea stops needing an explanation. Read straight off tmux,
-     so there is nothing to keep in sync and nothing to store. */
-  const screen = agent ? (await AgentOps.screenOf(agent.paneId, 40).catch(() => null)) ?? "" : "";
+  const screen = shoulder(agent ? (await AgentOps.screenOf(agent.paneId, 60).catch(() => null)) ?? "" : "");
   const rows = fieldFor(root, await boardNow().catch(() => []));
   const pulse = pulses(rows.map((r) => r.session ?? ""));
   const field: FieldRow[] = rows.map((r) => ({
