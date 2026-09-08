@@ -859,3 +859,55 @@ describe("one checkout is not another", () => {
     expect(seen?.branch).toBe("fix/thing");
   });
 });
+
+/*
+ * A RED DOT YOU CANNOT ACT ON.
+ *
+ * Measured on the machine this was written on: two rows claiming a person was
+ * needed, one of them for twenty-seven hours, neither with a pane to go to.
+ * The wait was true when it was recorded — the session's last hook event was
+ * Claude Code stopping for the next prompt — and then the agent went away and
+ * the claim stayed, at the top of a screen sorted by who has waited longest.
+ */
+describe("needs you means there is somewhere to go", () => {
+  const now = Date.now();
+  const waiting = (session: string) =>
+    new Map([[session, { kind: "input" as const, why: "waiting for your input", since: now - 60_000 }]]);
+
+  test("a wait on an agent whose pane is gone is not drawn as needing you", () => {
+    Board.saidBy({ name: "long-gone", doing: "a review", worktree: "/code/app", session: "s-gone" });
+    const [row] = Board.merged({
+      said: Board.board().filter((r) => r.name === "long-gone"),
+      panes: [{ paneId: "%3", name: "other", cwd: "/code/elsewhere" }],
+      waiting: waiting("s-gone"),
+      now,
+    }).filter((r) => r.name === "long-gone");
+    expect(row?.needsYou).toBeUndefined();
+    expect(row?.state).not.toBe("waiting");
+  });
+
+  test("but a wait on an agent with a pane still is", () => {
+    Board.saidBy({ name: "here", doing: "a fix", worktree: "/code/app", session: "s-here" });
+    const [row] = Board.merged({
+      said: Board.board().filter((r) => r.name === "here"),
+      hooks: [{ paneId: "%7", cwd: "/code/app", sessionId: "s-here", at: now }],
+      panes: [{ paneId: "%7", name: "here", cwd: "/code/app" }],
+      waiting: waiting("s-here"),
+      now,
+    }).filter((r) => r.name === "here");
+    expect(row?.needsYou?.kind).toBe("input");
+    expect(row?.state).toBe("waiting");
+  });
+
+  test("and with no pane list read at all, the wait is believed", () => {
+    /* Absence of evidence is not evidence: this is the rule that once deleted
+       a live agent, and it applies here the same way. */
+    Board.saidBy({ name: "unseen", doing: "a fix", worktree: "/code/app", session: "s-unseen" });
+    const [row] = Board.merged({
+      said: Board.board().filter((r) => r.name === "unseen"),
+      waiting: waiting("s-unseen"),
+      now,
+    }).filter((r) => r.name === "unseen");
+    expect(row?.needsYou?.kind).toBe("input");
+  });
+});

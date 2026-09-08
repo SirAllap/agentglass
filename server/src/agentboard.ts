@@ -552,7 +552,23 @@ export function merged(p: {
        machine placed in the same checkout. Both are how the wait is looked up
        and how the reminder knows it has been answered. */
     const session = s.session || hook?.sessionId;
-    const wait = session ? p.waiting?.get(session) : undefined;
+    /*
+     * A "NEEDS YOU" WITH NOWHERE TO GO IS NOT A NEEDS YOU.
+     *
+     * The wait is real — the session's last hook event was Claude Code saying
+     * it stopped for the next prompt. What is no longer real is the agent:
+     * its pane is gone, so the row is a red dot with no Go button behind it,
+     * and it sits at the top of a screen sorted by who has been waiting
+     * longest. Measured on this machine: two rows claiming a person was
+     * needed, one of them for 27 hours, neither of them anywhere.
+     *
+     * Only when this machine actually LOOKED. With no panes read there is
+     * nothing to contradict the wait, and inventing a contradiction out of an
+     * empty list is the mistake that once deleted a live agent — see
+     * `stillThere` above, same rule.
+     */
+    const somewhereToGo = !!paneId || p.panes === undefined || p.panes.length === 0;
+    const wait = session && somewhereToGo ? p.waiting?.get(session) : undefined;
     const wasCalled = alsoKnownAs.get(s.name);
     rows.set(s.name, {
       ...s,
