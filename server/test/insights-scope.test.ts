@@ -50,7 +50,12 @@ beforeAll(async () => {
   };
   loop(SCOPED, "s-in"); // in scope
   loop(OTHER, "s-out"); // out of scope — must not leak
-  loop(MONO, "s-cwd", { cwd: SCOPED + "/wt/x" }); // in scope via the cwd the turn ran in
+  // join, not `SCOPED + "/wt/x"`: `isWithin` compares with the platform's own
+  // separator, so on Windows the concatenated form is `C:\…\scoped/wt/x` and
+  // fails a prefix test against `C:\…\scoped\` — the fixture would sit outside
+  // the scope it exists to prove is inside it, and this assertion would pass by
+  // testing nothing (#569).
+  loop(MONO, "s-cwd", { cwd: join(SCOPED, "wt", "x") }); // in scope via the cwd the turn ran in
 
   // A second, differently-shaped query (SUM(cost)/HAVING) — a fast-burn session
   // over $15 in 15m — to prove the scope guard covers more than the loop query.
