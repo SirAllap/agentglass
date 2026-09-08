@@ -20,7 +20,7 @@ import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewT
 import { CardWrites } from "../lib/cardWrites.ts";
 import { activityRows, eventLine, foldLabel, folds, spanLabel, seenActor, NO_AUTHOR_NOTE } from "../lib/cardActivity.ts";
 import { layoutCard } from "../lib/cardLayout.ts";
-import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, parsePoints, sortSprints, sprintShort, tagChoices } from "../lib/cardEdits.ts";
+import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, parsePoints, sortSprints, sprintShort, tagChoices, tagSources } from "../lib/cardEdits.ts";
 
 import { branchName, checkoutCommand, commitCommand, worktreeCommand } from "../lib/cardBranch.ts";
 import { neighbours, shortTitle, hopMatches } from "../lib/cardHop.ts";
@@ -5162,13 +5162,36 @@ function TagEdit({ t, busy, onApply, board }: {
     return () => document.removeEventListener("mousedown", away);
   }, [adding]);
 
-  /** Every tag the board uses, minus the ones already on this card. */
+  /*
+   * EVERY TAG THE SPACE HAS, with the ones this board actually uses on top.
+   *
+   * It was the board's tags alone, which is what the loaded cards happened to
+   * carry: seven on the board this was reported from, against 571 that exist in
+   * that space. So anything the board had not used yet had to be typed from
+   * memory, exactly right — and a near miss does not fail, it quietly makes a
+   * SECOND tag with almost the same name.
+   *
+   * Order matters more than completeness here. The board's own tags are the
+   * ones a person reaches for, so they stay where they were, at the top, in the
+   * order they were; the rest of the space follows alphabetically. Typing
+   * filters across both.
+   */
+  const [spaceTags, setSpaceTags] = useState<string[]>([]);
+  useEffect(() => {
+    if (!adding) return;
+    let alive = true;
+    /* On opening rather than on mount: a board is drawn far more often than a
+       tag is added, and the server answers this from a per-space cache, so the
+       wait is paid once for every card under the same space. */
+    void api.clickupTags(t.id).then((r) => { if (alive && r.ok && r.tags) setSpaceTags(r.tags); });
+    return () => { alive = false; };
+  }, [adding, t.id]);
+
   const known = useMemo(() => {
-    const seen = new Set<string>();
-    for (const c of board?.values() ?? []) for (const x of c.tags) seen.add(x);
-    for (const x of t.tags) seen.delete(x);
-    return [...seen].sort((a, b) => a.localeCompare(b));
-  }, [board, t.tags]);
+    const boardTags = new Set<string>();
+    for (const c of board?.values() ?? []) for (const x of c.tags) boardTags.add(x);
+    return tagSources([...boardTags].sort((a, b) => a.localeCompare(b)), spaceTags, t.tags);
+  }, [board, t.tags, spaceTags]);
 
   const typed = draft.trim();
   const { rows, newAt, creating: canCreate } = useMemo(() => tagChoices(known, t.tags, typed), [known, t.tags, typed]);
@@ -5228,7 +5251,10 @@ function TagEdit({ t, busy, onApply, board }: {
             style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
             {!rows.length && (
               <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-                {known.length ? "Nothing on this board is called that." : "This board has no tags yet — type one."}
+                {/* "in this space", not "on this board": the list is the whole
+                    space's now, so naming the board would send somebody looking
+                    for a tag that the message has already ruled out. */}
+                {known.length ? "Nothing in this space is called that." : "No tags here yet — type one."}
               </div>
             )}
             {rows.map((name, i) => {
