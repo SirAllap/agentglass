@@ -3196,3 +3196,61 @@ export async function clickupFolderLists(folderId: string): Promise<CallResult<{
     },
   };
 }
+
+/*
+ * EVERY TAG THE SPACE HAS, not just the ones already in use.
+ *
+ * The picker offered the tags it could see on the cards it had loaded — seven
+ * of them on the board this was reported from, against 571 that actually exist
+ * in that space. So the common tags were reachable and everything else had to
+ * be typed from memory, exactly right, or it silently became a NEW tag with a
+ * near-identical name.
+ *
+ * By SPACE because that is where ClickUp keeps them: a tag belongs to a space
+ * and every list under it shares the set, which is also why one call answers
+ * for every card on a board.
+ *
+ * Cached hard. It is a property of the space rather than of any card, it is
+ * asked for the moment somebody opens the picker, and 571 names is a payload
+ * nobody should wait for twice.
+ */
+const spaceTagCache = new Map<string, { at: number; tags: string[] }>();
+const SPACE_TAG_TTL_MS = 30 * 60_000;
+/*
+ * Which space a card is in, remembered too — and this is the half that was
+ * costing the second.
+ *
+ * Caching only the tags left a card's own lookup on every open: measured, the
+ * first call took 0.84s and the "cached" one 0.96s, because the saved half was
+ * never the slow half. A card does not move between spaces, so this one never
+ * needs to expire within a session.
+ */
+const taskSpaceCache = new Map<string, string>();
+
+/** The tags of the space a task lives in, by task id. */
+export async function tagsForTask(taskId: string): Promise<CallResult<string[]>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  let space = taskSpaceCache.get(taskId);
+  if (!space) {
+    const t = await call<{ space?: { id?: string } }>(`/task/${encodeURIComponent(taskId)}`, token);
+    if (!t.ok) return { ...t, data: undefined };
+    space = t.data?.space?.id;
+    if (space) taskSpaceCache.set(taskId, space);
+  }
+  if (!space) return { ok: true, data: [] };
+
+  const hit = spaceTagCache.get(space);
+  if (hit && Date.now() - hit.at < SPACE_TAG_TTL_MS) return { ok: true, data: hit.tags };
+
+  const r = await call<{ tags?: { name?: string }[] }>(`/space/${encodeURIComponent(space)}/tag`, token);
+  if (!r.ok) return { ...r, data: undefined };
+  const tags = (r.data?.tags ?? [])
+    .map((x) => (x.name ?? "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  // Only a real answer is cached: a failure must not become "this space has no
+  // tags" for the next half hour.
+  spaceTagCache.set(space, { at: Date.now(), tags });
+  return { ok: true, data: tags };
+}

@@ -170,3 +170,34 @@ export function tagChoices(known: readonly string[], onCard: readonly string[], 
   if (!creating) return { rows, newAt: -1, creating };
   return { rows: [...rows, typed.trim()], newAt: rows.length, creating };
 }
+
+/**
+ * The tag picker's list, from the two places tags come from.
+ *
+ * `board` is what the loaded cards happen to carry; `space` is every tag the
+ * card's space defines. The board's come FIRST and keep their order, because
+ * those are the ones a person on this board reaches for — measured on a real
+ * board: seven in use against 571 defined, and burying the seven among the 571
+ * alphabetically would be complete and useless.
+ *
+ * Case-insensitive on the way in. ClickUp keeps `Backend` and `backend` apart
+ * and a picker that offers both invites the near miss this whole list exists to
+ * prevent; the first spelling seen is the one shown, which is the board's.
+ */
+export function tagSources(
+  board: readonly string[],
+  space: readonly string[],
+  onCard: readonly string[],
+): string[] {
+  const mine = new Set(onCard.map((x) => x.toLowerCase()));
+  const taken = new Set<string>();
+  const out: string[] = [];
+  for (const x of [...board, ...space]) {
+    const name = x.trim();
+    const k = name.toLowerCase();
+    if (!name || taken.has(k) || mine.has(k)) continue;
+    taken.add(k);
+    out.push(name);
+  }
+  return out;
+}

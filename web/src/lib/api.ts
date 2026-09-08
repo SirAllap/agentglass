@@ -1477,6 +1477,11 @@ const realApi = {
   /** A tag, by name — ClickUp has no id for them. */
   clickupTag: (id: string, tag: string, on: boolean) =>
     post<ClickUpWrite>("/clickup/tag", { id, tag, on }),
+  /** Every tag the card's space has, not only the ones its board happens to
+   *  use. Asked when the picker opens, and answered from the server's cache
+   *  after the first card — a space is shared by every list under it. */
+  clickupTags: (id: string) =>
+    get<{ ok: boolean; tags?: string[]; error?: string }>(`/clickup/tags?id=${encodeURIComponent(id)}`),
   /** The sprints this card could move to, and the one it is in. Asked when the
    *  picker opens: it costs two calls and a board is read far more often than a
    *  card changes sprint. */
@@ -2441,6 +2446,9 @@ const demoApi: typeof realApi = {
   clickupFieldClear: (_i: string, _f: string) => D({ ok: false, error: "not available in the demo" }),
   clickupEdit: (_i: string, _p: Record<string, unknown>, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupTag: (_i: string, _t: string, _o: boolean) => D({ ok: false, error: "not available in the demo" }),
+  /* An empty list rather than an error: the picker still offers what the demo
+     board itself uses, which is the whole of what a demo has. */
+  clickupTags: (_i: string) => D({ ok: true, tags: [] as string[] }),
   prsInbox: () => D({ ok: true, items: [] as InboxItem[], at: 0 }),
   prsInboxAct: (_b: { act: string }) => D({ ok: false, error: "not available in the demo" }),
   clickupSprints: (_i: string) => D({ ok: false, error: "not available in the demo" }),

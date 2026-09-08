@@ -9,7 +9,7 @@
  * somebody else set up.
  */
 import { describe, expect, test } from "bun:test";
-import { tagChoices } from "../src/lib/cardEdits.ts";
+import { tagChoices, tagSources } from "../src/lib/cardEdits.ts";
 
 describe("which tags the picker offers", () => {
   const board = ["bug-intake", "ai-triaged", "2026q3", "Access Request"];
@@ -53,5 +53,52 @@ describe("which tags the picker offers", () => {
     expect(r.creating).toBe(true);
     expect(r.rows).toEqual(["first-one"]);
     expect(r.newAt).toBe(0);
+  });
+});
+
+/*
+ * AND WHERE THE LIST COMES FROM.
+ *
+ * The picker offered only what the loaded cards carried — seven tags on the
+ * board this was reported from, against 571 defined in that space. Complete
+ * enough to look right, and the missing 564 had to be typed from memory, which
+ * is the same near miss the tests above exist to prevent, one level up.
+ */
+describe("where the picker's tags come from", () => {
+  test("the board's tags come first, then the rest of the space", () => {
+    // The board's are the ones somebody on this board reaches for; sorting all
+    // 571 alphabetically would bury them and be complete and useless.
+    expect(tagSources(["qa", "backend"], ["access request", "backend", "zebra"], []))
+      .toEqual(["qa", "backend", "access request", "zebra"]);
+  });
+
+  test("a tag already on the card is not offered again", () => {
+    expect(tagSources(["backend", "qa"], ["frontend"], ["qa"])).toEqual(["backend", "frontend"]);
+  });
+
+  test("the same tag in two cases is offered once, in the board's spelling", () => {
+    // ClickUp keeps `Backend` and `backend` apart, and offering both invites
+    // exactly the duplicate this list exists to prevent.
+    expect(tagSources(["Backend"], ["backend", "BACKEND"], [])).toEqual(["Backend"]);
+    expect(tagSources([], ["backend"], ["Backend"])).toEqual([]);
+  });
+
+  test("blank names never reach the list", () => {
+    expect(tagSources(["", "  "], ["ok", ""], [])).toEqual(["ok"]);
+  });
+
+  test("with the space unread, the board's tags still work", () => {
+    // The space is fetched when the picker opens, so the first frame has none —
+    // and an empty list there would be a picker that flashes empty on every open.
+    expect(tagSources(["backend", "qa"], [], [])).toEqual(["backend", "qa"]);
+  });
+
+  test("a space's tags are filtered by typing like any other", () => {
+    const known = tagSources(["qa"], ["access request", "account request", "backend"], []);
+    const { rows, newAt } = tagChoices(known, [], "request");
+    // The two matches, and then the offer to create `request` itself — nothing
+    // is called exactly that, and that offer is the picker's other half.
+    expect(rows).toEqual(["access request", "account request", "request"]);
+    expect(newAt).toBe(2);
   });
 });

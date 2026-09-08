@@ -98,7 +98,7 @@ import {
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -5673,6 +5673,13 @@ const server = Bun.serve<WsData>({
         (await import("./providers.ts")).rememberFiles(r.data.attachments);
       }
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
+    }
+    /* Every tag the card's space has, for the picker. Separate from the card
+       itself because it is asked for on a click and answered from a cache —
+       see `tagsForTask` for why it is by space. */
+    if (pathname === "/clickup/tags") {
+      const r = await tagsForTask(url.searchParams.get("id") ?? "");
+      return json(r.ok ? { ok: true, tags: r.data ?? [] } : { ok: false, error: r.error });
     }
     if (pathname.startsWith("/clickup/") && req.method === "POST") {
       // Assign somebody, move a card, set a field, add or drop a board, and
