@@ -30,12 +30,12 @@
  * agentops.ts learned about permission flags arriving as parameters.
  */
 import * as AgentOps from "./agentops.ts";
+import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
 import { chatBypassAllowed } from "./config.ts";
 import { db } from "./db.ts";
 import { fieldReadout, boardNow } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
-import { doctrinePath, readDoctrine } from "./seatdoctrine.ts";
-import { doctrineSlug } from "./seatdoctrine.ts";
+import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 
 /** What a seat is allowed to do. Ordered: each level is the one before it
@@ -155,7 +155,7 @@ export function houseBlock(powers: Power, wakeHours: number): string {
     "",
     "## How this app works with you",
     "",
-    `- Report each round with ONE line: \`agentglass-seat say \"<the line>\"\`. That line is what the person sees in the Orchestrator view; nothing else you print reaches them.`,
+    `- Report each round with ONE line: \`agentglass-agent say \"<the line>\"\`, run from this checkout. That line is what a person reads in the Orchestrator view; nothing else you print reaches them.`,
     `- ${may}`,
     "- You never merge, never push, and never open a pull request. When something is ready you say it is ready and who it is ready for.",
     `- DO NOT build a loop or a schedule of your own. This app re-reads the field on its own clock and will prompt you when something changes, and at least every ${wakeHours} h if nothing does. A round you run for yourself is a round nobody asked for.`,
@@ -209,13 +209,27 @@ export async function openSeat(p: {
   const kind = p.kind ?? row?.kind ?? "claude";
   const { prompt } = await seatPrompt(root, powers, p.wakeHours ?? 4);
   const name = seatName(root);
+  /*
+   * Its own credential, not the machine's.
+   *
+   * An agent this server starts inherits the environment, and the machine
+   * token is in it — so without this the seat would ask as the machine, with
+   * `full` scope, and `powers` would be a sentence in a prompt rather than a
+   * wall. The token is minted here, carried in the window's environment (which
+   * `AGENTGLASS_TOKEN` takes precedence over the token file for), and revoked
+   * when the chair is emptied.
+   */
+  revokeSeatTokens(root);
+  const token = mintSeatToken(root, powers);
   const r = await AgentOps.startAgent({
     root, name, cwd: root, kind, prompt,
     yolo: true, yoloAllowed: chatBypassAllowed(),
     args: model ? ["--model", model] : [],
+    env: { AGENTGLASS_TOKEN: token, AGENTGLASS_SEAT: root },
     now: p.now,
   });
   if (!r.ok) {
+    revokeSeatTokens(root);
     const why: Record<string, string> = {
       exists: "an agent is already running under the seat's name",
       "no-cli": "that agent CLI is not installed here",
@@ -236,8 +250,9 @@ export async function openSeat(p: {
 export async function closeSeat(root: string, now = Date.now()): Promise<{ ok: boolean; was: boolean }> {
   const there = await seated(root);
   closeRow.run(now, root);
+  revokeSeatTokens(root);
   if (!there) return { ok: true, was: false };
-  await AgentOps.stopAgent(there.name);
+  await AgentOps.stopAgent(there, now);
   return { ok: true, was: true };
 }
 
@@ -250,17 +265,12 @@ export function seatSays(root: string, line: string, now = Date.now()): { ok: tr
   return { ok: true };
 }
 
-/** Change what a seat is worth paying for and what it may do, seated or not. */
+/** Change what a seat is worth paying for and what it may do, seated or not.
+ *  Takes effect on the NEXT seating: a prompt already handed to a running CLI
+ *  cannot be edited, and pretending otherwise would be a setting that lies. */
 export function setSeatSettings(root: string, model: string, powers: Power): void {
-  const existing = seatRow(root);
-  if (existing) setSettings.run(seatName(root), model, powers);
-  else upsertIdle(root, model, powers);
+  settings.run(root, seatName(root), model, powers);
 }
-
-const upsertIdle = (root: string, model: string, powers: Power): void => {
-  db.query("INSERT INTO seat (root, name, model, powers, started_at, ended_at) VALUES (?, ?, ?, ?, 0, 0) ON CONFLICT(root) DO NOTHING")
-    .run(root, seatName(root), model, powers);
-};
 
 /** Everything the view needs for one project, in one answer. */
 export async function seatStatus(root: string): Promise<{

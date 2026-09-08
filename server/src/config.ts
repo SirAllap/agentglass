@@ -128,6 +128,13 @@ interface Config {
    *  work that was claimed has gone quiet. On by default. See lanternwatch.ts. */
   lanternWatch?: boolean;
   lanternWatchMinutes?: number;
+  /** How long the orchestrator's seat may sit without being woken, in hours.
+   *  The seat is woken when the field CHANGES; this is the floor under that,
+   *  so a quiet machine still gets a line saying it is quiet. Measured on the
+   *  hand-run version this replaced: of fourteen rounds on a fixed twenty
+   *  minutes, twelve said "no change" — a clock is the expensive way to learn
+   *  nothing happened. See seat.ts. */
+  seatWakeHours?: number;
   /** How long the provider keeps a prompt cache warm after a turn, in minutes
    *  — 5 on most plans, 60 on some. The Lantern's cards count it down, since
    *  it decides whether the next turn is cheap now or cheap in five minutes. */
@@ -783,6 +790,23 @@ export function lanternWatchMinutes(): number {
   const n = config().lanternWatchMinutes;
   if (typeof n !== "number" || !Number.isFinite(n)) return LANTERN_WATCH_DEFAULT_MIN;
   return Math.min(LANTERN_NUDGE_MAX_MIN, Math.max(LANTERN_NUDGE_MIN_MIN, Math.round(n)));
+}
+
+/** The floor under the seat's waking, in hours: 1 to 24, 4 by default. */
+export function seatWakeHours(): number {
+  const n = config().seatWakeHours;
+  if (typeof n !== "number" || !Number.isFinite(n)) return 4;
+  return Math.min(24, Math.max(1, Math.round(n)));
+}
+
+export function writeSeatSettings(fields: { seatWakeHours?: number }): { ok: boolean; persisted: boolean; error?: string } {
+  const out: Record<string, unknown> = {};
+  if (fields.seatWakeHours !== undefined) {
+    const n = Number(fields.seatWakeHours);
+    if (!Number.isFinite(n)) return { ok: false, persisted: false, error: "the floor has to be a number of hours" };
+    out.seatWakeHours = Math.min(24, Math.max(1, Math.round(n)));
+  }
+  return mergeConfig(out, "seat settings");
 }
 
 export function writeLanternSettings(fields: { lanternNudge?: boolean; lanternNudgeMinutes?: number; lanternWatch?: boolean; lanternWatchMinutes?: number; cacheTtlMinutes?: number }):

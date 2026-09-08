@@ -152,7 +152,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -1367,6 +1367,9 @@ import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
 import * as AgentBoard from "./agentboard.ts";
 import { boardNow, lanternChat, noteLanternSession, hookSaysLantern, isLanternSession } from "./lantern.ts";
+import { hookSaysSeat, isSeatSession, noteSeatSession } from "./seatrole.ts";
+import * as Seat from "./seat.ts";
+import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
 import * as AgentOps from "./agentops.ts";
 import { nudgeText, nudgeChannel, sendNudge } from "./prnudge.ts";
 import * as Schedule from "./agentschedule.ts";
@@ -2440,6 +2443,17 @@ const server = Bun.serve<WsData>({
          * because a 403 for a principal that is supposed to only ever watch is
          * the single most interesting line this feature can produce.
          */
+        if (caller.principal === "seat") {
+          /* Its own sentence for the same reason the clone has one: the seat
+             has no scope to widen, it has powers, and the fix is a setting on
+             the project's chair — said here so whoever reads the 403 in a
+             pane is told where to go. */
+          recordFence(pathname, req.method);
+          return json({
+            ok: false,
+            error: `the orchestrator's seat may not ${req.method} ${pathname}: this chair is set to "${caller.seat?.powers ?? "speak"}"`,
+          }, 403);
+        }
         if (caller.principal === "understudy") {
           recordFence(pathname, req.method);
           return json({
@@ -2722,6 +2736,13 @@ const server = Bun.serve<WsData>({
          itself. The pane says so in its environment; the hook passes it on. */
       const lanternItself = hookSaysLantern(body) || isLanternSession(String(body.session_id ?? ""));
       if (lanternItself) noteLanternSession(String(body.session_id ?? ""));
+      /* The seat is the board's other reader, and gets set aside for the same
+         reason: an orchestrator that shows up among the agents it is keeping
+         would be reminded to say what it is on, and counted as somebody's
+         work. Its mark is the first line of a prompt this server composed,
+         so no session can talk its way into the role. */
+      const seatItself = hookSaysSeat(body) || isSeatSession(String(body.session_id ?? ""));
+      if (seatItself) noteSeatSession(String(body.session_id ?? ""));
       /*
        * THE LANTERN REMINDER RIDES THE ANSWER.
        *
@@ -6695,6 +6716,54 @@ const server = Bun.serve<WsData>({
      * workspace root, or the caller's — a bench tab hangs off a checkout even
      * when the conversation is about all of them.
      */
+    /*
+     * THE ORCHESTRATOR'S SEAT — open it, empty it, read it, and the one line
+     * the agent in it says each round.
+     *
+     * The project is named by the caller because a seat is not tied to the
+     * open project: `Seat.seatable` measures it against the project list this
+     * server already serves at `/projects`, and refuses anything else. Nothing
+     * about what the seat is told arrives from a client — `Seat.seatPrompt`
+     * composes it here from the project's doctrine and the board, the same
+     * property `/lantern/ticket` keeps.
+     */
+    if (pathname === "/seat" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text });
+    }
+    if (pathname.startsWith("/seat/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: Record<string, unknown>;
+      try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const gate = Seat.seatable(typeof b.root === "string" && b.root ? b.root : workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const root = gate.root;
+      const verb = pathname.slice("/seat/".length);
+
+      if (verb === "open") {
+        if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+        const powers = Seat.isPower(b.powers) ? b.powers : undefined;
+        const model = typeof b.model === "string" ? b.model : undefined;
+        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "close") return json(await Seat.closeSeat(root));
+      /* The seat's own report. Not `/agents/status`: that is the board, and
+         the seat is deliberately not on it. */
+      if (verb === "say") return json(Seat.seatSays(root, typeof b.line === "string" ? b.line : ""), 200);
+      if (verb === "settings") {
+        if (b.powers !== undefined && !Seat.isPower(b.powers)) return json({ ok: false, error: "powers: speak, nudge or assign" }, 400);
+        const row = Seat.seatRow(root);
+        Seat.setSeatSettings(root, typeof b.model === "string" ? b.model : row?.model ?? "", Seat.isPower(b.powers) ? b.powers : row?.powers ?? "speak");
+        return json({ ok: true, seat: Seat.seatRow(root) });
+      }
+      if (verb === "doctrine") {
+        const r = writeDoctrine(root, typeof b.text === "string" ? b.text : "");
+        return json(r, r.ok ? 200 : 400);
+      }
+      return json({ ok: false, error: "no such seat verb" }, 404);
+    }
     if (pathname === "/lantern/ticket" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);

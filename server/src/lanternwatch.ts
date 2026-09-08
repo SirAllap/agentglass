@@ -39,6 +39,7 @@ import { boardNow } from "./lantern.ts";
 import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
 import { pushLantern } from "./alerts.ts";
+import { wakeSeats } from "./seatwake.ts";
 
 export interface Finding {
   kind: "waiting" | "forgotten" | "gone";
@@ -147,6 +148,10 @@ export async function tick(now = Date.now()): Promise<Finding[]> {
     last = { at: now, findings: f };
     const n = notice(f);
     if (n) pushLantern(n.title, n.body, n.pane);
+    /* The seat rides this look rather than keeping a clock of its own: the
+       board has just been read, and whether anything a person cares about
+       changed is already known here for free. See seatwake.ts. */
+    await wakeSeats(f, { now }).catch(() => []);
     return f;
   } finally {
     ticking = false;

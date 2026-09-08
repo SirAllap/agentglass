@@ -28,6 +28,7 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
 }
 
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
+import { isSeatSession } from "./seatrole.ts";
 export { LANTERN_PROMPT_MARK };
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
@@ -261,7 +262,7 @@ export async function boardNow(): Promise<LanternCard[]> {
   /* A status row the Lantern itself posted (a reminder that reached it before
      it was marked) is not a second agent: dropped before the merge, so the
      chat is one row, its pane's, and never "lantern" beside "Lantern". */
-  const said = AgentBoard.board().filter((a) => !isLanternSession(a.session));
+  const said = AgentBoard.board().filter((a) => !isLanternSession(a.session) && !isSeatSession(a.session));
   /*
    * WHICH NAMED CHECKOUTS ARE ACTUALLY GONE — asked of the filesystem, once
    * per distinct path, because the board drops a day-old row that names one.
@@ -275,8 +276,13 @@ export async function boardNow(): Promise<LanternCard[]> {
   for (const wt of new Set(said.map((a) => (a.worktree ?? "").trim()).filter(Boolean))) {
     if (!existsSync(wt)) gone.add(wt);
   }
-  const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }).map((r) =>
-    isLanternSession(r.session) ? { ...r, role: "lantern" as const, needsYou: undefined, state: r.state === "waiting" ? "idle" : r.state } : r);
+  const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }).map((r) => {
+    /* The two readers of this board, set aside the same way: the Lantern's
+       chat and the project's seat. Neither is somebody's work, and a "needs
+       you" on either is a person mid-conversation with it. */
+    const role = isLanternSession(r.session) ? "lantern" as const : isSeatSession(r.session) ? "orchestrator" as const : null;
+    return role ? { ...r, role, needsYou: undefined, state: r.state === "waiting" ? "idle" as const : r.state } : r;
+  });
 
   /* The card's facts. Sessions in one query each; git per distinct worktree,
      cached, against the base the landed check already found. */
@@ -312,7 +318,7 @@ const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
  * words against what is true now rather than what the pane text suggests.
  */
 export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): string {
-  const rows = all.filter((r) => r.role !== "lantern");
+  const rows = all.filter((r) => !r.role);
   const need = rows.filter((r) => r.needsYou);
   const working = rows.filter((r) => !r.needsYou && r.state === "working");
   const idle = rows.filter((r) => !r.needsYou && r.state === "idle");

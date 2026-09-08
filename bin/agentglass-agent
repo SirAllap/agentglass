@@ -177,6 +177,10 @@ def main():
     p = sub.add_parser("unschedule", help="cancel a schedule that has not fired")
     p.add_argument("id")
 
+    p = sub.add_parser("say", help="the orchestrator's one line for this round (run it from the project's checkout)")
+    p.add_argument("line", help="what a person should read: who needs them, what changed")
+    p.add_argument("--root", help="the project this is about (default: the current directory)")
+
     sub.add_parser("health", help="is agentglass listening")
 
     # Everything after a bare `--` is the agent CLI's, not ours. Split it off
@@ -233,6 +237,12 @@ def main():
         return emit(call("/agents/schedule", method="GET", timeout=30))
     if a.cmd == "unschedule":
         return emit(call("/agents/schedule/cancel", {"id": a.id}, timeout=30))
+    if a.cmd == "say":
+        # The seat runs IN its project's checkout, so the default root is the
+        # working directory: one less thing for a prompt to get wrong, and a
+        # line said from the wrong directory lands on the wrong project's view.
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/say", {"root": root, "line": a.line}, timeout=30))
     return 2
 
 

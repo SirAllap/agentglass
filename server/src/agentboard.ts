@@ -192,9 +192,11 @@ export interface BoardRow extends AgentRow {
    */
   wasCalled?: string[];
   /** What this session is to the app, when it is not a person's agent: the
-   *  Lantern's own chat. Set by lantern.ts from the session's hooks; never
-   *  counted as needing anybody. */
-  role?: "lantern";
+   *  Lantern's own chat, or the orchestrator sitting in the project's seat.
+   *  Set by lantern.ts from the session's hooks; never counted as needing
+   *  anybody — both of them read this board, and a reader of a board that
+   *  appears on it is a mirror, not an agent. */
+  role?: "lantern" | "orchestrator";
   startedAt?: number;
   /** working: something is running. waiting: it asked and nobody answered.
    *  idle: it is there and has said nothing lately. */

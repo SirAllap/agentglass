@@ -1,0 +1,97 @@
+/*
+ * WAKING THE SEAT — on what changed, not on a clock.
+ *
+ * The version of this post that was run by hand woke every twenty minutes and
+ * re-read a field nobody had touched: of fourteen rounds in one afternoon,
+ * twelve said "no change". Each of those is a turn, a context, and a bill, to
+ * learn that nothing happened — and the app already knew nothing had happened,
+ * because `lanternwatch.tick()` had just read the same board for free.
+ *
+ * So the seat has no clock of its own (its prompt says so in as many words).
+ * This module rides the watch that already runs: after each look it compares
+ * what the field says needs a person with what it said last time, and prompts
+ * the seat ONLY when that changed. A floor underneath — `seatWakeHours` — wakes
+ * it anyway now and then, so a quiet day still gets a line rather than silence
+ * that cannot be told from a dead agent.
+ *
+ * What is compared is the FINDINGS, not the board: an agent moving from one
+ * file to the next changes the board every few seconds and changes nothing a
+ * person needs to know. What changes a finding is somebody stopping, somebody
+ * going quiet for an hour, or a window vanishing.
+ */
+import * as AgentOps from "./agentops.ts";
+import { seatWakeHours } from "./config.ts";
+import type { Finding } from "./lanternwatch.ts";
+import { everySeat, seatName } from "./seat.ts";
+
+/** What the seat was last told, per project. Memory only: after a restart the
+ *  first look wakes every seat once, which is the right answer — the seat that
+ *  came back with the app has not been told anything yet either. */
+const told = new Map<string, { fingerprint: string; at: number }>();
+
+/**
+ * The findings reduced to what a person would call a change.
+ *
+ * Kind and name, sorted — deliberately NOT the wording or the elapsed time,
+ * which drift every minute ("7m" becomes "8m") and would make every look a
+ * change.
+ */
+export function fingerprint(f: Finding[]): string {
+  return f.map((x) => `${x.kind}:${x.name}`).sort().join("|");
+}
+
+/** The line the seat is woken with: what is new, in the words the watch used. */
+export function wakeLine(now: Finding[], before: string): string {
+  const had = new Set(before ? before.split("|") : []);
+  const fresh = now.filter((f) => !had.has(`${f.kind}:${f.name}`));
+  if (fresh.length) return `The field changed: ${fresh.map((f) => f.line).join(" · ")}. Take a look and report your line.`;
+  if (now.length === 0) return "The field is clear: nobody is stopped and nothing has gone quiet. Report your line.";
+  return "The field changed. Take a look and report your line.";
+}
+
+export interface WakeDeps {
+  seats?: () => { root: string; endedAt: number | null }[];
+  prompt?: (name: string, text: string) => Promise<unknown>;
+  now?: number;
+}
+
+/**
+ * One pass after a watch tick. Returns the roots woken, so a test can assert
+ * the silence as easily as the noise.
+ */
+export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<string[]> {
+  const now = deps.now ?? Date.now();
+  const seats = (deps.seats ?? (() => everySeat()))();
+  const send = deps.prompt ?? ((name: string, text: string) => promptByName(name, text));
+  const floorMs = seatWakeHours() * 3_600_000;
+  const fp = fingerprint(f);
+  const woken: string[] = [];
+  for (const s of seats) {
+    /* A row with `ended_at` set is a project whose chair is empty. Its
+       settings are kept; nobody is in it to wake. */
+    if (s.endedAt !== null) continue;
+    const last = told.get(s.root);
+    const changed = !last || last.fingerprint !== fp;
+    const overdue = !last || now - last.at >= floorMs;
+    if (!changed && !overdue) continue;
+    told.set(s.root, { fingerprint: fp, at: now });
+    /* A first sighting is not a change: the seat has just been given the whole
+       field in its opening prompt, and waking it to say so would be a turn
+       spent repeating what it is already reading. */
+    if (!last) continue;
+    await send(seatName(s.root), changed ? wakeLine(f, last.fingerprint) : "Nothing has changed since your last round. Say so in one line, or say what you notice.");
+    woken.push(s.root);
+  }
+  return woken;
+}
+
+async function promptByName(name: string, text: string): Promise<void> {
+  await AgentOps.reconcile();
+  const a = AgentOps.agentNamed(name);
+  /* Gone means the person closed the chair or the machine restarted; the row
+     is closed by `reconcile` and the view says so. Nothing to shout about. */
+  if (!a || a.endedAt !== null) return;
+  await AgentOps.promptAgent(a.paneId, text, 10_000);
+}
+
+export function __resetSeatWake(): void { told.clear(); }

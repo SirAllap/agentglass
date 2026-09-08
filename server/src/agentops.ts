@@ -172,6 +172,11 @@ export async function startAgent(p: {
   args?: string[];
   /** Claude's `--remote-control <name>`: the worker asks for it by name. */
   remoteControl?: string;
+  /** Extra environment for the window. NOT reachable from `/agents/named/start`
+   *  on purpose: this is how the server hands a seat its own credential
+   *  (seat.ts), and a body that could set environment would be a body that
+   *  could set `AGENTGLASS_TOKEN`. */
+  env?: Record<string, string>;
   yoloAllowed: boolean;
   now?: number;
 }): Promise<StartResult> {
@@ -210,7 +215,7 @@ export async function startAgent(p: {
      place for windows a script opened — it appears on the board and in the
      Terminal view's session list either way. Never selected, so nobody's
      screen is yanked by a tick. */
-  const opened = await engineWindowRunning(p.root, p.name, argv, p.cwd, { AGENTGLASS_AGENT_NAME: p.name }, AGENTS_SESSION, false);
+  const opened = await engineWindowRunning(p.root, p.name, argv, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, AGENTS_SESSION, false);
   if (!opened) return { ok: false, error: "no-window" };
   const startedAt = p.now ?? Date.now();
   upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, startedAt);
