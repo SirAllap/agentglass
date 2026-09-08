@@ -809,3 +809,53 @@ describe("a status line ages out", () => {
     expect(Board.board().map((r) => r.name)).toEqual(["recent"]);
   });
 });
+
+/*
+ * A SIBLING WORKTREE IS NOT INSIDE ITS NEIGHBOUR.
+ *
+ * `~/code/app` and `~/code/app-fixes` are two worktrees of one repository, and
+ * the second one's path starts with the first one's. Four joins in this file
+ * asked `cwd.startsWith(worktree)`, so the hook running in `app-fixes` was lent
+ * to the card for `app` — which is one agent drawn as several, and a card
+ * showing a branch it was never on. The naming here is the naming on the
+ * machine where it was measured, because that is the shape that bites: a
+ * checkout named after its parent plus a suffix.
+ */
+describe("one checkout is not another", () => {
+  test("a sibling whose name starts the same is a different checkout", () => {
+    expect(Board.under("/code/app-fixes", "/code/app")).toBe(false);
+    expect(Board.under("/code/app", "/code/app")).toBe(true);
+    expect(Board.under("/code/app/server/src", "/code/app")).toBe(true);
+    /* A trailing slash on the base is the same base. */
+    expect(Board.under("/code/app/x", "/code/app/")).toBe(true);
+    expect(Board.under("", "/code/app")).toBe(false);
+    expect(Board.under("/code/app", "")).toBe(false);
+  });
+
+  test("a nested checkout wins over the one containing it", () => {
+    /* Otherwise the branch on the card is whichever git printed first. */
+    const trees = [{ path: "/code/app", branch: "main" }, { path: "/code/app/vendor/thing", branch: "feat/thing" }];
+    expect(Board.deepest(trees, "/code/app/vendor/thing/src")?.branch).toBe("feat/thing");
+    expect(Board.deepest(trees, "/code/app/server")?.branch).toBe("main");
+    expect(Board.deepest(trees, "/code/other")).toBeUndefined();
+  });
+
+  test("the hook in the sibling does not land on the neighbour's card", () => {
+    const now = Date.now();
+    Board.saidBy({ name: "app", doing: "the release", worktree: "/code/app" });
+    const rows = Board.merged({
+      said: Board.board().filter((r) => r.name === "app"),
+      hooks: [{ paneId: "%9", cwd: "/code/app-fixes", sessionId: "s-fixes", at: now }],
+      panes: [{ paneId: "%9", name: "fixes", cwd: "/code/app-fixes" }],
+      trees: [{ path: "/code/app", branch: "main" }, { path: "/code/app-fixes", branch: "fix/thing" }],
+      now,
+    });
+    const app = rows.find((r) => r.name === "app");
+    /* The claim named `/code/app`; the only pane on the machine is in the
+       sibling. Borrowing it would put a Go button on somebody else's work. */
+    expect(app?.paneId).toBeUndefined();
+    /* And the sighting keeps its own branch rather than the neighbour's. */
+    const seen = rows.find((r) => r.paneId === "%9");
+    expect(seen?.branch).toBe("fix/thing");
+  });
+});
