@@ -137,6 +137,47 @@ jobs:
           curl -sf http://localhost:4123/health
           kill $SVPID
 
+  # Windows and macOS have never run a line of this in CI.
+  #
+  # `electron/package.json` has declared an `nsis` target and a `dmg` target for
+  # five releases and neither has ever been executed — not here, not anywhere
+  # the history shows (#193). An audit of an NSIS install on Windows 11 found
+  # roughly a dozen breakages, every one a first-ten-minutes failure of the kind
+  # this job catches in ninety seconds: an env var split on the wrong character,
+  # a prefix test with a hardcoded `/`, a shell that does not exist there. The
+  # cost was never the bugs. It was that they accumulated across five releases
+  # and were found by a person installing the app.
+  #
+  # It does not build an installer. Booting the sidecar and asking it four
+  # questions catches everything in that audit but the packaging provenance, and
+  # waiting for a signed artifact would have kept this from landing at all.
+  #
+  # Not `fail-fast`: a red Windows must not hide a green macOS, which is the
+  # whole reason both are here rather than one.
+  platform:
+    name: Sidecar (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14 # pinned — see the note in `build`
+      - name: Install
+        run: bun install --frozen-lockfile
+      # One bun script rather than shell steps, and that is the point: the
+      # shells differ exactly where the bugs are. `windows-latest` runs
+      # PowerShell, where `&` does not background, `curl` is an alias for
+      # Invoke-WebRequest and `seq` does not exist — so a shell-written version
+      # of this job would have to be written twice, and the half nobody reads
+      # would rot. See scripts/platformsmoke.ts for what it asserts and why the
+      # terminal check accepts two different answers.
+      - name: The sidecar boots and answers here
+        run: bun scripts/platformsmoke.ts
+
   # The phone had no CI at all: 29 suites and two tsconfigs that only ran when
   # somebody remembered, while mobile/README.md and mobile/.npmrc both described
   # a `npm ci` in CI that did not exist. A reader concluded the app was covered.
