@@ -183,3 +183,32 @@ describe("over its shoulder shows work, not furniture", () => {
     expect(out).toContain("did the thing");
   });
 });
+
+describe("an adopted seat's powers are a claim, not a credential", () => {
+  /*
+   * The lie a permissions control must never tell. A seat this app OPENS gets
+   * a token of its own and `speak` is a wall the server holds. A seat that was
+   * already running when it adopted the chair holds the machine's credential
+   * like any other session, and nothing here can take that away from a process
+   * that already exists.
+   *
+   * "¿mi orquestador actual seguro que está en speak?" — no, and the view now
+   * says so rather than drawing a badge that implies otherwise.
+   */
+  test("adopting does not mint a seat token", async () => {
+    const { seatTokenCount } = await import("../src/auth.ts");
+    const before = seatTokenCount();
+    await Seat.adoptSeat({ root: join(dir, "adopt-me"), session: "s-x", pane: "%4242" });
+    expect(seatTokenCount()).toBe(before);
+  });
+
+  test("and the row says which kind of seat it is", () => {
+    const { db } = require("../src/db.ts");
+    const root = join(dir, "adopt-me");
+    db.query(`INSERT INTO seat (root, name, powers, adopted_pane, started_at)
+              VALUES (?, 'orchestrator', 'speak', '%88', 1)
+              ON CONFLICT(root) DO UPDATE SET adopted_pane = '%88'`).run(root);
+    /* The one field the view reads to decide whether to promise enforcement. */
+    expect(Seat.seatRow(root)?.adoptedPane).toBe("%88");
+  });
+});

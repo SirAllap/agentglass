@@ -166,6 +166,17 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   /* Nothing came back, or what came back was a refusal: everything below is
      unknown, not empty. */
   const unread = data === null || data.ok === false;
+  /*
+   * ADOPTED SEATS WEAR THE LABEL, NOT THE CREDENTIAL.
+   *
+   * A seat this app OPENS gets a token of its own, and `speak` is then a wall:
+   * the server refuses its prompt. A seat that was already running when it
+   * adopted the chair holds the machine's token like any other session, and
+   * nothing here can take that away from a process that already exists. So the
+   * strip says which it is. Claiming a wall this app is not holding would be
+   * the worst kind of lie a permissions control can tell.
+   */
+  const adopted = !!seat?.adoptedPane && live;
   const shown = [...waiting, ...stuck, ...out, ...(showDone ? done : done.slice(0, 1))];
 
   const act = async (what: string, fn: () => Promise<{ ok: boolean; error?: string }>) => {
@@ -402,7 +413,12 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
           </div>
 
           {/* ── the field, and the day ─────────────────────────────── */}
-          <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 overflow-y-auto agx-scroll" style={{ background: "var(--bg2)" }}>
+          {/* The column scrolls; the strip at its foot does not. What this
+              chair may do, which model and how often it is woken are settings
+              you touch twice a month — they belong where a person can always
+              find them, not twenty agents down a list. */}
+          <div className="flex flex-col min-w-0 min-h-0" style={{ background: "var(--bg2)" }}>
+          <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 flex-1 overflow-y-auto agx-scroll">
             <section className="flex flex-col gap-1">
               <h2 className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>The field it keeps</h2>
               <p className="text-[10.5px] pb-1.5" style={{ color: "var(--text3)" }}>
@@ -461,14 +477,19 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                 )}
             </section>
 
-            {/* The settings drop to one quiet strip: you set them twice a
-                month and you read the sentence twice a day. */}
-            <section className="flex flex-wrap items-center gap-2 text-[10.5px] pt-3"
-              style={{ color: "var(--text3)", borderTop: "1px solid var(--border)" }}>
-              <span>This chair</span>
+          </div>
+
+            <section className="flex flex-wrap items-center gap-2 text-[10.5px] px-5 py-3 shrink-0"
+              style={{ color: "var(--text3)", borderTop: "1px solid var(--border)", background: "var(--bg2)" }}>
+              <span title={adopted
+                ? "This session was already running when it took the chair, so it holds the machine's credential like any other. These are its stated rules; what actually holds the line is the gate on anything that leaves the machine, and its own doctrine."
+                : "Enforced by the server: a seat set to Speaks is refused if it tries to prompt an agent."}>
+                {adopted ? "It says it" : "This chair"}
+              </span>
               <span className="inline-flex rounded overflow-hidden" style={{ border: edge(18) }}>
                 {POWERS.map((p, i) => (
-                  <button key={p.id} type="button" disabled={!!busy || !root} title={p.what}
+                  <button key={p.id} type="button" disabled={!!busy || !root}
+                    title={adopted ? `${p.what} (stated, not enforced: this seat was adopted)` : p.what}
                     onClick={() => void act("powers", () => api.seatSettingsSave(root, { powers: p.id }))}
                     className="agx-btn px-2 py-0.5 text-[10.5px] disabled:opacity-60"
                     style={{
@@ -487,7 +508,9 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   .map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
               </select>
               <span>· {data?.floorHours ?? 4} h floor</span>
-              {live && <span style={{ color: "var(--text4)" }}>· changes apply at the next seating</span>}
+              {adopted
+                ? <span style={{ color: "var(--warning)" }} title="Powers are enforced with a credential handed out when this app opens a seat. An adopted one already had the machine's.">· stated, not enforced</span>
+                : live ? <span style={{ color: "var(--text4)" }}>· changes apply at the next seating</span> : null}
             </section>
           </div>
         </div>

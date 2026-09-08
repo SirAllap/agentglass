@@ -688,7 +688,14 @@ export interface SeatAnswer {
   root: string;
   live: boolean;
   /** The row: settings and the last line, whether or not anybody is seated. */
-  seat: { root: string; name: string; model: string; powers: "speak" | "nudge" | "assign"; startedAt: number; endedAt: number | null; lastLine: string; lastTurnAt: number } | null;
+  seat: {
+    root: string; name: string; model: string; powers: "speak" | "nudge" | "assign";
+    startedAt: number; endedAt: number | null; lastLine: string; lastTurnAt: number;
+    /** Set when the seat is a session that was already running and adopted the
+     *  chair. It holds the machine's credential, so its powers are what it says
+     *  it does rather than what the server will refuse. */
+    adoptedSession: string; adoptedPane: string;
+  } | null;
   /** The agent in the chair right now, when there is one. */
   agent: { name: string; cwd: string; paneId: string; startedAt: number } | null;
   /** Where the project's rules live, and what they say. */
