@@ -74,6 +74,14 @@ const live = db.query<Row, []>(`SELECT * FROM named_agent WHERE ended_at IS NULL
 const everything = db.query<Row, []>(`SELECT * FROM named_agent ORDER BY started_at DESC LIMIT 200`);
 const end = db.query<never, [number, string]>(`UPDATE named_agent SET ended_at = ? WHERE name = ? AND ended_at IS NULL`);
 
+/** Whether ONE pane is on the engine. The same fact `panesAlive` rests on,
+ *  asked of a single id — an adopted seat is a pane this app did not open, and
+ *  it has to be checked the same way as one it did. */
+export async function paneAlive(paneId: string): Promise<boolean> {
+  if (!/^%\d+$/.test(paneId)) return false;
+  return (await panesAlive()).has(paneId);
+}
+
 /** Every pane on the engine right now — the one fact liveness rests on. */
 async function panesAlive(): Promise<Set<string>> {
   const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}"]).catch(() => null);

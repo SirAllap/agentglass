@@ -6822,6 +6822,27 @@ const server = Bun.serve<WsData>({
        * and should not have to go and find the view. Idempotent by the same
        * rule as the button: an occupied chair answers with its occupant.
        */
+      /*
+       * ADOPT — "the orchestrator for this project is already running, and it
+       * is me". For a session that has been working for hours with agents
+       * reporting to it: seating a fresh one would throw that away, and the
+       * only thing missing was the app knowing who it is.
+       *
+       * The pane is the identity, because the pane is what liveness rests on
+       * everywhere else here. A caller inside a pane knows its own id from
+       * $TMUX_PANE.
+       */
+      if (verb === "adopt") {
+        const r = await Seat.adoptSeat({
+          root,
+          session: String(b.session ?? ""),
+          pane: String(b.pane ?? ""),
+          powers: Seat.isPower(b.powers) ? b.powers : undefined,
+        });
+        if (!r.ok) return json(r, 400);
+        const d = readDoctrine(root), br = readBrief(root);
+        return json({ ok: true, already: r.already, seat: r.seat, doctrine: d.path, brief: br.path });
+      }
       if (verb === "orchestrate") {
         if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
         const powers = Seat.isPower(b.powers) ? b.powers : undefined;

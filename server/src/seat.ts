@@ -84,11 +84,16 @@ export interface Seat {
   endedAt: number | null;
   lastLine: string;
   lastTurnAt: number;
+  /** Set when the seat is a session that was ALREADY running and adopted it,
+   *  rather than one this app opened. Liveness is still the pane. */
+  adoptedSession: string;
+  adoptedPane: string;
 }
 
 interface Row {
   root: string; name: string; kind: string; model: string; powers: string;
   started_at: number; ended_at: number | null; last_line: string; last_turn_at: number;
+  adopted_session: string; adopted_pane: string;
 }
 
 const toSeat = (r: Row): Seat => ({
@@ -96,6 +101,7 @@ const toSeat = (r: Row): Seat => ({
   powers: isPower(r.powers) ? r.powers : "speak",
   startedAt: r.started_at, endedAt: r.ended_at,
   lastLine: r.last_line, lastTurnAt: r.last_turn_at,
+  adoptedSession: r.adopted_session ?? "", adoptedPane: r.adopted_pane ?? "",
 });
 
 const one = db.query<Row, [string]>(`SELECT * FROM seat WHERE root = ?`);
@@ -116,6 +122,14 @@ const settings = db.query<never, [string, string, string, string]>(`
   ON CONFLICT(root) DO UPDATE SET model = excluded.model, powers = excluded.powers
 `);
 const closeRow = db.query<never, [number, string]>(`UPDATE seat SET ended_at = ? WHERE root = ?`);
+const adoptRow = db.query<never, [string, string, string, string, string, number]>(`
+  INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, started_at, ended_at)
+  VALUES (?, ?, ?, ?, ?, ?, NULL)
+  ON CONFLICT(root) DO UPDATE SET
+    adopted_session = excluded.adopted_session, adopted_pane = excluded.adopted_pane,
+    started_at = excluded.started_at, ended_at = NULL
+`);
+const unadopt = db.query<never, [string]>(`UPDATE seat SET adopted_session = '', adopted_pane = '' WHERE root = ?`);
 const saidRow = db.query<never, [string, number, string]>(`UPDATE seat SET last_line = ?, last_turn_at = ? WHERE root = ?`);
 /* Every line, not only the latest. The row keeps the last one because the
    header reads it on every poll and a join for one string is a join too many;
@@ -168,12 +182,71 @@ export function seatable(rootIn: unknown): { root: string } | { error: string } 
   return { root };
 }
 
-/** Whether an agent is in the chair right now — the pane, never the row. */
+/**
+ * Whether an agent is in the chair right now — the pane, never the row.
+ *
+ * Two ways to be in it, one answer. A seat this app opened is a named agent
+ * and `reconcile` closes it the moment its pane is gone. A seat that was
+ * ADOPTED is a session that was already working when the chair was built: its
+ * pane is checked the same way, so an adopted orchestrator that dies stops
+ * being the orchestrator exactly as fast as one this app started.
+ */
 export async function seated(root: string): Promise<AgentOps.NamedAgent | null> {
   const name = seatName(root);
   await AgentOps.reconcile();
   const a = AgentOps.agentNamed(name);
-  return a && a.endedAt === null ? a : null;
+  if (a && a.endedAt === null) return a;
+
+  const row = seatRow(root);
+  if (!row?.adoptedPane) return null;
+  const alive = await AgentOps.paneAlive(row.adoptedPane);
+  if (!alive) {
+    /* Its pane is gone. The row keeps its settings and its lines; what it
+       stops claiming is that somebody is sitting there. */
+    unadopt.run(root);
+    return null;
+  }
+  return {
+    name: row.name || "orchestrator", kind: row.kind || "claude", cwd: root,
+    paneId: row.adoptedPane, windowId: "", startedAt: row.startedAt, endedAt: null,
+  };
+}
+
+/**
+ * Adopt a session that is already orchestrating this project.
+ *
+ * Nothing is restarted, nothing is re-prompted, and no context is thrown away:
+ * the whole point is the orchestrator that has been running for a day with
+ * five agents reporting to it. What it gains is the app knowing who it is —
+ * its line in the view, its queue, the field drawn for it, and being woken
+ * when that field changes instead of keeping a clock of its own.
+ *
+ * Its rules are NOT rewritten either. The two files are seeded if missing so
+ * there is something to edit, and an adopted seat is told where they are
+ * rather than handed them.
+ */
+export async function adoptSeat(p: { root: string; session: string; pane: string; powers?: Power; now?: number }):
+Promise<{ ok: true; seat: Seat; already: boolean } | { ok: false; error: string }> {
+  const gate = seatable(p.root);
+  if ("error" in gate) return { ok: false, error: gate.error };
+  const pane = String(p.pane ?? "").trim();
+  if (!/^%\d+$/.test(pane)) return { ok: false, error: "a pane id looks like %12" };
+  if (!(await AgentOps.paneAlive(pane))) return { ok: false, error: "there is no such pane on this machine's engine" };
+
+  const there = await seated(gate.root);
+  if (there && there.paneId !== pane) {
+    return { ok: false, error: `${there.name} is already in this project's chair; stand it down first` };
+  }
+  const row = seatRow(gate.root);
+  adoptRow.run(
+    gate.root,
+    row?.name || seatName(gate.root),
+    p.powers ?? row?.powers ?? "speak",
+    String(p.session ?? ""),
+    pane,
+    p.now ?? Date.now(),
+  );
+  return { ok: true, seat: seatRow(gate.root)!, already: there !== null };
 }
 
 /**
@@ -289,7 +362,7 @@ export async function openSeat(p: {
   const root = gate.root;
   const there = await seated(root);
   const row = seatRow(root);
-  if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0 }), agent: there, already: true };
+  if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "" }), agent: there, already: true };
 
   const powers: Power = p.powers ?? row?.powers ?? "speak";
   /* A seat reads a board and writes a sentence a few times an hour. It is not
@@ -343,10 +416,18 @@ export async function openSeat(p: {
 /** Empty the chair. The row stays: its settings and its last line are what the
  *  next seating starts from. */
 export async function closeSeat(root: string, now = Date.now()): Promise<{ ok: boolean; was: boolean }> {
+  const row = seatRow(root);
   const there = await seated(root);
   closeRow.run(now, root);
   revokeSeatTokens(root);
   if (!there) return { ok: true, was: false };
+  /* An ADOPTED seat is somebody else's session doing its own work. Standing it
+     down means this app stops calling it the orchestrator; killing it would be
+     killing a day of somebody's context because a button said "stand down". */
+  if (row?.adoptedPane && there.paneId === row.adoptedPane) {
+    unadopt.run(root);
+    return { ok: true, was: true };
+  }
   await AgentOps.stopAgent(there, now);
   return { ok: true, was: true };
 }

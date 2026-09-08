@@ -33,6 +33,26 @@ They are seeded from a template the first time and then they are yours. The
 answer says `doctrineSeeded: true` when this call created them, which is your
 cue to read them and change what does not match this project.
 
+## One that is already running
+
+If a session has been orchestrating a project for hours — with agents
+reporting to it and a context worth keeping — do NOT seat a new one. It adopts
+itself from inside its own pane:
+
+```bash
+agentglass-agent adopt --project ~/code/<project> --powers assign
+```
+
+Nothing restarts, nothing is re-prompted, and no context is thrown away. What
+it gains is the app knowing who it is: its line in the view, the queue, the
+field drawn for it with the last hour of every agent, and being woken when
+that field changes instead of keeping a clock of its own. Its rules files are
+seeded if missing so there is something to edit; they are not imposed on it.
+
+Standing down an adopted seat releases the claim. It does not kill the
+session — that would be throwing away somebody's day because a button said
+"stand down".
+
 ## What it may do
 
 `--powers speak` (the default), `nudge`, or `assign`.

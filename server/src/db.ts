@@ -1447,6 +1447,22 @@ CREATE TABLE IF NOT EXISTS seat_line (
 `);
 db.run(`CREATE INDEX IF NOT EXISTS seat_line_root ON seat_line (root, at DESC)`);
 
+/*
+ * AN ORCHESTRATOR THAT WAS ALREADY WORKING.
+ *
+ * The seat opens an agent and owns it. But the first orchestrator this feature
+ * was modelled on had been running a real project for a day when the seat was
+ * built, with five agents reporting to it and a context nobody wants to throw
+ * away — and "take the seat" would have replaced it with a stranger.
+ *
+ * So a session can be ADOPTED instead: the row points at a pane that already
+ * exists, and liveness is that pane, exactly as it is for a seat this app
+ * opened. Nothing is restarted and nothing is re-prompted; what changes is
+ * that the app knows who the orchestrator is.
+ */
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_session TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+
 /* What a run's branch pointed at when something last looked at it.
  *
  * Added after a merged branch was deleted by hand and the run that made it was

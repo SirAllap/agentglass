@@ -14,10 +14,15 @@ import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-brief-"));
 process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
+/* The open project, so `seatable` lets these through: its gate fires first and
+   would otherwise answer every adoption test with "not a project this app
+   knows", which is a true answer to a different question. */
+process.env.AGENTGLASS_ROOT = join(dir, "adopt-me");
 
 const { briefPath, briefTemplate, readBrief, writeBrief, REPORT_SHAPE, MAX_BRIEF } = await import("../src/seatbrief.ts");
 const { doctrinePath } = await import("../src/seatdoctrine.ts");
 const Seat = await import("../src/seat.ts");
+const { db } = await import("../src/db.ts");
 
 const ROOT = join(dir, "orbit");
 
@@ -90,5 +95,44 @@ describe("the seat is told to hand it out", () => {
 
   test("and with one report shape, not two spellings of it", () => {
     expect(Seat.houseBlock("assign", 4, ROOT)).toContain(REPORT_SHAPE);
+  });
+});
+
+describe("adopting an orchestrator that was already working", () => {
+  /*
+   * The case this exists for: a session had been running a real project for a
+   * day, with five agents reporting to it, when the seat was built. "Take the
+   * seat" would have replaced it with a stranger.
+   */
+  const ROOT2 = join(dir, "adopt-me");
+
+  test("a pane id that is not one is refused before anything is written", async () => {
+    const r = await Seat.adoptSeat({ root: ROOT2, session: "s-x", pane: "not-a-pane" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("pane id");
+    expect(Seat.seatRow(ROOT2)).toBeNull();
+  });
+
+  test("a pane nobody can find is refused too", async () => {
+    /* No tmux in a test, so every id is absent — which is the answer this
+       check exists to give: adopting a pane that is not there would claim
+       somebody is minding a project when nobody is. */
+    const r = await Seat.adoptSeat({ root: ROOT2, session: "s-x", pane: "%99999" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("no such pane");
+  });
+
+  test("standing down an adopted seat does not kill it", async () => {
+    /* Written straight to the row, because the live check needs a tmux this
+       test does not have. What is under test is the branch in closeSeat. */
+    db.query(`INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, started_at)
+              VALUES (?, 'orchestrator', 'assign', 's-real', '%77', 1)
+              ON CONFLICT(root) DO UPDATE SET adopted_pane = '%77'`).run(ROOT2);
+    expect(Seat.seatRow(ROOT2)?.adoptedPane).toBe("%77");
+    await Seat.closeSeat(ROOT2);
+    /* The claim is dropped; the session it pointed at is somebody else's day
+       and is not killed by a button that says "stand down". */
+    expect(Seat.seatRow(ROOT2)?.adoptedPane).toBe("");
+    expect(Seat.seatRow(ROOT2)?.lastLine).toBeDefined();
   });
 });
