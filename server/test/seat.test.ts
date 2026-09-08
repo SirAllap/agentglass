@@ -9,9 +9,10 @@
  * one name.
  */
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-seat-"));
 process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
@@ -75,6 +76,43 @@ describe("where a seat may be opened", () => {
     expect("error" in Seat.seatable("code/orbit")).toBe(true);
     expect("error" in Seat.seatable("")).toBe(true);
     expect("error" in Seat.seatable(undefined)).toBe(true);
+  });
+
+  test("a worktree of the project IS the project", () => {
+    /*
+     * The whole arrangement runs on worktrees — the brief tells every agent to
+     * cut one per task — so the directory a worker reports from is almost never
+     * the one the chair sits in. Before this, a report from a worktree opened a
+     * SECOND tray keyed by the worktree path and the seat waited forever for a
+     * report that had already arrived somewhere it never looks.
+     *
+     * `AGENTGLASS_ROOT` is set and restored inside the test on purpose:
+     * `bun test` shares one process, and a suite that sets it at module scope
+     * pins the scope for every file after it.
+     */
+    const repo = mkdtempSync(join(tmpdir(), "agx-seat-repo-"));
+    const wt = join(repo, "..", `${basename(repo)}-work`);
+    const run = (args: string[], cwd: string) => spawnSync("git", args, { cwd, stdio: "ignore" });
+    run(["init", "-q"], repo);
+    run(["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "root"], repo);
+    run(["worktree", "add", "-q", "-b", "side", wt], repo);
+
+    const before = process.env.AGENTGLASS_ROOT;
+    process.env.AGENTGLASS_ROOT = repo;
+    try {
+      const r = Seat.seatable(wt);
+      expect("error" in r).toBe(false);
+      /* Folded to the chair's own root, not merely accepted: the point is that
+         both send to ONE tray. */
+      expect("root" in r && r.root).toBe(realpathSync(repo));
+      /* And the fold is not a way in: a directory that is nobody's project is
+         still refused. */
+      expect("error" in Seat.seatable(mkdtempSync(join(tmpdir(), "agx-seat-nope-")))).toBe(true);
+    } finally {
+      if (before === undefined) delete process.env.AGENTGLASS_ROOT;
+      else process.env.AGENTGLASS_ROOT = before;
+      spawnSync("git", ["worktree", "remove", "--force", wt], { cwd: repo, stdio: "ignore" });
+    }
   });
 });
 
