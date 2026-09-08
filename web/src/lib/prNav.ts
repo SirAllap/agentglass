@@ -96,3 +96,33 @@ export function verticalScrollerOf<T extends ScrollBox>(
   }
   return null;
 }
+
+/**
+ * Which file the reader is on, given where each file's card sits and where the
+ * floor is — the line just under the pinned toolbar.
+ *
+ * THE LAST ONE THAT HAS CROSSED THE FLOOR, not the one covering the most of the
+ * screen. Area is the tempting rule and it reads worse: half a page into a long
+ * file the previous one still owns more pixels, so the mark lags by half a
+ * screen. The floor is also exactly where `scrollToFileStable` parks a file, so
+ * scrolling to a file by hand and jumping to it with `j` agree on what "here"
+ * means instead of disagreeing by one.
+ *
+ * `tops` are viewport coordinates in the order the files are drawn. Returns the
+ * index, or 0 when nothing has crossed yet — at the very top of the list the
+ * honest answer is the first file, not "none", because that is the one on
+ * screen. Returns -1 only for an empty list.
+ *
+ * `slack` absorbs the sub-pixel case: a card's top lands exactly on the floor
+ * and an exact comparison flickers between two files on the frame where they
+ * meet.
+ */
+export function fileAtFloor(tops: number[], floor: number, slack = 2): number {
+  if (!tops.length) return -1;
+  let hit = 0;
+  for (const [i, top] of tops.entries()) {
+    if (top - slack > floor) break;
+    hit = i;
+  }
+  return hit;
+}

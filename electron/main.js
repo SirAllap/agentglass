@@ -411,6 +411,9 @@ function readWindowState() {
  * key name, never as text that reached a field.
  */
 const WINDOW_LOG_MAX = 60_000;
+/** Bigger than the window log's, because one entry here is a stack trace and
+ *  one there is a line of numbers — see `writeSidecarLog`. */
+const SERVER_LOG_MAX = 200_000;
 /** @type {{at:number,key:string,ctrl:boolean,shift:boolean,alt:boolean}|null} */
 let lastChord = null;
 let askedAt = 0;            // when THIS process last asked for a window change
@@ -843,6 +846,33 @@ let sidecarFailure = null;
 let sidecarUp = false;
 
 /**
+ * THE SERVER'S LAST WORDS, ON DISK.
+ *
+ * They were kept in memory only, to paint in the banner at the top of the
+ * window — so a crash explained itself once, in a strip a popover could cover,
+ * and restarting the app threw the explanation away. Reported after exactly
+ * that: a `SIGILL` from the runtime, the banner underneath an open search, and
+ * by the time anybody went looking there was nothing on this machine to read.
+ * `window.log` already sits in the same directory for a far smaller question.
+ *
+ * Appended rather than replaced, and trimmed like `window.log`: a sidecar that
+ * dies every few seconds would otherwise fill a disk, and the SECOND crash is
+ * often the one that names the cause.
+ *
+ * Never throws. A log nobody can write must not become the reason a failing
+ * app also fails to say so.
+ * @param {SidecarFailure} failure
+ */
+function writeSidecarLog(failure) {
+  try {
+    const file = path.join(app.getPath("userData"), "server.log");
+    if (fs.existsSync(file) && fs.statSync(file).size > SERVER_LOG_MAX) fs.writeFileSync(file, "");
+    fs.appendFileSync(file,
+      `${new Date().toISOString()} ${failure.reason}\n${failure.detail || "(no detail)"}\n\n`);
+  } catch { /* the disk is full or read-only; the banner still says it */ }
+}
+
+/**
  * Say out loud that there is no server, and say WHY.
  *
  * THE HOLE THIS FILLS. `ensureServer` used to poll forty times and then simply
@@ -873,10 +903,12 @@ let sidecarUp = false;
  * was never asked for.
  * @param {SidecarFailure | null} failure
  */
+
 function reportSidecar(failure) {
   sidecarFailure = failure;
   sidecarUp = !failure;
   if (failure) console.error(`[agentglass] sidecar: ${failure.reason} — ${failure.detail || "(no detail)"}`);
+  if (failure) writeSidecarLog(failure);
   for (const w of BrowserWindow.getAllWindows()) {
     try { w.webContents.send("ag:server-failed", failure); } catch { /* window went away */ }
   }

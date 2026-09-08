@@ -558,7 +558,12 @@ describe("each tab keeps its own place", () => {
     /* Written on every scroll, never on the way out: by the time a passive
        cleanup runs the node is out of the document, where `scrollTop` reads 0 —
        so it faithfully remembered zero every time. */
-    expect(src).toContain("onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); }}");
+    /* Up to the semicolon, not to the closing brace: what this locks is that
+       the write happens IN the scroll handler, and the handler has since grown
+       a second tenant (the scrollspy that marks the file you are reading).
+       Pinning the whole line made an unrelated addition read as this bug
+       returning. */
+    expect(src).toContain("onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop);");
   });
 
   it("starts a different pull request at the top", () => {
