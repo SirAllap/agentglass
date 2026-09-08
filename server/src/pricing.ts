@@ -202,6 +202,20 @@ export function costUsd(usage: TokenUsage, modelName: string | null | undefined)
 }
 
 /**
+ * Extra dollars paid when tokens that could have been cache reads are written
+ * again. Unknown models and tables where writes are no dearer than reads do not
+ * produce a confident penalty.
+ */
+export function cacheRebuildPenaltyUsd(
+  cacheCreationTokens: number,
+  modelName: string | null | undefined,
+): number {
+  const p = priceFor(modelName);
+  if (!p || !Number.isFinite(cacheCreationTokens) || cacheCreationTokens <= 0) return 0;
+  return cacheCreationTokens * Math.max(0, p.cache_write - p.cache_read) / 1_000_000;
+}
+
+/**
  * What one token of each class costs, in uncached input tokens.
  *
  * A token is not a token. On Opus an output token costs five uncached input

@@ -3,7 +3,7 @@
 // Computed from the full event history (better than the live buffer for loops).
 import type { Insight } from "../../shared/types.ts";
 import { db, scopeClause } from "./db.ts";
-import { equivalentTokens } from "./pricing.ts";
+import { cacheRebuildPenaltyUsd, equivalentTokens } from "./pricing.ts";
 import { budgetStatus, budgetScopeLabel, periodLabel } from "./budget.ts";
 
 const key = (app: string, sid: string) => `${app}:${sid.slice(0, 8)}`;
@@ -14,6 +14,35 @@ const key = (app: string, sid: string) => `${app}:${sid.slice(0, 8)}`;
 // `b:c` are different rows that a plain join hands the same string.
 const rowId = (app: string, sid: string) => `${encodeURIComponent(app)}:${encodeURIComponent(sid)}`;
 const trim = (s: string, n = 64) => (s.length > n ? s.slice(0, n) + "…" : s);
+const USD = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// The bundled cache-write rates describe five-minute prompt caches. A smaller
+// creation is usually normal turn churn; keep this signal for prefixes large
+// enough to be useful rather than announcing pennies on every resumed chat.
+export const CACHE_REBUILD_WINDOW_MS = 5 * 60_000;
+export const CACHE_REBUILD_LOOKBACK_MS = 24 * 60 * 60_000;
+export const CACHE_REBUILD_MIN_TOKENS = 10_000;
+/** As many cards as the loop block allows itself, and for the same reason: the
+ *  panel is a place to look, not a list to scroll. Six rather than the four the
+ *  burn and failure blocks use, because this one reports per session and a fleet
+ *  where several sessions each rebuilt something is exactly when it is worth
+ *  reading. */
+export const CACHE_REBUILD_CARDS = 6;
+
+/**
+ * The dearest few rebuilds, dearest first.
+ *
+ * Every other block here stops itself in SQL — `LIMIT 6` for loops, `LIMIT 4`
+ * for burn and failures. This one aggregates per session in JS, so the cap
+ * lives here, and it cuts by what the rebuild actually cost rather than by
+ * whatever order the map happened to be filled in.
+ */
+export function topRebuilds<T extends { penalty: number }>(
+  rows: Map<string, T>,
+  n: number = CACHE_REBUILD_CARDS,
+): [string, T][] {
+  return [...rows.entries()].sort((a, b) => b[1].penalty - a[1].penalty).slice(0, n);
+}
 
 export function getInsights(): Insight[] {
   const now = Date.now();
@@ -71,7 +100,78 @@ export function getInsights(): Insight[] {
     });
   }
 
-  // 3) High failure rate — errors relative to tool calls in the last hour.
+  // 3) Cache rebuilds — a sizeable cache creation after the previous
+  // cache-bearing turn in the same model/agent lineage has expired.
+  //
+  // One pass over the window, not a lookup per candidate. Asking the session
+  // index for the prior cache-bearing turn once per candidate row reads as the
+  // cheaper shape and is not: SQLite answers it by walking every event that
+  // shares the model name, which on a desk running one model most of the day is
+  // most of the table. Measured, `getInsights()` went from 11ms against an empty
+  // database to 46 SECONDS against a day of turns — on a route the alerts panel
+  // polls every fifteen seconds, served inline off a synchronous handle, so that
+  // is the whole server not answering. LAG over the same partition asks the same
+  // question once. See scripts/perfbudget.ts, which now measures with rows in
+  // the table so this cannot pass unnoticed again.
+  //
+  // One consequence worth stating: the prior turn must itself fall inside the
+  // lookback window, so the first candidate after a full day of silence is not
+  // flagged. Deliberate — a cache that expired yesterday is not news, and the
+  // alternative is an unbounded reach backwards on every poll.
+  const rebuildRows = db
+    .query<{
+      source_app: string; session_id: string; model_name: string | null;
+      cache_creation_tokens: number; timestamp: number; previous_at: number;
+    }, any[]>(
+      `WITH turns AS (
+         SELECT source_app, session_id, model_name, cache_creation_tokens, timestamp,
+                LAG(timestamp) OVER (
+                  PARTITION BY source_app, session_id, model_name,
+                               COALESCE(NULLIF(agent_id, ''), 'main')
+                  ORDER BY timestamp, id) AS previous_at
+           FROM events
+          WHERE timestamp > ?
+            AND (cache_creation_tokens > 0 OR cache_read_tokens > 0)${sc}
+       )
+       SELECT source_app, session_id, model_name, cache_creation_tokens, timestamp, previous_at
+         FROM turns
+        WHERE cache_creation_tokens >= ?
+          AND previous_at IS NOT NULL
+          AND timestamp - previous_at > ?
+        ORDER BY timestamp DESC`
+    )
+    .all(now - CACHE_REBUILD_LOOKBACK_MS, ...sa, CACHE_REBUILD_MIN_TOKENS, CACHE_REBUILD_WINDOW_MS);
+  const rebuilds = new Map<string, {
+    source_app: string; session_id: string; count: number; tokens: number;
+    penalty: number; last: number;
+  }>();
+  for (const r of rebuildRows) {
+    const penalty = cacheRebuildPenaltyUsd(r.cache_creation_tokens, r.model_name);
+    if (!(penalty > 0)) continue;
+    const id = rowId(r.source_app, r.session_id);
+    const a = rebuilds.get(id) ?? {
+      source_app: r.source_app, session_id: r.session_id,
+      count: 0, tokens: 0, penalty: 0, last: 0,
+    };
+    a.count++;
+    a.tokens += r.cache_creation_tokens;
+    a.penalty += penalty;
+    a.last = Math.max(a.last, r.timestamp);
+    rebuilds.set(id, a);
+  }
+  for (const [id, r] of topRebuilds(rebuilds)) {
+    out.push({
+      id: `cache:${id}`,
+      severity: r.penalty >= 5 ? "warn" : "info",
+      kind: "cache",
+      title: `Rebuilt expired cache · ${r.count}× · $${USD.format(r.penalty)}`,
+      detail: `${Math.round(r.tokens / 1000)}k tokens paid at cache-write instead of cache-read rates`,
+      session: key(r.source_app, r.session_id),
+      ts: r.last,
+    });
+  }
+
+  // 4) High failure rate — errors relative to tool calls in the last hour.
   const fails = db
     .query<{ source_app: string; session_id: string; errs: number; tools: number; last: number }, any[]>(
       // errs counts only tool failures, because tools is the denominator. It
@@ -101,7 +201,7 @@ export function getInsights(): Insight[] {
     });
   }
 
-  // 4) Budgets — a number the user chose, which beats every constant above it.
+  // 5) Budgets — a number the user chose, which beats every constant above it.
   //
   //    Only when one is set. With none, everything here behaves exactly as it
   //    did, because a fixed threshold is a reasonable default and taking it
@@ -127,7 +227,7 @@ export function getInsights(): Insight[] {
     });
   }
 
-  // 5) Spend velocity — overall $/hr over the last hour (context, info-level).
+  // 6) Spend velocity — overall $/hr over the last hour (context, info-level).
   /*
    * Grouped by model so the token figure can be weighted.
    *

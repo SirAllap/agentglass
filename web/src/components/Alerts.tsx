@@ -16,7 +16,7 @@ const LEVEL: Record<Alert["level"], { color: string; icon: string }> = {
   info: { color: "var(--info)", icon: "ℹ" },
 };
 const SEV: Record<Insight["severity"], string> = { bad: "var(--error)", warn: "var(--warning)", info: "var(--info)" };
-const KIND_ICON: Record<Insight["kind"], string> = { loop: "↻", spend: "🔥", errors: "✕", burn: "⚡" };
+const KIND_ICON: Record<Insight["kind"], string> = { loop: "↻", spend: "🔥", errors: "✕", burn: "⚡", cache: "↥" };
 
 export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }: { alerts: Alert[]; agents?: AgentCard[]; onSelectApp?: (app: string) => void; bump?: number; active?: boolean }) {
   const [insights, setInsights] = useState<Insight[]>([]);
