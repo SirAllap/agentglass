@@ -24,14 +24,14 @@ import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, par
 
 import { branchName, checkoutCommand, commitCommand, worktreeCommand } from "../lib/cardBranch.ts";
 import { neighbours, shortTitle, hopMatches } from "../lib/cardHop.ts";
-import { CardFiles } from "./CardFiles.tsx";
+import { CardFiles, FileViewer, isViewable } from "./CardFiles.tsx";
 import { Composer } from "./tasks/Composer.tsx";
 import { readState } from "../lib/boardStaleness.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { Portal } from "./Portal.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
-import { Markdown } from "../lib/markdown.tsx";
+import { Markdown, MarkdownImages } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
@@ -5533,6 +5533,25 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      nothing on it must not leave the pane showing a tab that is no longer there,
      with nothing under it. */
   const files = full?.attachments ?? [];
+  /*
+   * The viewer lives HERE and not inside the Files tab, because the pictures on a
+   * card are met in two places and only one of them is that tab.
+   *
+   * A comment thread is mostly screenshots — measured on a real card: nine of them
+   * across the thread, and every one also in `attachments`, so the index below always
+   * finds its picture. Left in the Files tab the viewer would not exist while the
+   * activity feed is on screen, and clicking a screenshot in a comment would do what
+   * a plain link does in the desktop app: hand the URL to the system browser and
+   * abandon the thread it belonged to.
+   */
+  const viewable = useMemo(() => files.filter(isViewable), [files]);
+  const [viewAt, setViewAt] = useState<number | null>(null);
+  const openPicture = useCallback((url: string) => {
+    const i = viewable.findIndex((a) => a.url === url);
+    if (i < 0) return false;
+    setViewAt(i);
+    return true;
+  }, [viewable]);
   /* A tab that is not there cannot be the one you are on. The card is always there;
      the other two appear when they have something in them. */
   const view = (tab === "activity" && !rows.length) || (tab === "files" && !files.length) ? "card" : tab;
@@ -6269,6 +6288,12 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
 
       {view === "files" && <CardFiles files={files} />}
 
+      {/* Outside the tab switch on purpose: the activity feed opens it too, and a
+          viewer that unmounts with the tab under it is a viewer the thread cannot
+          reach. The Files grid keeps its own — two indexes into one list, and only
+          one of them is ever open. */}
+      <FileViewer files={files} at={viewAt} setAt={setViewAt} />
+
       {view === "github" && (<>
         {/*
           * What ClickUp's own GitHub panel gives you, and the pull requests it
@@ -6346,7 +6371,10 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         )}
       </>)}
 
-      {view === "activity" && (<>
+      {view === "activity" && (
+       /* A screenshot in a comment opens in the card's own viewer rather than
+          leaving for the system browser — see `openPicture`. */
+       <MarkdownImages onOpen={openPicture}><>
       {/* No heading and no rule of its own any more: the tab above already says
           "Activity 4", and repeating it under a divider read as a second section
           inside a pane that holds exactly one. Only the ordering survives,
@@ -6716,7 +6744,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           {sayErr && <div className="text-[10.5px] mt-1" style={{ color: "var(--error)" }}>{sayErr}</div>}
         </div>
       )}
-      </>)}
+      </></MarkdownImages>)}
 
       {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
 
