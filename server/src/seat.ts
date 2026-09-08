@@ -38,8 +38,11 @@ import { db } from "./db.ts";
 import { fieldReadout, boardNow } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
 import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
+import { REPORT_SHAPE, briefPath, readBrief } from "./seatbrief.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
+import { BUCKETS, pulses } from "./seatpulse.ts";
+import { lastWoken } from "./seatwoken.ts";
 
 /** What a seat is allowed to do. Ordered: each level is the one before it
  *  plus one verb, so a check is a comparison and not a set membership. */
@@ -81,11 +84,16 @@ export interface Seat {
   endedAt: number | null;
   lastLine: string;
   lastTurnAt: number;
+  /** Set when the seat is a session that was ALREADY running and adopted it,
+   *  rather than one this app opened. Liveness is still the pane. */
+  adoptedSession: string;
+  adoptedPane: string;
 }
 
 interface Row {
   root: string; name: string; kind: string; model: string; powers: string;
   started_at: number; ended_at: number | null; last_line: string; last_turn_at: number;
+  adopted_session: string; adopted_pane: string;
 }
 
 const toSeat = (r: Row): Seat => ({
@@ -93,6 +101,7 @@ const toSeat = (r: Row): Seat => ({
   powers: isPower(r.powers) ? r.powers : "speak",
   startedAt: r.started_at, endedAt: r.ended_at,
   lastLine: r.last_line, lastTurnAt: r.last_turn_at,
+  adoptedSession: r.adopted_session ?? "", adoptedPane: r.adopted_pane ?? "",
 });
 
 const one = db.query<Row, [string]>(`SELECT * FROM seat WHERE root = ?`);
@@ -113,7 +122,21 @@ const settings = db.query<never, [string, string, string, string]>(`
   ON CONFLICT(root) DO UPDATE SET model = excluded.model, powers = excluded.powers
 `);
 const closeRow = db.query<never, [number, string]>(`UPDATE seat SET ended_at = ? WHERE root = ?`);
+const adoptRow = db.query<never, [string, string, string, string, string, number]>(`
+  INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, started_at, ended_at)
+  VALUES (?, ?, ?, ?, ?, ?, NULL)
+  ON CONFLICT(root) DO UPDATE SET
+    adopted_session = excluded.adopted_session, adopted_pane = excluded.adopted_pane,
+    started_at = excluded.started_at, ended_at = NULL
+`);
+const unadopt = db.query<never, [string]>(`UPDATE seat SET adopted_session = '', adopted_pane = '' WHERE root = ?`);
 const saidRow = db.query<never, [string, number, string]>(`UPDATE seat SET last_line = ?, last_turn_at = ? WHERE root = ?`);
+/* Every line, not only the latest. The row keeps the last one because the
+   header reads it on every poll and a join for one string is a join too many;
+   this is the day. */
+const keepLine = db.query<never, [string, string, number]>(`INSERT INTO seat_line (root, line, at) VALUES (?, ?, ?)`);
+const recentLines = db.query<{ line: string; at: number }, [string, number]>(
+  `SELECT line, at FROM seat_line WHERE root = ? ORDER BY at DESC LIMIT ?`);
 
 /**
  * The name the seat's window carries.
@@ -159,12 +182,71 @@ export function seatable(rootIn: unknown): { root: string } | { error: string } 
   return { root };
 }
 
-/** Whether an agent is in the chair right now — the pane, never the row. */
+/**
+ * Whether an agent is in the chair right now — the pane, never the row.
+ *
+ * Two ways to be in it, one answer. A seat this app opened is a named agent
+ * and `reconcile` closes it the moment its pane is gone. A seat that was
+ * ADOPTED is a session that was already working when the chair was built: its
+ * pane is checked the same way, so an adopted orchestrator that dies stops
+ * being the orchestrator exactly as fast as one this app started.
+ */
 export async function seated(root: string): Promise<AgentOps.NamedAgent | null> {
   const name = seatName(root);
   await AgentOps.reconcile();
   const a = AgentOps.agentNamed(name);
-  return a && a.endedAt === null ? a : null;
+  if (a && a.endedAt === null) return a;
+
+  const row = seatRow(root);
+  if (!row?.adoptedPane) return null;
+  const alive = await AgentOps.paneAlive(row.adoptedPane);
+  if (!alive) {
+    /* Its pane is gone. The row keeps its settings and its lines; what it
+       stops claiming is that somebody is sitting there. */
+    unadopt.run(root);
+    return null;
+  }
+  return {
+    name: row.name || "orchestrator", kind: row.kind || "claude", cwd: root,
+    paneId: row.adoptedPane, windowId: "", startedAt: row.startedAt, endedAt: null,
+  };
+}
+
+/**
+ * Adopt a session that is already orchestrating this project.
+ *
+ * Nothing is restarted, nothing is re-prompted, and no context is thrown away:
+ * the whole point is the orchestrator that has been running for a day with
+ * five agents reporting to it. What it gains is the app knowing who it is —
+ * its line in the view, its queue, the field drawn for it, and being woken
+ * when that field changes instead of keeping a clock of its own.
+ *
+ * Its rules are NOT rewritten either. The two files are seeded if missing so
+ * there is something to edit, and an adopted seat is told where they are
+ * rather than handed them.
+ */
+export async function adoptSeat(p: { root: string; session: string; pane: string; powers?: Power; now?: number }):
+Promise<{ ok: true; seat: Seat; already: boolean } | { ok: false; error: string }> {
+  const gate = seatable(p.root);
+  if ("error" in gate) return { ok: false, error: gate.error };
+  const pane = String(p.pane ?? "").trim();
+  if (!/^%\d+$/.test(pane)) return { ok: false, error: "a pane id looks like %12" };
+  if (!(await AgentOps.paneAlive(pane))) return { ok: false, error: "there is no such pane on this machine's engine" };
+
+  const there = await seated(gate.root);
+  if (there && there.paneId !== pane) {
+    return { ok: false, error: `${there.name} is already in this project's chair; stand it down first` };
+  }
+  const row = seatRow(gate.root);
+  adoptRow.run(
+    gate.root,
+    row?.name || seatName(gate.root),
+    p.powers ?? row?.powers ?? "speak",
+    String(p.session ?? ""),
+    pane,
+    p.now ?? Date.now(),
+  );
+  return { ok: true, seat: seatRow(gate.root)!, already: there !== null };
 }
 
 /**
@@ -177,13 +259,15 @@ export async function seated(root: string): Promise<AgentOps.NamedAgent | null> 
  * the field and will wake it when something changes), and it must report
  * through one line rather than leave a person to read a pane.
  */
-export function houseBlock(powers: Power, wakeHours: number): string {
+export function houseBlock(powers: Power, wakeHours: number, root = ""): string {
   const may = powers === "speak"
     ? "You may not start, stop or prompt any agent. If one is stuck, say so — do not push it."
     : powers === "nudge"
       ? "You may prompt an agent that is ALREADY running, to unstick it (`agentglass-agent prompt --name <n> \"…\"`). You may not start or stop one."
       : [
         "You may prompt an agent that is already running, and start or stop named agents (`agentglass-agent start|prompt|stop`).",
+        `When you OPEN one, its first message is this project's worker brief — the file beside your rules — and nothing else you write replaces it: \`claude --dangerously-skip-permissions "$(cat ${root ? briefPath(root) : "the brief file beside your rules"})"\`, or \`agentglass-agent start <name> --cwd <checkout> --yolo\` and then send it. Every agent gets the same rules, which is what makes their reports comparable.`,
+        `Ask for the report in one shape and no other: ${REPORT_SHAPE}. A report you have to read twice is a report that cost twice.`,
         "When you hand a queued item to an agent, claim it first — `agentglass-agent claim <task-id> --to <agent-name>` — and say how it went with `agentglass-agent finish <task-id> \"<outcome>\"`.",
         "An item this app says has been beaten twice is NOT to be handed out again: say it needs a person.",
       ].join(" ");
@@ -240,7 +324,7 @@ export async function seatPrompt(root: string, powers: Power, wakeHours: number)
     `${SEAT_PROMPT_MARK}: ${root}.`,
     "",
     text.trim(),
-    houseBlock(powers, wakeHours),
+    houseBlock(powers, wakeHours, root),
     `## The agents working in ${root} right now`,
     "",
     fieldReadout(rows),
@@ -278,7 +362,7 @@ export async function openSeat(p: {
   const root = gate.root;
   const there = await seated(root);
   const row = seatRow(root);
-  if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0 }), agent: there, already: true };
+  if (there) return { ok: true, seat: row ?? toSeat({ root, name: there.name, kind: there.kind, model: "", powers: "speak", started_at: there.startedAt, ended_at: null, last_line: "", last_turn_at: 0, adopted_session: "", adopted_pane: "" }), agent: there, already: true };
 
   const powers: Power = p.powers ?? row?.powers ?? "speak";
   /* A seat reads a board and writes a sentence a few times an hour. It is not
@@ -332,10 +416,18 @@ export async function openSeat(p: {
 /** Empty the chair. The row stays: its settings and its last line are what the
  *  next seating starts from. */
 export async function closeSeat(root: string, now = Date.now()): Promise<{ ok: boolean; was: boolean }> {
+  const row = seatRow(root);
   const there = await seated(root);
   closeRow.run(now, root);
   revokeSeatTokens(root);
   if (!there) return { ok: true, was: false };
+  /* An ADOPTED seat is somebody else's session doing its own work. Standing it
+     down means this app stops calling it the orchestrator; killing it would be
+     killing a day of somebody's context because a button said "stand down". */
+  if (row?.adoptedPane && there.paneId === row.adoptedPane) {
+    unadopt.run(root);
+    return { ok: true, was: true };
+  }
   await AgentOps.stopAgent(there, now);
   return { ok: true, was: true };
 }
@@ -346,7 +438,13 @@ export function seatSays(root: string, line: string, now = Date.now()): { ok: tr
   if (!text) return { ok: false, error: "nothing said" };
   if (!seatRow(root)) return { ok: false, error: "no seat for that project" };
   saidRow.run(text, now, root);
+  keepLine.run(root, text, now);
   return { ok: true };
+}
+
+/** What it said, newest first. The view's "its day". */
+export function seatLines(root: string, limit = 8): { line: string; at: number }[] {
+  return recentLines.all(root, Math.max(1, Math.min(50, limit)));
 }
 
 /** Change what a seat is worth paying for and what it may do, seated or not.
@@ -356,10 +454,46 @@ export function setSeatSettings(root: string, model: string, powers: Power): voi
   settings.run(root, seatName(root), model, powers);
 }
 
+/** One row of the field, as the view draws it: who, what state, and the last
+ *  hour of what they actually did. */
+export interface FieldRow {
+  name: string;
+  session?: string;
+  paneId?: string;
+  state: "working" | "waiting" | "idle";
+  needsYou?: { kind: string; why: string; since: number };
+  doing?: string;
+  saidAt?: number;
+  /** Twelve five-minute counts, oldest first. */
+  pulse: number[];
+}
+
 /** Everything the view needs for one project, in one answer. */
 export async function seatStatus(root: string): Promise<{
   root: string; doctrine: string; seat: Seat | null; agent: AgentOps.NamedAgent | null; live: boolean;
+  field: FieldRow[]; wokenAt: number | null; screen: string; brief: string; briefText: string;
 }> {
   const agent = await seated(root);
-  return { root, doctrine: doctrinePath(root), seat: seatRow(root), agent, live: agent !== null };
+  /* The last few lines of its pane. The Clone had this and it was the best
+     thing in it: watching the seat recall a precedent and hand out a task is
+     the moment the idea stops needing an explanation. Read straight off tmux,
+     so there is nothing to keep in sync and nothing to store. */
+  const screen = agent ? (await AgentOps.screenOf(agent.paneId, 40).catch(() => null)) ?? "" : "";
+  const rows = fieldFor(root, await boardNow().catch(() => []));
+  const pulse = pulses(rows.map((r) => r.session ?? ""));
+  const field: FieldRow[] = rows.map((r) => ({
+    name: r.name,
+    session: r.session,
+    paneId: r.paneId,
+    state: r.state,
+    needsYou: r.needsYou,
+    doing: r.doing,
+    saidAt: r.saidAt,
+    pulse: pulse.get(r.session ?? "") ?? new Array(BUCKETS).fill(0),
+  }));
+  return {
+    root, doctrine: doctrinePath(root), seat: seatRow(root), agent, live: agent !== null,
+    field, wokenAt: lastWoken(root), screen,
+    brief: briefPath(root), briefText: readBrief(root).text,
+  };
 }

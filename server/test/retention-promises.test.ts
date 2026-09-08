@@ -45,6 +45,7 @@ describe("the promises SECURITY.md makes about retention", () => {
          live one is never swept, its pane being the record that it runs. */
       "db.ts:named_agent",
       "db.ts:reminders",
+      "db.ts:seat_line",
       /* What a session is to the app (the Lantern's chat): a mark that
          outlives its session by ninety days, then nothing needs it. */
       "db.ts:session_role",
@@ -111,7 +112,7 @@ describe("the promises SECURITY.md makes about retention", () => {
     for (const t of ["events_fts", "events", "sessions", "gates", "reminders",
                      "understudy_snapshots", "understudy_ledger",
                      "understudy_proposals", "understudy_shifts", "understudy_acts",
-                     "understudy_work", "understudy_asked", "understudy_help", "named_agent", "session_role", "agent_schedule"]) {
+                     "understudy_work", "understudy_asked", "understudy_help", "named_agent", "session_role", "agent_schedule", "seat_line"]) {
       expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(`DELETE FROM ${t}`);
     }
 

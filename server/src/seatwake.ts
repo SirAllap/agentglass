@@ -24,11 +24,11 @@ import { inScope, seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
 import { everySeat, seatName } from "./seat.ts";
 import { releaseVanished } from "./seatqueue.ts";
+import { noteWoken, wokenFor, __resetWoken } from "./seatwoken.ts";
 
-/** What the seat was last told, per project. Memory only: after a restart the
- *  first look wakes every seat once, which is the right answer — the seat that
- *  came back with the app has not been told anything yet either. */
-const told = new Map<string, { fingerprint: string; at: number }>();
+/* What each seat was last told lives in seatwoken.ts, a leaf: the view reads
+   it for its dial, and having seat.ts and this file import each other for one
+   timestamp is a cycle. */
 
 /**
  * The findings reduced to what a person would call a change.
@@ -87,11 +87,11 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
        its business — and, with powers, offer to unstick it. */
     const mine = f.filter((x) => x.worktree && inScope(x.worktree, s.root));
     const fp = fingerprint(mine);
-    const last = told.get(s.root);
+    const last = wokenFor(s.root);
     const changed = !last || last.fingerprint !== fp;
     const overdue = !last || now - last.at >= floorMs;
     if (!changed && !overdue) continue;
-    told.set(s.root, { fingerprint: fp, at: now });
+    noteWoken(s.root, fp, now);
     /* A first sighting is not a change: the seat has just been given the whole
        field in its opening prompt, and waking it to say so would be a turn
        spent repeating what it is already reading. */
@@ -118,4 +118,4 @@ async function promptByName(name: string, text: string): Promise<void> {
   await AgentOps.promptAgent(a.paneId, text, 10_000);
 }
 
-export function __resetSeatWake(): void { told.clear(); }
+export function __resetSeatWake(): void { __resetWoken(); }

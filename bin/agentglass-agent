@@ -195,6 +195,17 @@ def main():
     p.add_argument("question", help="in your own words, as ONE quoted argument")
     p.add_argument("--root", help="the project (default: the current directory)")
 
+    p = sub.add_parser("orchestrate", help="put an orchestrator in a project's chair, or bring the one that is there")
+    p.add_argument("--project", help="the project's checkout (default: the current directory)")
+    p.add_argument("--powers", choices=["speak", "nudge", "assign"], help="what the chair may do (default: what the project already had, else speak)")
+    p.add_argument("--model", help="which model to seat (default: what this build calls cheapest-capable)")
+
+    p = sub.add_parser("adopt", help="tell the app that YOU are already this project's orchestrator (keeps your session and your context)")
+    p.add_argument("--project", help="the project's checkout (default: the current directory)")
+    p.add_argument("--pane", help="your tmux pane (default: $TMUX_PANE)")
+    p.add_argument("--session", default="", help="your session id, if you know it")
+    p.add_argument("--powers", choices=["speak", "nudge", "assign"], help="what the chair may do")
+
     sub.add_parser("health", help="is agentglass listening")
 
     # Everything after a bare `--` is the agent CLI's, not ours. Split it off
@@ -251,6 +262,23 @@ def main():
         return emit(call("/agents/schedule", method="GET", timeout=30))
     if a.cmd == "unschedule":
         return emit(call("/agents/schedule/cancel", {"id": a.id}, timeout=30))
+    if a.cmd == "adopt":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        pane = a.pane or os.environ.get("TMUX_PANE", "")
+        if not pane:
+            return emit({"ok": False, "error": "no pane: run this from inside your tmux pane, or pass --pane %N"})
+        body = {"root": root, "pane": pane, "session": a.session}
+        if a.powers:
+            body["powers"] = a.powers
+        return emit(call("/seat/adopt", body, timeout=60))
+    if a.cmd == "orchestrate":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        body = {"root": root}
+        if a.powers:
+            body["powers"] = a.powers
+        if a.model:
+            body["model"] = a.model
+        return emit(call("/seat/orchestrate", body, timeout=180))
     if a.cmd == "recall":
         root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
         return emit(call("/seat/recall", {"root": root, "question": a.question}, timeout=30))

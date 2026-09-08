@@ -353,6 +353,9 @@ const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "
 export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string): boolean {
   if (method === "GET" || method === "HEAD") return !FULL_GET.has(pathname);
   if (method !== "POST") return false;
+  /* Saying its line and asking the bank are not acts: allowed at every level.
+     Seating another orchestrator is NOT on this list at any level — a seat
+     that could open seats is a seat that can spend without a ceiling. */
   if (pathname === "/seat/say" || pathname === "/seat/recall") return true;
   if (READ_POST.has(pathname)) return true;
   if (powers === "speak") return false;

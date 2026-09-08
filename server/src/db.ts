@@ -1424,6 +1424,45 @@ db.run(`CREATE INDEX IF NOT EXISTS seat_task_root ON seat_task (root, done_at, t
  * database made yesterday gains it too. */
 try { db.exec("ALTER TABLE seat_task ADD COLUMN proof TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
 
+/*
+ * WHAT THE SEAT SAID, kept.
+ *
+ * One line per round is the whole report, and only the latest was kept — which
+ * made the view a status light. Four of them is the day: what needed a person
+ * this morning, what it handed out at lunch, and whether anything landed. The
+ * cost of that is one short row per round, and a round happens when the field
+ * changes rather than on a clock, so this grows in tens per day and not in
+ * thousands.
+ *
+ * Swept with the ninety-day records. A line older than that is not history,
+ * it is a log nobody will read.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_line (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  root TEXT NOT NULL,
+  line TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_line_root ON seat_line (root, at DESC)`);
+
+/*
+ * AN ORCHESTRATOR THAT WAS ALREADY WORKING.
+ *
+ * The seat opens an agent and owns it. But the first orchestrator this feature
+ * was modelled on had been running a real project for a day when the seat was
+ * built, with five agents reporting to it and a context nobody wants to throw
+ * away — and "take the seat" would have replaced it with a stranger.
+ *
+ * So a session can be ADOPTED instead: the row points at a pane that already
+ * exists, and liveness is that pane, exactly as it is for a seat this app
+ * opened. Nothing is restarted and nothing is re-prompted; what changes is
+ * that the app knows who the orchestrator is.
+ */
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_session TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+
 /* What a run's branch pointed at when something last looked at it.
  *
  * Added after a merged branch was deleted by hand and the run that made it was
@@ -2095,6 +2134,11 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
     `DELETE FROM named_agent WHERE ended_at IS NOT NULL AND ended_at < ?`,
     [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
   );
+  /* The seat's own reports. A line is what it said at the time and the view
+     shows the last few; past ninety days it is a log nobody reads. Its task
+     rows are NOT swept: an item still waiting is a person's intent, and a
+     finished one is the record of what was asked and what came back. */
+  db.run(`DELETE FROM seat_line WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A role outlives its session by ninety days, then nothing needs it. */
   db.run(`DELETE FROM session_role WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A schedule that fired or was cancelled is a record, kept ninety days; one
