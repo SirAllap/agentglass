@@ -40,6 +40,8 @@ import { knownProjects } from "./transcripts.ts";
 import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
+import { BUCKETS, pulses } from "./seatpulse.ts";
+import { lastWoken } from "./seatwoken.ts";
 
 /** What a seat is allowed to do. Ordered: each level is the one before it
  *  plus one verb, so a check is a comparison and not a set membership. */
@@ -114,6 +116,12 @@ const settings = db.query<never, [string, string, string, string]>(`
 `);
 const closeRow = db.query<never, [number, string]>(`UPDATE seat SET ended_at = ? WHERE root = ?`);
 const saidRow = db.query<never, [string, number, string]>(`UPDATE seat SET last_line = ?, last_turn_at = ? WHERE root = ?`);
+/* Every line, not only the latest. The row keeps the last one because the
+   header reads it on every poll and a join for one string is a join too many;
+   this is the day. */
+const keepLine = db.query<never, [string, string, number]>(`INSERT INTO seat_line (root, line, at) VALUES (?, ?, ?)`);
+const recentLines = db.query<{ line: string; at: number }, [string, number]>(
+  `SELECT line, at FROM seat_line WHERE root = ? ORDER BY at DESC LIMIT ?`);
 
 /**
  * The name the seat's window carries.
@@ -346,7 +354,13 @@ export function seatSays(root: string, line: string, now = Date.now()): { ok: tr
   if (!text) return { ok: false, error: "nothing said" };
   if (!seatRow(root)) return { ok: false, error: "no seat for that project" };
   saidRow.run(text, now, root);
+  keepLine.run(root, text, now);
   return { ok: true };
+}
+
+/** What it said, newest first. The view's "its day". */
+export function seatLines(root: string, limit = 8): { line: string; at: number }[] {
+  return recentLines.all(root, Math.max(1, Math.min(50, limit)));
 }
 
 /** Change what a seat is worth paying for and what it may do, seated or not.
@@ -356,10 +370,45 @@ export function setSeatSettings(root: string, model: string, powers: Power): voi
   settings.run(root, seatName(root), model, powers);
 }
 
+/** One row of the field, as the view draws it: who, what state, and the last
+ *  hour of what they actually did. */
+export interface FieldRow {
+  name: string;
+  session?: string;
+  paneId?: string;
+  state: "working" | "waiting" | "idle";
+  needsYou?: { kind: string; why: string; since: number };
+  doing?: string;
+  saidAt?: number;
+  /** Twelve five-minute counts, oldest first. */
+  pulse: number[];
+}
+
 /** Everything the view needs for one project, in one answer. */
 export async function seatStatus(root: string): Promise<{
   root: string; doctrine: string; seat: Seat | null; agent: AgentOps.NamedAgent | null; live: boolean;
+  field: FieldRow[]; wokenAt: number | null; screen: string;
 }> {
   const agent = await seated(root);
-  return { root, doctrine: doctrinePath(root), seat: seatRow(root), agent, live: agent !== null };
+  /* The last few lines of its pane. The Clone had this and it was the best
+     thing in it: watching the seat recall a precedent and hand out a task is
+     the moment the idea stops needing an explanation. Read straight off tmux,
+     so there is nothing to keep in sync and nothing to store. */
+  const screen = agent ? (await AgentOps.screenOf(agent.paneId, 40).catch(() => null)) ?? "" : "";
+  const rows = fieldFor(root, await boardNow().catch(() => []));
+  const pulse = pulses(rows.map((r) => r.session ?? ""));
+  const field: FieldRow[] = rows.map((r) => ({
+    name: r.name,
+    session: r.session,
+    paneId: r.paneId,
+    state: r.state,
+    needsYou: r.needsYou,
+    doing: r.doing,
+    saidAt: r.saidAt,
+    pulse: pulse.get(r.session ?? "") ?? new Array(BUCKETS).fill(0),
+  }));
+  return {
+    root, doctrine: doctrinePath(root), seat: seatRow(root), agent, live: agent !== null,
+    field, wokenAt: lastWoken(root), screen,
+  };
 }

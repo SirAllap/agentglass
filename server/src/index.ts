@@ -6739,7 +6739,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/seat" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
-      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

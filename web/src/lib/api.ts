@@ -700,6 +700,28 @@ export interface SeatAnswer {
    *  From the server so the picker and the seating cannot disagree. */
   models: { id: string; label: string }[];
   defaultModel: string;
+  /** The agents in THIS project, each with the last hour of what it did. */
+  field: SeatFieldRow[];
+  /** What it said, newest first, and when it was last woken. */
+  lines: { line: string; at: number }[];
+  wokenAt: number | null;
+  floorHours: number;
+  /** The seat's own pane, as text, when somebody is in it. */
+  screen: string;
+}
+
+/** One agent on the seat's field. `pulse` is twelve five-minute counts of tool
+ *  calls, oldest first: what "quiet for an hour" looks like when it is drawn
+ *  instead of said. */
+export interface SeatFieldRow {
+  name: string;
+  session?: string;
+  paneId?: string;
+  state: "working" | "waiting" | "idle";
+  needsYou?: { kind: string; why: string; since: number };
+  doing?: string;
+  saidAt?: number;
+  pulse: number[];
 }
 
 /** One line of the seat's queue. `takenBy` is a named agent, never a pane —
@@ -2325,7 +2347,7 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
-  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], models: [], defaultModel: "" } as SeatAnswer),
+  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "" } as SeatAnswer),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),
   seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
