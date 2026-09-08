@@ -20,7 +20,7 @@
 // Nothing here touches the user's tmux. Only the engine's own socket is read,
 // and the data lands in the engine's state dir. The user's ~/.tmux/resurrect
 // saves are nobody's business but theirs (see tmuxsnapshot.ts).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
 import { tmux, listPanes, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.ts";
@@ -128,6 +128,35 @@ function restoreDir(): string {
 }
 function layoutPath(): string {
   return join(restoreDir(), "layout.json");
+}
+/*
+ * THE GENERATION BEFORE THIS ONE.
+ *
+ * One file, overwritten in place, is one bad write away from a desk nobody can
+ * get back — and "one bad write" is not hypothetical here: the file has been
+ * truncated by a crash mid-write (fixed with temp-and-rename) and photographed
+ * from a half-restored desk (fixed with the merge). Both fixes are in, and
+ * both were written after the loss they describe.
+ *
+ * So the previous generation is kept, and it costs one rename. Nothing reads
+ * it in the ordinary case; it is read when the current one is missing or does
+ * not parse, which is exactly the failure that used to be total.
+ */
+function previousLayoutPath(): string {
+  return join(restoreDir(), "layout.prev.json");
+}
+
+/**
+ * Replace layout.json with `tmp`, keeping the generation it replaces.
+ *
+ * `rename` inside one directory is atomic, so a reader sees the whole old file
+ * or the whole new one. The copy aside happens first and its failure is not
+ * fatal: a missing spare is worse than no spare only if it stops the write
+ * that matters.
+ */
+function swapInLayout(tmp: string): void {
+  try { if (existsSync(layoutPath())) copyFileSync(layoutPath(), previousLayoutPath()); } catch { /* the spare is a courtesy */ }
+  renameSync(tmp, layoutPath());
 }
 /** The pane's born-with command. `#{pane_start_command}` is empty for a plain
  *  shell (tmux only records explicit commands), which is the right thing: a
@@ -403,7 +432,7 @@ function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(state));
-  renameSync(tmp, layoutPath());
+  swapInLayout(tmp);
   return state;
 }
 
@@ -428,7 +457,7 @@ export function forgetSession(name: string): void {
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ ...before, sessions }));
-  renameSync(tmp, layoutPath());
+  swapInLayout(tmp);
 }
 
 /** Capture every session on the engine's socket into the state dir. Safe to
@@ -545,18 +574,21 @@ export function captureLayoutSync(now = Date.now()): void {
     mkdirSync(restoreDir(), { recursive: true });
     const tmp = `${layoutPath()}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()] }));
-    renameSync(tmp, layoutPath());
+    swapInLayout(tmp);
   } catch { /* never block an exit on bookkeeping */ }
 }
 
 /** The last capture, without re-reading tmux. */
 export function readRestoreState(): RestoreState | null {
-  try {
-    if (!existsSync(layoutPath())) return null;
-    return JSON.parse(readFileSync(layoutPath(), "utf8")) as RestoreState;
-  } catch {
-    return null;
-  }
+  const read = (at: string): RestoreState | null => {
+    try {
+      if (!existsSync(at)) return null;
+      const state = JSON.parse(readFileSync(at, "utf8")) as RestoreState;
+      /* A file that parses but says nothing is the same loss as no file. */
+      return Array.isArray(state?.sessions) && state.sessions.length ? state : null;
+    } catch { return null; }
+  };
+  return read(layoutPath()) ?? read(previousLayoutPath());
 }
 
 /** When the last capture was written, for the settings panel. */
