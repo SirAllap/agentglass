@@ -194,3 +194,83 @@ describe("a table's cells", () => {
     expect(md.split("\n")[2]).toBe("| share\\\\ |");
   });
 });
+
+/*
+ * A PICTURE IN A COMMENT.
+ *
+ * The blocks are the two shapes a real card carried, with the names changed: a
+ * file dropped on a comment arrives as `type: "attachment"`, a screenshot
+ * pasted into the editor as `type: "image"`, and their `text` is the file name
+ * in both. Handling neither is how a comment that was half evidence rendered as
+ * the word `image.png` on a line of its own.
+ */
+describe("a picture in a comment", () => {
+  const attachment = (over?: Record<string, unknown>) => ({
+    type: "attachment",
+    text: "orbit-01-red-dashboard.png",
+    attachment: {
+      id: "0a251062.png",
+      title: "orbit-01-red-dashboard.png",
+      mimetype: "image/png",
+      url: "https://t9900001.p.clickup-attachments.com/t9900001/0a251062/orbit-01-red-dashboard.png",
+      url_w_host: "https://t9900001.p.clickup-attachments.com/t9900001/0a251062/orbit-01-red-dashboard.png",
+      ...over,
+    },
+  });
+
+  const pasted = {
+    type: "image",
+    text: "image.png",
+    attributes: { width: "300", "data-id": "00f68b40.png" },
+    image: {
+      id: "00f68b40.png",
+      name: "image.png",
+      url: "https://t9900001.p.clickup-attachments.com/t9900001/00f68b40/image.png",
+      thumbnail_large: "https://t9900001.p.clickup-attachments.com/t9900001/00f68b40/image.png",
+    },
+  };
+
+  test("an attached image is an image, not its file name", () => {
+    expect(commentMarkdown([attachment(), nl()]))
+      .toBe("![orbit-01-red-dashboard.png](https://t9900001.p.clickup-attachments.com/t9900001/0a251062/orbit-01-red-dashboard.png)");
+  });
+
+  test("a pasted screenshot is an image too", () => {
+    // The second shape, and the one the reader actually meets most: `image`
+    // rather than `attachment`, and no mimetype anywhere on the block.
+    expect(commentMarkdown([pasted, nl()]))
+      .toBe("![image.png](https://t9900001.p.clickup-attachments.com/t9900001/00f68b40/image.png)");
+  });
+
+  test("a file that is not a picture is a link, not a broken image", () => {
+    // `![]()` on a PDF draws the broken-image icon where a readable name used
+    // to be, which is a worse answer than the bug being fixed.
+    const pdf = attachment({ title: "orbit-audit.pdf", mimetype: "application/pdf" });
+    expect(commentMarkdown([{ ...pdf, text: "orbit-audit.pdf" }, nl()]))
+      .toBe("[orbit-audit.pdf](https://t9900001.p.clickup-attachments.com/t9900001/0a251062/orbit-01-red-dashboard.png)");
+  });
+
+  test("the sentence around a screenshot survives it", () => {
+    // Measured on a real thread: the picture sits between two runs of prose on
+    // ONE line. Ending the line at the image would cut the sentence in half.
+    expect(commentMarkdown([{ text: "before " }, pasted, { text: " after" }, nl()]))
+      .toBe("before ![image.png](https://t9900001.p.clickup-attachments.com/t9900001/00f68b40/image.png) after");
+  });
+
+  test("a name with a bracket cannot break out of its own alt text", () => {
+    const odd = attachment({ title: "orbit [draft].png" });
+    expect(commentMarkdown([{ ...odd, text: "orbit [draft].png" }, nl()]))
+      .toBe("![orbit  draft .png](https://t9900001.p.clickup-attachments.com/t9900001/0a251062/orbit-01-red-dashboard.png)");
+  });
+
+  test("a space in the URL is encoded, because the reader's pattern stops at one", () => {
+    const spaced = attachment({ url_w_host: "https://t9900001.p.clickup-attachments.com/t9900001/0a251062/two words.png" });
+    expect(commentMarkdown([{ ...spaced, text: "two words.png" }, nl()]))
+      .toBe("![two words.png](https://t9900001.p.clickup-attachments.com/t9900001/0a251062/two%20words.png)");
+  });
+
+  test("a block with no URL is left alone rather than drawn as an empty image", () => {
+    const naked = { type: "attachment", text: "gone.png", attachment: { title: "gone.png", mimetype: "image/png" } };
+    expect(commentMarkdown([naked, nl()])).toBe("gone.png");
+  });
+});
