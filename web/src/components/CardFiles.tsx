@@ -12,6 +12,7 @@
 // what a screenshot is FOR is being read.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { CardAttachment } from "../../../shared/providers.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { SERVER, withToken } from "../lib/api.ts";
@@ -75,9 +76,23 @@ export const isViewable = (a: CardAttachment): boolean => isImage(a) || isVideo(
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
 
-export function CardFiles({ files }: { files: CardAttachment[] }) {
-  /** Which one is open in the viewer, by index. Null is closed. */
-  const [at, setAt] = useState<number | null>(null);
+/**
+ * The picture, at the size it was taken.
+ *
+ * Its own component and not a piece of the Files tab, because the pictures on a
+ * card are not only IN that tab: the same screenshots are pasted into the comments,
+ * and a comment is where somebody meets them first. `at` therefore comes from
+ * outside — the grid sets it from a thumbnail, the activity feed from an image in a
+ * comment, and both get the same viewer with the same keys.
+ */
+export function FileViewer({ files, at, setAt }: {
+  files: CardAttachment[];
+  /** Which one is open, by index into the viewable ones. Null is closed. */
+  at: number | null;
+  /** A setter and not a plain callback: walking with ←/→ reads the index it is
+   *  moving from, and a stale closure over `at` is how that walk skips one. */
+  setAt: Dispatch<SetStateAction<number | null>>;
+}) {
   /*
    * The viewer's OWN zoom, and it is deliberately not the application's.
    *
@@ -113,7 +128,6 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
      they are the thing somebody attached to show what happened, and a screen
      recording filed under "other files" is one nobody opens. */
   const images = files.filter(isViewable);
-  const others = files.filter((f) => !isViewable(f));
 
   /** Both go back to fit whenever the picture changes: a pan held over from the last
    *  image points at a place this one does not have. */
@@ -132,7 +146,7 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
       if (cur === null || !images.length) return cur;
       return (cur + by + images.length) % images.length;
     });
-  }, [images.length, reset]);
+  }, [images.length, reset, setAt]);
 
   /* The keys somebody already has their hands on: arrows walk, Escape leaves. Bound
      while the viewer is open and never otherwise — a card is a page with a comment box
@@ -148,7 +162,11 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
          process and a renderer cannot preventDefault it. */
       const zoomKey = e.key === "+" || e.key === "=" || e.key === "-" || e.key === "_" || e.key === "0";
       if ((e.metaKey || e.ctrlKey) && !zoomKey) return;
-      if (e.key === "Escape") { e.preventDefault(); setAt(null); }
+      /* `stopPropagation` for the same reason the zoom keys have it: Escape closes
+         the thing on TOP, and the card under this one closes on Escape too. Measured
+         from the activity feed — one press shut the picture and the whole card with
+         it, so the way back to the thread you were reading was to find it again. */
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setAt(null); }
       else if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
       else if (e.key === "+" || e.key === "=") { e.preventDefault(); e.stopPropagation(); zoomBy(1.25); }
@@ -211,11 +229,176 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [at, zoomBy]);
 
+  const open = at !== null ? images[at] : null;
+  if (!open) return null;
+
+  return (
+      /* Over the card, not in it: a screenshot is read at the size it was taken, and
+         the pane it would sit in is 380px wide. */
+      <div role="dialog" aria-modal="true" aria-label={open.title}
+        onClick={() => setAt(null)}
+        className="fixed inset-0 z-50 flex flex-col"
+        style={{ background: "color-mix(in srgb, var(--bg) 88%, black)" }}>
+        <div className="flex items-center gap-3 px-4 py-2 shrink-0 text-[11px]"
+          onClick={(e) => e.stopPropagation()}
+          style={{ color: "var(--text2)", borderBottom: edge(12) }}>
+          <span className="min-w-0 truncate">{open.title}</span>
+          <span className="shrink-0 tabular-nums" style={{ color: "var(--text4)" }}>
+            {at! + 1} / {images.length}{open.size ? ` · ${fileSize(open.size)}` : ""}
+          </span>
+          {shown !== open.id && (
+            <span className="shrink-0 flex items-center gap-1.5 text-[10px]" style={{ color: "var(--text3)" }}>
+              <span className="agx-spin" aria-hidden style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
+              loading
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-1.5 shrink-0">
+            {/* The viewer's own zoom, said out loud so nobody wonders whether it is
+                the app's: it says what it is doing and 0 puts it back. */}
+            <button onClick={() => zoomBy(1 / 1.25)} disabled={zoom <= ZOOM_MIN} title="Zoom out (−)"
+              className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>−</button>
+            <button onClick={reset} title="Fit to the window (0)"
+              className="agx-btn px-2 py-0.5 rounded tabular-nums" style={{ border: edge(18), color: zoom === 1 ? "var(--text3)" : "var(--text)" }}>
+              {zoom === 1 ? "fit" : `${Math.round(zoom * 100)}%`}
+            </button>
+            <button onClick={() => zoomBy(1.25)} disabled={zoom >= ZOOM_MAX} title="Zoom in (+)"
+              className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>+</button>
+            <span aria-hidden style={{ color: "var(--text4)" }}>·</span>
+            <button onClick={() => step(-1)} disabled={images.length < 2} title="Previous (←)"
+              className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>←</button>
+            <button onClick={() => step(1)} disabled={images.length < 2} title="Next (→)"
+              className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>→</button>
+            <a href={externalUrl(open.url) || undefined} target="_blank" rel="noreferrer noopener"
+              className="px-2 py-0.5 rounded" style={{ border: edge(18), color: "var(--text2)" }} title="Open the file itself">Open ↗</a>
+            {/* The app's one close control — same grid, same stroke, and a target
+                you can actually hit. See CloseButton. */}
+            <CloseButton onClick={() => setAt(null)} title="Close (Esc)" />
+          </span>
+        </div>
+        {/*
+          * The picture, and the gestures that belong to a picture.
+          *
+          * Any wheel zooms it, Ctrl or no Ctrl: with a screenshot open, that gesture
+          * means this picture. Dragging pans once there is something to pan.
+          * Double-click is the toggle everybody tries first: fit, then twice life
+          * size, then fit again.
+          *
+          * `onWheel` is passive:false by way of React's synthetic handler plus the
+          * preventDefault below, which is what stops the page (and the app) taking
+          * the gesture instead.
+          */}
+        <div ref={stage} className="flex-1 min-h-0 overflow-hidden grid place-items-center p-4"
+          onClick={() => setAt(null)}
+          onDoubleClick={(e) => { e.stopPropagation(); if (zoom === 1) setZoom(2); else reset(); }}
+          onPointerDown={(e) => {
+            if (zoom <= 1) return;
+            drag.current = { x: e.clientX, y: e.clientY, ox: pan.x, oy: pan.y };
+            (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (!d) return;
+            setPan({ x: d.ox + (e.clientX - d.x), y: d.oy + (e.clientY - d.y) });
+          }}
+          onPointerUp={() => { drag.current = null; }}
+          style={{ cursor: zoom > 1 ? (drag.current ? "grabbing" : "grab") : "default" }}>
+          {/* The thumbnail, already in the browser from the grid, standing in until
+              the real one arrives. It is the same picture at 300px — so the moment
+              you press →, what you see IS the next screenshot, blurred, rather than
+              the previous one pretending nothing happened. */}
+          <div className="relative grid place-items-center" style={{ maxWidth: "100%", maxHeight: "100%" }}
+            onClick={(e) => e.stopPropagation()}>
+            {open.thumb && shown !== open.id && !isVideo(open) && (
+              <img src={open.thumb} alt="" aria-hidden draggable={false}
+                style={{
+                  maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                  filter: "blur(2px)", opacity: 0.55,
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                }} />
+            )}
+            {isVideo(open) ? (
+              /*
+               * `preload="none"`, and that is the whole point.
+               *
+               * It was "metadata", which sounds cheap and is not — for THIS
+               * kind of file. Reported as "it takes ages and does not play —
+               * is it actually DOWNLOADING it?", and it was.
+               *
+               * Measured rather than guessed, and the first two guesses were
+               * both wrong. The host answers range requests (206,
+               * accept-ranges: bytes), so it is not a server that refuses to
+               * seek. The codec is avc1 — H.264 — which this browser plays
+               * fine, so it is not an undecodable file either.
+               *
+               * It is where QuickTime puts the metadata. A .mov written by a
+               * screen recorder keeps its `moov` atom at the END, so "just
+               * the metadata" means reading to the end of a 21.6 MB file
+               * before the player can show a duration. Asking for nothing
+               * until Play is the only honest setting here.
+               *
+               * No autoplay either — a recording that starts talking the
+               * moment a card opens is why people mute browsers.
+               */
+              <video key={open.id} src={playableUrl(open)} controls preload="none" poster={open.thumb}
+                onError={() => setBroke(open.id)}
+                onClick={(e) => e.stopPropagation()}
+                style={{ maxWidth: "100%", maxHeight: "100%", outline: "none", display: broke === open.id ? "none" : undefined }} />
+            ) : (
+            <img key={open.id} src={open.url} alt={open.title} draggable={false}
+              /* `complete` as well as `onLoad`: an image already in the cache can be
+                 done before React has attached the handler, and a spinner that never
+                 clears is worse than no spinner. */
+              ref={(el) => { if (el?.complete) setShown(open.id); }}
+              onLoad={() => setShown(open.id)}
+              onError={() => setShown(open.id)}
+              style={{
+                maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
+                ...(open.thumb && shown !== open.id
+                  ? { position: "absolute", opacity: 0, pointerEvents: "none" as const }
+                  : null),
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "center",
+                transition: drag.current ? "none" : "transform 90ms ease-out",
+              }} />
+            )}
+            {/* A player draws its own state: a poster, a spinner while it
+                buffers, a time that moves. Ours on top of it was a second
+                spinner over a picture that never cleared, because nothing is
+                being loaded until Play is pressed. */}
+            {isVideo(open) && broke === open.id && (
+              <span className="absolute flex flex-col items-center gap-2 px-3 py-2.5 rounded-lg text-[11.5px] text-center"
+                style={{ background: "color-mix(in srgb, var(--bg) 88%, transparent)", border: edge(18), color: "var(--text2)", maxWidth: 340 }}>
+                <span>This browser could not play {open.ext ? `this .${open.ext}` : "this file"}.</span>
+                <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
+                  Usually a codec it has no decoder for — some recorders write HEVC. It will open outside.
+                </span>
+                <a href={open.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                  className="text-[11px] px-2.5 py-1 rounded-lg"
+                  style={{ border: edge(28), color: "var(--text)" }}>Open it outside ↗</a>
+              </span>
+            )}
+            {shown !== open.id && !isVideo(open) && (
+              <span className="absolute flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[10.5px]"
+                style={{ background: "color-mix(in srgb, var(--bg) 80%, transparent)", border: edge(18), color: "var(--text2)" }}>
+                <span className="agx-spin" aria-hidden style={{ width: 11, height: 11, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
+                Loading{open.size ? ` ${fileSize(open.size)}` : ""}…
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+  );
+}
+
+export function CardFiles({ files }: { files: CardAttachment[] }) {
+  /** Which one the viewer is on, by index into the viewable ones. Null is closed. */
+  const [at, setAt] = useState<number | null>(null);
+  const images = files.filter(isViewable);
+  const others = files.filter((f) => !isViewable(f));
+
   if (!files.length) {
     return <div className="p-5 text-center text-[11.5px]" style={{ color: "var(--text3)" }}>No files on this card.</div>;
   }
-
-  const open = at !== null ? images[at] : null;
 
   return (
     <div className="flex flex-col gap-3 pt-2">
@@ -273,162 +456,7 @@ export function CardFiles({ files }: { files: CardAttachment[] }) {
         </div>
       )}
 
-      {open && (
-        /* Over the card, not in it: a screenshot is read at the size it was taken, and
-           the pane it would sit in is 380px wide. */
-        <div role="dialog" aria-modal="true" aria-label={open.title}
-          onClick={() => setAt(null)}
-          className="fixed inset-0 z-50 flex flex-col"
-          style={{ background: "color-mix(in srgb, var(--bg) 88%, black)" }}>
-          <div className="flex items-center gap-3 px-4 py-2 shrink-0 text-[11px]"
-            onClick={(e) => e.stopPropagation()}
-            style={{ color: "var(--text2)", borderBottom: edge(12) }}>
-            <span className="min-w-0 truncate">{open.title}</span>
-            <span className="shrink-0 tabular-nums" style={{ color: "var(--text4)" }}>
-              {at! + 1} / {images.length}{open.size ? ` · ${fileSize(open.size)}` : ""}
-            </span>
-            {shown !== open.id && (
-              <span className="shrink-0 flex items-center gap-1.5 text-[10px]" style={{ color: "var(--text3)" }}>
-                <span className="agx-spin" aria-hidden style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-                loading
-              </span>
-            )}
-            <span className="ml-auto flex items-center gap-1.5 shrink-0">
-              {/* The viewer's own zoom, said out loud so nobody wonders whether it is
-                  the app's: it says what it is doing and 0 puts it back. */}
-              <button onClick={() => zoomBy(1 / 1.25)} disabled={zoom <= ZOOM_MIN} title="Zoom out (−)"
-                className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>−</button>
-              <button onClick={reset} title="Fit to the window (0)"
-                className="agx-btn px-2 py-0.5 rounded tabular-nums" style={{ border: edge(18), color: zoom === 1 ? "var(--text3)" : "var(--text)" }}>
-                {zoom === 1 ? "fit" : `${Math.round(zoom * 100)}%`}
-              </button>
-              <button onClick={() => zoomBy(1.25)} disabled={zoom >= ZOOM_MAX} title="Zoom in (+)"
-                className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>+</button>
-              <span aria-hidden style={{ color: "var(--text4)" }}>·</span>
-              <button onClick={() => step(-1)} disabled={images.length < 2} title="Previous (←)"
-                className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>←</button>
-              <button onClick={() => step(1)} disabled={images.length < 2} title="Next (→)"
-                className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>→</button>
-              <a href={externalUrl(open.url) || undefined} target="_blank" rel="noreferrer noopener"
-                className="px-2 py-0.5 rounded" style={{ border: edge(18), color: "var(--text2)" }} title="Open the file itself">Open ↗</a>
-              {/* The app's one close control — same grid, same stroke, and a target
-                  you can actually hit. See CloseButton. */}
-              <CloseButton onClick={() => setAt(null)} title="Close (Esc)" />
-            </span>
-          </div>
-          {/*
-            * The picture, and the gestures that belong to a picture.
-            *
-            * Any wheel zooms it, Ctrl or no Ctrl: with a screenshot open, that gesture
-            * means this picture. Dragging pans once there is something to pan.
-            * Double-click is the toggle everybody tries first: fit, then twice life
-            * size, then fit again.
-            *
-            * `onWheel` is passive:false by way of React's synthetic handler plus the
-            * preventDefault below, which is what stops the page (and the app) taking
-            * the gesture instead.
-            */}
-          <div ref={stage} className="flex-1 min-h-0 overflow-hidden grid place-items-center p-4"
-            onClick={() => setAt(null)}
-            onDoubleClick={(e) => { e.stopPropagation(); if (zoom === 1) setZoom(2); else reset(); }}
-            onPointerDown={(e) => {
-              if (zoom <= 1) return;
-              drag.current = { x: e.clientX, y: e.clientY, ox: pan.x, oy: pan.y };
-              (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-            }}
-            onPointerMove={(e) => {
-              const d = drag.current;
-              if (!d) return;
-              setPan({ x: d.ox + (e.clientX - d.x), y: d.oy + (e.clientY - d.y) });
-            }}
-            onPointerUp={() => { drag.current = null; }}
-            style={{ cursor: zoom > 1 ? (drag.current ? "grabbing" : "grab") : "default" }}>
-            {/* The thumbnail, already in the browser from the grid, standing in until
-                the real one arrives. It is the same picture at 300px — so the moment
-                you press →, what you see IS the next screenshot, blurred, rather than
-                the previous one pretending nothing happened. */}
-            <div className="relative grid place-items-center" style={{ maxWidth: "100%", maxHeight: "100%" }}
-              onClick={(e) => e.stopPropagation()}>
-              {open.thumb && shown !== open.id && !isVideo(open) && (
-                <img src={open.thumb} alt="" aria-hidden draggable={false}
-                  style={{
-                    maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                    filter: "blur(2px)", opacity: 0.55,
-                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                  }} />
-              )}
-              {isVideo(open) ? (
-                /*
-                 * `preload="none"`, and that is the whole point.
-                 *
-                 * It was "metadata", which sounds cheap and is not — for THIS
-                 * kind of file. Reported as "it takes ages and does not play —
-                 * is it actually DOWNLOADING it?", and it was.
-                 *
-                 * Measured rather than guessed, and the first two guesses were
-                 * both wrong. The host answers range requests (206,
-                 * accept-ranges: bytes), so it is not a server that refuses to
-                 * seek. The codec is avc1 — H.264 — which this browser plays
-                 * fine, so it is not an undecodable file either.
-                 *
-                 * It is where QuickTime puts the metadata. A .mov written by a
-                 * screen recorder keeps its `moov` atom at the END, so "just
-                 * the metadata" means reading to the end of a 21.6 MB file
-                 * before the player can show a duration. Asking for nothing
-                 * until Play is the only honest setting here.
-                 *
-                 * No autoplay either — a recording that starts talking the
-                 * moment a card opens is why people mute browsers.
-                 */
-                <video key={open.id} src={playableUrl(open)} controls preload="none" poster={open.thumb}
-                  onError={() => setBroke(open.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ maxWidth: "100%", maxHeight: "100%", outline: "none", display: broke === open.id ? "none" : undefined }} />
-              ) : (
-              <img key={open.id} src={open.url} alt={open.title} draggable={false}
-                /* `complete` as well as `onLoad`: an image already in the cache can be
-                   done before React has attached the handler, and a spinner that never
-                   clears is worse than no spinner. */
-                ref={(el) => { if (el?.complete) setShown(open.id); }}
-                onLoad={() => setShown(open.id)}
-                onError={() => setShown(open.id)}
-                style={{
-                  maxWidth: "100%", maxHeight: "100%", objectFit: "contain",
-                  ...(open.thumb && shown !== open.id
-                    ? { position: "absolute", opacity: 0, pointerEvents: "none" as const }
-                    : null),
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                  transformOrigin: "center",
-                  transition: drag.current ? "none" : "transform 90ms ease-out",
-                }} />
-              )}
-              {/* A player draws its own state: a poster, a spinner while it
-                  buffers, a time that moves. Ours on top of it was a second
-                  spinner over a picture that never cleared, because nothing is
-                  being loaded until Play is pressed. */}
-              {isVideo(open) && broke === open.id && (
-                <span className="absolute flex flex-col items-center gap-2 px-3 py-2.5 rounded-lg text-[11.5px] text-center"
-                  style={{ background: "color-mix(in srgb, var(--bg) 88%, transparent)", border: edge(18), color: "var(--text2)", maxWidth: 340 }}>
-                  <span>This browser could not play {open.ext ? `this .${open.ext}` : "this file"}.</span>
-                  <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
-                    Usually a codec it has no decoder for — some recorders write HEVC. It will open outside.
-                  </span>
-                  <a href={open.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-                    className="text-[11px] px-2.5 py-1 rounded-lg"
-                    style={{ border: edge(28), color: "var(--text)" }}>Open it outside ↗</a>
-                </span>
-              )}
-              {shown !== open.id && !isVideo(open) && (
-                <span className="absolute flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[10.5px]"
-                  style={{ background: "color-mix(in srgb, var(--bg) 80%, transparent)", border: edge(18), color: "var(--text2)" }}>
-                  <span className="agx-spin" aria-hidden style={{ width: 11, height: 11, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-                  Loading{open.size ? ` ${fileSize(open.size)}` : ""}…
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <FileViewer files={files} at={at} setAt={setAt} />
     </div>
   );
 }

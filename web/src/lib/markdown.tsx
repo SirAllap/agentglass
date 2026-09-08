@@ -14,9 +14,50 @@
 // dangerouslySetInnerHTML anywhere in here. Message text is untrusted (it can
 // contain anything a model or a tool emitted), so it must never be able to
 // become markup.
-import { memo, type ReactNode } from "react";
+import { createContext, memo, useContext, type ReactNode } from "react";
 import { externalUrl } from "./externalUrl.ts";
 import { CodeBlock } from "./mdCode.tsx";
+
+/*
+ * WHO OPENS A PICTURE, when something around the markdown can do it better.
+ *
+ * A rendered image is a link to its own URL, and a link leaves: in the desktop
+ * app `target="_blank"` is handed to `shell.openExternal`, so clicking a
+ * screenshot in a card comment opens the system browser and abandons the thread
+ * it belonged to. Where the surrounding view already has a viewer — the card
+ * panel does, for the same files — it says so here and keeps the click.
+ *
+ * A context rather than a prop because `inline()` is a plain function called
+ * from eight places and cannot hold a hook; only the small component below can,
+ * and it is the only thing that needs the answer. Returning `false` (or
+ * providing nothing at all) leaves the link exactly as it was.
+ */
+const OpenImage = createContext<((url: string) => boolean) | null>(null);
+
+/** Wrap markdown whose images should open somewhere in-app. `onOpen` returns
+ *  true when it took the click. */
+export function MarkdownImages({ onOpen, children }: { onOpen: (url: string) => boolean; children: ReactNode }) {
+  return <OpenImage.Provider value={onOpen}>{children}</OpenImage.Provider>;
+}
+
+/** One `![alt](url)`, drawn. Its own component so it can ask who owns the click. */
+function MdImage({ src, alt }: { src: string; alt: string }) {
+  const onOpen = useContext(OpenImage);
+  return (
+    <a href={src} target="_blank" rel="noreferrer noopener" className="block my-1.5"
+      onClick={(e) => {
+        if (!onOpen) return;
+        // Only swallow the click if something actually took it — a viewer that
+        // does not know this picture must not turn the link into a dead end.
+        if (onOpen(src)) e.preventDefault();
+      }}>
+      <img src={src} alt={alt} loading="lazy"
+        title={alt || "Open full size"}
+        className="rounded-lg max-w-full h-auto"
+        style={{ border: "1px solid color-mix(in srgb, var(--text) 14%, transparent)", maxHeight: 420, objectFit: "contain" }} />
+    </a>
+  );
+}
 
 /* Mixed from --text rather than from a surface colour: --bg3 is a surface, and
    on the neutral themes it sits a hair from the panel behind it, so a chip
@@ -90,12 +131,7 @@ function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
       const alt = tok.slice(2, sep);
       const safe = externalUrl(tok.slice(sep + 2, -1));
       out.push(safe
-        ? <a key={k} href={safe} target="_blank" rel="noreferrer noopener" className="block my-1.5">
-            <img src={safe} alt={alt} loading="lazy"
-              title={alt || "Open full size"}
-              className="rounded-lg max-w-full h-auto"
-              style={{ border: "1px solid color-mix(in srgb, var(--text) 14%, transparent)", maxHeight: 420, objectFit: "contain" }} />
-          </a>
+        ? <MdImage key={k} src={safe} alt={alt} />
         // A picture we will not fetch is still worth naming — silently dropping
         // it would lose the fact that the card HAS one.
         : <span key={k} style={{ color: "var(--text4)" }}>{alt ? `[image: ${alt}]` : "[image]"}</span>);
