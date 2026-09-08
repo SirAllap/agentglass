@@ -1401,6 +1401,13 @@ interface DeltaBlock {
     list?: { list?: string };
     "code-block"?: { "code-block"?: string };
     blockquote?: boolean;
+    /* What a PASTED image carries, and nothing else does: the width the editor
+       stored and the attachment's id. Named here because a real payload has
+       them and this type had only the marks — which typechecked fine until a
+       test wrote a real block, and then failed with "no properties in common",
+       an error about the type being wrong that reads as one about the test. */
+    width?: string;
+    "data-id"?: string;
   };
   "table-embed"?: { rows?: unknown[]; columns?: unknown[]; cells?: Record<string, { content?: { insert?: unknown }[] }> };
   /*
