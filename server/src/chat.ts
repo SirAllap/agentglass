@@ -17,6 +17,7 @@ import { paneTurnStream, paneEngineCapability } from "./chatpane.ts";
 import type { Scope } from "./devices.ts";
 import { CHAT_EFFORTS } from "../../shared/types.ts";
 import type { ChatImage, ChatImageMediaType, ChatEffort } from "../../shared/types.ts";
+import { stopTree } from "./proctree.ts";
 
 const claudeBin = () => Bun.which("claude");
 export const CHAT_ENABLED = !!claudeBin();
@@ -550,10 +551,7 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
               || `claude produced no output in ${STARTUP_TIMEOUT_MS / 1000}s — it is probably waiting for a login it can't ask for here. Run \`claude\` once in a terminal to sign in, then try again.`,
           }) + "\n"));
         } catch { /* the client already went away */ }
-        try {
-          if (setsid) process.kill(-proc.pid, "SIGTERM");
-          else proc.kill();
-        } catch { /* gone */ }
+        stopTree(proc, !!setsid);
       }, STARTUP_TIMEOUT_MS);
       const dec = new TextDecoder();
       try {
@@ -591,10 +589,7 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
     cancel() {
       cancelled = true;
       release();
-      try {
-        if (setsid) process.kill(-proc.pid, "SIGTERM"); // the group, not just claude
-        else proc.kill();
-      } catch { /* gone */ }
+      stopTree(proc, !!setsid); // the tree, not just claude
     },
   });
 

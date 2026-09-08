@@ -23,6 +23,7 @@ import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { inScope, chatBypassAllowed } from "./config.ts";
 import { startKeepalive, drainStderr, MODEL_RE, SESSION_RE } from "./chat.ts";
 import type { CodexModel, TimelineEntry } from "../../shared/types.ts";
+import { stopTree } from "./proctree.ts";
 
 const codexBin = () => Bun.which("codex");
 /*
@@ -484,10 +485,7 @@ export function codexStream(cwd: unknown, message: unknown, model: unknown, resu
               || `codex produced no output in ${STARTUP_TIMEOUT_MS / 1000}s — it is probably waiting for a login it can't ask for here. Run \`codex login\` in a terminal, then try again.`,
           }) + "\n"));
         } catch { /* the client already went away */ }
-        try {
-          if (setsid) process.kill(-proc.pid, "SIGTERM");
-          else proc.kill();
-        } catch { /* gone */ }
+        stopTree(proc, !!setsid); // the tree, not just the CLI
       }, STARTUP_TIMEOUT_MS);
       /*
        * The only thing read out of this stream on the way past: the id Codex
@@ -534,10 +532,7 @@ export function codexStream(cwd: unknown, message: unknown, model: unknown, resu
     },
     cancel() {
       cancelled = true;
-      try {
-        if (setsid) process.kill(-proc.pid, "SIGTERM"); // the group, not just codex
-        else proc.kill();
-      } catch { /* gone */ }
+      stopTree(proc, !!setsid); // the tree, not just the CLI
     },
   });
 

@@ -24,7 +24,7 @@
  *   bun scripts/platformsmoke.ts
  */
 import { spawn } from "bun";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -120,6 +120,52 @@ async function terminalContract(): Promise<void> {
   });
 }
 
+/**
+ * Can this platform launch a CLI installed the way npm installs one? (#195)
+ *
+ * `chat.ts` finds its CLI with `Bun.which("claude")` and launches it with
+ * `Bun.spawn`, and on Windows an npm install lands as a `claude.cmd` shim
+ * rather than an executable — so both steps were open questions that could not
+ * be answered from a Linux machine, and a wrong answer means the chat panel is
+ * dead at the first turn rather than degraded. This asks the same two questions
+ * of a shim we write ourselves, through the same two functions.
+ *
+ * It runs everywhere: on POSIX the shim is a `#!/bin/sh` script, which keeps
+ * the probe itself honest on the machine where it was written.
+ */
+async function cliShimContract(): Promise<void> {
+  const name = "Bun.which + Bun.spawn on an npm-style shim (#195)";
+  const dir = mkdtempSync(join(tmpdir(), "agx-shim-"));
+  const windows = process.platform === "win32";
+  const shim = join(dir, windows ? "agxprobe.cmd" : "agxprobe");
+  try {
+    if (windows) writeFileSync(shim, "@echo off\r\necho agx-shim-ok\r\n");
+    else { writeFileSync(shim, "#!/bin/sh\necho agx-shim-ok\n"); chmodSync(shim, 0o755); }
+
+    // An explicit PATH, because `Bun.which` does not read a `process.env.PATH`
+    // mutated after start — measured here: the ambient form answers null and
+    // the explicit one finds the file. Production is unaffected, since the
+    // server inherits its PATH at boot, but a probe that mutated and asked
+    // would have reported a failure that does not exist.
+    const PATH = `${dir}${windows ? ";" : ":"}${process.env.PATH ?? ""}`;
+    {
+      const found = Bun.which("agxprobe", { PATH });
+      if (!found) return record(name, false, "Bun.which did not resolve the shim — a CLI installed this way is invisible");
+      const proc = Bun.spawn([found], { stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH } });
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      const ran = out.includes("agx-shim-ok");
+      record(name, ran, ran
+        ? `resolved ${found.replace(dir, "…")} and ran it`
+        : `resolved it, but the spawn produced ${JSON.stringify(out.slice(0, 120))} — a shim that needs a shell`);
+    }
+  } catch (e) {
+    record(name, false, `probe failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 let failed = false;
 try {
   let up = false;
@@ -140,6 +186,7 @@ try {
   await endpoint("GET /git/repos?all=1", "/git/repos?all=1",
     (b) => (Array.isArray(b) || (b && typeof b === "object") ? null : "200, but neither a list nor an object"));
   await terminalContract();
+  await cliShimContract();
 
   failed = results.some((r) => !r.ok);
   console.log(failed
