@@ -78,3 +78,22 @@ describe("the bus", () => {
     expect(() => announceCard(card("1", "x"))).not.toThrow();
   });
 });
+
+/*
+ * AND IT STAYS LOADABLE WITHOUT AN INSTALL.
+ *
+ * `mobile/node_modules` is gitignored, so a worktree a task just cut has none —
+ * and one `import { useEffect } from "react"` at the top of the module under
+ * test made this whole file fail to LOAD, not fail: `make check` came back red
+ * with `Cannot find package 'react'` in a checkout where nothing was wrong.
+ * The hook lives in `useCardChanges.ts` now. This is the lock, because the
+ * import that breaks it is the natural thing to add.
+ */
+describe("the module a fresh checkout can still read", () => {
+  test("card-edits.ts imports nothing that needs npm", async () => {
+    const src = await Bun.file(new URL("../src/state/card-edits.ts", import.meta.url)).text();
+    const imports = [...src.matchAll(/^import\s+(?:type\s+)?.*?from\s+"([^"]+)";/gm)].map((m) => m[1]!);
+    const bare = imports.filter((i) => !i.startsWith(".") && !i.startsWith("node:"));
+    expect(bare, `card-edits.ts imports ${bare.join(", ")} — a fresh worktree cannot load it`).toEqual([]);
+  });
+});

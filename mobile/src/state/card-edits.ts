@@ -18,10 +18,20 @@
  * navigators and share no ancestor short of the root, and a context at the
  * root re-renders the app to move one row.
  */
-import { useEffect } from "react";
+/*
+ * NOTHING IS IMPORTED HERE THAT NEEDS AN INSTALL.
+ *
+ * This file used to import `useEffect` for one hook, and that one import made
+ * the whole module — its pure list arithmetic included — impossible to load in
+ * a checkout without `mobile/node_modules`, which is every worktree a task
+ * cuts. `make check` came back red with `Cannot find package 'react'` and the
+ * thing it was actually reporting was a missing install. The hook now lives in
+ * `useCardChanges.ts`, beside this, and nothing was lost: a type import costs
+ * nothing at runtime and the rest is plain data.
+ */
 import type { ProviderTask } from "../../../shared/providers.ts";
 
-type Listener = (task: ProviderTask) => void;
+export type Listener = (task: ProviderTask) => void;
 const listeners = new Set<Listener>();
 
 /** Said by a screen that just wrote to a card and was handed it back. */
@@ -34,12 +44,6 @@ export function announceCard(task: ProviderTask): void {
 export function onCardChanged(listen: Listener): () => void {
   listeners.add(listen);
   return () => { listeners.delete(listen); };
-}
-
-/** `onCardChanged` for a component's lifetime. `listen` is a dependency, so
- *  hand it a stable function (a `useCallback`) or it resubscribes per render. */
-export function useCardChanges(listen: Listener): void {
-  useEffect(() => onCardChanged(listen), [listen]);
 }
 
 /**
