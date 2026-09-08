@@ -17,7 +17,7 @@ import type { ControlCmd, ViewId } from "../../shared/types.ts";
 // made, it acts on nothing, and everything it shows already rides the same
 // read-only socket. A view the keyboard reaches with one key and /control
 // answers 400 for is the drift this duplicated list exists to make visible.
-const VIEW_IDS: readonly ViewId[] = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "understudy", "lantern"];
+const VIEW_IDS: readonly ViewId[] = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "understudy", "lantern", "seat"];
 type OpenWhat = Extract<ControlCmd, { cmd: "open" }>["what"];
 const OPEN_WHAT: readonly OpenWhat[] = ["stats", "skills", "search", "help", "palette"];
 type ChatDo = Extract<ControlCmd, { cmd: "chat" }>["do"];

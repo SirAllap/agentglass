@@ -222,6 +222,21 @@ export function CloseIcon({ size = ICON.md }: P) {
 /** A lantern: it lights when somebody needs you. The flame is the one filled
  *  shape on the rail — everything else here is strokes — because a flame
  *  drawn as an outline is a leaf. */
+/** The orchestrator: a chair seen from the side. Not a person, not a crown —
+ *  the thing the view is about is whether somebody is IN it. */
+export function SeatIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M7 4.5v7.5" />
+      <path d="M7 12h9" />
+      <path d="M16 12V8.5" />
+      <path d="M16 12v8" />
+      <path d="M7 12v8" />
+      <path d="M9.5 8.5h6" />
+    </svg>
+  );
+}
+
 export function LanternIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>

@@ -9,7 +9,7 @@
  * one name.
  */
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +20,6 @@ const { doctrineSlug, doctrinePath, readDoctrine, writeDoctrine, doctrineTemplat
 const Seat = await import("../src/seat.ts");
 const { isSeatSession, noteSeatSession, hookSaysSeat, __resetSeatSessions } = await import("../src/seatrole.ts");
 const { SEAT_PROMPT_MARK } = await import("../src/seatmark.ts");
-const Board = await import("../src/agentboard.ts");
 const { db } = await import("../src/db.ts");
 
 describe("the doctrine is a file, one per project", () => {
@@ -118,9 +117,13 @@ describe("powers are an order, so a check is a comparison", () => {
 });
 
 describe("the seat is not on the board it keeps", () => {
+  /* Only the rows this file makes. `session_role` is where the Lantern keeps
+     its own marks, and bun runs every test file in one process — emptying the
+     table here would quietly delete another suite's fixture, which is a flake
+     that looks like somebody else's bug. */
+  const MINE = ["s-seat", "s-other", "s-restart"];
   beforeEach(() => {
-    db.query("DELETE FROM agent_status").run();
-    db.query("DELETE FROM session_role").run();
+    for (const id of MINE) db.query("DELETE FROM session_role WHERE session_id = ?").run(id);
     __resetSeatSessions();
   });
 

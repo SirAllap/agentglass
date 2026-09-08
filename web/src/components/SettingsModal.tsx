@@ -497,7 +497,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      every pane and every chat runs on, with a binary, a config and a restore of
      its own — three settings deep is not a row in a list of "is it installed". */
   { id: "tmux", label: "tmux", group: "Agents & work", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout scrollback resume socket status bar chat warm cli claude how new chats run", what: "What a pane runs on — the tmux binary, its config and prefix — and how a new chat picks one.", icon: PanesIcon },
-  { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup lantern reminder status what doing needs you ask sessions working on interval", what: "Wire Claude Code into this app, what the Lantern may ask of a session, and what else is installed.", icon: PlugIcon },
+  { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "Wire Claude Code into this app, what the Lantern may ask of a session, and what else is installed.", icon: PlugIcon },
   /* Filed beside Agents rather than under Your data, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
      watches agents work. It is here because the question people arrive with is
@@ -1944,6 +1944,8 @@ function HooksPane({ open }: { open: boolean }) {
  * one session may be asked again.
  */
 function LanternSection({ open }: { open: boolean }) {
+  const [seatWake, setSeatWake] = useState(4);
+  useEffect(() => { if (open) void api.seatWake().then((r) => { if (r.ok) setSeatWake(r.hours); }).catch(() => {}); }, [open]);
   const [nudge, setNudge] = useState(true);
   const [minutes, setMinutes] = useState(20);
   const [watch, setWatch] = useState(true);
@@ -1998,6 +2000,14 @@ function LanternSection({ open }: { open: boolean }) {
         options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
         onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
         disabledHint="Nothing is looked at while the watch is off." />
+      {/* The seat's floor lives here because it rides the same look: the watch
+          re-reads the field, and the orchestrator is prompted only when what
+          it found CHANGED. This is how long a quiet field may stay quiet
+          before it gets a line anyway. */}
+      <Choice label="Wake the orchestrator at least every" value={String(seatWake)}
+        hint="The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent."
+        options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
+        onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
       <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
         hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
         options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}

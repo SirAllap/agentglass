@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, UnderstudyIcon, LanternIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon, UnderstudyIcon, LanternIcon, SeatIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 import { IS_DEMO } from "../../lib/demo.ts";
 
@@ -82,6 +82,15 @@ export const VIEWS: ViewDef[] = [
    * the clone, since it is not only about the clone".
    */
   { id: "lantern", label: "Lantern", key: "l", icon: LanternIcon, hint: "Who needs you, what every agent is working on, and the way there — it never acts on its own", group: "utility" },
+  /*
+   * Appended last, for the same reason as the three above it, and next to the
+   * Lantern on purpose: the Lantern is the field and never acts; this is the
+   * post that reads it, and it is the one view that CAN be given hands. Two
+   * views rather than one card because "what is happening" and "who is minding
+   * it" are different questions, and a screen answering both answers neither
+   * first.
+   */
+  { id: "seat", label: "Orchestrator", key: "s", icon: SeatIcon, hint: "Who is minding this project: the seat, its last word, and the rules it was seated with", group: "utility" },
 ];
 
 export const VIEW_IDS = VIEWS.map((v) => v.id);

@@ -6727,6 +6727,13 @@ const server = Bun.serve<WsData>({
      * composes it here from the project's doctrine and the board, the same
      * property `/lantern/ticket` keeps.
      */
+    if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
+    if (pathname === "/seat/wake" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { hours?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      const r = writeSeatSettings({ seatWakeHours: Number(b.hours) });
+      return json({ ...r, hours: seatWakeHours() }, r.ok ? 200 : 400);
+    }
     if (pathname === "/seat" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);

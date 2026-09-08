@@ -31,7 +31,7 @@
  */
 import * as AgentOps from "./agentops.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
-import { chatBypassAllowed } from "./config.ts";
+import { chatBypassAllowed, workspaceRoot } from "./config.ts";
 import { db } from "./db.ts";
 import { fieldReadout, boardNow } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
@@ -122,6 +122,12 @@ export function seatable(rootIn: unknown): { root: string } | { error: string } 
   const root = typeof rootIn === "string" ? rootIn.trim() : "";
   if (!root) return { error: "no project given" };
   if (!root.startsWith("/") || root.includes("\0")) return { error: "not an absolute path" };
+  /* The OPEN project always qualifies, and it has to: `knownProjects()` is
+     built from sessions this app has seen, so on a fresh install it is empty
+     — and the first thing a person does is open the view for the project they
+     are looking at. Measured by running it: without this line a new install
+     answered "that is not a project this app knows" about its own checkout. */
+  if (root === workspaceRoot()) return { root };
   const known = knownProjects().some((p) => p.path === root);
   if (!known) return { error: "that is not a project this app knows" };
   return { root };

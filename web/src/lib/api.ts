@@ -681,6 +681,21 @@ function viewerTz(): string | null {
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
 const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
+/** What `/seat` answers: the chair for one project, and what is in it. */
+export interface SeatAnswer {
+  ok: boolean;
+  error?: string;
+  root: string;
+  live: boolean;
+  /** The row: settings and the last line, whether or not anybody is seated. */
+  seat: { root: string; name: string; model: string; powers: "speak" | "nudge" | "assign"; startedAt: number; endedAt: number | null; lastLine: string; lastTurnAt: number } | null;
+  /** The agent in the chair right now, when there is one. */
+  agent: { name: string; cwd: string; paneId: string; startedAt: number } | null;
+  /** Where the project's rules live, and what they say. */
+  doctrine: string;
+  doctrineText: string;
+}
+
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
   /** Where the machine's agents are sitting, in tmux terms. Asked on demand —
@@ -1173,6 +1188,20 @@ const realApi = {
   /** Who is working on what: what each agent said, joined with the panes,
    *  worktrees and deputy runs this app already reads. */
   agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
+  /** The orchestrator's seat for a project: who is in it, what it last said,
+   *  and the doctrine it was seated with. */
+  seat: (root = "") => get<SeatAnswer>(`/seat${root ? `?root=${encodeURIComponent(root)}` : ""}`),
+  seatOpen: (root: string, powers?: string, model?: string) =>
+    post<{ ok: boolean; already?: boolean; error?: string }>("/seat/open", { root, powers, model }),
+  seatClose: (root: string) => post<{ ok: boolean; was?: boolean }>("/seat/close", { root }),
+  seatSettingsSave: (root: string, f: { powers?: string; model?: string }) =>
+    post<{ ok: boolean; error?: string }>("/seat/settings", { root, ...f }),
+  seatDoctrineSave: (root: string, text: string) =>
+    post<{ ok: boolean; path?: string; error?: string }>("/seat/doctrine", { root, text }),
+  /** The floor under the seat's waking, in hours — read and written with the
+   *  Lantern's settings because it rides the same look. */
+  seatWake: () => get<{ ok: boolean; hours: number }>("/seat/wake"),
+  seatWakeSave: (hours: number) => post<{ ok: boolean; error?: string }>("/seat/wake", { hours }),
   /** Whether hooked sessions get asked what they are working on, and how
    *  often — the Lantern's one setting. */
   lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
@@ -2279,6 +2308,13 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
+  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "" } as SeatAnswer),
+  seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
+  seatClose: (_r: string) => D({ ok: false }),
+  seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
+  seatDoctrineSave: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  seatWake: () => D({ ok: true, hours: 4 }),
+  seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),
