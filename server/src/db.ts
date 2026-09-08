@@ -1385,6 +1385,37 @@ CREATE TABLE IF NOT EXISTS seat (
 );
 `);
 
+/*
+ * THE SEAT'S QUEUE — what a project's orchestrator has been asked to see done,
+ * and who it handed each one to (seatqueue.ts).
+ *
+ * Claimed at the START of a handing-out and not at the end, which is the one
+ * thing the clone's own queue had to learn twice: stamping `taken_at` when the
+ * work FINISHED left everything that failed looking untouched, and the next
+ * round picked it straight back up against the checkout the failure had left
+ * behind. `attempts` counts the goes; past a ceiling the seat is told to stop
+ * offering it and say so to a person instead.
+ *
+ * `taken_by` is a named agent's name, not a pane: panes are recycled by tmux
+ * and a row that outlives one would point at somebody else's work.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_task (
+  id TEXT PRIMARY KEY,
+  root TEXT NOT NULL,
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  weight INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL,
+  taken_at INTEGER,
+  taken_by TEXT NOT NULL DEFAULT '',
+  done_at INTEGER,
+  outcome TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_task_root ON seat_task (root, done_at, taken_at)`);
+
 /* What a run's branch pointed at when something last looked at it.
  *
  * Added after a merged branch was deleted by hand and the run that made it was

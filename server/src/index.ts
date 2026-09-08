@@ -1370,6 +1370,7 @@ import { boardNow, lanternChat, noteLanternSession, hookSaysLantern, isLanternSe
 import { hookSaysSeat, isSeatSession, noteSeatSession } from "./seatrole.ts";
 import * as Seat from "./seat.ts";
 import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
+import * as SeatQueue from "./seatqueue.ts";
 import * as AgentOps from "./agentops.ts";
 import { nudgeText, nudgeChannel, sendNudge } from "./prnudge.ts";
 import * as Schedule from "./agentschedule.ts";
@@ -6737,7 +6738,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/seat" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
-      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text });
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root) });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -6764,6 +6765,38 @@ const server = Bun.serve<WsData>({
         const row = Seat.seatRow(root);
         Seat.setSeatSettings(root, typeof b.model === "string" ? b.model : row?.model ?? "", Seat.isPower(b.powers) ? b.powers : row?.powers ?? "speak");
         return json({ ok: true, seat: Seat.seatRow(root) });
+      }
+      /*
+       * THE QUEUE. Four verbs and no fifth: a person adds and drops, the seat
+       * claims and finishes. Nothing here picks WHAT to work on — the seat
+       * does that, out loud, and this only records that it did.
+       */
+      if (verb === "task") {
+        const r = SeatQueue.addTask({ root, title: String(b.title ?? ""), detail: String(b.detail ?? ""), weight: Number(b.weight ?? 0) });
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "task/drop") {
+        const t = SeatQueue.taskById(String(b.id ?? ""));
+        if (!t || t.root !== root) return json({ ok: false, error: "no such task in this project" }, 404);
+        SeatQueue.dropTask(t.id);
+        return json({ ok: true });
+      }
+      if (verb === "task/claim") {
+        const t = SeatQueue.taskById(String(b.id ?? ""));
+        if (!t || t.root !== root) return json({ ok: false, error: "no such task in this project" }, 404);
+        if (t.attempts >= SeatQueue.MAX_ATTEMPTS) return json({ ok: false, error: `that task has already beaten ${SeatQueue.MAX_ATTEMPTS} agents — it needs a person, not a third go` }, 409);
+        const agent = String(b.agent ?? "").trim();
+        if (!AgentOps.validName(agent)) return json({ ok: false, error: "claim it for a named agent" }, 400);
+        const got = SeatQueue.claimTask(t.id, agent);
+        /* 409 rather than 200-with-null: somebody got there first, and a seat
+           told "ok" would go and open an agent for work already in hand. */
+        return json(got ? { ok: true, task: got } : { ok: false, error: "somebody claimed that first" }, got ? 200 : 409);
+      }
+      if (verb === "task/finish") {
+        const t = SeatQueue.taskById(String(b.id ?? ""));
+        if (!t || t.root !== root) return json({ ok: false, error: "no such task in this project" }, 404);
+        SeatQueue.finishTask(t.id, String(b.outcome ?? ""));
+        return json({ ok: true, task: SeatQueue.taskById(t.id) });
       }
       if (verb === "doctrine") {
         const r = writeDoctrine(root, typeof b.text === "string" ? b.text : "");

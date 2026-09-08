@@ -23,6 +23,7 @@ import * as AgentOps from "./agentops.ts";
 import { seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
 import { everySeat, seatName } from "./seat.ts";
+import { releaseVanished } from "./seatqueue.ts";
 
 /** What the seat was last told, per project. Memory only: after a restart the
  *  first look wakes every seat once, which is the right answer — the seat that
@@ -51,6 +52,9 @@ export function wakeLine(now: Finding[], before: string): string {
 
 export interface WakeDeps {
   seats?: () => { root: string; endedAt: number | null }[];
+  /** The named agents alive right now, injected so a test can say who is gone
+   *  without a tmux server. */
+  alive?: () => string[];
   prompt?: (name: string, text: string) => Promise<unknown>;
   now?: number;
 }
@@ -66,6 +70,15 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
   const floorMs = seatWakeHours() * 3_600_000;
   const fp = fingerprint(f);
   const woken: string[] = [];
+  /* Work handed to an agent whose window is gone is work nobody is doing, and
+     a row left claimed is hidden from the queue for ever. Freed here, on the
+     look that already knows who is alive, rather than by a watchdog of its
+     own. The attempt it cost is kept: that is what makes the ceiling mean
+     something. */
+  const alive = new Set((deps.alive ?? (() => aliveNames()))());
+  for (const s of seats) {
+    if (s.endedAt === null) releaseVanished(s.root, alive);
+  }
   for (const s of seats) {
     /* A row with `ended_at` set is a project whose chair is empty. Its
        settings are kept; nobody is in it to wake. */
@@ -83,6 +96,13 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
     woken.push(s.root);
   }
   return woken;
+}
+
+/** Every named agent with a pane, by name. Synchronous on the registry the
+ *  watch has just reconciled — a second tmux call here would be asking the
+ *  same question twice in one tick. */
+function aliveNames(): string[] {
+  return AgentOps.everyAgent().filter((a) => a.endedAt === null).map((a) => a.name);
 }
 
 async function promptByName(name: string, text: string): Promise<void> {

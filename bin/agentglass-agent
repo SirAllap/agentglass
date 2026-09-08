@@ -181,6 +181,16 @@ def main():
     p.add_argument("line", help="what a person should read: who needs them, what changed")
     p.add_argument("--root", help="the project this is about (default: the current directory)")
 
+    p = sub.add_parser("claim", help="take a queued task for a named agent, before you open it")
+    p.add_argument("id", help="the task id, as the queue gave it")
+    p.add_argument("--to", required=True, dest="to", help="the named agent that will carry it")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("finish", help="say how a queued task went")
+    p.add_argument("id")
+    p.add_argument("outcome", help="one line: what came of it")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
     sub.add_parser("health", help="is agentglass listening")
 
     # Everything after a bare `--` is the agent CLI's, not ours. Split it off
@@ -237,6 +247,12 @@ def main():
         return emit(call("/agents/schedule", method="GET", timeout=30))
     if a.cmd == "unschedule":
         return emit(call("/agents/schedule/cancel", {"id": a.id}, timeout=30))
+    if a.cmd == "claim":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task/claim", {"root": root, "id": a.id, "agent": a.to}, timeout=30))
+    if a.cmd == "finish":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task/finish", {"root": root, "id": a.id, "outcome": a.outcome}, timeout=30))
     if a.cmd == "say":
         # The seat runs IN its project's checkout, so the default root is the
         # working directory: one less thing for a prompt to get wrong, and a

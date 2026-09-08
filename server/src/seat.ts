@@ -37,6 +37,7 @@ import { fieldReadout, boardNow } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
 import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
+import { queueReadout } from "./seatqueue.ts";
 
 /** What a seat is allowed to do. Ordered: each level is the one before it
  *  plus one verb, so a check is a comparison and not a set membership. */
@@ -156,7 +157,11 @@ export function houseBlock(powers: Power, wakeHours: number): string {
     ? "You may not start, stop or prompt any agent. If one is stuck, say so — do not push it."
     : powers === "nudge"
       ? "You may prompt an agent that is ALREADY running, to unstick it (`agentglass-agent prompt --name <n> \"…\"`). You may not start or stop one."
-      : "You may prompt an agent that is already running, and start or stop named agents on the queue (`agentglass-agent start|prompt|stop`).";
+      : [
+        "You may prompt an agent that is already running, and start or stop named agents (`agentglass-agent start|prompt|stop`).",
+        "When you hand a queued item to an agent, claim it first — `agentglass-agent claim <task-id> --to <agent-name>` — and say how it went with `agentglass-agent finish <task-id> \"<outcome>\"`.",
+        "An item this app says has been beaten twice is NOT to be handed out again: say it needs a person.",
+      ].join(" ");
   return [
     "",
     "## How this app works with you",
@@ -182,6 +187,14 @@ export async function seatPrompt(root: string, powers: Power, wakeHours: number)
     "## The field as it is right now",
     "",
     fieldReadout(rows),
+    "",
+    /* The queue rides in the prompt rather than being fetched: the seat is
+       woken with a message, and a round that begins by asking the server what
+       it already knows spends a tool call on a list this app can just hand
+       over. */
+    "## The queue for this project",
+    "",
+    queueReadout(root),
     "",
     "Begin: one line saying who needs a person and what everybody else is on.",
   ].join("\n");

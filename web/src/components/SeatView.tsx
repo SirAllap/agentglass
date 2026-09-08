@@ -3,7 +3,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { edge, wash } from "./git/ui.tsx";
-import { api, type SeatAnswer } from "../lib/api.ts";
+import { api, type SeatAnswer, type SeatTask } from "../lib/api.ts";
 
 /**
  * THE ORCHESTRATOR — the chair, and who is in it.
@@ -58,6 +58,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [openRules, setOpenRules] = useState(false);
+  const [adding, setAdding] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -81,6 +82,14 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const powers = seat?.powers ?? "speak";
   const live = data?.live === true;
   const power = POWERS.find((p) => p.id === powers)!;
+  const tasks: SeatTask[] = data?.tasks ?? [];
+  const waiting = tasks.filter((t) => !t.doneAt && !t.takenAt && t.attempts < 2);
+  const out = tasks.filter((t) => !t.doneAt && t.takenAt);
+  const stuck = tasks.filter((t) => !t.doneAt && !t.takenAt && t.attempts >= 2);
+  const done = tasks.filter((t) => t.doneAt);
+  /* Nothing came back, or what came back was a refusal: everything below is
+     unknown, not empty. */
+  const unread = data === null || data.ok === false;
 
   const act = async (what: string, fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setBusy(what); setError("");
@@ -129,12 +138,19 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
             <div className="flex items-center gap-2">
               <span className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Its last word</span>
               <span className="flex-1" />
-              {live
-                ? <Chip tone="--success" title="An agent is in the chair right now — its pane exists on the engine">seated</Chip>
-                : <Chip tone="--text4" title="Nobody is in the chair. Its rules and settings are kept.">empty</Chip>}
+              {unread
+                ? <Chip tone="--warning" title="The last read of this project's seat failed">unknown</Chip>
+                : live
+                  ? <Chip tone="--success" title="An agent is in the chair right now — its pane exists on the engine">seated</Chip>
+                  : <Chip tone="--text4" title="Nobody is in the chair. Its rules and settings are kept.">empty</Chip>}
             </div>
-            <p className="text-[14px] leading-relaxed max-w-[95ch]" style={{ color: seat?.lastLine ? "var(--text)" : "var(--text4)" }}>
-              {seat?.lastLine
+            <p className="text-[14px] leading-relaxed max-w-[95ch]" style={{ color: unread ? "var(--warning)" : seat?.lastLine ? "var(--text)" : "var(--text4)" }}>
+              {/* A read that failed is NOT an empty chair. Drawing the
+                  never-been-seated sentence under a red error said two things
+                  at once, and the calmer one was a lie: measured by pointing
+                  the view at a server it could not authenticate against. */}
+              {unread ? "This screen could not read the seat, so it cannot say who is minding this project."
+                : seat?.lastLine
                 || (live ? "It has not said anything yet — it reports once it has read the field."
                   : "Nobody has sat here yet. Take the seat and it will read the field and report.")}
             </p>
@@ -146,7 +162,9 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               the seat will DO — four dashes under an empty chair teach nobody
               anything, and this is the one screen a person meets it on. */}
           <div className="px-4 py-2.5 grid grid-cols-2 sm:grid-cols-4 gap-4 border-t" style={{ borderColor: "var(--border, rgba(255,255,255,0.07))", background: wash("--text", 2) }}>
-            {live || seat?.lastLine ? (
+            {unread ? (
+              <Fact label="Last read" value="failed — the rest of this screen is unknown, not empty" />
+            ) : live || seat?.lastLine ? (
               <>
                 <Fact label="Said" value={seat?.lastTurnAt ? `${fmtAgo(seat.lastTurnAt)} ago` : "not yet"} title="When it last reported a line" />
                 <Fact label="Seated" value={live && seat?.startedAt ? `${fmtAgo(seat.startedAt)} ago` : "stood down"} title="When this seating began" />
@@ -163,6 +181,65 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               </>
             )}
           </div>
+        </section>
+
+        {/*
+         * THE QUEUE. What a person has asked to see done, and who is carrying
+         * each piece. Three states drawn as three, because "out with somebody"
+         * and "nobody could finish it twice" are different news: the second
+         * needs a person and the seat has been told to stop offering it.
+         */}
+        <section className="flex flex-col gap-2">
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-[9px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>The queue</h2>
+            {tasks.length > 0 && (
+              <span className="text-[10px]" style={{ color: "var(--text4)" }}>
+                {waiting.length} waiting · {out.length} out{stuck.length ? ` · ${stuck.length} need you` : ""}
+              </span>
+            )}
+          </div>
+
+          <form className="flex items-center gap-2"
+            onSubmit={(e) => { e.preventDefault(); const t = adding.trim(); if (!t) return; void act("task", async () => { const r = await api.seatTaskAdd(root, t); if (r.ok) setAdding(""); return r; }); }}>
+            <input value={adding} onChange={(e) => setAdding(e.target.value)} placeholder="Ask the seat to see something done…"
+              className="flex-1 rounded-md px-2.5 py-1.5 text-[12px]"
+              style={{ background: "var(--surface2, var(--bg2))", border: edge(18), color: "var(--text)" }} />
+            <button type="submit" disabled={!adding.trim() || !!busy || !root}
+              className="agx-btn text-[11px] px-2.5 py-1.5 rounded disabled:opacity-50"
+              style={{ color: "var(--text2)", border: edge(20) }}>Add</button>
+          </form>
+
+          {tasks.length === 0
+            ? (
+              <p className="text-[11px] max-w-[80ch]" style={{ color: "var(--text4)" }}>
+                Nothing on the list. A seat with no queue still reads the field and reports; the queue is for work you
+                want handed out — it picks who and opens the agent, and it never merges or pushes what comes back.
+              </p>
+            )
+            : (
+              <ul className="flex flex-col gap-1">
+                {[...waiting, ...out, ...stuck, ...done].map((t) => {
+                  const beaten = !t.doneAt && !t.takenAt && t.attempts >= 2;
+                  return (
+                    <li key={t.id} className="rounded-lg px-3 py-2 flex items-baseline gap-2.5"
+                      style={{ background: "var(--surface2, var(--bg2))", border: `1px solid ${beaten ? wash("--warning", 34) : "var(--border, rgba(255,255,255,0.08))"}` }}>
+                      <span className="text-[12px] flex-1 min-w-0 truncate" title={t.detail || t.title}
+                        style={{ color: t.doneAt ? "var(--text4)" : "var(--text)", textDecoration: t.doneAt ? "line-through" : undefined }}>{t.title}</span>
+                      {t.doneAt
+                        ? <span className="text-[10.5px] shrink-0" style={{ color: "var(--text4)" }} title={t.outcome}>done {fmtAgo(t.doneAt)} ago</span>
+                        : t.takenAt
+                          ? <span className="text-[10.5px] shrink-0" style={{ color: "var(--primary)" }} title={`handed out ${fmtAgo(t.takenAt)} ago`}>→ {t.takenBy || "unnamed"}</span>
+                          : beaten
+                            ? <Chip tone="--warning" title={`Two agents could not finish this. The seat has been told to stop offering it and say it needs you.`}>needs you</Chip>
+                            : <span className="text-[10.5px] shrink-0" style={{ color: "var(--text4)" }}>waiting</span>}
+                      <button type="button" disabled={!!busy} onClick={() => void act("drop", () => api.seatTaskDrop(root, t.id))}
+                        className="agx-btn shrink-0 text-[10.5px] px-1.5 py-0.5 rounded disabled:opacity-50"
+                        style={{ color: "var(--text4)", border: edge(14) }} title="Take it off the list">Drop</button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
         </section>
 
         {/*
