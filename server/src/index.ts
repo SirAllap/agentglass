@@ -165,7 +165,7 @@ import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAll
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
+import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, basename } from "node:path";
 import { tmpdir } from "node:os";
@@ -3080,6 +3080,14 @@ const server = Bun.serve<WsData>({
     if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
+    }
+    /* The gate is its own switch and never a flag on the one above: telemetry
+       may not stop a tool call, and this exists to hold one. */
+    if (pathname === "/hooks/gate" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: Record<string, unknown> = {};
+      try { b = (await req.json()) as Record<string, unknown>; } catch { /* no body is "turn it on" */ }
+      return json(applyGate(b.on === false ? "uninstall" : "install"));
     }
 
     /**

@@ -1850,6 +1850,29 @@ function HooksPane({ open }: { open: boolean }) {
     return () => { live = false; };
   }, [open]);
 
+  /*
+   * THE GATE IS ITS OWN SWITCH, and the copy has to say why.
+   *
+   * The forwarder streams what happened. The gate HOLDS a tool call until
+   * somebody decides, and an outward one — a push, a pull request, a comment,
+   * a review, a merge, a ticket, a message in a channel — is held closed. Two
+   * different bargains, so two different buttons: nobody should acquire a
+   * thing that can stop their agents by asking for telemetry.
+   */
+  const gate = async (on: boolean) => {
+    setBusy(true); setErr(null); setNote(null);
+    const r = await api.hooksGate(on)
+      .catch(() => ({ ok: false, installed: false, changed: false, settingsPath: "", error: "Could not reach the server" }));
+    setBusy(false);
+    if (!r.ok) { setErr(r.error || "Could not update the gate"); return; }
+    setSt((cur) => (cur ? { ...cur, gate: on } : cur));
+    setNote(!r.changed
+      ? (on ? "The gate was already on." : "The gate was already off.")
+      : on
+        ? "The gate is on. Start a new Claude Code session for it to take effect."
+        : "The gate is off. Sessions already running keep it until they restart.");
+  };
+
   const act = async (kind: "install" | "uninstall") => {
     setBusy(true); setErr(null); setNote(null);
     const r = await (kind === "install" ? api.hooksInstall() : api.hooksUninstall())
@@ -1904,11 +1927,44 @@ function HooksPane({ open }: { open: boolean }) {
         {/* What the checklist below is FOR, which is read once. The checklist
                 itself already names the file it writes to, on its own step. */}
                 <Fold label="What wiring this actually changes">
-              Every Claude Code session streams here live, and gate approvals
-              (<span className="tabular-nums">PreToolUse</span>) reach the app instead of only the terminal.
+              Every Claude Code session streams here live — what ran, what it
+              cost, when it stopped for you. It watches; it never stops a tool
+              call, and its command ends in <span className="t-mono text-[11px]">|| exit 0</span> so that stays true
+              even if the script goes missing. Holding calls is the gate below, which is a separate switch.
               It edits <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>,
               backing it up first, and leaves your other hooks untouched.
                 </Fold>
+
+            {/* The gate. Below the forwarder because it is the stronger thing,
+                and read second for the same reason. */}
+            <div className="flex flex-col gap-1.5 px-2.5 py-2 rounded-lg"
+              style={{ background: "color-mix(in srgb, var(--primary) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 26%, transparent)" }}>
+              <div className="flex items-center gap-2">
+                <span className="text-[12px]" style={{ color: "var(--text)" }}>
+                  Hold what leaves this machine {st.gate ? "· on" : "· off"}
+                </span>
+                <span className="flex-1" />
+                {!st.gateBundled ? (
+                  <span className="text-[10.5px] t-dim2">not in this build</span>
+                ) : (
+                  <button onClick={() => void gate(!st.gate)} disabled={busy}
+                    className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
+                    style={st.gate
+                      ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 34%, transparent)", opacity: busy ? 0.5 : 1 }
+                      : { color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                    {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
+                  </button>
+                )}
+              </div>
+              <span className="text-[10.5px]" style={{ color: "var(--text2)" }}>
+                A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
+                waits here with the text it would send, and nobody answering means it does not happen.
+                Everything local — writing code, running tests, cutting a worktree — is never held.
+              </span>
+              <span className="text-[9.5px] t-dim2">
+                Until you turn this on, that line is held by each agent remembering it.
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               {!st.installed ? null : (
                 <button onClick={() => act("uninstall")} disabled={busy}

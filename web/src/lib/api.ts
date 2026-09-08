@@ -1758,6 +1758,9 @@ const realApi = {
   // ~/.claude/settings.json server-side (idempotent, backed up first).
   hooksStatus: () => get<HookSetupStatus>("/hooks/status"),
   hooksInstall: () => post<HookSetupResult>("/hooks/install", {}),
+  /** The gate hook — held tool calls — on or off. A switch of its own: the
+   *  forwarder above may never stop a tool call, and this one exists to. */
+  hooksGate: (on: boolean) => post<HookSetupResult>("/hooks/gate", { on }),
   hooksUninstall: () => post<HookSetupResult>("/hooks/uninstall", {}),
   dockerInspect: (id: string) => get<{ ok: boolean; env: string[]; config: string; error?: string }>(`/docker/inspect?id=${encodeURIComponent(id)}`),
   dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
@@ -2242,9 +2245,10 @@ const demoApi: typeof realApi = {
   budgetsSet: (_budgets: Budget[]) => D({ ok: false, error: "not available in the demo" }),
   updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0, stamp: "demo", tree: "", dirty: false, dirtyCount: 0, dirtyFiles: [] }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
   updateRun: () => D({ ok: false, error: "not available in the demo" }),
-  hooksStatus: () => D({ installed: false, bundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),
+  hooksStatus: () => D({ installed: false, bundled: false, gate: false, gateBundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),
   hooksInstall: () => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
   hooksUninstall: () => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
+  hooksGate: (_on: boolean) => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
   updateLog: () => D({ ok: true, text: "" }),
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
