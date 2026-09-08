@@ -80,6 +80,13 @@ beforeAll(async () => {
     usage: { input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 100_000 },
   }) as any);
   db.insertEvent(event("prior-read", now - 60_000, 100_000) as any);
+
+  // The prior turn is found in one pass over the lookback window, so a session
+  // whose only earlier cache-bearing turn sits behind that window has nothing to
+  // measure the gap against.
+  db.insertEvent(event("older-than-window", now - 26 * 60 * 60_000, 100_000) as any);
+  db.insertEvent(event("older-than-window", now - 60_000, 100_000) as any);
+
 });
 
 const caches = () => insights.getInsights().filter((i) => i.kind === "cache");
@@ -117,5 +124,35 @@ describe("expired prompt cache insight", () => {
 
   test("does not invent a penalty for an unpriced model", () => {
     expect(cache("unknown-model")).toBeUndefined();
+  });
+
+  test("needs the earlier turn inside the lookback window, not merely somewhere", () => {
+    expect(cache("older-than-window")).toBeUndefined();
+  });
+});
+
+/*
+ * The cap is exercised without the database on purpose. `bun test` shares one
+ * module registry — and so one AGENTGLASS_DB — across the files in a run, so a
+ * fixture crowded enough to push past a cap would evict the cases above from
+ * whichever file lost the race to import db.ts first. The selection is a pure
+ * function; test it as one.
+ */
+describe("the block stops itself, dearest first", () => {
+  const rows = (...penalties: number[]) =>
+    new Map(penalties.map((penalty, i) => [`s${i}`, { penalty }]));
+
+  test("shows as many as the loop block does and no more", () => {
+    const shown = insights.topRebuilds(rows(1, 2, 3, 4, 5, 6, 7, 8));
+    expect(shown).toHaveLength(insights.CACHE_REBUILD_CARDS);
+    expect(shown.map(([, r]) => r.penalty)).toEqual([8, 7, 6, 5, 4, 3]);
+  });
+
+  test("keeps everything when there is room, still dearest first", () => {
+    expect(insights.topRebuilds(rows(0.2, 9, 1)).map(([id]) => id)).toEqual(["s1", "s2", "s0"]);
+  });
+
+  test("an empty field is an empty panel, not a crash", () => {
+    expect(insights.topRebuilds(new Map())).toEqual([]);
   });
 });

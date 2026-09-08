@@ -22,6 +22,27 @@ const USD = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFr
 export const CACHE_REBUILD_WINDOW_MS = 5 * 60_000;
 export const CACHE_REBUILD_LOOKBACK_MS = 24 * 60 * 60_000;
 export const CACHE_REBUILD_MIN_TOKENS = 10_000;
+/** As many cards as the loop block allows itself, and for the same reason: the
+ *  panel is a place to look, not a list to scroll. Six rather than the four the
+ *  burn and failure blocks use, because this one reports per session and a fleet
+ *  where several sessions each rebuilt something is exactly when it is worth
+ *  reading. */
+export const CACHE_REBUILD_CARDS = 6;
+
+/**
+ * The dearest few rebuilds, dearest first.
+ *
+ * Every other block here stops itself in SQL — `LIMIT 6` for loops, `LIMIT 4`
+ * for burn and failures. This one aggregates per session in JS, so the cap
+ * lives here, and it cuts by what the rebuild actually cost rather than by
+ * whatever order the map happened to be filled in.
+ */
+export function topRebuilds<T extends { penalty: number }>(
+  rows: Map<string, T>,
+  n: number = CACHE_REBUILD_CARDS,
+): [string, T][] {
+  return [...rows.entries()].sort((a, b) => b[1].penalty - a[1].penalty).slice(0, n);
+}
 
 export function getInsights(): Insight[] {
   const now = Date.now();
@@ -80,38 +101,51 @@ export function getInsights(): Insight[] {
   }
 
   // 3) Cache rebuilds — a sizeable cache creation after the previous
-  // cache-bearing turn in the same model/agent lineage has expired. The query
-  // starts from recent creations, then asks the session index for the one prior
-  // cache-bearing event. That keeps this 15-second poll proportional to recent
-  // candidates rather than rescanning the whole retention window.
+  // cache-bearing turn in the same model/agent lineage has expired.
+  //
+  // One pass over the window, not a lookup per candidate. Asking the session
+  // index for the prior cache-bearing turn once per candidate row reads as the
+  // cheaper shape and is not: SQLite answers it by walking every event that
+  // shares the model name, which on a desk running one model most of the day is
+  // most of the table. Measured, `getInsights()` went from 11ms against an empty
+  // database to 46 SECONDS against a day of turns — on a route the alerts panel
+  // polls every fifteen seconds, served inline off a synchronous handle, so that
+  // is the whole server not answering. LAG over the same partition asks the same
+  // question once. See scripts/perfbudget.ts, which now measures with rows in
+  // the table so this cannot pass unnoticed again.
+  //
+  // One consequence worth stating: the prior turn must itself fall inside the
+  // lookback window, so the first candidate after a full day of silence is not
+  // flagged. Deliberate — a cache that expired yesterday is not news, and the
+  // alternative is an unbounded reach backwards on every poll.
   const rebuildRows = db
     .query<{
       source_app: string; session_id: string; model_name: string | null;
-      cache_creation_tokens: number; timestamp: number; previous_at: number | null;
+      cache_creation_tokens: number; timestamp: number; previous_at: number;
     }, any[]>(
-      `SELECT e.source_app, e.session_id, e.model_name,
-              e.cache_creation_tokens, e.timestamp,
-              (SELECT MAX(p.timestamp)
-                 FROM events p
-                WHERE p.source_app = e.source_app
-                  AND p.session_id = e.session_id
-                  AND p.model_name IS e.model_name
-                  AND COALESCE(NULLIF(p.agent_id, ''), 'main') =
-                      COALESCE(NULLIF(e.agent_id, ''), 'main')
-                  AND (p.timestamp < e.timestamp OR (p.timestamp = e.timestamp AND p.id < e.id))
-                  AND (p.cache_creation_tokens > 0 OR p.cache_read_tokens > 0)
-              ) previous_at
-         FROM events e
-        WHERE e.timestamp > ? AND e.cache_creation_tokens >= ?${sc}
-        ORDER BY e.timestamp DESC`
+      `WITH turns AS (
+         SELECT source_app, session_id, model_name, cache_creation_tokens, timestamp,
+                LAG(timestamp) OVER (
+                  PARTITION BY source_app, session_id, model_name,
+                               COALESCE(NULLIF(agent_id, ''), 'main')
+                  ORDER BY timestamp, id) AS previous_at
+           FROM events
+          WHERE timestamp > ?
+            AND (cache_creation_tokens > 0 OR cache_read_tokens > 0)${sc}
+       )
+       SELECT source_app, session_id, model_name, cache_creation_tokens, timestamp, previous_at
+         FROM turns
+        WHERE cache_creation_tokens >= ?
+          AND previous_at IS NOT NULL
+          AND timestamp - previous_at > ?
+        ORDER BY timestamp DESC`
     )
-    .all(now - CACHE_REBUILD_LOOKBACK_MS, CACHE_REBUILD_MIN_TOKENS, ...sa);
+    .all(now - CACHE_REBUILD_LOOKBACK_MS, ...sa, CACHE_REBUILD_MIN_TOKENS, CACHE_REBUILD_WINDOW_MS);
   const rebuilds = new Map<string, {
     source_app: string; session_id: string; count: number; tokens: number;
     penalty: number; last: number;
   }>();
   for (const r of rebuildRows) {
-    if (r.previous_at === null || r.timestamp - r.previous_at <= CACHE_REBUILD_WINDOW_MS) continue;
     const penalty = cacheRebuildPenaltyUsd(r.cache_creation_tokens, r.model_name);
     if (!(penalty > 0)) continue;
     const id = rowId(r.source_app, r.session_id);
@@ -125,7 +159,7 @@ export function getInsights(): Insight[] {
     a.last = Math.max(a.last, r.timestamp);
     rebuilds.set(id, a);
   }
-  for (const [id, r] of rebuilds) {
+  for (const [id, r] of topRebuilds(rebuilds)) {
     out.push({
       id: `cache:${id}`,
       severity: r.penalty >= 5 ? "warn" : "info",
