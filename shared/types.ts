@@ -1153,6 +1153,11 @@ export interface BrowserAskFrame {
     /* §12: DOM, network and console against one timeline, navigable
        afterwards — what happened, as an artefact rather than a reconstruction. */
     | "trace"
+    /* The inspector panel itself: open it, change its panel, scale it, or
+       photograph it. The last one is the point — Console and Network answer as
+       data through CDP, while Elements, Sources and Application answer as
+       nothing at all, so their pixels are the only reading of them there is. */
+    | "inspect"
     /* §2: the tree of one subtree instead of the page — a modal is fifteen
        nodes inside three hundred, and the rest is paid for every turn. */
     | "region"

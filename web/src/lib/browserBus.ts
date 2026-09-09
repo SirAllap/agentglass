@@ -1,6 +1,6 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { api } from "./api.ts";
-import { captureBrowser, registerBrowserInitScript, browserCdp, browserCdpEvents, applySessionSettings} from "./desktop.ts";
+import { captureBrowser, registerBrowserInitScript, browserCdp, browserCdpEvents, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsShot, browserDevtoolsPanel, browserDevtoolsZoom } from "./desktop.ts";
 import { runBrowserAsk, type DrivableWebview } from "./browserDrive.ts";
 import { whilePainting } from "./panePainting.ts";
 import { diagnosisScript } from "./browserObserve.ts";
@@ -361,7 +361,45 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
           }
           return browserCdp(method, params, guest ?? undefined);
         },
-        browserCdpEvents, applySessionSettings))
+        browserCdpEvents, applySessionSettings,
+        /*
+         * The inspector, keyed on the same guest the rest of the verbs act on.
+         *
+         * Resolved here for the reason the CDP relay above spells out: the tab
+         * an agent means is the one it has been driving, and looking it up
+         * anywhere later is how one agent's shot becomes a picture of another
+         * agent's page.
+         */
+        async (req) => {
+          const guest = guestIdOf(el);
+          if (guest == null) {
+            return { ok: false, error: "could not work out which tab this is — it may not have finished attaching." };
+          }
+          switch (req.action) {
+            case "open": {
+              /* A rectangle it can be composited into. The panel overwrites it
+                 with the real hole the moment it renders; without one, the view
+                 exists at zero size and photographs as nothing. */
+              const r = await browserDevtools({ guest, rect: { x: 0, y: 0, width: 1200, height: 900 } });
+              return r.ok ? { ok: true } : { ok: false, error: r.error || "the inspector did not open" };
+            }
+            case "close":
+              await browserDevtoolsClose(guest);
+              return { ok: true };
+            case "panel":
+              return await browserDevtoolsPanel(guest, String(req.panel ?? ""));
+            case "zoom":
+              browserDevtoolsZoom(guest, Number(req.level ?? 0));
+              /* Fire-and-forget on the shell's side, so the level asked for IS
+                 the answer — the shell clamps it and the panel hears the real
+                 one through `ag:browser-devtools-zoom`. */
+              return { ok: true, level: Number(req.level ?? 0) };
+            case "shot":
+              return await browserDevtoolsShot(guest);
+            default:
+              return { ok: false, error: `unknown inspector action ${req.action}` };
+          }
+        }))
     : { ok: false, error: "the browser view is not open in this window" };
   const withDiagnosis = await attachDiagnosis(el, ask.op, reply);
   try { await api.browserResult({ id: ask.id, ...withDiagnosis }); } catch { /* the ask has already timed out */ }

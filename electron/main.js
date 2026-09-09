@@ -2201,6 +2201,17 @@ function registerIpc(win) {
    */
   /** @type {Map<number, DevtoolsView>} */
   const devtoolsViews = new Map();
+  /*
+   * Each inspector's own `apply`, kept rather than dropped on the floor.
+   *
+   * `wireDevtoolsZoom` returns the setter that BOTH scales the view and tells
+   * the panel what it is now, and until there was a second caller nobody needed
+   * the return value: the panel was the only thing asking, and it already knew.
+   * A shell verb is that second caller, and without the echo it leaves the
+   * panel reading 160% over an inspector at 100.
+   * @type {Map<number, (level: number) => void>}
+   */
+  const devtoolsZoom = new Map();
 
   /** `rect` is described as the complete rectangle it has to be for the branch
    *  below to use it, and the `!!rect` guard stays for the renderer that sends
@@ -2266,6 +2277,7 @@ function registerIpc(win) {
     const view = devtoolsViews.get(id);
     if (!view) return;
     devtoolsViews.delete(id);
+    devtoolsZoom.delete(id);
     try { win.contentView.removeChildView(view); } catch { /* already detached */ }
     try { view.webContents.close(); } catch { /* already closed */ }
   };
@@ -2295,7 +2307,7 @@ function registerIpc(win) {
         win.contentView.addChildView(view);
         guest.setDevToolsWebContents(view.webContents);
         guest.openDevTools();
-        wireDevtoolsZoom(view, guest.id);
+        devtoolsZoom.set(guest.id, wireDevtoolsZoom(view, guest.id));
         /* The level the panel remembers, applied once the front-end is there to
            be scaled — before that the call lands on `about:blank` and is lost
            on the navigation to `devtools://`. */
@@ -2346,8 +2358,178 @@ function registerIpc(win) {
     const view = guest && devtoolsViews.get(guest.id);
     if (!view || view.webContents.isDestroyed()) return { ok: false };
     const level = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Number(req && req.level) || 0));
-    try { view.webContents.setZoomLevel(level); } catch { return { ok: false }; }
+    /* Through the wired setter, not `setZoomLevel` on its own: that one scales
+       the view and tells nobody, which is invisible while the panel is the only
+       caller and a lie the moment a shell verb is. */
+    const apply = devtoolsZoom.get(guest.id);
+    if (apply) apply(level);
+    else { try { view.webContents.setZoomLevel(level); } catch { return { ok: false }; } }
     return { ok: true, level };
+  });
+
+  /*
+   * A PICTURE OF THE INSPECTOR ITSELF.
+   *
+   * The panel's screenshot verb photographs the page; the inspector is a
+   * WebContentsView the shell owns, so it has to be asked separately. This is
+   * what makes "show me the Network tab" answerable at all — Console and
+   * Network have CDP verbs that return data, and Elements, Sources, Performance
+   * and Application have nothing an agent can read except the pixels.
+   *
+   * Hidden is the normal state, not the exception: `placeDevtools` marks the
+   * view invisible whenever the browser is not the pane on screen, which is
+   * most of the time an agent is driving. Chromium does not render what is not
+   * visible, so the compositor hands back an empty frame — the same wall the
+   * pane capture hit.
+   *
+   * The way out is NOT `setVisible(true)` where it stands: the view floats over
+   * the window, so that paints the inspector across whatever the person is
+   * reading. It is moved off the window first, shown there, photographed, and
+   * put back — the bounds are restored in a `finally`, because a view left
+   * parked outside the window is an inspector that never comes back.
+   */
+  ipcMain.handle("ag:browserDevtoolsShot", async (_e, req) => {
+    const guest = knownGuest(Number(req && req.guest));
+    const view = guest && devtoolsViews.get(guest.id);
+    if (!view || view.webContents.isDestroyed()) return { ok: false, error: "the inspector is not open" };
+    const wc = view.webContents;
+    /*
+     * A FRAME OF ONE COLOUR IS NOT A PICTURE OF ANYTHING.
+     *
+     * `isEmpty()` only answers "is this zero by zero", and the failure that
+     * actually happens here answers no to that: a view that has never been
+     * composited hands back a full-size rectangle of the theme's background
+     * and nothing else. MEASURED — 1500x1125, one distinct colour, and the
+     * verb reported success and wrote the file.
+     *
+     * So the check is on the pixels. Corners and centre rather than all of
+     * them: a real inspector differs across those five points every time (the
+     * toolbar, the tree, the styles pane), a blank frame differs nowhere, and
+     * reading five pixels costs nothing next to reading two megabytes.
+     */
+    /** @param {Electron.NativeImage} img */
+    const blank = (img) => {
+      try {
+        const { width, height } = img.getSize();
+        if (!width || !height) return true;
+        const buf = img.toBitmap();
+        /** @param {number} x @param {number} y */
+        const at = (x, y) => {
+          const i = (y * width + x) * 4;
+          return `${buf[i]},${buf[i + 1]},${buf[i + 2]}`;
+        };
+        const seen = new Set([
+          at(1, 1), at(width - 2, 1), at(1, height - 2),
+          at(width - 2, height - 2), at(width >> 1, height >> 1),
+        ]);
+        return seen.size <= 1;
+      } catch { return false; }
+    };
+    const shoot = async () => {
+      const img = await wc.capturePage(undefined, { stayHidden: false, stayAwake: true });
+      return img && !img.isEmpty() && !blank(img) ? img : null;
+    };
+    let before = null;
+    /* Read here rather than taken from the caller: the renderer that asks knows
+       whether the browser is the pane on screen, but by the time this restores
+       the view that may already be stale — and a wrong answer leaves the
+       inspector painted over the terminal, or invisible when it should not be. */
+    let wasVisible = false;
+    try {
+      const first = await shoot();
+      if (first) return { ok: true, png: first.toDataURL(), via: "the compositor" };
+      /*
+       * Shown WHERE IT BELONGS, briefly — not parked off the window.
+       *
+       * Off-window was the first attempt and it does not work: measured, the
+       * capture came back a full-size rectangle of one colour, because
+       * Chromium composites what is inside the window and a view moved outside
+       * it is still a view being drawn nowhere. The same wall, one step along.
+       *
+       * So it is made visible in its own rectangle for as long as the capture
+       * takes. If the browser is not the pane on screen this flickers the
+       * inspector over whatever is — which is the honest price, and the same
+       * one the pane capture pays for the same reason. It lasts about a third
+       * of a second and only when an agent asks for a picture.
+       */
+      before = view.getBounds();
+      wasVisible = typeof view.getVisible === "function" ? view.getVisible() : false;
+      if (!before.width || !before.height) {
+        /* Never placed: the panel sets the real hole when it renders, and
+           until then the view has no size to be drawn into. */
+        view.setBounds({ x: 0, y: 0, width: 1200, height: 900 });
+      }
+      view.setVisible(true);
+      // One frame is not enough — the view has to be composited once where it
+      // now stands before there is anything to copy.
+      await new Promise((r) => setTimeout(r, 300));
+      const second = await shoot();
+      if (second) return { ok: true, png: second.toDataURL(), via: "shown briefly" };
+      return { ok: false, error: "the inspector produced an empty frame" };
+    } catch (e) {
+      return { ok: false, error: String(e instanceof Error ? e.message : e) };
+    } finally {
+      if (before) {
+        try { view.setBounds(before); } catch { /* the view went away mid-shot */ }
+        /* Back to exactly what it was before the detour. */
+        try { view.setVisible(wasVisible); } catch { /* gone */ }
+      }
+    }
+  });
+
+  /*
+   * WHICH PANEL THE INSPECTOR IS SHOWING.
+   *
+   * There is no CDP for this and there cannot be: the panels belong to the
+   * DevTools front-end, which is a web page, and CDP talks to the page being
+   * inspected rather than to the thing inspecting it. So this runs script in
+   * the front-end's own WebContents.
+   *
+   * Two ways, tried in order, because which one exists depends on the Chromium
+   * the front-end shipped with and this app has moved between them before:
+   *
+   *   1. `DevToolsAPI.showPanel(id)` — the embedder API, hung on the front-end
+   *      window for exactly this kind of host. Oldest and most stable.
+   *   2. The front-end's own view manager, reached through its module graph.
+   *      The path has changed between versions, so it is a fallback and it
+   *      reports what it found rather than pretending.
+   *
+   * Returns which route worked, so a caller that got neither can say so
+   * instead of reporting a panel change that never happened.
+   */
+  ipcMain.handle("ag:browserDevtoolsPanel", async (_e, req) => {
+    const guest = knownGuest(Number(req && req.guest));
+    const view = guest && devtoolsViews.get(guest.id);
+    if (!view || view.webContents.isDestroyed()) return { ok: false, error: "the inspector is not open" };
+    const panel = String((req && req.panel) || "").trim();
+    if (!/^[a-z0-9_-]{1,40}$/i.test(panel)) return { ok: false, error: "not a panel name" };
+    const script = `(async () => {
+      const id = ${JSON.stringify(panel)};
+      try {
+        if (typeof DevToolsAPI !== "undefined" && DevToolsAPI && typeof DevToolsAPI.showPanel === "function") {
+          DevToolsAPI.showPanel(id);
+          return { via: "DevToolsAPI.showPanel" };
+        }
+      } catch (e) { /* fall through to the view manager */ }
+      try {
+        const mod = await import("./ui/legacy/legacy.js");
+        const vm = mod && mod.ViewManager && mod.ViewManager.ViewManager
+          ? mod.ViewManager.ViewManager.instance()
+          : null;
+        if (vm && typeof vm.showView === "function") {
+          await vm.showView(id);
+          return { via: "ViewManager.showView" };
+        }
+      } catch (e) { return { error: String(e && e.message || e) }; }
+      return { error: "no way in on this front-end" };
+    })()`;
+    try {
+      const r = await view.webContents.executeJavaScript(script, true);
+      if (r && r.via) return { ok: true, panel, via: r.via };
+      return { ok: false, error: (r && r.error) || "the front-end did not answer" };
+    } catch (e) {
+      return { ok: false, error: String(e instanceof Error ? e.message : e) };
+    }
   });
 
   ipcMain.handle("ag:browserDevtoolsClose", (_e, req) => {

@@ -51,6 +51,8 @@ type DesktopBridge = {
   browserDevtoolsClose?: (req: { guest: number }) => Promise<{ ok: boolean }>;
   browserDevtoolsRect?: (req: { guest: number; rect: DevtoolsRect }) => void;
   browserDevtoolsZoom?: (req: { guest: number; level: number }) => Promise<{ ok: boolean; level?: number }>;
+  browserDevtoolsShot?: (req: { guest: number }) => Promise<{ ok: boolean; png?: string; via?: string; error?: string }>;
+  browserDevtoolsPanel?: (req: { guest: number; panel: string }) => Promise<{ ok: boolean; panel?: string; via?: string; error?: string }>;
   onDevtoolsZoom?: (fn: (at: { guest: number; level: number }) => void) => () => void;
   onBrowserInspect?: (fn: (at: { x: number; y: number }) => void) => () => void;
   setActiveBrowserGuest?: (id: number) => Promise<boolean>;
@@ -241,6 +243,27 @@ export interface DevtoolsRect { x: number; y: number; width: number; height: num
 export function browserDevtoolsZoom(guest: number, level: number): void {
   const b = bridge();
   try { void b?.browserDevtoolsZoom?.({ guest, level }); } catch { /* older shell */ }
+}
+
+/*
+ * A picture of the inspector, and which panel it is showing.
+ *
+ * Both awaited rather than fired and forgotten, unlike the zoom above: an
+ * agent asked for these and is waiting on the answer, so a shell too old to
+ * have them has to say so rather than go quiet.
+ */
+export async function browserDevtoolsShot(guest: number): Promise<{ ok: boolean; png?: string; via?: string; error?: string }> {
+  const b = bridge();
+  if (!b?.browserDevtoolsShot) return { ok: false, error: "this shell cannot photograph the inspector" };
+  try { return await b.browserDevtoolsShot({ guest }); }
+  catch (e) { return { ok: false, error: String(e instanceof Error ? e.message : e) }; }
+}
+
+export async function browserDevtoolsPanel(guest: number, panel: string): Promise<{ ok: boolean; panel?: string; via?: string; error?: string }> {
+  const b = bridge();
+  if (!b?.browserDevtoolsPanel) return { ok: false, error: "this shell cannot change the inspector's panel" };
+  try { return await b.browserDevtoolsPanel({ guest, panel }); }
+  catch (e) { return { ok: false, error: String(e instanceof Error ? e.message : e) }; }
 }
 
 export function onDevtoolsZoom(fn: (at: { guest: number; level: number }) => void): () => void {

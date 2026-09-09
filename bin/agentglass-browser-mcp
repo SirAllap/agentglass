@@ -939,6 +939,35 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_inspect",
+        "description": (
+            "THE DEVTOOLS PANEL ITSELF — open it, switch its tab, scale it, photograph it. "
+            "Use browser_console and browser_network for those two: they answer as DATA, and a "
+            "picture of a console costs a hundred times the tokens to read. This is for the panels "
+            "that answer as nothing else — Elements (computed styles, the box model, what the DOM "
+            "actually became), Sources, Performance, Memory, Application. "
+            "ZOOM BEFORE YOU SHOOT: level 0 is 100%, each step is about 20%, and NEGATIVE IS SMALLER "
+            "— a capture at the level a person reads on screen is usually unreadable later. "
+            "action=shot writes a png and never writes one it could not fill."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["open", "close", "panel", "zoom", "shot"]},
+                "panel": {
+                    "type": "string",
+                    "description": "For action=panel: elements, console, sources, network, timeline, heap-profiler, resources, security, lighthouse",
+                },
+                "level": {
+                    "type": "number",
+                    "description": "For action=zoom: 0 is 100%, each step about 20%, negative is smaller",
+                },
+                "path": {"type": "string", "description": "For action=shot: absolute path to write the png to"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
         "name": "browser_trace",
         "description": (
             "DevTools trace recording — DOM, network and console against one timeline. "
