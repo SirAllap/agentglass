@@ -18,6 +18,7 @@
  */
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
+import { matchesQuery } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
@@ -815,10 +816,10 @@ async function sweepWorkspace(
  *  this is a list somebody is scanning, and a fuzzy hit they cannot see the
  *  reason for reads as noise. */
 export function matchesText(t: Pick<ProviderTask, "title" | "customId" | "id" | "list">, q: string): boolean {
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return false;
-  const hay = `${t.title} ${t.customId ?? ""} ${t.id} ${t.list ?? ""}`.toLowerCase();
-  return words.every((w) => hay.includes(w));
+  // The rule itself is in shared/, because the phone asks the same question of
+  // a row it already has and two copies of "every word appears somewhere"
+  // drift the day one of them learns about a new field.
+  return matchesQuery([t.title, t.customId, t.id, t.list], q);
 }
 
 /**
