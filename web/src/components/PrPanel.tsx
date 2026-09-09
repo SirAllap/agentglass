@@ -72,11 +72,13 @@ import { loginOf, ownersOf } from "../lib/codeowners.ts";
 import { UnreadBadge } from "./UnreadBadge.tsx";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
+import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
+import { EMPTY as EMPTY_RULES, applyWith, type FilterSet } from "./tasks/filters.ts";
 import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict } from "../../../shared/mergeReason.ts";
-import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
+import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
@@ -2744,7 +2746,28 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const seenMarks = useMemo(() => readSeen(), [seenTick]);
 
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const basePrs = useMemo(() => applyFilters(pool, filters), [pool, filters]);
+  /*
+   * THE RULES, ON TOP OF THE PILLS.
+   *
+   * Both, and in this order, because they answer different halves of the same
+   * question. The pills say "which of these" and are one click; the rules say
+   * "anything but these" and "the ones with nothing there", which no checkbox
+   * list can say at all.
+   *
+   * Kept as their own state rather than folded into the query string: that
+   * string has never been able to write a negation, and inventing a syntax for
+   * one would mean every saved view, every URL and the search box learning it
+   * too. The tabs along the top still open the way they always did — see
+   * `queryToRules`, which fills the builder from one instead of clearing it.
+   */
+  const [rules, setRules] = useState<FilterSet>(EMPTY_RULES);
+  const basePrs = useMemo(
+    () => applyWith(applyFilters(pool, filters), rules, readPrField),
+    [pool, filters, rules],
+  );
+  /* Only the fields that anything on this board actually has — which is what
+     keeps the tracker's two out of the way of everybody who has no tracker. */
+  const ruleFields = useMemo(() => builderFields(prs, filters, facetOpts), [prs, filters, facetOpts]);
   const unreadPrs = useMemo(
     () => basePrs.filter((p) => unreadOf(p, repo?.key, seenMarks)),
     [basePrs, repo?.key, seenMarks],
@@ -4107,6 +4130,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
            number nobody can act on. */
         swept={filters.text.trim() && sweep?.key === sweepKey ? { rows: sweep.rows.length, done: sweep.done } : undefined}
               total={listState.total ?? prs.length}
+              /* The half the pills cannot say: `is not`, `is set`, and rules
+                 joined together. Handed the same fields the pills offer, so the
+                 two lists can never disagree about what a field is. */
+              builder={<FilterBuilder fields={ruleFields} value={rules} onChange={setRules} />}
             />
           )}
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">

@@ -14,7 +14,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { RefreshIcon } from "../lib/glyphIcons.tsx";
 import { api } from "../lib/api.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
-import { EMPTY, apply as applyFilters, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
+import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
 import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
 import { CardWrites } from "../lib/cardWrites.ts";
@@ -1613,6 +1613,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     [data, over],
   );
 
+  /* Worked out here rather than inside the builder, so the same builder can
+     draw a row of pull requests — see FilterBuilder for why it stopped knowing
+     what a task is. */
+  const taskFields = useMemo(() => fieldsOf(tasks), [tasks]);
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
 
   /*
@@ -2700,7 +2704,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             impacted application, an assignee, any custom field this workspace
             invented — none of which could be a chip, because which fields
             exist is the board's business and not ours. */}
-        <FilterBuilder tasks={tasks} value={built} onChange={setBuilt} />
+        <FilterBuilder fields={taskFields} value={built} onChange={setBuilt} />
         <span className="flex-1" />
         {/* Named by what pressing it DOES, not by what is true.
             "6 done hidden" is a caption, and it was read as one: six statuses
