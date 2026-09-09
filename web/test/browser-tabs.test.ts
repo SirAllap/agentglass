@@ -8,7 +8,7 @@
  * show and no way back.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
-import { addTab, closeTab, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, __resetTabIds } from "../src/lib/browserTabs.ts";
+import { addTab, closeTab, isBlank, listable, MAX_TABS, newTab, patchTab, pruneBlank, stepTab, tabLabel, withInspected, __resetTabIds } from "../src/lib/browserTabs.ts";
 
 beforeEach(__resetTabIds);
 
@@ -239,5 +239,45 @@ describe("blank tabs", () => {
   it("never nothing", () => {
     // An empty list has no active tab and nowhere to type.
     expect(pruneBlank([blank], "somebody-else")).toHaveLength(1);
+  });
+});
+
+/*
+ * WHICH PAGE SOMEBODY ELSE IS INSPECTING.
+ *
+ * An agent can open the inspector from a terminal, and it opens hidden — so
+ * without a mark on the tab there is no pixel anywhere saying it is there, and
+ * the switch in the ⋯ menu stays off because that switch is about what the
+ * panel itself opened. Before it opened hidden you found out because it
+ * covered half the window: a bug, and by accident the only signal there was.
+ *
+ * The shell reports every open and close, including the panel's own, so this
+ * is told the same thing more than once by design. That is what the identity
+ * rule is for.
+ */
+describe("the inspector mark", () => {
+  it("adds and removes the page it is told about", () => {
+    const none: ReadonlySet<string> = new Set();
+    const one = withInspected(none, "t1", true);
+    expect([...one]).toEqual(["t1"]);
+    expect([...withInspected(one, "t2", true)].sort()).toEqual(["t1", "t2"]);
+    expect([...withInspected(one, "t1", false)]).toEqual([]);
+  });
+
+  it("hands back the SAME set when told what it already knows", () => {
+    /* Not an optimisation — the panel would re-render its whole tab list on
+       every repeat, and the shell repeats by design. `toBe`, not `toEqual`:
+       an equal set is a new object and React reads it as news. */
+    const one = withInspected(new Set(), "t1", true);
+    expect(withInspected(one, "t1", true)).toBe(one);
+    const none: ReadonlySet<string> = new Set();
+    expect(withInspected(none, "t9", false)).toBe(none);
+  });
+
+  it("ignores a guest it could not place on any tab", () => {
+    /* The panel passes "" when no mounted webview owns that guest — a page
+       that closed mid-flight. Adding it would light a mark on nothing. */
+    const one = withInspected(new Set(), "t1", true);
+    expect(withInspected(one, "", true)).toBe(one);
   });
 });
