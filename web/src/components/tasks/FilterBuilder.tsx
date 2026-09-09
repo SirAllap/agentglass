@@ -15,6 +15,27 @@ import type { ProviderTask } from "../../../../shared/providers.ts";
 
 import { StatusPill } from "../StatusPill.tsx";
 
+/** The panel's narrowest, shared by the box and by the clamp that keeps it on
+ *  screen — two places that must not drift apart. */
+const PANEL_MIN = 520;
+
+/**
+ * Where the panel goes, given the button and the window.
+ *
+ * Its own function because it is the whole of the bug and none of the
+ * rendering: a rect in, a position out, testable without a browser.
+ */
+export function panelAt(r: { bottom: number; left: number }, innerWidth: number): { top: number; left: number } {
+  /* The width the panel will actually be drawn at — `minWidth: PANEL_MIN` with
+     `maxWidth: min(94vw, 720px)` — so the clamp is about that box rather than a
+     number near it. */
+  const w = Math.min(720, Math.max(PANEL_MIN, innerWidth * 0.94));
+  return {
+    top: Math.round(r.bottom + 6),
+    left: Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8))),
+  };
+}
+
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 let seq = 0;
 const newRule = (): Rule => ({ id: `r${++seq}`, field: "", op: "is", values: [] });
@@ -250,15 +271,18 @@ export function FilterBuilder({ fields, value, onChange }: {
    * screen, not guessed. Anchored off the button's own rect instead, the way
    * the notification panel and the plan panel already are.
    *
-   * Right-aligned to the button and clamped to the window: 520px hanging off a
-   * button near the right edge would otherwise run past it.
+   * Left-aligned to the button and clamped to the window at both ends. It used
+   * to hang off the button's RIGHT edge, which was fine while the button sat at
+   * the end of a row of pills and wrong the moment it did not: from a button
+   * near the left edge, a 520px panel anchored by its right side lands almost
+   * entirely off screen.
    */
   const btn = useRef<HTMLButtonElement | null>(null);
-  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const toggle = () => {
     if (open) { setOpen(false); return; }
     const r = btn.current?.getBoundingClientRect();
-    if (r) setAt({ top: Math.round(r.bottom + 6), right: Math.max(8, Math.round(window.innerWidth - r.right)) });
+    if (r) setAt(panelAt(r, window.innerWidth));
     setOpen(true);
   };
 
@@ -285,7 +309,7 @@ export function FilterBuilder({ fields, value, onChange }: {
             ROWS scroll instead, so the menus are free to overhang. */}
         <span data-agx-filters="" className="fixed rounded-xl p-3 flex flex-col gap-2"
           style={{
-            top: at.top, right: at.right, minWidth: 520, maxWidth: "min(94vw, 720px)",
+            top: at.top, left: at.left, minWidth: PANEL_MIN, maxWidth: "min(94vw, 720px)",
             background: "var(--bg2)", border: "1px solid var(--border)",
             boxShadow: "0 22px 48px -20px var(--shadow)",
           }}>
