@@ -167,3 +167,31 @@ describe("nothing is swallowed", () => {
     expect(parseMarkdown("\n\n  \n")).toEqual([]);
   });
 });
+
+/*
+ * A body is text a stranger wrote, so the parser's cost has to stay linear in
+ * its length. Three of these lines used to be quadratic: a table's rule row and
+ * a thematic break both repeated a group with an optional-space run inside it,
+ * and a bare address ended in two overlapping character classes. CodeQL called
+ * the first one on the way in.
+ *
+ * The bound is deliberately loose. It is not a benchmark — it is the difference
+ * between milliseconds and a phone that stops answering, and a tight number
+ * here would fail on a busy runner while proving nothing extra.
+ */
+describe("a hostile body cannot hang the screen", () => {
+  const under = (name: string, body: string): void => {
+    test(name, () => {
+      const started = performance.now();
+      parseMarkdown(body);
+      expect(performance.now() - started).toBeLessThan(1000);
+    });
+  };
+
+  under("a rule row of four thousand dashes", `| ${"-".repeat(4000)}${" ".repeat(200)}${"|".repeat(200)}`);
+  under("four thousand dashes and spaces", "- ".repeat(4000));
+  under("an address with a tail of punctuation", `https://x.example/${"a".repeat(6000)}.....`);
+  under("a run of backticks that closes nothing", `${"`".repeat(4000)}text`);
+  under("emphasis that is never closed", `**${"a ".repeat(4000)}`);
+  under("four hundred lines of shifting indent", Array.from({ length: 400 }, (_, i) => `${" ".repeat(i % 20)}- item`).join("\n"));
+});

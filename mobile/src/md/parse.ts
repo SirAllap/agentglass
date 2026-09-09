@@ -57,14 +57,57 @@ const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 
 const FENCE = /^(\s*)(```+|~~~+)\s*([^\s`]*)/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
-const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+/**
+ * `---`, `***`, `___` — three or more of one mark, spaces allowed between.
+ *
+ * A loop rather than `(?:\s*\1){2,}`, which is the same quadratic shape as the
+ * table rule above: a repeated group with an optional-space run inside it.
+ */
+function isBreak(line: string): boolean {
+  const body = line.trim();
+  if (body.length < 3) return false;
+  const mark = body[0]!;
+  if (mark !== "-" && mark !== "*" && mark !== "_") return false;
+  let seen = 0;
+  for (const ch of body) {
+    if (ch === mark) seen++;
+    else if (ch !== " " && ch !== "\t") return false;
+  }
+  return seen >= 3;
+}
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
 const BULLET = /^(\s*)([-*+])\s+(.*)$/;
 const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
 const TASK = /^\[([ xX])\]\s+(.*)$/;
-/** A table's second row: `---`, `:--`, `--:` or `:-:`, per column. */
-const TABLE_RULE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/;
+/** One column of a table's rule row: `---`, `:--`, `--:` or `:-:`. Anchored,
+ *  with a single quantifier and nothing ambiguous around it. */
+const RULE_CELL = /^:?-+:?$/;
+
+/**
+ * Is this the `| --- | --- |` row under a table's header?
+ *
+ * Split and checked rather than matched by one expression. The expression this
+ * replaced repeated a group that contained `\s*` on both sides of a `-{1,}`,
+ * which backtracks quadratically on a long line of dashes — and every line here
+ * comes from a pull request body, which is text a stranger wrote. Splitting on
+ * the pipes is linear whatever the line is.
+ */
+function isTableRule(line: string): boolean {
+  const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
+  if (cells.length < 2) return false;
+  return cells.every((cell) => RULE_CELL.test(cell.trim()));
+}
 const IMAGE_ONLY = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/;
+
+/** Does this line close a fence opened with `marker`? At least as many of the
+ *  same character, and nothing else. Built by hand rather than by compiling a
+ *  regex per line out of text somebody else wrote. */
+function closesFence(line: string, marker: string): boolean {
+  const body = line.trim();
+  if (body.length < marker.length) return false;
+  for (const ch of body) if (ch !== marker[0]) return false;
+  return true;
+}
 
 /** How far in a line is, with a tab counted as the four spaces a phone shows. */
 const indentOf = (s: string): number => {
@@ -108,7 +151,7 @@ function parseLines(lines: string[]): Block[] {
       const lang = fence[3] ? fence[3] : null;
       const body: string[] = [];
       i++;
-      while (i < lines.length && !new RegExp(`^\\s*${marker[0]}{${marker.length},}\\s*$`).test(lines[i]!)) {
+      while (i < lines.length && !closesFence(lines[i]!, marker)) {
         body.push(lines[i]!);
         i++;
       }
@@ -117,7 +160,7 @@ function parseLines(lines: string[]): Block[] {
       continue;
     }
 
-    if (RULE.test(line)) { out.push({ t: "hr" }); i++; continue; }
+    if (isBreak(line)) { out.push({ t: "hr" }); i++; continue; }
 
     const heading = HEADING.exec(line);
     if (heading) {
@@ -151,7 +194,7 @@ function parseLines(lines: string[]): Block[] {
 
     // A table is only a table with its rule row under the header; without one,
     // a line of pipes is a sentence about pipes.
-    if (line.includes("|") && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]!)) {
+    if (line.includes("|") && i + 1 < lines.length && isTableRule(lines[i + 1]!)) {
       const head = splitRow(line);
       const rows: Inline[][][] = [];
       i += 2;
@@ -172,7 +215,7 @@ function parseLines(lines: string[]): Block[] {
     const para: string[] = [];
     while (i < lines.length && lines[i]!.trim()) {
       const at = lines[i]!;
-      if (para.length && (HEADING.test(at) || RULE.test(at) || FENCE.test(at) || QUOTE.test(at)
+      if (para.length && (HEADING.test(at) || isBreak(at) || FENCE.test(at) || QUOTE.test(at)
         || BULLET.test(at) || ORDERED.test(at))) break;
       para.push(at.trim());
       i++;
@@ -260,9 +303,12 @@ const LINK = /^\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
 const IMAGE_INLINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
 const AUTOLINK = /^<((?:https?):\/\/[^>\s]+)>/;
 /** A bare address, which is how the CU reference is written in this project's
- *  own template. Stops before trailing punctuation so a URL at the end of a
- *  sentence does not swallow the full stop. */
-const BARE_URL = /^(https?:\/\/[^\s<]+[^\s<.,:;!?)\]}"'])/;
+ *  own template. One quantifier and no lookahead: the two adjacent character
+ *  classes this used to end with overlap, which is the third quadratic shape in
+ *  this file. The trailing punctuation is trimmed below instead. */
+const BARE_URL = /^https?:\/\/[^\s<]+/;
+/** What a URL at the end of a sentence should not swallow. */
+const URL_TAIL = ".,:;!?)]}\"'";
 const STRONG = /^(\*\*|__)(?=\S)([\s\S]*?\S)\1/;
 const EM = /^(\*|_)(?=\S)([\s\S]*?\S)\1/;
 
@@ -317,9 +363,13 @@ export function parseInline(src: string): Inline[] {
     if (rest[0] === "h") {
       const bare = BARE_URL.exec(rest);
       if (bare) {
+        let href = bare[0];
+        while (href.length > "https://".length && URL_TAIL.includes(href[href.length - 1]!)) {
+          href = href.slice(0, -1);
+        }
         flush();
-        out.push({ t: "link", href: bare[1]!, kids: [{ t: "text", text: bare[1]! }] });
-        i += bare[0].length;
+        out.push({ t: "link", href, kids: [{ t: "text", text: href }] });
+        i += href.length;
         continue;
       }
     }
