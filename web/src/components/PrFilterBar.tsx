@@ -15,11 +15,15 @@ import {
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, pending, searching, checksPending, shown, total, swept, unread,
+  query, filters, facets, onQuery, onSearch, pending, searching, checksPending, shown, total, swept, unread, builder,
 }: {
   query: string;
   filters: FilterState;
   facets: FacetView[];
+  /** The rule builder, drawn after the pills. Passed in rather than built here
+   *  so this file stays what it is — a row of controls — and the rules keep
+   *  living where the rows they filter do. */
+  builder?: React.ReactNode;
   onQuery: (q: string) => void;
   /** Ask GitHub. Never called on a keystroke — see PrPanel's serverQuery. */
   onSearch: () => void;
@@ -159,7 +163,9 @@ export function PrFilterBar({
             {f.label} ▾
           </span>
         ))}
-        {facets.map((f) => (
+        {/* A field nothing on this board has, and that only a tracker could fill,
+            is left out entirely rather than drawn empty — see `whenPresent`. */}
+        {facets.filter((f) => !f.whenPresent || f.options.length > 0).map((f) => (
           <FacetMenu
             key={f.key}
             label={f.label}
@@ -170,6 +176,11 @@ export function PrFilterBar({
             note={f.key === "checks" && checksPending ? "Checks are still loading; unfinished rows are kept." : undefined}
           />
         ))}
+        {/* After the pills and before Sort: the pills are the one-click answer
+            to "which of these", and this is where you go when the answer is
+            "anything but these". Reading left to right, that is the order the
+            two get reached for. */}
+        {builder}
         <div className="ml-auto">
           <FacetMenu
             label="Sort"

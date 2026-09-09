@@ -215,12 +215,20 @@ function RuleRow({ fields, rule, onChange, onDrop }: {
   );
 }
 
-export function FilterBuilder({ tasks, value, onChange }: {
-  tasks: ProviderTask[]; value: FilterSet; onChange: (f: FilterSet) => void;
+/**
+ * The rows it filters are handed in ALREADY DESCRIBED, rather than being tasks.
+ *
+ * It used to take `ProviderTask[]` and work the fields out itself, which tied
+ * a piece of interface — a row that reads `Where … is not …` — to one kind of
+ * row. The pull request board wants exactly this interface over pull requests,
+ * and the honest way to give it one is to hand it the fields rather than to
+ * write a second one that drifts from this by a pixel a month.
+ */
+export function FilterBuilder({ fields, value, onChange }: {
+  fields: FieldSpec[]; value: FilterSet; onChange: (f: FilterSet) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useAway<HTMLSpanElement>(open, () => setOpen(false), "[data-agx-filters]");
-  const fields = useMemo(() => fieldsOf(tasks), [tasks]);
   const n = liveCount(value);
 
   const set = (rules: Rule[]) => onChange({ ...value, rules });
