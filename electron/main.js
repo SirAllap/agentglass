@@ -2278,6 +2278,10 @@ function registerIpc(win) {
     if (!view) return;
     devtoolsViews.delete(id);
     devtoolsZoom.delete(id);
+    /* Every close routes through here — the shell verb, the panel's own, and
+       the guest being destroyed — so one line covers all three and none of
+       them can leave the tab's mark lit over an inspector that is gone. */
+    try { win.webContents.send("ag:browser-devtools-open", { guest: id, open: false }); } catch { /* torn down */ }
     try { win.contentView.removeChildView(view); } catch { /* already detached */ }
     try { view.webContents.close(); } catch { /* already closed */ }
   };
@@ -2338,6 +2342,23 @@ function registerIpc(win) {
       if (req && typeof req.x === "number" && typeof req.y === "number") {
         guest.inspectElement(Math.round(req.x), Math.round(req.y));
       }
+      /*
+       * THE TAB SAYS SO, because nothing else does any more.
+       *
+       * The inspector used to announce itself by covering half the screen —
+       * badly, and it was reported as a bug, so it opens hidden now. Which
+       * leaves an agent able to open an inspector on somebody's tab with no
+       * sign of it anywhere: the panel's own switch is inside a `⋯` menu, and
+       * a signal you have to open a menu to read is not a signal.
+       *
+       * Sent from HERE and not from the caller, so the panel's own open and a
+       * shell verb's open are the same event. Two sources for one mark is two
+       * marks that can disagree.
+       *
+       * After `placeDevtools` on purpose: an open that threw before this line
+       * would otherwise light a mark with no inspector under it.
+       */
+      try { win.webContents.send("ag:browser-devtools-open", { guest: guest.id, open: true }); } catch { /* torn down */ }
       return { ok: true, docked: true };
     } catch (e) {
       dropDevtools(guest.id);
