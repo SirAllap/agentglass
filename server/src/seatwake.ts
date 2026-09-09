@@ -120,6 +120,39 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
   return woken;
 }
 
+/**
+ * WAKE THIS SEAT NOW, because something happened that cannot wait for a sweep.
+ *
+ * The rest of this file rides the Lantern's look, which is every fifteen
+ * minutes by default and only while that watch is on at all. For a field that
+ * drifts — somebody going quiet, a window vanishing — a sweep is the right
+ * shape: those are states, and reading them a few minutes late costs nothing.
+ *
+ * A report is not a state, it is an EVENT, and one that says an agent is
+ * stopped. Measured from the other side by the seat itself: it sent a report
+ * saying it was waiting on a person, and nothing arrived — "lo leí con
+ * `inbox`", because the next sweep had not come round yet. Fifteen minutes of
+ * an agent sitting still is exactly what waking on events was meant to end.
+ *
+ * The fingerprint is updated here too, so the sweep that follows does not say
+ * the same thing again.
+ */
+export async function wakeForReport(root: string, from: string, deps: WakeDeps = {}): Promise<boolean> {
+  const now = deps.now ?? Date.now();
+  const seat = (deps.seats ?? (() => everySeat()))().find((s) => s.root === root && s.endedAt === null);
+  if (!seat) return false;
+  const waiting = unreadWorthWaking(root);
+  if (!waiting) return false;
+  const send = deps.prompt ?? ((r: string, text: string) => promptSeat(r, text));
+  const last = wokenFor(root);
+  /* The field half of the fingerprint is left exactly as it was: this is news
+     about the tray, and pretending the field changed too would make the next
+     sweep think it had already reported something it has not. */
+  noteWoken(root, `${last?.fingerprint.split("#")[0] ?? ""}#${waiting}`, now);
+  await send(root, `${from} is stopped or needs a decision. ${waiting} report${waiting === 1 ? "" : "s"} waiting: run \`agentglass-agent inbox\`.`);
+  return true;
+}
+
 /** Every named agent with a pane, by name. Synchronous on the registry the
  *  watch has just reconciled — a second tmux call here would be asking the
  *  same question twice in one tick. */
