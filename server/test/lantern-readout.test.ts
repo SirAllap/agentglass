@@ -42,3 +42,57 @@ describe("fieldReadout", () => {
     expect(fieldReadout([row({ doing: "the migration" })], NOW)).toContain("on: the migration");
   });
 });
+
+/*
+ * A ROW IS NOT A PROCESS.
+ *
+ * Measured by the orchestrator that lives off this readout, on its first round
+ * using it: sixteen of its twenty rows were sessions that had ended one and two
+ * days earlier. A status line outlives the agent that wrote it on purpose — a
+ * row going quiet is information — but a name with no pane and no word since
+ * yesterday is not somebody you can go and talk to, and listing it beside the
+ * ones you can is what made a field of twenty read as twenty agents.
+ */
+describe("names that are not agents any more", () => {
+  const NOW = Date.now();
+  const row = (over: Partial<BoardRow> = {}): BoardRow => ({
+    name: "worker", state: "idle", saidAt: NOW - 60_000, ...over,
+  } as BoardRow);
+
+  test("no pane and quiet for hours is collapsed onto one line, not listed as an agent", () => {
+    const text = fieldReadout([
+      row({ name: "alive", paneId: "%4", state: "working" }),
+      row({ name: "yesterday", saidAt: NOW - 30 * 60 * 60_000 }),
+      row({ name: "day-before", saidAt: NOW - 50 * 60 * 60_000 }),
+    ], NOW);
+    expect(text).toContain("Gone (2)");
+    expect(text).toContain("yesterday, day-before");
+    /* One line for the two of them, not one line each. */
+    expect(text.split("\n").filter((l) => l.includes("yesterday"))).toHaveLength(1);
+    expect(text).toContain("Working (1)");
+    expect(text).toContain("Idle (0)");
+  });
+
+  test("quiet but reachable is still an agent: a pane is somewhere to go", () => {
+    const text = fieldReadout([row({ name: "napping", paneId: "%9", saidAt: NOW - 40 * 60 * 60_000 })], NOW);
+    expect(text).toContain("Idle (1)");
+    expect(text).not.toContain("Gone");
+  });
+
+  test("no pane but spoke recently is still an agent: it may be on another tmux server", () => {
+    /* Absence of a pane here is not absence of an agent — the board's own rule,
+       and the one that once deleted a live one. */
+    const text = fieldReadout([row({ name: "elsewhere", saidAt: NOW - 5 * 60_000 })], NOW);
+    expect(text).toContain("Idle (1)");
+    expect(text).not.toContain("Gone");
+  });
+
+  test("and somebody stopped on a person is never collapsed, however old", () => {
+    const text = fieldReadout([row({
+      name: "waiting", saidAt: NOW - 40 * 60 * 60_000,
+      needsYou: { kind: "input", why: "waiting for your input", since: NOW - 40 * 60 * 60_000 },
+    })], NOW);
+    expect(text).toContain("1 agent stopped on you");
+    expect(text).not.toContain("Gone");
+  });
+});
