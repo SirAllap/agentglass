@@ -3,6 +3,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { edge, wash } from "./git/ui.tsx";
+import { whatWaits } from "../lib/seatWaiting.ts";
 import { api, type SeatAnswer, type SeatTask, type SeatFieldRow, type SeatReportRow } from "../lib/api.ts";
 import { Persona } from "./understudy/persona/Persona.tsx";
 import { useCosmetic } from "./understudy/persona/cosmeticStore.ts";
@@ -193,6 +194,15 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const adopted = !!seat?.adoptedPane && live;
   const shown = [...waiting, ...stuck, ...out, ...(showDone ? done : done.slice(0, 1))];
 
+  /*
+   * WHAT IS WAITING ON YOU — the first thing on the screen, because it is the
+   * question the screen exists to answer. The rule lives in `whatWaits`, with
+   * its tests; this only draws it.
+   */
+  const wait = whatWaits(field, reports, tasks);
+  const { stopped: stoppedOnYou, asked, orphaned, beaten } = wait;
+  const waitingCount = wait.count;
+
   const act = async (what: string, fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setBusy(what); setError("");
     try {
@@ -262,6 +272,83 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                 </div>
               </div>
             </div>
+
+            {/* WHAT IS WAITING ON YOU. First, and quiet when there is nothing:
+                a heading over an empty box is a screen that cries wolf, and
+                "nobody needs you" is an answer worth reading. */}
+            <section className="flex flex-col gap-1.5">
+              <div className="flex items-baseline gap-2.5">
+                <h2 className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>Waiting on you</h2>
+                <span className="text-[11px]" style={{ color: waitingCount ? "var(--warning)" : "var(--text3)" }}>
+                  {waitingCount ? `${waitingCount} ${waitingCount === 1 ? "thing" : "things"}` : "nothing right now"}
+                </span>
+              </div>
+              {waitingCount === 0 ? (
+                <p className="text-[11px] max-w-[80ch]" style={{ color: "var(--text4)" }}>
+                  Nobody is stopped, nothing is asking for a decision, and no task has beaten two agents.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-0.5">
+                  {stoppedOnYou.map((r) => (
+                    <li key={`s-${r.name}`} className="flex items-start gap-2.5 py-1">
+                      <span aria-hidden className="shrink-0 self-stretch" style={{ width: 2, borderRadius: 2, background: "var(--error)" }} />
+                      <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                        <span className="text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>
+                          <span style={{ color: "var(--text2)" }}>{r.name}</span> is stopped at a prompt
+                        </span>
+                        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{r.needsYou?.why}</span>
+                      </span>
+                      <span className="shrink-0 flex items-center gap-2 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text3)" }}>
+                        {r.needsYou ? fmtAgo(r.needsYou.since) : ""}
+                        {r.paneId && (
+                          <button type="button" onClick={() => jumpToPane(r.paneId!)}
+                            className="agx-btn text-[10px] rounded px-1.5 py-0.5" style={{ color: "var(--primary)", border: edge(14) }}>Go</button>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                  {asked.map((r) => (
+                    <li key={`a-${r.id}`} className="flex items-start gap-2.5 py-1">
+                      <span aria-hidden className="shrink-0 self-stretch" style={{ width: 2, borderRadius: 2, background: "var(--warning)" }} />
+                      <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                        <span className="text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>
+                          <span style={{ color: "var(--text2)" }}>{r.agent}</span> {r.need ? "needs a decision" : "is blocked"}
+                        </span>
+                        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{r.need || r.blocked}</span>
+                      </span>
+                      <span className="shrink-0 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text3)" }}>{fmtAgo(r.at)}</span>
+                    </li>
+                  ))}
+                  {orphaned.map((r) => (
+                    <li key={`o-${r.id}`} className="flex items-start gap-2.5 py-1">
+                      <span aria-hidden className="shrink-0 self-stretch" style={{ width: 2, borderRadius: 2, background: "var(--text4)" }} />
+                      <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                        <span className="text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>
+                          <span style={{ color: "var(--text2)" }}>{r.agent}</span> stopped and is no longer here
+                        </span>
+                        {/* The one kind that vanishes if nothing says it: the
+                            work is blocked and its owner is gone, so nobody is
+                            coming back for it. */}
+                        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>left blocked: {r.blocked}</span>
+                      </span>
+                      <span className="shrink-0 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text4)" }}>{fmtAgo(r.at)}</span>
+                    </li>
+                  ))}
+                  {beaten.map((t) => (
+                    <li key={`b-${t.id}`} className="flex items-start gap-2.5 py-1">
+                      <span aria-hidden className="shrink-0 self-stretch" style={{ width: 2, borderRadius: 2, background: "var(--warning)" }} />
+                      <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                        <span className="text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>{t.title}</span>
+                        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+                          has beaten {t.attempts} agents — a third go is not the answer
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text3)" }}>{fmtAgo(t.created)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
 
             {live && (data?.screen ?? "").trim() !== "" && (
               /* OVER ITS SHOULDER. The pane it runs in, last few lines, read
