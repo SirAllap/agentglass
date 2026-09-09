@@ -2547,63 +2547,39 @@ function registerIpc(win) {
       lighthouse: "lighthouse",
     };
     const want = ALIAS[panel.toLowerCase()] || panel;
-    const script = `(async () => {
-      const id = ${JSON.stringify(want)};
-      /* The tab bar, as this front-end happens to draw it. Read rather than
-         assumed: the class has moved between versions, and a selector that
-         matches nothing must not become "the switch failed". */
-      const label = (e) => (e.id || e.getAttribute("aria-label") || e.textContent || "").trim().toLowerCase();
-      const tabs = () => [...document.querySelectorAll(".tabbed-pane-header-tab")].map(label);
-      const current = () => {
-        const el = document.querySelector(".tabbed-pane-header-tab.selected, .tabbed-pane-header-tab[aria-selected='true']");
+    /*
+     * NO WAITING IN HERE, and that is not a style choice.
+     *
+     * This view is hidden — the inspector is opened with no rectangle so it
+     * cannot land on top of whatever is on screen — and Chromium freezes the
+     * timers of a page nobody is showing. A poll of "has the tab changed yet"
+     * therefore never advances: measured, twenty seconds and a timeout on
+     * every panel, while the panel HAD in fact changed. So the tab bar is read
+     * once, straight after the call, and the answer says what it found.
+     */
+    const script = `(function () {
+      var id = ${JSON.stringify(want)};
+      var label = function (e) { return (e.id || e.getAttribute("aria-label") || e.textContent || "").trim().toLowerCase(); };
+      var all = function () { return Array.prototype.map.call(document.querySelectorAll(".tabbed-pane-header-tab"), label); };
+      var current = function () {
+        var el = document.querySelector(".tabbed-pane-header-tab.selected, .tabbed-pane-header-tab[aria-selected='true']");
         return el ? label(el) : "";
       };
-      const settled = async () => {
-        for (let i = 0; i < 20; i++) {
-          if (current().includes(id)) return true;
-          await new Promise((r) => setTimeout(r, 50));
-        }
-        return current().includes(id);
-      };
-      /* Bounded, because it is a dynamic import inside somebody else's page and
-         a promise that never settles here is a verb that never answers —
-         measured, twenty seconds and a timeout on every panel. */
-      const soon = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), ms))]);
-
-      let via = "";
-      try {
-        if (typeof DevToolsAPI !== "undefined" && DevToolsAPI && typeof DevToolsAPI.showPanel === "function") {
-          DevToolsAPI.showPanel(id);
-          via = "DevToolsAPI.showPanel";
-          if (await settled()) return { via, now: current() };
-        }
-      } catch (e) { /* fall through */ }
-
-      const seen = tabs();
-      /* It answered, we can read the bar, and the panel is not on it: that is a
-         name this front-end does not have, and saying so beats reporting a
-         switch that did not happen. */
-      if (seen.length && !seen.some((t) => t.includes(id))) {
+      var seen = all();
+      /* A bar we can read that has no such panel: say what it does have,
+         rather than report a switch over whatever was already up. */
+      if (seen.length && !seen.some(function (t) { return t.indexOf(id) >= 0; })) {
         return { error: "this front-end has no panel called " + id + " — it has " + seen.join(", ") };
       }
-
-      try {
-        const mod = await soon(import("./ui/legacy/legacy.js"), 2000);
-        const vm = mod && mod.ViewManager && mod.ViewManager.ViewManager
-          ? mod.ViewManager.ViewManager.instance()
-          : null;
-        if (vm && typeof vm.showView === "function") {
-          await soon(vm.showView(id), 2000);
-          if (await settled()) return { via: "ViewManager.showView", now: current() };
-        }
-      } catch (e) { /* the last word is below */ }
-
-      /* Nothing could be read back. On a front-end whose tab bar this does not
-         recognise that is not a failure: showPanel is the embedder API and it
-         took the call, so the route is reported and the reading is left empty
-         rather than invented. */
-      if (via && !seen.length) return { via, now: "" };
-      return { error: via ? "the panel did not change" : "no way in on this front-end" };
+      if (typeof DevToolsAPI === "undefined" || !DevToolsAPI || typeof DevToolsAPI.showPanel !== "function") {
+        return { error: "this front-end has no DevToolsAPI.showPanel" };
+      }
+      try { DevToolsAPI.showPanel(id); } catch (e) { return { error: String(e && e.message || e) }; }
+      /* Read back at once. The selection itself is synchronous; what is slow is
+         the panel's own module, which is not what is being asserted here. An
+         empty reading on a bar this does not recognise is left empty rather
+         than invented — showPanel is the embedder API and it took the call. */
+      return { via: "DevToolsAPI.showPanel", now: current() };
     })()`;
     try {
       const r = await view.webContents.executeJavaScript(script, true);
