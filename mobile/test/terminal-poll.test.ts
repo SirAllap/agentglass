@@ -2,13 +2,12 @@
  * The strip keeps up with the computer on its own, and costs nothing when the
  * computer stands still.
  *
- * Reported from a phone: "cuando tengo la app de movil abierta y en el pc en
- * una tab que solo tiene un pane meto uno mas… tengo que refresh para que se
- * haga, no es un auto sync como tiene que ser." Measured, and he was exactly
- * right: `load()` ran once on mount and after that only from the two refresh
- * buttons. The desk does not have the problem because the server sweeps tmux
- * twice a second and pushes it a `t:"tmux"` frame; the phone's socket carries
- * `events`, `notify` and pty bytes and nothing that says the panes moved.
+ * Open a pane at the computer with the phone watching, and the phone's strip
+ * did not know until you pulled it down: measured, `load()` ran once on mount
+ * and after that only from the two refresh buttons. The desk does not have the
+ * problem because the server sweeps tmux twice a second and pushes it a
+ * `t:"tmux"` frame; the phone's socket carries `events`, `notify` and pty bytes
+ * and nothing that says the panes moved.
  *
  * The fix is a poll while the screen is focused, and a poll has one dangerous
  * half: the answer is a fresh array every couple of seconds, so adopting it

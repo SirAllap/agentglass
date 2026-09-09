@@ -64,3 +64,44 @@ export function editFor(was: string, next: string): string {
   // counts array entries rather than `was.length`.
   return DEL.repeat(a.length - same) + b.slice(same).join("");
 }
+
+/** A line that has just been submitted from the phone, and the moment it was. */
+export interface JustSent { text: string; at: number }
+
+/**
+ * Is what the pane is showing just the line we sent a moment ago?
+ *
+ * A message sent used to stay written along the bottom of the screen. In line
+ * mode the field IS the pane's line — everything above this explains why — so
+ * the pane holding the submitted prompt in its box for a beat puts it straight
+ * back into a field that had just been emptied. The field is not wrong, it is
+ * honest; but "I pressed send and my message is still sitting there" is the
+ * reading, and the reading is what matters.
+ *
+ * So a report equal to what was just sent is ignored, and the field stays
+ * empty until the pane says something else — which it does the instant the
+ * agent takes the line.
+ *
+ * ── why it expires ────────────────────────────────────────────────────────
+ * Because "the pane still shows it" and "the pane has a line on it again that
+ * happens to be the same" are the same read, and only time tells them apart. A
+ * TUI that keeps the submitted line on its prompt is not echoing, it is
+ * holding a line somebody may want to edit — and after the hold it mirrors
+ * again, one blink late, rather than leaving a field that never fills.
+ *
+ * Compared trimmed: a pane pads its box to the width of the frame, and a line
+ * that differs from the one we sent by the spaces around it is the line we
+ * sent. An empty submission is never an echo — there was nothing on the line
+ * to hold.
+ */
+export function echoOfSent(
+  sent: JustSent | null,
+  line: string | null,
+  now: number,
+  holdMs = 3000,
+): boolean {
+  if (!sent || line === null) return false;
+  if (!sent.text.trim()) return false;
+  if (now - sent.at >= holdMs) return false;
+  return line.trim() === sent.text.trim();
+}
