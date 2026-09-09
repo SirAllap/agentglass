@@ -2524,12 +2524,53 @@ function registerIpc(win) {
     if (!view || view.webContents.isDestroyed()) return { ok: false, error: "the inspector is not open" };
     const panel = String((req && req.panel) || "").trim();
     if (!/^[a-z0-9_-]{1,40}$/i.test(panel)) return { ok: false, error: "not a panel name" };
+    /*
+     * THE NAME ON THE TAB IS NOT THE PANEL'S ID.
+     *
+     * Three of them differ, and `showPanel` on an id it does not know returns
+     * without throwing and without switching — so the verb reported
+     * "via DevToolsAPI.showPanel" for `performance`, `memory` and
+     * `application` and photographed whatever was already up. Measured: the
+     * three files came back byte-identical, and identical to the Network shot
+     * before them.
+     */
+    /** @type {Record<string, string>} */
+    const ALIAS = {
+      performance: "timeline",
+      memory: "heap-profiler",
+      application: "resources",
+      network: "network",
+      elements: "elements",
+      console: "console",
+      sources: "sources",
+      security: "security",
+      lighthouse: "lighthouse",
+    };
+    const want = ALIAS[panel.toLowerCase()] || panel;
     const script = `(async () => {
-      const id = ${JSON.stringify(panel)};
+      const id = ${JSON.stringify(want)};
+      /* Which tab the front-end says is selected. Read from its own DOM
+         because that is the fact — a call that returned is not a panel that
+         changed, which is the whole reason this function exists. */
+      const current = () => {
+        const el = document.querySelector(".tabbed-pane-header-tab.selected");
+        return el ? (el.id || el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase() : "";
+      };
+      const settled = async (was) => {
+        for (let i = 0; i < 20; i++) {
+          const now = current();
+          if (now && now !== was) return now;
+          if (now && now.includes(id)) return now;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return current();
+      };
+      const was = current();
       try {
         if (typeof DevToolsAPI !== "undefined" && DevToolsAPI && typeof DevToolsAPI.showPanel === "function") {
           DevToolsAPI.showPanel(id);
-          return { via: "DevToolsAPI.showPanel" };
+          const now = await settled(was);
+          if (now && now.includes(id)) return { via: "DevToolsAPI.showPanel", now };
         }
       } catch (e) { /* fall through to the view manager */ }
       try {
@@ -2539,14 +2580,16 @@ function registerIpc(win) {
           : null;
         if (vm && typeof vm.showView === "function") {
           await vm.showView(id);
-          return { via: "ViewManager.showView" };
+          const now = await settled(was);
+          if (now && now.includes(id)) return { via: "ViewManager.showView", now };
+          return { error: "the front-end knows no panel called " + id + " — it is showing " + (now || "nothing") };
         }
       } catch (e) { return { error: String(e && e.message || e) }; }
       return { error: "no way in on this front-end" };
     })()`;
     try {
       const r = await view.webContents.executeJavaScript(script, true);
-      if (r && r.via) return { ok: true, panel, via: r.via };
+      if (r && r.via) return { ok: true, panel: want, via: r.via };
       return { ok: false, error: (r && r.error) || "the front-end did not answer" };
     } catch (e) {
       return { ok: false, error: String(e instanceof Error ? e.message : e) };

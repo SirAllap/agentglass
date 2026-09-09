@@ -1796,8 +1796,10 @@ def main():
         body = {"action": a.action}
         if a.action == "panel":
             if not a.value:
-                print("inspect panel needs a panel id: elements, console, sources, network, "
-                      "timeline, heap-profiler, resources, security, lighthouse", file=sys.stderr)
+                print("inspect panel needs a panel: elements, console, sources, network, "
+                      "performance, memory, application, security, lighthouse — the name on "
+                      "the tab. The front-end's own ids (timeline, heap-profiler, resources) "
+                      "work too.", file=sys.stderr)
                 return 2
             body["panel"] = a.value
         elif a.action == "zoom":
