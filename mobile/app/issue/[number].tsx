@@ -24,6 +24,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { IssueDetail, IssuePr, IssuePrsReport, IssueStartResult } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
+import { Md } from "../../src/md/Md.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { since } from "../../src/lib/dates.ts";
@@ -237,13 +238,14 @@ export default function IssueScreen(): React.ReactNode {
 
           {detail.body.trim() ? (
             <Card>
-              {/* Verbatim, and never reflowed into something that reads like a
-                  different report. Markdown is not rendered here: an issue body
-                  is somebody's description of a bug, and half-rendered markup
-                  is harder to read than none. */}
-              <Text style={{ color: C.text2, fontSize: T.body, lineHeight: 21 }}>
-                {detail.body.trim()}
-              </Text>
+              {/* Rendered, and never reflowed into something that reads like a
+                  different report: a report's own headings, its numbered steps
+                  and its fenced output are how it argues, and flattening them
+                  is what made an issue harder to read here than on the web.
+                  Uncapped, because an issue is read rather than skimmed — the
+                  cap belongs on a pull request template, not on somebody's
+                  account of a bug. */}
+              <Md text={detail.body.trim()} host={host} />
             </Card>
           ) : (
             <Card>
