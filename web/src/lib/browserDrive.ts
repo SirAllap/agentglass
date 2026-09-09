@@ -3144,16 +3144,31 @@ async function runVerb(
            * again." A timeout that poisons what it was protecting is not a
            * timeout.
            */
+          /* The inspector beside the page, shared by BOTH ways out of this
+             verb: it used to live on the fallback branch alone, so the flag
+             silently produced the page by itself every time the debugger route
+             answered — which is nearly always, being the first one tried. After
+             the page's own capture rather than instead of it: a shot whose
+             inspector half failed is still the page. */
+          const withInspectorHalf = async (png: string) => {
+            if (!ask.args.withInspector) return { png, extra: null };
+            const ins = await inspector({ action: "shot" });
+            return ins.ok && ins.png
+              ? { png: await joinPngs(png, ins.png), extra: { withInspector: true } }
+              : { png, extra: { withInspector: false } };
+          };
+
           const viaCdp = await cdp("Page.captureScreenshot", { format: "png" })
             .catch(() => ({ ok: false })) as { ok: boolean; result?: { data?: string } };
           if (viaCdp.ok && viaCdp.result?.data) {
             const whole = `data:image/png;base64,${viaCdp.result.data}`;
-            const png = clip ? await cropPng(whole, clip, density).catch(() => whole) : whole;
+            const shot = clip ? await cropPng(whole, clip, density).catch(() => whole) : whole;
             if (highlightSel) await el.executeJavaScript(REMOVE_HIGHLIGHT_SCRIPT).catch(() => {});
+            const { png, extra } = await withInspectorHalf(shot);
             return {
               ok: true,
               value: {
-                url: el.getURL(), title: el.getTitle(), png, via: "the debugger",
+                url: el.getURL(), title: el.getTitle(), png, ...extra, via: "the debugger",
               },
             };
           }
@@ -3207,28 +3222,12 @@ async function runVerb(
           // `via` is diagnosis, not decoration: the routes to a frame differ in
           // what they can survive, and knowing which one produced this picture is
           // the difference between fixing the next failure and guessing at it.
-          /*
-           * The inspector beside the page, when asked for it.
-           *
-           * After the page's own capture rather than instead of it: a shot
-           * whose inspector half failed is still the page, and withholding it
-           * because the garnish did not arrive helps nobody. `joinPngs` says
-           * the same by returning the left image alone.
-           */
-          let joined = png;
-          let withInspector = false;
-          if (ask.args.withInspector) {
-            const ins = await inspector({ action: "shot" });
-            if (ins.ok && ins.png) {
-              joined = await joinPngs(png, ins.png);
-              withInspector = true;
-            }
-          }
+          const { png: joined, extra } = await withInspectorHalf(png);
           return {
             ok: true,
             value: {
               url: el.getURL(), title: el.getTitle(), png: joined,
-              ...(ask.args.withInspector ? { withInspector } : null),
+              ...extra,
               via: fromShell.via ?? (fromShell.png ? "shell" : "the element itself"),
               // Chromium refuses a capture past 16384px: a `--full-page` shot
               // on a page taller than that comes back cropped rather than not
