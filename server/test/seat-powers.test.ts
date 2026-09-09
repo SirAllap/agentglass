@@ -136,3 +136,14 @@ describe("methods that are neither a read nor a named POST", () => {
     expect(req("GET").method).toBe("GET");
   });
 });
+
+describe("enlisting a tab is an assigning act", () => {
+  test("a chair that may only unstick cannot decide which panes exist for it", () => {
+    /* Enlisting widens WHICH panes every other verb can reach — including ones
+       in projects that are none of this seat's business. That is the assigning
+       half of the job, not the unsticking half. */
+    expect(seatAllows("speak", "POST", "/agents/named/enlist")).toBe(false);
+    expect(seatAllows("nudge", "POST", "/agents/named/enlist")).toBe(false);
+    expect(seatAllows("assign", "POST", "/agents/named/enlist")).toBe(true);
+  });
+});

@@ -113,7 +113,24 @@ export function addSchedule(p: { name: unknown; cwd: unknown; kind?: unknown; pr
   if (due <= now) return { ok: false, error: "that time has passed" };
   if (due > now + MAX_AHEAD_MS) return { ok: false, error: "a month ahead at most" };
   if ((pendingCount.get()?.n ?? 0) >= MAX_PENDING) return { ok: false, error: `${MAX_PENDING} schedules are already waiting` };
-  const id = randomBytes(9).toString("base64url");
+  /*
+   * NEVER STARTING WITH A DASH, and this cost an afternoon of calling a test
+   * flaky.
+   *
+   * `base64url` includes `-`, so about one id in sixty-four began with one —
+   * and an id that begins with a dash is not an argument, it is a flag: the
+   * worker CLI is Python's argparse and it answered `unrecognized arguments`
+   * with exit 2. So roughly one schedule in sixty-four could never be
+   * cancelled from the command line, at random, for as long as this has
+   * existed. It showed up as `agent-cli-route` failing once every few full
+   * runs and passing alone, which is exactly what a real bug looks like when
+   * it is rare.
+   *
+   * The prefix is the fix and it is also the convention the queue already uses
+   * (`st_`): an id that says what it is an id OF, and that no shell or parser
+   * can mistake for anything else.
+   */
+  const id = `sc_${randomBytes(9).toString("base64url")}`;
   insert.run(id, p.name, cwd, kind, prompt, yolo ? 1 : 0, Math.floor(due), now);
   return { ok: true, schedule: { id, name: p.name, cwd, kind, prompt, yolo, due: Math.floor(due), created: now, firedAt: null, cancelledAt: null, result: "" } };
 }

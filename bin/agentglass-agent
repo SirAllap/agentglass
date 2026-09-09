@@ -186,8 +186,10 @@ def main():
     p = sub.add_parser("list", help="every live named agent, as JSON")
     p.add_argument("--all", action="store_true", help="include ended ones, with endedAt")
 
-    p = sub.add_parser("stop", help="kill the agent's window")
+    p = sub.add_parser("stop", help="stop a named agent — a tab you enlisted is LET GO, not killed")
     p.add_argument("name")
+    p.add_argument("--kill", action="store_true",
+                   help="kill the window even for a tab you only enlisted: you mean the tab, not the registration")
 
     p = sub.add_parser("schedule", help="start an agent later: at a clock time, a date-time, or after a delay")
     p.add_argument("name")
@@ -206,6 +208,11 @@ def main():
     p = sub.add_parser("say", help="the orchestrator's one line for this round (run it from the project's checkout)")
     p.add_argument("line", help="what a person should read: who needs them, what changed")
     p.add_argument("--root", help="the project this is about (default: the current directory)")
+
+    p = sub.add_parser("enlist", help="take a tab you opened yourself under the app's hand, so broadcast, prompt and read reach it")
+    p.add_argument("name", help="what you will call it from now on")
+    p.add_argument("--pane", help="the tmux pane id (%%12). Exact, and the way to be sure")
+    p.add_argument("--window", help="the tmux window name, when it is not the same as <name>")
 
     p = sub.add_parser("task", help="put something on this project's queue — what you found, for whoever picks it up")
     p.add_argument("title", help="one line: what is to be done")
@@ -309,7 +316,7 @@ def main():
     if a.cmd == "send-keys":
         return emit(call("/agents/named/keys", {"name": a.name, "key": a.key}, timeout=30))
     if a.cmd == "stop":
-        return emit(call("/agents/named/stop", {"name": a.name}, timeout=30))
+        return emit(call("/agents/named/stop", {"name": a.name, "kill": bool(a.kill)}, timeout=30))
     if a.cmd == "schedule":
         text = a.prompt
         if a.file:
@@ -369,6 +376,13 @@ def main():
     if a.cmd == "recall":
         root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
         return emit(call("/seat/recall", {"root": root, "question": a.question}, timeout=30))
+    if a.cmd == "enlist":
+        body = {"name": a.name}
+        if a.pane:
+            body["pane"] = a.pane
+        if a.window:
+            body["window"] = a.window
+        return emit(call("/agents/named/enlist", body, timeout=30))
     if a.cmd == "task":
         root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
         return emit(call("/seat/task", {

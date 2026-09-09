@@ -455,7 +455,7 @@ export async function closeSeat(root: string, now = Date.now()): Promise<{ ok: b
     unadopt.run(root);
     return { ok: true, was: true };
   }
-  await AgentOps.stopAgent(there, now);
+  await AgentOps.stopAgent(there, now, true);
   return { ok: true, was: true };
 }
 

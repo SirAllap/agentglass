@@ -288,3 +288,63 @@ describe.skipIf(!have)("the queue through the CLI", () => {
     expect(still, "a dropped task is still on the queue").toBeUndefined();
   }, SLOW);
 });
+
+/*
+ * A TAB SOMEBODY OPENED THEMSELVES.
+ *
+ * The registry held only what `startAgent` opened, so for the orchestrator
+ * running a real project here — whose whole fleet is tmux tabs it opened by
+ * hand — `list` answered zero with two agents alive, and `broadcast`, its
+ * first ask, reached nobody. One message to N agents, with N of zero.
+ */
+describe.skipIf(!have)("enlisting a pane this app did not open", () => {
+  const tmuxCmd = (...args: string[]) => Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, ...args], {
+    env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ""}`, TMUX_TMPDIR: TMUX_TEST_TMPDIR },
+    stdout: "pipe", stderr: "pipe",
+  });
+
+  test("a hand-made window becomes an agent the verbs can reach, and stop lets it go", async () => {
+    /* A window this app did not make, running the same stub every other test
+       drives, named the way a person names a tab. */
+    const mk = tmuxCmd("new-session", "-d", "-s", "mine", "-n", "by-hand", "-c", wt, "claude");
+    expect(await mk.exited).toBe(0);
+    await Bun.sleep(600);
+
+    /* Before: it does not exist. */
+    const before = await cli("list");
+    expect((before.out.result?.agents ?? []).some((a) => a.name === "by-hand")).toBe(false);
+
+    const took = await cli("enlist", "by-hand");
+    expect(took.out.ok, took.out.error).toBe(true);
+
+    const after = await cli("list");
+    const row = (after.out.result?.agents ?? []).find((a) => a.name === "by-hand");
+    expect(row, "an enlisted tab is not in the list").toBeDefined();
+    expect(row?.cwd).toBe(wt);
+
+    /* And the verbs reach it: this is the whole point. */
+    const said = await cli("prompt", "by-hand", "PING-ENLISTED");
+    expect(said.out.ok, said.out.error).toBe(true);
+
+    /* Stop LETS GO of a window somebody else made: the row closes, the tab
+       stays. Killing it would be killing a day of somebody's context because a
+       verb was called on the name they lent it. */
+    const stopped = await cli("stop", "by-hand");
+    expect(stopped.out.ok).toBe(true);
+    expect(stopped.out.result?.killed).toBe(false);
+    const still = tmuxCmd("has-session", "-t", "=mine");
+    expect(await still.exited, "the tab was killed after being let go").toBe(0);
+
+    await tmuxCmd("kill-session", "-t", "=mine").exited;
+  }, SLOW);
+
+  test("a plain shell is refused, because prompting one types into somebody's command line", async () => {
+    const mk = tmuxCmd("new-session", "-d", "-s", "plain", "-n", "just-a-shell", "-c", wt);
+    expect(await mk.exited).toBe(0);
+    await Bun.sleep(400);
+    const r = await cli("enlist", "just-a-shell");
+    expect(r.out.ok).toBe(false);
+    expect(r.out.error).toContain("not an agent");
+    await tmuxCmd("kill-session", "-t", "=plain").exited;
+  }, SLOW);
+});
