@@ -382,3 +382,49 @@ describe("the board through the rule engine", () => {
     expect(fields.some((f) => f.key === "author")).toBe(true);
   });
 });
+
+/*
+ * THE WHOLE WORKFLOW, NOT THE PART ON SCREEN.
+ *
+ * "faltan muchos statuses" — the menu offered the two statuses the loaded pull
+ * requests happened to be in, out of a workflow with eleven. A filter that can
+ * only offer what is already visible cannot answer "show me the ones I am NOT
+ * looking at", which is the half it exists for.
+ */
+describe("the statuses the filter offers", () => {
+  const seeded = {
+    authors: [], assignees: [], labels: [], milestones: [], bases: [],
+    cardStatuses: [
+      { status: "to do", color: "#87909e" },
+      { status: "in development", color: "#f5c542" },
+      { status: "code review", color: "#e8912d" },
+      { status: "ready for qa", color: "#e05194" },
+    ],
+  };
+  const carded = (status: string) => pr({ card: { id: `c-${status}`, title: "x", status, priority: null } });
+
+  test("offers every status the boards know, not the ones on this page", () => {
+    const rows = [carded("in development"), carded("code review")];
+    const opts = buildFacets(rows, parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.map((o) => o.value)).toEqual(["to do", "in development", "code review", "ready for qa"]);
+  });
+
+  test("each one carries the colour the card draws it in", () => {
+    // So the option reads as the chip it filters rather than as a grey word.
+    const opts = buildFacets([carded("to do")], parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.find((o) => o.value === "ready for qa")?.tint).toBe("#e05194");
+  });
+
+  test("a status on a card but not in the seeded list is still offered", () => {
+    // The seed is a cache; a board read since could hold a status it predates,
+    // and dropping it would hide rows that are on screen.
+    const opts = buildFacets([carded("invented today")], parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.map((o) => o.value)).toContain("invented today");
+  });
+
+  test("no tracker, no statuses, no field", () => {
+    const opts = buildFacets([pr()], parseQuery(""), { authors: [], assignees: [], labels: [], milestones: [], bases: [] })
+      .find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.length).toBe(0);
+  });
+});

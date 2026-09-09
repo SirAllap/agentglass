@@ -250,6 +250,38 @@ export const cachedFor = (id: string): CachedView | undefined => load().cache[id
  * "unknown", never as "no prefix": the difference is between not knowing
  * whether `ABC-12` is one of ours and being sure it is not.
  */
+/**
+ * EVERY STATUS THESE BOARDS HAVE, not the handful currently on screen.
+ *
+ * The board's filter offered the statuses it could see on the pull requests it
+ * had loaded — two of them, out of a workflow with eleven. "Faltan muchos
+ * statuses", and he was right: a filter that can only offer what is already
+ * visible cannot answer "show me the ones I am NOT looking at", which is half
+ * of what it is for.
+ *
+ * Free, because it is already on disk: every cached board was stored with the
+ * list's own statuses beside its tasks, so this is a read of a file the app
+ * keeps anyway rather than a call to anybody.
+ *
+ * In workflow order and deduplicated by name across boards, because that is
+ * how a person reads them — To do, then Shaping, then Ready for design — and
+ * two boards sharing a status share its place in the line.
+ */
+export function knownStatuses(): ListStatus[] {
+  const s = load();
+  const out: ListStatus[] = [];
+  const seen = new Set<string>();
+  for (const v of savedViews()) {
+    for (const st of s.cache[v.id]?.statuses ?? []) {
+      const key = st.status.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(st);
+    }
+  }
+  return out;
+}
+
 export function knownCardPrefix(): string {
   const s = load();
   // `savedViews()`, not `s.views`: the built-in board is not in the stored list
