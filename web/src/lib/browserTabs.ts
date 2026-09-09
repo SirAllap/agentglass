@@ -233,3 +233,20 @@ export function pruneBlank(tabs: BrowserTab[], activeId: string): BrowserTab[] {
   // Never nothing: an empty list has no active tab and nowhere to type.
   return kept.length ? kept : tabs.slice(0, 1);
 }
+
+/**
+ * Which pages have an inspector open on them, one fact at a time.
+ *
+ * Pure because the interesting part is the identity: told the same thing
+ * twice — and it IS told twice, since the shell reports the panel's own opens
+ * as well as an agent's — this hands back the set it was given, so React sees
+ * no change and the tab list does not re-render for news it already had.
+ */
+export function withInspected(was: ReadonlySet<string>, tab: string, open: boolean): ReadonlySet<string> {
+  if (!tab) return was;
+  if (was.has(tab) === open) return was;
+  const next = new Set(was);
+  if (open) next.add(tab);
+  else next.delete(tab);
+  return next;
+}

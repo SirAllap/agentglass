@@ -24,10 +24,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { CloseButton } from "./CloseButton.tsx";
 import { Portal } from "./Portal.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
-import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest } from "../lib/desktop.ts";
+import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
 import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
-import { addTab, closeTab, listable, newTab, patchTab, pruneBlank, sleepingTab, stepTab, tabLabel, wake, type BrowserTab } from "../lib/browserTabs.ts";
+import { addTab, closeTab, listable, newTab, patchTab, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
 import { dropsBefore, isDrag, parseDrop, type DropAt } from "../lib/browserDrag.ts";
 import {
   MAX_ESSENTIALS, allItems, emptyShelf, findByUrl, folderCount, insertFolder, place, readShelves, removeItem, saveShelves,
@@ -698,6 +698,9 @@ export function BrowserView({ active: viewOn, scope }: {
   /** The guest whose inspector is open, by WebContents id — what the shell
    *  needs to name it, and what has to survive the pane being resized. */
   const [dtGuest, setDtGuest] = useState(0);
+  /* Which pages have an inspector open on them, by tab id. Told by the shell,
+     never inferred here — see the effect below. */
+  const [inspected, setInspected] = useState<ReadonlySet<string>>(() => new Set());
   /** The hole the inspector floats over. It is a plain div: the DevTools are a
    *  view the shell owns (see browserDevtools), and all this side does is leave
    *  room and say where the room is. */
@@ -1262,6 +1265,32 @@ export function BrowserView({ active: viewOn, scope }: {
      never reach this document, so the shell handles them and says what it did —
      otherwise the percentage on the strip would be a number nobody updated. */
   useEffect(() => onDevtoolsZoom(({ level }) => { setDtZoom(level); setDevtoolsZoom(level); }), []);
+
+  /*
+   * A MARK ON THE PAGE SOMEBODY ELSE IS INSPECTING.
+   *
+   * The inspector used to be this panel's alone, so this panel's own state was
+   * the answer. An agent can open one now, from a terminal, and it opens
+   * hidden — so there was no pixel anywhere saying so, and the switch in the
+   * ⋯ menu stayed off because that switch is about what THIS panel opened.
+   * Before it opened hidden you found out because it covered half the window:
+   * a bug, and by accident the only signal there was.
+   *
+   * The shell tells us, for every open and close, whoever asked — including
+   * this panel's own, which is the point. One fact, one source.
+   *
+   * Guest ids are the shell's currency and tab ids are ours, so the id is
+   * resolved here against the guests that are actually mounted. A webview that
+   * has not finished being created throws when asked, which is not an error:
+   * it is a page that cannot be the one holding an inspector.
+   */
+  useEffect(() => onDevtoolsOpen(({ guest, open }) => {
+    let tab = "";
+    for (const [id, el] of els.current) {
+      try { if (el.getWebContentsId() === guest) { tab = id; break; } } catch { /* not born yet */ }
+    }
+    setInspected((was) => withInspected(was, tab, open));
+  }), []);
 
   /*
    * Keep the hole and the view on top of each other.
@@ -2565,6 +2594,13 @@ export function BrowserView({ active: viewOn, scope }: {
                             being active and another one being, somehow, also on screen. */}
                         {split && t.id === splitId && (
                           <span className="shrink-0" title="beside the one you are on" style={{ color: "var(--primary-hover)" }}><SplitIcon size={ICON.xs} /></span>
+                        )}
+                        {/* The inspector, on the page rather than in a menu.
+                            The same glyph the ⋯ menu uses for Developer tools,
+                            because it is the same thing — a second drawing for
+                            one idea is how a vocabulary stops being one. */}
+                        {inspected.has(t.id) && (
+                          <span className="shrink-0" title="the inspector is open on this page" style={{ color: "var(--warning)" }}><CodeIcon size={ICON.xs} /></span>
                         )}
                         {/* Same size and the same reddish box as the shelf's ×: one glyph,
                             one meaning, one target big enough to aim at. */}

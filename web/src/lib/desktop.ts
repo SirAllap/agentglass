@@ -54,6 +54,8 @@ type DesktopBridge = {
   browserDevtoolsShot?: (req: { guest: number }) => Promise<{ ok: boolean; png?: string; via?: string; error?: string }>;
   browserDevtoolsPanel?: (req: { guest: number; panel: string }) => Promise<{ ok: boolean; panel?: string; via?: string; error?: string }>;
   onDevtoolsZoom?: (fn: (at: { guest: number; level: number }) => void) => () => void;
+  /** Absent on shells built before the inspector could be opened from a CLI. */
+  onDevtoolsOpen?: (fn: (at: { guest: number; open: boolean }) => void) => () => void;
   onBrowserInspect?: (fn: (at: { x: number; y: number }) => void) => () => void;
   setActiveBrowserGuest?: (id: number) => Promise<boolean>;
   browserPlaces?: (req: { source: string }) => Promise<{ ok: boolean; places?: ImportedPlace[]; error?: string }>;
@@ -269,6 +271,25 @@ export async function browserDevtoolsPanel(guest: number, panel: string): Promis
 export function onDevtoolsZoom(fn: (at: { guest: number; level: number }) => void): () => void {
   const b = bridge();
   return b?.onDevtoolsZoom ? b.onDevtoolsZoom(fn) : () => {};
+}
+
+/*
+ * WHO HAS THE INSPECTOR OPEN, told rather than assumed.
+ *
+ * The panel used to be the only thing that could open one, so its own state
+ * was the answer. An agent can open one now — `agentglass-browser inspect
+ * open` — and it opens HIDDEN, so a person looking at the browser had no way
+ * at all to know it was there: no pixel on screen, and the panel's own switch
+ * still off. Before it opened hidden you found out because it covered half the
+ * window, which was a bug and was also, accidentally, the only signal.
+ *
+ * So the shell says it, for every open and every close, whoever asked. One
+ * source, including the panel's own opens: two sources for one fact are two
+ * sources that can disagree.
+ */
+export function onDevtoolsOpen(fn: (at: { guest: number; open: boolean }) => void): () => void {
+  const b = bridge();
+  return b?.onDevtoolsOpen ? b.onDevtoolsOpen(fn) : () => {};
 }
 
 export function browserDevtoolsRect(guest: number, rect: DevtoolsRect): void {
