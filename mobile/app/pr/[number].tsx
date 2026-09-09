@@ -27,6 +27,7 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, Vie
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { PrCheck, PrDetail, ReviewRecipe, ReviewRecipesResponse } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
+import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.ts";
@@ -41,6 +42,9 @@ import {
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
+
+/** How much of a description shows before the fold. */
+const BODY_BLOCKS = 6;
 
 /** The rollup as one word and one colour. `pending` beats `failure` on purpose:
  *  a run still going has not failed yet, and calling it red is how a screen
@@ -151,6 +155,16 @@ export default function PrScreen(): React.ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [handing, setHanding] = useState(false);
   const [allFiles, setAllFiles] = useState(false);
+  /* The description folds after six blocks. Six is where this project's own
+     template stops being the checklist and starts being the CU reference —
+     which is exactly the point a reader decides whether to read on. */
+  const [bodyOpen, setBodyOpen] = useState(false);
+  /* What the fold is hiding, named rather than counted: "CU reference and 2
+     more" tells you whether to open it; "Show more" does not. */
+  const rest = useMemo(
+    () => (detail?.body ? outline(detail.body.trim(), BODY_BLOCKS) : { hidden: 0, nextHeading: null }),
+    [detail?.body],
+  );
   /** The menu, as the computer has it — built-ins with the user's own edits
    *  merged in. Null until it answers, which is why the sheet says so rather
    *  than drawing an empty list that reads as "no options". */
@@ -526,15 +540,27 @@ export default function PrScreen(): React.ReactNode {
             </View>
 
             {detail.body.trim() ? (
-              <Card>
-                {/* Verbatim. Markdown is not rendered: a description is prose
-                    somebody wrote, and half-rendered markup reads worse than
-                    none. Capped, because a template can be four thousand
-                    characters of checklist. */}
-                <Text style={{ color: C.text2, fontSize: T.body, lineHeight: 21 }}>
-                  {detail.body.trim().slice(0, 1200)}
-                  {detail.body.trim().length > 1200 ? "…" : ""}
-                </Text>
+              <Card style={{ gap: SPACE.md }}>
+                {/* Rendered, and folded by BLOCKS rather than by characters.
+                    A cut at 1,200 characters landed mid-word and mid-checkbox;
+                    a cut after six blocks lands between two things somebody
+                    wrote, and the expander below can say what the rest is. */}
+                <Md text={detail.body.trim()} host={host} limit={bodyOpen ? undefined : BODY_BLOCKS} />
+                {rest.hidden ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setBodyOpen((was) => !was)}
+                    style={{ minHeight: TAP, flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
+                  >
+                    <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>
+                      {bodyOpen
+                        ? "Show less"
+                        : rest.nextHeading
+                          ? `${rest.nextHeading}${rest.hidden > 1 ? ` and ${rest.hidden - 1} more` : ""}`
+                          : `${rest.hidden} more`}
+                    </Text>
+                  </Pressable>
+                ) : null}
               </Card>
             ) : null}
 
