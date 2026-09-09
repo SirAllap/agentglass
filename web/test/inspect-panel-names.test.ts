@@ -41,8 +41,20 @@ test("the switch is read back rather than assumed", () => {
   /* The selected tab, off the front-end's own DOM. Without this the call
      returning IS the answer, which is the bug. */
   expect(body).toContain("tabbed-pane-header-tab.selected");
-  /* And a success is conditional on that reading. */
-  expect(body).toMatch(/if \(now && now\.includes\(id\)\) return \{ via:/);
+  /* A success is conditional on that reading... */
+  expect(body).toMatch(/if \(await settled\(\)\) return \{ via/);
+  /* ...and a name this front-end does not have is an error that says what it
+     does have, rather than a switch reported over the panel already up. */
+  expect(body).toContain("this front-end has no panel called");
+});
+
+test("nothing in the panel switch can hang the verb", () => {
+  const body = handler();
+  /* A dynamic import inside somebody else's page: measured, a promise that
+     never settled there was twenty seconds and a timeout on every panel. */
+  expect(body).toMatch(/const soon = \(p, ms\) => Promise\.race/);
+  expect(body).toContain('soon(import("./ui/legacy/legacy.js"), 2000)');
+  expect(body).toMatch(/soon\(vm\.showView\(id\), 2000\)/);
 });
 
 test("the CLI's help names the tabs, not only the internal ids", () => {

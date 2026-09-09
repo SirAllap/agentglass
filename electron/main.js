@@ -2549,43 +2549,61 @@ function registerIpc(win) {
     const want = ALIAS[panel.toLowerCase()] || panel;
     const script = `(async () => {
       const id = ${JSON.stringify(want)};
-      /* Which tab the front-end says is selected. Read from its own DOM
-         because that is the fact — a call that returned is not a panel that
-         changed, which is the whole reason this function exists. */
+      /* The tab bar, as this front-end happens to draw it. Read rather than
+         assumed: the class has moved between versions, and a selector that
+         matches nothing must not become "the switch failed". */
+      const label = (e) => (e.id || e.getAttribute("aria-label") || e.textContent || "").trim().toLowerCase();
+      const tabs = () => [...document.querySelectorAll(".tabbed-pane-header-tab")].map(label);
       const current = () => {
-        const el = document.querySelector(".tabbed-pane-header-tab.selected");
-        return el ? (el.id || el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase() : "";
+        const el = document.querySelector(".tabbed-pane-header-tab.selected, .tabbed-pane-header-tab[aria-selected='true']");
+        return el ? label(el) : "";
       };
-      const settled = async (was) => {
+      const settled = async () => {
         for (let i = 0; i < 20; i++) {
-          const now = current();
-          if (now && now !== was) return now;
-          if (now && now.includes(id)) return now;
+          if (current().includes(id)) return true;
           await new Promise((r) => setTimeout(r, 50));
         }
-        return current();
+        return current().includes(id);
       };
-      const was = current();
+      /* Bounded, because it is a dynamic import inside somebody else's page and
+         a promise that never settles here is a verb that never answers —
+         measured, twenty seconds and a timeout on every panel. */
+      const soon = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), ms))]);
+
+      let via = "";
       try {
         if (typeof DevToolsAPI !== "undefined" && DevToolsAPI && typeof DevToolsAPI.showPanel === "function") {
           DevToolsAPI.showPanel(id);
-          const now = await settled(was);
-          if (now && now.includes(id)) return { via: "DevToolsAPI.showPanel", now };
+          via = "DevToolsAPI.showPanel";
+          if (await settled()) return { via, now: current() };
         }
-      } catch (e) { /* fall through to the view manager */ }
+      } catch (e) { /* fall through */ }
+
+      const seen = tabs();
+      /* It answered, we can read the bar, and the panel is not on it: that is a
+         name this front-end does not have, and saying so beats reporting a
+         switch that did not happen. */
+      if (seen.length && !seen.some((t) => t.includes(id))) {
+        return { error: "this front-end has no panel called " + id + " — it has " + seen.join(", ") };
+      }
+
       try {
-        const mod = await import("./ui/legacy/legacy.js");
+        const mod = await soon(import("./ui/legacy/legacy.js"), 2000);
         const vm = mod && mod.ViewManager && mod.ViewManager.ViewManager
           ? mod.ViewManager.ViewManager.instance()
           : null;
         if (vm && typeof vm.showView === "function") {
-          await vm.showView(id);
-          const now = await settled(was);
-          if (now && now.includes(id)) return { via: "ViewManager.showView", now };
-          return { error: "the front-end knows no panel called " + id + " — it is showing " + (now || "nothing") };
+          await soon(vm.showView(id), 2000);
+          if (await settled()) return { via: "ViewManager.showView", now: current() };
         }
-      } catch (e) { return { error: String(e && e.message || e) }; }
-      return { error: "no way in on this front-end" };
+      } catch (e) { /* the last word is below */ }
+
+      /* Nothing could be read back. On a front-end whose tab bar this does not
+         recognise that is not a failure: showPanel is the embedder API and it
+         took the call, so the route is reported and the reading is left empty
+         rather than invented. */
+      if (via && !seen.length) return { via, now: "" };
+      return { error: via ? "the panel did not change" : "no way in on this front-end" };
     })()`;
     try {
       const r = await view.webContents.executeJavaScript(script, true);
