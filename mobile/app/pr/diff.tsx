@@ -25,18 +25,35 @@
  * GitHub only accepts a comment on a line the diff touches, and drawing them
  * as pressable would be offering something that fails on send.
  *
+ * ── what has already been said, on the line it was said about ────────────
+ * A conversation lives on a line, and until this it lived on another screen:
+ * you read the code here, and the remark about it two taps away, with nothing
+ * on the diff to say there was one. So the threads are drawn where they
+ * belong — one line each, opened by a tap into the same card the threads
+ * screen draws, answered and resolved from here.
+ *
+ * Your own queued remarks are drawn the same way, in the review's colour
+ * rather than a thread's: they are not a conversation yet and nobody else can
+ * see them. Before this they vanished into a counter, which is how a remark
+ * gets written twice.
+ *
+ * A thread whose lines have changed underneath it has no line to sit on —
+ * GitHub clears it — and goes above the file rather than onto whatever now
+ * carries that number.
+ *
  * ── the whole diff arrives as one string ─────────────────────────────────
  * `/prs/diff` answers with the output of `gh pr diff`. Parsing it is
  * src/model/diffLines.ts, which is where the line-number arithmetic and its
  * tests live — a comment anchored to the wrong line is a remark about code the
  * author did not write.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
+import type { PrDetail } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
@@ -44,7 +61,12 @@ import {
   commentableLine, fileLabel, parseDiff, type DiffFile, type DiffLine,
 } from "../../src/model/diffLines.ts";
 import { gapLabel, gapsIn, nextSlice, type Gap } from "../../src/model/expand.ts";
-import { draftCount, takeDraft, type LineNote } from "../../src/model/reviewDraft.ts";
+import { draft, takeDraft, type LineNote } from "../../src/model/reviewDraft.ts";
+import { threadsOnFile } from "../../src/model/threads.ts";
+import { ApplyConfirm } from "../../src/review/ApplyConfirm.tsx";
+import { ThreadCard } from "../../src/review/ThreadCard.tsx";
+import { ThreadMarker } from "../../src/review/ThreadMarker.tsx";
+import { useThreadActions } from "../../src/review/useThreadActions.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, tint } from "../../src/theme.ts";
 
@@ -119,30 +141,82 @@ export default function DiffScreen(): React.ReactNode {
   const [picking, setPicking] = useState(false);
   /** The line a comment is being written against, and what has been typed. */
   const [writing, setWriting] = useState<{ line: number; body: string } | null>(null);
-  /** Only to repaint the counter — the draft itself lives in the module, so it
-   *  survives this screen being left and come back to. */
-  const [queued, setQueued] = useState(0);
+  /** A copy of the draft, only so this screen repaints — the draft itself
+   *  lives in the module, so it survives leaving here and coming back.
+   *
+   *  The whole list rather than its count, because a remark you have written
+   *  and cannot see is a remark you write twice. They are drawn on their own
+   *  lines below. */
+  const [queued, setQueued] = useState<LineNote[]>([]);
 
   const key = `${root}#${number}`;
 
-  useEffect(() => { setQueued(draftCount(key)); }, [key]);
+  useEffect(() => { setQueued(draft(key)); }, [key]);
 
-  useEffect(() => {
+  /** Which read is the current one. Two can be in flight — the first on
+   *  arrival, a second after a suggestion is committed — and the answer that
+   *  arrives last is not necessarily the one that was asked for last. */
+  const diffRead = useRef(0);
+
+  const loadDiff = useCallback(async (): Promise<void> => {
     if (!host || !number || !root) return;
-    let gone = false;
-    void (async () => {
-      const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
-      const answer = await ask<{ ok: boolean; text?: string; error?: string }>(
-        host, `/prs/diff?${query}`,
-      );
-      if (gone) return;
-      if (!answer.ok) { setError(answer.error); return; }
-      if (!answer.value.ok) { setError(answer.value.error || "That diff could not be read."); return; }
-      setError(null);
-      setText(answer.value.text ?? "");
-    })();
-    return () => { gone = true; };
+    const mine = ++diffRead.current;
+    const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
+    const answer = await ask<{ ok: boolean; text?: string; error?: string }>(
+      host, `/prs/diff?${query}`,
+    );
+    if (mine !== diffRead.current) return;
+    if (!answer.ok) { setError(answer.error); return; }
+    if (!answer.value.ok) { setError(answer.value.error || "That diff could not be read."); return; }
+    setError(null);
+    setText(answer.value.text ?? "");
   }, [host, number, root]);
+
+  useEffect(() => { void loadDiff(); }, [loadDiff]);
+
+  /*
+   * The conversations, from the same detail the threads screen reads.
+   *
+   * A second request on this screen and not a shared one, because the two
+   * answers have different lifetimes: `/prs/diff` is the change and does not
+   * move while you read it, and a thread does — somebody replies, somebody
+   * resolves — and every write below re-reads exactly this. The server serves
+   * both stale-while-revalidate, so the cost of asking here is one cached
+   * answer, not one round trip to GitHub.
+   */
+  const [detail, setDetail] = useState<PrDetail | null>(null);
+
+  const loadThreads = useCallback(async (): Promise<void> => {
+    if (!host || !number || !root) return;
+    const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
+    const answer = await ask<{ ok: boolean; detail?: PrDetail; error?: string }>(host, `/prs/detail?${query}`);
+    // Deliberately quiet. The diff is the reason to be here; a pull request
+    // whose detail cannot be read still shows its change, with no markers.
+    if (answer.ok && answer.value.ok && answer.value.detail) setDetail(answer.value.detail);
+  }, [host, number, root]);
+
+  useEffect(() => { void loadThreads(); }, [loadThreads]);
+
+  /*
+   * After a write, both halves of the screen are re-read.
+   *
+   * The threads for the obvious reason — a reply has to appear, a resolve has
+   * to take. The DIFF because one of these three writes a commit: applying a
+   * suggestion changes the very lines under the card, and leaving them on
+   * screen as they were is showing code that no longer exists, directly above
+   * the conversation that just replaced it.
+   */
+  const reload = useCallback(async (): Promise<void> => {
+    await Promise.all([loadThreads(), loadDiff()]);
+  }, [loadThreads, loadDiff]);
+
+  const actions = useThreadActions({
+    host, root: root ?? "", number: number ?? "", reload,
+  });
+
+  /** Which thread is open. One at a time: two cards expanded in a diff is a
+   *  screen with no code left on it. */
+  const [reading, setReading] = useState<string | null>(null);
 
   const files = useMemo(() => parseDiff(text ?? ""), [text]);
 
@@ -155,6 +229,86 @@ export default function DiffScreen(): React.ReactNode {
   }, [path, files]);
 
   const file: DiffFile | undefined = files[at];
+
+  /** This file's conversations: the ones with a line to sit on, and the ones
+   *  whose lines have gone. */
+  const onFile = useMemo(
+    () => threadsOnFile(detail?.threads ?? [], file?.path ?? ""),
+    [detail, file],
+  );
+
+  /** How many are still open, per file — the number the picker needs so you
+   *  can find the file somebody is waiting on without opening all eleven. */
+  const openByPath = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of detail?.threads ?? []) {
+      if (t.isResolved) continue;
+      counts.set(t.path, (counts.get(t.path) ?? 0) + 1);
+    }
+    return counts;
+  }, [detail]);
+
+  /** One expanded card belongs to the file it was opened on. Moving to
+   *  another file leaves it behind rather than carrying it across. */
+  useEffect(() => { setReading(null); }, [at]);
+
+  /** What you have already written on this line, waiting to go with the
+   *  verdict. In the review's own colour rather than a thread's: it is not a
+   *  conversation yet, and nobody else can see it. */
+  const yoursOn = (line: number | null): React.ReactNode => {
+    if (line === null || !file) return null;
+    const mine = queued.filter((n) => n.path === file.path && n.line === line);
+    if (!mine.length) return null;
+    return mine.map((note, i) => (
+      <View
+        key={`${note.line}-${i}`}
+        style={{
+          marginLeft: 38, paddingLeft: SPACE.sm, paddingRight: SPACE.md, paddingVertical: SPACE.sm,
+          gap: SPACE.xs, backgroundColor: C.bg3,
+          borderLeftWidth: 3, borderLeftColor: C.warning,
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+          <Text style={{ color: C.warning, fontSize: T.eyebrow, fontWeight: "700", flex: 1 }}>
+            Yours · not sent yet
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Remove your comment on line ${note.line}`}
+            onPress={() => drop(note)}
+            style={{ minHeight: TAP, justifyContent: "center", paddingLeft: SPACE.md }}
+          >
+            <Text style={{ color: C.text3, fontSize: T.eyebrow }}>Remove</Text>
+          </Pressable>
+        </View>
+        <Text style={{ color: C.text2, fontSize: T.small, lineHeight: 18 }}>{note.body}</Text>
+      </View>
+    ));
+  };
+
+  /** The markers under one line of code, and the card when one is open. */
+  const threadsOn = (line: number | null): React.ReactNode => {
+    if (line === null) return null;
+    const here = onFile.byLine.get(line);
+    if (!here?.length) return null;
+    return here.map((thread) => (
+      <View key={thread.id}>
+        <ThreadMarker
+          thread={thread}
+          open={reading === thread.id}
+          onPress={() => setReading((was) => (was === thread.id ? null : thread.id))}
+        />
+        {reading === thread.id ? (
+          <View style={{ padding: SPACE.md }}>
+            {/* No path header and no hunk: the file is in the bar above and
+                the code is the row this card is hanging from. Printing either
+                again pushes the words themselves off the screen. */}
+            <ThreadCard thread={thread} host={host} actions={actions} where={false} hunk={false} />
+          </View>
+        ) : null}
+      </View>
+    ));
+  };
 
   /*
    * The context fetched around this file's hunks, one entry per gap.
@@ -236,9 +390,15 @@ export default function DiffScreen(): React.ReactNode {
       line: writing.line,
       body: writing.body.trim(),
     };
-    setQueued(takeDraft(key, (was) => [...was.filter((n) => !(n.path === note.path && n.line === note.line)), note]).length);
+    setQueued(takeDraft(key, (was) => [...was.filter((n) => !(n.path === note.path && n.line === note.line)), note]));
     setWriting(null);
   }, [writing, file, key]);
+
+  /** Take one back. A queued remark is not on GitHub yet, so this is the whole
+   *  of undoing it — no call, and nothing to tell anybody. */
+  const drop = useCallback((note: LineNote): void => {
+    setQueued(takeDraft(key, (was) => was.filter((n) => !(n.path === note.path && n.line === note.line))));
+  }, [key]);
 
   /** One gap: what has already been fetched into it, and the offer to fetch
    *  more. Nothing at all when the file has no such gap, which is the ordinary
@@ -317,6 +477,23 @@ export default function DiffScreen(): React.ReactNode {
           </View>
         ) : null}
 
+        {/* The conversations this file has that no line can hold. GitHub
+            clears a thread's line when the code under it changes, and hanging
+            one on whatever now carries that number would be a remark about
+            code nobody was talking about — so they sit above the file, with
+            the hunk they were written against, which is the only copy of
+            those lines left anywhere. */}
+        {onFile.adrift.length ? (
+          <View style={{ padding: SPACE.lg, gap: SPACE.md }}>
+            <Label text={onFile.adrift.length === 1
+              ? "One conversation about lines that have changed"
+              : `${onFile.adrift.length} conversations about lines that have changed`} />
+            {onFile.adrift.map((thread) => (
+              <ThreadCard key={thread.id} thread={thread} host={host} actions={actions} />
+            ))}
+          </View>
+        ) : null}
+
         {file?.hunks.map((hunk, h) => (
           <View key={`${hunk.header}-${h}`}>
             {gapBefore(h)}
@@ -361,6 +538,9 @@ export default function DiffScreen(): React.ReactNode {
                       }}
                     >{line.text || " "}</Text>
                   </Pressable>
+
+                  {yoursOn(line.newNo ?? null)}
+                  {threadsOn(line.newNo ?? null)}
 
                   {open ? (
                     <View style={{
@@ -427,9 +607,9 @@ export default function DiffScreen(): React.ReactNode {
           disabled={at === 0}
           onPress={() => { setWriting(null); setAt((n) => Math.max(0, n - 1)); }}
         />
-        {queued > 0 ? (
+        {queued.length > 0 ? (
           <Btn
-            label={`Review · ${queued}`}
+            label={`Review · ${queued.length}`}
             tone="primary"
             style={{ flex: 1 }}
             onPress={() => router.push({
@@ -446,12 +626,29 @@ export default function DiffScreen(): React.ReactNode {
         />
       </View>
 
+      {actions.confirming ? (
+        <ApplyConfirm
+          thread={actions.confirming.thread}
+          text={actions.confirming.text}
+          branch={detail?.headRefName}
+          onCancel={actions.cancelApply}
+          onApply={() => { void actions.apply(); }}
+        />
+      ) : null}
+
       <Sheet open={picking} onClose={() => setPicking(false)} title="Files">
         {files.map((f, i) => (
           <SheetRow
             key={`${f.path}-${i}`}
             label={fileLabel(f)}
-            sub={f.binary ? "binary" : `+${f.additions} −${f.deletions}`}
+            sub={[
+              f.binary ? "binary" : `+${f.additions} −${f.deletions}`,
+              // The number that decides which file to open next, on the row
+              // that opens it.
+              openByPath.get(f.path)
+                ? `${openByPath.get(f.path)} open`
+                : null,
+            ].filter(Boolean).join(" · ")}
             on={i === at}
             onPress={() => { setAt(i); setWriting(null); setPicking(false); }}
           />

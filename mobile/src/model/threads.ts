@@ -84,3 +84,73 @@ export function replyAnchor(thread: Pick<PrThread, "comments">): number | null {
   }
   return null;
 }
+
+/**
+ * The threads that belong on a file of the diff, and where each one sits.
+ *
+ * `line` is the thread's position in the file as this pull request leaves it —
+ * the RIGHT side, which is the side the numbers on the diff screen belong to.
+ * That makes the anchor a lookup and not arithmetic.
+ *
+ * A thread with no `line` is adrift, and that is not an error: GitHub clears
+ * it when the lines the conversation was about have changed underneath it. It
+ * cannot be drawn against a row of code that no longer says what it said, so
+ * it is handed back separately and the screen puts it at the top of the file,
+ * where it reads as "about this file, once" rather than as a remark about
+ * whatever line happens to be there now.
+ *
+ * Resolved threads are kept, and grouped like the rest. A resolved thread on a
+ * line is the record of an argument that was had about it, which is the thing
+ * you go looking for when the same line comes back a week later — the screen
+ * draws it collapsed rather than dropping it.
+ */
+export function threadsOnFile(threads: PrThread[], path: string): {
+  byLine: Map<number, PrThread[]>;
+  adrift: PrThread[];
+} {
+  const byLine = new Map<number, PrThread[]>();
+  const adrift: PrThread[] = [];
+  for (const thread of ordered(threads)) {
+    if (thread.path !== path) continue;
+    const line = thread.line;
+    if (typeof line !== "number") { adrift.push(thread); continue; }
+    const at = byLine.get(line);
+    if (at) at.push(thread);
+    else byLine.set(line, [thread]);
+  }
+  return { byLine, adrift };
+}
+
+/**
+ * The one line an unopened thread gets on the diff.
+ *
+ * A marker under a row of code has room for a name, a state and a few words,
+ * and those few words have to be enough to decide whether to open it. So it is
+ * the FIRST comment — the remark itself, not the last reply, which out of
+ * context is usually "done" — flattened to one line, with the number of
+ * replies after it.
+ */
+export function threadDigest(thread: PrThread): {
+  who: string;
+  gist: string;
+  replies: number;
+  state: "open" | "outdated" | "resolved";
+} {
+  const first = thread.comments[0];
+  /* Fenced blocks stand aside for the word "code": a marker is one line, and a
+     stack trace flattened into it says nothing while filling all of it. Split
+     on the fence rather than matched with a pattern — the segments between a
+     pair of fences are the odd ones, which is the whole rule. */
+  const parts = (first?.body ?? "").split("```");
+  const gist = parts
+    .filter((_, i) => i % 2 === 0)
+    .join(" code ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    who: first?.author ?? "somebody",
+    gist,
+    replies: Math.max(0, thread.comments.length - 1),
+    state: thread.isResolved ? "resolved" : thread.isOutdated ? "outdated" : "open",
+  };
+}
