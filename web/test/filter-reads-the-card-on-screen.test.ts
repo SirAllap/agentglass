@@ -1,0 +1,61 @@
+/**
+ * The filter has to read the card the SCREEN is reading.
+ *
+ * `p.card` is filled by the server off the boards cached on disk, and only from
+ * a cache read within the day — so on a machine whose boards were last read a
+ * week ago it is absent from every row, while the chip is still on every card,
+ * fetched one at a time by `prCardStore`. A filter looking at `p.card` alone
+ * then matched nothing at all: the rule was set, the button counted it, and not
+ * one card left its lane.
+ */
+import { test, expect, beforeEach } from "bun:test";
+import { applyWith, type FilterSet } from "../src/components/tasks/filters.ts";
+import { readPrField } from "../src/lib/prFilter.ts";
+import { withCard, forgetCards } from "../src/lib/prCardStore.ts";
+import type { PrSummary } from "../../shared/types.ts";
+
+beforeEach(() => forgetCards());
+
+/** A row as the list hands it over with a stale cache: an id in the branch and
+ *  no card attached. */
+const bare = (number: number, ref: string): PrSummary => ({
+  number, title: `PR ${number}`, author: "someone", state: "open",
+  headRefName: `${ref}-something`,
+} as unknown as PrSummary);
+
+test("a row whose card only the store knows is still read by the filter", async () => {
+  /* The store's queue is the network, so this drives it the way the board
+     does — ask, let the lookup settle, then read. `api.clickupFind` is stubbed
+     through the module the store imports. */
+  const store = await import("../src/lib/prCardStore.ts");
+  const api = (await import("../src/lib/api.ts")).api as unknown as Record<string, unknown>;
+  const before = api.clickupFind;
+  api.clickupFind = async (query: string) => ({
+    ok: true,
+    task: { id: query, customId: query, title: "a card", status: "in review", priority: null, people: [] },
+  });
+  try {
+    const rows = [bare(1, "ORBIT-1042"), bare(2, "ORBIT-1043")];
+    /* First pass: nobody has an answer yet, so nothing is enriched — and a
+       filter must not drop rows on that account. */
+    const f: FilterSet = { join: "and", rules: [{ id: "r1", field: "cardstatus", op: "not", values: ["in review"] }] };
+    expect(applyWith(rows.map((p) => store.withCard(p, true)), f, readPrField).length).toBe(2);
+    /* Let the two lookups land. */
+    for (let i = 0; i < 50 && !store.withCard(rows[0], true).card; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(withCard(rows[0], true).card?.status).toBe("in review");
+    expect(applyWith(rows.map((p) => store.withCard(p, true)), f, readPrField)).toEqual([]);
+  } finally {
+    api.clickupFind = before;
+  }
+});
+
+test("a row that already carries its card is left alone", () => {
+  const p = { ...bare(3, "ORBIT-1044"), card: { id: "x", title: "t", status: "done", priority: null } } as unknown as PrSummary;
+  expect(withCard(p, true)).toBe(p);
+});
+
+test("nothing is asked for when no provider is connected", () => {
+  /* `taskLink` refuses a convention-shaped id with nothing to resolve it, and
+     this must not queue a lookup that can only fail. */
+  expect(withCard(bare(4, "ORBIT-1045"), false).card).toBeUndefined();
+});

@@ -20,7 +20,7 @@ import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "..
 import type { PrSummary } from "../../../shared/types.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
-import { cardOf, onCard } from "../lib/prCardStore.ts";
+import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { openCard } from "../lib/openCard.ts";
 import { PriorityFlag, CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
 import { StatusPill } from "./StatusPill.tsx";
@@ -1159,31 +1159,15 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
   /*
    * THE CARDS THE BOARDS DO NOT HOLD, asked for one at a time.
    *
-   * `p.card` comes free from the saved boards already on disk, and covers most
-   * of them — measured on his: nineteen of twenty-four. The other five drew no
-   * line at all, which reads as "this pull request has no card" when the truth
-   * is "no board we have cached is holding it".
-   *
-   * `prCardStore` is the answer the sidebar has used all along: keyed by card
-   * reference so two pull requests on one card cost one lookup, two in flight
-   * at a time, a minute of cache. Five stragglers, not four hundred rows —
-   * which is the request-per-row cost the free path exists to avoid.
+   * `p.card` is free — the server reads it off the boards already cached on
+   * disk — but only from a cache read within the day, so it can be absent from
+   * every row at once. `prCardStore` fills the rest: keyed by card reference,
+   * two in flight, a minute of cache.
    */
-  const askedCard = useSyncExternalStore(onCard, () => (task && !p.card ? cardOf(task.query) : null),
-    () => null);
-  const shown: PrSummary["card"] = p.card ?? (askedCard?.task ? {
-    id: askedCard.task.id,
-    customId: askedCard.task.customId,
-    title: askedCard.task.title,
-    url: askedCard.task.url,
-    status: askedCard.task.status,
-    statusColor: askedCard.task.statusColor,
-    statusKind: askedCard.task.statusKind,
-    priority: askedCard.task.priority,
-    people: askedCard.task.people?.slice(0, 3),
-    /* Read just now, by definition: this path IS the fresh read. */
-    at: askedCard.at,
-  } : undefined);
+  /* Re-read when an answer lands. The mapping itself lives in the store, so the
+     card this draws and the card a filter reads are the same one. */
+  useSyncExternalStore(onCard, cardVersion, () => 0);
+  const shown: PrSummary["card"] = withCard(p, hasTaskProvider).card;
   return (
     /* `data-pr` because a card is the unit anything outside this file counts —
        a test asking how many landed in a lane, a probe asking which column it
@@ -1530,7 +1514,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
       {/* Same reason as the header: absent and "not read yet" look identical,
           and a row that quietly drops the tracker card while it loads teaches
           you not to trust the line at all. */}
-      {!p.card && p.checksLoaded !== true && task && (
+      {!shown && p.checksLoaded !== true && task && (
         <div className="flex items-center gap-1.5 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
           <span className="rounded" style={{ width: 74, height: CHIP_H, background: "color-mix(in srgb, var(--text) 8%, transparent)" }} />
           <span>reading the card…</span>

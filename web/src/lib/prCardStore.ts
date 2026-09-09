@@ -12,7 +12,9 @@
  * lookup.
  */
 import { api } from "./api.ts";
+import { taskLink } from "./taskLink.ts";
 import type { ProviderTask } from "../../../shared/providers.ts";
+import type { PrSummary } from "../../../shared/types.ts";
 
 /** Long enough that moving between tabs does not re-ask, short enough that a
  *  card somebody moved on the board stops claiming its old status. */
@@ -28,7 +30,13 @@ const waiting: string[] = [];
 const listeners = new Set<() => void>();
 let running = 0;
 
-function tell(): void { for (const l of listeners) l(); }
+let version = 0;
+
+function tell(): void { version++; for (const l of listeners) l(); }
+
+/** Changes when any answer lands — the snapshot for `useSyncExternalStore`,
+ *  which needs a value it can compare rather than a fresh object. */
+export function cardVersion(): number { return version; }
 
 function pump(): void {
   while (running < AT_ONCE && waiting.length) {
@@ -96,4 +104,37 @@ export function forgetCard(query: string): void {
 export function forgetCards(): void {
   seen.clear();
   waiting.length = 0;
+}
+
+/**
+ * The row carrying the card the SCREEN is showing.
+ *
+ * `p.card` is filled by the server from the boards already cached on disk, and
+ * only from ones read in the last day — so on a machine whose boards were last
+ * read a week ago it is absent from every row, and the chip on screen comes
+ * from the lookup above instead. Anything that reads `p.card` directly is then
+ * blind to a card that is in plain sight: a filter on card status matched
+ * nothing at all, silently, which reads as a filter that does not work.
+ *
+ * Asking is the side effect of `cardOf`, so this must only be called for rows
+ * something is already drawing — the board's two dozen, never the table's four
+ * hundred.
+ */
+export function withCard<T extends PrSummary>(p: T, hasTaskProvider: boolean): T {
+  if (p.card) return p;
+  const t = taskLink(p, hasTaskProvider);
+  const hit = t ? cardOf(t.query) : null;
+  const k = hit?.task;
+  if (!k) return p;
+  return {
+    ...p,
+    card: {
+      id: k.id, customId: k.customId, title: k.title, url: k.url,
+      status: k.status, statusColor: k.statusColor, statusKind: k.statusKind,
+      priority: k.priority,
+      people: k.people?.slice(0, 3),
+      /* Read just now, by definition: this path IS the fresh read. */
+      at: hit.at,
+    },
+  };
 }

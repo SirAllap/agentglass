@@ -40,8 +40,8 @@ test("is on a card status keeps exactly those rows", () => {
 
 test("the board is handed the filtered lists, not the raw fetches", () => {
   const src = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
-  expect(src).toMatch(/const boardMineShown = useMemo\(\(\) => applyWith\(boardMine, rules, readPrField\)/);
-  expect(src).toMatch(/const boardReviewShown = useMemo\(\(\) => applyWith\(boardReview, rules, readPrField\)/);
+  expect(src).toMatch(/const boardMineShown = useMemo\(\s*\(\) => applyWith\(boardMine\.map\(\(p\) => withCard\(p, hasTaskProvider\)\), rules, readPrField\)/);
+  expect(src).toMatch(/const boardReviewShown = useMemo\(\s*\(\) => applyWith\(boardReview\.map\(\(p\) => withCard\(p, hasTaskProvider\)\), rules, readPrField\)/);
   expect(src).toContain("mine={boardMineShown} review={boardReviewShown}");
   /* The raw pair never reaches the component again — the exact shape of the bug. */
   expect(src).not.toContain("mine={boardMine}");

@@ -47,7 +47,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
-import { cardOf, askingCard, onCard, forgetCard } from "../lib/prCardStore.ts";
+import { cardOf, askingCard, onCard, forgetCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
@@ -2874,8 +2874,22 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      the rule builder narrowed the table behind it and left every lane as it
      was. The raw arrays stay for the loading and settling checks, which ask
      whether the FETCH is complete — not a question a filter should answer. */
-  const boardMineShown = useMemo(() => applyWith(boardMine, rules, readPrField), [boardMine, rules]);
-  const boardReviewShown = useMemo(() => applyWith(boardReview, rules, readPrField), [boardReview, rules]);
+  /* And the card is read the way the cards on screen read it. `p.card` is only
+     filled from boards cached within the day, so on a stale cache it is absent
+     everywhere and the chip comes from `prCardStore` — a filter looking at
+     `p.card` alone then matches nothing at all. No extra request: the board
+     asks for exactly these rows already. */
+  const cardTick = useSyncExternalStore(onCard, cardVersion, () => 0);
+  const boardMineShown = useMemo(
+    () => applyWith(boardMine.map((p) => withCard(p, hasTaskProvider)), rules, readPrField),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boardMine, rules, hasTaskProvider, cardTick],
+  );
+  const boardReviewShown = useMemo(
+    () => applyWith(boardReview.map((p) => withCard(p, hasTaskProvider)), rules, readPrField),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boardReview, rules, hasTaskProvider, cardTick],
+  );
   /*
    * Neither list has answered yet.
    *
