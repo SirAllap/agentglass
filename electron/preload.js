@@ -195,6 +195,16 @@ contextBridge.exposeInMainWorld("agentglass", {
     ipcRenderer.on("ag:browser-devtools-zoom", h);
     return () => ipcRenderer.removeListener("ag:browser-devtools-zoom", h);
   },
+  /** Whether a tab has an inspector open — from the shell, so the panel's own
+   *  open and a shell verb's open are one event and the tab cannot end up
+   *  showing a mark that disagrees with the view.
+   *  @param {(at: { guest: number; open: boolean }) => void} fn */
+  onDevtoolsOpen: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, at) => fn(at);
+    ipcRenderer.on("ag:browser-devtools-open", h);
+    return () => ipcRenderer.removeListener("ag:browser-devtools-open", h);
+  },
   /** "Inspect" from the page's own context menu, with where it was clicked.
    * @param {(at: { x: number; y: number }) => void} fn */
   onBrowserInspect: (fn) => {
