@@ -1,0 +1,60 @@
+# Working in this repo
+
+Facts an agent needs before touching agentglass. Long form: `CONTRIBUTING.md`, `docs/`.
+
+## Verify
+
+- `make check` is the bar, never `bun test` alone: `bun test` does not
+  typecheck, and a green suite with a red `tsc` has happened. `make ci` runs
+  everything CI runs; `make smoke` boots the production bundle in headless
+  Chrome and fails on a blank screen or a console error.
+- A check that failed because of the environment (missing `node_modules`,
+  no `LANG`, no `TERM`) is not a check that passed. Note it and rerun it.
+- Before pushing, emulate the CI runner (tmux 3.4, Python 3.12, no `TERM`, no `claude`, reverse file order):
+  `env -u TERM PATH="<python3→3.12,tmux→/usr/bin/tmux>:$(dirname $(which bun)):/usr/bin:/bin" bun test $(ls test/*.test.ts | sort -r)`
+
+## Tests share one process
+
+- `bun test` runs every file in a single process. Globals a test sets leak
+  into the others: stub the minimum and restore in `afterAll`. Known leaks:
+  `AGENTGLASS_ROOT`, `__setPrivateTermsPath`, anything on PATH, the scope cache.
+- `Bun.which` resolves with the PATH the process started with; changing
+  `process.env.PATH` in a hook does nothing. A stub agent goes in a child
+  process with the PATH already set, and the test asserts it ran against the
+  stub.
+- `bun test` writes its verdict to stderr; read both pipes with `Promise.all`.
+- `beforeAll` gets 5 s by default. Servers boot with `SERVER_BOOT_MS` from
+  `server/test/serverBoot.ts` as the hook's second argument.
+- `expect(m).toBeDefined()` on a `match()` always passes. Use `not.toBeNull()`.
+  Break every new guard on purpose and watch it go red before trusting it.
+- Tests that read source as text: match `"async function foo("` with the
+  paren, slice to the function's own closing brace (never a fixed window),
+  strip comment lines before asserting a word is absent, and keep
+  `await Bun.file(...)` at module level.
+- Isolation in every test that starts the server: `XDG_CONFIG_HOME`,
+  `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `AGENTGLASS_STATE_DIR`, `AGENTGLASS_DB`,
+  `TMUX_TMPDIR`. Only `bun test` sets `NODE_ENV=test`; a `bun -e` that imports
+  `db.ts` opens the real database.
+- tmux in tests: `-f /dev/null`, an explicit `-L agx-<name>` socket under a
+  private `TMUX_TMPDIR`, `env -u TMUX`, `sleep` as the window command, and
+  `kill-server` before restoring `TMUX_TMPDIR`. Never `tmux kill-server`
+  without `-L`.
+
+## Editing
+
+- Stage by explicit path; never `git add -A`. Other sessions may be editing
+  the same tree.
+- Work notes (`TASKS.md`, `DECISIONS.md`, `*_AUDIT.md`, `NOTES.md`) never go in
+  the tree. Product docs live in `README.md`, `SECURITY.md`, `CONTRIBUTING.md`
+  and `docs/`.
+- A pre-commit hook rejects private terms. Fixtures and comments use invented
+  names (`acme/orbit`, `ORBIT-1042`).
+- A backtick inside a comment inside a template literal closes the literal;
+  a bare `\s` in a template literal collapses to `s`.
+- Replacing a block in a large file: delimit it by its own closing brace and
+  check `git diff --stat` before committing.
+- No dynamic `import()` between modules that already import each other; the
+  bundler emits an undefined helper and the compiled server dies on line one.
+- Prefer the house tokens (`ICON`/`HIT` in `web/src/lib/iconSize.ts`,
+  `--surface-*` in `web/src/index.css`, `LAYER` in `web/src/lib/layers.ts`)
+  over new numbers; count what the repo already uses before adding a size.
