@@ -10,7 +10,7 @@
  */
 import { describe, expect, mock, test } from "bun:test";
 import {
-  clearFocusTimer, focusCapture, liveDetail, scheduleFocus,
+  clearFocusTimer, endsTheLine, focusCapture, liveDetail, scheduleFocus,
   type FocusTarget, type FocusTimer,
 } from "../src/terminal/liveFocus.ts";
 
@@ -136,5 +136,45 @@ describe("what the bar says", () => {
 
   test("a line of spaces is a line — it is what was typed", () => {
     expect(liveDetail(" ")).toBe(" ");
+  });
+});
+
+/*
+ * Reported from a phone, with a screenshot: "cuando envío un mensaje se queda
+ * escrito aquí abajo y aquí no debería escribirse nada — es un botón y ya no
+ * un input".
+ *
+ * It was right, and the cause was that nothing dropped the transcript. In
+ * `keys` the row along the bottom reads back what has gone down the wire, and
+ * a line that has RUN has nothing left to read back — so it kept the message
+ * and read as a field with your message still in it.
+ */
+describe("when the button stops showing a line", () => {
+  test("the return key ends it, by either spelling", () => {
+    expect(endsTheLine("\r")).toBe(true);
+    expect(endsTheLine("\n")).toBe(true);
+    expect(endsTheLine("\r\n")).toBe(true);
+  });
+
+  test("the keys that change a line without ending it do not", () => {
+    // Tab completes it, up replaces it, Ctrl+C throws it away. All of them
+    // leave a line on the pane, and the pane is what knows what it says
+    // afterwards.
+    for (const key of ["\t", "\u001b[A", "\u001b[B", "\u0003", "\u0004"]) {
+      expect(endsTheLine(key), JSON.stringify(key)).toBe(false);
+    }
+  });
+
+  test("a line that merely contains a return is not the return key", () => {
+    // A paste. It goes to the pane as bytes, and what it leaves behind is a
+    // line the pane is still holding.
+    expect(endsTheLine("git status\r")).toBe(false);
+    expect(endsTheLine("")).toBe(false);
+  });
+
+  test("and then the bar is back to asking for the keyboard", () => {
+    // The pair, stated together: this is the state the screen is left in after
+    // the clear, and it is the whole of what the report asked for.
+    expect(liveDetail("")).toBe("Tap to show keyboard");
   });
 });

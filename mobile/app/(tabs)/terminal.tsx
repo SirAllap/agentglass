@@ -55,7 +55,7 @@ import {
   NO_MODES, applyDefault, isLive, prune, setLive, type LiveModes,
 } from "../../src/terminal/liveDefault.ts";
 import {
-  clearFocusTimer, focusCapture, liveDetail, scheduleFocus, type FocusTimer,
+  clearFocusTimer, endsTheLine, focusCapture, liveDetail, scheduleFocus, type FocusTimer,
 } from "../../src/terminal/liveFocus.ts";
 import { onHandoff, takeHandoff } from "../../src/terminal/handoff.ts";
 import { BackIcon, ImageIcon, KeyboardIcon, MicIcon } from "../../src/nav/icons.tsx";
@@ -929,8 +929,12 @@ function TerminalPane(): React.ReactNode {
     // the field, so what `onPane` holds describes a screen that no longer
     // exists. Dropped rather than refreshed — the next report seeds it again.
     onPane.current = null;
+    // The line has run, so the transcript of it is over. Without this the
+    // button along the bottom keeps the message that was just sent, which is
+    // how a button ends up looking like a field with your line still in it.
+    if (endsTheLine(bytes)) forgetKeys();
     terminal.current?.send(bytes);
-  }, []);
+  }, [forgetKeys]);
 
   /**
    * Deliver whatever another screen left in the letterbox.
@@ -1131,7 +1135,15 @@ function TerminalPane(): React.ReactNode {
     if (text.endsWith("\n")) {
       const body = text.replace(/\n+$/, "");
       typedBody(body);
-      commit(body);
+      /*
+       * In `keys` the body has already gone down the wire, character by
+       * character, as it was typed — so what is left to send is the return
+       * itself. `commit` would send the whole line AGAIN, which is the same
+       * double-run `onPane` exists to stop, and it is `onKey` that drops the
+       * transcript afterwards.
+       */
+      if (raw) onKey("\r");
+      else commit(body);
       return;
     }
     typedBody(text);
