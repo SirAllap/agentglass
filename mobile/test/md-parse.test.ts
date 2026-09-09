@@ -105,6 +105,43 @@ describe("what a review bot writes", () => {
   });
 });
 
+describe("an HTML comment is hidden the way a browser hides it", () => {
+  const gone = (body: string, marker = "secret"): void => {
+    expect(JSON.stringify(parseMarkdown(body))).not.toContain(marker);
+  };
+
+  test("the ordinary one, on its own line and inline", () => {
+    gone("<!-- secret -->");
+    gone("before <!-- secret --> after");
+    expect(inlineText(only(parseMarkdown("before <!-- secret --> after"), "p")[0]!.kids))
+      .toBe("before  after");
+  });
+
+  test("the short forms a browser closes early", () => {
+    // `<!-->` and `<!--->` are whole comments; what follows them is text.
+    expect(inlineText(only(parseMarkdown("<!-->secret is text"), "p")[0]!.kids)).toBe("secret is text");
+    expect(inlineText(only(parseMarkdown("<!--->secret is text"), "p")[0]!.kids)).toBe("secret is text");
+  });
+
+  test("`--!>` closes one too, so what follows is not left hidden", () => {
+    expect(inlineText(only(parseMarkdown("<!-- x --!>shown"), "p")[0]!.kids)).toBe("shown");
+  });
+
+  test("dashes inside a comment do not close it", () => {
+    gone("<!-- secret --- still secret -->");
+    expect(parseMarkdown("<!-- a --- b -->post")[0]).toEqual({ t: "p", kids: [{ t: "text", text: "post" }] });
+  });
+
+  test("an unterminated comment takes the rest, rather than printing it", () => {
+    gone(md("intro", "<!-- secret", "secret too"));
+    expect(inlineText(only(parseMarkdown(md("intro", "<!-- secret")), "p")[0]!.kids)).toBe("intro");
+  });
+
+  test("a lone `<!--` in a code span is still hidden — and nothing throws", () => {
+    expect(() => parseMarkdown("`<!--` and `-->`")).not.toThrow();
+  });
+});
+
 describe("nesting, quotes and images", () => {
   test("a sub-list belongs to the item above it, not to the list", () => {
     const [list] = only(parseMarkdown(md(
@@ -193,5 +230,7 @@ describe("a hostile body cannot hang the screen", () => {
   under("an address with a tail of punctuation", `https://x.example/${"a".repeat(6000)}.....`);
   under("a run of backticks that closes nothing", `${"`".repeat(4000)}text`);
   under("emphasis that is never closed", `**${"a ".repeat(4000)}`);
+  under("a thousand comment openings that never close", `${"<!--".repeat(1000)}text`);
+  under("a comment full of dashes", `<!-- ${"-".repeat(8000)} -->tail`);
   under("four hundred lines of shifting indent", Array.from({ length: 400 }, (_, i) => `${" ".repeat(i % 20)}- item`).join("\n"));
 });

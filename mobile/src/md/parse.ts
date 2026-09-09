@@ -50,10 +50,39 @@ export type Block =
   | { t: "table"; head: Inline[][]; rows: Inline[][][] }
   | { t: "image"; src: string; alt: string };
 
-/** `<!-- pr-template-nudge -->` opens a bot comment this app shows every day.
- *  Dropped rather than escaped: it is addressed to a machine, and printing it
- *  would be printing the one thing the author meant to hide. */
-const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+/**
+ * Drop HTML comments.
+ *
+ * `<!-- pr-template-nudge -->` opens a bot comment this app shows every day.
+ * Dropped rather than escaped: it is addressed to a machine, and printing it
+ * would be printing the one thing the author meant to hide.
+ *
+ * A scanner rather than a pattern. The obvious `/<!--[\s\S]*?-->/g` agrees with
+ * a browser on the comment a bot writes and disagrees on every short one: HTML
+ * ends a comment at `<!-->` and at `<!--->` before it has begun, and at `--!>`
+ * as well as at `-->`. A filter that misses those leaves the reader looking at
+ * markup the author hid, so this follows the parser browsers follow.
+ */
+function stripComments(src: string): string {
+  let out = "";
+  let at = 0;
+  for (;;) {
+    const open = src.indexOf("<!--", at);
+    if (open < 0) return out + src.slice(at);
+    out += src.slice(at, open);
+    let i = open + 4;
+    // `<!-->` and `<!--->` are a whole comment, empty and already closed.
+    if (src.startsWith(">", i)) { at = i + 1; continue; }
+    if (src.startsWith("->", i)) { at = i + 2; continue; }
+    for (;;) {
+      const dash = src.indexOf("--", i);
+      if (dash < 0) return out;          // unterminated: the rest is comment
+      if (src.startsWith("-->", dash)) { at = dash + 3; break; }
+      if (src.startsWith("--!>", dash)) { at = dash + 4; break; }
+      i = dash + 2;
+    }
+  }
+}
 
 const FENCE = /^(\s*)(```+|~~~+)\s*([^\s`]*)/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
@@ -129,7 +158,7 @@ const indentOf = (s: string): number => {
  * same wherever it appears.
  */
 export function parseMarkdown(src: string): Block[] {
-  const text = (src ?? "").replace(HTML_COMMENT, "");
+  const text = stripComments(src ?? "");
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   return parseLines(lines);
 }
