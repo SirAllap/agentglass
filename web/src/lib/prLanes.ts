@@ -303,11 +303,17 @@ export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake): Map<L
  * How many a lane may draw.
  *
  * A lane is allowed to be forty on a bad week, and forty cards in a column is a
- * scroll inside a scroll — worse than the flat list the board replaced. Six
- * keeps every lane on one screen at the sizes this app runs at; the rest are
- * counted, not hidden, and the table is one click away.
+ * scroll inside a scroll — worse than the flat list the board replaced. The
+ * rest are counted, not hidden, and the table is one click away.
+ *
+ * Six was that argument taken too far. "es molesto tener que andar haciendo el
+ * show more ese": on a real board the green lane held thirteen, so the button
+ * appeared with SEVEN left over — and pressing a button to see seven more cards
+ * on a screen with room for them is a click that buys nothing. Twenty is where
+ * a column stops fitting and starts being a list; below that the fold costs
+ * more than it saves.
  */
-export const LANE_CAP = 6;
+export const LANE_CAP = 20;
 
 /* ------------------------------------------------------------------ acting */
 
