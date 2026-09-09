@@ -36,7 +36,7 @@ import { claudeModels } from "./claudemodels.ts";
 import { chatBypassAllowed, inScope, workspaceRoot } from "./config.ts";
 import { db } from "./db.ts";
 import { projectRootOf } from "./git.ts";
-import { fieldReadout, boardNow } from "./lantern.ts";
+import { fieldReadout, boardNow, isGone } from "./lantern.ts";
 import { knownProjects } from "./transcripts.ts";
 import { doctrinePath, doctrineSlug, readDoctrine } from "./seatdoctrine.ts";
 import { REPORT_SHAPE, briefPath, readBrief } from "./seatbrief.ts";
@@ -535,6 +535,8 @@ export interface FieldRow {
   saidAt?: number;
   /** Twelve five-minute counts, oldest first. */
   pulse: number[];
+  /** No pane here and quiet for hours: a name, not somebody to talk to. */
+  gone?: boolean;
 }
 
 /** Everything the view needs for one project, in one answer. */
@@ -556,6 +558,9 @@ export async function seatStatus(root: string): Promise<{
     doing: r.doing,
     saidAt: r.saidAt,
     pulse: pulse.get(r.session ?? "") ?? new Array(BUCKETS).fill(0),
+    /* Drawn as a name rather than as an agent — see `isGone`. The view folds
+       these away; it was showing seventeen agents where four were reachable. */
+    ...(isGone(r) ? { gone: true } : null),
   }));
   return {
     root, doctrine: doctrinePath(root), seat: seatRow(root), agent, live: agent !== null,
