@@ -756,10 +756,33 @@ export function isRestoring(): boolean { return restoring; }
 export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promise<{ ok: boolean; restored: number; error?: string }> {
   restoring = true;
   try {
-    return await restorePass(mode);
+    const r = await restorePass(mode);
+    /*
+     * SETTLED ONLY WHEN THE PASS ACTUALLY FINISHED, and that is why this line
+     * is not in the `finally` below.
+     *
+     * `settled` is what stops a photograph from shrinking a session's window
+     * list. Setting it in the `finally` set it after a pass that THREW —
+     * halfway through rebuilding the desk, with the file still holding the six
+     * windows and the desk holding two. The next sweep, ten seconds later, was
+     * then believed, and the record shrank to what the broken pass had managed.
+     * A restore that blew up is the one moment the record is most worth
+     * keeping and it was the moment it was least protected.
+     *
+     * Left false, the only cost is a stale entry that a later restore skips
+     * harmlessly — the trade this whole file already makes, in the direction
+     * it already chose.
+     */
+    settled = true;
+    return r;
+  } catch (e: any) {
+    /* And it comes back as an answer rather than an unhandled rejection: the
+       boot calls this as `void restoreLayout().then(() => captureLayout())`,
+       so a throw here used to skip that capture and print a rejection nobody
+       reads. */
+    return { ok: false, restored: 0, error: String(e?.message ?? e) };
   } finally {
     restoring = false;
-    settled = true;
     /* Whatever asked for a capture while this was running gets one now,
        against a desk that is whole. */
     if (captureWanted) { captureWanted = false; void captureLayout(); }

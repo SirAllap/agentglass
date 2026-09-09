@@ -24,7 +24,7 @@
  * Against the machine's real tmux, on our own socket and our own state dir.
  */
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdirSync, rmSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -134,4 +134,46 @@ test("a boot that says it is not re-capturing does not re-capture", async () => 
        halt every capture in every file that runs after this one. */
     restore.__clearCrashLoop();
   }
+});
+
+test("a restore that blows up leaves the record protected, not settled", async () => {
+  /*
+   * THE QUESTION THIS ANSWERS, asked in these words: if the restore takes
+   * longer than it should, can the photograph every ten seconds overwrite and
+   * break it?
+   *
+   * While the pass is RUNNING, no: `captureLayout` returns null and defers.
+   * The hole was on the other side of it. `settled` was set in a `finally`,
+   * so a pass that THREW — halfway through rebuilding, file holding six
+   * windows, desk holding two — marked the desk as settled anyway, and the
+   * next sweep ten seconds later was believed. The moment the record was most
+   * worth keeping was the moment it was least protected.
+   *
+   * A `windows` that is not an array is the cheapest real way to make the pass
+   * throw: it is also what a half-written or hand-edited layout.json looks
+   * like, so the test is a corrupt-file test as well.
+   */
+  restore.__resetRestoreSettled();
+  const dir = join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore");
+  const good = windowsRecorded();
+  expect(good.length).toBeGreaterThan(0);
+  const state = JSON.parse(readFileSync(join(dir, "layout.json"), "utf8")) as { sessions: any[] };
+  writeFileSync(join(dir, "layout.json"), JSON.stringify({
+    ...state,
+    sessions: [{ name: `${SESSION}-broken`, windows: null }, ...state.sessions],
+  }));
+
+  /* It answers instead of rejecting: the boot calls this as a floating
+     promise, and a throw there skipped the capture that follows it. */
+  const r = await restore.restoreLayout("lazy");
+  expect(r.ok).toBe(false);
+
+  /* And the desk is NOT settled, so the next photograph still cannot shrink
+     the session it could not put back. */
+  for (const w of await windowsLive()) {
+    if (w !== "one") await pane.tmux(["kill-window", "-t", `=${SESSION}:${w}`]);
+  }
+  await restore.captureLayout();
+  expect(windowsRecorded().sort(), "a broken restore let the next photograph eat the record")
+    .toEqual(good.sort());
 });
