@@ -377,10 +377,25 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
           }
           switch (req.action) {
             case "open": {
-              /* A rectangle it can be composited into. The panel overwrites it
-                 with the real hole the moment it renders; without one, the view
-                 exists at zero size and photographs as nothing. */
-              const r = await browserDevtools({ guest, rect: { x: 0, y: 0, width: 1200, height: 900 } });
+              /*
+               * OPENED HIDDEN, and that is not a detail.
+               *
+               * The first version handed it a rectangle "to be composited
+               * into" — 1200x900 at the origin — on the reasoning that a view
+               * with no size photographs as nothing. True, and it lands on the
+               * WINDOW: this view floats over the workspace, so an agent typing
+               * `inspect open` while somebody is reading a diff pasted the
+               * inspector across their screen and left it there. Reported with
+               * a screenshot of exactly that.
+               *
+               * The panel corrects the rectangle the moment it renders — but
+               * only when the browser is the pane on screen, which is precisely
+               * when an agent is NOT the one looking. So `on: false`: the view
+               * exists, the front-end loads, and `inspect shot` is the thing
+               * that shows it, for the third of a second it takes to
+               * photograph, and puts it back.
+               */
+              const r = await browserDevtools({ guest, rect: { x: 0, y: 0, width: 1200, height: 900, on: false } });
               return r.ok ? { ok: true } : { ok: false, error: r.error || "the inspector did not open" };
             }
             case "close":

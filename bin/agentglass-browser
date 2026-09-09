@@ -2613,6 +2613,17 @@ def main():
             print(dest)
         else:
             print(png)
+        # ASKED FOR TWO HALVES, GIVEN ONE, AND TOLD NOTHING.
+        #
+        # `--with-inspector` falls back to the page alone when the inspector
+        # could not be photographed — which is right, a shot whose garnish
+        # failed is still the page. What was wrong is that the fallback was
+        # silent: the file appeared, the path printed, exit 0, and the picture
+        # was missing the half you asked for. Found by somebody opening the PNG,
+        # which is the one check this tool exists to save.
+        if getattr(a, "withInspector", False) and not value.get("withInspector"):
+            print("the inspector could not be photographed — this is the page alone. "
+                  "`inspect shot` on its own usually works; try that.", file=sys.stderr)
     else:
         print(json.dumps(value))
     return 0
