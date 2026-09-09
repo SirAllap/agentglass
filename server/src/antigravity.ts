@@ -30,6 +30,7 @@ import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { inScope, chatBypassAllowed } from "./config.ts";
 import { startKeepalive, drainStderr, MODEL_RE, SESSION_RE } from "./chat.ts";
 import type { AgentModel, IngestBody } from "../../shared/types.ts";
+import { stopTree } from "./proctree.ts";
 
 const agyBin = () => Bun.which("agy");
 /*
@@ -472,10 +473,7 @@ export function antigravityStream(
               || `agy produced no output in ${STARTUP_TIMEOUT_MS / 1000}s — it is probably waiting for a login it can't ask for here. Run \`agy\` in a terminal and sign in, then try again.`,
           }) + "\n"));
         } catch { /* the client already went away */ }
-        try {
-          if (setsid) process.kill(-proc.pid, "SIGTERM");
-          else proc.kill();
-        } catch { /* gone */ }
+        stopTree(proc, !!setsid); // the tree, not just the CLI
       }, STARTUP_TIMEOUT_MS);
       try {
         for (;;) {
@@ -502,10 +500,7 @@ export function antigravityStream(
     },
     cancel() {
       cancelled = true;
-      try {
-        if (setsid) process.kill(-proc.pid, "SIGTERM"); // the group, not just agy
-        else proc.kill();
-      } catch { /* gone */ }
+      stopTree(proc, !!setsid); // the tree, not just the CLI
     },
   });
 

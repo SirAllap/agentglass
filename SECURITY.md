@@ -362,12 +362,30 @@ button is for, and it runs only when you press it. It has a switch of its own,
 `AGENTGLASS_WALKTHROUGH_DISABLED=1`, and where it sends is checked before either
 transport is chosen: a custom `ANTHROPIC_BASE_URL` is refused unless
 `AGENTGLASS_ALLOW_REMOTE=1` says otherwise, on the local CLI path as much as the
-API one. Two more paths exist and both are off until you turn them on:
+API one. Three more paths exist and all three are off until you turn them on:
 `AGENTGLASS_WEBHOOK` (what travels through it is listed under
-[What leaves through the webhook](#what-leaves-through-the-webhook)), and the
+[What leaves through the webhook](#what-leaves-through-the-webhook)); the
 Clone's judge, which hands `claude -p` the material it is comparing — through
 the same local CLI, only after the private-terms gate, and only with the `judge`
-setting on.
+setting on; and `AGENTGLASS_PRICING_REFRESH=1`, described next.
+
+### One request that carries nothing: the price catalogue
+
+With `AGENTGLASS_PRICING_REFRESH=1`, the server reads LiteLLM's published price
+table from `raw.githubusercontent.com` once at boot and once a day. It is a
+**GET of a public file** — no credential, no query string, no body, and nothing
+about you, your models or your spend goes with it. What comes back is validated
+before it can replace anything: over five megabytes is refused, a redirect is
+refused rather than followed, a catalogue with fewer than a hundred usable
+models is rejected whole, and the bundled table stays in place if any of that
+fails. Where it may go is checked by the same `outboundDestination()` that
+guards the webhook and `ANTHROPIC_BASE_URL`, with GitHub's raw host trusted for
+this one read the way the webhook trusts Slack's and Discord's.
+
+The observable fact is that the machine makes a request at all, which on a
+network you would rather stayed quiet is worth knowing: it is off by default,
+and off means no request. `AGENTGLASS_PRICING` — your own price file — disables
+the refresh outright and stays authoritative.
 
 What it will not send: files whose contents are a credential by design (`.env*`,
 `*.pem`, `*.key`, `id_rsa`, `credentials.json`, `.npmrc`, and their neighbours)

@@ -1,3 +1,7 @@
+import type { StatsSummary } from "../../shared/types.ts";
+import { statSync } from "node:fs";
+import { outboundDestination } from "./egress.ts";
+
 // Model pricing, USD per 1,000,000 tokens.
 //
 // These are user-editable defaults. Whatever source feeds agentglass (Claude
@@ -135,7 +139,122 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["command"], label: "Command", input: 0.5, output: 1.5, cache_write: 0, cache_read: 0 },
 ];
 
-let table = PRICE_TABLE;
+type PricingProvenance = NonNullable<StatsSummary["pricing"]>;
+
+export const LITELLM_PRICING_URL =
+  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+/** The host that URL names, trusted for this one read the way the webhook
+ *  trusts the two chat services it exists for. Nothing else is. */
+export const PRICING_SERVICE_HOSTS = ["raw.githubusercontent.com"] as const;
+const BUNDLED_UPDATED_AT = "2026-07-28";
+const LITELLM_MAX_BYTES = 5 * 1024 * 1024;
+const LITELLM_MIN_MODELS = 100;
+const REFRESH_MS = 24 * 60 * 60 * 1000;
+type PricingFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+function matchTable(table: ModelPrice[], model: string): ModelPrice | null {
+  for (const p of table) {
+    const exact = p.exact?.some((id) => model === id || model.startsWith(`${id}[`));
+    if (exact || p.match.some((frag) => model.includes(frag))) return p;
+  }
+  return null;
+}
+
+function perMillion(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return value * 1_000_000;
+}
+
+/**
+ * What a cache token costs when the catalogue does not price one.
+ *
+ * Absent is not free, and reading it as zero would quietly replace a rate we
+ * verified by hand with nothing. Counted in today's catalogue: 843 rows carry a
+ * discounted `cache_read` and no `cache_creation` — OpenAI's and Gemini's shape,
+ * where writing to the cache costs the ordinary input rate and only the read is
+ * cheaper — and 1,971 rows publish neither, which is a provider that prices no
+ * caching at all. Ordinary input is the honest answer to both, and it is the
+ * floor in every case: no provider bills a cache write below its input rate.
+ *
+ * An explicit `0` is left alone — 37 rows mean it, and meaning it is different
+ * from not saying.
+ */
+const cacheRate = (value: unknown, input: number): number | null =>
+  value === undefined || value === null ? input : perMillion(value);
+
+/** Validate the remote shape before any of it can replace the active catalogue. */
+export function mapLiteLlmPricing(raw: unknown): Map<string, ModelPrice> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("price catalogue is not an object");
+  const mapped = new Map<string, ModelPrice>();
+  for (const [rawName, value] of Object.entries(raw)) {
+    if (!rawName.trim() || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    const row = value as Record<string, unknown>;
+    const input = perMillion(row.input_cost_per_token);
+    const output = perMillion(row.output_cost_per_token);
+    if (input === null || output === null) continue;
+    const cacheWrite = cacheRate(row.cache_creation_input_token_cost, input);
+    const cacheRead = cacheRate(row.cache_read_input_token_cost, input);
+    if (cacheWrite === null || cacheRead === null) continue;
+    const name = rawName.toLowerCase();
+    mapped.set(name, {
+      match: [],
+      exact: [name],
+      label: rawName,
+      input,
+      output,
+      cache_write: cacheWrite,
+      cache_read: cacheRead,
+    });
+  }
+  return mapped;
+}
+
+/** A catalogue swaps remote data atomically and always retains bundled fallback. */
+export class PricingCatalog {
+  private live = new Map<string, ModelPrice>();
+  private liveAt: string | null = null;
+
+  constructor(
+    private readonly bundled: ModelPrice[],
+    private readonly user: ModelPrice[] | null = null,
+    /** When the user's own file was last written — not when this process
+     *  started, which says nothing about the numbers in it. */
+    private readonly userLoadedAt = new Date().toISOString().slice(0, 10),
+  ) {}
+
+  priceFor(modelName: string | null | undefined): ModelPrice | null {
+    if (!modelName) return null;
+    const model = modelName.toLowerCase();
+    if (this.user) return matchTable(this.user, model);
+    const exact = model.replace(/\[[^\]]+\]$/, "");
+    return this.live.get(exact) ?? matchTable(this.bundled, model);
+  }
+
+  installLive(prices: Map<string, ModelPrice>, updatedAt: string): void {
+    if (prices.size < LITELLM_MIN_MODELS) throw new Error(`price catalogue has only ${prices.size} usable models`);
+    this.live = new Map(prices);
+    this.liveAt = updatedAt;
+  }
+
+  /**
+   * Which numbers are in use and how old they are.
+   *
+   * `updated_at` is "as of", and each source has to earn the word: the bundled
+   * table dates from when it was last checked by hand, the user's file from
+   * when they last wrote it, and a live catalogue from when we fetched it —
+   * which is not the day LiteLLM last changed a rate, and the panel says "as
+   * of" rather than "updated" so it does not claim to be.
+   */
+  provenance(): PricingProvenance {
+    if (this.user) return { source: "user", updated_at: this.userLoadedAt };
+    if (this.liveAt) return { source: "live", provider: "litellm", updated_at: this.liveAt };
+    return { source: "bundled", updated_at: BUNDLED_UPDATED_AT };
+  }
+}
+
+let userTable: ModelPrice[] | null = null;
+/** The date the panel shows for a user table: the file's own, not today's. */
+let userTableAt = new Date().toISOString().slice(0, 10);
 
 // Allow a JSON override file so users tune prices without editing source.
 try {
@@ -144,20 +263,85 @@ try {
     const f = Bun.file(path);
     // top-level await is fine in Bun module scope
     const custom = (await f.json()) as ModelPrice[];
-    if (Array.isArray(custom) && custom.length) table = custom;
+    if (Array.isArray(custom) && custom.length) {
+      userTable = custom;
+      // mtime, so a table written months ago says so instead of looking fresh
+      // at every restart. Best-effort: a file we could read but cannot stat
+      // keeps today's date rather than losing the table over a label.
+      try { userTableAt = new Date(statSync(path).mtimeMs).toISOString().slice(0, 10); } catch { /* keep the default */ }
+    }
   }
 } catch (e) {
   console.warn("[pricing] failed to load AGENTGLASS_PRICING, using defaults:", e);
 }
 
-export function priceFor(modelName: string | null | undefined): ModelPrice | null {
-  if (!modelName) return null;
-  const m = modelName.toLowerCase();
-  for (const p of table) {
-    const exact = p.exact?.some((id) => m === id || m.startsWith(`${id}[`));
-    if (exact || p.match.some((frag) => m.includes(frag))) return p;
+const catalog = new PricingCatalog(PRICE_TABLE, userTable, userTableAt);
+
+export function pricingProvenance(): PricingProvenance {
+  return catalog.provenance();
+}
+
+export async function refreshLiteLlmPricing(
+  target: PricingCatalog = catalog,
+  fetcher: PricingFetch = fetch,
+  now = Date.now(),
+): Promise<boolean> {
+  try {
+    /*
+     * Through egress.ts rather than around it. The URL is a constant and the
+     * whole feature is off unless someone sets AGENTGLASS_PRICING_REFRESH, so
+     * nothing here needs the opt-in today — but that function is the one place
+     * that answers "may this process talk to that host", and a call that skips
+     * it is a call that meets no gate on the day the constant is edited or
+     * pointed at a mirror. GitHub's raw host is trusted the way the webhook
+     * trusts Slack's and Discord's: it is the host this feature exists for.
+     */
+    const destination = outboundDestination(LITELLM_PRICING_URL, "the LiteLLM price catalogue", PRICING_SERVICE_HOSTS);
+    if (!destination.ok) throw new Error(destination.error);
+    const response = await fetcher(destination.url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+      redirect: "error",
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const declared = Number(response.headers.get("content-length") ?? 0);
+    if (declared > LITELLM_MAX_BYTES) throw new Error(`response exceeds ${LITELLM_MAX_BYTES} bytes`);
+    if (!response.body) throw new Error("response has no body");
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > LITELLM_MAX_BYTES) {
+        try { await reader.cancel(); } catch { /* the size refusal is the useful error */ }
+        throw new Error(`response exceeds ${LITELLM_MAX_BYTES} bytes`);
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const prices = mapLiteLlmPricing(JSON.parse(new TextDecoder().decode(bytes)));
+    target.installLive(prices, new Date(now).toISOString().slice(0, 10));
+    return true;
+  } catch (e) {
+    console.warn("[pricing] LiteLLM refresh failed; keeping current prices:", e);
+    return false;
   }
-  return null;
+}
+
+let refreshStarted = false;
+export function startPricingRefresh(): void {
+  if (refreshStarted || userTable || !/^(1|true|yes|on)$/i.test(process.env.AGENTGLASS_PRICING_REFRESH ?? "")) return;
+  refreshStarted = true;
+  void refreshLiteLlmPricing();
+  setInterval(() => void refreshLiteLlmPricing(), REFRESH_MS).unref?.();
+}
+
+export function priceFor(modelName: string | null | undefined): ModelPrice | null {
+  return catalog.priceFor(modelName);
 }
 
 export interface TokenUsage {
@@ -199,6 +383,20 @@ export function costUsd(usage: TokenUsage, modelName: string | null | undefined)
       cr * p.cache_read) /
     1_000_000
   );
+}
+
+/**
+ * Extra dollars paid when tokens that could have been cache reads are written
+ * again. Unknown models and tables where writes are no dearer than reads do not
+ * produce a confident penalty.
+ */
+export function cacheRebuildPenaltyUsd(
+  cacheCreationTokens: number,
+  modelName: string | null | undefined,
+): number {
+  const p = priceFor(modelName);
+  if (!p || !Number.isFinite(cacheCreationTokens) || cacheCreationTokens <= 0) return 0;
+  return cacheCreationTokens * Math.max(0, p.cache_write - p.cache_read) / 1_000_000;
 }
 
 /**

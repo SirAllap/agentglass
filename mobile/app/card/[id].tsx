@@ -48,6 +48,7 @@ import type { GitRepoRef, SkillInfo } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { announceCard } from "../../src/state/card-edits.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
+import { Md, outline } from "../../src/md/Md.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { providerTitle } from "../../src/model/taskProviders.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
@@ -85,7 +86,9 @@ function prInk(pr: { state: string; draft?: boolean }): string {
 /** How much description opens by default. 900 is about a screenful and a half
  *  at this size — enough that most cards are shown whole and a specification is
  *  visibly cut rather than silently truncated. */
-const BODY_CAP = 900;
+/** How much of a description shows before the fold. Blocks, not
+ *  characters: a cut mid-sentence is a cut nobody chose. */
+const BODY_BLOCKS = 5;
 
 /** One status the card can be moved to, as the list defines it. */
 interface Status { status: string; color?: string; type?: string }
@@ -408,6 +411,9 @@ export default function CardScreen(): React.ReactNode {
      so the emptiness test is on the trimmed text and the trimmed text is what
      gets drawn. */
   const body = (detail?.description ?? "").trim();
+  /* What the fold hides, named. A specification's next heading is the whole
+     of what a reader needs to decide whether to open it. */
+  const bodyRest = useMemo(() => outline(body, BODY_BLOCKS), [body]);
 
   /* Subtasks and checklist items counted as one number, because they are one
      question — what is left underneath this card. A subtask is done when the
@@ -473,27 +479,28 @@ export default function CardScreen(): React.ReactNode {
               <Note tone={said.ok ? "quiet" : "bad"}>{said.text}</Note>
             ) : null}
 
-            {/* Verbatim, and capped. Markdown is not rendered here for the
-                reason the pull request and issue screens both give: a
-                description is prose somebody wrote, and half-rendered markup
-                reads worse than none. The cap is because a ClickUp description
-                is regularly a specification, and a screen that opens on eight
-                hundred words has buried the status and the buttons under
-                them. */}
+            {/* Rendered, and folded by blocks rather than by characters. The
+                fold is still here for the reason it always was — a ClickUp
+                description is regularly a specification, and a screen that
+                opens on eight hundred words has buried the status and the
+                buttons under them — but a cut between two things somebody
+                wrote beats a cut at character nine hundred, and the expander
+                can name what is under it. */}
             {body ? (
-              <Card>
-                <Text style={{ color: C.text2, fontSize: T.body, lineHeight: 21 }}>
-                  {wholeBody ? body : body.slice(0, BODY_CAP)}
-                  {!wholeBody && body.length > BODY_CAP ? "…" : ""}
-                </Text>
-                {body.length > BODY_CAP ? (
+              <Card style={{ gap: SPACE.md }}>
+                <Md text={body} host={host} limit={wholeBody ? undefined : BODY_BLOCKS} />
+                {bodyRest.hidden ? (
                   <Pressable
                     accessibilityRole="button"
                     onPress={() => setWholeBody((was) => !was)}
                     style={{ minHeight: TAP, justifyContent: "center" }}
                   >
                     <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>
-                      {wholeBody ? "Show less" : `Show all ${body.length} characters`}
+                      {wholeBody
+                        ? "Show less"
+                        : bodyRest.nextHeading
+                          ? `${bodyRest.nextHeading}${bodyRest.hidden > 1 ? ` and ${bodyRest.hidden - 1} more` : ""}`
+                          : `${bodyRest.hidden} more`}
                     </Text>
                   </Pressable>
                 ) : null}

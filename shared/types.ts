@@ -331,6 +331,12 @@ export interface StatsSummary {
   /** Wall-clock ms when the server process started — what the header's
    *  uptime counts from. Absent in demo mode, where nothing is "up". */
   server_started_at?: number;
+  /** The price catalogue currently used for locally estimated spend. */
+  pricing?: {
+    source: "bundled" | "live" | "user";
+    updated_at: string;
+    provider?: "litellm";
+  };
   /**
    * AGENTGLASS_RETENTION_DAYS, so the window chips can tell the truth.
    *
@@ -794,7 +800,7 @@ export interface SearchHit {
 export interface Insight {
   id: string;
   severity: "info" | "warn" | "bad";
-  kind: "loop" | "spend" | "errors" | "burn";
+  kind: "loop" | "spend" | "errors" | "burn" | "cache";
   title: string;
   detail: string;
   session: string | null; // "source_app:session8"

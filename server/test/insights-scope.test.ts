@@ -50,7 +50,12 @@ beforeAll(async () => {
   };
   loop(SCOPED, "s-in"); // in scope
   loop(OTHER, "s-out"); // out of scope — must not leak
-  loop(MONO, "s-cwd", { cwd: SCOPED + "/wt/x" }); // in scope via the cwd the turn ran in
+  // join, not `SCOPED + "/wt/x"`: `isWithin` compares with the platform's own
+  // separator, so on Windows the concatenated form is `C:\…\scoped/wt/x` and
+  // fails a prefix test against `C:\…\scoped\` — the fixture would sit outside
+  // the scope it exists to prove is inside it, and this assertion would pass by
+  // testing nothing (#569).
+  loop(MONO, "s-cwd", { cwd: join(SCOPED, "wt", "x") }); // in scope via the cwd the turn ran in
 
   // A second, differently-shaped query (SUM(cost)/HAVING) — a fast-burn session
   // over $15 in 15m — to prove the scope guard covers more than the loop query.
@@ -68,6 +73,22 @@ beforeAll(async () => {
   };
   burn(SCOPED, "b-in");
   burn(OTHER, "b-out");
+
+  // Cache rebuilds use a correlated lookup for the prior cache-bearing turn.
+  // The candidate still has to obey the project boundary; otherwise the new
+  // card would reintroduce the exact cross-project leak this file guards.
+  const cache = (project: string, session: string) => {
+    for (const timestamp of [now - 10 * 60_000, now - 1000]) db.insertEvent({
+      source_app: basename(project), session_id: session, hook_event_type: "Stop",
+      tool_name: null, tool_use_id: null, agent_id: null, agent_type: null, model_name: "claude-opus-4-8",
+      is_error: 0, error_text: null,
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_tokens: 100_000, cache_read_tokens: 0 },
+      usage_is_cumulative: false, summary: "", timestamp,
+      payload: { project_path: project }, chat: null,
+    } as any);
+  };
+  cache(SCOPED, "c-in");
+  cache(OTHER, "c-out");
 });
 
 const loopIds = () => insights.getInsights().filter((i) => i.kind === "loop").map((i) => i.id);
@@ -89,5 +110,11 @@ describe("insights are scoped to the project", () => {
     const spendIds = insights.getInsights().filter((i) => i.kind === "spend").map((i) => i.id);
     expect(spendIds).toContain("spend:scoped:b-in"); // in-scope fast burn surfaces
     expect(spendIds.some((id) => id.startsWith("spend:other:"))).toBe(false); // another project's does not leak
+  });
+
+  test("cache rebuilds obey the same scope, including their prior-turn lookup", () => {
+    const cacheIds = insights.getInsights().filter((i) => i.kind === "cache").map((i) => i.id);
+    expect(cacheIds).toContain("cache:scoped:c-in");
+    expect(cacheIds.some((id) => id.startsWith("cache:other:"))).toBe(false);
   });
 });
