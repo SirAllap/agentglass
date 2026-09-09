@@ -17,7 +17,8 @@ import type { Finding } from "../src/lanternwatch.ts";
 const dir = mkdtempSync(join(tmpdir(), "agx-seatwake-"));
 process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
 
-const { fingerprint, wakeLine, wakeSeats, __resetSeatWake } = await import("../src/seatwake.ts");
+const { fingerprint, wakeLine, wakeSeats, wakeForReport, __resetSeatWake } = await import("../src/seatwake.ts");
+const R = await import("../src/seatreport.ts");
 
 const ROOT = "/home/a/code/orbit";
 /* Every finding carries the checkout it came from: a seat is per project and
@@ -147,5 +148,65 @@ describe("a seat is woken for its own project only", () => {
     await wakeSeats([], { seats, prompt, now: 0 });
     const woken = await wakeSeats([{ kind: "gone", name: "nowhere", since: 1, line: "gone" }], { seats, prompt, now: 60_000 });
     expect(woken).toEqual([]);
+  });
+});
+
+/*
+ * A REPORT IS AN EVENT, NOT A STATE.
+ *
+ * The rest of this file rides the Lantern's look, which is fifteen minutes by
+ * default: right for a field that drifts — somebody going quiet, a window
+ * vanishing — and wrong for an agent saying it is stopped. Measured from the
+ * other side by the seat itself: it sent a report saying it was waiting on a
+ * person, nothing arrived, and it found the report by asking. Fifteen minutes
+ * of an agent sitting still is what waking on events was meant to end.
+ */
+describe("a report wakes the seat now", () => {
+  const ROOT = "/home/a/code/orbit";
+  const seats = () => [{ root: ROOT, endedAt: null }];
+
+  test("one that is stopped or asking goes straight through", async () => {
+    __resetSeatWake();
+    R.addReport({ root: ROOT, agent: "stuck", text: "STATE waiting\nNEED a go on the push" });
+    const sent: string[] = [];
+    const woke = await wakeForReport(ROOT, "stuck", { seats, prompt: async (_r, t) => { sent.push(t); }, now: 1 });
+    expect(woke).toBe(true);
+    expect(sent[0]).toContain("stuck is stopped or needs a decision");
+    expect(sent[0]).toContain("agentglass-agent inbox");
+  });
+
+  test("one that only says how it is going does not", async () => {
+    __resetSeatWake();
+    R.drainReports(ROOT);
+    R.addReport({ root: ROOT, agent: "steady", text: "STATE halfway through the retry\nBLOCKED nothing\nNEED nothing" });
+    const sent: string[] = [];
+    expect(await wakeForReport(ROOT, "steady", { seats, prompt: async (_r, t) => { sent.push(t); }, now: 2 })).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  test("and an empty chair is not woken", async () => {
+    __resetSeatWake();
+    R.drainReports(ROOT);
+    R.addReport({ root: ROOT, agent: "stuck", text: "STATE waiting\nBLOCKED the container" });
+    const sent: string[] = [];
+    const woke = await wakeForReport(ROOT, "stuck", {
+      seats: () => [{ root: ROOT, endedAt: 123 }], prompt: async (_r, t) => { sent.push(t); }, now: 3,
+    });
+    expect(woke).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  test("the sweep that follows does not say it again", async () => {
+    /* The tray half of the fingerprint is what changed, so the next look sees
+       the same count and the same field, and stays quiet. */
+    __resetSeatWake();
+    R.drainReports(ROOT);
+    R.addReport({ root: ROOT, agent: "stuck", text: "STATE waiting\nNEED a decision" });
+    const sent: string[] = [];
+    const prompt = async (_r: string, t: string) => { sent.push(t); };
+    await wakeForReport(ROOT, "stuck", { seats, prompt, now: 10 });
+    expect(sent).toHaveLength(1);
+    await wakeSeats([], { seats, prompt, now: 20 });
+    expect(sent, "the sweep repeated a report the seat had already been told about").toHaveLength(1);
   });
 });

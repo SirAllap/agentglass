@@ -1374,6 +1374,7 @@ import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
 import { readBrief, writeBrief } from "./seatbrief.ts";
 import * as SeatQueue from "./seatqueue.ts";
 import * as SeatInbox from "./seatreport.ts";
+import * as SeatWake from "./seatwake.ts";
 import { recall } from "./seatmemory.ts";
 import * as AgentOps from "./agentops.ts";
 import { nudgeText, nudgeChannel, sendNudge } from "./prnudge.ts";
@@ -6793,8 +6794,24 @@ const server = Bun.serve<WsData>({
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
       const rows = Seat.fieldFor(gate.root, await boardNow().catch(() => []));
-      if (url.searchParams.get("format") === "json") return json({ ok: true, root: gate.root, field: rows });
-      return new Response(fieldReadout(rows), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+      if (url.searchParams.get("format") === "json") {
+        return json({ ok: true, root: gate.root, field: rows, unread: SeatInbox.unreadCount(gate.root), stopped: SeatInbox.unreadWorthWaking(gate.root) });
+      }
+      /*
+       * THE TRAY IS PART OF THE FIELD.
+       *
+       * "Nobody is stopped on you" while a report in the tray says an agent is
+       * waiting for a decision is a true sentence about panes and a false one
+       * about the field — measured by the seat reading its own readout with a
+       * blocked report sitting unread. An agent stopped on a person is stopped
+       * whether the app worked it out from a hook or the agent said so itself.
+       */
+      const waiting = SeatInbox.unreadWorthWaking(gate.root);
+      const unread = SeatInbox.unreadCount(gate.root);
+      const tray = unread
+        ? `\n\n${unread} unread report${unread === 1 ? "" : "s"} in the tray${waiting ? `, ${waiting} of them stopped or asking for a decision` : ""}: run \`agentglass-agent inbox\`.`
+        : "";
+      return new Response(fieldReadout(rows) + tray, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     if (pathname === "/seat" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
@@ -6842,6 +6859,21 @@ const server = Bun.serve<WsData>({
        */
       if (verb === "report") {
         const r = SeatInbox.addReport({ root, agent: String(b.agent ?? ""), session: String(b.session ?? ""), text: String(b.text ?? "") });
+        /*
+         * AND THE SEAT HEARS IT NOW, not at the next sweep.
+         *
+         * The wake rides the Lantern's look, which is fifteen minutes by
+         * default: right for a field that drifts, wrong for an agent saying it
+         * is stopped. Measured from the other side — a report saying "waiting
+         * for a decision" arrived nowhere, and was found by asking.
+         *
+         * Floated rather than awaited: the worker's answer is that its report
+         * was filed, and that is true whether or not there is anybody in the
+         * chair to tell.
+         */
+        if (r.ok && SeatInbox.worthWaking(r.report)) {
+          void SeatWake.wakeForReport(root, r.report.agent).catch(() => false);
+        }
         return json(r, r.ok ? 200 : 400);
       }
       if (verb === "inbox") {
