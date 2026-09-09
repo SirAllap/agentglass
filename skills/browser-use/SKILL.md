@@ -60,9 +60,10 @@ containers  whoami · profiles (--make/--drop) · newtab --profile · lanes
 identity    cookies · storage · permission · permissions · clipboard
 run code    eval · eval --file · addInitScript · expose · exposed
 inspect     cdp · debug · listeners · coverage · trace
+devtools    inspect open|close · inspect panel <id> · inspect zoom <n> · inspect shot
 network     fake · intercept · throttle · headers · har
 pretend     emulate · resize · clock · settings
-evidence    shot · record · pdf · save · download · audit --script
+evidence    shot · shot --with-inspector · record · pdf · save · download · audit --script
 batch       do (and `lanes` for several pages at once)
 ```
 
@@ -244,6 +245,24 @@ flag works on `read`, `click`, `type`, `wait` and `observe`. Tab ids come from
 
 **It is one browser, and it is theirs.** The person can see every page you open.
 Open what the task needs and leave it somewhere reasonable.
+
+## The inspector, when the data verbs cannot answer
+
+`console` and `network` already answer as DATA, and are better that way — a picture of a console is a picture of text, and costs a hundred times the tokens to read.
+
+Reach for `inspect` for the panels that answer as nothing else: **Elements** (the computed styles, the box model, what the DOM actually became), **Sources**, **Performance**, **Memory**, **Application**. There is no protocol call for "what does the Styles pane say", because that pane is the front-end's own reading of the page.
+
+```
+agentglass-browser inspect open
+agentglass-browser inspect panel elements
+agentglass-browser inspect zoom 2            # BIGGER — see below
+agentglass-browser inspect shot styles.png   # the inspector alone
+agentglass-browser shot --with-inspector both.png   # page and inspector, joined
+```
+
+**Zoom before you shoot.** The level a person reads comfortably on a 27-inch screen is often unreadable in a capture somebody opens later at half size. `0` is 100%, each step is about 20%, and the sign is the part that gets typed backwards: **negative is smaller**. `inspect zoom 2` is 144% and is usually what a readable screenshot wants.
+
+`inspect shot` never writes a file it cannot fill. A view that has never been drawn hands back a full-size rectangle of one flat colour, which is not a picture of anything — that is checked, and you get an error and no file instead of evidence that turns out to be a grey square.
 
 ## Guardrails, and why they are there
 
