@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { PrThread, PrThreadComment } from "../../shared/types.ts";
-import { hunkTail, ordered, replyAnchor, whereOf } from "../src/model/threads.ts";
+import { hunkTail, ordered, replyAnchor, threadDigest, threadsOnFile, whereOf } from "../src/model/threads.ts";
 
 function comment(over: Partial<PrThreadComment> = {}): PrThreadComment {
   return {
@@ -142,5 +142,92 @@ describe("replyAnchor", () => {
     expect(replyAnchor({ comments: [comment()] })).toBe(null);
     expect(replyAnchor({ comments: [] })).toBe(null);
     expect(replyAnchor({ comments: [comment({ databaseId: null })] })).toBe(null);
+  });
+});
+
+/*
+ * Which line a conversation belongs on.
+ *
+ * The diff screen draws one file at a time and looks up each row by its
+ * new-side number, so this is the lookup it does — and the case that matters
+ * is the one where there is nothing to look up: an outdated thread has no
+ * line, and hanging it on the row that now holds that number would be a
+ * remark attached to code nobody was talking about.
+ */
+describe("threadsOnFile", () => {
+  test("only this file's threads, keyed by the line they sit on", () => {
+    const { byLine, adrift } = threadsOnFile([
+      thread({ id: "here", path: "src/a.ts", line: 12 }),
+      thread({ id: "elsewhere", path: "src/b.ts", line: 12 }),
+    ], "src/a.ts");
+    expect([...byLine.keys()]).toEqual([12]);
+    expect(byLine.get(12)!.map((t) => t.id)).toEqual(["here"]);
+    expect(adrift).toEqual([]);
+  });
+
+  test("two conversations on one line both stay on it, open first", () => {
+    const { byLine } = threadsOnFile([
+      thread({ id: "done", line: 40, isResolved: true }),
+      thread({ id: "asking", line: 40 }),
+    ], "src/a.ts");
+    expect(byLine.get(40)!.map((t) => t.id)).toEqual(["asking", "done"]);
+  });
+
+  test("a thread with no line is adrift rather than hung on a number", () => {
+    const { byLine, adrift } = threadsOnFile([
+      thread({ id: "moved", line: null, originalLine: 12, isOutdated: true }),
+      thread({ id: "still", line: 12 }),
+    ], "src/a.ts");
+    expect(adrift.map((t) => t.id)).toEqual(["moved"]);
+    expect(byLine.get(12)!.map((t) => t.id)).toEqual(["still"]);
+  });
+
+  test("a resolved thread is kept — it is the record of the argument", () => {
+    const { byLine } = threadsOnFile([thread({ id: "done", line: 3, isResolved: true })], "src/a.ts");
+    expect(byLine.get(3)!.map((t) => t.id)).toEqual(["done"]);
+  });
+
+  test("nothing on this file is two empties, not a crash", () => {
+    const { byLine, adrift } = threadsOnFile([], "src/a.ts");
+    expect(byLine.size).toBe(0);
+    expect(adrift).toEqual([]);
+  });
+});
+
+describe("threadDigest", () => {
+  test("the first comment is the gist — the last one is usually 'done'", () => {
+    const got = threadDigest(thread({
+      comments: [
+        comment({ author: "ana", body: "This drops the error." }),
+        comment({ author: "me", body: "Done." }),
+      ],
+    }));
+    expect(got.who).toBe("ana");
+    expect(got.gist).toBe("This drops the error.");
+    expect(got.replies).toBe(1);
+    expect(got.state).toBe("open");
+  });
+
+  test("a fenced block stands aside for the word code", () => {
+    expect(threadDigest(thread({
+      comments: [comment({ body: "Try\n```ts\nconst a = 1;\n```\ninstead." })],
+    })).gist).toBe("Try code instead.");
+  });
+
+  test("newlines collapse — a marker is one line", () => {
+    expect(threadDigest(thread({
+      comments: [comment({ body: "one\n\ntwo   three" })],
+    })).gist).toBe("one two three");
+  });
+
+  test("the state is the one the screen colours by", () => {
+    expect(threadDigest(thread({ isResolved: true })).state).toBe("resolved");
+    expect(threadDigest(thread({ isOutdated: true })).state).toBe("outdated");
+  });
+
+  test("a thread with no comments still names somebody", () => {
+    const got = threadDigest(thread({ comments: [] }));
+    expect(got.who).toBe("somebody");
+    expect(got.replies).toBe(0);
   });
 });
