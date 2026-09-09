@@ -102,11 +102,11 @@ export function liveDetail(captured: string, idle = "Tap to show keyboard"): str
 /**
  * Does this key end the line the button is showing?
  *
- * Reported from a phone: send a message, and it stays written along the bottom
- * of the screen. That row is a BUTTON in `keys` mode — its text is a reading
- * of what has gone down the wire, not a field somebody is still editing — and
- * a button that keeps the last message reads as a field with your message
- * still in it, which is the one thing it must not look like.
+ * A message sent used to stay written along the bottom of the screen. That row
+ * is a BUTTON in `keys` mode — its text is a reading of what has gone down the
+ * wire, not a field somebody is still editing — and a button that keeps the
+ * last message reads as a field with that message still in it, which is the
+ * one thing it must not look like.
  *
  * Enter is where a line stops being anything: it has run. So the transcript is
  * dropped on it, whichever route the key took — the bar's ⏎, the keyboard's

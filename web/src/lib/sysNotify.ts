@@ -796,7 +796,7 @@ function scheduleReopen() {
  * A ClickUp notification, pointed at the board in this app.
  *
  * ClickUp's desktop app posts the task's title and the sentence that happened to
- * it — "Alejandro set the status to: READY FOR QA" — and nothing else: no id, no
+ * it — "<somebody> set the status to: READY FOR QA" — and nothing else: no id, no
  * url, and a D-Bus monitor cannot invoke the notification's own action to ask.
  * So these rows were the only ones behind the bell that could not be opened, and
  * clicking the desktop pop-up went to ClickUp's website, which is the one place

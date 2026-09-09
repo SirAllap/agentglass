@@ -67,8 +67,8 @@ describe("the placeholders", () => {
  * personal, so the wording that actually goes out lives in the user's own file.
  * What is pinned here is the frame's two halves, because losing either is how
  * the feature failed the first time it was used — style copied from the channel
- * with no floor under the content produced a one-line "cuando puedas <link>",
- * and content with no style rule reads like an app wrote it.
+ * with no floor under the content produced a bare "when you can, <link>", and
+ * content with no style rule reads like an app wrote it.
  */
 describe("the prompt that asks somebody for a review", () => {
   const ping = () => C.BUILT_IN_RECIPES.find((r) => r.id === "ready-for-review")!;

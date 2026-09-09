@@ -190,9 +190,9 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
   // The lane is one slot in the middle of the bar, and the "needs you" chip owns
   // that slot whenever anything is held — so the mirrored ping arrived exactly
   // when it was least likely to be shown. And a caption cannot carry someone
-  // else's message: "New message from Alejandro García / Avisa cuando lo tengas"
-  // is prose, and truncating prose to 10px of bar is how you end up opening
-  // Slack to find out what Slack already told you.
+  // else's message: a chat notification is a name and a sentence of prose, and
+  // truncating prose to 10px of bar is how you end up opening Slack to find
+  // out what Slack already told you.
   //
   // Our own events keep the lane, because they genuinely are captions.
 

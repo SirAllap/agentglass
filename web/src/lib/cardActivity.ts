@@ -162,8 +162,8 @@ export const NO_AUTHOR_NOTE =
  * name appears — and a name deserves the same face the creation row gets.
  *
  * Split on the verb rather than on the first word: names have two and three
- * parts ("Alejandro Garcia assigned this task to you"), and a first-word rule
- * would put "Alejandro" beside a face belonging to somebody else.
+ * parts ("A B C assigned this task to you"), and a first-word rule would put
+ * the first of them beside a face belonging to somebody else.
  */
 const SEEN_VERBS = [
   "assigned", "unassigned", "set", "moved", "commented", "mentioned", "added",

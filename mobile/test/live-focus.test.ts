@@ -140,14 +140,13 @@ describe("what the bar says", () => {
 });
 
 /*
- * Reported from a phone, with a screenshot: "cuando envío un mensaje se queda
- * escrito aquí abajo y aquí no debería escribirse nada — es un botón y ya no
- * un input".
+ * The button along the bottom, after the line it was showing has run.
  *
- * It was right, and the cause was that nothing dropped the transcript. In
- * `keys` the row along the bottom reads back what has gone down the wire, and
- * a line that has RUN has nothing left to read back — so it kept the message
- * and read as a field with your message still in it.
+ * In `keys` that row reads back what has gone down the wire, and nothing ever
+ * dropped the transcript: not the bar's return, not the keyboard's. A line
+ * that has RUN has nothing left to read back, so the row kept the message and
+ * read as a field with that message still in it — which is the one thing a
+ * button must not look like.
  */
 describe("when the button stops showing a line", () => {
   test("the return key ends it, by either spelling", () => {
