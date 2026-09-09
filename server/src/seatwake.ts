@@ -24,7 +24,7 @@ import { inScope, seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
 import { everySeat, seatName } from "./seat.ts";
 import { releaseVanished } from "./seatqueue.ts";
-import { unreadCount } from "./seatreport.ts";
+import { unreadWorthWaking } from "./seatreport.ts";
 import { noteWoken, wokenFor, __resetWoken } from "./seatwoken.ts";
 
 /* What each seat was last told lives in seatwoken.ts, a leaf: the view reads
@@ -87,11 +87,18 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
        another one stopped would spend a turn reporting on work that is none of
        its business — and, with powers, offer to unstick it. */
     const mine = f.filter((x) => x.worktree && inScope(x.worktree, s.root));
-    /* A report waiting is part of what the field says, and the count is in the
-       fingerprint so a fifth report wakes the seat exactly as a fifth stopped
-       agent does. Its own words for why this matters: it was pasting five
-       reports by hand. */
-    const waiting = unreadCount(s.root);
+    /*
+     * A report waiting is part of what the field says, and the count is in the
+     * fingerprint so a fifth report wakes the seat exactly as a fifth stopped
+     * agent does. Its own words for why this matters: it was pasting five
+     * reports by hand.
+     *
+     * Only the ones worth a turn, though — a report that says work is
+     * proceeding is a thing to read at the next round, not a reason to spend
+     * one. That line was drawn by the seat itself: "reporte con ESTADO y nada
+     * más" is on its own list of what should NOT wake it.
+     */
+    const waiting = unreadWorthWaking(s.root);
     const fp = `${fingerprint(mine)}#${waiting}`;
     const last = wokenFor(s.root);
     const changed = !last || last.fingerprint !== fp;

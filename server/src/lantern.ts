@@ -319,9 +319,32 @@ const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
  */
 export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): string {
   const rows = all.filter((r) => !r.role);
-  const need = rows.filter((r) => r.needsYou);
-  const working = rows.filter((r) => !r.needsYou && r.state === "working");
-  const idle = rows.filter((r) => !r.needsYou && r.state === "idle");
+  /*
+   * A ROW IS NOT A PROCESS, and this list was reading as if it were.
+   *
+   * Measured by the orchestrator that lives off this readout, on its first
+   * round using it: sixteen of its rows were sessions that had ended one and
+   * two days earlier. A status line outlives the agent that wrote it on
+   * purpose — a row going quiet is information — but a name with no pane and
+   * no word since yesterday is not somebody you can go and talk to, and
+   * listing it beside the ones you can is what made a field of twenty read as
+   * twenty agents.
+   *
+   * Both halves are required: no pane THIS MACHINE CAN SEE, and quiet long
+   * enough that "it is between panes" stops being the likely story. A live
+   * agent on a second tmux server has no pane here either, and it will have
+   * said something in the last two hours.
+   *
+   * They are not dropped — the line is still a fact with a time on it — they
+   * are collapsed onto one line, which is also sixteen lines of somebody's
+   * context back.
+   */
+  const COLD_MS = 2 * 60 * 60_000;
+  const gone = rows.filter((r) => !r.paneId && !r.needsYou && (r.saidAt ?? 0) < now - COLD_MS);
+  const live = rows.filter((r) => !gone.includes(r));
+  const need = live.filter((r) => r.needsYou);
+  const working = live.filter((r) => !r.needsYou && r.state === "working");
+  const idle = live.filter((r) => !r.needsYou && r.state === "idle");
   const line = (r: AgentBoard.BoardRow) => {
     const bits = [r.name];
     if (r.needsYou) bits.push(`${waitWord(r.needsYou)} for ${ago(r.needsYou.since, now)} — "${r.needsYou.why}"`);
@@ -344,6 +367,10 @@ export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): stri
   out.push(...need.map(line));
   out.push("", `Working (${working.length}):`, ...working.map(line));
   out.push("", `Idle (${idle.length}):`, ...idle.map(line));
+  if (gone.length) {
+    out.push("", `Gone (${gone.length}) — no pane here and quiet for hours; a name, not somebody to talk to:`,
+      `  ${gone.map((r) => r.name).join(", ")}`);
+  }
   return out.join("\n");
 }
 

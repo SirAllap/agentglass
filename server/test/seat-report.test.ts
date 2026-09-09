@@ -21,9 +21,10 @@ process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
 
 const R = await import("../src/seatreport.ts");
 const { db } = await import("../src/db.ts");
+const Board = await import("../src/agentboard.ts");
 
 const ROOT = "/home/a/code/orbit";
-beforeEach(() => { db.query("DELETE FROM seat_report").run(); });
+beforeEach(() => { db.query("DELETE FROM seat_report").run(); db.query("DELETE FROM agent_status").run(); });
 
 describe("reading what an agent sent", () => {
   test("the four labels land in the four fields", () => {
@@ -116,5 +117,65 @@ describe("what the seat is told about its tray", () => {
   test("an agent that said nothing about its state is named, not hidden", () => {
     R.addReport({ root: ROOT, agent: "terse", text: "COST 1 min" });
     expect(R.inboxReadout(ROOT)).toContain("said nothing about its state");
+  });
+});
+
+/*
+ * WHAT IS WORTH A TURN, AND WHAT IS WORTH A LINE.
+ *
+ * The line is the seat's own: "reporte con ESTADO y nada más" is on its list of
+ * things that should NOT wake it. Waking spends a whole turn of the most
+ * expensive context on the machine, and spending one to learn that work is
+ * proceeding is the cost this arrangement exists to avoid.
+ */
+describe("which reports are worth waking for", () => {
+  test("a report that is only a state does not ring the bell — but it is still in the tray", () => {
+    R.addReport({ root: ROOT, agent: "steady", text: "STATE still on the retry, halfway" });
+    expect(R.unreadCount(ROOT)).toBe(1);
+    expect(R.unreadWorthWaking(ROOT)).toBe(0);
+    expect(R.inboxReadout(ROOT)).toContain("steady");
+  });
+
+  test("blocked or needing something does", () => {
+    R.addReport({ root: ROOT, agent: "stuck", text: "STATE waiting\nBLOCKED the container is somebody else's" });
+    expect(R.unreadWorthWaking(ROOT)).toBe(1);
+    R.addReport({ root: ROOT, agent: "asking", text: "STATE ready\nNEED a go on the push" });
+    expect(R.unreadWorthWaking(ROOT)).toBe(2);
+  });
+
+  test("and draining clears both counts, because it is the same tray", () => {
+    R.addReport({ root: ROOT, agent: "a", text: "STATE fine\nNEED nothing much, but: a decision" });
+    R.drainReports(ROOT);
+    expect(R.unreadCount(ROOT)).toBe(0);
+    expect(R.unreadWorthWaking(ROOT)).toBe(0);
+  });
+});
+
+/*
+ * THE BOARD'S LINE GOES STALE; A REPORT IS THE SAME AGENT SAYING THE SAME KIND
+ * OF THING, MINUTES AGO.
+ *
+ * Measured on this machine: a row read "waiting to push" while three pushes had
+ * already happened, because `doing` is the last line the agent posted to the
+ * Lantern and nobody posts twice.
+ */
+describe("a report refreshes what the board says", () => {
+  test("an agent the board knows gets its line updated", () => {
+    Board.saidBy({ name: "porter", doing: "waiting to push", worktree: "/code/app", branch: "feat/x" });
+    R.addReport({ root: ROOT, agent: "porter", text: "STATE pushed, and the checks are green" });
+    const [row] = Board.board().filter((r) => r.name === "porter");
+    expect(row?.doing).toBe("pushed, and the checks are green");
+    /* And nothing else about the row was invented or lost. */
+    expect(row?.worktree).toBe("/code/app");
+    expect(row?.branch).toBe("feat/x");
+  });
+
+  test("a name the board has never seen does NOT become an agent", () => {
+    /* The reporting name is whatever the worker's environment called it — a
+       checkout basename, a tmux window. Writing a row for it would draw a
+       second agent that does not exist. */
+    const before = Board.board().length;
+    R.addReport({ root: ROOT, agent: "nobody-has-seen-this", text: "STATE hello" });
+    expect(Board.board().length).toBe(before);
   });
 });

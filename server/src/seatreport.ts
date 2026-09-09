@@ -17,6 +17,7 @@
  * argument about formatting, and the report is the thing that matters.
  */
 import { db } from "./db.ts";
+import { board, saidBy } from "./agentboard.ts";
 
 export interface SeatReport {
   id: number;
@@ -103,6 +104,24 @@ export function addReport(p: { root: string; agent: string; session?: string; te
   const f = parseReport(raw);
   const at = p.now ?? Date.now();
   insert.run(p.root, agent, line(p.session ?? ""), f.state, f.blocked, f.need, f.cost, raw, at);
+  /*
+   * AND THE BOARD LEARNS WHAT THIS AGENT IS ON.
+   *
+   * The row's `doing` is the last line the agent posted to the Lantern, and it
+   * goes stale the moment the work moves: measured on this machine, a row read
+   * "waiting to push" while three pushes had already happened. A report is the
+   * same agent saying the same kind of thing, in a fixed shape, minutes ago —
+   * so the freshest of the two wins and nobody has to post twice.
+   *
+   * ONLY FOR A NAME THE BOARD ALREADY HAS. `saidBy` writes a row keyed by
+   * name, so a report from a name nobody has seen would draw a second agent
+   * that does not exist — and the reporting name is whatever the worker's
+   * environment happened to call it.
+   */
+  if (f.state) {
+    const known = board().find((r) => r.name === agent);
+    if (known) saidBy({ name: agent, doing: f.state, worktree: known.worktree, branch: known.branch, session: known.session, at });
+  }
   const [last] = recentQ.all(p.root, 1);
   return { ok: true, report: toReport(last!) };
 }
@@ -110,6 +129,22 @@ export function addReport(p: { root: string; agent: string; session?: string; te
 export const unreadReports = (root: string, limit = 20): SeatReport[] => unreadQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
 export const recentReports = (root: string, limit = 8): SeatReport[] => recentQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
 export const unreadCount = (root: string): number => countQ.get(root)?.n ?? 0;
+
+/*
+ * HOW MANY UNREAD REPORTS ARE WORTH A TURN.
+ *
+ * Not all of them, and the orchestrator that reads these drew the line itself:
+ * a report that says only what it is doing is something to note, and one that
+ * says it is stopped or needs a decision is something to act on. Waking for
+ * the first kind spends a whole turn of the most expensive context on the
+ * machine to learn that work is proceeding — which is the exact cost this
+ * whole arrangement exists to avoid.
+ *
+ * The quiet ones are still in the tray, still drawn, and still handed over by
+ * the next `inbox`. They simply do not ring the bell.
+ */
+export const unreadWorthWaking = (root: string): number =>
+  unreadReports(root, 100).filter((r) => r.blocked || r.need).length;
 
 /** Everything unread, and it is read now. One call, which is the whole ask. */
 export function drainReports(root: string, now = Date.now()): SeatReport[] {
