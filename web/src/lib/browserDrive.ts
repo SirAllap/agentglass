@@ -698,6 +698,33 @@ function elementRectScript(selLit: string): string {
  * viewport, so the mapping is one multiplication and nothing has to agree about
  * coordinate spaces.
  */
+/**
+ * The page and the inspector, joined into one picture.
+ *
+ * Side by side, and scaled to a common height rather than padded: the two come
+ * from different surfaces at different sizes, and a band of empty pixels down
+ * one side reads as a rendering failure to the person looking at the evidence.
+ *
+ * Returns the page alone if the inspector could not be photographed. A shot
+ * that half-worked is still the page, and refusing to hand it over because the
+ * garnish failed helps nobody.
+ */
+async function joinPngs(left: string, right: string): Promise<string> {
+  const a = new Image(); a.src = left;
+  const b = new Image(); b.src = right;
+  try { await Promise.all([a.decode(), b.decode()]); } catch { return left; }
+  const h = Math.max(a.naturalHeight, b.naturalHeight);
+  const aw = Math.round(a.naturalWidth * (h / a.naturalHeight));
+  const bw = Math.round(b.naturalWidth * (h / b.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = aw + bw; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return left;
+  ctx.drawImage(a, 0, 0, aw, h);
+  ctx.drawImage(b, aw, 0, bw, h);
+  return canvas.toDataURL("image/png");
+}
+
 async function cropPng(dataUrl: string, rect: ShotClip, scale: number): Promise<string> {
   const img = new Image();
   img.src = dataUrl;
@@ -977,6 +1004,13 @@ async function runVerb(
    *  the Electron main process. */
   applySessionSettings: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string }> =
     async () => ({ ok: false, error: "this shell does not support session settings" }),
+  /** The inspector panel, which is a view of the SHELL and not part of the page
+   *  — so none of the tools above can reach it and none of them should try.
+   *  Injected like the rest for the same reason: this module stays testable
+   *  without an Electron window behind it. */
+  inspector: (req: { action: string; panel?: string; level?: number }) =>
+    Promise<{ ok: boolean; png?: string; panel?: string; level?: number; via?: string; error?: string }> =
+    async () => ({ ok: false, error: "this shell has no inspector" }),
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
   const sel = jsLit(String(ask.args.selector ?? ""));
   try {
@@ -3173,10 +3207,28 @@ async function runVerb(
           // `via` is diagnosis, not decoration: the routes to a frame differ in
           // what they can survive, and knowing which one produced this picture is
           // the difference between fixing the next failure and guessing at it.
+          /*
+           * The inspector beside the page, when asked for it.
+           *
+           * After the page's own capture rather than instead of it: a shot
+           * whose inspector half failed is still the page, and withholding it
+           * because the garnish did not arrive helps nobody. `joinPngs` says
+           * the same by returning the left image alone.
+           */
+          let joined = png;
+          let withInspector = false;
+          if (ask.args.withInspector) {
+            const ins = await inspector({ action: "shot" });
+            if (ins.ok && ins.png) {
+              joined = await joinPngs(png, ins.png);
+              withInspector = true;
+            }
+          }
           return {
             ok: true,
             value: {
-              url: el.getURL(), title: el.getTitle(), png,
+              url: el.getURL(), title: el.getTitle(), png: joined,
+              ...(ask.args.withInspector ? { withInspector } : null),
               via: fromShell.via ?? (fromShell.png ? "shell" : "the element itself"),
               // Chromium refuses a capture past 16384px: a `--full-page` shot
               // on a page taller than that comes back cropped rather than not
@@ -3190,6 +3242,34 @@ async function runVerb(
         }
       }
 
+      case "inspect": {
+        /*
+         * The inspector, for an agent that cannot see the screen.
+         *
+         * `shot` is the one that earns this verb. `console` and `network`
+         * already answer as data through CDP, and are better that way — a
+         * picture of a console is a picture of text. Elements, Sources,
+         * Performance, Memory and Application answer as nothing at all, so
+         * their pixels are the only reading of them there is.
+         *
+         * The work is all in the shell: this validates nothing the server has
+         * not already validated and adds no policy of its own.
+         */
+        const action = String(ask.args.action ?? "open");
+        const r = await inspector({
+          action,
+          ...(typeof ask.args.panel === "string" ? { panel: ask.args.panel } : null),
+          ...(typeof ask.args.level === "number" ? { level: ask.args.level } : null),
+        });
+        if (!r.ok) return { ok: false, error: r.error || "the inspector did not answer" };
+        if (action === "shot") {
+          /* Handed back as a data URL under the same key `shot` uses, so the
+             CLI's one file-writing path serves both and there is no second
+             place for "where does the png go" to be got wrong. */
+          return { ok: true, value: { png: r.png ?? null, via: r.via ?? "" } };
+        }
+        return { ok: true, value: { action, ...(r.panel ? { panel: r.panel } : null), ...(typeof r.level === "number" ? { level: r.level } : null), ...(r.via ? { via: r.via } : null) } };
+      }
       case "trace": {
         const which = String(ask.args.action ?? "start");
         if (which === "start") {

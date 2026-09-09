@@ -178,6 +178,14 @@ contextBridge.exposeInMainWorld("agentglass", {
   /** The inspector's OWN zoom — not the app's, not the page's.
    * @param {{ guest: number; level: number }} req */
   browserDevtoolsZoom: (req) => ipcRenderer.invoke("ag:browserDevtoolsZoom", req),
+  /** A picture of the inspector itself — the page's own screenshot cannot see
+   *  it, because it is a view of the shell rather than part of the page.
+   *  @param {{ guest: number }} req */
+  browserDevtoolsShot: (req) => ipcRenderer.invoke("ag:browserDevtoolsShot", req),
+  /** Which panel the inspector shows. Not CDP: the panels belong to the
+   *  DevTools front-end, and CDP talks to the page being inspected.
+   *  @param {{ guest: number; panel: string }} req */
+  browserDevtoolsPanel: (req) => ipcRenderer.invoke("ag:browserDevtoolsPanel", req),
   /** …and the same zoom after a Ctrl+wheel or Ctrl+plus inside the inspector,
    *  which lands in that view and never reaches this one.
    * @param {(at: { guest: number; level: number }) => void} fn */

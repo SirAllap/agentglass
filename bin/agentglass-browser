@@ -1195,6 +1195,8 @@ def main():
     # above — it can sit inside a selector crop, a clip, a full page or a
     # plain viewport shot.
     p.add_argument("--highlight", help="draw a box around this element")
+    p.add_argument("--with-inspector", dest="withInspector", action="store_true",
+                   help="the page AND the inspector, joined side by side into one png")
     p.add_argument("--label", help="a caption next to --highlight's box")
     # DECLARED, because the code below already reads it. It did not, so every
     # `shot --out file.png` died on an AttributeError and exited 1 with nothing
@@ -1507,6 +1509,25 @@ def main():
     p = sub.add_parser("coverage",
                        help="which JS and CSS actually RAN — the direct answer to 'did my change even load'")
     p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
+    p = sub.add_parser(
+        "inspect",
+        help="the inspector panel: open it, switch its tab, scale it, photograph it",
+        description="The DevTools panel itself, for an agent that cannot see the screen.\n\n"
+                    "`console` and `network` already answer as DATA and are better that way — a\n"
+                    "picture of a console is a picture of text. Elements, Sources, Performance,\n"
+                    "Memory and Application answer as nothing at all, and this is how you read\n"
+                    "them.\n\n"
+                    "  inspect open\n"
+                    "  inspect panel network\n"
+                    "  inspect zoom 2                 # BIGGER. 0 is 100%, each step ~20%,\n"
+                    "                                 # negative is smaller\n"
+                    "  inspect shot devtools.png      # just the inspector\n"
+                    "  shot --with-inspector both.png # the page and the inspector, side by side\n\n"
+                    "Zoom before you shoot: at the level a person reads on screen the text in a\n"
+                    "capture is often too small to read back.",
+    )
+    p.add_argument("action", nargs="?", choices=["open", "close", "panel", "zoom", "shot"], default="open")
+    p.add_argument("value", nargs="?", help="the panel id for `panel`, the level for `zoom`, the file for `shot`")
     p = sub.add_parser("trace", help="DevTools trace — DOM, network and console against one timeline")
     p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
     p.add_argument("path", nargs="?", help="path to save the trace to (required for stop)")
@@ -1771,6 +1792,26 @@ def main():
         body = {"selector": a.selector}
     elif a.cmd == "coverage":
         body = {"action": a.action}
+    elif a.cmd == "inspect":
+        body = {"action": a.action}
+        if a.action == "panel":
+            if not a.value:
+                print("inspect panel needs a panel id: elements, console, sources, network, "
+                      "timeline, heap-profiler, resources, security, lighthouse", file=sys.stderr)
+                return 2
+            body["panel"] = a.value
+        elif a.action == "zoom":
+            if a.value is None:
+                print("inspect zoom needs a level: 0 is 100%, each step is about 20%, "
+                      "and NEGATIVE is smaller", file=sys.stderr)
+                return 2
+            try:
+                body["level"] = float(a.value)
+            except ValueError:
+                print(f"inspect zoom takes a number, not {a.value!r}", file=sys.stderr)
+                return 2
+        elif a.action == "shot" and a.value:
+            body["path"] = os.path.abspath(a.value)
     elif a.cmd == "trace":
         body = {"action": a.action}
         if a.action == "stop" and a.path:
@@ -1974,6 +2015,8 @@ def main():
             body["timeoutMs"] = a.timeoutMs
     elif a.cmd == "shot":
         body = {}
+        if a.withInspector:
+            body["withInspector"] = True
         if a.selector:
             body["selector"] = a.selector
         if a.clip:
@@ -2495,6 +2538,41 @@ def main():
         # wrapping it in JSON would spend tokens on punctuation.
         print(f"{value.get('title', '')}\n{value.get('url', '')}\n")
         print(value.get("text", ""))
+    elif a.cmd == "inspect" and a.action == "shot":
+        # Down the same path as `shot`, deliberately: that branch is where the
+        # rule "an empty capture is a FAILURE, not a zero-byte file" lives, and
+        # a second copy of it is a second place for it to rot.
+        png = value.get("png", "")
+        raw = base64.b64decode(png.split(",", 1)[1]) if "," in png else b""
+        if not raw:
+            print("the inspector produced no pixels — nothing was written", file=sys.stderr)
+            print_diagnosis(res.get("diagnosis"))
+            return 1
+        dest = getattr(a, "value", None)
+        if dest:
+            tmp = os.path.abspath(dest) + ".part"
+            with open(tmp, "wb") as fh:
+                fh.write(raw)
+            os.replace(tmp, os.path.abspath(dest))
+            # The path AND how it was taken. `via` is the difference between a
+            # capture of a visible panel and one the shell had to show
+            # off-window to get, and when a picture comes back wrong that is
+            # the first thing worth knowing.
+            print(f"{os.path.abspath(dest)}  ({value.get('via', 'unknown route')})")
+        else:
+            print(png)
+    elif a.cmd == "inspect":
+        # open / close / panel / zoom: a line a person can read, not JSON.
+        bits = [str(value.get("action", a.action))]
+        if value.get("panel"):
+            bits.append(f"panel {value['panel']}")
+        if value.get("level") is not None:
+            # The percentage as well as the level, because the level is the
+            # unit Chromium uses and the percentage is the one on the panel.
+            bits.append(f"zoom {value['level']} ({round(100 * (1.2 ** float(value['level'])))}%)")
+        if value.get("via"):
+            bits.append(f"via {value['via']}")
+        print(" · ".join(bits))
     elif a.cmd == "shot":
         png = value.get("png", "")
         raw = base64.b64decode(png.split(",", 1)[1]) if "," in png else b""
