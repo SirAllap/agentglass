@@ -13,6 +13,8 @@ import { ICON } from "../../lib/iconSize.ts";
 import { EMPTY, OPS, fieldsOf, liveCount, takesValues, type FieldSpec, type FilterSet, type Op, type Rule } from "./filters.ts";
 import type { ProviderTask } from "../../../../shared/providers.ts";
 
+import { StatusPill } from "../StatusPill.tsx";
+
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 let seq = 0;
 const newRule = (): Rule => ({ id: `r${++seq}`, field: "", op: "is", values: [] });
@@ -117,8 +119,15 @@ function Menu({ items, onPick, selected, current }: {
                   color: "var(--bg)", fontSize: 9, lineHeight: "13px",
                 }}>{on ? "✓" : ""}</span>
               )}
-              {i.color && <span className="shrink-0 rounded-full" style={{ width: 8, height: 8, background: i.color }} />}
-              <span className="truncate">{i.label}</span>
+              {/* AS THE CHIP IT STANDS FOR, not a dot beside a word.
+                  A tracker status is a coloured pill everywhere else in this
+                  app — on the card, in the picker that changes it — and a list
+                  of grey words with a dot is one you read where you could have
+                  recognised it at a glance. Reported against the pull request
+                  board, and it improves the tasks board it came from too. */}
+              {i.color
+                ? <StatusPill status={i.label} color={i.color} dim={!on} />
+                : <span className="truncate">{i.label}</span>}
               {!selected && on && (
                 <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}
                   strokeLinecap="round" strokeLinejoin="round" aria-hidden

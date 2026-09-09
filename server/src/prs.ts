@@ -22,7 +22,7 @@ import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { inScope } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
-import { boardHolding } from "./clickupviews.ts";
+import { boardHolding, knownStatuses } from "./clickupviews.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
@@ -1944,6 +1944,18 @@ export type PrFacetOptions = {
   labels: { name: string; color: string }[];
   milestones: string[];
   bases: string[];
+  /**
+   * Every status the tracker boards on this machine know, with its colour.
+   *
+   * NOT derived from the pull requests on screen, which was the bug reported:
+   * a board showing two statuses offered two, out of a workflow with eleven —
+   * and "show me the ones I am not looking at" is exactly the question that
+   * needs the other nine.
+   *
+   * Empty for anybody with no tracker, which is what keeps the field out of
+   * their filter bar altogether.
+   */
+  cardStatuses?: { status: string; color?: string; type?: string }[];
 };
 const facetCache = new Map<string, { at: number; data: PrFacetOptions }>();
 const FACET_TTL_MS = 5 * 60_000;
@@ -1970,6 +1982,9 @@ export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data
     labels: (labels ?? []).map((l: any) => ({ name: String(l?.name ?? ""), color: String(l?.color ?? "") })).filter((l) => l.name),
     milestones: (milestones ?? []).map((m: any) => String(m?.title ?? "")).filter(Boolean),
     bases: (branches ?? []).map((b: any) => String(b?.name ?? "")).filter(Boolean),
+    /* Free: the boards were cached with their own statuses beside their tasks,
+       so this is a read of a file this app keeps anyway. Nobody is asked. */
+    cardStatuses: knownStatuses().map((x) => ({ status: x.status, color: x.color, type: x.type })),
   };
   facetCache.set(repo.key, { at: Date.now(), data });
   return { ok: true, data };

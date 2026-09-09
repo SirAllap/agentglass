@@ -335,6 +335,10 @@ export interface FacetOption {
   value: string;
   label: string;
   count: number;
+  /** The colour this value is drawn in wherever else it appears — a status
+   *  chip on a card. An option that does not match the thing it filters is a
+   *  list you have to read instead of recognise. */
+  tint?: string;
   /** The GitHub login this option stands for, when it is a person. */
   avatar?: string;
 }
@@ -373,6 +377,9 @@ export interface RepoFacets {
   labels: { name: string; color: string }[];
   milestones: string[];
   bases: string[];
+  /** The tracker's whole workflow, so the filter can offer the statuses that
+   *  are NOT on screen — which is the half a filter is for. */
+  cardStatuses?: { status: string; color?: string; type?: string }[];
 }
 
 export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets | null): FacetView[] {
@@ -407,6 +414,10 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
         : facet.key === "labels" ? repo?.labels.map((l) => l.name)
         : facet.key === "milestones" ? repo?.milestones
         : facet.key === "base" ? repo?.bases
+        /* The whole workflow, not the statuses that happen to be on this page.
+           Seeded like the labels above and for the same reason: a filter that
+           can only offer what is already visible cannot exclude anything. */
+        : facet.key === "cardStatus" ? repo?.cardStatuses?.map((x) => x.status)
         : undefined;
       const seen = order.sort((a, b) => (counts.get(b)! - counts.get(a)!) || a.localeCompare(b));
       values = fromRepo?.length ? [...new Set([...fromRepo, ...seen])] : seen;
@@ -434,6 +445,12 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
         // Authors and assignees are people; a face finds a name in a list of a
         // dozen faster than reading down it does.
         ...(facet.key === "authors" || facet.key === "assignees" ? { avatar: v } : {}),
+        /* The tracker's own colour for the status, so the option reads as the
+           chip it stands for. "Esa lista debe verse así" — the same pills the
+           card shows, not a column of grey words. */
+        ...(facet.key === "cardStatus"
+          ? { tint: repo?.cardStatuses?.find((x) => x.status.toLowerCase() === v.toLowerCase())?.color }
+          : {}),
       })),
     };
   });
@@ -463,7 +480,7 @@ export function builderFields(prs: PrSummary[], f: FilterState, repo?: RepoFacet
     .map((v) => ({
       key: v.queryKey,
       label: v.label,
-      options: v.options.map((o) => ({ value: o.value, label: o.label })),
+      options: v.options.map((o) => ({ value: o.value, label: o.label, ...(o.tint ? { color: o.tint } : {}) })),
     }));
 }
 
