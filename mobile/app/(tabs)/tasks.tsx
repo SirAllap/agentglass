@@ -24,7 +24,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
-import { useNavigation, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { ClickUpBoards, ProviderTask } from "../../../shared/providers.ts";
@@ -35,7 +35,8 @@ import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { useTaskProvider } from "../../src/state/use-tracks-work.ts";
 import { localMeta, visibleLocal } from "../../src/model/localTasks.ts";
-import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow, groupEdge } from "../../src/ui.tsx";
+import { matchesQuery } from "../../../shared/taskref.ts";
+import { Card, HeaderPick, Label, Note, Segmented, Sheet, SheetRow, TAP, groupEdge } from "../../src/ui.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
@@ -182,6 +183,23 @@ export default function TasksScreen(): React.ReactNode {
      until it is known, because fetching ClickUp's board on a Taskwarrior
      machine is the bug this screen had. */
   const provider = useTaskProvider(host);
+  /*
+   * An id handed over from somewhere else — today, the chip on a pull request
+   * that names the item it came from.
+   *
+   * It filters what this screen already has rather than asking the tracker,
+   * and that is the whole reason it works for everybody: the rows are whatever
+   * the connected provider returned, and "every word appears somewhere in the
+   * row" is a question that can be asked of a card, a Taskwarrior task, or
+   * whatever comes next. Nothing here knows which one it is looking at.
+   *
+   * Dismissed rather than sticky: it arrives with a navigation and the screen
+   * is a tab somebody comes back to, so it must not still be filtering
+   * tomorrow.
+   */
+  const { q } = useLocalSearchParams<{ q?: string }>();
+  const [finding, setFinding] = useState<string | null>(null);
+  useEffect(() => { setFinding(q && q.trim() ? q.trim() : null); }, [q]);
   const board = provider?.id === "clickup";
   const localList = !!provider && !board;
 
@@ -224,10 +242,16 @@ export default function TasksScreen(): React.ReactNode {
     // Done cards are the bulk of any board and none of them are work you owe.
     // Kept behind a switch rather than dropped, because "did I close that?" is
     // a real question somebody asks from a sofa.
-    () => (tasks ?? []).filter((t) => (openOnly ? t.statusKind !== "done" : true)),
-    [tasks, openOnly],
+    () => (tasks ?? [])
+      .filter((t) => (openOnly ? t.statusKind !== "done" : true))
+      .filter((t) => !finding || matchesQuery([t.title, t.customId, t.id, t.list], finding)),
+    [tasks, openOnly, finding],
   );
-  const shownLocal = useMemo(() => visibleLocal(local, openOnly), [local, openOnly]);
+  const shownLocal = useMemo(
+    () => visibleLocal(local, openOnly)
+      .filter((t) => !finding || matchesQuery([t.description, t.project, ...t.tags], finding)),
+    [local, openOnly, finding],
+  );
 
   const onRefresh = useCallback((): void => {
     setPulling(true);
@@ -309,6 +333,29 @@ export default function TasksScreen(): React.ReactNode {
         name no product. `undefined` — still asking — draws nothing, because
         the wrong empty state for a second reads as a flash of a lie.
       */}
+      {/* Said out loud, with the way out beside it. A list quietly showing
+          three of forty rows is the same screen as a tracker that lost
+          everything, and the difference has to be on screen. */}
+      {finding ? (
+        <View style={{
+          flexDirection: "row", alignItems: "center", gap: SPACE.sm,
+          paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm,
+          borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.bg2,
+        }}>
+          <Text numberOfLines={1} style={{ color: C.text2, fontSize: T.small, flex: 1 }}>
+            Showing what matches <Text style={{ color: C.text, fontFamily: MONO }}>{finding}</Text>
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Show everything again"
+            onPress={() => setFinding(null)}
+            style={{ minHeight: TAP, justifyContent: "center", paddingLeft: SPACE.md }}
+          >
+            <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>Clear</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {provider === null ? (
         <View style={{ padding: SPACE.lg }}>
           <Card>
