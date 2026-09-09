@@ -33,6 +33,18 @@ const get = async <T,>(path: string): Promise<T> => {
   return (await response.json()) as T;
 };
 
+/**
+ * Boots the sidecar and waits for it to answer.
+ *
+ * The wait below budgets twenty seconds for a cold server; the hook around it
+ * had bun's default five, so on a loaded runner the boot was still going when
+ * the hook was killed and every test in this file went with it — measured on
+ * ubuntu-latest as `(fail) (unnamed) [5000.53ms] — a beforeEach/afterEach hook
+ * timed out for this test`, with nothing in it naming the file. The same
+ * failure `pane-line.test.ts` carries a comment about, and the same fix: the
+ * hook outlasts its own wait, so a boot that really is broken fails with the
+ * sentence at the end rather than as an unnamed timeout.
+ */
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-shapes-"));
   server = Bun.spawn(["bun", "run", "src/index.ts"], {
@@ -61,7 +73,7 @@ beforeAll(async () => {
     await Bun.sleep(250);
   }
   throw new Error(`the server never answered ${ORIGIN}/health`);
-});
+}, 45_000);
 
 afterAll(async () => {
   server?.kill();
