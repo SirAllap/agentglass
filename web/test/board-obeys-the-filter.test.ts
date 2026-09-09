@@ -40,9 +40,16 @@ test("is on a card status keeps exactly those rows", () => {
 
 test("the board is handed the filtered lists, not the raw fetches", () => {
   const src = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
-  expect(src).toMatch(/const boardMineShown = useMemo\(\s*\(\) => applyWith\(boardMine\.map\(\(p\) => withCard\(p, hasTaskProvider\)\), rules, readPrField\)/);
-  expect(src).toMatch(/const boardReviewShown = useMemo\(\s*\(\) => applyWith\(boardReview\.map\(\(p\) => withCard\(p, hasTaskProvider\)\), rules, readPrField\)/);
+  /* Enriched with the card the screen is showing, then filtered. */
+  expect(src).toMatch(/const boardMineCards = useMemo\(\s*\(\) => boardMine\.map\(\(p\) => withCard\(p, hasTaskProvider\)\)/);
+  expect(src).toMatch(/const boardReviewCards = useMemo\(\s*\(\) => boardReview\.map\(\(p\) => withCard\(p, hasTaskProvider\)\)/);
+  expect(src).toContain("const boardMineShown = useMemo(() => applyWith(boardMineCards, rules, readPrField)");
+  expect(src).toContain("const boardReviewShown = useMemo(() => applyWith(boardReviewCards, rules, readPrField)");
   expect(src).toContain("mine={boardMineShown} review={boardReviewShown}");
   /* The raw pair never reaches the component again — the exact shape of the bug. */
   expect(src).not.toContain("mine={boardMine}");
+  /* And the builder is offered the fields of the rows on screen, not the
+     table's pool: `Card assignee` is seeded from nothing, so built from `prs`
+     it had no options and the field disappeared. */
+  expect(src).toContain("builderFields(ruleRows, filters, facetOpts)");
 });

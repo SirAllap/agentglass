@@ -2765,9 +2765,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     () => applyWith(applyFilters(pool, filters), rules, readPrField),
     [pool, filters, rules],
   );
-  /* Only the fields that anything on this board actually has — which is what
-     keeps the tracker's two out of the way of everybody who has no tracker. */
-  const ruleFields = useMemo(() => builderFields(prs, filters, facetOpts), [prs, filters, facetOpts]);
   const unreadPrs = useMemo(
     () => basePrs.filter((p) => unreadOf(p, repo?.key, seenMarks)),
     [basePrs, repo?.key, seenMarks],
@@ -2880,16 +2877,38 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      `p.card` alone then matches nothing at all. No extra request: the board
      asks for exactly these rows already. */
   const cardTick = useSyncExternalStore(onCard, cardVersion, () => 0);
-  const boardMineShown = useMemo(
-    () => applyWith(boardMine.map((p) => withCard(p, hasTaskProvider)), rules, readPrField),
+  const boardMineCards = useMemo(
+    () => boardMine.map((p) => withCard(p, hasTaskProvider)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boardMine, rules, hasTaskProvider, cardTick],
+    [boardMine, hasTaskProvider, cardTick],
   );
-  const boardReviewShown = useMemo(
-    () => applyWith(boardReview.map((p) => withCard(p, hasTaskProvider)), rules, readPrField),
+  const boardReviewCards = useMemo(
+    () => boardReview.map((p) => withCard(p, hasTaskProvider)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [boardReview, rules, hasTaskProvider, cardTick],
+    [boardReview, hasTaskProvider, cardTick],
   );
+  const boardMineShown = useMemo(() => applyWith(boardMineCards, rules, readPrField), [boardMineCards, rules]);
+  const boardReviewShown = useMemo(() => applyWith(boardReviewCards, rules, readPrField), [boardReviewCards, rules]);
+
+  /*
+   * The fields the builder offers, taken from the rows the surface is drawing.
+   *
+   * `prs` is the table's pool, and with the board up it is not what is on
+   * screen — nor does it carry the cards the board looked up one at a time. So
+   * `Card assignee`, which nothing seeds from the server, had no options at all
+   * and the field was hidden: a filter that cannot offer what is in front of
+   * you. Deduplicated by number because a pull request that is both yours and
+   * asked of you is in both lists, and a value counted twice sorts wrong.
+   */
+  const ruleRows = useMemo(() => {
+    if (!boardShown) return prs;
+    const by = new Map<number, PrSummary>();
+    for (const p of [...boardMineCards, ...boardReviewCards]) if (!by.has(p.number)) by.set(p.number, p);
+    return [...by.values()];
+  }, [boardShown, prs, boardMineCards, boardReviewCards]);
+  /* Only the fields that anything on this board actually has — which is what
+     keeps the tracker's two out of the way of everybody who has no tracker. */
+  const ruleFields = useMemo(() => builderFields(ruleRows, filters, facetOpts), [ruleRows, filters, facetOpts]);
   /*
    * Neither list has answered yet.
    *
