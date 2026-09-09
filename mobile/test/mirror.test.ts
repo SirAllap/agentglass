@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { editFor } from "../src/terminal/mirror.ts";
+import { echoOfSent, editFor } from "../src/terminal/mirror.ts";
 import { announce, built } from "./generated-artifacts.ts";
 import { C } from "../src/theme.ts";
 
@@ -244,9 +244,9 @@ describe("the field's claim on the line", () => {
  *   1. the phone's field went EMPTY while the pane held the whole line, which
  *      is "one shows the text and the other does not";
  *   2. and the field, now a composer, sent its contents on top of what was
- *      already there. Captured: `esto es una linea larga escrita en el
- *      ordenador para ver si el movil la` typed at the computer plus `hola2`
- *      typed on the phone ran as one prompt, concatenated.
+ *      already there. Measured: a long line typed at the computer, plus one
+ *      word typed on the phone, ran as one prompt — the two of them
+ *      concatenated.
  */
 describe("a line the field could read but cannot edit", () => {
   const screen = readFileSync(join(import.meta.dir, "..", "app", "(tabs)", "terminal.tsx"), "utf8");
@@ -455,5 +455,59 @@ describe("what a burst of typing puts on the pane", () => {
     expect(paneAfter(["hello", "hell", "hel"])).toBe("hel");
     // And it must not retype the tail it kept.
     expect(editFor("hello", "hell")).toBe("\x7f");
+  });
+});
+
+/*
+ * The other half of "my message stays written after I send it".
+ *
+ * In line mode the field is the pane's line, so the pane still holding the
+ * submitted prompt in its box puts it straight back into a field that had just
+ * been emptied. That read is honest and the reading of it is not, so a report
+ * equal to what was just sent is ignored — for a while.
+ */
+describe("the pane still showing what was just sent", () => {
+  const at = 1_000_000;
+
+  test("the same line, a moment later, is the echo and not news", () => {
+    expect(echoOfSent({ text: "deploy the thing", at }, "deploy the thing", at + 200)).toBe(true);
+  });
+
+  test("padding around it is still the same line — a box pads to its frame", () => {
+    expect(echoOfSent({ text: "deploy the thing", at }, "  deploy the thing   ", at + 200)).toBe(true);
+  });
+
+  test("anything else is the pane talking, and the field follows it", () => {
+    expect(echoOfSent({ text: "deploy the thing", at }, "deploy the thin", at + 200)).toBe(false);
+    expect(echoOfSent({ text: "deploy the thing", at }, "", at + 200)).toBe(false);
+    expect(echoOfSent({ text: "deploy the thing", at }, null, at + 200)).toBe(false);
+  });
+
+  test("it expires, because only time tells a held line from an echo", () => {
+    // A TUI that keeps the submitted line on its prompt is not echoing — it is
+    // holding a line somebody may want to edit. After the hold the field
+    // mirrors it again, one blink late.
+    expect(echoOfSent({ text: "deploy the thing", at }, "deploy the thing", at + 3000)).toBe(false);
+    expect(echoOfSent({ text: "deploy the thing", at }, "deploy the thing", at + 2999)).toBe(true);
+  });
+
+  test("an empty submission is never an echo", () => {
+    // There was nothing on the line to hold, and an empty read is exactly the
+    // one this must not swallow: it is how the field learns the line is gone.
+    expect(echoOfSent({ text: "", at }, "", at + 10)).toBe(false);
+    expect(echoOfSent({ text: "   ", at }, "", at + 10)).toBe(false);
+  });
+
+  test("nothing was sent, so nothing is an echo", () => {
+    expect(echoOfSent(null, "anything at all", at)).toBe(false);
+  });
+
+  test("the screen remembers the line on every route that sends one", () => {
+    // Three ways a line leaves this app — the mirror's Enter, the read-only
+    // line's Enter, and a plain send — and the guard is worth nothing if it is
+    // wired to two of them.
+    const screen = readFileSync(join(import.meta.dir, "..", "app", "(tabs)", "terminal.tsx"), "utf8");
+    expect(screen.match(/justSent\.current = \{ text/g)?.length).toBe(3);
+    expect(screen).toContain("if (echoOfSent(justSent.current, text, Date.now())) return;");
   });
 });

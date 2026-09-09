@@ -50,7 +50,7 @@ import {
   customKeys, keyLayout, onTermPrefs, setTermColumns, termAssist, termColumns,
 } from "../../src/terminal/termPrefs.ts";
 import { bytesFor } from "../../src/terminal/customKeys.ts";
-import { editFor } from "../../src/terminal/mirror.ts";
+import { echoOfSent, editFor, type JustSent } from "../../src/terminal/mirror.ts";
 import {
   NO_MODES, applyDefault, isLive, prune, setLive, type LiveModes,
 } from "../../src/terminal/liveDefault.ts";
@@ -370,14 +370,23 @@ function TerminalPane(): React.ReactNode {
    *
    * Treating that as `shadow = null`, which is what happened before this
    * existed, is what makes the phone send a line the pane already has. Measured
-   * on the emulator: `esto es una linea larga escrita en el ordenador para ver
-   * si el movil la` was typed at the computer, the phone's field went empty and
-   * became a composer, and one word typed into it submitted
-   * "…si el movil la hola2" — the desk's line and the phone's word, run as one
-   * prompt. Holding what the pane has is what lets Send know there is nothing
-   * to send but a carriage return.
+   * on the emulator: a long line typed at the computer left the phone's field
+   * empty and turned it into a composer, and one word typed into that field
+   * submitted the tail of the desk's line with the word appended — the two of
+   * them run as one prompt. Holding what the pane has is what lets Send know
+   * there is nothing to send but a carriage return.
    */
   const onPane = useRef<string | null>(null);
+  /*
+   * The line that was just submitted from here, and when.
+   *
+   * A pane goes on showing a prompt for a beat after it is submitted — an
+   * agent keeps it in its box until it takes it — and the read of that line
+   * arrives here as an ordinary report, which puts the message straight back
+   * into a field that had just been emptied. `echoOfSent` is where the rule
+   * and its expiry are written.
+   */
+  const justSent = useRef<JustSent | null>(null);
   /*
    * Whether somebody has started a line here, and therefore owns it.
    *
@@ -1022,6 +1031,16 @@ function TerminalPane(): React.ReactNode {
    */
   const onLine = useCallback((text: string | null, exact = true): void => {
     if (claimed.current) return;
+    /*
+     * The pane still showing the line that was just sent is not news.
+     *
+     * Without this the field emptied on send and filled again a beat later
+     * with the same message — reported from a phone as the message staying
+     * written along the bottom of the screen. See `echoOfSent`, which is also
+     * where the reason it expires is written.
+     */
+    if (echoOfSent(justSent.current, text, Date.now())) return;
+    justSent.current = null;
     // Editable only when the read is exact. An inexact one still fills the
     // field — that is the whole point, the two sides are meant to show the same
     // thing — but it is remembered as the pane's rather than as ours, so
@@ -1052,6 +1071,7 @@ function TerminalPane(): React.ReactNode {
       terminal.current?.send("\r");
       // Cleared here rather than waiting for the pane to say so: the field is
       // empty the instant Enter is pressed, everywhere else in the world.
+      justSent.current = { text, at: Date.now() };
       shadow.current = "";
       onPane.current = null;
       // The line is gone, so nobody owns it any more and the pane may seed the
@@ -1074,6 +1094,7 @@ function TerminalPane(): React.ReactNode {
     if (onPane.current !== null) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       terminal.current?.send("\r");
+      justSent.current = { text: onPane.current, at: Date.now() };
       onPane.current = null;
       claimed.current = false;
       setDraft("");
@@ -1091,6 +1112,7 @@ function TerminalPane(): React.ReactNode {
      * here; `submitBehavior` below spends the return key on sending.
      */
     terminal.current?.send(`${text.replace(/\n/g, "\r")}\r`);
+    justSent.current = { text, at: Date.now() };
     setDraft("");
   }, []);
 
