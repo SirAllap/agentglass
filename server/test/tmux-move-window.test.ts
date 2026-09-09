@@ -60,7 +60,7 @@ describe("dragging a tab", () => {
   });
 
   it("dropped leftwards, lands where the line was and pushes the rest along", () => {
-    // His words: "muevo la 7 al 3, entonces el 3 pasa a ser 4".
+    // The rule, stated as a drag: move 7 onto 3, and 3 becomes 4.
     move("w5", 2);
     expect(strip()).toBe("1:w1 2:w5 3:w2 4:w3 5:w4");
   });
