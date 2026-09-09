@@ -1,7 +1,7 @@
 import { FacetMenu } from "./FacetMenu.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import {
-  serializeQuery, toggleFacet, clearFacet, setSort, DEFAULT_SORT, SORT_OPTIONS, FACETS,
+  serializeQuery, toggleFacet, setSort, DEFAULT_SORT, SORT_OPTIONS,
   type FilterState, type FacetView, type SortTok,
 } from "../lib/prFilter.ts";
 
@@ -15,7 +15,7 @@ import {
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, pending, searching, checksPending, shown, total, swept, unread, builder,
+  query, filters, facets, onQuery, onSearch, pending, searching, shown, total, swept, unread, builder,
 }: {
   query: string;
   filters: FilterState;
@@ -30,8 +30,6 @@ export function PrFilterBar({
   /** The box says something the last search did not ask for. */
   pending: boolean;
   searching?: boolean;
-  /** Second-pass check states still loading — the Checks menu says so. */
-  checksPending?: boolean;
   shown: number;
   total: number;
   /** How far the background sweep has read, while free text is filtering. A
@@ -146,40 +144,11 @@ export function PrFilterBar({
             {unread.count} unread
           </button>
         )}
-        {/*
-          * The row exists before the rows do.
-          *
-          * These pills are built from the pull requests that have been loaded,
-          * so the bar used to appear a second or two after everything else and
-          * shove the board down as it landed — reported as "tarda en cargar,
-          * entonces como que salta". Drawn from the static facet table instead
-          * while there is nothing to count, dimmed and inert: same row, same
-          * height, same place, filling in rather than arriving.
-          */}
-        {facets.length === 0 && FACETS.map((f) => (
-          <span key={f.key} aria-hidden
-            className="text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap select-none"
-            style={{ color: "var(--text4)", border, opacity: 0.55 }}>
-            {f.label} ▾
-          </span>
-        ))}
-        {/* A field nothing on this board has, and that only a tracker could fill,
-            is left out entirely rather than drawn empty — see `whenPresent`. */}
-        {facets.filter((f) => !f.whenPresent || f.options.length > 0).map((f) => (
-          <FacetMenu
-            key={f.key}
-            label={f.label}
-            options={f.options}
-            selected={f.selected}
-            onToggle={(v) => emit(toggleFacet(filters, f.key, v))}
-            onClear={() => emit(clearFacet(filters, f.key))}
-            note={f.key === "checks" && checksPending ? "Checks are still loading; unfinished rows are kept." : undefined}
-          />
-        ))}
-        {/* After the pills and before Sort: the pills are the one-click answer
-            to "which of these", and this is where you go when the answer is
-            "anything but these". Reading left to right, that is the order the
-            two get reached for. */}
+        {/* No row of pills: the builder is the filter, and it says everything
+            they said plus `is not`, `is set`, `is not set`, and several joined.
+            It reads the same field table (`builderFields` reads `buildFacets`),
+            so every menu they had is a field in it, and a query string still
+            fills it through `queryToRules`. */}
         {builder}
         <div className="ml-auto">
           <FacetMenu

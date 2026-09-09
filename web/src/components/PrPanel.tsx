@@ -2870,6 +2870,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
   const [boardMine, setBoardMine] = useState<PrSummary[]>([]);
   const [boardReview, setBoardReview] = useState<PrSummary[]>([]);
+  /* The board draws these two fetches of its own and never looks at `prs`, so
+     the rule builder narrowed the table behind it and left every lane as it
+     was. The raw arrays stay for the loading and settling checks, which ask
+     whether the FETCH is complete — not a question a filter should answer. */
+  const boardMineShown = useMemo(() => applyWith(boardMine, rules, readPrField), [boardMine, rules]);
+  const boardReviewShown = useMemo(() => applyWith(boardReview, rules, readPrField), [boardReview, rules]);
   /*
    * Neither list has answered yet.
    *
@@ -4122,7 +4128,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               onSearch={runSearch}
               pending={query.trim() !== serverQuery.trim()}
               searching={listState.loading}
-              checksPending={listState.checksPending}
               shown={visiblePrs.length}
               unread={{ count: unreadPrs.length, on: unreadOnly, onToggle: () => setUnreadOnly((v) => !v) }}
         /* How much of the scope the filter actually saw. A count that says "12"
@@ -4144,7 +4149,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                  and search above stays where it was, and picking any of them
                  switches back to the table it belongs to. */
               <TriageBoard
-                mine={boardMine} review={boardReview}
+                mine={boardMineShown} review={boardReviewShown}
                 /*
                  * Every open pull request, not the count for whichever filter
                  * happened to be selected — `listState.total` is the current
