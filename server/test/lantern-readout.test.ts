@@ -6,7 +6,7 @@
  * starts from what is true now, and so the client never sends a prompt.
  */
 import { describe, expect, test } from "bun:test";
-import { fieldReadout } from "../src/lantern.ts";
+import { fieldReadout, isGone } from "../src/lantern.ts";
 import type { BoardRow } from "../src/agentboard.ts";
 
 const NOW = 1_700_000_000_000;
@@ -94,5 +94,18 @@ describe("names that are not agents any more", () => {
     })], NOW);
     expect(text).toContain("1 agent stopped on you");
     expect(text).not.toContain("Gone");
+  });
+});
+
+describe("one rule for both screens", () => {
+  test("isGone is what the readout and the view both ask", () => {
+    /* The collapse landed in this readout and the VIEW went on drawing all
+       seventeen rows — thirteen of them dead for a day or two. A rule with one
+       reader and two screens is a rule that is true on one of them. */
+    const NOW = Date.now();
+    expect(isGone({ saidAt: NOW - 40 * 60 * 60_000 }, NOW)).toBe(true);
+    expect(isGone({ paneId: "%3", saidAt: NOW - 40 * 60 * 60_000 }, NOW)).toBe(false);
+    expect(isGone({ saidAt: NOW - 60_000 }, NOW)).toBe(false);
+    expect(isGone({ saidAt: NOW - 40 * 60 * 60_000, needsYou: { kind: "input" } }, NOW)).toBe(false);
   });
 });

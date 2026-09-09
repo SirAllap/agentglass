@@ -742,6 +742,9 @@ export interface SeatFieldRow {
   doing?: string;
   saidAt?: number;
   pulse: number[];
+  /** No pane this machine can see and quiet for hours: a name, not somebody to
+   *  talk to. Folded away rather than drawn beside the ones you can reach. */
+  gone?: boolean;
 }
 
 /** One line of the seat's queue. `takenBy` is a named agent, never a pane —

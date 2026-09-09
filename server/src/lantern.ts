@@ -317,6 +317,22 @@ const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
  * terminal chat opens with, so the person asks the follow-up in their own
  * words against what is true now rather than what the pane text suggests.
  */
+/**
+ * A NAME THAT IS NOT SOMEBODY YOU CAN TALK TO.
+ *
+ * No pane this machine can see, AND quiet long enough that "it is between
+ * panes" stops being the likely story. Both halves are required: a live agent
+ * on a second tmux server has no pane here either, and it will have said
+ * something in the last two hours.
+ *
+ * Exported because it had exactly one reader and needed two: the readout the
+ * seat gets by CLI collapsed these, and the VIEW went on drawing all seventeen
+ * — thirteen of them dead for a day or two. One rule, both screens.
+ */
+const COLD_MS = 2 * 60 * 60_000;
+export const isGone = (r: { paneId?: string; needsYou?: unknown; saidAt?: number }, now = Date.now()): boolean =>
+  !r.paneId && !r.needsYou && (r.saidAt ?? 0) < now - COLD_MS;
+
 export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): string {
   const rows = all.filter((r) => !r.role);
   /*
@@ -339,8 +355,7 @@ export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): stri
    * are collapsed onto one line, which is also sixteen lines of somebody's
    * context back.
    */
-  const COLD_MS = 2 * 60 * 60_000;
-  const gone = rows.filter((r) => !r.paneId && !r.needsYou && (r.saidAt ?? 0) < now - COLD_MS);
+  const gone = rows.filter((r) => isGone(r, now));
   const live = rows.filter((r) => !gone.includes(r));
   const need = live.filter((r) => r.needsYou);
   const working = live.filter((r) => !r.needsYou && r.state === "working");

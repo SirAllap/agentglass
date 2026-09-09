@@ -161,6 +161,17 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const done = tasks.filter((t) => t.doneAt);
   const field = data?.field ?? [];
   const need = field.filter((r) => r.needsYou);
+  /*
+   * NAMES THAT ARE NOT AGENTS ANY MORE.
+   *
+   * Measured on this screen: seventeen rows, thirteen of them sessions that
+   * had ended a day or two earlier, and one a pane left behind by a stopped
+   * agent. The server marks them (`isGone`) and the CLI's readout already
+   * folded them; this screen went on drawing all seventeen, which is what made
+   * a field of four reachable agents read as a crowd.
+   */
+  const reachable = field.filter((r) => !r.gone);
+  const past = field.filter((r) => r.gone);
   const models = data?.models ?? [];
   const chosen = seat?.model || data?.defaultModel || "";
   const lines = data?.lines ?? [];
@@ -304,7 +315,20 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   </span>
                 </div>
                 <ul className="flex flex-col">
-                  {reports.map((r) => (
+                  {reports.map((r) => {
+                  /*
+                   * A BLOCKER FROM AN AGENT THAT IS GONE IS HISTORY.
+                   *
+                   * Measured on this screen: two reports from a test agent,
+                   * dead two hours earlier, still drawn in red and amber as if
+                   * somebody were waiting on a decision right now. "Blocked"
+                   * is a claim about the present, and the agent that made it
+                   * has to still be there for the claim to hold. The words are
+                   * kept — what an agent said is the record — they just stop
+                   * shouting.
+                   */
+                  const alive = field.some((f) => !f.gone && f.name === r.agent);
+                  return (
                     <li key={r.id} className="flex items-start gap-2.5 py-1.5">
                       <span aria-hidden className="shrink-0 rounded-full"
                         title={r.readAt ? "the seat has read this" : "waiting for the seat"}
@@ -325,15 +349,21 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                             {r.state || "said nothing about its state"}
                           </span>
                         </span>
-                        {r.blocked && <span className="text-[11px] leading-snug" style={{ color: "var(--error)" }}>blocked: {r.blocked}</span>}
-                        {r.need && <span className="text-[11px] leading-snug" style={{ color: "var(--warning)" }}>needs: {r.need}</span>}
+                        {r.blocked && <span className="text-[11px] leading-snug" style={{ color: alive ? "var(--error)" : "var(--text4)" }}>blocked: {r.blocked}</span>}
+                        {r.need && <span className="text-[11px] leading-snug" style={{ color: alive ? "var(--warning)" : "var(--text4)" }}>needs: {r.need}</span>}
+                        {!alive && (r.blocked || r.need) && (
+                          <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
+                            {r.agent} is no longer on the field — this is what it said, not what is true now
+                          </span>
+                        )}
                       </span>
                       <span className="shrink-0 flex items-baseline gap-2 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text4)" }}>
                         {r.cost ? <span title="what it says this has cost so far">{r.cost}</span> : null}
                         <span>{fmtAgo(r.at)}</span>
                       </span>
                     </li>
-                  ))}
+                  );
+                  })}
                 </ul>
               </section>
             )}
@@ -481,8 +511,8 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
             <section className="flex flex-col gap-1">
               <h2 className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>The field it keeps</h2>
               <p className="text-[10.5px] pb-1.5" style={{ color: "var(--text3)" }}>
-                {field.length
-                  ? <>{field.length} in this project, and the last hour of each.{need.length ? <> <span style={{ color: "var(--error)" }}>{need.length} stopped on you.</span></> : null}</>
+                {reachable.length
+                  ? <>{reachable.length} in this project, and the last hour of each.{need.length ? <> <span style={{ color: "var(--error)" }}>{need.length} stopped on you.</span></> : null}</>
                   : "Nobody is working in this project right now."}
                 {onLantern && <> <button type="button" onClick={onLantern} className="agx-btn" style={{ color: "var(--primary)" }}>Lantern →</button></>}
               </p>
@@ -527,7 +557,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                 </form>
               )}
               {sentTo && <p className="text-[10.5px] pb-1.5" style={{ color: "var(--text3)" }}>{sentTo}</p>}
-              {field.map((r) => {
+              {reachable.map((r) => {
                 const tone = toneOf(r);
                 return (
                   <button key={`${r.name}-${r.session ?? r.paneId ?? ""}`} type="button"
@@ -545,6 +575,16 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   </button>
                 );
               })}
+              {/* The ones that are gone: a count and their names, on one line.
+                  Not dropped — the row is still a fact with a time on it — and
+                  not drawn as thirteen agents either. */}
+              {past.length > 0 && (
+                <p className="text-[10.5px] pt-1.5" style={{ color: "var(--text4)" }}
+                  title={past.map((r) => r.name).join(", ")}>
+                  {past.length} more {past.length === 1 ? "name has" : "names have"} no pane here and {past.length === 1 ? "has" : "have"} been
+                  quiet for hours: {past.slice(0, 6).map((r) => r.name).join(", ")}{past.length > 6 ? `, +${past.length - 6}` : ""}
+                </p>
+              )}
             </section>
 
             <section className="flex flex-col gap-1">
