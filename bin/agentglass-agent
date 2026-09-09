@@ -207,6 +207,20 @@ def main():
     p.add_argument("line", help="what a person should read: who needs them, what changed")
     p.add_argument("--root", help="the project this is about (default: the current directory)")
 
+    p = sub.add_parser("task", help="put something on this project's queue — what you found, for whoever picks it up")
+    p.add_argument("title", help="one line: what is to be done")
+    p.add_argument("--proof", default="", help="what would prove it done: a test, a file, an output. An unstated proof is allowed and drawn as missing")
+    p.add_argument("--detail", default="", help="the rest of it, if a line is not enough")
+    p.add_argument("--weight", type=int, default=0, help="how big you think it is; 0 when you do not know")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("tasks", help="the queue as it stands: waiting, out, and what landed")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("drop", help="take a task off the queue")
+    p.add_argument("id")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
     p = sub.add_parser("claim", help="take a queued task for a named agent, before you open it")
     p.add_argument("id", help="the task id, as the queue gave it")
     p.add_argument("--to", required=True, dest="to", help="the named agent that will carry it")
@@ -355,6 +369,17 @@ def main():
     if a.cmd == "recall":
         root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
         return emit(call("/seat/recall", {"root": root, "question": a.question}, timeout=30))
+    if a.cmd == "task":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task", {
+            "root": root, "title": a.title, "proof": a.proof, "detail": a.detail, "weight": a.weight,
+        }, timeout=30))
+    if a.cmd == "tasks":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/tasks?root=" + urllib.parse.quote(root), method="GET", timeout=30))
+    if a.cmd == "drop":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task/drop", {"root": root, "id": a.id}, timeout=30))
     if a.cmd == "claim":
         root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
         return emit(call("/seat/task/claim", {"root": root, "id": a.id, "agent": a.to}, timeout=30))

@@ -179,3 +179,63 @@ describe("a report refreshes what the board says", () => {
     expect(Board.board().length).toBe(before);
   });
 });
+
+/*
+ * THE SHAPE IT ACTUALLY ARRIVES IN.
+ *
+ * The four fields were written one per line, and the orchestrator this was
+ * built for writes them in a row — that is the shape its own brief taught its
+ * agents. Measured against the real thing: every field but the first landed in
+ * `state`, and it noticed because `blocked/need/cost` came back empty.
+ */
+describe("a report on one line", () => {
+  test("slash-separated labels are four fields, not one sentence", () => {
+    const f = R.parseReport("ESTADO: PR lista y en verde / BLOQUEO: ninguno / NECESITO: revisor / COSTE: 0");
+    expect(f.state).toBe("PR lista y en verde");
+    expect(f.blocked).toBe("ninguno");
+    expect(f.need).toBe("revisor");
+    expect(f.cost).toBe("0");
+  });
+
+  test("in English, and mixed with newlines", () => {
+    const f = R.parseReport("STATE done / BLOCKED nothing\nNEED a go on the push / COST 12 min");
+    expect(f.state).toBe("done");
+    expect(f.blocked).toBe("nothing");
+    expect(f.need).toBe("a go on the push");
+    expect(f.cost).toBe("12 min");
+  });
+
+  test("a slash that is not a label keeps its sentence whole", () => {
+    /* `src/api / src/web` is one thought. Splitting on every slash would cut a
+       state in half and file the second half under nothing. */
+    const f = R.parseReport("STATE touched src/api / src/web and the tests pass");
+    expect(f.state).toBe("touched src/api / src/web and the tests pass");
+    expect(f.blocked).toBe("");
+  });
+
+  test("and one of these wakes the seat only if it is stopped or asking", () => {
+    R.addReport({ root: ROOT, agent: "one-liner", text: "ESTADO: siguiendo / BLOQUEO: ninguno / NECESITO: nada / COSTE: 2 min" });
+    /* "ninguno" and "nada" are answers, not blanks: the agent said it is not
+       blocked, which is exactly the report that must NOT spend a turn. */
+    expect(R.unreadWorthWaking(ROOT)).toBe(0);
+  });
+});
+
+describe("what counts as blocked", () => {
+  test("the words that mean nothing do not ring the bell", () => {
+    /* The brief tells every worker to write "nothing" rather than leave the
+       field blank, so the ordinary report has both fields filled in with a word
+       that means empty. Counting those would be the rule not existing. */
+    for (const word of ["nothing", "none", "nada", "ninguno", "N/A", "-", "no"]) {
+      db.query("DELETE FROM seat_report").run();
+      R.addReport({ root: ROOT, agent: "a", text: `STATE fine\nBLOCKED ${word}\nNEED ${word}` });
+      expect(R.unreadWorthWaking(ROOT), `"${word}" was read as a blocker`).toBe(0);
+    }
+  });
+
+  test("but a sentence that merely contains one does", () => {
+    db.query("DELETE FROM seat_report").run();
+    R.addReport({ root: ROOT, agent: "a", text: "STATE stuck\nBLOCKED nothing except the container, which is somebody else's" });
+    expect(R.unreadWorthWaking(ROOT)).toBe(1);
+  });
+});

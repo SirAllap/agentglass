@@ -22,7 +22,7 @@
 import * as AgentOps from "./agentops.ts";
 import { inScope, seatWakeHours } from "./config.ts";
 import type { Finding } from "./lanternwatch.ts";
-import { everySeat, seatName } from "./seat.ts";
+import { everySeat, seated } from "./seat.ts";
 import { releaseVanished } from "./seatqueue.ts";
 import { unreadWorthWaking } from "./seatreport.ts";
 import { noteWoken, wokenFor, __resetWoken } from "./seatwoken.ts";
@@ -56,7 +56,9 @@ export interface WakeDeps {
   /** The named agents alive right now, injected so a test can say who is gone
    *  without a tmux server. */
   alive?: () => string[];
-  prompt?: (name: string, text: string) => Promise<unknown>;
+  /** Given the project root, not the seat's name: an ADOPTED seat has no named
+   *  agent to look up, and that is the common case. */
+  prompt?: (root: string, text: string) => Promise<unknown>;
   now?: number;
 }
 
@@ -67,7 +69,7 @@ export interface WakeDeps {
 export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<string[]> {
   const now = deps.now ?? Date.now();
   const seats = (deps.seats ?? (() => everySeat()))();
-  const send = deps.prompt ?? ((name: string, text: string) => promptByName(name, text));
+  const send = deps.prompt ?? ((root: string, text: string) => promptSeat(root, text));
   const floorMs = seatWakeHours() * 3_600_000;
   const woken: string[] = [];
   /* Work handed to an agent whose window is gone is work nobody is doing, and
@@ -112,7 +114,7 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
     const line = changed
       ? (waiting ? `${waiting} report${waiting === 1 ? "" : "s"} waiting: run \`agentglass-agent inbox\`. ` : "") + wakeLine(mine, last.fingerprint.split("#")[0] ?? "")
       : "Nothing has changed since your last round. Say so in one line, or say what you notice.";
-    await send(seatName(s.root), line);
+    await send(s.root, line);
     woken.push(s.root);
   }
   return woken;
@@ -125,12 +127,25 @@ function aliveNames(): string[] {
   return AgentOps.everyAgent().filter((a) => a.endedAt === null).map((a) => a.name);
 }
 
-async function promptByName(name: string, text: string): Promise<void> {
-  await AgentOps.reconcile();
-  const a = AgentOps.agentNamed(name);
+/*
+ * THE SEAT IS WOKEN WHEREVER IT IS SITTING.
+ *
+ * This looked the seat up with `agentNamed`, which knows only agents this app
+ * STARTED — and the seat that runs a real project here adopted the chair from
+ * a session somebody had already opened. So every wake in this file was a
+ * no-op for the one seat it was written for, silently, for as long as it has
+ * existed. Its own words, measuring it from the other side: "NO me despertó
+ * (lo leí porque miré)".
+ *
+ * `seated` is the resolution the rest of the seat uses and it answers for both
+ * ways of being in the chair: a named agent this app opened, or the pane an
+ * adopted session is running in.
+ */
+async function promptSeat(root: string, text: string): Promise<void> {
+  const a = await seated(root);
   /* Gone means the person closed the chair or the machine restarted; the row
      is closed by `reconcile` and the view says so. Nothing to shout about. */
-  if (!a || a.endedAt !== null) return;
+  if (!a) return;
   await AgentOps.promptAgent(a.paneId, text, 10_000);
 }
 
