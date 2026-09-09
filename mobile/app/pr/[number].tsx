@@ -30,6 +30,8 @@ import { ask } from "../../src/lib/api.ts";
 import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { useTracksWork } from "../../src/state/use-tracks-work.ts";
+import { TaskChip } from "../../src/review/TaskChip.tsx";
 import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
@@ -141,6 +143,10 @@ function CheckRow({ check, onOpen }: {
 export default function PrScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
+  /* Whether this machine tracks work in ANYTHING — the catalogue's question,
+     not a product's. It decides only whether an id read from a branch may be
+     offered as something to look up; an address in the body opens either way. */
+  const tracked = useTracksWork(host);
   const router = useRouter();
   const { number, root, review } = useLocalSearchParams<{
     number: string; root: string; review?: string;
@@ -500,6 +506,15 @@ export default function PrScreen(): React.ReactNode {
                 style={{ color: C.text3, fontSize: T.eyebrow, fontFamily: MONO }}
               >{detail.headRefName} → {detail.baseRefName}</Text>
               <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" }}>
+                {/* First, because it is the only chip that says what this pull
+                    request is ABOUT — the rest say what state it is in. It
+                    draws nothing at all on a machine that tracks work nowhere,
+                    or on a pull request that names no item. */}
+                <TaskChip
+                  pr={detail}
+                  tracked={tracked}
+                  onFind={(query) => router.push({ pathname: "/(tabs)/tasks", params: { q: query } })}
+                />
                 {detail.isDraft ? (
                   <View style={{
                     paddingHorizontal: SPACE.sm, paddingVertical: 2,
