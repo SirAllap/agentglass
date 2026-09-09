@@ -64,3 +64,28 @@ Facts an agent needs before touching agentglass. Long form: `CONTRIBUTING.md`, `
 - Prefer the house tokens (`ICON`/`HIT` in `web/src/lib/iconSize.ts`,
   `--surface-*` in `web/src/index.css`, `LAYER` in `web/src/lib/layers.ts`)
   over new numbers; count what the repo already uses before adding a size.
+
+## Before adding code
+
+A ladder. Take the rungs in order and stop at the first one that answers.
+
+1. Does this need to exist? A thing nobody asked for is a thing somebody
+   maintains.
+2. Does the repo already do it? Count what is there before adding a size, a
+   helper, a colour or a store — the canon is usually already written, and the
+   second copy is the one that drifts.
+3. Does the platform or the standard library do it?
+4. Does something already installed do it? No new dependency for one function.
+5. Can it be a few lines where the caller already is, instead of a module?
+
+Then write it.
+
+- A deliberate simplification names its ceiling. Say what the smaller thing
+  cannot do — "nested groups are the next thing after this and are not here" —
+  so the next person can tell a limit that was chosen from a gap that was
+  missed. `simplify:` in the subject when that is the whole change.
+- **The measured why is still written, and this one is not negotiable.**
+  Deleting code is not deleting the paragraph that says what was measured and
+  why the obvious version does not work. That paragraph is what makes this
+  repo readable six months later, and it is the first thing a "shortest diff
+  wins" reflex eats.
