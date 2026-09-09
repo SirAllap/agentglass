@@ -47,7 +47,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
-import { cardOf, askingCard, onCard, forgetCard, cardVersion, withCard } from "../lib/prCardStore.ts";
+import { cardOf, askingCard, onCard, forgetCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
@@ -4036,8 +4036,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           {/*
             * Refresh means "ask again for what is in front of me".
             *
-            * It forced the main list and nothing else: the board'"'"'s own two
-            * lists were re-read from the server'"'"'s cache, so a pull request that
+            * It forced the main list and nothing else: the board's own two
+            * lists were re-read from the server's cache, so a pull request that
             * arrived after that cache was filled stayed invisible however many
             * times it was pressed. Reported that way — a review requested of
             * him, present in the list the server serves, and absent from the
@@ -4054,6 +4054,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           <Btn onClick={() => {
             forgetBehind();
             forgetRollups();
+            /* And the tracker cards, which were the one reading Refresh could
+               not shift: they are held here, not on the server, so re-asking
+               the server for the same rows brought the same card back. */
+            forgetCards();
             boardForce.current = true;
             setBoardTick((n) => n + 1);
             loadList(true);
@@ -6278,7 +6282,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
     <Portal>
       <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
-        {/* `min-h-0`, and it is the whole bug: a flex child'"'"'s default floor is
+        {/* `min-h-0`, and it is the whole bug: a flex child's default floor is
             its content, so the people list grew past the menu instead of
             scrolling inside it — taking the ClickUp half and Done off the
             bottom with it, and leaving nothing to scroll. */}
@@ -6590,7 +6594,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   }
 
   return (
-    /* Under the people, not beside them: the menu'"'"'s height is what was going
+    /* Under the people, not beside them: the menu's height is what was going
        spare. Capped, so the list above it keeps most of the window and this
        never pushes Done off the bottom. */
     <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>

@@ -19,6 +19,22 @@ import type { PrSummary } from "../../../shared/types.ts";
 /** Long enough that moving between tabs does not re-ask, short enough that a
  *  card somebody moved on the board stops claiming its old status. */
 const TTL_MS = 60_000;
+/**
+ * How old a reading may be before a row is worth replacing with a live one.
+ *
+ * The server's copy comes off a board cached on disk and is accepted up to a
+ * day old, which is far too generous for a field people move several times a
+ * morning: measured on a row 24 minutes old, the board drew "in development"
+ * on him while the tracker had it in "code review" on somebody else, and no
+ * amount of pressing Refresh changed it — Refresh re-reads the pull requests,
+ * not the tracker.
+ *
+ * Longer than TTL_MS on purpose. A whole board of rows re-asking on the
+ * store's own TTL is twenty lookups a minute for a view somebody leaves open;
+ * at five minutes it is four, and a status nobody has touched in five minutes
+ * is not the one that misleads.
+ */
+const FRESH_ENOUGH_MS = 5 * 60_000;
 /** At once. The server holds one ClickUp token and the sidebar is a glance. */
 const AT_ONCE = 2;
 
@@ -71,10 +87,10 @@ export function onCard(fn: () => void): () => void {
  * about yet puts it in the queue. The thing that knows a card is on screen is
  * the thing drawing it.
  */
-export function cardOf(query: string): Entry | null {
+export function cardOf(query: string, maxAgeMs: number = TTL_MS): Entry | null {
   if (!query) return null;
   const hit = seen.get(query);
-  if (hit && Date.now() - hit.at < TTL_MS) return hit;
+  if (hit && Date.now() - hit.at < maxAgeMs) return hit;
   if (!inflight.has(query) && !waiting.includes(query)) {
     waiting.push(query);
     pump();
@@ -100,10 +116,19 @@ export function forgetCard(query: string): void {
   tell();
 }
 
-/** Forget everything — for a test. */
+/**
+ * Forget everything, and say so.
+ *
+ * Refresh means "ask again for what is in front of me", and this is the one
+ * reading it could not shift: the cards are held here rather than on the
+ * server, so re-asking the server returned the same rows carrying the same
+ * card. Telling the listeners is the half that makes it visible — without it
+ * nothing re-renders, so nothing calls `cardOf`, so nothing is re-read.
+ */
 export function forgetCards(): void {
   seen.clear();
   waiting.length = 0;
+  tell();
 }
 
 /**
@@ -121,9 +146,15 @@ export function forgetCards(): void {
  * hundred.
  */
 export function withCard<T extends PrSummary>(p: T, hasTaskProvider: boolean): T {
-  if (p.card) return p;
   const t = taskLink(p, hasTaskProvider);
-  const hit = t ? cardOf(t.query) : null;
+  if (!t) return p;
+  /* A reading young enough to stand behind is left alone — that is the free
+     path, and most rows take it. Everything else asks, and keeps what it has
+     until an answer arrives: a stale status is worse than a fresh one and
+     better than none. */
+  const mine = p.card;
+  if (mine?.at && Date.now() - mine.at < FRESH_ENOUGH_MS) return p;
+  const hit = cardOf(t.query, FRESH_ENOUGH_MS);
   const k = hit?.task;
   if (!k) return p;
   return {

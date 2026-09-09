@@ -59,3 +59,45 @@ test("nothing is asked for when no provider is connected", () => {
      this must not queue a lookup that can only fail. */
   expect(withCard(bare(4, "ORBIT-1045"), false).card).toBeUndefined();
 });
+
+/**
+ * A READING THE SERVER GAVE US IS NOT AUTOMATICALLY THE ONE TO DRAW.
+ *
+ * It comes off a board cached on disk and is accepted up to a day old, and a
+ * status is a field people move several times a morning. Measured on a row
+ * whose cached copy was 24 minutes old: the board said "in development" on one
+ * person while the tracker had it in "code review" on another, and Refresh —
+ * which re-reads the pull requests, not the tracker — could not shift it.
+ */
+test("a stale card is replaced by a fresher reading, and a fresh one is left alone", async () => {
+  const store = await import("../src/lib/prCardStore.ts");
+  const api = (await import("../src/lib/api.ts")).api as unknown as Record<string, unknown>;
+  const before = api.clickupFind;
+  api.clickupFind = async (query: string) => ({
+    ok: true,
+    task: { id: query, customId: query, title: "a card", status: "code review", priority: null, people: [{ name: "Someone Else" }] },
+  });
+  try {
+    /* Half an hour old, and the row says what the board said then. */
+    const stale = {
+      ...bare(9, "ORBIT-1050"),
+      card: { id: "c9", title: "a card", status: "in progress", priority: null, at: Date.now() - 30 * 60_000 },
+    } as unknown as PrSummary;
+    /* Nothing has answered yet, so the stale reading is kept rather than
+       dropped: a status somebody can act on beats a blank. */
+    expect(store.withCard(stale, true).card?.status).toBe("in progress");
+    for (let i = 0; i < 50 && store.withCard(stale, true).card?.status !== "code review"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(store.withCard(stale, true).card?.status).toBe("code review");
+
+    /* A minute old is young enough to stand behind, and costs nothing. */
+    const fresh = {
+      ...bare(10, "ORBIT-1051"),
+      card: { id: "c10", title: "a card", status: "in progress", priority: null, at: Date.now() - 60_000 },
+    } as unknown as PrSummary;
+    expect(store.withCard(fresh, true)).toBe(fresh);
+  } finally {
+    api.clickupFind = before;
+  }
+});
