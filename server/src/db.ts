@@ -1495,6 +1495,17 @@ db.run(`CREATE INDEX IF NOT EXISTS seat_report_root ON seat_report (root, read_a
  */
 try { db.exec("ALTER TABLE seat ADD COLUMN adopted_session TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
 try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+/*
+ * A NAMED AGENT THIS APP DID NOT START.
+ *
+ * The registry held only what `startAgent` opened, so a person's own tmux tab
+ * running an agent did not exist as far as `broadcast`, `prompt` or `stop`
+ * were concerned — measured by the orchestrator here, whose whole fleet is
+ * tabs it opened by hand: "`list` da 0 con 2 tabs vivas". Enlisting one writes
+ * the same row, and this column is what keeps `stop` honest afterwards: a
+ * window somebody opened is not this app's to kill.
+ */
+try { db.exec("ALTER TABLE named_agent ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
 
 /* What a run's branch pointed at when something last looked at it.
  *

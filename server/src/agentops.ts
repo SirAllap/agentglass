@@ -30,7 +30,7 @@ import { db } from "./db.ts";
 import { tmux, engineWindowRunning } from "./tmuxpane.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
 import { agentKind } from "../../shared/agentKinds.ts";
-import { supportsSessionName } from "./agents/claudecode.ts";
+import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { SPELLINGS } from "./agents/launch.ts";
 import { inputBox, __submitVerdict, __needsYou, __running } from "./chatpane.ts";
 import { boardNow } from "./lantern.ts";
@@ -51,15 +51,19 @@ export interface NamedAgent {
   windowId: string;
   startedAt: number;
   endedAt: number | null;
+  /** True when this app did not open the window — somebody's own tab, enlisted
+   *  so the verbs can reach it. What keeps `stop` from killing it. */
+  adopted?: boolean;
 }
 
 interface Row {
   name: string; kind: string; cwd: string; pane_id: string; window_id: string;
-  started_at: number; ended_at: number | null;
+  started_at: number; ended_at: number | null; adopted?: number;
 }
 const toAgent = (r: Row): NamedAgent => ({
   name: r.name, kind: r.kind, cwd: r.cwd, paneId: r.pane_id, windowId: r.window_id,
   startedAt: r.started_at, endedAt: r.ended_at,
+  ...(r.adopted ? { adopted: true } : null),
 });
 
 const upsert = db.query<never, [string, string, string, string, string, number]>(`
@@ -73,6 +77,16 @@ const byName = db.query<Row, [string]>(`SELECT * FROM named_agent WHERE name = ?
 const live = db.query<Row, []>(`SELECT * FROM named_agent WHERE ended_at IS NULL ORDER BY started_at DESC`);
 const everything = db.query<Row, []>(`SELECT * FROM named_agent ORDER BY started_at DESC LIMIT 200`);
 const end = db.query<never, [number, string]>(`UPDATE named_agent SET ended_at = ? WHERE name = ? AND ended_at IS NULL`);
+/* The same row `startAgent` writes, with `adopted` set: one registry, so every
+   verb that reads it reaches an enlisted tab without knowing there are two
+   ways in. */
+const adopt = db.query<never, [string, string, string, string, string, number]>(`
+  INSERT INTO named_agent (name, kind, cwd, pane_id, window_id, started_at, ended_at, adopted)
+  VALUES (?, ?, ?, ?, ?, ?, NULL, 1)
+  ON CONFLICT(name) DO UPDATE SET
+    kind = excluded.kind, cwd = excluded.cwd, pane_id = excluded.pane_id,
+    window_id = excluded.window_id, started_at = excluded.started_at, ended_at = NULL, adopted = 1
+`);
 
 /** Whether ONE pane is on the engine. The same fact `panesAlive` rests on,
  *  asked of a single id — an adopted seat is a pane this app did not open, and
@@ -307,10 +321,87 @@ export async function pressKey(paneId: string, key: string): Promise<boolean> {
   return (await tmux(["send-keys", "-t", paneId, key])).ok;
 }
 
-export async function stopAgent(a: NamedAgent, now = Date.now()): Promise<boolean> {
-  const r = await tmux(["kill-window", "-t", a.windowId]);
+/**
+ * Stop an agent — and for one this app did not open, "stop" means LET GO.
+ *
+ * A window somebody made themselves, with their work in it, is not this app's
+ * to kill because a verb was called on the name they lent it. So an enlisted
+ * agent is forgotten: the row closes, the verbs stop reaching it, and the tab
+ * is exactly where its owner left it. `kill` says the caller meant the window
+ * and not the registration, and it is never the default.
+ *
+ * The answer says which happened, because "stopped" meaning two things and
+ * saying so once is how a caller ends up surprised in one direction or the
+ * other.
+ */
+export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopted): Promise<{ ok: boolean; killed: boolean }> {
+  const killed = kill ? (await tmux(["kill-window", "-t", a.windowId])).ok : false;
   end.run(now, a.name);
-  return r.ok;
+  return { ok: kill ? killed : true, killed };
+}
+
+/**
+ * Take an existing pane under this app's hand, by name.
+ *
+ * The registry held only what `startAgent` opened, so a person's own tmux tab
+ * running an agent did not exist for `broadcast`, `prompt` or `read` —
+ * measured by the orchestrator whose whole fleet is tabs it opened by hand:
+ * "`list` da 0 con 2 tabs vivas, broadcast no encuentra a nadie". Its first
+ * ask was one message to N agents, and the N was zero.
+ *
+ * The pane is found by its id, or by the window name a person gave it, which
+ * is the handle they actually use. Everything else is read off tmux rather
+ * than taken from the caller: where it is running, which window it belongs to,
+ * and whether an agent is running in it at all — enlisting a plain shell would
+ * make `prompt` type a paragraph into somebody's command line.
+ */
+export type EnlistResult =
+  | { ok: true; agent: NamedAgent }
+  | { ok: false; error: "bad-name" | "exists" | "no-pane" | "many-panes" | "not-an-agent"; detail?: string };
+
+export async function enlistAgent(p: { name: string; pane?: string; window?: string }): Promise<EnlistResult> {
+  if (!validName(p.name)) return { ok: false, error: "bad-name" };
+  const existing = agentNamed(p.name);
+  if (existing && existing.endedAt === null && await paneAlive(existing.paneId)) {
+    return { ok: false, error: "exists", detail: existing.paneId };
+  }
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_start_command}"]);
+  if (!r.ok) return { ok: false, error: "no-pane" };
+  const rows = r.stdout.split("\n").map((l) => l.split("\t")).filter((c) => c.length >= 5);
+  const wanted = p.pane
+    ? rows.filter((c) => c[0] === p.pane)
+    : rows.filter((c) => c[2] === (p.window ?? p.name));
+  if (!wanted.length) return { ok: false, error: "no-pane" };
+  /* A window name is a label, not a key: two tabs can carry the same one, and
+     picking the first would enlist a coin toss. */
+  if (wanted.length > 1) return { ok: false, error: "many-panes", detail: wanted.map((c) => c[0]).join(", ") };
+  const [paneId = "", windowId = "", , cwd = "", command = "", startedWith = ""] = wanted[0]!;
+  /*
+   * IS AN AGENT RUNNING IN THERE — asked of both the process and the command
+   * the pane was born with, because either alone is wrong.
+   *
+   * `pane_current_command` is the foreground binary, and it is `bash` or `node`
+   * for every agent that was started through a wrapper — including the ones
+   * this app's own restore opens, as `sh -c 'claude …'`. Refusing on that
+   * alone would refuse panes agentglass itself made.
+   *
+   * The start command alone is worse: it still says `claude` in a pane where
+   * the agent exited an hour ago and left a shell.
+   *
+   * So: either says yes. This is a help against the obvious mistake — pointing
+   * a verb at somebody's editor or their shell — and not a proof, and the
+   * caller is naming a specific pane on purpose. A plain interactive shell has
+   * neither, which is the case worth stopping.
+   */
+  const bin = (claudeCode.bin() || "claude").split("/").pop() || "claude";
+  const named = new RegExp(`(^|[/\\s"'])${bin}([\\s"']|$)`);
+  if (command !== bin && !named.test(startedWith)) {
+    return { ok: false, error: "not-an-agent", detail: command };
+  }
+  const now = Date.now();
+  adopt.run(p.name, "claude", cwd, paneId, windowId, now);
+  const made = agentNamed(p.name);
+  return made ? { ok: true, agent: made } : { ok: false, error: "no-pane" };
 }
 
 /** The list the worker reconciles against: every live name, with what the

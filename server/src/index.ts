@@ -7103,6 +7103,29 @@ const server = Bun.serve<WsData>({
         return json({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
       }
 
+      /*
+       * ENLIST — a tab somebody opened, under this app's hand.
+       *
+       * Its first ask was one message to N agents, and for the orchestrator
+       * here the N was zero: every agent it runs is a tmux tab it opened by
+       * hand, and the registry held only what this app had started.
+       */
+      if (verb === "enlist") {
+        const r = await AgentOps.enlistAgent({
+          name, pane: typeof b.pane === "string" ? b.pane : undefined,
+          window: typeof b.window === "string" ? b.window : undefined,
+        });
+        if (r.ok) return json({ ok: true, result: { agent: r.agent } });
+        const why: Record<string, string> = {
+          "bad-name": "name: letters, digits, dot, dash or underscore, 64 at most",
+          exists: `an agent by that name is already live in pane ${r.detail}`,
+          "no-pane": "no pane by that id or window name on the engine",
+          "many-panes": `more than one window is called that (${r.detail}) — say which pane`,
+          "not-an-agent": `that pane is running ${r.detail}, not an agent — prompting it would type into a shell`,
+        };
+        return json({ ok: false, error: why[r.error] }, r.error === "exists" ? 409 : 400);
+      }
+
       const a = AgentOps.agentNamed(name);
       if (!a || a.endedAt !== null) return json({ ok: false, error: "no agent by that name" }, 404);
 
@@ -7135,8 +7158,11 @@ const server = Bun.serve<WsData>({
         return json({ ok, result: { name, key } }, ok ? 200 : 410);
       }
       if (verb === "stop") {
-        const ok = await AgentOps.stopAgent(a);
-        return json({ ok: true, result: { name, killed: ok } });
+        /* An enlisted tab is let go, not killed: it is somebody's own window
+           with their work in it. `kill: true` says the caller meant the window
+           and not the registration. The answer says which happened. */
+        const r = await AgentOps.stopAgent(a, Date.now(), b.kill === true || !a.adopted);
+        return json({ ok: r.ok, result: { name, killed: r.killed, letGo: !r.killed } });
       }
       return json({ ok: false, error: "no such verb" }, 404);
     }
