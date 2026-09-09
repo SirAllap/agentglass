@@ -76,7 +76,23 @@ export function parseReport(text: string): { state: string; blocked: string; nee
      `**STATE:**` are both things people write — so both positions are optional;
      and the word ends where the word ends, or `COSTE` matches the `cost` arm
      and leaves an `E` at the head of the value. */
-  const LABEL = /^\s*(?:\*\*)?\s*(state|estado|blocked|bloqueo|bloqueado|need|necesito|necesita|coste|costo|cost)\b\s*(?:\*\*)?\s*[:\-–—]?\s*(?:\*\*)?\s*/i;
+  const WORDS = "state|estado|blocked|bloqueo|bloqueado|need|necesito|necesita|coste|costo|cost";
+  const LABEL = new RegExp(`^\\s*(?:\\*\\*)?\\s*(${WORDS})\\b\\s*(?:\\*\\*)?\\s*[:\\-–—]?\\s*(?:\\*\\*)?\\s*`, "i");
+  /*
+   * AND THE WHOLE REPORT ON ONE LINE, which is how it actually arrives.
+   *
+   * The shape this was written for puts each field on its own line. The
+   * orchestrator it was written FOR writes them in a row —
+   * `ESTADO: ... / BLOQUEO: ninguno / NECESITO: ... / COSTE: 0` — because that
+   * is the shape its own brief taught its agents, and measured against the
+   * real thing every field but the first landed in `state`. A parser that only
+   * accepts the shape it prefers is a parser that turns a status into an
+   * argument about formatting.
+   *
+   * The slash only separates when a LABEL follows it: a state that says
+   * "src/api / src/web" keeps its slash and stays one sentence.
+   */
+  const SPLIT = new RegExp(`\\s+[/|·]\\s+(?=(?:\\*\\*)?\\s*(?:${WORDS})\\b)`, "gi");
   const bucket: Record<string, string[]> = { state: [], blocked: [], need: [], cost: [] };
   const key = (w: string) => {
     const l = w.toLowerCase();
@@ -86,7 +102,7 @@ export function parseReport(text: string): { state: string; blocked: string; nee
     return "cost";
   };
   let where = "state";
-  for (const ln of raw.split("\n")) {
+  for (const ln of raw.replace(SPLIT, "\n").split("\n")) {
     const m = LABEL.exec(ln);
     if (m) { where = key(m[1]!); bucket[where]!.push(ln.slice(m[0].length)); continue; }
     bucket[where]!.push(ln);
@@ -143,8 +159,27 @@ export const unreadCount = (root: string): number => countQ.get(root)?.n ?? 0;
  * The quiet ones are still in the tray, still drawn, and still handed over by
  * the next `inbox`. They simply do not ring the bell.
  */
+/*
+ * "NOTHING" IS AN ANSWER, NOT A BLOCKER.
+ *
+ * The brief every worker is handed says it in as many words — `BLOCKED what is
+ * stopping you, or "nothing"` — so the ordinary report has both fields filled
+ * in with a word that means empty. Counting those as reasons to wake would
+ * make the rule fire on every report ever sent, which is the rule not
+ * existing. Caught by its own test before it shipped.
+ *
+ * Deliberately a short list of the words people actually type, in the two
+ * languages this machine writes in, and nothing cleverer: a report that says
+ * "nothing blocking except the container" is blocked, and must stay so.
+ */
+const NOTHING = /^(nothing|none|no|n\/?a|nada|ninguno|ninguna|ningun|sin bloqueo|-{1,2}|—|\.)\s*[.!]?$/i;
+const saysNothing = (v: string): boolean => !v.trim() || NOTHING.test(v.trim());
+
+/** Whether this report is one to act on: stopped, or asking for a decision. */
+export const worthWaking = (r: SeatReport): boolean => !saysNothing(r.blocked) || !saysNothing(r.need);
+
 export const unreadWorthWaking = (root: string): number =>
-  unreadReports(root, 100).filter((r) => r.blocked || r.need).length;
+  unreadReports(root, 100).filter(worthWaking).length;
 
 /** Everything unread, and it is read now. One call, which is the whole ask. */
 export function drainReports(root: string, now = Date.now()): SeatReport[] {

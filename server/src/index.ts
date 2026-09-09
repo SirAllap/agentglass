@@ -51,7 +51,7 @@ import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk,
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, safeAbs as gitSafeAbs } from "./git.ts";
+import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, projectRootOf, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
   workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
@@ -6782,6 +6782,13 @@ const server = Bun.serve<WsData>({
      * re-reads its whole context every turn. So the same facts, as text, with
      * nothing else in the envelope.
      */
+    /* The queue, read-only, for a seat that would rather not carry the whole
+       `/seat` answer to find out what is waiting. */
+    if (pathname === "/seat/tasks" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      return json({ ok: true, root: gate.root, tasks: SeatQueue.tasksFor(gate.root) });
+    }
     if (pathname === "/seat/field" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
@@ -7042,8 +7049,26 @@ const server = Bun.serve<WsData>({
 
       if (verb === "start") {
         const cwd = gitSafeAbs(b.cwd);
-        if (!cwd || !inScope(cwd) || !fsExists(cwd)) {
-          return json({ ok: false, error: "that directory is not in the open project" }, 400);
+        /*
+         * A SIBLING WORKTREE IS THE SAME PROJECT.
+         *
+         * `inScope` measures against the open project's directory, so
+         * `~/code/app-feature` — a worktree of `~/code/app`, cut by the very
+         * brief these agents are handed — read as somewhere else and the start
+         * was refused. Measured by the orchestrator running a real project
+         * here: "la mitad de mis agentes viven en worktrees hermanos, así que
+         * hoy no puedo arrancarlos por la app."
+         *
+         * The rule widens to the REPOSITORY, not to the machine: a directory
+         * qualifies when git says it belongs to the project this app has open.
+         * `projectRootOf` is the reader that already answers that question —
+         * it strips `.worktrees/` and folds the rest through
+         * `--git-common-dir` — and it is the same fold the seat uses to decide
+         * where a report lands.
+         */
+        const sameProject = !!cwd && !!workspaceRoot() && projectRootOf(cwd) === workspaceRoot();
+        if (!cwd || (!inScope(cwd) && !sameProject) || !fsExists(cwd)) {
+          return json({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
         }
         const wanted = typeof b.kind === "string" ? b.kind : "claude";
         if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);

@@ -256,3 +256,35 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(w.out.error).toContain("no agent");
   }, SLOW);
 });
+
+/*
+ * THE QUEUE, FROM THE CLI.
+ *
+ * The orchestrator could claim a task and finish one, and had no way at all to
+ * PUT one there: the only door was the view. Its words, testing all twenty-one
+ * verbs: "el orquestador no puede meter en la cola lo que descubre". A seat
+ * whose whole job is noticing things could not write one down.
+ */
+describe.skipIf(!have)("the queue through the CLI", () => {
+  test("a task can be added, listed and dropped without opening the view", async () => {
+    const root = process.env.AGENTGLASS_ROOT_FOR_TEST ?? dir;
+    const added = await cli("task", "the retry drops the last page", "--proof", "a failing test named in the report", "--root", root);
+    expect(added.out.ok, added.out.error).toBe(true);
+
+    const listed = await cli("tasks", "--root", root);
+    expect(listed.out.ok, JSON.stringify(listed.out)).toBe(true);
+    /* The queue answers at the top level, not under `result`: these routes are
+       the seat's own and predate the worker CLI's envelope. */
+    const tasks = ((listed.out as unknown as { tasks?: Array<Record<string, unknown>> }).tasks ?? []);
+    const mine = tasks.find((t) => t.title === "the retry drops the last page");
+    expect(mine, "the task did not come back in the queue").toBeDefined();
+    expect(mine?.proof).toBe("a failing test named in the report");
+
+    const dropped = await cli("drop", String(mine?.id ?? ""), "--root", root);
+    expect(dropped.out.ok).toBe(true);
+    const after = await cli("tasks", "--root", root);
+    const still = ((after.out as unknown as { tasks?: Array<Record<string, unknown>> }).tasks ?? [])
+      .find((t) => t.title === "the retry drops the last page");
+    expect(still, "a dropped task is still on the queue").toBeUndefined();
+  }, SLOW);
+});
