@@ -264,3 +264,18 @@ export function matchesQuery(fields: (string | null | undefined)[], q: string): 
   const hay = fields.filter(Boolean).join(" ").toLowerCase();
   return words.every((w) => hay.includes(w));
 }
+
+/**
+ * What to call a tracker in a sentence.
+ *
+ * Only ever used for one whose OWN address was read, so this never guesses:
+ * there is no entry for "an id from we cannot say where", because the honest
+ * word for that is nothing at all.
+ */
+const NAMES: Record<TrackerId, string> = {
+  clickup: "ClickUp", jira: "Jira", linear: "Linear", shortcut: "Shortcut",
+  asana: "Asana", trello: "Trello", github: "GitHub", gitlab: "GitLab",
+  azure: "Azure Boards",
+};
+
+export const trackerName = (id: TrackerId | null): string | null => (id ? NAMES[id] : null);
