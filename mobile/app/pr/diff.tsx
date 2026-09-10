@@ -64,7 +64,7 @@ import { gapLabel, gapsIn, nextSlice, type Gap } from "../../src/model/expand.ts
 import { draft, takeDraft, type LineNote } from "../../src/model/reviewDraft.ts";
 import { threadsOnFile } from "../../src/model/threads.ts";
 import { FIRST_ROWS, rowsOf } from "../../src/model/diffRows.ts";
-import { inlineSpans, pairsIn, type Span } from "../../src/model/tokens.ts";
+import { pairsIn, tokenDiff, type Seg } from "../../../shared/tokenDiff.ts";
 import { ApplyConfirm } from "../../src/review/ApplyConfirm.tsx";
 import { ThreadCard } from "../../src/review/ThreadCard.tsx";
 import { ThreadMarker } from "../../src/review/ThreadMarker.tsx";
@@ -240,19 +240,21 @@ export default function DiffScreen(): React.ReactNode {
    * repaint of a screen that repaints on every tap. Keyed by hunk and index
    * because that is what the renderer has in hand.
    *
-   * Bounded twice over in `tokens.ts` — a pair too dissimilar to be an edit
-   * gets nothing, and a middle too long for the table is marked coarsely — so
-   * a file of minified JavaScript costs a pass over its lines and stops.
+   * Bounded twice over in `shared/tokenDiff.ts` — a pair too dissimilar to be
+   * an edit gets nothing, and a middle too long for the table is marked
+   * coarsely — so a file of minified JavaScript costs a pass over its lines
+   * and stops. Shared with the desk, because one reader on two screens must
+   * not be told two different things about the same line.
    */
   const marks = useMemo(() => {
-    const out = new Map<string, Span[]>();
+    const out = new Map<string, Seg[]>();
     if (!file) return out;
     file.hunks.forEach((hunk, h) => {
       for (const [del, add] of pairsIn(hunk.lines)) {
-        const both = inlineSpans(hunk.lines[del]!.text, hunk.lines[add]!.text);
+        const both = tokenDiff(hunk.lines[del]!.text, hunk.lines[add]!.text);
         if (!both) continue;
-        out.set(`${h}:${del}`, both.before);
-        out.set(`${h}:${add}`, both.after);
+        out.set(`${h}:${del}`, both.left);
+        out.set(`${h}:${add}`, both.right);
       }
     });
     return out;
