@@ -49,7 +49,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, KeyboardAvoidingView, Pressable, ScrollView, Text, TextInput, View,
+  ActivityIndicator, FlatList, KeyboardAvoidingView, Pressable, Text, TextInput, View,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -63,6 +63,7 @@ import {
 import { gapLabel, gapsIn, nextSlice, type Gap } from "../../src/model/expand.ts";
 import { draft, takeDraft, type LineNote } from "../../src/model/reviewDraft.ts";
 import { threadsOnFile } from "../../src/model/threads.ts";
+import { FIRST_ROWS, rowsOf } from "../../src/model/diffRows.ts";
 import { inlineSpans, pairsIn, type Span } from "../../src/model/tokens.ts";
 import { ApplyConfirm } from "../../src/review/ApplyConfirm.tsx";
 import { ThreadCard } from "../../src/review/ThreadCard.tsx";
@@ -354,6 +355,10 @@ export default function DiffScreen(): React.ReactNode {
 
   const gaps = useMemo(() => (file ? gapsIn(file) : []), [file]);
 
+  /** The file as a flat list of rows, which is what lets the list window it —
+   *  see model/diffRows.ts for why a column of nested maps could not be. */
+  const rows = useMemo(() => rowsOf(file), [file]);
+
   /** Which way a gap grows. Stated once, because the renderer and the fetcher
    *  must agree — a gap drawn as growing up and fetched downward would append
    *  lines to the wrong end of what is on screen. */
@@ -458,6 +463,98 @@ export default function DiffScreen(): React.ReactNode {
     );
   };
 
+  /**
+   * One line of the diff, with whatever hangs off it.
+   *
+   * A FUNCTION that returns elements, and deliberately not a component defined
+   * here. A component declared inside a render is a new type on every repaint,
+   * and React unmounts a subtree whose type changed — which for this row means
+   * the comment box losing focus on the keystroke that opened it, every time.
+   * Called rather than rendered, the elements keep their identity and the row
+   * is just what was inside the map before.
+   */
+  const lineRow = (h: number, i: number, line: DiffLine): React.ReactNode => {
+    const face = lineFace(line.kind);
+    const can = commentableLine(line);
+    const open = writing?.line === can && can !== null;
+    return (
+      <View>
+        <Pressable
+          disabled={can === null}
+          onPress={() => setWriting(can === null ? null : { line: can, body: "" })}
+          style={{ flexDirection: "row", backgroundColor: face.bg, minHeight: 22 }}
+        >
+          {/* The new-side number, which is the one a comment anchors to. The
+              old side is deliberately not drawn: two columns of digits on a
+              393-point screen is a third of the width spent on something you
+              look at once. */}
+          <Text style={{
+            width: 38, textAlign: "right", paddingRight: SPACE.sm,
+            color: C.text4, fontSize: 10.5, fontFamily: MONO, lineHeight: 20,
+          }}>{line.newNo ?? line.oldNo ?? ""}</Text>
+          <Text style={{
+            width: 10, color: face.ink, fontSize: 10.5, fontFamily: MONO, lineHeight: 20,
+          }}>{face.mark}</Text>
+          <Text
+            style={{
+              flex: 1, color: line.kind === "meta" ? C.text4 : C.text2,
+              fontSize: 10.5, fontFamily: MONO, lineHeight: 20, paddingRight: SPACE.sm,
+            }}
+          >
+            {/* The words that actually changed, when this line is a rewrite of
+                the one above or below it. A hunk that renames one identifier
+                used to be two full-width bands and a game of
+                spot-the-difference at eleven points; the band still says which
+                side you are on, and this says where to look. */}
+            {marks.get(`${h}:${i}`)?.map((span, s) => (
+              <Text
+                key={s}
+                style={span.changed
+                  ? { color: C.text, backgroundColor: tint(face.ink, 0.34), fontWeight: "600" }
+                  : undefined}
+              >{span.text}</Text>
+            )) ?? (line.text || " ")}
+          </Text>
+        </Pressable>
+
+        {yoursOn(line.newNo ?? null)}
+        {threadsOn(line.newNo ?? null)}
+
+        {open ? (
+          <View style={{
+            margin: SPACE.md, borderWidth: 1, borderColor: C.primary,
+            borderRadius: RADIUS.md, padding: SPACE.md, gap: SPACE.sm,
+          }}>
+            <Label text={`Comment on line ${writing!.line}`} />
+            <TextInput
+              value={writing!.body}
+              onChangeText={(body) => setWriting({ line: writing!.line, body })}
+              placeholder="What is wrong with it?"
+              placeholderTextColor={C.text4}
+              multiline
+              autoFocus
+              style={{
+                minHeight: 64, borderWidth: 1, borderColor: C.border,
+                borderRadius: RADIUS.sm, backgroundColor: C.bg,
+                color: C.text, padding: SPACE.sm, fontSize: T.body,
+              }}
+            />
+            <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+              <Btn
+                label="Add to review"
+                tone="primary"
+                style={{ flex: 1 }}
+                disabled={!writing!.body.trim()}
+                onPress={add}
+              />
+              <Btn label="Cancel" onPress={() => setWriting(null)} />
+            </View>
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }} behavior="padding">
       <Stack.Screen options={{ title: file ? fileLabel(file).split("/").pop() ?? "Diff" : "Diff" }} />
@@ -484,159 +581,103 @@ export default function DiffScreen(): React.ReactNode {
         </Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: SPACE.xl }}>
-        {error ? (
-          <View style={{ padding: SPACE.lg }}>
-            <Card>
-              <Label text="Cannot read it" />
-              <Note tone="bad">{error}</Note>
-            </Card>
-          </View>
-        ) : null}
+      {/*
+        A windowed list, not a column.
 
-        {text === null && !error ? (
-          <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
-        ) : null}
+        Every row of the open file used to be mounted before the first one was
+        on screen — four hundred rows of three text nodes each on a big file,
+        measured up front and measured again on every repaint, which on this
+        screen is every tap. `rowsOf` flattens the same content into rows with
+        stable keys so the list can mount what is near the viewport and drop
+        the rest.
 
-        {file?.binary ? (
-          <View style={{ padding: SPACE.lg }}>
-            <Card><Note>This file is binary — there is nothing to show.</Note></Card>
-          </View>
-        ) : null}
+        `removeClippedSubviews` stays off deliberately: a row here can hold a
+        text input and a thread's buttons, and clipping those on Android is how
+        a control stops answering after a scroll. The window is what buys the
+        cost back; clipping would only buy memory this screen does not need.
+      */}
+      <FlatList
+        data={rows}
+        keyExtractor={(row) => row.key}
+        contentContainerStyle={{ paddingBottom: SPACE.xl }}
+        /* The comment box lives inside a row, so a tap must reach the row
+           while the keyboard is up rather than being spent dismissing it. */
+        keyboardShouldPersistTaps="handled"
+        initialNumToRender={FIRST_ROWS}
+        maxToRenderPerBatch={FIRST_ROWS}
+        windowSize={7}
+        removeClippedSubviews={false}
+        ListHeaderComponent={
+          <>
+            {error ? (
+              <View style={{ padding: SPACE.lg }}>
+                <Card>
+                  <Label text="Cannot read it" />
+                  <Note tone="bad">{error}</Note>
+                </Card>
+              </View>
+            ) : null}
 
-        {/* The conversations this file has that no line can hold. GitHub
-            clears a thread's line when the code under it changes, and hanging
-            one on whatever now carries that number would be a remark about
-            code nobody was talking about — so they sit above the file, with
-            the hunk they were written against, which is the only copy of
-            those lines left anywhere. */}
-        {onFile.adrift.length ? (
-          <View style={{ padding: SPACE.lg, gap: SPACE.md }}>
-            <Label text={onFile.adrift.length === 1
-              ? "One conversation about lines that have changed"
-              : `${onFile.adrift.length} conversations about lines that have changed`} />
-            {onFile.adrift.map((thread) => (
-              <ThreadCard key={thread.id} thread={thread} host={host} actions={actions} />
-            ))}
-          </View>
-        ) : null}
+            {text === null && !error ? (
+              <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
+            ) : null}
 
-        {file?.hunks.map((hunk, h) => (
-          <View key={`${hunk.header}-${h}`}>
-            {gapBefore(h)}
-            {/* The header verbatim, including gh's trailing context — usually
-                the enclosing function, which is the most useful thing on
-                screen for saying where you are. */}
-            <View style={{
-              backgroundColor: C.bg3, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
-              borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.border,
-            }}>
-              <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.eyebrow, fontFamily: MONO }}>
-                {hunk.header}
-              </Text>
+            {file?.binary ? (
+              <View style={{ padding: SPACE.lg }}>
+                <Card><Note>This file is binary — there is nothing to show.</Note></Card>
+              </View>
+            ) : null}
+
+            {/* The conversations this file has that no line can hold. GitHub
+                clears a thread's line when the code under it changes, and
+                hanging one on whatever now carries that number would be a
+                remark about code nobody was talking about — so they sit above
+                the file, with the hunk they were written against, which is the
+                only copy of those lines left anywhere. */}
+            {onFile.adrift.length ? (
+              <View style={{ padding: SPACE.lg, gap: SPACE.md }}>
+                <Label text={onFile.adrift.length === 1
+                  ? "One conversation about lines that have changed"
+                  : `${onFile.adrift.length} conversations about lines that have changed`} />
+                {onFile.adrift.map((thread) => (
+                  <ThreadCard key={thread.id} thread={thread} host={host} actions={actions} />
+                ))}
+              </View>
+            ) : null}
+          </>
+        }
+        ListEmptyComponent={
+          file && !file.binary && file.hunks.length === 0 ? (
+            <View style={{ padding: SPACE.lg }}>
+              <Card>
+                <Note>
+                  No lines changed in this file — it was {file.status}
+                  {file.from ? ` from ${file.from}` : ""}.
+                </Note>
+              </Card>
             </View>
-
-            {hunk.lines.map((line, i) => {
-              const face = lineFace(line.kind);
-              const can = commentableLine(line);
-              const open = writing?.line === can && can !== null;
-              return (
-                <View key={i}>
-                  <Pressable
-                    disabled={can === null}
-                    onPress={() => setWriting(can === null ? null : { line: can, body: "" })}
-                    style={{ flexDirection: "row", backgroundColor: face.bg, minHeight: 22 }}
-                  >
-                    {/* The new-side number, which is the one a comment anchors
-                        to. The old side is deliberately not drawn: two columns
-                        of digits on a 393-point screen is a third of the width
-                        spent on something you look at once. */}
-                    <Text style={{
-                      width: 38, textAlign: "right", paddingRight: SPACE.sm,
-                      color: C.text4, fontSize: 10.5, fontFamily: MONO, lineHeight: 20,
-                    }}>{line.newNo ?? line.oldNo ?? ""}</Text>
-                    <Text style={{
-                      width: 10, color: face.ink, fontSize: 10.5, fontFamily: MONO, lineHeight: 20,
-                    }}>{face.mark}</Text>
-                    <Text
-                      style={{
-                        flex: 1, color: line.kind === "meta" ? C.text4 : C.text2,
-                        fontSize: 10.5, fontFamily: MONO, lineHeight: 20, paddingRight: SPACE.sm,
-                      }}
-                    >
-                      {/* The words that actually changed, when this line is a
-                          rewrite of the one above or below it. A hunk that
-                          renames one identifier used to be two full-width
-                          bands and a game of spot-the-difference at eleven
-                          points; the band still says which side you are on,
-                          and this says where to look. */}
-                      {marks.get(`${h}:${i}`)?.map((span, s) => (
-                        <Text
-                          key={s}
-                          style={span.changed
-                            ? { color: C.text, backgroundColor: tint(face.ink, 0.34), fontWeight: "600" }
-                            : undefined}
-                        >{span.text}</Text>
-                      )) ?? (line.text || " ")}
-                    </Text>
-                  </Pressable>
-
-                  {yoursOn(line.newNo ?? null)}
-                  {threadsOn(line.newNo ?? null)}
-
-                  {open ? (
-                    <View style={{
-                      margin: SPACE.md, borderWidth: 1, borderColor: C.primary,
-                      borderRadius: RADIUS.md, padding: SPACE.md, gap: SPACE.sm,
-                    }}>
-                      <Label text={`Comment on line ${writing!.line}`} />
-                      <TextInput
-                        value={writing!.body}
-                        onChangeText={(body) => setWriting({ line: writing!.line, body })}
-                        placeholder="What is wrong with it?"
-                        placeholderTextColor={C.text4}
-                        multiline
-                        autoFocus
-                        style={{
-                          minHeight: 64, borderWidth: 1, borderColor: C.border,
-                          borderRadius: RADIUS.sm, backgroundColor: C.bg,
-                          color: C.text, padding: SPACE.sm, fontSize: T.body,
-                        }}
-                      />
-                      <View style={{ flexDirection: "row", gap: SPACE.sm }}>
-                        <Btn
-                          label="Add to review"
-                          tone="primary"
-                          style={{ flex: 1 }}
-                          disabled={!writing!.body.trim()}
-                          onPress={add}
-                        />
-                        <Btn label="Cancel" onPress={() => setWriting(null)} />
-                      </View>
-                    </View>
-                  ) : null}
-                </View>
-              );
-            })}
-          </View>
-        ))}
-
-        {/* The tail of the file, below the last hunk. Rendered outside the map
-            because it belongs to no hunk — `gapsIn` numbers it `hunks.length`
-            for exactly this. */}
-        {file && !file.binary ? gapBefore(file.hunks.length) : null}
-
-        {file && !file.binary && file.hunks.length === 0 ? (
-          <View style={{ padding: SPACE.lg }}>
-            <Card>
-              <Note>
-                No lines changed in this file — it was {file.status}
-                {file.from ? ` from ${file.from}` : ""}.
-              </Note>
-            </Card>
-          </View>
-        ) : null}
-      </ScrollView>
+          ) : null
+        }
+        renderItem={({ item }) => {
+          if (item.t === "gap") return <>{gapBefore(item.before)}</>;
+          if (item.t === "hunk") {
+            return (
+              /* The header verbatim, including gh's trailing context — usually
+                 the enclosing function, which is the most useful thing on
+                 screen for saying where you are. */
+              <View style={{
+                backgroundColor: C.bg3, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+                borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.border,
+              }}>
+                <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.eyebrow, fontFamily: MONO }}>
+                  {item.header}
+                </Text>
+              </View>
+            );
+          }
+          return <>{lineRow(item.h, item.i, item.line)}</>;
+        }}
+      />
 
       <View style={{
         flexDirection: "row", gap: SPACE.sm,
