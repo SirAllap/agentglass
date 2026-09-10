@@ -63,6 +63,7 @@ import {
 import { gapLabel, gapsIn, nextSlice, type Gap } from "../../src/model/expand.ts";
 import { draft, takeDraft, type LineNote } from "../../src/model/reviewDraft.ts";
 import { threadsOnFile } from "../../src/model/threads.ts";
+import { inlineSpans, pairsIn, type Span } from "../../src/model/tokens.ts";
 import { ApplyConfirm } from "../../src/review/ApplyConfirm.tsx";
 import { ThreadCard } from "../../src/review/ThreadCard.tsx";
 import { ThreadMarker } from "../../src/review/ThreadMarker.tsx";
@@ -229,6 +230,32 @@ export default function DiffScreen(): React.ReactNode {
   }, [path, files]);
 
   const file: DiffFile | undefined = files[at];
+
+  /*
+   * What changed INSIDE each line, for the pairs that are an edit.
+   *
+   * Computed once per file rather than per row: it is pure, the file does not
+   * change under it, and a row that recomputed its own would do so on every
+   * repaint of a screen that repaints on every tap. Keyed by hunk and index
+   * because that is what the renderer has in hand.
+   *
+   * Bounded twice over in `tokens.ts` — a pair too dissimilar to be an edit
+   * gets nothing, and a middle too long for the table is marked coarsely — so
+   * a file of minified JavaScript costs a pass over its lines and stops.
+   */
+  const marks = useMemo(() => {
+    const out = new Map<string, Span[]>();
+    if (!file) return out;
+    file.hunks.forEach((hunk, h) => {
+      for (const [del, add] of pairsIn(hunk.lines)) {
+        const both = inlineSpans(hunk.lines[del]!.text, hunk.lines[add]!.text);
+        if (!both) continue;
+        out.set(`${h}:${del}`, both.before);
+        out.set(`${h}:${add}`, both.after);
+      }
+    });
+    return out;
+  }, [file]);
 
   /** This file's conversations: the ones with a line to sit on, and the ones
    *  whose lines have gone. */
@@ -536,7 +563,22 @@ export default function DiffScreen(): React.ReactNode {
                         flex: 1, color: line.kind === "meta" ? C.text4 : C.text2,
                         fontSize: 10.5, fontFamily: MONO, lineHeight: 20, paddingRight: SPACE.sm,
                       }}
-                    >{line.text || " "}</Text>
+                    >
+                      {/* The words that actually changed, when this line is a
+                          rewrite of the one above or below it. A hunk that
+                          renames one identifier used to be two full-width
+                          bands and a game of spot-the-difference at eleven
+                          points; the band still says which side you are on,
+                          and this says where to look. */}
+                      {marks.get(`${h}:${i}`)?.map((span, s) => (
+                        <Text
+                          key={s}
+                          style={span.changed
+                            ? { color: C.text, backgroundColor: tint(face.ink, 0.34), fontWeight: "600" }
+                            : undefined}
+                        >{span.text}</Text>
+                      )) ?? (line.text || " ")}
+                    </Text>
                   </Pressable>
 
                   {yoursOn(line.newNo ?? null)}
