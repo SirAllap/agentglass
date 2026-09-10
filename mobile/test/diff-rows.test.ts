@@ -125,8 +125,8 @@ describe("a hunk that starts at line 1", () => {
  * are facts about how the screen is written. Same technique, and the same
  * reason, as mirror.test.ts and tap-floor.test.ts.
  */
-describe("the screen actually windows it", () => {
-  const screen = readFileSync(join(import.meta.dir, "..", "app", "pr", "diff.tsx"), "utf8");
+describe("the pane actually windows it", () => {
+  const screen = readFileSync(join(import.meta.dir, "..", "src", "review", "FilesPane.tsx"), "utf8");
 
   test("the diff is a list, not a column of everything", () => {
     expect(screen).toContain("<FlatList");
