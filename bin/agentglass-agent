@@ -214,6 +214,21 @@ def main():
     p.add_argument("--pane", help="the tmux pane id (%%12). Exact, and the way to be sure")
     p.add_argument("--window", help="the tmux window name, when it is not the same as <name>")
 
+    p = sub.add_parser("need", help="ask the person for the one action only they can take — and keep it on their screen until they take it")
+    p.add_argument("text", help="one line: what you are asking them to do")
+    p.add_argument("--cost", default="", help="what it costs them: 'one click', 'five minutes', 'a review round'")
+    p.add_argument("--recommend", default="", help="what you would do. Leave it out if you have no opinion rather than inventing one")
+    p.add_argument("--proof", default="", help="what would show it settled: a reviewer requested, a push landed")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("needs", help="what you have asked the person for and not had an answer to")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("settled", help="a decision you asked for has been taken (or no longer matters)")
+    p.add_argument("id")
+    p.add_argument("outcome", nargs="?", default="", help="one line: what came of it")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
     p = sub.add_parser("task", help="put something on this project's queue — what you found, for whoever picks it up")
     p.add_argument("title", help="one line: what is to be done")
     p.add_argument("--proof", default="", help="what would prove it done: a test, a file, an output. An unstated proof is allowed and drawn as missing")
@@ -383,6 +398,19 @@ def main():
         if a.window:
             body["window"] = a.window
         return emit(call("/agents/named/enlist", body, timeout=30))
+    if a.cmd == "need":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/need", {
+            "root": root, "text": a.text, "cost": a.cost, "recommend": a.recommend, "proof": a.proof,
+        }, timeout=30))
+    if a.cmd == "needs":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        ok, out = text_call("/seat/needs?" + urllib.parse.urlencode({"root": root}))
+        print(out)
+        return 0 if ok else 1
+    if a.cmd == "settled":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/need/finish", {"root": root, "id": a.id, "outcome": a.outcome}, timeout=30))
     if a.cmd == "task":
         root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
         return emit(call("/seat/task", {

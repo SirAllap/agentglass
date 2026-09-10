@@ -1375,6 +1375,7 @@ import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
 import { readBrief, writeBrief } from "./seatbrief.ts";
 import * as SeatQueue from "./seatqueue.ts";
 import * as SeatInbox from "./seatreport.ts";
+import * as SeatNeeds from "./seatneed.ts";
 import * as SeatWake from "./seatwake.ts";
 import { recall } from "./seatmemory.ts";
 import * as AgentOps from "./agentops.ts";
@@ -6791,6 +6792,14 @@ const server = Bun.serve<WsData>({
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
       return json({ ok: true, root: gate.root, tasks: SeatQueue.tasksFor(gate.root) });
     }
+    /* What the seat has asked the person for, as text, for the same reason the
+       field is text: the thing reading it pays to read. */
+    if (pathname === "/seat/needs" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      if (url.searchParams.get("format") === "json") return json({ ok: true, root: gate.root, needs: SeatNeeds.needsFor(gate.root) });
+      return new Response(SeatNeeds.needReadout(gate.root), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+    }
     if (pathname === "/seat/field" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
@@ -6817,7 +6826,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/seat" && req.method === "GET") {
       const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
       if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
-      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
     }
     if (pathname.startsWith("/seat/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -6882,6 +6891,27 @@ const server = Bun.serve<WsData>({
            what the next caller sees. `peek` reads without claiming. */
         const reports = b.peek === true ? SeatInbox.unreadReports(root) : SeatInbox.drainReports(root);
         return json({ ok: true, reports, unread: SeatInbox.unreadCount(root) });
+      }
+      /*
+       * WHAT THE SEAT ASKS OF THE PERSON — the other direction of the tray.
+       * A report is a worker saying what it needs; this is the seat saying
+       * what it needs from the one person who can give it.
+       */
+      if (verb === "need") {
+        const r = SeatNeeds.addNeed({ root, text: b.text, cost: b.cost, recommend: b.recommend, proof: b.proof });
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "need/finish") {
+        const n = SeatNeeds.needById(String(b.id ?? ""));
+        if (!n || n.root !== root) return json({ ok: false, error: "no such decision in this project" }, 404);
+        SeatNeeds.finishNeed(n.id, String(b.outcome ?? ""));
+        return json({ ok: true, need: SeatNeeds.needById(n.id) });
+      }
+      if (verb === "need/drop") {
+        const n = SeatNeeds.needById(String(b.id ?? ""));
+        if (!n || n.root !== root) return json({ ok: false, error: "no such decision in this project" }, 404);
+        SeatNeeds.dropNeed(n.id);
+        return json({ ok: true });
       }
       if (verb === "task") {
         const r = SeatQueue.addTask({ root, title: String(b.title ?? ""), detail: String(b.detail ?? ""), proof: String(b.proof ?? ""), weight: Number(b.weight ?? 0) });

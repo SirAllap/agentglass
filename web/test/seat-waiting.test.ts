@@ -12,7 +12,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { whatWaits } from "../src/lib/seatWaiting.ts";
-import type { SeatFieldRow, SeatReportRow, SeatTask } from "../src/lib/api.ts";
+import type { SeatFieldRow, SeatNeed, SeatReportRow, SeatTask } from "../src/lib/api.ts";
 
 const NOW = Date.now();
 const agent = (name: string, over: Partial<SeatFieldRow> = {}): SeatFieldRow =>
@@ -21,6 +21,9 @@ const report = (agentName: string, over: Partial<SeatReportRow> = {}): SeatRepor
   ({ id: Math.random(), agent: agentName, session: "", state: "", blocked: "", need: "", cost: "", raw: "", at: NOW, readAt: null, ...over });
 const task = (over: Partial<SeatTask> = {}): SeatTask =>
   ({ id: "t", root: "/r", title: "a thing", detail: "", proof: "", weight: 0, created: NOW, takenAt: null, takenBy: "", doneAt: null, outcome: "", attempts: 0, ...over });
+
+const need = (over: Partial<SeatNeed> = {}): SeatNeed =>
+  ({ id: `n${Math.random()}`, root: "/r", text: "ask for a reviewer", cost: "one click", recommend: "", proof: "", created: NOW, doneAt: null, outcome: "", ...over });
 
 describe("what waits", () => {
   test("nothing waiting is an answer, not an empty list", () => {
@@ -73,5 +76,37 @@ describe("what waits", () => {
   test("a report that says nothing is wrong is not on this list at all", () => {
     const w = whatWaits([agent("fine")], [report("fine", { state: "halfway through" })], []);
     expect(w.count).toBe(0);
+  });
+});
+
+/*
+ * THE FIFTH PILE, AND THE ONE THE SEAT USED MOST.
+ *
+ * Something finished that needs one action only a person can take: re-upload
+ * the GIF, ask for a reviewer, say yes to a push. Before this it lived nowhere
+ * but a chat, so it was lost the moment the conversation moved on. Its own
+ * words for why it is not the same as `asked`: "el `asked` de los agentes es lo
+ * que ELLOS piden; el `ready` es lo que YO le pido a él."
+ */
+describe("what the seat asks of the person", () => {
+  test("an open one waits; a settled one does not", () => {
+    const w = whatWaits([], [], [], [need(), need({ doneAt: NOW })]);
+    expect(w.ready).toHaveLength(1);
+    expect(w.count).toBe(1);
+  });
+
+  test("it comes FIRST, because a decision is the only time that cannot be recovered", () => {
+    /* The first draft put the stopped agent first — cheapest to clear. The seat
+       corrected it: what the person takes time to decide is what holds up the
+       day, and an agent parked at a prompt rarely is. */
+    const order = Object.keys(whatWaits([], [], [], []));
+    expect(order.slice(0, 5)).toEqual(["ready", "asked", "orphaned", "stopped", "beaten"]);
+  });
+
+  test("and it carries what it costs and what the seat would do", () => {
+    const w = whatWaits([], [], [], [need({ cost: "one click", recommend: "ask Ale", proof: "reviewer requested" })]);
+    expect(w.ready[0]?.cost).toBe("one click");
+    expect(w.ready[0]?.recommend).toBe("ask Ale");
+    expect(w.ready[0]?.proof).toBe("reviewer requested");
   });
 });

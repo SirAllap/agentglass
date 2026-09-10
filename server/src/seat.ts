@@ -43,6 +43,7 @@ import { REPORT_SHAPE, briefPath, readBrief } from "./seatbrief.ts";
 import { SEAT_PROMPT_MARK } from "./seatmark.ts";
 import { queueReadout } from "./seatqueue.ts";
 import { inboxReadout, recentReports, unreadCount, type SeatReport } from "./seatreport.ts";
+import { needReadout } from "./seatneed.ts";
 import { BUCKETS, pulses } from "./seatpulse.ts";
 import { lastWoken } from "./seatwoken.ts";
 
@@ -359,6 +360,13 @@ export async function seatPrompt(root: string, powers: Power, wakeHours: number)
     "## Reports waiting for you",
     "",
     inboxReadout(root),
+    "",
+    /* And what it has already asked the person for, so a round does not ask
+       twice. A seat that repeats an unanswered question is a seat the person
+       learns to skim. */
+    "## What you have asked for and not had an answer to",
+    "",
+    needReadout(root),
     "",
     "## The queue for this project",
     "",

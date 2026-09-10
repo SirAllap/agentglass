@@ -131,12 +131,17 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const [showDone, setShowDone] = useState(false);
   const [saying, setSaying] = useState("");
   const [sentTo, setSentTo] = useState("");
+  /* When this screen last got an answer from the server. An empty panel and a
+     broken panel look identical, and the seat said so: "si no, un panel vacío
+     y un panel roto se ven igual". */
+  const [checkedAt, setCheckedAt] = useState(0);
   const cos = useCosmetic();
 
   const load = useCallback(async () => {
     try {
       const r = await api.seat();
       setData(r);
+      setCheckedAt(Date.now());
       setError(!r.ok && r.error ? r.error : "");
     } catch { setError("could not read the seat"); }
   }, []);
@@ -199,8 +204,8 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
    * question the screen exists to answer. The rule lives in `whatWaits`, with
    * its tests; this only draws it.
    */
-  const wait = whatWaits(field, reports, tasks);
-  const { stopped: stoppedOnYou, asked, orphaned, beaten } = wait;
+  const wait = whatWaits(field, reports, tasks, data?.needs ?? []);
+  const { ready, stopped: stoppedOnYou, asked, orphaned, beaten } = wait;
   const waitingCount = wait.count;
 
   const act = async (what: string, fn: () => Promise<{ ok: boolean; error?: string }>) => {
@@ -282,28 +287,39 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                 <span className="text-[11px]" style={{ color: waitingCount ? "var(--warning)" : "var(--text3)" }}>
                   {waitingCount ? `${waitingCount} ${waitingCount === 1 ? "thing" : "things"}` : "nothing right now"}
                 </span>
+                {waitingCount > 0 && checkedAt ? (
+                  <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
+                    looked at {new Date(checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}
+                  </span>
+                ) : null}
               </div>
               {waitingCount === 0 ? (
                 <p className="text-[11px] max-w-[80ch]" style={{ color: "var(--text4)" }}>
-                  Nobody is stopped, nothing is asking for a decision, and no task has beaten two agents.
+                  Nobody is stopped, nothing is asking for a decision, and no task has beaten two agents
+                  {checkedAt ? <> — looked at {new Date(checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}</> : null}.
                 </p>
               ) : (
                 <ul className="flex flex-col gap-0.5">
-                  {stoppedOnYou.map((r) => (
-                    <li key={`s-${r.name}`} className="flex items-start gap-2.5 py-1">
-                      <span aria-hidden className="shrink-0 self-stretch" style={{ width: 2, borderRadius: 2, background: "var(--error)" }} />
+                  {/* What the SEAT is asking for. First, because what a person
+                      takes time to decide is the only part of the day that
+                      cannot be recovered. */}
+                  {ready.map((n) => (
+                    <li key={`r-${n.id}`} className="flex items-start gap-2.5 py-1">
+                      <span aria-hidden className="shrink-0 self-stretch" style={{ width: 2, borderRadius: 2, background: "var(--primary)" }} />
                       <span className="flex flex-col gap-0.5 min-w-0 flex-1">
-                        <span className="text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>
-                          <span style={{ color: "var(--text2)" }}>{r.name}</span> is stopped at a prompt
+                        <span className="text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>{n.text}</span>
+                        <span className="text-[10.5px] flex flex-wrap gap-x-2.5" style={{ color: "var(--text3)" }}>
+                          {n.cost ? <span>costs {n.cost}</span> : null}
+                          {n.recommend ? <span style={{ color: "var(--text2)" }}>it would: {n.recommend}</span> : null}
+                          {n.proof ? <span>settled when {n.proof}</span> : null}
                         </span>
-                        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{r.needsYou?.why}</span>
                       </span>
                       <span className="shrink-0 flex items-center gap-2 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text3)" }}>
-                        {r.needsYou ? fmtAgo(r.needsYou.since) : ""}
-                        {r.paneId && (
-                          <button type="button" onClick={() => jumpToPane(r.paneId!)}
-                            className="agx-btn text-[10px] rounded px-1.5 py-0.5" style={{ color: "var(--primary)", border: edge(14) }}>Go</button>
-                        )}
+                        {fmtAgo(n.created)}
+                        <button type="button" disabled={!!busy}
+                          onClick={() => void act("settled", () => api.seatNeedSettled(root, n.id))}
+                          className="agx-btn text-[10px] rounded px-1.5 py-0.5 disabled:opacity-50"
+                          style={{ color: "var(--text4)", border: edge(12) }} title="Taken, or no longer matters">Done</button>
                       </span>
                     </li>
                   ))}
@@ -332,6 +348,24 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                         <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>left blocked: {r.blocked}</span>
                       </span>
                       <span className="shrink-0 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text4)" }}>{fmtAgo(r.at)}</span>
+                    </li>
+                  ))}
+                  {stoppedOnYou.map((r) => (
+                    <li key={`s-${r.name}`} className="flex items-start gap-2.5 py-1">
+                      <span aria-hidden className="shrink-0 self-stretch" style={{ width: 2, borderRadius: 2, background: "var(--error)" }} />
+                      <span className="flex flex-col gap-0.5 min-w-0 flex-1">
+                        <span className="text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>
+                          <span style={{ color: "var(--text2)" }}>{r.name}</span> is stopped at a prompt
+                        </span>
+                        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{r.needsYou?.why}</span>
+                      </span>
+                      <span className="shrink-0 flex items-center gap-2 text-[10.5px] whitespace-nowrap pt-0.5" style={{ color: "var(--text3)" }}>
+                        {r.needsYou ? fmtAgo(r.needsYou.since) : ""}
+                        {r.paneId && (
+                          <button type="button" onClick={() => jumpToPane(r.paneId!)}
+                            className="agx-btn text-[10px] rounded px-1.5 py-0.5" style={{ color: "var(--primary)", border: edge(14) }}>Go</button>
+                        )}
+                      </span>
                     </li>
                   ))}
                   {beaten.map((t) => (

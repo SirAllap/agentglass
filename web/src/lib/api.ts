@@ -703,6 +703,8 @@ export interface SeatAnswer {
   doctrineText: string;
   /** The project's queue: what it has been asked to see done, and who has it. */
   tasks: SeatTask[];
+  /** The other direction: what the SEAT has asked the person for. */
+  needs: SeatNeed[];
   /** What this build offers, and what it would seat with if nobody chose.
    *  From the server so the picker and the seating cannot disagree. */
   models: { id: string; label: string }[];
@@ -750,6 +752,20 @@ export interface SeatFieldRow {
 /** One line of the seat's queue. `takenBy` is a named agent, never a pane —
  *  tmux recycles pane ids and a row that outlived one would point at somebody
  *  else's work. */
+/**
+ * What the seat has asked the person for.
+ *
+ * A report is a worker saying what it needs; this is the seat saying what it
+ * needs from the one person who can give it — and it carries what the ask
+ * costs, what the seat would do, and what would show it settled, because a
+ * decision handed over as a bare sentence is one the person has to research
+ * before they can make it.
+ */
+export interface SeatNeed {
+  id: string; root: string; text: string; cost: string; recommend: string; proof: string;
+  created: number; doneAt: number | null; outcome: string;
+}
+
 export interface SeatTask {
   id: string; root: string; title: string; detail: string; proof: string; weight: number; created: number;
   takenAt: number | null; takenBy: string; doneAt: number | null; outcome: string; attempts: number;
@@ -1262,6 +1278,9 @@ const realApi = {
   seatTaskAdd: (root: string, title: string, proof = "", detail = "", weight = 0) =>
     post<{ ok: boolean; error?: string }>("/seat/task", { root, title, proof, detail, weight }),
   seatTaskDrop: (root: string, id: string) => post<{ ok: boolean; error?: string }>("/seat/task/drop", { root, id }),
+  /** A decision the seat asked for has been taken, or no longer matters. */
+  seatNeedSettled: (root: string, id: string, outcome = "") =>
+    post<{ ok: boolean; error?: string }>("/seat/need/finish", { root, id, outcome }),
   /** One message, every live agent — or the named ones. Every outcome comes
    *  back: a partial send read as a success leaves somebody waiting for an
    *  instruction that never arrived. */
@@ -2385,13 +2404,14 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
-  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
+  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], needs: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),
   seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
   seatDoctrineSave: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   seatTaskAdd: (_r: string, _t: string, _p?: string) => D({ ok: false, error: "not available in the demo" }),
   seatTaskDrop: (_r: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  seatNeedSettled: (_r: string, _i: string, _o?: string) => D({ ok: false, error: "not available in the demo" }),
   agentsBroadcast: (_t: string, _n?: string[]) => D({ ok: false, error: "not available in the demo" }),
   seatWake: () => D({ ok: true, hours: 4 }),
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),

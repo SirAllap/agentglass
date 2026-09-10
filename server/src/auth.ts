@@ -372,7 +372,11 @@ export function seatAllows(powers: "speak" | "nudge" | "assign", method: string,
      read, which is a change — but it is a change to the seat's own post, and a
      chair that may not read its mail is not a chair. */
   if (pathname === "/seat/say" || pathname === "/seat/recall"
-    || pathname === "/seat/report" || pathname === "/seat/inbox") return true;
+    || pathname === "/seat/report" || pathname === "/seat/inbox"
+    /* Asking the person for a decision is the opposite of acting without one:
+       a seat with no powers at all must still be able to say "this needs you",
+       or the only way it has to escalate is to do the thing itself. */
+    || pathname === "/seat/need" || pathname === "/seat/need/finish" || pathname === "/seat/need/drop") return true;
   if (READ_POST.has(pathname)) return true;
   if (powers === "speak") return false;
   if (SEAT_POST_NUDGE.has(pathname)) return true;
