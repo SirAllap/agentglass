@@ -53,10 +53,10 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import type { PrDetail } from "../../../shared/types.ts";
 import { ask } from "../lib/api.ts";
 import { useAgentglass } from "../state/host-context.tsx";
 import { usePaletteTick } from "../state/use-palette.ts";
+import { usePrDetail } from "../state/pr-detail.ts";
 import {
   commentableLine, fileLabel, parseDiff, type DiffFile, type DiffLine,
 } from "../model/diffLines.ts";
@@ -209,18 +209,14 @@ export function FilesPane({ number, root, path, bar = true }: {
    * both stale-while-revalidate, so the cost of asking here is one cached
    * answer, not one round trip to GitHub.
    */
-  const [detail, setDetail] = useState<PrDetail | null>(null);
-
-  const loadThreads = useCallback(async (): Promise<void> => {
-    if (!host || !number || !root) return;
-    const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
-    const answer = await ask<{ ok: boolean; detail?: PrDetail; error?: string }>(host, `/prs/detail?${query}`);
-    // Deliberately quiet. The diff is the reason to be here; a pull request
-    // whose detail cannot be read still shows its change, with no markers.
-    if (answer.ok && answer.value.ok && answer.value.detail) setDetail(answer.value.detail);
-  }, [host, number, root]);
-
-  useEffect(() => { void loadThreads(); }, [loadThreads]);
+  /*
+   * The conversations, from the same read the rest of the review uses.
+   *
+   * A shared one and not this pane's own: it is a segment beside the overview
+   * and the threads, all three want the same answer, and three copies of it
+   * disagree the moment one of them writes. See state/pr-detail.ts.
+   */
+  const { detail, reload: loadThreads } = usePrDetail(host, root, number);
 
   /*
    * After a write, both halves of the screen are re-read.

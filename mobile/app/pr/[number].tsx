@@ -30,6 +30,7 @@ import { ask } from "../../src/lib/api.ts";
 import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { usePrDetail } from "../../src/state/pr-detail.ts";
 import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { TaskChip } from "../../src/review/TaskChip.tsx";
 import { FilesPane } from "../../src/review/FilesPane.tsx";
@@ -194,8 +195,12 @@ export default function PrScreen(): React.ReactNode {
      stay available, because neither writes anything. */
   const mayWrite = host?.scope === "full";
 
-  const [detail, setDetail] = useState<PrDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /* One read for the whole review — the two panes below are looking at the
+     same pull request, and a write in either of them re-reads this. Before
+     that, resolving a thread left the count on this screen saying what it said
+     when you arrived. See state/pr-detail.ts. */
+  const { detail, error, reload: load } = usePrDetail(host, root ?? "", String(number ?? ""));
+
   const [handing, setHanding] = useState(false);
   const [allFiles, setAllFiles] = useState(false);
   /* The description folds after six blocks. Six is where this project's own
@@ -276,22 +281,6 @@ export default function PrScreen(): React.ReactNode {
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeErr, setMergeErr] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
-    if (!host || !number || !root) return;
-    const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
-    const answer = await ask<{ ok: boolean; detail?: PrDetail; error?: string }>(
-      host, `/prs/detail?${query}`,
-    );
-    if (!answer.ok) { setError(answer.error); return; }
-    if (!answer.value.ok || !answer.value.detail) {
-      setError(answer.value.error || "That pull request could not be read.");
-      return;
-    }
-    setError(null);
-    setDetail(answer.value.detail);
-  }, [host, number, root]);
-
-  useEffect(() => { void load(); }, [load]);
 
   // Fetched beside the detail rather than after it: they are independent
   // questions, and the sheet is not opened in the first instant anyway.
