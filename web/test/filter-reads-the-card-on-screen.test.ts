@@ -47,14 +47,16 @@ test("a row whose card only the store knows is still read by the filter", async 
   const store = await import("../src/lib/prCardStore.ts");
   const api = (await import("../src/lib/api.ts")).api as unknown as Record<string, unknown>;
   const before = api.clickupFind;
-  /* Only this file's own references. A stub that answers for ANY reference is
-     the leak: a lookup another file queued resolves through it and that file's
-     "no card cached" becomes a card. */
-  api.clickupFind = async (query: string) => (/^ORBIT-104[23]$/.test(query)
+  /* Only this file's own references, and they are its own: `ORBIT-1042` was
+     the first choice and another file's fixture uses that very branch, so the
+     card seeded here replaced a five-hour-old reading it was asserting on —
+     three tests red on the runner and nowhere else. Anything not from this
+     file goes to the real function. */
+  api.clickupFind = async (query: string) => (/^ORBIT-880[12]$/.test(query)
     ? { ok: true, task: { id: query, customId: query, title: "a card", status: "in review", priority: null, people: [] } }
     : (before as (q: string) => Promise<unknown>)(query));
   try {
-    const rows = [bare(1, "ORBIT-1042"), bare(2, "ORBIT-1043")];
+    const rows = [bare(1, "ORBIT-8801"), bare(2, "ORBIT-8802")];
     /* First pass: nobody has an answer yet, so nothing is enriched — and a
        filter must not drop rows on that account. */
     const f: FilterSet = { join: "and", rules: [{ id: "r1", field: "cardstatus", op: "not", values: ["in review"] }] };
@@ -69,14 +71,14 @@ test("a row whose card only the store knows is still read by the filter", async 
 });
 
 test("a row that already carries its card is left alone", () => {
-  const p = { ...bare(3, "ORBIT-1044"), card: { id: "x", title: "t", status: "done", priority: null } } as unknown as PrSummary;
+  const p = { ...bare(3, "ORBIT-8803"), card: { id: "x", title: "t", status: "done", priority: null } } as unknown as PrSummary;
   expect(withCard(p, true)).toBe(p);
 });
 
 test("nothing is asked for when no provider is connected", () => {
   /* `taskLink` refuses a convention-shaped id with nothing to resolve it, and
      this must not queue a lookup that can only fail. */
-  expect(withCard(bare(4, "ORBIT-1045"), false).card).toBeUndefined();
+  expect(withCard(bare(4, "ORBIT-8804"), false).card).toBeUndefined();
 });
 
 /**
@@ -92,13 +94,13 @@ test("a stale card is replaced by a fresher reading, and a fresh one is left alo
   const store = await import("../src/lib/prCardStore.ts");
   const api = (await import("../src/lib/api.ts")).api as unknown as Record<string, unknown>;
   const before = api.clickupFind;
-  api.clickupFind = async (query: string) => (query === "ORBIT-1050"
+  api.clickupFind = async (query: string) => (query === "ORBIT-8805"
     ? { ok: true, task: { id: query, customId: query, title: "a card", status: "code review", priority: null, people: [{ name: "Someone Else" }] } }
     : (before as (q: string) => Promise<unknown>)(query));
   try {
     /* Half an hour old, and the row says what the board said then. */
     const stale = {
-      ...bare(9, "ORBIT-1050"),
+      ...bare(9, "ORBIT-8805"),
       card: { id: "c9", title: "a card", status: "in progress", priority: null, at: Date.now() - 30 * 60_000 },
     } as unknown as PrSummary;
     /* Nothing has answered yet, so the stale reading is kept rather than
@@ -111,7 +113,7 @@ test("a stale card is replaced by a fresher reading, and a fresh one is left alo
 
     /* A minute old is young enough to stand behind, and costs nothing. */
     const fresh = {
-      ...bare(10, "ORBIT-1051"),
+      ...bare(10, "ORBIT-8806"),
       card: { id: "c10", title: "a card", status: "in progress", priority: null, at: Date.now() - 60_000 },
     } as unknown as PrSummary;
     expect(store.withCard(fresh, true)).toBe(fresh);
