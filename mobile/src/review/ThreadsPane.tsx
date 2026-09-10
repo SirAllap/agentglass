@@ -24,12 +24,11 @@
  * stands on its own, and holding it back until some later verdict would be
  * holding an answer somebody is waiting for.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, ScrollView } from "react-native";
-import type { PrDetail } from "../../../shared/types.ts";
-import { ask } from "../lib/api.ts";
 import { useAgentglass } from "../state/host-context.tsx";
 import { usePaletteTick } from "../state/use-palette.ts";
+import { usePrDetail } from "../state/pr-detail.ts";
 import { ordered } from "../model/threads.ts";
 import { ApplyConfirm } from "./ApplyConfirm.tsx";
 import { ThreadCard } from "./ThreadCard.tsx";
@@ -48,25 +47,12 @@ export function ThreadsPane({ number, root }: { number: string; root: string }):
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
 
-  const [detail, setDetail] = useState<PrDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /* One read for the whole review — see state/pr-detail.ts. This pane is a
+     segment beside two others that want the same answer, and three copies of
+     it disagree the moment one of them writes. */
+  const { detail, error, reload } = usePrDetail(host, root, number);
 
-  const load = useCallback(async (): Promise<void> => {
-    if (!host || !number || !root) return;
-    const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
-    const answer = await ask<{ ok: boolean; detail?: PrDetail; error?: string }>(host, `/prs/detail?${query}`);
-    if (!answer.ok) { setError(answer.error); return; }
-    if (!answer.value.ok || !answer.value.detail) {
-      setError(answer.value.error || "That pull request could not be read.");
-      return;
-    }
-    setError(null);
-    setDetail(answer.value.detail);
-  }, [host, number, root]);
-
-  useEffect(() => { void load(); }, [load]);
-
-  const actions = useThreadActions({ host, root: root ?? "", number: number ?? "", reload: load });
+  const actions = useThreadActions({ host, root, number, reload });
 
   const threads = useMemo(() => ordered(detail?.threads ?? []), [detail]);
   const open = threads.filter((t) => !t.isResolved).length;
