@@ -142,10 +142,19 @@ function Expander({ label, busy, onPress }: {
  * list, and it is the caller's business: inside the review it moves to the
  * next segment, and on the route there is nowhere to go.
  */
-export function FilesPane({ number, root, path }: {
+export function FilesPane({ number, root, path, bar = true }: {
   number: string;
   root: string;
   path?: string;
+  /**
+   * Draw the pane's own bottom bar.
+   *
+   * Off inside the review, where the screen already has one: two pinned bars
+   * stacked is a third of a 393-point screen spent on chrome, and the one
+   * underneath would carry a second Review button that means the same thing.
+   * Moving between files is the picker at the top either way.
+   */
+  bar?: boolean;
 }): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
@@ -694,6 +703,7 @@ export function FilesPane({ number, root, path }: {
         }}
       />
 
+      {bar ? (
       <View style={{
         flexDirection: "row", gap: SPACE.sm,
         paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.lg,
@@ -723,6 +733,7 @@ export function FilesPane({ number, root, path }: {
           onPress={() => { setWriting(null); setAt((n) => Math.min(files.length - 1, n + 1)); }}
         />
       </View>
+      ) : null}
 
       {actions.confirming ? (
         <ApplyConfirm
