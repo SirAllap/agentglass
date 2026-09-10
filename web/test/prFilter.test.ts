@@ -307,17 +307,17 @@ describe("filtering by the card behind the pull request", () => {
      * disagree often enough that one shared filter would be a wrong answer
      * rather than a convenience.
      */
-    const rows = [carded("IN QA", ["Alfonso Gaviño"]), pr({ assignees: ["Alfonso Gaviño"] })];
-    expect(applyFilters(rows, parseQuery("cardassignee:\"Alfonso Gaviño\"")).length).toBe(1);
-    expect(applyFilters(rows, parseQuery("assignee:\"Alfonso Gaviño\"")).length).toBe(1);
+    const rows = [carded("IN QA", ["Ada Lovelace"]), pr({ assignees: ["Ada Lovelace"] })];
+    expect(applyFilters(rows, parseQuery("cardassignee:\"Ada Lovelace\"")).length).toBe(1);
+    expect(applyFilters(rows, parseQuery("assignee:\"Ada Lovelace\"")).length).toBe(1);
   });
 
   test("both card facets survive a round trip through the query string", () => {
     // The query string is the state, so a filter that cannot be written down
     // is a filter that vanishes on the next keystroke.
-    const q = 'cardstatus:"READY FOR QA" cardassignee:"Alfonso Gaviño"';
+    const q = 'cardstatus:"READY FOR QA" cardassignee:"Ada Lovelace"';
     expect(serializeQuery(parseQuery(q))).toContain('cardstatus:"READY FOR QA"');
-    expect(serializeQuery(parseQuery(q))).toContain('cardassignee:"Alfonso Gaviño"');
+    expect(serializeQuery(parseQuery(q))).toContain('cardassignee:"Ada Lovelace"');
   });
 
   test("offers nothing to somebody with no tracker at all", () => {

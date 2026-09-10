@@ -79,7 +79,7 @@ describe("the tracker card's chip", () => {
  * Two more spellings of one thing, both created by this work:
  *
  *   the face    drawn with `<Avatar login={name}>`, which asks GitHub for a
- *               portrait of "Antonio García" and returns a blank circle. A name
+ *               portrait of "Grace Hopper" and returns a blank circle. A name
  *               on a tracker board is not a username on a forge.
  *   the status  drawn as coloured uppercase text here and as a bordered chip in
  *               the tasks view, from the same workspace colour.

@@ -142,7 +142,7 @@ export function CardChip({ id, priority, status, onOpen, title, className }: {
  * A PERSON FROM THE TRACKER, not from the forge.
  *
  * The board drew the card's assignee with `<Avatar login={name}>`, which asks
- * GitHub for a portrait of "Antonio García" and gets a blank circle: a name on
+ * GitHub for a portrait of "Grace Hopper" and gets a blank circle: a name on
  * a tracker board is not a username on a forge, and the two identity systems do
  * not line up at all.
  *

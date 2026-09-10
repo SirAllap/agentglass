@@ -9,8 +9,8 @@
  *
  * So it does not go in the list. It takes the screen, it makes a sound, and it
  * stays until it is answered — which is what "alarm" means everywhere else on a
- * machine, and what was asked for: "es una alarma que yo he programado, tiene
- * que ser más invasiva".
+ * machine, and what was asked for: an alarm somebody set for themselves has to
+ * be more invasive than a notification, or it is not an alarm.
  *
  * Three deliberate limits:
  *

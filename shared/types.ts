@@ -3114,7 +3114,7 @@ export interface PrSummary {
      * Who the card is on — ClickUp's own people, not GitHub logins.
      *
      * Drawn first with `<Avatar login={...}>`, which asks GitHub for a portrait
-     * of "Antonio García" and gets a blank circle back: a name on a tracker
+     * of "Grace Hopper" and gets a blank circle back: a name on a tracker
      * board is not a username on a forge. The tracker already hands over the
      * photo, the initials and the colour it assigned each person, and the tasks
      * view has drawn them that way all along.

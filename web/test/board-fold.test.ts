@@ -488,7 +488,7 @@ describe("what the card finally says", () => {
 
   test("shows who the card is on, with the tracker's own face", () => {
     /* ClickUp's people, not GitHub logins: a name on a tracker board is not a
-       username on a forge, and `<Avatar login="Antonio García">` draws a blank
+       username on a forge, and `<Avatar login="Grace Hopper">` draws a blank
        circle. The tracker hands over the photo, the initials and the colour. */
     const html = inCard(withCard({ people: [{ name: "Antonio", initials: "AG", color: "#7b68ee" }] }));
     expect(html).toContain("Card assigned to Antonio");

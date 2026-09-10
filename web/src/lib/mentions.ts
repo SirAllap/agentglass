@@ -58,7 +58,7 @@ export function insertMention(text: string, q: MentionQuery, name: string): { te
   return { text: text.slice(0, q.at) + body + rest, caret: q.at + body.length };
 }
 
-/** Names the text calls out, longest first so "Ana María" wins over "Ana". */
+/** Names the text calls out, longest first so "Ada Lovelace" wins over "Ada". */
 export function mentioned<T extends Mentionable>(text: string, people: T[]): T[] {
   const found: T[] = [];
   for (const p of [...people].sort((a, b) => b.name.length - a.name.length)) {
