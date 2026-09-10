@@ -26,9 +26,23 @@ Everything below follows from that one fact.
   files, no implementation plans, no screenshots of a conversation. A working
   document lives outside the repository.
 
-`bun test` in `server/` runs `test/private-content.test.ts`, which scans the
-tree for the first three. It fails the build rather than trusting anybody to
-remember.
+`bun test` in `server/` runs `test/private-content.test.ts`, and it fails the
+build rather than trusting anybody to remember. It checks two of the five:
+
+  the session links, which are a fixed shape;
+  and a quoted conversation, by language — this codebase is written in
+  English, so three distinct Spanish function words inside one pair of quotes
+  in a comment is not an accident. The comment is flattened first, because a
+  quote wrapped across two lines is one quote to a reader.
+
+**A real name it cannot check**, and pretending otherwise is worse than saying
+so: there is no scan that separates a person from an identifier. That one rests
+on whoever writes the example, and the place it has come from every time is a
+chat notification or a task board open on the other screen.
+
+The other two — a paraphrase with "reported by", and a working document
+committed by accident — are the same: read before you commit, because nothing
+here will stop you.
 
 ## Commits
 
