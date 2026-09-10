@@ -29,6 +29,7 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
 
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { isSeatSession } from "./seatrole.ts";
+import { seatPanes } from "./seatpanes.ts";
 export { LANTERN_PROMPT_MARK };
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
@@ -276,11 +277,16 @@ export async function boardNow(): Promise<LanternCard[]> {
   for (const wt of new Set(said.map((a) => (a.worktree ?? "").trim()).filter(Boolean))) {
     if (!existsSync(wt)) gone.add(wt);
   }
+  /* BY PANE AS WELL AS BY SESSION. A session id is not stable enough to rest
+     this on — see seatpanes.ts — and the cost of missing it was the seat being
+     woken every hour by a finding about itself. */
+  const chairs = seatPanes();
   const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }).map((r) => {
     /* The two readers of this board, set aside the same way: the Lantern's
        chat and the project's seat. Neither is somebody's work, and a "needs
        you" on either is a person mid-conversation with it. */
-    const role = isLanternSession(r.session) ? "lantern" as const : isSeatSession(r.session) ? "orchestrator" as const : null;
+    const role = isLanternSession(r.session) ? "lantern" as const
+      : (isSeatSession(r.session) || (!!r.paneId && chairs.has(r.paneId))) ? "orchestrator" as const : null;
     return role ? { ...r, role, needsYou: undefined, state: r.state === "waiting" ? "idle" as const : r.state } : r;
   });
 
