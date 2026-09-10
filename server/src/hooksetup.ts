@@ -262,11 +262,10 @@ function readCfg(path: string): { cfg: any } | { error: string } {
  * review, a ticket, a message in a channel) is held closed.
  *
  * That is why it installs and uninstalls on its own, and why nothing here
- * turns it on as a side effect of anything else. The orchestrator running a
- * real project on this machine named the gap in one sentence when asked what
- * it was missing: "hoy eso lo sostiene la memoria y la cortesía de los
- * agentes; funcionó, pero por cultura, no por herramienta." The tool existed
- * and there was no switch.
+ * turns it on as a side effect of anything else. Until it existed, what held
+ * an outward call back was an agent remembering to hold it: it worked, and it
+ * worked by convention rather than by tooling. The tool existed and there was
+ * no switch.
  *
  * One PreToolUse entry, matcher `*`, and NO `|| exit 0`: swallowing the exit
  * status is what makes telemetry advisory, and a gate whose refusal is

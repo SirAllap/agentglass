@@ -59,7 +59,7 @@ const ALLOWED: { file: string; height: number; because: string }[] = [
       + "chrome over a screen whose whole point is the pane below it.",
   },
   {
-    file: "app/pr/diff.tsx",
+    file: "src/review/FilesPane.tsx",
     height: 22,
     because:
       "a line of the diff. This is the one exception with a real argument "

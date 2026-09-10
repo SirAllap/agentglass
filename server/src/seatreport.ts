@@ -142,8 +142,8 @@ export function addReport(p: { root: string; agent: string; session?: string; te
      * The board's rows are agents that have POSTED a line; the registry's are
      * agents this app opened. A worker started through `start` and reporting
      * before it ever posted to the Lantern was in the second and not the
-     * first, so its report refreshed nothing — measured: "el `on:` de
-     * verbtest2 no salió en field tras los reports". Either door is proof
+     * first, so its report refreshed nothing — measured: a worker's `on:` line
+     * was still missing from the readout after it reported. Either door is proof
      * enough that the name is somebody's, which is all this needs: what it
      * must not do is invent a row for a name that came from a worker's
      * environment and belongs to nobody.

@@ -221,9 +221,9 @@ describe("delivery", () => {
        * This assertion used to read 1, with a comment saying a reminder is
        * news. It is not: everything else on this path is something that
        * HAPPENED and can be read whenever, while a reminder is a promise the
-       * user made to themselves at a particular minute. Reported exactly so —
-       * "es una alarma que yo he programado, tiene que ser más invasiva" — and
-       * both halves of the change are here: freedesktop keeps a CRITICAL
+       * user made to themselves at a particular minute. An alarm somebody set
+       * deliberately is meant to interrupt, and both halves of the change are
+       * here: freedesktop keeps a CRITICAL
        * notification on screen instead of expiring it after a few seconds, and
        * the mark is what lets the app raise its own alarm rather than adding
        * another grey row to the list behind the bell.

@@ -30,6 +30,11 @@ import { ask } from "../../src/lib/api.ts";
 import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { usePrDetail } from "../../src/state/pr-detail.ts";
+import { useTracksWork } from "../../src/state/use-tracks-work.ts";
+import { TaskChip } from "../../src/review/TaskChip.tsx";
+import { FilesPane } from "../../src/review/FilesPane.tsx";
+import { ThreadsPane } from "../../src/review/ThreadsPane.tsx";
 import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
@@ -39,7 +44,7 @@ import {
   MERGE_LABEL, MERGE_OPTION, allowedMethods, mergeSubject, pickMergeMethod,
   type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
-import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
+import { Btn, Card, Label, Note, Segmented, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
@@ -138,21 +143,64 @@ function CheckRow({ check, onOpen }: {
   );
 }
 
+/** The three faces of a review. Overview is what a pull request IS; the other
+ *  two are what it changed and what was said about it. */
+type Pane = "overview" | "files" | "threads";
+
+/** A parameter is a stranger's string. Anything that is not one of the three
+ *  is the overview, which is where somebody arriving with a broken link should
+ *  land rather than on a blank pane. */
+const asPane = (raw: string | undefined): Pane =>
+  raw === "files" || raw === "threads" ? raw : "overview";
+
 export default function PrScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
+  /* Whether this machine tracks work in ANYTHING — the catalogue's question,
+     not a product's. It decides only whether an id read from a branch may be
+     offered as something to look up; an address in the body opens either way. */
+  const tracked = useTracksWork(host);
+
   const router = useRouter();
-  const { number, root, review } = useLocalSearchParams<{
-    number: string; root: string; review?: string;
+  const { number, root, review, pane: wanted } = useLocalSearchParams<{
+    number: string; root: string; review?: string; pane?: string;
   }>();
+  /*
+   * Which pane, and which file it was opened on.
+   *
+   * `pane` comes in as a parameter as well as being state, so a link can point
+   * at a segment — `/pr/12?pane=threads` — the same way `/pr/threads` used to
+   * point at a screen. Both still work; this is the one that does not push.
+   *
+   * `seen` is the mount-once rule: a pane the reader never opened costs
+   * nothing, and one they did keeps its scroll position for the rest of the
+   * review. Recorded rather than derived, because "is it showing" is not the
+   * same question as "has it ever shown".
+   */
+  const [pane, setPaneState] = useState<Pane>(asPane(wanted));
+  const [seen, setSeen] = useState<Record<Pane, boolean>>(() => ({
+    overview: true, files: asPane(wanted) === "files", threads: asPane(wanted) === "threads",
+  }));
+  /** The file the Files pane should land on, when it was opened by tapping one. */
+  const [file, setFile] = useState<string | null>(null);
+
+  const setPane = useCallback((next: Pane): void => {
+    setPaneState(next);
+    setSeen((was) => (was[next] ? was : { ...was, [next]: true }));
+  }, []);
+
   /* Submitting a review writes to GitHub. A phone paired to answer gates does
      not get to, and the control is not drawn rather than drawn and refused —
      the rule repos.tsx set. Reading the diff and handing it to Claude both
      stay available, because neither writes anything. */
   const mayWrite = host?.scope === "full";
 
-  const [detail, setDetail] = useState<PrDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /* One read for the whole review — the two panes below are looking at the
+     same pull request, and a write in either of them re-reads this. Before
+     that, resolving a thread left the count on this screen saying what it said
+     when you arrived. See state/pr-detail.ts. */
+  const { detail, error, reload: load } = usePrDetail(host, root ?? "", String(number ?? ""));
+
   const [handing, setHanding] = useState(false);
   const [allFiles, setAllFiles] = useState(false);
   /* The description folds after six blocks. Six is where this project's own
@@ -233,22 +281,6 @@ export default function PrScreen(): React.ReactNode {
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeErr, setMergeErr] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
-    if (!host || !number || !root) return;
-    const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
-    const answer = await ask<{ ok: boolean; detail?: PrDetail; error?: string }>(
-      host, `/prs/detail?${query}`,
-    );
-    if (!answer.ok) { setError(answer.error); return; }
-    if (!answer.value.ok || !answer.value.detail) {
-      setError(answer.value.error || "That pull request could not be read.");
-      return;
-    }
-    setError(null);
-    setDetail(answer.value.detail);
-  }, [host, number, root]);
-
-  useEffect(() => { void load(); }, [load]);
 
   // Fetched beside the detail rather than after it: they are independent
   // questions, and the sheet is not opened in the first instant anyway.
@@ -479,6 +511,43 @@ export default function PrScreen(): React.ReactNode {
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <Stack.Screen options={{ title: `#${number}` }} />
 
+      {/*
+        One screen, three panes.
+
+        Reading a pull request used to be three screens deep: the overview, then
+        push for the diff, then back, then push for the threads, then back to
+        approve. A review is a loop between those three — read the code, answer
+        the remark it prompted, read the next file — and every turn of that loop
+        was a back gesture.
+
+        The segments are drawn only once the detail is in, because a control
+        that appears a beat after the screen does is a control the thumb has
+        already moved past.
+      */}
+      {detail ? (
+        <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm }}>
+          <Segmented
+            options={[
+              { id: "overview", label: "Overview" },
+              { id: "files", label: "Files", count: files.length },
+              { id: "threads", label: "Threads", count: openThreads || undefined },
+            ]}
+            value={pane}
+            onChange={setPane}
+          />
+        </View>
+      ) : null}
+
+      {/*
+        A pane is mounted the first time it is opened and never unmounted after
+        that, which is the whole of "keeps its place". Losing your position in a
+        600-line diff because you went to read a comment is the thing being
+        fixed here, and a pane that re-mounts starts at the top.
+
+        Hidden with `display: "none"` rather than by not rendering: the tree
+        stays, its scroll offset with it, and React Native stops laying it out.
+      */}
+      <View style={{ flex: 1, display: pane === "overview" ? "flex" : "none" }}>
       <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}>
         {error ? (
           <Card>
@@ -500,6 +569,15 @@ export default function PrScreen(): React.ReactNode {
                 style={{ color: C.text3, fontSize: T.eyebrow, fontFamily: MONO }}
               >{detail.headRefName} → {detail.baseRefName}</Text>
               <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" }}>
+                {/* First, because it is the only chip that says what this pull
+                    request is ABOUT — the rest say what state it is in. It
+                    draws nothing at all on a machine that tracks work nowhere,
+                    or on a pull request that names no item. */}
+                <TaskChip
+                  pr={detail}
+                  tracked={tracked}
+                  onFind={(query) => router.push({ pathname: "/(tabs)/tasks", params: { q: query } })}
+                />
                 {detail.isDraft ? (
                   <View style={{
                     paddingHorizontal: SPACE.sm, paddingVertical: 2,
@@ -594,10 +672,9 @@ export default function PrScreen(): React.ReactNode {
                   <FileRow
                     key={f.path}
                     file={f}
-                    onOpen={() => router.push({
-                      pathname: "/pr/diff",
-                      params: { number: String(number), root: root ?? "", path: f.path },
-                    })}
+                    // The segment, not a push. This is the back gesture the
+                    // whole rearrangement exists to remove.
+                    onOpen={() => { setFile(f.path); setPane("files"); }}
                   />
                 ))}
                 {files.length > shownFiles.length ? (
@@ -617,10 +694,7 @@ export default function PrScreen(): React.ReactNode {
                 <Card>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => router.push({
-                      pathname: "/pr/threads",
-                      params: { number: String(number), root: root ?? "" },
-                    })}
+                    onPress={() => setPane("threads")}
                     style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, minHeight: TAP }}
                   >
                     <Text style={{ color: C.text2, fontSize: T.body, flex: 1 }}>
@@ -652,6 +726,22 @@ export default function PrScreen(): React.ReactNode {
           </>
         ) : null}
       </ScrollView>
+      </View>
+
+      {/* Mounted on first visit and kept. `seen` is what makes that true: a
+          pane the reader never opened costs nothing, and one they did keeps
+          its scroll, its expanded threads and its half-typed remark. */}
+      {seen.files ? (
+        <View style={{ flex: 1, display: pane === "files" ? "flex" : "none" }}>
+          <FilesPane number={String(number)} root={root ?? ""} path={file ?? undefined} bar={false} />
+        </View>
+      ) : null}
+
+      {seen.threads ? (
+        <View style={{ flex: 1, display: pane === "threads" ? "flex" : "none" }}>
+          <ThreadsPane number={String(number)} root={root ?? ""} />
+        </View>
+      ) : null}
 
       {/* The bar, pinned. It is the reason to be on this screen, so it does not
           scroll away under a long description. */}

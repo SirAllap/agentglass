@@ -1,8 +1,8 @@
 /*
  * THE CACHED ANSWER OUTLIVES THE ONE THAT FAILED TO ARRIVE.
  *
- * "las PRs se me quedan asi despues de un rato cuando deberian aparecer asi …
- * he vuelto a la vista de PR y ha vuelto a resetearse las cabeceras."
+ * After a while every row settled into the wrong header, and leaving the view
+ * and coming back reset them to it again.
  *
  * Every review header on the board read "No review asked for yet", and it
  * survived leaving the view and coming back — which is what said the blank was

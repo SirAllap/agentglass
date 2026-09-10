@@ -17,6 +17,7 @@ import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, 
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject, WheelEvent as ReactWheelEvent } from "react";
 import { HiliteCtx } from "../../lib/diffHighlight.ts";
 import type { DiffHunk, FileChange } from "../../../../shared/types.ts";
+import { pairsIn, tokenDiff, type Seg } from "../../../../shared/tokenDiff.ts";
 
 // --- shared type + style vocabulary ------------------------------------------
 
@@ -78,8 +79,9 @@ export const SCROLLBAR_CSS = '.agx-scroll{scrollbar-width:thin;scrollbar-color:c
 // --- the row model (pure; everything below the components depends on it) -----
 
 export type DiffKind = "ctx" | "del" | "add";
-/** A run of a line's text, `hi` when the intra-line diff says it changed. */
-export type Seg = { text: string; hi: boolean };
+/** A run of a line's text, `changed` when the intra-line diff says it did.
+ *  Re-exported so the components below keep their own vocabulary. */
+export type { Seg } from "../../../../shared/tokenDiff.ts";
 /** One unified row: at most one of the two gutters carries a number. */
 export type URow = { oldN: number | null; newN: number | null; text: string; kind: DiffKind; segs?: Seg[] | null };
 /** One side of one split row. Absent (`null` in `SplitRow`) means the other
@@ -116,66 +118,27 @@ function parseLine(line: string): { kind: DiffKind; text: string } | null {
 
 // --- intra-line (token-level) diff --------------------------------------------
 
-// Whitespace runs, identifier runs, and every other character on its own: the
-// three alternatives cover any string, so the tokens of a line always
-// reconstruct it exactly. Callers rely on that — a segment list that lost a
-// character would render code the file does not contain.
-const WORD_RE = /\s+|[A-Za-z0-9_]+|[^\sA-Za-z0-9_]/g;
-const tokenize = (s: string): string[] => s.match(WORD_RE) ?? [];
-
-/**
- * Token LCS between two lines → highlighted segments per side, or null when the
- * lines are too dissimilar to be "the same line, modified".
+/*
+ * The rule itself is `shared/tokenDiff.ts`, and it is shared for a reason that
+ * had already happened: the phone grew its own a week after this one, and the
+ * two disagreed about when a deleted line and an added one are a rewrite of
+ * each other. One reader, two screens, two answers.
  *
- * The null cases are the point. Removals and additions are paired by position,
- * which is a guess, so two unrelated lines regularly land opposite each other;
- * without the similarity floor the guess gets painted as a word-level change
- * and the reader is told to look at noise. The size caps exist because the DP
- * table is O(n·m) and a minified bundle in a diff is one line of 200k.
+ * What moved out is the whole of it — the tokeniser, the similarity floor, the
+ * bounded table — and what came back is a better bound than this file had. It
+ * used to give up entirely on a pair longer than 4,000 characters; the shared
+ * one trims the common prefix and suffix first, so a minified line changed at
+ * its end is still marked at its end.
  */
-export function tokenDiff(a: string, b: string): { left: Seg[]; right: Seg[] } | null {
-  if (!a || !b || a === b || a.length + b.length > 4000) return null;
-  const ta = tokenize(a), tb = tokenize(b);
-  const n = ta.length, m = tb.length;
-  if (n + m > 600) return null;
-  const dp = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      dp[i][j] = ta[i] === tb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-  const left: Seg[] = [], right: Seg[] = [];
-  // Adjacent runs of the same verdict are merged as they are pushed, so the
-  // renderer emits one <span> per visible change instead of one per token.
-  const push = (arr: Seg[], text: string, hi: boolean) => {
-    const last = arr[arr.length - 1];
-    if (last && last.hi === hi) last.text += text; else arr.push({ text, hi });
-  };
-  let i = 0, j = 0, eq = 0;
-  while (i < n && j < m) {
-    if (ta[i] === tb[j]) { push(left, ta[i], false); push(right, tb[j], false); eq += ta[i].length; i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) push(left, ta[i++], true);
-    else push(right, tb[j++], true);
-  }
-  while (i < n) push(left, ta[i++], true);
-  while (j < m) push(right, tb[j++], true);
-  if ((2 * eq) / (a.length + b.length) < 0.4) return null; // too different → render plain
-  return { left, right };
-}
 
 /** In a unified row list, pair each removal with the addition at the same offset
  *  in the following add block, and attach token segments to those pairs. Blocks
  *  are matched in order and never across a context line, because a context line
  *  is git telling us the change block ended. */
 export function attachTokenDiff(rows: URow[]): void {
-  let i = 0;
-  while (i < rows.length) {
-    if (rows[i].kind !== "del") { i++; continue; }
-    let d = i; while (d < rows.length && rows[d].kind === "del") d++;
-    let a = d; while (a < rows.length && rows[a].kind === "add") a++;
-    for (let k = 0; k < Math.min(d - i, a - d); k++) {
-      const td = tokenDiff(rows[i + k].text, rows[d + k].text);
-      if (td) { rows[i + k].segs = td.left; rows[d + k].segs = td.right; }
-    }
-    i = a;
+  for (const [del, add] of pairsIn(rows)) {
+    const td = tokenDiff(rows[del].text, rows[add].text);
+    if (td) { rows[del].segs = td.left; rows[add].segs = td.right; }
   }
 }
 
@@ -266,7 +229,7 @@ function gutterWidth(maxLine: number): string {
 
 function Marked({ segs, kind }: { segs: Seg[]; kind: "del" | "add" }) {
   const bg = kind === "del" ? "color-mix(in srgb, var(--error) 22%, transparent)" : "color-mix(in srgb, var(--success) 22%, transparent)";
-  return <>{segs.map((s, i) => (s.hi ? <span key={i} style={{ background: bg, borderRadius: "2px" }}>{s.text}</span> : <span key={i}>{s.text}</span>))}</>;
+  return <>{segs.map((s, i) => (s.changed ? <span key={i} style={{ background: bg, borderRadius: "2px" }}>{s.text}</span> : <span key={i}>{s.text}</span>))}</>;
 }
 
 /** Segment list → character ranges, so the token diff can be re-applied on top
@@ -275,7 +238,7 @@ function changedRanges(segs?: Seg[] | null): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   if (!segs) return out;
   let off = 0;
-  for (const s of segs) { if (s.hi) out.push([off, off + s.text.length]); off += s.text.length; }
+  for (const s of segs) { if (s.changed) out.push([off, off + s.text.length]); off += s.text.length; }
   return out;
 }
 

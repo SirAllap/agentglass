@@ -404,7 +404,7 @@ export function stopCardWatch(): void {
 /**
  * ClickUp's own desktop notification, matched back to a card.
  *
- * The desktop app posts "Alejandro set the status to: READY FOR QA" with the
+ * The desktop app posts "<somebody> set the status to: READY FOR QA" with the
  * task's TITLE as the summary and nothing else — no id, no url, and a D-Bus
  * monitor cannot invoke the notification's own action to find out. So the row
  * behind the bell had nowhere to go but ClickUp's website, which is the one

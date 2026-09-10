@@ -9,8 +9,8 @@
  * one of them something finished, waiting on a single action only a person can
  * take, and every one of them lost the moment the conversation moved on.
  *
- * Its own words for the difference: "el `asked` de los agentes es lo que ELLOS
- * piden; el `ready` es lo que YO le pido a él."
+ * The difference is the direction: `asked` is what the agents want from the
+ * person, `ready` is what the seat wants back from them.
  *
  * WHY THE THREE EXTRA FIELDS. A decision handed over as a bare sentence is a
  * decision the person has to go and research before they can make it, which is

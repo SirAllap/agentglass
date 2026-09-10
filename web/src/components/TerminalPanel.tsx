@@ -2630,9 +2630,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * `cwd.startsWith(worktree)`, so every window in one checkout resolved to
    * whichever agent sorted first, and five tabs all read "Investigando p…".
    *
-   * The prefix match is fixable and the label still went, because the ask was
-   * to remove it: "realmente esa description la puedes quitar, no me hace
-   * falta que una tab tenga ese texto". The strip is read by its addresses.
+   * The prefix match is fixable and the label still went: a tab is read by its
+   * address, and a description repeated across five of them is noise wherever
+   * the matching bug ends up.
    */
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.

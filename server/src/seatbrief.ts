@@ -4,9 +4,10 @@
  * This file exists because of an interview. The orchestrator this feature was
  * modelled on has no doctrine file at all: what makes it work is the paragraph
  * it sends to every agent it puts to work, and the fixed shape it demands
- * back. Its own words: "la doctrina real está en dos sitios, su memoria y el
- * briefing que yo mandé a cada agente". The seat's rules govern the seat; THIS
- * governs everybody it hands work to, and it is the half that was missing.
+ * back. The doctrine that actually governs lives in two places — what the seat
+ * remembers, and the briefing it sent each agent. The seat's rules govern the
+ * seat; THIS governs everybody it hands work to, and it is the half that was
+ * missing.
  *
  * Four of its rules were paid for, not designed. In the order they were
  * learned:

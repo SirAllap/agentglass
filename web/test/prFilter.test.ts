@@ -266,9 +266,10 @@ describe("toggleFacet round-trips through the string", () => {
 /*
  * THE TRACKER CARD BEHIND A PULL REQUEST.
  *
- * "sería muy útil tener un filtro para quitar/filtrar esas PRs por un estado de
- * ClickUp" — with the example that decides the shape: only the ones in Ready
- * for QA, or everything EXCEPT those.
+ * The board could say which card a pull request came from and could not narrow
+ * by what that card said. The example that decides the shape is the one that
+ * needs both directions: only the ones in a given status, or everything EXCEPT
+ * those.
  *
  * The card's status and its people are already on every row of the list, so
  * this filters what the board is already drawing rather than asking anybody
@@ -289,10 +290,10 @@ describe("filtering by the card behind the pull request", () => {
 
   test("a pull request with no card is NOT one of them", () => {
     /*
-     * `[]`, not the fail-open `null` the checks facet uses, and asked before it
-     * was built: "solo ver aquellas PRs que tienen cards en Ready For QA" means
-     * the ones that have one. A row with no card answered "maybe" would put
-     * every unlinked pull request in the result of a question about statuses.
+     * `[]`, not the fail-open `null` the checks facet uses. A question about
+     * card statuses is a question about rows that HAVE a card; a row with no
+     * card answered "maybe" would put every unlinked pull request in the
+     * result.
      */
     const rows = [carded("READY FOR QA"), pr()];
     const kept = applyFilters(rows, parseQuery("cardstatus:\"READY FOR QA\""));

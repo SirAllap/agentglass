@@ -17,10 +17,11 @@ export interface Waiting {
    * WHAT THE SEAT ITSELF IS ASKING FOR, and the pile it used most.
    *
    * Something finished that needs one action only a person can take: re-upload
-   * the GIF, ask for a reviewer, say yes to a push. Its own account of why this
-   * is a separate kind: "el `asked` de los agentes es lo que ELLOS piden; el
-   * `ready` es lo que YO le pido a él" — and before this it lived nowhere but
-   * a chat, so it was lost the moment the conversation moved on.
+   * the GIF, ask for a reviewer, say yes to a push. A separate kind from
+   * `asked` because the direction is the other way — that is what the agents
+   * want from the person, this is what the seat wants back — and before this it
+   * lived nowhere but a chat, so it was lost the moment the conversation moved
+   * on.
    */
   ready: SeatNeed[];
   /** An agent sitting at a prompt. There is a pane to go to, and it is the

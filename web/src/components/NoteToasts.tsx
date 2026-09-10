@@ -6,8 +6,8 @@
 // has listed them — but the only thing that *interrupted* was a line of 10px
 // text in the middle of the top bar, which loses its slot to the "needs you"
 // chip the moment anything is held, and which cannot carry a message anyway.
-// "Slack — New message from Alejandro García" is two lines of prose, not a
-// caption.
+// "Slack — New message from <somebody>" plus the message itself is two lines
+// of prose, not a caption.
 //
 // So mirrored notifications get the surface they always needed: a card, in a
 // stack, over everything. Deliberately separate from the bar's lane, which keeps

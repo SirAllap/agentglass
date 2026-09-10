@@ -97,8 +97,8 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
      *
      * Only the ones worth a turn, though — a report that says work is
      * proceeding is a thing to read at the next round, not a reason to spend
-     * one. That line was drawn by the seat itself: "reporte con ESTADO y nada
-     * más" is on its own list of what should NOT wake it.
+     * one. A report carrying a status and nothing else is on the seat's own
+     * list of what should NOT wake it.
      */
     const waiting = unreadWorthWaking(s.root);
     const fp = `${fingerprint(mine)}#${waiting}`;
@@ -167,8 +167,8 @@ function aliveNames(): string[] {
  * STARTED — and the seat that runs a real project here adopted the chair from
  * a session somebody had already opened. So every wake in this file was a
  * no-op for the one seat it was written for, silently, for as long as it has
- * existed. Its own words, measuring it from the other side: "NO me despertó
- * (lo leí porque miré)".
+ * existed. Measured from the other side: no wake ever arrived, and the report
+ * was read only because somebody went and looked.
  *
  * `seated` is the resolution the rest of the seat uses and it answers for both
  * ways of being in the chair: a named agent this app opened, or the pane an

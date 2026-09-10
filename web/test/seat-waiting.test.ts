@@ -84,9 +84,9 @@ describe("what waits", () => {
  *
  * Something finished that needs one action only a person can take: re-upload
  * the GIF, ask for a reviewer, say yes to a push. Before this it lived nowhere
- * but a chat, so it was lost the moment the conversation moved on. Its own
- * words for why it is not the same as `asked`: "el `asked` de los agentes es lo
- * que ELLOS piden; el `ready` es lo que YO le pido a él."
+ * but a chat, so it was lost the moment the conversation moved on. Not the
+ * same pile as `asked`, and the direction is the difference: `asked` is what
+ * the agents want from the person, `ready` is what the seat wants back.
  */
 describe("what the seat asks of the person", () => {
   test("an open one waits; a settled one does not", () => {

@@ -131,9 +131,9 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
   const [showDone, setShowDone] = useState(false);
   const [saying, setSaying] = useState("");
   const [sentTo, setSentTo] = useState("");
-  /* When this screen last got an answer from the server. An empty panel and a
-     broken panel look identical, and the seat said so: "si no, un panel vacío
-     y un panel roto se ven igual". */
+  /* When this screen last got an answer from the server. Without it an empty
+     panel and a broken panel are drawn identically, and there is nothing on
+     screen that tells them apart. */
   const [checkedAt, setCheckedAt] = useState(0);
   const cos = useCosmetic();
 

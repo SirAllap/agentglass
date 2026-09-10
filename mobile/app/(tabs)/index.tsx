@@ -257,8 +257,8 @@ export default function InboxScreen(): React.ReactNode {
           {/*
             A title in the CONTENT, not only in the navigation bar.
 
-            The bar's own title is 17pt and shares its row with a gear; it says
-            which tab you are on and nothing else. A page has room to open with
+            The bar's own title is 17pt and shares its row with the More
+            control; it says which tab you are on and nothing else. A page has room to open with
             a sentence, and the sentence people arrive for is not "Inbox" — it
             is how much is waiting. So the heading answers that, and the count
             under it is the same one the tiles add up to, said in words for the

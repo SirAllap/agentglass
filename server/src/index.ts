@@ -6779,8 +6779,8 @@ const server = Bun.serve<WsData>({
      * THE FIELD, IN A FEW LINES, FOR SOMEBODY WHO PAYS TO READ.
      *
      * The second thing the orchestrator asked for: whether each agent is idle,
-     * working or dead and since when, "sin capture-pane ni ListAgents de 80
-     * filas". `/seat` answers that and a great deal more — the doctrine, the
+     * working or dead and since when, without a pane capture and without eighty
+     * rows of listing. `/seat` answers that and a great deal more — the doctrine, the
      * brief, the queue, a photograph of a pane — and the model reading it
      * re-reads its whole context every turn. So the same facts, as text, with
      * nothing else in the envelope.
@@ -7118,9 +7118,9 @@ const server = Bun.serve<WsData>({
          * `inScope` measures against the open project's directory, so
          * `~/code/app-feature` — a worktree of `~/code/app`, cut by the very
          * brief these agents are handed — read as somewhere else and the start
-         * was refused. Measured by the orchestrator running a real project
-         * here: "la mitad de mis agentes viven en worktrees hermanos, así que
-         * hoy no puedo arrancarlos por la app."
+         * was refused. Measured on a real project here: half the agents live in
+         * sibling worktrees, so half of them could not be started from the app
+         * at all.
          *
          * The rule widens to the REPOSITORY, not to the machine: a directory
          * qualifies when git says it belongs to the project this app has open.

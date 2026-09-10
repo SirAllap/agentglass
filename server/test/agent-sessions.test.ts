@@ -1,11 +1,11 @@
 /*
  * The sessions a project has, wherever they ran.
  *
- * Asked for like this: "que este desplegable me abra directamente la tab o el
- * pane… muéstrame todas las sesiones que haya en todas las rutas del proyecto,
- * ya que puede que hayan sesiones en worktrees que no se muestren".
+ * Two things were asked of it: that picking a session opens its tab or pane
+ * directly, and that the list covers every path of the project — because
+ * sessions in a worktree were not being shown at all.
  *
- * That last clause is the whole feature. `/resume` lists the transcripts of the
+ * That second one is the whole feature. `/resume` lists the transcripts of the
  * directory the agent is running in, so a session from a worktree is invisible
  * from the main checkout — and those are the ones being looked for, because a
  * worktree is where the work was. This walks every checkout `git worktree list`

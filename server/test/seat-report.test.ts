@@ -123,10 +123,10 @@ describe("what the seat is told about its tray", () => {
 /*
  * WHAT IS WORTH A TURN, AND WHAT IS WORTH A LINE.
  *
- * The line is the seat's own: "reporte con ESTADO y nada más" is on its list of
- * things that should NOT wake it. Waking spends a whole turn of the most
- * expensive context on the machine, and spending one to learn that work is
- * proceeding is the cost this arrangement exists to avoid.
+ * A report carrying a status and nothing else is on the list of things that
+ * should NOT wake the seat. Waking spends a whole turn of the most expensive
+ * context on the machine, and spending one to learn that work is proceeding is
+ * the cost this arrangement exists to avoid.
  */
 describe("which reports are worth waking for", () => {
   test("a report that is only a state does not ring the bell — but it is still in the tray", () => {

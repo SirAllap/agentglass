@@ -261,9 +261,8 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
  * THE QUEUE, FROM THE CLI.
  *
  * The orchestrator could claim a task and finish one, and had no way at all to
- * PUT one there: the only door was the view. Its words, testing all twenty-one
- * verbs: "el orquestador no puede meter en la cola lo que descubre". A seat
- * whose whole job is noticing things could not write one down.
+ * PUT one there: the only door was the view. Found by exercising all twenty-one
+ * verbs — a seat whose whole job is noticing things could not write one down.
  */
 describe.skipIf(!have)("the queue through the CLI", () => {
   test("a task can be added, listed and dropped without opening the view", async () => {

@@ -23,8 +23,8 @@ describe("what a visit to the card would change", () => {
   });
 
   it("does not count a status the card is already in", () => {
-    // Reported: "esto no es nada, no deberíamos mandarlo". A card in Code
-    // Review being moved to Code Review is a no-op that dates the card.
+    // A card in Code Review being moved to Code Review is a write that
+    // changes nothing and dates the card, which is worse than not writing.
     expect(plan({ pick: "code review", statusNow: "code review" }).status).toBe("");
     expect(plan({ pick: "code review", statusNow: "in progress" }).status).toBe("code review");
   });

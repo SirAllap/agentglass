@@ -1450,9 +1450,9 @@ db.run(`CREATE INDEX IF NOT EXISTS seat_line_root ON seat_line (root, at DESC)`)
 /*
  * REPORTS FROM THE AGENTS DOING THE WORK.
  *
- * The orchestrator this feature was modelled on asked for exactly one thing
- * first: "una bandeja donde el reporte de cada uno llegue en el formato fijo
- * sin que yo lo pegue cinco veces". Today each worker messages it, and the
+ * The one thing the orchestrator this feature was modelled on wanted first: a
+ * tray where every worker's report arrives in the same fixed shape, without it
+ * being pasted in five times by hand. Today each worker messages it, and the
  * report lands in the most expensive context on the machine as prose that has
  * to be read, re-read and remembered.
  *
@@ -3119,9 +3119,9 @@ function decentPrompt(p: string): boolean {
    *
    * These three were on the Lantern, as the titles of three cards:
    *
-   *   "que son estos?? [Image #1] [Image #2]"
-   *   "Ayudame a instalar Thought for 24s Partly — and the distinction matters"
-   *   "Quiero que mires cómo hiciste la última mes para que cuando cierra la…"
+   *   a line that is only a question mark and two attachments
+   *   a pasted transcript whose first line happens to be a sentence
+   *   a request that runs past the width and is cut off mid-word
    *
    * The first is a person pointing at a picture — the picture carried the
    * subject and the words carried none of it. The second is a pasted

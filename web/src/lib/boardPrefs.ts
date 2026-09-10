@@ -65,9 +65,8 @@ export function setFoldedLanes(ids: readonly string[]): void {
  * ONLY WHILE IT HOLDS SOMETHING, which the first version of this missed. The
  * argument above is entirely about a lane that is asking you for something: a
  * lane at ZERO is asking for nothing, and it was still taking 268 pixels of a
- * board that does not fit five columns on his screen, with a control that
- * refused. Reported looking straight at it: "no puedo plegar la primera
- * columna", under a heading reading `0 NEEDS YOUR REVIEW`.
+ * board that does not fit five columns, with a control that refused — a lane
+ * that cannot be folded under a heading reading `0 NEEDS YOUR REVIEW`.
  *
  * Both halves matter and they do not conflict. Empty, it folds like any other.
  * The moment something lands in it, `foldable` says no again — and because a

@@ -4,9 +4,8 @@
  * Every orchestrator arrangement on this machine draws one line and draws it
  * in the same place: anything local and reversible is the agent's, and
  * anything a colleague can see is the owner's. Until now that line was held by
- * culture. The orchestrator running a real project here said so plainly when
- * asked what it was missing: "hoy eso lo sostiene la memoria y la cortesía de
- * los agentes; funcionó, pero por cultura, no por herramienta."
+ * convention alone: an agent remembered to hold an outward call back, and it
+ * worked — by culture, not by tooling.
  *
  * This is the tool. It classifies a tool call as OUTWARD — a push, a pull
  * request, a comment, a review, a ticket's state, a message in a chat — and

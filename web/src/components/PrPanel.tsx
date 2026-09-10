@@ -82,6 +82,7 @@ import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, read
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
+import { trackerName } from "../../../shared/taskref.ts";
 import { reviewerRoster, blockingReviewers, reviewVerdict, verdictLine, type ReviewerRow, type ReviewerState } from "../lib/prReviewers.ts";
 import { expandRecipe } from "../../../shared/recipeText.ts";
 import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
@@ -352,9 +353,11 @@ function PrCardChip({ pr, card }: {
       status={card?.status}
       external={!inApp}
       onClick={() => { if (go.in === "tasks") openCard(ref.query, ref.label); else openExternal(go.url); }}
+      /* The tracker is named only when its own address said which one it is.
+         Guessing here is how a Jira ticket gets offered as a ClickUp card. */
       title={inApp
         ? `Open ${ref.label} in Tasks — the ClickUp card this pull request came from`
-        : `Open ${ref.label} in ClickUp`} />
+        : `Open ${ref.label}${trackerName(ref.tracker) ? ` in ${trackerName(ref.tracker)}` : ""}`} />
   );
 }
 

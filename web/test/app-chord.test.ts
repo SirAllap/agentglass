@@ -4,9 +4,8 @@
  * It is the only binding in the app that reaches past a running shell — the
  * terminal is told to hand it over instead of writing it to the PTY. That makes
  * it the one most likely to collide with something already bound inside tmux,
- * readline or vim, and so the one that most needs to be movable. "Ante la duda
- * déjalo para poder editarlo en los settings" is exactly the right instinct and
- * this is the test of it.
+ * readline or vim, and so the one that most needs to be movable. When in doubt
+ * a binding stays editable in Settings, and this is the test of that.
  *
  * The first case here is a defect found while building it, not a hypothetical:
  * the chord encoder dropped Shift for letter keys, so Ctrl+Shift+P and Ctrl+P

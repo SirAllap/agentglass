@@ -1,170 +1,104 @@
 /*
- * The card a pull request came from.
+ * The work item a pull request came from, on the desk.
  *
- * ClickUp already draws the other half of this link: open a card and its
- * sidebar lists the pull requests that mention it. Standing on the pull request
- * there is nothing — the card id is sitting in the branch name and in the body,
- * and reading it means selecting text and pasting it somewhere else.
+ * The READING is `shared/taskref.ts`, and it is shared because the phone asks
+ * exactly this and the two must not answer differently. What stays here is the
+ * half that is genuinely about ClickUp: whether an item is one this machine's
+ * board can open, and therefore what a tap on the chip is entitled to do.
  *
- * So it is read here, from what a pull request already carries. Two sources,
- * and they are not equally trustworthy:
+ * That split is the whole point. This file used to read clickup.com addresses
+ * and nothing else, so a repository whose pull requests link Jira, Linear or a
+ * GitHub issue got no chip at all — while the phone, since it was made
+ * general, showed one. One reader, two screens, two answers.
  *
- *   the body's ClickUp address   certain — nothing else writes clickup.com
- *   an id in the branch/title    a convention, and other trackers share it
+ * Three answers, and only the middle one involves ClickUp:
  *
- * That difference is reported rather than smoothed over (`from`), because the
- * caller has to decide with it: a Jira shop whose branches are `ABC-12-thing`
- * must not be shown a ClickUp mark for a card that does not exist.
- *
- * What is deliberately NOT read is any card a TEMPLATE mentions, and that is
- * not a precaution — it is measured. Across fourteen real pull requests, twelve
- * resolved to the same card, because the checklist every one of them is written
- * from links a card of its own ("A/B testing only — see ORBIT-3306"), and it is
- * above the reference. So boilerplate is skipped by shape rather than by
- * wording: template links live inside checklist items, a card reference is
- * written as a line of its own. See `addresses`.
+ *   nothing              no chip, no gap, no placeholder
+ *   ours                 open it here, in the board
+ *   somebody else's      open its address, which needs no credentials
  */
+import {
+  chipFor, readTaskRef, type Evidence, type TaskRef, type TrackerId,
+} from "../../../shared/taskref.ts";
 
 export interface CardRef {
   /** What the chip says. The human id when the pull request has one, because
-   *  `ORBIT-1042` is what people say out loud; ClickUp's internal id otherwise. */
+   *  `ORBIT-1042` is what people say out loud; the tracker's own id otherwise. */
   label: string;
   /** What the finder is handed. Not always the label: an address gives an
    *  unambiguous id, and using it skips the custom-id lookup entirely. */
   query: string;
-  /** ClickUp's own address, when the body carried one. The way out when this
-   *  machine has no ClickUp connected to open the card in. */
+  /** The item's own address, when the body carried one. The way out when this
+   *  machine has no board to open it in — or when it is not this board's item
+   *  at all. */
   url?: string;
   /** Which evidence this rests on. `url` is certain; the rest is a convention
-   *  and needs corroborating before a ClickUp mark is put on it. */
-  from: "url" | "branch" | "title";
+   *  and needs corroborating before a board's mark is put on it. */
+  from: Evidence;
+  /** Named only by its own address, never guessed from an id's shape. Null
+   *  means "an id, from we cannot say where". */
+  tracker: TrackerId | null;
 }
 
 /**
- * A ClickUp task address.
+ * What item this pull request is about, as far as it is willing to say.
  *
- * Two shapes in the wild: `/t/<id>` and `/t/<team>/<id>`, the second being what
- * you get when the workspace has custom ids switched on. When there are two
- * segments the LAST is the task — the first is the workspace, and handing that
- * to a task lookup asks for a card whose id is a team number.
+ * A thin call now. Every rule that used to be here — a template's own links
+ * skipped by shape, a body naming two items answering neither, the bounds that
+ * keep `fix/UTF-8-decode` from looking like an id — moved to shared/ with the
+ * reading, and the phone's tests cover them.
  */
-const CU_URL = /https?:\/\/(?:[\w-]+\.)*clickup\.com\/t\/([\w-]+)(?:\/([\w-]+))?/i;
-
-/**
- * The card addresses a body means, which is not every address in it.
- *
- * Lines that are a list item or a quotation are skipped. That is where a
- * template puts its own links and where a reply quotes somebody else's, and
- * both are in the body of every pull request the template made rather than in
- * the one you are reading. What is left is a reference somebody wrote for THIS
- * pull request — on its own line, bare or as a link.
- *
- * Two different cards surviving that means the body names two, and this cannot
- * tell which is the one. It says so by returning neither: a chip that opens the
- * wrong card is worse than no chip, because it is believed.
- */
-function addresses(body: string): { id: string; url: string }[] {
-  const found = new Map<string, string>();
-  for (const line of (body || "").split(/\r?\n/)) {
-    if (/^\s*(?:[-*+>]|\d+[.)])\s/.test(line)) continue;
-    const m = CU_URL.exec(line);
-    // `/t/<team>/<id>` — the second capture is the task. With one segment the
-    // first IS the task, and handing a team number to a task lookup finds
-    // nothing.
-    if (m) found.set(m[2] ?? m[1], m[0]);
-  }
-  return [...found].map(([id, url]) => ({ id, url }));
+export function cardRef(pr: { headRefName?: string; title?: string; body?: string; url?: string }): CardRef | null {
+  return readTaskRef(pr) as TaskRef | null;
 }
 
 /**
- * A human card id: capitals, a hyphen, digits.
+ * Does this item belong to the workspace we are connected to?
  *
- * Every bound here is doing the same job — keeping ordinary branch names out of
- * a feature that otherwise puts a ClickUp mark on a Renovate PR. None of them
- * are hypothetical:
+ * Two ways for the answer to be no, and the first one is new: an address that
+ * belongs to ANOTHER tracker is not this board's item, whatever its id looks
+ * like. Being certain about the item and wrong about which system owns it is
+ * how a Jira ticket ends up being looked up in ClickUp and found missing.
  *
- *   fix/UTF-8-decode                    one digit, so not an id
- *   release/v2-1409                     lower case, and a digit in the prefix
- *   .../types/node-22-10-1              lower case — this is the one that bites
- *
- * Capitals is the load-bearing rule, and it is not arbitrary: an id is a proper
- * noun and gets written as one, by ClickUp's own "create branch", by every
- * template, and by anybody copying it out of the address bar. Somebody who
- * lower-cases theirs loses the chip on the branch — and keeps it via the
- * address in the body, which is where most of these come from anyway.
- *
- * The id must start the string or follow a separator, so `agent-v2` cannot lend
- * its tail to something that looks like an id. What follows it may be a hyphen
- * — a branch is `ORBIT-1042-what-it-was-about` — but not a word character, so a
- * number is never matched half-way.
- */
-const HUMAN_ID = /(?:^|[/_\-\s[(])([A-Z]{2,10})-(\d{2,})(?!\w)/;
-
-const human = (s: string): string | null => {
-  const m = HUMAN_ID.exec(s || "");
-  return m ? `${m[1]}-${m[2]}` : null;
-};
-
-/**
- * What card this pull request is about, as far as it is willing to say.
- *
- * Null when it says nothing, which is the common case on a repository that
- * does not work this way — and the reason the chip has to be able to not exist
- * rather than render an empty slot.
- */
-export function cardRef(pr: { headRefName?: string; title?: string; body?: string }): CardRef | null {
-  // The label people recognise, wherever it turns up. Branch first: it is
-  // written by the tool that cut it, so it is the id far more often than a
-  // title somebody typed.
-  const branch = human(pr.headRefName ?? "");
-  const named = branch ?? human(pr.title ?? "");
-  const [only, ...rest] = addresses(pr.body ?? "");
-
-  if (only && !rest.length) {
-    return { label: named ?? only.id, query: only.id, url: only.url, from: "url" };
-  }
-  if (!named) return null;
-  return { label: named, query: named, from: branch ? "branch" : "title" };
-}
-
-/**
- * Does this id belong to the workspace we are connected to?
- *
- * The prefix is derived from cards already read rather than configured — see
- * the server's `knownCardPrefix`. Unknown means nothing has been read yet, and
- * the honest answer then is yes: refusing to show a card link because a board
- * has not been opened this session would make the feature come and go.
+ * The second is the prefix, derived from cards already read rather than
+ * configured — see the server's `knownCardPrefix`. Unknown means nothing has
+ * been read yet, and the honest answer then is yes: refusing to show a card
+ * link because a board has not been opened this session would make the feature
+ * come and go.
  */
 export function looksLikeOurs(ref: CardRef, prefix: string | undefined): boolean {
+  if (ref.tracker && ref.tracker !== "clickup") return false;
   if (ref.from === "url") return true;
   if (!prefix) return true;
   return ref.label.toUpperCase().startsWith(prefix.toUpperCase());
 }
 
 /**
- * What the masthead chip should DO — the three answers at the top of this file,
- * as one decision instead of a condition spread across some JSX.
+ * What the chip should DO — the three answers above, as one decision instead
+ * of a condition spread across some JSX.
  *
  * It lives here, next to the evidence it weighs, because the mistake it exists
  * to prevent is not a rendering mistake. The rule was right and the value fed
  * to it was not: the chip asked "are there boards", the answer was always yes
- * because the built-in board is always there, and a repository that has never
+ * because the built-in board is always there, and a repository that had never
  * heard of ClickUp got ClickUp's mark on its pull requests. A boolean called
  * `connected` cannot be satisfied by an off-by-one, and a function returning
  * WHERE this goes cannot be half-applied.
  *
  *   null            say nothing — an id from a tracker we cannot resolve
- *   { in: "tasks" } open the card here, in the ClickUp board
- *   { in: "clickup" } no ClickUp on this machine, but the body gave an address,
- *                   and a URL opens without anybody's credentials
+ *   { in: "tasks" } open it here, in the board
+ *   { in: "away" }  not this board's item, or no board here, and the body gave
+ *                   an address — which opens without anybody's credentials
  */
 export function chipAction(
   ref: CardRef | null,
   setup: { connected: boolean; prefix?: string } | null,
-): { in: "tasks" } | { in: "clickup"; url: string } | null {
+): { in: "tasks" } | { in: "away"; url: string } | null {
   // Null setup is "the answer has not arrived", not "no". Saying nothing until
   // it has is what stops the chip appearing and then vanishing.
   if (!ref || !setup) return null;
   if (setup.connected && looksLikeOurs(ref, setup.prefix)) return { in: "tasks" };
-  return ref.url ? { in: "clickup", url: ref.url } : null;
+  // Everything else is the shared rule: an address opens, a bare id does not.
+  const away = chipFor(ref, false);
+  return away && "open" in away ? { in: "away", url: away.open } : null;
 }

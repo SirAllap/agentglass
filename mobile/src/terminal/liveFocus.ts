@@ -98,3 +98,25 @@ export function focusCapture(
 export function liveDetail(captured: string, idle = "Tap to show keyboard"): string {
   return captured.length > 0 ? captured : idle;
 }
+
+/**
+ * Does this key end the line the button is showing?
+ *
+ * A message sent used to stay written along the bottom of the screen. That row
+ * is a BUTTON in `keys` mode — its text is a reading of what has gone down the
+ * wire, not a field somebody is still editing — and a button that keeps the
+ * last message reads as a field with that message still in it, which is the
+ * one thing it must not look like.
+ *
+ * Enter is where a line stops being anything: it has run. So the transcript is
+ * dropped on it, whichever route the key took — the bar's ⏎, the keyboard's
+ * return, or an IME that commits the newline as text.
+ *
+ * CR and LF both, because the bar sends CR and a pasted line arrives as LF.
+ * Nothing else clears it: Tab completes the line, up replaces it, Ctrl+C
+ * throws it away — all of which change the line without ending it, and the
+ * pane is the thing that knows what it looks like afterwards.
+ */
+export function endsTheLine(bytes: string): boolean {
+  return bytes === "\r" || bytes === "\n" || bytes === "\r\n";
+}
