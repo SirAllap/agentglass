@@ -8,7 +8,7 @@
  * not change. So most of what is pinned here is a refusal.
  */
 import { describe, expect, test } from "bun:test";
-import { inlineSpans, pairsIn, tokens } from "../src/model/tokens.ts";
+import { pairsIn, tokenDiff, tokens } from "../../shared/tokenDiff.ts";
 import type { DiffLine } from "../src/model/diffLines.ts";
 
 /** The changed text of a side, which is the whole question a reader has. */
@@ -21,25 +21,25 @@ const whole = (spans: { text: string }[] | undefined): string =>
   (spans ?? []).map((s) => s.text).join("");
 
 describe("one identifier renamed", () => {
-  const both = inlineSpans(
+  const both = tokenDiff(
     "  const answer = await ask(host, `/prs/diff?${query}`);",
     "  const answer = await ask(host, `/prs/detail?${query}`);",
   )!;
 
   test("only the word that changed is marked, on each side", () => {
-    expect(marked(both.before)).toBe("diff");
-    expect(marked(both.after)).toBe("detail");
+    expect(marked(both.left)).toBe("diff");
+    expect(marked(both.right)).toBe("detail");
   });
 
   test("and the line comes back whole", () => {
-    expect(whole(both.before)).toBe("  const answer = await ask(host, `/prs/diff?${query}`);");
-    expect(whole(both.after)).toBe("  const answer = await ask(host, `/prs/detail?${query}`);");
+    expect(whole(both.left)).toBe("  const answer = await ask(host, `/prs/diff?${query}`);");
+    expect(whole(both.right)).toBe("  const answer = await ask(host, `/prs/detail?${query}`);");
   });
 
   test("neighbouring tokens of the same kind are one span", () => {
     // One `<Text>` per token is a paragraph the layout engine measures word by
     // word, on every row of a diff that can be four hundred rows long.
-    expect(both.before.length).toBeLessThan(6);
+    expect(both.left.length).toBeLessThan(6);
   });
 });
 
@@ -47,21 +47,21 @@ describe("an insertion in the middle", () => {
   test("marks what was inserted and nothing either side of it", () => {
     // The case a prefix-only rule gets wrong: it would mark `c, b` and read as
     // though two things moved.
-    const both = inlineSpans("foo(a, b)", "foo(a, c, b)")!;
-    expect(marked(both.before)).toBe("");
-    expect(marked(both.after)).toBe("c, ");
+    const both = tokenDiff("foo(a, b)", "foo(a, c, b)")!;
+    expect(marked(both.left)).toBe("");
+    expect(marked(both.right)).toBe("c, ");
   });
 
   test("a token appended at the end is the only mark", () => {
-    const both = inlineSpans("await load()", "await load(host)")!;
-    expect(marked(both.after)).toBe("host");
+    const both = tokenDiff("await load()", "await load(host)")!;
+    expect(marked(both.right)).toBe("host");
   });
 
   test("indentation changing is visible as indentation changing", () => {
     // Whitespace is its own token, so this is not "the whole line changed".
-    const both = inlineSpans("  return null;", "      return null;")!;
-    expect(marked(both.before)).toBe("  ");
-    expect(marked(both.after)).toBe("      ");
+    const both = tokenDiff("  return null;", "      return null;")!;
+    expect(marked(both.left)).toBe("  ");
+    expect(marked(both.right)).toBe("      ");
   });
 });
 
@@ -70,18 +70,18 @@ describe("what it refuses to mark", () => {
     // A line that went and a line that came. Marking them token by token marks
     // nearly everything, which is the same as marking nothing and costs the
     // reader a second to work out.
-    expect(inlineSpans("import { readFileSync } from 'node:fs';", "export const TAP = 44;")).toBeNull();
+    expect(tokenDiff("import { readFileSync } from 'node:fs';", "export const TAP = 44;")).toBeNull();
   });
 
   test("identical lines have nothing to say", () => {
-    expect(inlineSpans("same", "same")).toBeNull();
+    expect(tokenDiff("same", "same")).toBeNull();
   });
 
   test("an empty side is not a rewrite", () => {
     // A line emptied or a line born is a deletion and an addition; the bands
     // already say so.
-    expect(inlineSpans("", "something")).toBeNull();
-    expect(inlineSpans("something", "")).toBeNull();
+    expect(tokenDiff("", "something")).toBeNull();
+    expect(tokenDiff("something", "")).toBeNull();
   });
 });
 
@@ -89,7 +89,7 @@ describe("a line with no length limit", () => {
   const under = (name: string, before: string, after: string): void => {
     test(name, () => {
       const started = performance.now();
-      inlineSpans(before, after);
+      tokenDiff(before, after);
       // Loose on purpose. It is not a benchmark — it is the difference between
       // a scroll and a phone that stops answering, and a tight number here
       // would fail on a busy runner while proving nothing extra.
@@ -112,10 +112,10 @@ describe("a line with no length limit", () => {
     const same = Array.from({ length: 400 }, (_, i) => `k${i}`).join(" ");
     const a = `${same} ${Array.from({ length: 300 }, (_, i) => `a${i}`).join(" ")} ${same}`;
     const b = `${same} ${Array.from({ length: 300 }, (_, i) => `b${i}`).join(" ")} ${same}`;
-    const both = inlineSpans(a, b)!;
-    expect(whole(both.before)).toBe(a);
-    expect(marked(both.before)).toContain("a0");
-    expect(marked(both.before)).not.toContain("k0");
+    const both = tokenDiff(a, b)!;
+    expect(whole(both.left)).toBe(a);
+    expect(marked(both.left)).toContain("a0");
+    expect(marked(both.left)).not.toContain("k0");
   });
 
   test("and a pair with nothing much in common is refused before any of that", () => {
@@ -123,7 +123,7 @@ describe("a line with no length limit", () => {
     // reached for two lines that are not an edit of each other.
     const a = Array.from({ length: 300 }, (_, i) => `a${i}`).join(" ");
     const b = Array.from({ length: 300 }, (_, i) => `b${i}`).join(" ");
-    expect(inlineSpans(a, b)).toBeNull();
+    expect(tokenDiff(a, b)).toBeNull();
   });
 });
 
@@ -141,13 +141,24 @@ describe("which lines are a pair", () => {
     expect([...pairs]).toEqual([[1, 3], [2, 4]]);
   });
 
-  test("uneven runs are a deletion and an insertion, not edits", () => {
-    // Three lines deleted and one added is not three rewrites, and pairing
-    // them would draw a relationship that is not there.
-    expect(pairsIn([
+  test("uneven runs pair as far as the shorter one goes", () => {
+    /*
+     * Three deleted and one added usually IS one line rewritten and two
+     * removed. Refusing the whole block would throw away the marks on the pair
+     * that is right; the similarity floor in `tokenDiff` is what stops the
+     * guess being painted when it is wrong, and it is measured rather than
+     * assumed — see the pair below, which pairs and then marks nothing.
+     */
+    expect([...pairsIn([
       line("del", "a"), line("del", "b"), line("del", "c"),
       line("add", "z"),
-    ]).size).toBe(0);
+    ])]).toEqual([[0, 3]]);
+  });
+
+  test("and a pairing that was a bad guess is marked by nobody", () => {
+    // The two halves working together: positional pairing is a guess, and the
+    // floor is what keeps a wrong guess off the screen.
+    expect(tokenDiff("import { readFileSync } from 'node:fs';", "})")).toBeNull();
   });
 
   test("additions with no deletion above them pair with nothing", () => {

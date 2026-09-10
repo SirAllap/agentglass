@@ -9,7 +9,8 @@
 // what is tested here.
 import { test, expect } from "bun:test";
 import type { DiffHunk } from "../../shared/types.ts";
-import { unifiedRows, splitRows, tokenDiff, attachTokenDiff, type URow } from "../src/components/diff/DiffLines.tsx";
+import { unifiedRows, splitRows, attachTokenDiff, type URow } from "../src/components/diff/DiffLines.tsx";
+import { tokenDiff } from "../../shared/tokenDiff.ts";
 
 const hunk = (over: Partial<DiffHunk> & Pick<DiffHunk, "lines">): DiffHunk =>
   ({ oldStart: 1, oldLines: 0, newStart: 1, newLines: 0, ...over });
@@ -101,8 +102,8 @@ test("the token diff runs on the stripped text, not on the CR", () => {
   // it a silent partner in the similarity score and in every segment length.
   expect(del.segs!.map((s) => s.text).join("")).toBe("const b = 2;");
   expect(add.segs!.map((s) => s.text).join("")).toBe("const b = 3;");
-  expect(del.segs!.filter((s) => s.hi).map((s) => s.text)).toEqual(["2"]);
-  expect(add.segs!.filter((s) => s.hi).map((s) => s.text)).toEqual(["3"]);
+  expect(del.segs!.filter((s) => s.changed).map((s) => s.text)).toEqual(["2"]);
+  expect(add.segs!.filter((s) => s.changed).map((s) => s.text)).toEqual(["3"]);
 });
 
 // --- a one-line file ---------------------------------------------------------
@@ -211,8 +212,8 @@ test("a line changed at both ends is reconstructed exactly by its segments", () 
   // order. Anything else paints code the file does not contain.
   expect(td.left.map((s) => s.text).join("")).toBe(a);
   expect(td.right.map((s) => s.text).join("")).toBe(b);
-  expect(td.left.filter((s) => s.hi).map((s) => s.text)).toEqual(["const", "seed"]);
-  expect(td.right.filter((s) => s.hi).map((s) => s.text)).toEqual(["let", "base"]);
+  expect(td.left.filter((s) => s.changed).map((s) => s.text)).toEqual(["const", "seed"]);
+  expect(td.right.filter((s) => s.changed).map((s) => s.text)).toEqual(["let", "base"]);
   // Adjacent runs of the same verdict are merged, so the untouched middle is
   // one span rather than one per token.
   expect(td.left).toHaveLength(4);
@@ -233,8 +234,8 @@ test("attachTokenDiff pairs by offset within a block and never across context", 
     { oldN: 3, newN: null, text: "const c = 4;", kind: "del" },
   ];
   attachTokenDiff(rows);
-  expect(rows[0]!.segs!.filter((s) => s.hi).map((s) => s.text)).toEqual(["1"]);
-  expect(rows[1]!.segs!.filter((s) => s.hi).map((s) => s.text)).toEqual(["2"]);
+  expect(rows[0]!.segs!.filter((s) => s.changed).map((s) => s.text)).toEqual(["1"]);
+  expect(rows[1]!.segs!.filter((s) => s.changed).map((s) => s.text)).toEqual(["2"]);
   expect(rows[2]!.segs).toBeUndefined();
   // A removal with no addition opposite it has nothing to be compared against —
   // it must not borrow the context line above or the block before it.

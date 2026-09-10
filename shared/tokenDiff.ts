@@ -1,25 +1,31 @@
 /*
  * What actually changed INSIDE a line.
  *
- * A hunk that renames one identifier draws two full-width bands, one red and
- * one green, and leaves the reader to play spot-the-difference on eleven-point
- * monospace. On a 393-point screen that is most of the work of reading a diff,
- * and it is work a machine can do: the two lines are right there.
+ * Shared because two clients ask the same question of the same diff and must
+ * not answer it differently. They did: the desk had this, the phone grew its
+ * own a week later, and the two disagreed about when a deleted line and an
+ * added one are a rewrite of each other — which is a difference a reader would
+ * see as one screen marking a word and the other marking nothing.
+ *
+ * ── the value, and the risk ──────────────────────────────────────────────
+ * A hunk that renames one identifier draws two full-width bands and leaves the
+ * reader to play spot-the-difference. That is work a machine can do; both
+ * lines are right there. But a mark is READ AS A FACT, and a wrong fact about
+ * a diff sends somebody looking at code that did not change — so most of what
+ * is below is about refusing to mark.
  *
  * ── which lines are a pair ───────────────────────────────────────────────
  * A run of deletions immediately followed by a run of additions is an edit,
- * and the nth of each is the same line before and after. That is the rule
- * every diff viewer uses and it is right far more often than it is wrong —
- * but only when the runs are the same length. Three lines deleted and one
- * added is not three edits, it is a deletion and an insertion, and pairing
- * them would draw a relationship that is not there.
+ * and the nth of each is the same line before and after. Pairing is positional
+ * and therefore a guess, which is exactly why the similarity floor below is
+ * not optional: unrelated lines land opposite each other all the time.
  *
  * ── and when a pair is too different to be one ───────────────────────────
  * Two lines that share almost nothing are not an edit of each other; they are
  * a line that went and a line that came. Highlighting them token by token
- * would mark nearly everything, which is the same as marking nothing while
- * costing the reader a second to work that out. So a pair below a similarity
- * floor gets no intra-line marks at all and stays two plain bands.
+ * marks nearly everything, which is the same as marking nothing while costing
+ * the reader a second to work that out. Below the floor: no marks, two plain
+ * bands.
  *
  * ── the cost, which is the reason for the shape below ────────────────────
  * A diff is text a stranger wrote and a line has no length limit — a minified
@@ -29,10 +35,10 @@
  * are short enough for it to be free; past that the whole middle is marked,
  * which is coarser and never slower than the reader's patience.
  */
-import type { DiffLine } from "./diffLines.ts";
 
 /** A run of text, and whether it is part of what changed. */
-export interface Span { text: string; changed: boolean }
+export interface Seg { text: string; changed: boolean }
+
 
 /**
  * Words, punctuation and runs of space, kept separately.
@@ -50,10 +56,10 @@ export function tokens(line: string): string[] {
  *  comparisons is nothing; the guard is against the line that is a whole file. */
 const LCS_LIMIT = 64;
 
-/** Below this share of tokens in common, two lines are not an edit of each
- *  other. Half is deliberately generous: a line whose right-hand side was
+/** Below this share of their characters in common, two lines are not an edit
+ *  of each other. Deliberately generous: a line whose right-hand side was
  *  rewritten still shares its declaration, and that is worth marking. */
-const SIMILAR = 0.3;
+const SIMILAR = 0.4;
 
 /**
  * The spans to draw for one pair of lines, or null when there is no pair worth
@@ -63,7 +69,7 @@ const SIMILAR = 0.3;
  * not an edit of each other", and the honest drawing then is the two plain
  * bands this app already had.
  */
-export function inlineSpans(before: string, after: string): { before: Span[]; after: Span[] } | null {
+export function tokenDiff(before: string, after: string): { left: Seg[]; right: Seg[] } | null {
   if (before === after) return null;
   const a = tokens(before);
   const b = tokens(after);
@@ -82,16 +88,36 @@ export function inlineSpans(before: string, after: string): { before: Span[]; af
 
   const midA = a.slice(head, a.length - tail);
   const midB = b.slice(head, b.length - tail);
-  const shared = head + tail;
-  if (shared / Math.max(a.length, b.length) < SIMILAR) return null;
 
-  const marks = midA.length <= LCS_LIMIT && midB.length <= LCS_LIMIT
+  /*
+   * The middle, and then the floor — in that order, which is not an
+   * optimisation but the difference between right and wrong.
+   *
+   * Measuring similarity from the trimmed head and tail ALONE says a line
+   * changed at both of its ends has nothing in common with itself:
+   * `const total = sum(items, seed);` against
+   * `let total = sum(items, base);` shares its whole middle and agrees on two
+   * tokens at the end, and a head-and-tail count calls that 14% and refuses to
+   * mark it. So what counts is everything the two lines actually keep,
+   * including what the table matched in the middle.
+   *
+   * In characters rather than tokens, because it is a claim about what a
+   * reader sees: one long identifier kept is worth more than three brackets.
+   */
+  const fits = midA.length <= LCS_LIMIT && midB.length <= LCS_LIMIT;
+  const marks = fits
     ? viaLcs(midA, midB)
     : { a: midA.map(() => true), b: midB.map(() => true) };
 
+  let kept = 0;
+  for (let i = 0; i < head; i++) kept += a[i]!.length;
+  for (let i = 0; i < tail; i++) kept += a[a.length - 1 - i]!.length;
+  if (fits) for (let i = 0; i < midA.length; i++) if (!marks.a[i]) kept += midA[i]!.length;
+  if ((2 * kept) / (before.length + after.length) < SIMILAR) return null;
+
   return {
-    before: assemble(a, head, tail, marks.a),
-    after: assemble(b, head, tail, marks.b),
+    left: assemble(a, head, tail, marks.a),
+    right: assemble(b, head, tail, marks.b),
   };
 }
 
@@ -129,13 +155,13 @@ function viaLcs(a: string[], b: string[]): { a: boolean[]; b: boolean[] } {
 /** The whole line as spans: the agreed head, the marked middle, the agreed
  *  tail — with neighbours of the same kind joined, because one `<Text>` per
  *  token is a paragraph the layout engine has to measure word by word. */
-function assemble(all: string[], head: number, tail: number, marks: boolean[]): Span[] {
+function assemble(all: string[], head: number, tail: number, marks: boolean[]): Seg[] {
   const flags = [
     ...Array.from<boolean>({ length: head }).fill(false),
     ...marks,
     ...Array.from<boolean>({ length: tail }).fill(false),
   ];
-  const out: Span[] = [];
+  const out: Seg[] = [];
   for (let i = 0; i < all.length; i++) {
     const changed = flags[i] ?? false;
     const last = out[out.length - 1];
@@ -146,26 +172,29 @@ function assemble(all: string[], head: number, tail: number, marks: boolean[]): 
 }
 
 /**
- * The pairs in a hunk: which deleted line each added line is a rewrite of.
+ * The pairs in a run of rows: which deleted line each added line rewrites.
  *
- * Keyed by index into the hunk's own lines, because that is what the renderer
- * has in hand while it draws. A run only pairs when the two sides are the same
- * length — see the note at the top about three deleted and one added.
+ * Keyed by index into the rows themselves, because that is what both callers
+ * have in hand while they draw. A block of deletions pairs with the block of
+ * additions immediately after it, nth with nth, and never across a line of
+ * context — a context line is git saying the change block ended.
+ *
+ * Uneven blocks pair as far as the shorter one goes rather than not at all.
+ * Three deleted and one added usually IS one line rewritten and two removed,
+ * and the similarity floor in `tokenDiff` is what stops the guess being
+ * painted when it is wrong. Refusing the whole block instead would throw away
+ * the marks on the pair that is right.
  */
-export function pairsIn(lines: DiffLine[]): Map<number, number> {
+export function pairsIn(rows: { kind: string }[]): Map<number, number> {
   const pairs = new Map<number, number>();
   let i = 0;
-  while (i < lines.length) {
-    if (lines[i]!.kind !== "del") { i++; continue; }
+  while (i < rows.length) {
+    if (rows[i]!.kind !== "del") { i++; continue; }
     let dels = i;
-    while (dels < lines.length && lines[dels]!.kind === "del") dels++;
+    while (dels < rows.length && rows[dels]!.kind === "del") dels++;
     let adds = dels;
-    while (adds < lines.length && lines[adds]!.kind === "add") adds++;
-    const removed = dels - i;
-    const added = adds - dels;
-    if (removed > 0 && removed === added) {
-      for (let k = 0; k < removed; k++) pairs.set(i + k, dels + k);
-    }
+    while (adds < rows.length && rows[adds]!.kind === "add") adds++;
+    for (let k = 0; k < Math.min(dels - i, adds - dels); k++) pairs.set(i + k, dels + k);
     i = adds > dels ? adds : dels;
   }
   return pairs;
