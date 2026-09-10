@@ -681,6 +681,96 @@ function viewerTz(): string | null {
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
 const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
+/** What `/seat` answers: the chair for one project, and what is in it. */
+export interface SeatAnswer {
+  ok: boolean;
+  error?: string;
+  root: string;
+  live: boolean;
+  /** The row: settings and the last line, whether or not anybody is seated. */
+  seat: {
+    root: string; name: string; model: string; powers: "speak" | "nudge" | "assign";
+    startedAt: number; endedAt: number | null; lastLine: string; lastTurnAt: number;
+    /** Set when the seat is a session that was already running and adopted the
+     *  chair. It holds the machine's credential, so its powers are what it says
+     *  it does rather than what the server will refuse. */
+    adoptedSession: string; adoptedPane: string;
+  } | null;
+  /** The agent in the chair right now, when there is one. */
+  agent: { name: string; cwd: string; paneId: string; startedAt: number } | null;
+  /** Where the project's rules live, and what they say. */
+  doctrine: string;
+  doctrineText: string;
+  /** The project's queue: what it has been asked to see done, and who has it. */
+  tasks: SeatTask[];
+  /** The other direction: what the SEAT has asked the person for. */
+  needs: SeatNeed[];
+  /** What this build offers, and what it would seat with if nobody chose.
+   *  From the server so the picker and the seating cannot disagree. */
+  models: { id: string; label: string }[];
+  defaultModel: string;
+  /** The agents in THIS project, each with the last hour of what it did. */
+  field: SeatFieldRow[];
+  /** What it said, newest first, and when it was last woken. */
+  lines: { line: string; at: number }[];
+  wokenAt: number | null;
+  floorHours: number;
+  /** The seat's own pane, as text, when somebody is in it. */
+  screen: string;
+  /** The tray: what the agents sent, newest first, and how many the seat has
+   *  not drained yet. Read-only here — see the note in seatStatus. */
+  reports: SeatReportRow[];
+  unread: number;
+}
+
+/** One report an agent sent, in the four fields the brief asks for. `raw` is
+ *  what it actually wrote, kept because a parse is a reading and the words are
+ *  the record. */
+export interface SeatReportRow {
+  id: number; agent: string; session: string;
+  state: string; blocked: string; need: string; cost: string;
+  raw: string; at: number; readAt: number | null;
+}
+
+/** One agent on the seat's field. `pulse` is twelve five-minute counts of tool
+ *  calls, oldest first: what "quiet for an hour" looks like when it is drawn
+ *  instead of said. */
+export interface SeatFieldRow {
+  name: string;
+  session?: string;
+  paneId?: string;
+  state: "working" | "waiting" | "idle";
+  needsYou?: { kind: string; why: string; since: number };
+  doing?: string;
+  saidAt?: number;
+  pulse: number[];
+  /** No pane this machine can see and quiet for hours: a name, not somebody to
+   *  talk to. Folded away rather than drawn beside the ones you can reach. */
+  gone?: boolean;
+}
+
+/** One line of the seat's queue. `takenBy` is a named agent, never a pane —
+ *  tmux recycles pane ids and a row that outlived one would point at somebody
+ *  else's work. */
+/**
+ * What the seat has asked the person for.
+ *
+ * A report is a worker saying what it needs; this is the seat saying what it
+ * needs from the one person who can give it — and it carries what the ask
+ * costs, what the seat would do, and what would show it settled, because a
+ * decision handed over as a bare sentence is one the person has to research
+ * before they can make it.
+ */
+export interface SeatNeed {
+  id: string; root: string; text: string; cost: string; recommend: string; proof: string;
+  created: number; doneAt: number | null; outcome: string;
+}
+
+export interface SeatTask {
+  id: string; root: string; title: string; detail: string; proof: string; weight: number; created: number;
+  takenAt: number | null; takenBy: string; doneAt: number | null; outcome: string; attempts: number;
+}
+
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
   /** Where the machine's agents are sitting, in tmux terms. Asked on demand —
@@ -1173,6 +1263,32 @@ const realApi = {
   /** Who is working on what: what each agent said, joined with the panes,
    *  worktrees and deputy runs this app already reads. */
   agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
+  /** The orchestrator's seat for a project: who is in it, what it last said,
+   *  and the doctrine it was seated with. */
+  seat: (root = "") => get<SeatAnswer>(`/seat${root ? `?root=${encodeURIComponent(root)}` : ""}`),
+  seatOpen: (root: string, powers?: string, model?: string) =>
+    post<{ ok: boolean; already?: boolean; error?: string }>("/seat/open", { root, powers, model }),
+  seatClose: (root: string) => post<{ ok: boolean; was?: boolean }>("/seat/close", { root }),
+  seatSettingsSave: (root: string, f: { powers?: string; model?: string }) =>
+    post<{ ok: boolean; error?: string }>("/seat/settings", { root, ...f }),
+  seatDoctrineSave: (root: string, text: string) =>
+    post<{ ok: boolean; path?: string; error?: string }>("/seat/doctrine", { root, text }),
+  /** The floor under the seat's waking, in hours — read and written with the
+   *  Lantern's settings because it rides the same look. */
+  seatTaskAdd: (root: string, title: string, proof = "", detail = "", weight = 0) =>
+    post<{ ok: boolean; error?: string }>("/seat/task", { root, title, proof, detail, weight }),
+  seatTaskDrop: (root: string, id: string) => post<{ ok: boolean; error?: string }>("/seat/task/drop", { root, id }),
+  /** A decision the seat asked for has been taken, or no longer matters. */
+  seatNeedSettled: (root: string, id: string, outcome = "") =>
+    post<{ ok: boolean; error?: string }>("/seat/need/finish", { root, id, outcome }),
+  /** One message, every live agent — or the named ones. Every outcome comes
+   *  back: a partial send read as a success leaves somebody waiting for an
+   *  instruction that never arrived. */
+  agentsBroadcast: (text: string, names: string[] = []) =>
+    post<{ ok: boolean; error?: string; result?: { sent: { name: string; outcome: string }[]; missing: string[]; asked: number } }>(
+      "/agents/named/broadcast", { text, names }),
+  seatWake: () => get<{ ok: boolean; hours: number }>("/seat/wake"),
+  seatWakeSave: (hours: number) => post<{ ok: boolean; error?: string }>("/seat/wake", { hours }),
   /** Whether hooked sessions get asked what they are working on, and how
    *  often — the Lantern's one setting. */
   lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
@@ -1184,7 +1300,6 @@ const realApi = {
     post<{ ok: boolean; ticket?: string; cwd?: string; needs?: number; error?: string }>("/lantern/ticket", { cwd }),
   /** What each tmux window is being used for, by window id — the label under
    *  the strip's stable `AI0N` names. */
-  tabHints: () => get<{ ok: boolean; hints?: Record<string, string> }>("/terminal/tab-hints"),
   clickupViews: () => get<ClickUpBoards>("/clickup/views"),
   /** Which card a mirrored ClickUp desktop notification is about, by its title.
    *  Answered from the watcher's own file, so it costs no ClickUp call. */
@@ -1384,6 +1499,11 @@ const realApi = {
   /** A tag, by name — ClickUp has no id for them. */
   clickupTag: (id: string, tag: string, on: boolean) =>
     post<ClickUpWrite>("/clickup/tag", { id, tag, on }),
+  /** Every tag the card's space has, not only the ones its board happens to
+   *  use. Asked when the picker opens, and answered from the server's cache
+   *  after the first card — a space is shared by every list under it. */
+  clickupTags: (id: string) =>
+    get<{ ok: boolean; tags?: string[]; error?: string }>(`/clickup/tags?id=${encodeURIComponent(id)}`),
   /** The sprints this card could move to, and the one it is in. Asked when the
    *  picker opens: it costs two calls and a board is read far more often than a
    *  card changes sprint. */
@@ -1660,6 +1780,9 @@ const realApi = {
   // ~/.claude/settings.json server-side (idempotent, backed up first).
   hooksStatus: () => get<HookSetupStatus>("/hooks/status"),
   hooksInstall: () => post<HookSetupResult>("/hooks/install", {}),
+  /** The gate hook — held tool calls — on or off. A switch of its own: the
+   *  forwarder above may never stop a tool call, and this one exists to. */
+  hooksGate: (on: boolean) => post<HookSetupResult>("/hooks/gate", { on }),
   hooksUninstall: () => post<HookSetupResult>("/hooks/uninstall", {}),
   dockerInspect: (id: string) => get<{ ok: boolean; env: string[]; config: string; error?: string }>(`/docker/inspect?id=${encodeURIComponent(id)}`),
   dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
@@ -2144,9 +2267,10 @@ const demoApi: typeof realApi = {
   budgetsSet: (_budgets: Budget[]) => D({ ok: false, error: "not available in the demo" }),
   updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0, stamp: "demo", tree: "", dirty: false, dirtyCount: 0, dirtyFiles: [] }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
   updateRun: () => D({ ok: false, error: "not available in the demo" }),
-  hooksStatus: () => D({ installed: false, bundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),
+  hooksStatus: () => D({ installed: false, bundled: false, gate: false, gateBundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),
   hooksInstall: () => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
   hooksUninstall: () => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
+  hooksGate: (_on: boolean) => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
   updateLog: () => D({ ok: true, text: "" }),
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
@@ -2280,10 +2404,20 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
+  seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], needs: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
+  seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
+  seatClose: (_r: string) => D({ ok: false }),
+  seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
+  seatDoctrineSave: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  seatTaskAdd: (_r: string, _t: string, _p?: string) => D({ ok: false, error: "not available in the demo" }),
+  seatTaskDrop: (_r: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
+  seatNeedSettled: (_r: string, _i: string, _o?: string) => D({ ok: false, error: "not available in the demo" }),
+  agentsBroadcast: (_t: string, _n?: string[]) => D({ ok: false, error: "not available in the demo" }),
+  seatWake: () => D({ ok: true, hours: 4 }),
+  seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),
-  tabHints: () => D({ ok: true, hints: {} }),
   clickupViews: () => D({ views: [], connected: false, writeEnabled: false }),
   clickupCardForNote: () => D({ card: null }),
   clickupFileNote: () => D({ ok: false }),
@@ -2339,6 +2473,9 @@ const demoApi: typeof realApi = {
   clickupFieldClear: (_i: string, _f: string) => D({ ok: false, error: "not available in the demo" }),
   clickupEdit: (_i: string, _p: Record<string, unknown>, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupTag: (_i: string, _t: string, _o: boolean) => D({ ok: false, error: "not available in the demo" }),
+  /* An empty list rather than an error: the picker still offers what the demo
+     board itself uses, which is the whole of what a demo has. */
+  clickupTags: (_i: string) => D({ ok: true, tags: [] as string[] }),
   prsInbox: () => D({ ok: true, items: [] as InboxItem[], at: 0 }),
   prsInboxAct: (_b: { act: string }) => D({ ok: false, error: "not available in the demo" }),
   clickupSprints: (_i: string) => D({ ok: false, error: "not available in the demo" }),

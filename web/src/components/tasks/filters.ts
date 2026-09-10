@@ -123,12 +123,22 @@ export function fieldsOf(tasks: ProviderTask[]): FieldSpec[] {
   return out;
 }
 
-/** Does one card survive one rule? A rule with no values chosen yet is still
+/**
+ * How to read one field off one row.
+ *
+ * The rules below — is, is not, is set, is not set, and joining them — are the
+ * same question whatever the row is. Only "what does `status` mean on this
+ * thing" differs, so that is the one part handed in, and a pull request can use
+ * the engine a task already uses instead of a second copy of it that drifts.
+ */
+export type ReadField<T> = (row: T, field: string) => string[];
+
+/** Does one row survive one rule? A rule with no values chosen yet is still
  *  being written and filters nothing — the alternative is a board that empties
  *  the moment you add a row. */
-function passes(t: ProviderTask, r: Rule): boolean {
+function passes<T>(t: T, r: Rule, read: ReadField<T>): boolean {
   if (!r.field) return true;
-  const mine = valuesOf(t, r.field);
+  const mine = read(t, r.field);
   /* "set" and "unset" ask whether the field has ANY value, so they are
      answered before values are consulted — and they are complete without
      any, which is why `live` below cannot simply require values. */
@@ -143,12 +153,17 @@ function passes(t: ProviderTask, r: Rule): boolean {
  *  are still being written until they have some. */
 const isLive = (r: Rule): boolean => !!r.field && (!takesValues(r.op) || r.values.length > 0);
 
-export function apply(tasks: ProviderTask[], f: FilterSet): ProviderTask[] {
+export function applyWith<T>(rows: T[], f: FilterSet, read: ReadField<T>): T[] {
   const live = f.rules.filter(isLive);
-  if (!live.length) return tasks;
-  return tasks.filter((t) => (f.join === "or"
-    ? live.some((r) => passes(t, r))
-    : live.every((r) => passes(t, r))));
+  if (!live.length) return rows;
+  return rows.filter((t) => (f.join === "or"
+    ? live.some((r) => passes(t, r, read))
+    : live.every((r) => passes(t, r, read))));
+}
+
+/** The tasks board's own reading, kept at the name and shape it already calls. */
+export function apply(tasks: ProviderTask[], f: FilterSet): ProviderTask[] {
+  return applyWith(tasks, f, valuesOf);
 }
 
 /** How many rules are actually doing something — for the count on the button.

@@ -75,6 +75,7 @@ export type BrowserOp =
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
   | "trace" | "intercept"
+  | "inspect"
   | "whoami"
   | "health";
 /** Every verb, exported so a test can hold the CLI and the MCP to it — see
@@ -88,6 +89,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "dblclick", "rightclick", "hover", "focus", "blur", "check", "fill",
   "addInitScript", "expose", "exposed",
   "cdp", "listeners", "coverage", "profiles", "emulate", "events", "record", "audit", "debug",
+  "inspect",
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
   "whoami",
@@ -233,6 +235,11 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   health: 5_000,
   /* Collecting and saving DevTools trace data — generous like record. */
   trace: 120_000,
+  /* The inspector: opening one builds a whole DevTools front-end, and a shot
+     of it may have to show the view off-window and wait a frame for it to be
+     composited. Neither waits on the page, which is why this is nowhere near
+     `record`'s budget. */
+  inspect: 20_000,
 };
 
 /** Requests handed to the window and not yet answered. */
@@ -2114,6 +2121,55 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       args.action = action;
       break;
     }
+    case "inspect": {
+      /*
+       * THE INSPECTOR, which until now only a person could reach.
+       *
+       * `console` and `network` already answer as data, through CDP. Elements,
+       * Sources, Performance, Memory and Application answer as nothing: there
+       * is no protocol for "what does the Styles pane say", because that pane
+       * is the DevTools front-end's own reading of the page. The pixels are the
+       * only honest answer for those, which is why `shot` is here.
+       *
+       * A closed set of actions rather than a passthrough. `panel` runs script
+       * in the front-end, and the only thing standing between that and running
+       * anything is that the name is checked here and again in the shell.
+       */
+      const action = b.action === undefined ? "open" : b.action;
+      const known = ["open", "close", "panel", "zoom", "shot"];
+      if (typeof action !== "string" || !known.includes(action)) {
+        return { error: `inspect takes action: ${known.join(", ")}` };
+      }
+      args.action = action;
+      if (action === "panel") {
+        /* The panel ids DevTools itself uses. Spelled out rather than passed
+           through: this ends up inside `executeJavaScript` on the front-end. */
+        if (typeof b.panel !== "string" || !/^[a-z0-9_-]{1,40}$/.test(b.panel)) {
+          return { error: "panel needs a DevTools panel id — elements, console, sources, network, timeline, heap-profiler, resources, security, lighthouse" };
+        }
+        args.panel = b.panel;
+      }
+      if (action === "zoom") {
+        /*
+         * The LEVEL, the same unit Chromium uses and the same one the panel's
+         * own +/− step through — not a percentage. 0 is 100%, each step is
+         * about 20%, and the sign is what a reader gets wrong: NEGATIVE is
+         * smaller. A capture that has to be readable usually wants a positive
+         * level, which is why the CLI says so where somebody will read it.
+         */
+        if (typeof b.level !== "number" || !Number.isFinite(b.level)) {
+          return { error: "zoom needs level: a number, 0 is 100% and each step is about 20% (negative is smaller)" };
+        }
+        args.level = b.level;
+      }
+      if (action === "shot" && b.path !== undefined) {
+        if (typeof b.path !== "string" || !b.path.startsWith("/")) {
+          return { error: "path must be an absolute path to write the png to" };
+        }
+        args.path = b.path;
+      }
+      break;
+    }
     case "trace": {
       const action = b.action === undefined ? "start" : b.action;
       if (action !== "start" && action !== "stop") {
@@ -2555,6 +2611,12 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       break;
     }
     case "shot": {
+      /* The inspector beside the page. A flag and nothing else — where the
+         picture comes from and how it is joined is the renderer's problem. */
+      if (b.withInspector !== undefined) {
+        if (typeof b.withInspector !== "boolean") return { error: "withInspector is a flag" };
+        args.withInspector = b.withInspector;
+      }
       /* Three ways to say what the picture should CONTAIN — the house rule on
          evidence is that a capture which does not show the number it claims to
          show is worthless, so cropping is not an afterthought done to the file

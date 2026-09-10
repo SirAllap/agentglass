@@ -13,6 +13,29 @@ import { ICON } from "../../lib/iconSize.ts";
 import { EMPTY, OPS, fieldsOf, liveCount, takesValues, type FieldSpec, type FilterSet, type Op, type Rule } from "./filters.ts";
 import type { ProviderTask } from "../../../../shared/providers.ts";
 
+import { StatusPill } from "../StatusPill.tsx";
+
+/** The panel's narrowest, shared by the box and by the clamp that keeps it on
+ *  screen — two places that must not drift apart. */
+const PANEL_MIN = 520;
+
+/**
+ * Where the panel goes, given the button and the window.
+ *
+ * Its own function because it is the whole of the bug and none of the
+ * rendering: a rect in, a position out, testable without a browser.
+ */
+export function panelAt(r: { bottom: number; left: number }, innerWidth: number): { top: number; left: number } {
+  /* The width the panel will actually be drawn at — `minWidth: PANEL_MIN` with
+     `maxWidth: min(94vw, 720px)` — so the clamp is about that box rather than a
+     number near it. */
+  const w = Math.min(720, Math.max(PANEL_MIN, innerWidth * 0.94));
+  return {
+    top: Math.round(r.bottom + 6),
+    left: Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8))),
+  };
+}
+
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 let seq = 0;
 const newRule = (): Rule => ({ id: `r${++seq}`, field: "", op: "is", values: [] });
@@ -117,8 +140,15 @@ function Menu({ items, onPick, selected, current }: {
                   color: "var(--bg)", fontSize: 9, lineHeight: "13px",
                 }}>{on ? "✓" : ""}</span>
               )}
-              {i.color && <span className="shrink-0 rounded-full" style={{ width: 8, height: 8, background: i.color }} />}
-              <span className="truncate">{i.label}</span>
+              {/* AS THE CHIP IT STANDS FOR, not a dot beside a word.
+                  A tracker status is a coloured pill everywhere else in this
+                  app — on the card, in the picker that changes it — and a list
+                  of grey words with a dot is one you read where you could have
+                  recognised it at a glance. Reported against the pull request
+                  board, and it improves the tasks board it came from too. */}
+              {i.color
+                ? <StatusPill status={i.label} color={i.color} dim={!on} />
+                : <span className="truncate">{i.label}</span>}
               {!selected && on && (
                 <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}
                   strokeLinecap="round" strokeLinejoin="round" aria-hidden
@@ -215,12 +245,20 @@ function RuleRow({ fields, rule, onChange, onDrop }: {
   );
 }
 
-export function FilterBuilder({ tasks, value, onChange }: {
-  tasks: ProviderTask[]; value: FilterSet; onChange: (f: FilterSet) => void;
+/**
+ * The rows it filters are handed in ALREADY DESCRIBED, rather than being tasks.
+ *
+ * It used to take `ProviderTask[]` and work the fields out itself, which tied
+ * a piece of interface — a row that reads `Where … is not …` — to one kind of
+ * row. The pull request board wants exactly this interface over pull requests,
+ * and the honest way to give it one is to hand it the fields rather than to
+ * write a second one that drifts from this by a pixel a month.
+ */
+export function FilterBuilder({ fields, value, onChange }: {
+  fields: FieldSpec[]; value: FilterSet; onChange: (f: FilterSet) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useAway<HTMLSpanElement>(open, () => setOpen(false), "[data-agx-filters]");
-  const fields = useMemo(() => fieldsOf(tasks), [tasks]);
   const n = liveCount(value);
 
   const set = (rules: Rule[]) => onChange({ ...value, rules });
@@ -233,15 +271,18 @@ export function FilterBuilder({ tasks, value, onChange }: {
    * screen, not guessed. Anchored off the button's own rect instead, the way
    * the notification panel and the plan panel already are.
    *
-   * Right-aligned to the button and clamped to the window: 520px hanging off a
-   * button near the right edge would otherwise run past it.
+   * Left-aligned to the button and clamped to the window at both ends. It used
+   * to hang off the button's RIGHT edge, which was fine while the button sat at
+   * the end of a row of pills and wrong the moment it did not: from a button
+   * near the left edge, a 520px panel anchored by its right side lands almost
+   * entirely off screen.
    */
   const btn = useRef<HTMLButtonElement | null>(null);
-  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const toggle = () => {
     if (open) { setOpen(false); return; }
     const r = btn.current?.getBoundingClientRect();
-    if (r) setAt({ top: Math.round(r.bottom + 6), right: Math.max(8, Math.round(window.innerWidth - r.right)) });
+    if (r) setAt(panelAt(r, window.innerWidth));
     setOpen(true);
   };
 
@@ -268,7 +309,7 @@ export function FilterBuilder({ tasks, value, onChange }: {
             ROWS scroll instead, so the menus are free to overhang. */}
         <span data-agx-filters="" className="fixed rounded-xl p-3 flex flex-col gap-2"
           style={{
-            top: at.top, right: at.right, minWidth: 520, maxWidth: "min(94vw, 720px)",
+            top: at.top, left: at.left, minWidth: PANEL_MIN, maxWidth: "min(94vw, 720px)",
             background: "var(--bg2)", border: "1px solid var(--border)",
             boxShadow: "0 22px 48px -20px var(--shadow)",
           }}>

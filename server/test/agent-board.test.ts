@@ -635,3 +635,279 @@ describe("the lantern reminder", () => {
     expect(Board.board().find((r) => r.name === "orbit-1042")?.session).toBe("s-3");
   });
 });
+
+/*
+ * ONE CARD PER AGENT.
+ *
+ * Measured on a real board the day this was written: 29 cards for 13 sessions.
+ * Not a rendering accident — four separate joins in `merged` each produced a
+ * duplicate of its own, and one of them handed four cards a Go button that
+ * opened somebody else's pane. These are the four, each pinned by the shape
+ * that produced it on that machine.
+ */
+describe("one card per agent", () => {
+  const AT = 1_700_000_000_000;
+  const hook = (paneId: string, sessionId: string, cwd: string, at = AT) => ({ paneId, sessionId, cwd, at });
+  const pane = (paneId: string, cwd: string) => ({ paneId, name: "claude", cwd });
+
+  test("a session that renamed itself is one card, not one per name", () => {
+    /* one session posted under five names in three hours. `agent_status` is
+       keyed by name, so it kept five rows — and each drew the same session's
+       calls, turns and cost, five times over. */
+    for (const [i, name] of ["reddit-post-draft", "readme-diet", "readme-front-door", "reddit-post"].entries()) {
+      Board.saidBy({ name, doing: name, worktree: "/code/app", session: "s-one", at: AT - (4 - i) * 60_000 });
+    }
+    const rows = Board.merged({ said: Board.board(), now: AT });
+    expect(rows).toHaveLength(1);
+    /* The newest name, and the older ones kept rather than silently dropped:
+       somebody watched "readme-diet" on this screen an hour ago. */
+    expect(rows[0]!.name).toBe("reddit-post");
+    expect(rows[0]!.wasCalled).toEqual(["readme-front-door", "readme-diet", "reddit-post-draft"]);
+  });
+
+  test("four agents in one checkout do not share one pane", () => {
+    /*
+     * THE ONE THAT MOVED THE PERSON'S SCREEN.
+     *
+     * Four sessions named `~/code/shop-api`; the pane was found with
+     * `h.cwd.startsWith(worktree)`, whose first match was a fifth session's
+     * `%40`. All four Go buttons opened `%40`.
+     */
+    const hooks = [
+      hook("%40", "s-orq", "/code/shop-api"),
+      hook("%37", "s-heartbeat", "/code/shop-api"),
+      hook("%33", "s-vr", "/code/shop-api"),
+      hook("%34", "s-cards", "/code/shop-api"),
+    ];
+    for (const [name, session] of [["healthz", "s-heartbeat"], ["cancellation", "s-vr"], ["cards-to-work", "s-cards"]]) {
+      Board.saidBy({ name: name!, doing: name!, worktree: "/code/shop-api", session, at: AT });
+    }
+    const rows = Board.merged({ said: Board.board(), hooks, panes: hooks.map((h) => pane(h.paneId, h.cwd)), now: AT });
+    const by = (n: string) => rows.find((r) => r.name === n);
+    expect(by("healthz")?.paneId).toBe("%37");
+    expect(by("cancellation")?.paneId).toBe("%33");
+    expect(by("cards-to-work")?.paneId).toBe("%34");
+    /* And no two of them on the same one. */
+    const panes = rows.map((r) => r.paneId).filter(Boolean);
+    expect(new Set(panes).size).toBe(panes.length);
+  });
+
+  test("a checkout with two agents in it lends its pane to neither", () => {
+    /* Better no button than a button to the wrong agent: no pane draws
+       nothing, a wrong pane moves the screen somebody is working in. */
+    const hooks = [hook("%5", "s-a", "/code/shop-api"), hook("%8", "s-b", "/code/shop-api")];
+    Board.saidBy({ name: "nameless", doing: "something", worktree: "/code/shop-api", at: AT });
+    const rows = Board.merged({ said: Board.board(), hooks, panes: hooks.map((h) => pane(h.paneId, h.cwd)), now: AT });
+    expect(rows.find((r) => r.name === "nameless")?.paneId).toBeUndefined();
+  });
+
+  test("a session seen in five panes is one card, under the name it chose", () => {
+    /*
+     * A session gets a `pane_agent` row per pane it has ever run in — a
+     * reboot is enough. Deleting the one pane the named row landed on left
+     * the rest on the board titled with whatever `names` called them, which
+     * is where a card headed "que son estos?? [Image #1]" came from: the same
+     * session as a named card, drawn again under its person's first message.
+     */
+    const hooks = [hook("%3", "s-me", "/code/app", AT), hook("%44", "s-me", "/code/app", AT - 1000)];
+    Board.saidBy({ name: "lantern-dedupe", doing: "the fix", worktree: "/code/app", session: "s-me", at: AT });
+    const rows = Board.merged({
+      said: Board.board(), hooks, panes: hooks.map((h) => pane(h.paneId, h.cwd)),
+      names: new Map([["s-me", "que son estos?? [Image #1]"]]), now: AT,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.name).toBe("lantern-dedupe");
+    /* Its own freshest pane, not the other session's and not the older one. */
+    expect(rows[0]!.paneId).toBe("%3");
+  });
+
+  test("a stale sighting whose pane tmux no longer has is not an agent", () => {
+    /* 304 sightings on this machine, 290 of whose panes were gone. Two
+       survived the 24-hour window and were drawn as idle agents. */
+    const hooks = [hook("%39", "s-live", "/code/app"), hook("%36", "s-dead", "/code/app", AT - 60 * 60_000)];
+    const rows = Board.merged({ said: [], hooks, panes: [pane("%39", "/code/app")], now: AT });
+    expect(rows.map((r) => r.paneId)).toEqual(["%39"]);
+  });
+
+  test("a named row does not get a Go button onto a pane that is gone", () => {
+    /*
+     * Found on the installed board: four cards whose `Go` pointed at panes
+     * tmux no longer had. The liveness test was only applied to the anonymous
+     * `seen` rows, so a row that said its name took any sighting of its own
+     * session — including the one whose pane died with the last restart, which
+     * an install causes on purpose.
+     */
+    const hooks = [hook("%14", "s-mine", "/code/app", AT - 60 * 60_000)];
+    Board.saidBy({ name: "pull-check", doing: "pulling", worktree: "/code/app", session: "s-mine", at: AT });
+    const rows = Board.merged({
+      said: Board.board(), hooks, panes: [pane("%99", "/code/other")], now: AT,
+    });
+    /* The row stays — the agent said something and that is the card. It is the
+       button that goes, because there is nowhere for it to land. */
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.paneId).toBeUndefined();
+  });
+
+  test("but an agent on a SECOND tmux server is not dead, it is elsewhere", () => {
+    /*
+     * Pane ids are per server: `%3` exists on every tmux running, and `panes`
+     * is one server's list. Reading absence from it as death would empty the
+     * board of every agent somebody started on another socket. A sighting
+     * from the last ten minutes stands wherever its pane is.
+     */
+    const hooks = [hook("%39", "s-here", "/code/app"), hook("%7", "s-other-server", "/code/app")];
+    const rows = Board.merged({ said: [], hooks, panes: [pane("%39", "/code/app")], now: AT });
+    expect(rows.map((r) => r.paneId).sort()).toEqual(["%39", "%7"]);
+  });
+
+  test("but a tmux that did not answer deletes nobody", () => {
+    /* An empty pane list is a socket that did not reply. Believing it would
+       blank the board on a failed read, which is worse than a stale row. */
+    const hooks = [hook("%39", "s-a", "/code/app"), hook("%36", "s-b", "/code/app")];
+    expect(Board.merged({ said: [], hooks, panes: [], now: AT })).toHaveLength(2);
+  });
+
+  test("a claim about a checkout gone for a day is not a row", () => {
+    /* `race-condition-fix-measurement` named `~/code/orbit-zoom` for five
+       days and eighteen hours after that worktree stopped existing. */
+    Board.saidBy({ name: "old-gone", doing: "measuring", worktree: "/code/gone", at: AT - 2 * 24 * 60 * 60_000 });
+    Board.saidBy({ name: "just-gone", doing: "measuring", worktree: "/code/gone", at: AT - 60_000 });
+    Board.saidBy({ name: "old-here", doing: "measuring", worktree: "/code/app", at: AT - 2 * 24 * 60 * 60_000 });
+    const rows = Board.merged({ said: Board.board(), gone: new Set(["/code/gone"]), now: AT });
+    const names = rows.map((r) => r.name).sort();
+    /* Gone AND old goes. Gone but recent stays — a worktree swapped mid-task,
+       with the agent still there to say so. Old but present stays: a quiet
+       checkout is exactly the row worth seeing. */
+    expect(names).toEqual(["just-gone", "old-here"]);
+  });
+
+  test("and a checkout nobody looked for is not gone", () => {
+    /*
+     * THE ONE THAT DELETED A LIVE AGENT.
+     *
+     * The first version read absence off `stillThere` — no pane there, not a
+     * git worktree — and `laptop-lid-closed-remote`, whose directory is `~`,
+     * matched both: `~` is never a git worktree, and tmux had not answered.
+     * A row was removed because nothing had confirmed it, which is the
+     * opposite of the test the comment claimed to be making.
+     */
+    Board.saidBy({ name: "old-here", doing: "measuring", worktree: "/home/somebody", at: AT - 9 * 24 * 60 * 60_000 });
+    const seen = { paneId: "%1", sessionId: "s", cwd: "/code/other", at: AT };
+    expect(Board.merged({
+      said: Board.board(), hooks: [seen], panes: [{ paneId: "%1", name: "sh", cwd: "/code/other" }],
+      trees: [{ path: "/code/other", branch: "main" }], now: AT,
+    }).some((r) => r.name === "old-here")).toBe(true);
+  });
+});
+
+describe("a status line ages out", () => {
+  test("a line older than the keep window goes; a recent one stays", () => {
+    const now = 1_700_000_000_000;
+    Board.saidBy({ name: "ancient", doing: "long done", at: now - Board.KEEP_MS - 60_000 });
+    Board.saidBy({ name: "recent", doing: "yesterday", at: now - 24 * 60 * 60_000 });
+    expect(Board.sweepAgents(now)).toBe(1);
+    expect(Board.board().map((r) => r.name)).toEqual(["recent"]);
+  });
+});
+
+/*
+ * A SIBLING WORKTREE IS NOT INSIDE ITS NEIGHBOUR.
+ *
+ * `~/code/app` and `~/code/app-fixes` are two worktrees of one repository, and
+ * the second one's path starts with the first one's. Four joins in this file
+ * asked `cwd.startsWith(worktree)`, so the hook running in `app-fixes` was lent
+ * to the card for `app` — which is one agent drawn as several, and a card
+ * showing a branch it was never on. The naming here is the naming on the
+ * machine where it was measured, because that is the shape that bites: a
+ * checkout named after its parent plus a suffix.
+ */
+describe("one checkout is not another", () => {
+  test("a sibling whose name starts the same is a different checkout", () => {
+    expect(Board.under("/code/app-fixes", "/code/app")).toBe(false);
+    expect(Board.under("/code/app", "/code/app")).toBe(true);
+    expect(Board.under("/code/app/server/src", "/code/app")).toBe(true);
+    /* A trailing slash on the base is the same base. */
+    expect(Board.under("/code/app/x", "/code/app/")).toBe(true);
+    expect(Board.under("", "/code/app")).toBe(false);
+    expect(Board.under("/code/app", "")).toBe(false);
+  });
+
+  test("a nested checkout wins over the one containing it", () => {
+    /* Otherwise the branch on the card is whichever git printed first. */
+    const trees = [{ path: "/code/app", branch: "main" }, { path: "/code/app/vendor/thing", branch: "feat/thing" }];
+    expect(Board.deepest(trees, "/code/app/vendor/thing/src")?.branch).toBe("feat/thing");
+    expect(Board.deepest(trees, "/code/app/server")?.branch).toBe("main");
+    expect(Board.deepest(trees, "/code/other")).toBeUndefined();
+  });
+
+  test("the hook in the sibling does not land on the neighbour's card", () => {
+    const now = Date.now();
+    Board.saidBy({ name: "app", doing: "the release", worktree: "/code/app" });
+    const rows = Board.merged({
+      said: Board.board().filter((r) => r.name === "app"),
+      hooks: [{ paneId: "%9", cwd: "/code/app-fixes", sessionId: "s-fixes", at: now }],
+      panes: [{ paneId: "%9", name: "fixes", cwd: "/code/app-fixes" }],
+      trees: [{ path: "/code/app", branch: "main" }, { path: "/code/app-fixes", branch: "fix/thing" }],
+      now,
+    });
+    const app = rows.find((r) => r.name === "app");
+    /* The claim named `/code/app`; the only pane on the machine is in the
+       sibling. Borrowing it would put a Go button on somebody else's work. */
+    expect(app?.paneId).toBeUndefined();
+    /* And the sighting keeps its own branch rather than the neighbour's. */
+    const seen = rows.find((r) => r.paneId === "%9");
+    expect(seen?.branch).toBe("fix/thing");
+  });
+});
+
+/*
+ * A RED DOT YOU CANNOT ACT ON.
+ *
+ * Measured on the machine this was written on: two rows claiming a person was
+ * needed, one of them for twenty-seven hours, neither with a pane to go to.
+ * The wait was true when it was recorded — the session's last hook event was
+ * Claude Code stopping for the next prompt — and then the agent went away and
+ * the claim stayed, at the top of a screen sorted by who has waited longest.
+ */
+describe("needs you means there is somewhere to go", () => {
+  const now = Date.now();
+  const waiting = (session: string) =>
+    new Map([[session, { kind: "input" as const, why: "waiting for your input", since: now - 60_000 }]]);
+
+  test("a wait on an agent whose pane is gone is not drawn as needing you", () => {
+    Board.saidBy({ name: "long-gone", doing: "a review", worktree: "/code/app", session: "s-gone" });
+    const [row] = Board.merged({
+      said: Board.board().filter((r) => r.name === "long-gone"),
+      panes: [{ paneId: "%3", name: "other", cwd: "/code/elsewhere" }],
+      waiting: waiting("s-gone"),
+      now,
+    }).filter((r) => r.name === "long-gone");
+    expect(row?.needsYou).toBeUndefined();
+    expect(row?.state).not.toBe("waiting");
+  });
+
+  test("but a wait on an agent with a pane still is", () => {
+    Board.saidBy({ name: "here", doing: "a fix", worktree: "/code/app", session: "s-here" });
+    const [row] = Board.merged({
+      said: Board.board().filter((r) => r.name === "here"),
+      hooks: [{ paneId: "%7", cwd: "/code/app", sessionId: "s-here", at: now }],
+      panes: [{ paneId: "%7", name: "here", cwd: "/code/app" }],
+      waiting: waiting("s-here"),
+      now,
+    }).filter((r) => r.name === "here");
+    expect(row?.needsYou?.kind).toBe("input");
+    expect(row?.state).toBe("waiting");
+  });
+
+  test("and with no pane list read at all, the wait is believed", () => {
+    /* Absence of evidence is not evidence: this is the rule that once deleted
+       a live agent, and it applies here the same way. */
+    Board.saidBy({ name: "unseen", doing: "a fix", worktree: "/code/app", session: "s-unseen" });
+    const [row] = Board.merged({
+      said: Board.board().filter((r) => r.name === "unseen"),
+      waiting: waiting("s-unseen"),
+      now,
+    }).filter((r) => r.name === "unseen");
+    expect(row?.needsYou?.kind).toBe("input");
+  });
+});

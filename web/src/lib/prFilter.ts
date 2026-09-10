@@ -19,6 +19,7 @@
 // a multi-select checkbox facet has to be OR, or ticking a second box can only
 // ever shrink the result to zero, which reads as broken.
 import type { PrSummary } from "../../../shared/types.ts";
+import type { FieldSpec, ReadField, Rule } from "../components/tasks/filters.ts";
 
 export type ReviewTok = "approved" | "changes-requested" | "required" | "none";
 export type ChecksTok = "green" | "red" | "pending";
@@ -49,6 +50,9 @@ export interface FilterState {
   checks: ChecksTok[];
   is: IsTok[];
   base: string[];
+  /* The tracker card's own two, empty for anyone not using one. */
+  cardStatus: string[];
+  cardPeople: string[];
   text: string; // free words, matched as today: number / title / author substring
   sort: SortTok;
 }
@@ -57,10 +61,15 @@ export interface FilterState {
 // string; `field` reads the token(s) a PR matches for this facet — returning
 // `null` means "unknown, fail open" (only checks, and only before its second
 // fetch pass has landed). `label` names the facet in the UI.
-type ArrayKey = "authors" | "assignees" | "labels" | "milestones" | "reviews" | "checks" | "is" | "base";
+type ArrayKey = "authors" | "assignees" | "labels" | "milestones" | "reviews" | "checks" | "is" | "base" | "cardStatus" | "cardPeople";
 
 export interface FacetDef {
   key: ArrayKey;
+  /** Drawn only when something on this board has one. Author and Label mean
+   *  something on every repository even while empty; a tracker's fields mean
+   *  nothing at all to somebody with no tracker, and an empty pill they can
+   *  never fill is a control that only takes up room. */
+  whenPresent?: boolean;
   queryKey: string;
   label: string;
   /** Fixed option set (enum facets); free-form facets derive options from the rows. */
@@ -93,13 +102,42 @@ export const FACETS: FacetDef[] = [
   { key: "base", queryKey: "base", label: "Base", field: (p) => (p.baseRefName ? [p.baseRefName] : []) },
   { key: "assignees", queryKey: "assignee", label: "Assignee", field: (p) => p.assignees },
   { key: "milestones", queryKey: "milestone", label: "Milestone", field: (p) => (p.milestone ? [p.milestone] : []) },
+  /*
+   * THE TRACKER CARD BEHIND THE PULL REQUEST — the two things the card on the
+   * board already shows, and nothing else.
+   *
+   * Only these two because only these two are ON SCREEN. A filter for a field
+   * nobody can see on the row it filters is a filter whose result cannot be
+   * checked by looking.
+   *
+   * `[]` and not `null` for a pull request with no card, which is the opposite
+   * of the fail-open the checks facet uses, and deliberate: "show me the ones
+   * in Ready for QA" means the ones in Ready for QA. A pull request with no
+   * card is not one of them, and leaving it in would answer a question nobody
+   * asked. His call, asked before it was built.
+   *
+   * Empty for everybody who does not use a tracker, so the field never appears
+   * for them — see `buildFacets`, which offers no option nothing has.
+   */
+  /* `cardstatus:`, not `status:` — this app already has a state for a pull
+     request (open, closed, draft) reachable as `is:`, and one word meaning two
+     of them in the same box is a filter somebody applies by accident. Paired
+     with `cardassignee:` so the two read as a set. */
+  { key: "cardStatus", queryKey: "cardstatus", label: "Card status", whenPresent: true, field: (p) => (p.card ? [p.card.status] : []) },
+  {
+    key: "cardPeople", queryKey: "cardassignee", label: "Card assignee", whenPresent: true,
+    /* The tracker's own people, by name — NOT the GitHub logins the `assignee`
+       facet above matches. The two disagree often enough that sharing one
+       filter between them would be a wrong answer rather than a convenience. */
+    field: (p) => (p.card?.people ?? []).map((x) => x.name).filter(Boolean),
+  },
 ];
 
 const FACET_BY_QKEY = new Map(FACETS.map((f) => [f.queryKey, f]));
 const KNOWN_KEYS = new Set([...FACET_BY_QKEY.keys(), "sort"]);
 
 function empty(): FilterState {
-  return { authors: [], assignees: [], labels: [], milestones: [], reviews: [], checks: [], is: [], base: [], text: "", sort: DEFAULT_SORT };
+  return { authors: [], assignees: [], labels: [], milestones: [], reviews: [], checks: [], is: [], base: [], cardStatus: [], cardPeople: [], text: "", sort: DEFAULT_SORT };
 }
 
 // Split into tokens, keeping `key:"a b"` whole (a space inside quotes is not a
@@ -297,6 +335,10 @@ export interface FacetOption {
   value: string;
   label: string;
   count: number;
+  /** The colour this value is drawn in wherever else it appears — a status
+   *  chip on a card. An option that does not match the thing it filters is a
+   *  list you have to read instead of recognise. */
+  tint?: string;
   /** The GitHub login this option stands for, when it is a person. */
   avatar?: string;
 }
@@ -306,6 +348,9 @@ export interface FacetView {
   label: string;
   options: FacetOption[];
   selected: string[];
+  /** Only worth drawing when it has options — a tracker's field, to somebody
+   *  with no tracker, is a pill that can never be filled. */
+  whenPresent?: boolean;
 }
 
 const REVIEW_LABEL: Record<string, string> = {
@@ -332,6 +377,9 @@ export interface RepoFacets {
   labels: { name: string; color: string }[];
   milestones: string[];
   bases: string[];
+  /** The tracker's whole workflow, so the filter can offer the statuses that
+   *  are NOT on screen — which is the half a filter is for. */
+  cardStatuses?: { status: string; color?: string; type?: string }[];
 }
 
 export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets | null): FacetView[] {
@@ -366,6 +414,10 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
         : facet.key === "labels" ? repo?.labels.map((l) => l.name)
         : facet.key === "milestones" ? repo?.milestones
         : facet.key === "base" ? repo?.bases
+        /* The whole workflow, not the statuses that happen to be on this page.
+           Seeded like the labels above and for the same reason: a filter that
+           can only offer what is already visible cannot exclude anything. */
+        : facet.key === "cardStatus" ? repo?.cardStatuses?.map((x) => x.status)
         : undefined;
       const seen = order.sort((a, b) => (counts.get(b)! - counts.get(a)!) || a.localeCompare(b));
       values = fromRepo?.length ? [...new Set([...fromRepo, ...seen])] : seen;
@@ -378,6 +430,10 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
       key: facet.key,
       queryKey: facet.queryKey,
       label: facet.label,
+      /* Carried through so the bar can leave out a field this board does not
+         have — see `whenPresent`. Decided here rather than there because it is
+         a fact about the field, and the bar's job is to draw what it is given. */
+      ...(facet.whenPresent ? { whenPresent: true } : null),
       selected: f[facet.key] as string[],
       // No count. It could only ever count the page in hand, and GitHub's own
       // facet menus do not show one either — a number that means "on this page"
@@ -389,7 +445,80 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
         // Authors and assignees are people; a face finds a name in a list of a
         // dozen faster than reading down it does.
         ...(facet.key === "authors" || facet.key === "assignees" ? { avatar: v } : {}),
+        /* The tracker's own colour for the status, so the option reads as the
+           chip it stands for. "Esa lista debe verse así" — the same pills the
+           card shows, not a column of grey words. */
+        ...(facet.key === "cardStatus"
+          ? { tint: repo?.cardStatuses?.find((x) => x.status.toLowerCase() === v.toLowerCase())?.color }
+          : {}),
       })),
     };
   });
 }
+
+/*
+ * THE SAME FILTERS, SAID THE OTHER WAY.
+ *
+ * The pills answer "which of these" and cannot answer "anything but these" —
+ * there is no way to say `is not` in a checkbox list, and no way to ask for the
+ * ones with no milestone at all. The query builder the tasks board already has
+ * says both, so the board borrows it rather than growing a second grammar.
+ *
+ * These two functions are the whole of the translation. `applyFilters` and the
+ * pills keep working exactly as they did; a rule set is turned into the same
+ * query string everything else already reads, so saved views, the search box
+ * and the URL never learn that any of this happened.
+ */
+
+/** The board's fields, described the way the builder wants them. */
+export function builderFields(prs: PrSummary[], f: FilterState, repo?: RepoFacets | null): FieldSpec[] {
+  return buildFacets(prs, f, repo)
+    /* A field with nothing in it is not offered. This is what keeps `Card
+       status` and `Card assignee` out of the way of everybody who does not use
+       a tracker: no card on any row, no options, no field. */
+    .filter((v) => v.options.length > 0)
+    .map((v) => ({
+      key: v.queryKey,
+      label: v.label,
+      options: v.options.map((o) => ({ value: o.value, label: o.label, ...(o.tint ? { color: o.tint } : {}) })),
+    }));
+}
+
+/**
+ * A saved view's query string, as rules the builder can show.
+ *
+ * The tabs along the top — Needs my review, Mine, Failing, Ready — are query
+ * strings written by hand, and they have to keep working: opening one has to
+ * fill the builder with what it says rather than clearing it. Only `is` comes
+ * out, because a query string is all this file has ever been able to say; a
+ * view that wanted `is not` could not have been written in the first place.
+ */
+export function queryToRules(query: string): Rule[] {
+  const f = parseQuery(query);
+  const out: Rule[] = [];
+  for (const facet of FACETS) {
+    const chosen = f[facet.key];
+    if (chosen.length) out.push({ id: `${facet.queryKey}-0`, field: facet.queryKey, op: "is", values: [...chosen] });
+  }
+  return out;
+}
+
+/**
+ * One field of one pull request, for the rule engine.
+ *
+ * The `FACETS` table above already says what every field means; this is that
+ * same table read one row at a time, so the pills and the builder can never
+ * disagree about what `label` is.
+ *
+ * A field the table does not know answers nothing rather than throwing: a saved
+ * view from a future version naming a field this build has never heard of
+ * should narrow nothing, not break the board.
+ */
+export const readPrField: ReadField<PrSummary> = (p, key) => {
+  const facet = FACET_BY_QKEY.get(key);
+  if (!facet) return [];
+  /* `null` is the fail-open the checks facet uses for a row whose checks have
+     not arrived; for the rule engine that means "no values", which `is` reads
+     as no match and `is not` as a match — the same answer the pills give. */
+  return facet.field(p) ?? [];
+};

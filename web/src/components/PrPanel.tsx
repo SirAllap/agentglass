@@ -47,14 +47,14 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
-import { cardOf, askingCard, onCard, forgetCard } from "../lib/prCardStore.ts";
+import { cardOf, askingCard, onCard, forgetCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, toggleChecklistItem, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
-import { afterViewed, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
+import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
@@ -72,11 +72,13 @@ import { loginOf, ownersOf } from "../lib/codeowners.ts";
 import { UnreadBadge } from "./UnreadBadge.tsx";
 import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
+import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
+import { EMPTY as EMPTY_RULES, applyWith, type FilterSet } from "./tasks/filters.ts";
 import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict } from "../../../shared/mergeReason.ts";
-import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
+import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
@@ -2747,7 +2749,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const seenMarks = useMemo(() => readSeen(), [seenTick]);
 
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const basePrs = useMemo(() => applyFilters(pool, filters), [pool, filters]);
+  /*
+   * THE RULES, ON TOP OF THE PILLS.
+   *
+   * Both, and in this order, because they answer different halves of the same
+   * question. The pills say "which of these" and are one click; the rules say
+   * "anything but these" and "the ones with nothing there", which no checkbox
+   * list can say at all.
+   *
+   * Kept as their own state rather than folded into the query string: that
+   * string has never been able to write a negation, and inventing a syntax for
+   * one would mean every saved view, every URL and the search box learning it
+   * too. The tabs along the top still open the way they always did — see
+   * `queryToRules`, which fills the builder from one instead of clearing it.
+   */
+  const [rules, setRules] = useState<FilterSet>(EMPTY_RULES);
+  const basePrs = useMemo(
+    () => applyWith(applyFilters(pool, filters), rules, readPrField),
+    [pool, filters, rules],
+  );
   const unreadPrs = useMemo(
     () => basePrs.filter((p) => unreadOf(p, repo?.key, seenMarks)),
     [basePrs, repo?.key, seenMarks],
@@ -2850,6 +2870,48 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
   const [boardMine, setBoardMine] = useState<PrSummary[]>([]);
   const [boardReview, setBoardReview] = useState<PrSummary[]>([]);
+  /* The board draws these two fetches of its own and never looks at `prs`, so
+     the rule builder narrowed the table behind it and left every lane as it
+     was. The raw arrays stay for the loading and settling checks, which ask
+     whether the FETCH is complete — not a question a filter should answer. */
+  /* And the card is read the way the cards on screen read it. `p.card` is only
+     filled from boards cached within the day, so on a stale cache it is absent
+     everywhere and the chip comes from `prCardStore` — a filter looking at
+     `p.card` alone then matches nothing at all. No extra request: the board
+     asks for exactly these rows already. */
+  const cardTick = useSyncExternalStore(onCard, cardVersion, () => 0);
+  const boardMineCards = useMemo(
+    () => boardMine.map((p) => withCard(p, hasTaskProvider)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boardMine, hasTaskProvider, cardTick],
+  );
+  const boardReviewCards = useMemo(
+    () => boardReview.map((p) => withCard(p, hasTaskProvider)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boardReview, hasTaskProvider, cardTick],
+  );
+  const boardMineShown = useMemo(() => applyWith(boardMineCards, rules, readPrField), [boardMineCards, rules]);
+  const boardReviewShown = useMemo(() => applyWith(boardReviewCards, rules, readPrField), [boardReviewCards, rules]);
+
+  /*
+   * The fields the builder offers, taken from the rows the surface is drawing.
+   *
+   * `prs` is the table's pool, and with the board up it is not what is on
+   * screen — nor does it carry the cards the board looked up one at a time. So
+   * `Card assignee`, which nothing seeds from the server, had no options at all
+   * and the field was hidden: a filter that cannot offer what is in front of
+   * you. Deduplicated by number because a pull request that is both yours and
+   * asked of you is in both lists, and a value counted twice sorts wrong.
+   */
+  const ruleRows = useMemo(() => {
+    if (!boardShown) return prs;
+    const by = new Map<number, PrSummary>();
+    for (const p of [...boardMineCards, ...boardReviewCards]) if (!by.has(p.number)) by.set(p.number, p);
+    return [...by.values()];
+  }, [boardShown, prs, boardMineCards, boardReviewCards]);
+  /* Only the fields that anything on this board actually has — which is what
+     keeps the tracker's two out of the way of everybody who has no tracker. */
+  const ruleFields = useMemo(() => builderFields(ruleRows, filters, facetOpts), [ruleRows, filters, facetOpts]);
   /*
    * Neither list has answered yet.
    *
@@ -3977,8 +4039,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           {/*
             * Refresh means "ask again for what is in front of me".
             *
-            * It forced the main list and nothing else: the board'"'"'s own two
-            * lists were re-read from the server'"'"'s cache, so a pull request that
+            * It forced the main list and nothing else: the board's own two
+            * lists were re-read from the server's cache, so a pull request that
             * arrived after that cache was filled stayed invisible however many
             * times it was pressed. Reported that way — a review requested of
             * him, present in the list the server serves, and absent from the
@@ -3995,6 +4057,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           <Btn onClick={() => {
             forgetBehind();
             forgetRollups();
+            /* And the tracker cards, which were the one reading Refresh could
+               not shift: they are held here, not on the server, so re-asking
+               the server for the same rows brought the same card back. */
+            forgetCards();
             boardForce.current = true;
             setBoardTick((n) => n + 1);
             loadList(true);
@@ -4102,7 +4168,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               onSearch={runSearch}
               pending={query.trim() !== serverQuery.trim()}
               searching={listState.loading}
-              checksPending={listState.checksPending}
               shown={visiblePrs.length}
               unread={{ count: unreadPrs.length, on: unreadOnly, onToggle: () => setUnreadOnly((v) => !v) }}
         /* How much of the scope the filter actually saw. A count that says "12"
@@ -4110,6 +4175,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
            number nobody can act on. */
         swept={filters.text.trim() && sweep?.key === sweepKey ? { rows: sweep.rows.length, done: sweep.done } : undefined}
               total={listState.total ?? prs.length}
+              /* The half the pills cannot say: `is not`, `is set`, and rules
+                 joined together. Handed the same fields the pills offer, so the
+                 two lists can never disagree about what a field is. */
+              builder={<FilterBuilder fields={ruleFields} value={rules} onChange={setRules} />}
             />
           )}
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">
@@ -4120,7 +4189,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                  and search above stays where it was, and picking any of them
                  switches back to the table it belongs to. */
               <TriageBoard
-                mine={boardMine} review={boardReview}
+                mine={boardMineShown} review={boardReviewShown}
                 /*
                  * Every open pull request, not the count for whichever filter
                  * happened to be selected — `listState.total` is the current
@@ -4451,6 +4520,42 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onCancelAutoMerge={() => act("Auto-merge cancelled", () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }))}
                           onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
                           onGoThreads={() => setTab("conversation")}
+                          /*
+                           * The review, in THIS panel.
+                           *
+                           * It used to be `openExternal` — reported, and fairly: a
+                           * button that reads "go to it" beside a verdict this app
+                           * is already showing should not answer by launching the
+                           * system browser onto github.com. The whole review is a
+                           * row in the Conversation tab, twenty pixels away.
+                           *
+                           * Same two gotchas as the quote jump above: force the
+                           * segment to "all" first, or a Conversation filtered to
+                           * Humans scrolls to nothing; and defer TWO frames — one
+                           * for the tab to render and one for its content to lay
+                           * out, because a single frame finds an element whose
+                           * height is still zero.
+                           */
+                          onGoReview={(nodeId, url) => {
+                            if (!nodeId) { openExternal(url); return; }
+                            setConvWho("all");
+                            setTab("conversation");
+                            requestAnimationFrame(() => requestAnimationFrame(() => {
+                              const el = document.querySelector(`[data-node="${CSS.escape(nodeId)}"]`);
+                              /*
+                               * Outside only when there is genuinely nothing here to
+                               * land on — checked against the DOM rather than against
+                               * the review list, because a review can be in `reviews`
+                               * and still have no row: the timeline drops one that
+                               * said nothing, and the bot lanes are foldable. A
+                               * button that silently does nothing is worse than one
+                               * that leaves.
+                               */
+                              if (!(el instanceof HTMLElement)) { openExternal(url); return; }
+                              el.scrollIntoView({ block: "center", behavior: "smooth" });
+                              flashElement(el);
+                            }));
+                          }}
                           movedSince={movedHere.length}
                           onGoMoved={() => { setTab("files"); setWantSince((n) => n + 1); }}
                           awaitingChecks={awaitingChecks}
@@ -4809,7 +4914,7 @@ function ConflictActions({ root, number, branch, base, disabled }: {
   );
 }
 
-function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
+function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -4837,6 +4942,9 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
    *  the phone — and the button then behaves as it always did. */
   onReviewInTerminal?: (recipe?: string) => void; onMerge: (method: MergeMethod) => void; onClose: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
+  /** Take me to that review inside this panel, by the node id of its row —
+   *  falling back to `url` outside when this panel has no row for it. */
+  onGoReview: (nodeId: string | undefined, url: string) => void;
   /** Open Files with the "since your review" filter already on. */
   onGoMoved: () => void;
   /** How many of this review's files have changed since your own last review — see
@@ -5094,12 +5202,23 @@ function Overview({ d, root, busy, busyWhat, mergeWork, openThreads, conversatio
                     <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>{v.note}</span>
                   )}
                 </span>
-                {v.url && (
-                  <button className="agx-btn shrink-0 rounded px-1.5 py-0.5 text-[11px]"
-                    style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
-                    title="Open the review itself on GitHub"
-                    onClick={() => openExternal(v.url!)}>Go to it ↗</button>
-                )}
+                {v.url && (() => {
+                  /*
+                   * The same review, as a row this panel already draws.
+                   *
+                   * Matched on the URL rather than by parsing `#pullrequestreview-…`
+                   * out of it: `humanReview.url` and `PrReview.url` are the one
+                   * string GitHub gave for that submission, so equality is exact and
+                   * there is no fragment format to keep in step with.
+                   */
+                  const node = d.reviews?.find((r) => r.url && r.url === v.url)?.nodeId;
+                  return (
+                    <button className="agx-btn shrink-0 rounded px-1.5 py-0.5 text-[11px]"
+                      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
+                      title="Go to that review in the conversation"
+                      onClick={() => onGoReview(node, v.url!)}>Go to it</button>
+                  );
+                })()}
               </div>
             );
           })()}
@@ -6166,7 +6285,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
     <Portal>
       <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
         style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
-        {/* `min-h-0`, and it is the whole bug: a flex child'"'"'s default floor is
+        {/* `min-h-0`, and it is the whole bug: a flex child's default floor is
             its content, so the people list grew past the menu instead of
             scrolling inside it — taking the ClickUp half and Done off the
             bottom with it, and leaving nothing to scroll. */}
@@ -6478,7 +6597,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   }
 
   return (
-    /* Under the people, not beside them: the menu'"'"'s height is what was going
+    /* Under the people, not beside them: the menu's height is what was going
        spare. Capped, so the list above it keeps most of the window and this
        never pushes Done off the bottom. */
     <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
@@ -7798,6 +7917,10 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, pending, moved, dep
         const pend = pending(f.path);
         return (
           <button key={f.path} onClick={() => onPick(f.path)}
+            /* The marked row, findable from outside without a ref through a
+               recursive component. The tree brings it back into its own view
+               when the scrollspy moves the mark — see `keepRowInView`. */
+            data-sel={on ? "1" : undefined}
             // Alt-click opens it whole, which is the gesture that costs nothing
             // to learn because it costs nothing to not know.
             onAuxClick={(e) => { if (e.button === 1 && onPeek) { e.preventDefault(); onPeek(f.path); } }}
@@ -8354,6 +8477,13 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
   const barRef = useRef<HTMLDivElement>(null);
   /** The frame the running jump has booked, so the next one can take it back. */
   const alignRaf = useRef(0);
+  /** True while `scrollToFileStable` is driving the scroller frame by frame, so
+   *  the scrollspy below does not read a position that is still on its way. */
+  const jumping = useRef(false);
+  /** The scrollspy's own frame token, so a flick of the wheel schedules one
+   *  measurement rather than one per scroll event. */
+  const spyRaf = useRef(0);
+  const treeRef = useRef<HTMLElement | null>(null);
   const [barH, setBarH] = useState(76);
   useEffect(() => {
     const el = barRef.current;
@@ -8391,6 +8521,17 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
     // would otherwise overlap, and two aligners with different targets writing
     // to the same scrollTop every frame is a shudder, not a scroll.
     cancelAnimationFrame(alignRaf.current);
+    /*
+     * The scrollspy stands down while this runs, and only while THIS runs.
+     *
+     * The aligner aims at `[data-file="active"]`, which the render derives from
+     * `sel` — so a spy that renamed `sel` from a half-finished frame would move
+     * the target the aligner is chasing, and the two would walk each other down
+     * the file list. The jumps that aim at a hunk or a thread need no such
+     * guard: they scroll to a fixed element, and a spy noticing you landed in
+     * another file is the right answer, not a fight.
+     */
+    jumping.current = true;
     let ticks = 0, still = 0, lastTop = NaN;
     const align = () => {
       const el = getEl();
@@ -8427,6 +8568,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       // ~24 frames whatever happens, which is a third of a second nobody sees.
       ticks++;
       if (ticks < 60 && (ticks < 24 || still < 3)) alignRaf.current = requestAnimationFrame(align);
+      else jumping.current = false;
     };
     alignRaf.current = requestAnimationFrame(align);
   };
@@ -8659,6 +8801,82 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
   const showing = oneFile ? (sel ?? shownFiles[0]?.path ?? null) : sel;
   useEffect(() => { onShowing?.(showing); }, [showing, onShowing]);
 
+  /*
+   * Something is always selected, and it is always a file that is still listed.
+   *
+   * Two things this settles. Opening Files used to mark nothing until you
+   * clicked — the rail on the right read "Nothing selected" beside a diff that
+   * was plainly showing a file. And `sel` outlives the list it names: it is not
+   * reset when the pull request changes, and filtering (a search, "since your
+   * review", hiding viewed files) can drop the file it points at, leaving the
+   * tree with no mark and the rail describing a file that is not on screen.
+   *
+   * The first of `shownFiles` in both cases, which in this list means the first
+   * one you would read — `treeOrder`, not GitHub's order.
+   */
+  useEffect(() => {
+    if (!shownFiles.length) return;
+    if (sel && shownFiles.some((f) => f.path === sel)) return;
+    onSel(shownFiles[0].path);
+  }, [shownFiles, sel, onSel]);
+
+  /*
+   * WHICH FILE YOU ARE LOOKING AT, while you scroll.
+   *
+   * The tree marked whatever was last clicked and then sat there: eight files
+   * deep into a pull request the rail on the right was still explaining the
+   * first one, and nothing on screen said which of the eight the diff under the
+   * cursor belonged to.
+   *
+   * The one that has crossed the floor, not the one covering the most of the
+   * screen. Area sounds fairer and reads worse: half a page into a long file
+   * the previous one still owns more pixels, so the mark lags by half a screen
+   * — and the floor is exactly where `scrollToFileStable` parks a file, so
+   * scrolling to a file by hand and jumping to it with `j` agree on what
+   * "here" means.
+   *
+   * Measured on a frame rather than per event: a wheel flick is dozens of
+   * scroll events and each one would walk every file's rectangle.
+   */
+  const spy = useCallback(() => {
+    if (oneFile || jumping.current) return;
+    cancelAnimationFrame(spyRaf.current);
+    spyRaf.current = requestAnimationFrame(() => {
+      const frame = frameRef.current;
+      const sc = frame && vScrollerOf(frame);
+      if (!sc) return;
+      const floor = sc.getBoundingClientRect().top + (barRef.current?.offsetHeight ?? 76);
+      const cards = [...frame.querySelectorAll<HTMLElement>("[data-path]")];
+      const i = fileAtFloor(cards.map((el) => el.getBoundingClientRect().top), floor);
+      const hit = i < 0 ? null : cards[i].dataset.path ?? null;
+      if (hit && hit !== sel) onSel(hit);
+    });
+  }, [oneFile, shownFiles, sel, onSel]);
+  useEffect(() => () => cancelAnimationFrame(spyRaf.current), []);
+
+  /*
+   * The marked row, brought back into the tree's own view — and NOTHING else moved.
+   *
+   * Deliberately not `scrollIntoView`: that walks every scrollable ancestor,
+   * and the tree's nearest one is the frame holding the diff. Asking the tree
+   * to show a row would scroll the diff, which would move the scrollspy's
+   * answer, which would mark another row. The whole loop is avoided by writing
+   * this one element's `scrollTop` and no other's.
+   *
+   * `block: "nearest"` by hand: a row already on screen is left exactly where
+   * it is, because a list that re-centres itself under a still cursor is a list
+   * that feels like it is fighting you.
+   */
+  useEffect(() => {
+    const tree = treeRef.current;
+    const row = tree?.querySelector<HTMLElement>('[data-sel="1"]');
+    if (!tree || !row) return;
+    const box = tree.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    if (r.top < box.top) tree.scrollTop -= box.top - r.top;
+    else if (r.bottom > box.bottom) tree.scrollTop += r.bottom - box.bottom;
+  }, [showing]);
+
   const toggleFold = (p: string) => setFolded((cur) => {
     const next = new Set(cur);
     if (next.has(p)) next.delete(p); else next.add(p);
@@ -8806,7 +9024,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
        * the tab always came back at the top. Reported as "the scroll position of
        * the open file is never kept".
        */
-      onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); }}
+      onScroll={(e) => { FILES_SCROLL.set(`${root}#${d.number}`, e.currentTarget.scrollTop); spy(); }}
       className="agx-col3 agx-scroll text-[11px] flex flex-col gap-2 outline-none">
       {/* One bar, and it stays put: filter, view mode, progress. Everything that
           used to be repeated on each file's own toolbar lives here once.
@@ -8947,7 +9165,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
         {/* Always present in one-file mode: it is the only way to reach the
             other eight, so hiding it below five files would strand you. */}
         {(oneFile || shownFiles.length > 4) && (
-          <aside className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
+          <aside ref={treeRef} className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
             style={{ borderRight: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
             {/* `showing`, not `sel`.
                 

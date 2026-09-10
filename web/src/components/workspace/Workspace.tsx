@@ -35,8 +35,8 @@ import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
-import { UnderstudyView } from "../understudy/UnderstudyPanel.tsx";
 import { LanternView } from "../LanternView.tsx";
+import { SeatView } from "../SeatView.tsx";
 import { subscribeLantern, lanternNeed } from "../../lib/lanternStore.ts";
 import { requestTermReview } from "../../lib/termReview.ts";
 
@@ -99,6 +99,7 @@ export function Workspace({
      comparison fail for all seven of them — which is the memo doing nothing at
      all. Same shape as `openChat` above for the same reason. */
   const openBrowser = useCallback(() => onView("browser"), [onView]);
+  const openLantern = useCallback(() => onView("lantern"), [onView]);
 
   /**
    * Start a chat already pointed at a directory, with a prompt waiting.
@@ -199,7 +200,7 @@ export function Workspace({
                 {v.id === "dash"
                   ? dashboard(active)
                   : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prJump={prJump}
-                      openBrowser={openBrowser}
+                      openBrowser={openBrowser} openLantern={openLantern}
                       cardJump={cardJump} issueJump={issueJump} reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
               </ViewBoundary>
             </ViewBox>
@@ -253,9 +254,10 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function BodyImpl({ id, active, openChat, openChatWith, openBrowser, reviewInTerminal, chatFocusId, prJump, cardJump, issueJump }: {
+function BodyImpl({ id, active, openChat, openChatWith, openBrowser, openLantern, reviewInTerminal, chatFocusId, prJump, cardJump, issueJump }: {
   id: ViewId; active: boolean;
   openChat: () => void;
+  openLantern: () => void;
   /** Bring the browser view forward — the Docker panel asks for it when you
    *  open a container's port, so a dev server lands in a tab of this app
    *  instead of somewhere else. */
@@ -277,11 +279,10 @@ function BodyImpl({ id, active, openChat, openChatWith, openBrowser, reviewInTer
     case "term": return <TermView active={active} />;
     case "chat": return <ChatView active={active} focusId={chatFocusId} />;
     case "browser": return <BrowserView active={active} />;
-    /* Nothing is passed but `active`, and that is the shape of the whole
-       feature rather than an oversight: the clone reads a scorecard off
-       the socket and has nothing to hand to another view — no chat to seed, no
-       pull request to jump to. A view that only watches needs no errands. */
-    case "understudy": return <UnderstudyView active={active} />;
+    /* One errand, and only one: the Lantern is the field this post reads, so
+       the seat carries a way across to it rather than drawing the board a
+       second time. */
+    case "seat": return <SeatView onLantern={openLantern} />;
     /* Its chat is a tab on the floating bench, not a seeded Chat view — see
        lanternAsk.ts. Nothing to hand it. */
     case "lantern": return <LanternView active={active} />;

@@ -49,6 +49,7 @@ const lastBySession = db.query<{ at: number }, [string]>(
   "SELECT MAX(at) AS at FROM agent_status WHERE session_id = ?",
 );
 const drop = db.query<never, [string, string]>("DELETE FROM agent_status WHERE name = ? AND session_id = ?");
+const dropOld = db.query<never, [number]>("DELETE FROM agent_status WHERE at < ?");
 
 /**
  * The longest a path or a branch is stored at.
@@ -109,13 +110,33 @@ export function forgetAgent(name: string, session: string): boolean {
 }
 
 /**
+ * How long a status line outlives the agent that wrote it.
+ *
+ * Deliberately long. A row going quiet is information — see `board` — and the
+ * board says how long ago it spoke, so a day-old line is answerable rather
+ * than wrong. This is only the far end, where a row stops being a stale fact
+ * about somebody's afternoon and becomes a table nothing prunes.
+ */
+export const KEEP_MS = 14 * 24 * 60 * 60_000;
+
+/** Drop status lines older than `KEEP_MS`. Returns how many went. */
+export function sweepAgents(now = Date.now()): number {
+  try { return dropOld.run(now - KEEP_MS).changes; } catch { return 0; }
+}
+
+/**
  * Every agent that has said something, newest first.
  *
  * Stale rows are NOT hidden: an agent that stopped writing an hour ago is
  * exactly what a person wants to see, and the timestamp says which. Hiding it
  * would turn "nobody is on this" into "there is nothing to know".
  */
+let sweptAt = 0;
 export function board(): AgentRow[] {
+  /* Once an hour, not once a tick: the board is read every five seconds while
+     the view is open, and a DELETE that finds nothing 719 times out of 720 is
+     720 writes' worth of lock for one row's worth of work. */
+  if (Date.now() - sweptAt > 60 * 60_000) { sweptAt = Date.now(); sweepAgents(); }
   try {
     return all.all().map((r) => ({
       name: r.name,
@@ -159,10 +180,23 @@ export interface HookSeen {
 export interface BoardRow extends AgentRow {
   /** What this machine can see about it, whoever said what. */
   paneId?: string;
+  /**
+   * WHAT THIS SESSION USED TO CALL ITSELF, newest first, when it has posted
+   * under more than one name.
+   *
+   * `agent_status` is keyed by name, so a rename leaves the old row behind
+   * rather than replacing it. The board draws one card per session now; this
+   * is the rest of the names, kept so the fold is legible rather than silent
+   * — a person who saw "readme-diet" on this screen an hour ago can still
+   * find out where it went.
+   */
+  wasCalled?: string[];
   /** What this session is to the app, when it is not a person's agent: the
-   *  Lantern's own chat. Set by lantern.ts from the session's hooks; never
-   *  counted as needing anybody. */
-  role?: "lantern";
+   *  Lantern's own chat, or the orchestrator sitting in the project's seat.
+   *  Set by lantern.ts from the session's hooks; never counted as needing
+   *  anybody — both of them read this board, and a reader of a board that
+   *  appears on it is a mirror, not an agent. */
+  role?: "lantern" | "orchestrator";
   startedAt?: number;
   /** working: something is running. waiting: it asked and nobody answered.
    *  idle: it is there and has said nothing lately. */
@@ -198,6 +232,41 @@ export interface BoardRow extends AgentRow {
 /** A line said this recently is a claim about NOW; older than this it is a
  *  claim about earlier, and the screen says so rather than pretending. */
 export const FRESH_MS = 10 * 60_000;
+
+/*
+ * IS THIS PATH INSIDE THAT CHECKOUT — on a path boundary, never on characters.
+ *
+ * `cwd.startsWith(worktree)` was the test in four places, and on this machine
+ * it is wrong in the ordinary case: `~/code/app` and `~/code/app-fixes` are two
+ * different worktrees of one repository, and the second one's path starts with
+ * the first one's. So a hook in `app-fixes` was lent to the card for `app`,
+ * which is how one agent came to be drawn as several and how a card came to
+ * show a branch it had never been on.
+ *
+ * Equal, or followed by a separator. Nothing else counts.
+ */
+export function under(path: string | undefined, base: string | undefined): boolean {
+  if (!path || !base) return false;
+  const b = base.endsWith("/") ? base.slice(0, -1) : base;
+  return path === b || path.startsWith(`${b}/`);
+}
+
+/**
+ * The INNERMOST checkout holding a path.
+ *
+ * A repository with a worktree inside it — `~/code/app` and
+ * `~/code/app/vendor/thing` — answers `under` twice, and the first match in
+ * the list is whichever git happened to print first. The longest one is the
+ * one the work is actually in.
+ */
+export function deepest<T extends { path?: string }>(trees: T[], path: string): T | undefined {
+  let best: T | undefined;
+  for (const t of trees) {
+    if (!under(path, t.path)) continue;
+    if (!best || (t.path?.length ?? 0) > (best.path?.length ?? 0)) best = t;
+  }
+  return best;
+}
 
 /**
  * One row per agent, from every source at once.
@@ -244,6 +313,15 @@ export function merged(p: {
    * merged" and must not be drawn as if it were.
    */
   landedBy?: Record<string, { landed: boolean; into: string }>;
+  /**
+   * The checkouts this machine LOOKED FOR AND DID NOT FIND, by path.
+   *
+   * Passed in rather than read here so this stays a join over facts, and so a
+   * missing entry means "nobody asked" instead of "not there" — the same
+   * distinction `landed` keeps, and for the same reason. Only a path in this
+   * set is treated as gone; every other row is believed.
+   */
+  gone?: Set<string>;
   /** A session's own name, by `sessionId` — a rename, a generated title, or
    *  the first thing typed (see `sessionNames` in db.ts). A "seen" row falls
    *  back to its bare pane id when its session has none of the three, which
@@ -265,7 +343,7 @@ export function merged(p: {
     return said ? { landed: said.landed, ...(said.into ? { landedInto: said.into } : null) } : null;
   };
 
-  const branchOf = (path: string) => trees.find((t) => t.path && path.startsWith(t.path))?.branch ?? "";
+  const branchOf = (path: string) => deepest(trees, path)?.branch ?? "";
   const rows = new Map<string, BoardRow>();
 
   /*
@@ -293,10 +371,47 @@ export function merged(p: {
     const prev = freshest.get(h.paneId);
     if (!prev || h.at > prev.at) freshest.set(h.paneId, h);
   }
+  /*
+   * A PANE THAT IS GONE IS NOT AN AGENT.
+   *
+   * `pane_agent` keeps every sighting a hook ever made; tmux recycles pane ids
+   * across reboots and keeps none of them. Measured on this machine the day
+   * this was written: 304 rows, 290 of whose panes no longer exist. The 24-hour
+   * window in `recentPaneAgents` narrows it to twelve and still let two dead
+   * ones through — `%36` and `%38` — each drawn as an idle agent somebody could
+   * click Go on.
+   *
+   * Only applied when tmux actually answered. An empty pane list is a socket
+   * that did not reply, and deleting the board on the strength of a failed
+   * read is the one outcome worse than a stale row.
+   */
+  const alive = new Set(panes.map((x) => x.paneId));
+  const seenBySession = new Map<string, Set<string>>();
   for (const h of freshest.values()) {
-    const tree = trees.find((t) => t.path && h.cwd.startsWith(t.path));
+    /*
+     * AND A PANE ID IS ONLY MEANINGFUL ON THE SERVER THAT ISSUED IT.
+     *
+     * `panes` is ONE tmux server's list; `hooks` are whatever fired, on any
+     * server on the machine, and `%3` exists on all of them. So "not in the
+     * list" is not proof of death — it is also what a live agent on a second
+     * tmux server looks like from here, and dropping those would empty the
+     * board of exactly the agents somebody started somewhere else.
+     *
+     * The freshness gate is what makes it safe: a hook that fired in the last
+     * ten minutes is an agent that was running ten minutes ago, wherever it
+     * is, and it stays. Only a stale sighting whose pane this machine cannot
+     * find is dropped — which is the case that was drawing `%36` and `%38`,
+     * quiet for hours, as idle agents somebody could click Go on.
+     */
+    if (alive.size > 0 && !alive.has(h.paneId) && h.at <= now - FRESH_MS) continue;
+    const tree = deepest(trees, h.cwd);
     const branch = tree?.branch ?? "";
     const wait = p.waiting?.get(h.sessionId);
+    if (h.sessionId) {
+      const had = seenBySession.get(h.sessionId) ?? new Set<string>();
+      had.add(h.paneId);
+      seenBySession.set(h.sessionId, had);
+    }
     rows.set(h.paneId, {
       name: p.names?.get(h.sessionId) || h.paneId,
       worktree: tree?.path ?? h.cwd,
@@ -314,12 +429,38 @@ export function merged(p: {
     });
   }
 
+  /*
+   * ONE CARD PER SESSION, NOT PER NAME.
+   *
+   * `agent_status` is keyed by name, so an agent that renames itself between
+   * tasks leaves a row behind every time. Measured: session one session posted
+   * under five names in three hours and got five cards, all reading the same
+   * session's stats — same calls, same turns, same cost, same ASKED line —
+   * because the numbers are looked up by session id. Five cards, one agent,
+   * and nothing on screen saying so.
+   *
+   * `said` arrives newest first, so the first row for a session is its current
+   * name and the rest are what it used to be called. They are kept as history
+   * on the row rather than dropped: "this is the one that was posting as
+   * readme-diet" is the sentence that makes the fold legible.
+   */
+  const claimedSession = new Map<string, string>();
+  const alsoKnownAs = new Map<string, string[]>();
   for (const s of said) {
+    if (!s.session) continue;
+    const first = claimedSession.get(s.session);
+    if (first === undefined) claimedSession.set(s.session, s.name);
+    else alsoKnownAs.set(first, [...(alsoKnownAs.get(first) ?? []), s.name]);
+  }
+
+  for (const s of said) {
+    /* A later name for a session already drawn under its newest one. */
+    if (s.session && claimedSession.get(s.session) !== s.name) continue;
     /* The pane whose working directory is inside the worktree it named. A
        name match would be neater and is not available: tmux renames a window
        when the program inside sets a title, which is the bug that cost a
        morning of the deputy's runs. */
-    const pane = s.worktree ? panes.find((x) => x.cwd && x.cwd.startsWith(s.worktree!)) : undefined;
+    const pane = s.worktree ? panes.find((x) => under(x.cwd, s.worktree!)) : undefined;
     const fresh = (s.saidAt ?? 0) > now - FRESH_MS;
     /*
      * A CLAIM THIS MACHINE CANNOT SEE ANY MORE IS NOT "WORKING".
@@ -336,30 +477,121 @@ export function merged(p: {
     const couldSee = trees.length > 0 || panes.length > 0;
     const stillThere = !s.worktree || !couldSee
       || !!pane || trees.some((t) => t.path === s.worktree);
+    /*
+     * AND A CLAIM ABOUT A CHECKOUT THAT HAS BEEN GONE FOR A DAY IS NOT A ROW.
+     *
+     * `stillThere` above demotes it from working to idle, which is right for
+     * the afternoon it stopped — the line is a fact with a time on it and a
+     * person can still answer it. It is not right a week later:
+     * `race-condition-fix-measurement` sat on this board for five days and
+     * eighteen hours naming `~/code/orbit-zoom`, a worktree that no
+     * longer exists, on a screen whose whole job is who to go and talk to.
+     *
+     * Dropping a row needs the directory to have been LOOKED FOR AND NOT
+     * FOUND — `gone`, which lantern.ts fills in by asking the filesystem.
+     * `stillThere` is not that test and must not stand in for it: it is false
+     * whenever tmux did not answer and git does not list the path, and the
+     * first thing that combination erased in testing was
+     * `laptop-lid-closed-remote`, whose directory is `~` and has been there
+     * the whole time. Absence of evidence had deleted an agent.
+     *
+     * Both halves are still required. Gone but recent stays — a worktree
+     * swapped mid-task, with the agent still there to say so; old but present
+     * stays, because a quiet checkout is exactly the row worth seeing.
+     */
+    const GONE_MS = 24 * 60 * 60_000;
+    if (s.worktree && p.gone?.has(s.worktree) && (s.saidAt ?? 0) < now - GONE_MS) continue;
     const branch = s.branch || branchOf(s.worktree ?? "");
-    /* The hook sighting for the same checkout, which knows the pane when tmux
-       does not: `panes` is every pane on the machine, `hooks` is only the ones
-       an agent fired from. */
-    const hook = s.worktree
-      ? [...freshest.values()].find((h) => h.cwd.startsWith(s.worktree!))
+    /*
+     * THE HOOK BEHIND THIS CLAIM — ITS OWN, AND NOBODY ELSE'S.
+     *
+     * `panes` is every pane on the machine, `hooks` is only the ones an agent
+     * fired from, so a hook knows the pane when tmux does not. It has to be
+     * the RIGHT hook. This used to take the first sighting whose cwd started
+     * with the named worktree, which on this machine meant every session in
+     * `~/code/shop-api` — four of them — borrowing one pane, `%40`, that belonged
+     * to a fifth. Four cards whose Go button opened somebody else's agent, and
+     * one (`laptop-lid-closed-remote`, really in `%7`) sent to `%0`, a live
+     * pane of an unrelated session. A wrong pane is worse than none: no pane
+     * draws no button, a wrong one moves the person's screen.
+     *
+     * So the session it named decides, and only when it named none does the
+     * checkout get a say — by exact path rather than by prefix, taking the
+     * freshest sighting, and only when that checkout has exactly one session
+     * in it. Two agents in one directory cannot be told apart from here, and
+     * guessing between them is how the last four wrong buttons happened.
+     */
+    /* And the same liveness test the seen rows get — a said row was taking any
+       sighting of its own session, including one whose pane died with the last
+       restart, so the button was drawn onto a pane that is not there. Same
+       freshness gate, for the same reason: a pane id means nothing on another
+       tmux server, and a recent hook is an agent that is running somewhere. */
+    const findable = (h: HookSeen) => alive.size === 0 || alive.has(h.paneId) || h.at > now - FRESH_MS;
+    const hook = s.session
+      ? [...freshest.values()].filter((h) => h.sessionId === s.session && findable(h))
+        .sort((a, b) => b.at - a.at)[0]
+      : s.worktree
+      ? (() => {
+        const here = [...freshest.values()].filter((h) => h.cwd === s.worktree && findable(h))
+          .sort((a, b) => b.at - a.at);
+        return new Set(here.map((h) => h.sessionId)).size === 1 ? here[0] : undefined;
+      })()
       : undefined;
-    const paneId = pane?.paneId ?? hook?.paneId;
+    /*
+     * tmux's pane only when the hook has none AND the checkout holds one
+     * agent: the hook is an agent saying where it is, the pane list is a
+     * directory match that two agents in one checkout answer identically —
+     * the same ambiguity as above, arriving by the other door.
+     */
+    const oneAgentHere = new Set(
+      [...freshest.values()].filter((h) => s.worktree && under(h.cwd, s.worktree)).map((h) => h.sessionId),
+    ).size <= 1;
+    /* tmux's own pane is live by definition — it came from the list. */
+    const paneId = hook?.paneId ?? (s.session || !oneAgentHere ? undefined : pane?.paneId);
     /* The session behind this claim: the one it named, else the hook this
        machine placed in the same checkout. Both are how the wait is looked up
        and how the reminder knows it has been answered. */
     const session = s.session || hook?.sessionId;
-    const wait = session ? p.waiting?.get(session) : undefined;
+    /*
+     * A "NEEDS YOU" WITH NOWHERE TO GO IS NOT A NEEDS YOU.
+     *
+     * The wait is real — the session's last hook event was Claude Code saying
+     * it stopped for the next prompt. What is no longer real is the agent:
+     * its pane is gone, so the row is a red dot with no Go button behind it,
+     * and it sits at the top of a screen sorted by who has been waiting
+     * longest. Measured on this machine: two rows claiming a person was
+     * needed, one of them for 27 hours, neither of them anywhere.
+     *
+     * Only when this machine actually LOOKED. With no panes read there is
+     * nothing to contradict the wait, and inventing a contradiction out of an
+     * empty list is the mistake that once deleted a live agent — see
+     * `stillThere` above, same rule.
+     */
+    const somewhereToGo = !!paneId || p.panes === undefined || p.panes.length === 0;
+    const wait = session && somewhereToGo ? p.waiting?.get(session) : undefined;
+    const wasCalled = alsoKnownAs.get(s.name);
     rows.set(s.name, {
       ...s,
       branch,
       ...(paneId ? { paneId } : null),
       ...(session ? { session } : null),
+      ...(wasCalled?.length ? { wasCalled } : null),
       ...isLanded(branch),
       ...(wait ? { needsYou: wait } : null),
       state: wait ? "waiting" : fresh && stillThere ? "working" : "idle",
     });
-    /* And the anonymous row for that pane goes: it is the same agent, now with
-       a name and a task. Two rows for one pane is the board counting twice. */
+    /*
+     * And the anonymous rows for that session go: it is the same agent, now
+     * with a name and a task.
+     *
+     * EVERY pane of it, not the one pane this row landed on. A session that
+     * has been through a reboot has a sighting per pane it ever ran in, and
+     * deleting one left the rest on the board under whatever `names` called
+     * them — which is where "Ayudame a instalar…" and "que son estos??" came
+     * from: the same session as a named card, drawn a second time titled with
+     * the first thing its person had typed into it.
+     */
+    for (const dead of session ? seenBySession.get(session) ?? [] : []) rows.delete(dead);
     if (paneId) rows.delete(paneId);
   }
 

@@ -1,7 +1,7 @@
 import { FacetMenu } from "./FacetMenu.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import {
-  serializeQuery, toggleFacet, clearFacet, setSort, DEFAULT_SORT, SORT_OPTIONS, FACETS,
+  serializeQuery, toggleFacet, setSort, DEFAULT_SORT, SORT_OPTIONS,
   type FilterState, type FacetView, type SortTok,
 } from "../lib/prFilter.ts";
 
@@ -15,19 +15,21 @@ import {
  * state; it turns clicks into new query strings and hands them up via `onQuery`.
  */
 export function PrFilterBar({
-  query, filters, facets, onQuery, onSearch, pending, searching, checksPending, shown, total, swept, unread,
+  query, filters, facets, onQuery, onSearch, pending, searching, shown, total, swept, unread, builder,
 }: {
   query: string;
   filters: FilterState;
   facets: FacetView[];
+  /** The rule builder, drawn after the pills. Passed in rather than built here
+   *  so this file stays what it is — a row of controls — and the rules keep
+   *  living where the rows they filter do. */
+  builder?: React.ReactNode;
   onQuery: (q: string) => void;
   /** Ask GitHub. Never called on a keystroke — see PrPanel's serverQuery. */
   onSearch: () => void;
   /** The box says something the last search did not ask for. */
   pending: boolean;
   searching?: boolean;
-  /** Second-pass check states still loading — the Checks menu says so. */
-  checksPending?: boolean;
   shown: number;
   total: number;
   /** How far the background sweep has read, while free text is filtering. A
@@ -142,34 +144,12 @@ export function PrFilterBar({
             {unread.count} unread
           </button>
         )}
-        {/*
-          * The row exists before the rows do.
-          *
-          * These pills are built from the pull requests that have been loaded,
-          * so the bar used to appear a second or two after everything else and
-          * shove the board down as it landed, which reads as the board jumping
-          * under the cursor. Drawn from the static facet table instead
-          * while there is nothing to count, dimmed and inert: same row, same
-          * height, same place, filling in rather than arriving.
-          */}
-        {facets.length === 0 && FACETS.map((f) => (
-          <span key={f.key} aria-hidden
-            className="text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap select-none"
-            style={{ color: "var(--text4)", border, opacity: 0.55 }}>
-            {f.label} ▾
-          </span>
-        ))}
-        {facets.map((f) => (
-          <FacetMenu
-            key={f.key}
-            label={f.label}
-            options={f.options}
-            selected={f.selected}
-            onToggle={(v) => emit(toggleFacet(filters, f.key, v))}
-            onClear={() => emit(clearFacet(filters, f.key))}
-            note={f.key === "checks" && checksPending ? "Checks are still loading; unfinished rows are kept." : undefined}
-          />
-        ))}
+        {/* No row of pills: the builder is the filter, and it says everything
+            they said plus `is not`, `is set`, `is not set`, and several joined.
+            It reads the same field table (`builderFields` reads `buildFacets`),
+            so every menu they had is a field in it, and a query string still
+            fills it through `queryToRules`. */}
+        {builder}
         <div className="ml-auto">
           <FacetMenu
             label="Sort"

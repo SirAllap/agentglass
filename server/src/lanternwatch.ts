@@ -35,16 +35,21 @@
  * than a pile.
  */
 import * as AgentBoard from "./agentboard.ts";
-import { boardNow } from "./lantern.ts";
+import { isGone, boardNow } from "./lantern.ts";
 import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
 import { pushLantern } from "./alerts.ts";
+import { wakeSeats } from "./seatwake.ts";
 
 export interface Finding {
   kind: "waiting" | "forgotten" | "gone";
   name: string;
   line: string;
   pane?: string;
+  /** The checkout the agent is in, when it is known. Carried so a per-project
+   *  reader (seatwake.ts) can tell whose field this belongs to — the board is
+   *  machine-wide and a seat is not. */
+  worktree?: string;
   /** Sort key: the oldest wait first, then the longest silence. */
   since: number;
 }
@@ -81,7 +86,7 @@ export function findings(p: {
          nobody coming back to it. A permission or a gate is urgent at once. */
       if (r.needsYou.kind === "input" && now - r.needsYou.since < FORGOTTEN_AFTER_MS) continue;
       out.push({
-        kind: "waiting", name: r.name, pane: r.paneId, since: r.needsYou.since,
+        kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou.since,
         line: `${r.name} ${waitWord(r.needsYou)} — ${ago(r.needsYou.since, now)}${r.needsYou.why ? `: ${r.needsYou.why}` : ""}`.slice(0, 200),
       });
       continue;
@@ -89,9 +94,27 @@ export function findings(p: {
     /* "Said what it was on, never said done, quiet for an hour." A row the
        hooks made without a status post has no `doing`, and an idle pane that
        never claimed a task is not forgotten work — it is a shell. */
+    /*
+     * A DEAD SESSION IS NOT FORGOTTEN WORK.
+     *
+     * The shape of a session that ended two days ago is exactly the shape this
+     * looks for: idle, with a `doing` from when it was alive, and quiet ever
+     * since. So it was reported as forgotten work every single look, for ever
+     * — and every one of those woke the seat. Measured from the other side, in
+     * the seat's own words: six wakes in a night, five of them about sessions
+     * dead for days, on the most expensive context on the machine.
+     *
+     * `isGone` is the rule the field and the view already share: no pane this
+     * machine can see, AND quiet long enough that "it is between panes" has
+     * stopped being the likely story. An agent quiet for an hour with no pane
+     * here is still worth asking about — it may be alive on another tmux
+     * server — which is why the two thresholds differ and why this is not just
+     * a longer silence.
+     */
+    if (isGone(r, now)) continue;
     if (r.state === "idle" && r.doing && r.saidAt && now - r.saidAt >= FORGOTTEN_AFTER_MS) {
       out.push({
-        kind: "forgotten", name: r.name, pane: r.paneId, since: r.saidAt,
+        kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt,
         line: `${r.name} said it was on "${r.doing}" and has been quiet for ${ago(r.saidAt, now)} — done, or stuck?`.slice(0, 200),
       });
     }
@@ -100,7 +123,7 @@ export function findings(p: {
     const alive = new Set(p.namedNow.map((a) => a.name));
     for (const a of p.namedBefore) {
       if (!alive.has(a.name)) {
-        out.push({ kind: "gone", name: a.name, since: a.startedAt, line: `${a.name}'s window is gone (started ${ago(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
+        out.push({ kind: "gone", name: a.name, worktree: a.cwd, since: a.startedAt, line: `${a.name}'s window is gone (started ${ago(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
       }
     }
   }
@@ -147,6 +170,10 @@ export async function tick(now = Date.now()): Promise<Finding[]> {
     last = { at: now, findings: f };
     const n = notice(f);
     if (n) pushLantern(n.title, n.body, n.pane);
+    /* The seat rides this look rather than keeping a clock of its own: the
+       board has just been read, and whether anything a person cares about
+       changed is already known here for free. See seatwake.ts. */
+    await wakeSeats(f, { now }).catch(() => []);
     return f;
   } finally {
     ticking = false;

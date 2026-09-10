@@ -16,7 +16,13 @@
     "",
     "To override without editing the checkout, put your own copy at",
     "$XDG_CONFIG_HOME/agentglass/claude-models.json (~/.config/agentglass/), or",
-    "point AGENTGLASS_CLAUDE_MODELS at a file."
+    "point AGENTGLASS_CLAUDE_MODELS at a file.",
+    "",
+    "Fable 5.1's dates are the day it was first SEEN offered by the CLI on a",
+    "machine here, not a published date — nothing publishes one this file can",
+    "read. They are an honest floor: the model answers today, and the shutdown",
+    "date is a year out so a stale checkout stops offering it rather than",
+    "offering it for ever. Correct them the day a real date exists."
   ],
   "models": [
     {
@@ -42,9 +48,16 @@
       "scheduled_shutdown_date": "2027-06-30"
     },
     {
+      "id": "claude-fable-5-1",
+      "display_name": "Claude Fable 5.1",
+      "status": "active",
+      "release_date": "2026-09-07",
+      "scheduled_shutdown_date": "2027-09-07"
+    },
+    {
       "id": "claude-fable-5",
       "display_name": "Claude Fable 5",
-      "status": "active",
+      "status": "superseded",
       "release_date": "2026-06-09",
       "scheduled_shutdown_date": "2027-06-09"
     },

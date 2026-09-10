@@ -14,24 +14,24 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { RefreshIcon } from "../lib/glyphIcons.tsx";
 import { api } from "../lib/api.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
-import { EMPTY, apply as applyFilters, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
+import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
 import type { ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
 import { CardWrites } from "../lib/cardWrites.ts";
 import { activityRows, eventLine, foldLabel, folds, spanLabel, seenActor, NO_AUTHOR_NOTE } from "../lib/cardActivity.ts";
 import { layoutCard } from "../lib/cardLayout.ts";
-import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, parsePoints, sortSprints, sprintShort, tagChoices } from "../lib/cardEdits.ts";
+import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, parsePoints, sortSprints, sprintShort, tagChoices, tagSources } from "../lib/cardEdits.ts";
 
 import { branchName, checkoutCommand, commitCommand, worktreeCommand } from "../lib/cardBranch.ts";
 import { neighbours, shortTitle, hopMatches } from "../lib/cardHop.ts";
-import { CardFiles } from "./CardFiles.tsx";
+import { CardFiles, FileViewer, isViewable } from "./CardFiles.tsx";
 import { Composer } from "./tasks/Composer.tsx";
 import { readState } from "../lib/boardStaleness.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { Portal } from "./Portal.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
-import { Markdown } from "../lib/markdown.tsx";
+import { Markdown, MarkdownImages } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
@@ -1613,6 +1613,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
     [data, over],
   );
 
+  /* Worked out here rather than inside the builder, so the same builder can
+     draw a row of pull requests — see FilterBuilder for why it stopped knowing
+     what a task is. */
+  const taskFields = useMemo(() => fieldsOf(tasks), [tasks]);
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
 
   /*
@@ -2700,7 +2704,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             impacted application, an assignee, any custom field this workspace
             invented — none of which could be a chip, because which fields
             exist is the board's business and not ours. */}
-        <FilterBuilder tasks={tasks} value={built} onChange={setBuilt} />
+        <FilterBuilder fields={taskFields} value={built} onChange={setBuilt} />
         <span className="flex-1" />
         {/* Named by what pressing it DOES, not by what is true.
             "6 done hidden" is a caption, and it was read as one: six statuses
@@ -5162,13 +5166,36 @@ function TagEdit({ t, busy, onApply, board }: {
     return () => document.removeEventListener("mousedown", away);
   }, [adding]);
 
-  /** Every tag the board uses, minus the ones already on this card. */
+  /*
+   * EVERY TAG THE SPACE HAS, with the ones this board actually uses on top.
+   *
+   * It was the board's tags alone, which is what the loaded cards happened to
+   * carry: seven on the board this was reported from, against 571 that exist in
+   * that space. So anything the board had not used yet had to be typed from
+   * memory, exactly right — and a near miss does not fail, it quietly makes a
+   * SECOND tag with almost the same name.
+   *
+   * Order matters more than completeness here. The board's own tags are the
+   * ones a person reaches for, so they stay where they were, at the top, in the
+   * order they were; the rest of the space follows alphabetically. Typing
+   * filters across both.
+   */
+  const [spaceTags, setSpaceTags] = useState<string[]>([]);
+  useEffect(() => {
+    if (!adding) return;
+    let alive = true;
+    /* On opening rather than on mount: a board is drawn far more often than a
+       tag is added, and the server answers this from a per-space cache, so the
+       wait is paid once for every card under the same space. */
+    void api.clickupTags(t.id).then((r) => { if (alive && r.ok && r.tags) setSpaceTags(r.tags); });
+    return () => { alive = false; };
+  }, [adding, t.id]);
+
   const known = useMemo(() => {
-    const seen = new Set<string>();
-    for (const c of board?.values() ?? []) for (const x of c.tags) seen.add(x);
-    for (const x of t.tags) seen.delete(x);
-    return [...seen].sort((a, b) => a.localeCompare(b));
-  }, [board, t.tags]);
+    const boardTags = new Set<string>();
+    for (const c of board?.values() ?? []) for (const x of c.tags) boardTags.add(x);
+    return tagSources([...boardTags].sort((a, b) => a.localeCompare(b)), spaceTags, t.tags);
+  }, [board, t.tags, spaceTags]);
 
   const typed = draft.trim();
   const { rows, newAt, creating: canCreate } = useMemo(() => tagChoices(known, t.tags, typed), [known, t.tags, typed]);
@@ -5228,7 +5255,10 @@ function TagEdit({ t, busy, onApply, board }: {
             style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
             {!rows.length && (
               <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-                {known.length ? "Nothing on this board is called that." : "This board has no tags yet — type one."}
+                {/* "in this space", not "on this board": the list is the whole
+                    space's now, so naming the board would send somebody looking
+                    for a tag that the message has already ruled out. */}
+                {known.length ? "Nothing in this space is called that." : "No tags here yet — type one."}
               </div>
             )}
             {rows.map((name, i) => {
@@ -5533,6 +5563,25 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      nothing on it must not leave the pane showing a tab that is no longer there,
      with nothing under it. */
   const files = full?.attachments ?? [];
+  /*
+   * The viewer lives HERE and not inside the Files tab, because the pictures on a
+   * card are met in two places and only one of them is that tab.
+   *
+   * A comment thread is mostly screenshots — measured on a real card: nine of them
+   * across the thread, and every one also in `attachments`, so the index below always
+   * finds its picture. Left in the Files tab the viewer would not exist while the
+   * activity feed is on screen, and clicking a screenshot in a comment would do what
+   * a plain link does in the desktop app: hand the URL to the system browser and
+   * abandon the thread it belonged to.
+   */
+  const viewable = useMemo(() => files.filter(isViewable), [files]);
+  const [viewAt, setViewAt] = useState<number | null>(null);
+  const openPicture = useCallback((url: string) => {
+    const i = viewable.findIndex((a) => a.url === url);
+    if (i < 0) return false;
+    setViewAt(i);
+    return true;
+  }, [viewable]);
   /* A tab that is not there cannot be the one you are on. The card is always there;
      the other two appear when they have something in them. */
   const view = (tab === "activity" && !rows.length) || (tab === "files" && !files.length) ? "card" : tab;
@@ -6269,6 +6318,12 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
 
       {view === "files" && <CardFiles files={files} />}
 
+      {/* Outside the tab switch on purpose: the activity feed opens it too, and a
+          viewer that unmounts with the tab under it is a viewer the thread cannot
+          reach. The Files grid keeps its own — two indexes into one list, and only
+          one of them is ever open. */}
+      <FileViewer files={files} at={viewAt} setAt={setViewAt} />
+
       {view === "github" && (<>
         {/*
           * What ClickUp's own GitHub panel gives you, and the pull requests it
@@ -6346,7 +6401,10 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         )}
       </>)}
 
-      {view === "activity" && (<>
+      {view === "activity" && (
+       /* A screenshot in a comment opens in the card's own viewer rather than
+          leaving for the system browser — see `openPicture`. */
+       <MarkdownImages onOpen={openPicture}><>
       {/* No heading and no rule of its own any more: the tab above already says
           "Activity 4", and repeating it under a divider read as a second section
           inside a pane that holds exactly one. Only the ordering survives,
@@ -6716,7 +6774,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           {sayErr && <div className="text-[10.5px] mt-1" style={{ color: "var(--error)" }}>{sayErr}</div>}
         </div>
       )}
-      </>)}
+      </></MarkdownImages>)}
 
       {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
 

@@ -66,7 +66,7 @@ describe("the name a notification carries", () => {
   });
 
   test("and a two- or three-word name is not cut in half", () => {
-    expect(seenActor("Alejandro Garcia assigned this task to you").who).toBe("Alejandro Garcia");
+    expect(seenActor("Grace Hopper assigned this task to you").who).toBe("Grace Hopper");
     expect(seenActor("Ada Lovelace Byron commented on this task").who).toBe("Ada Lovelace Byron");
   });
 

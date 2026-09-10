@@ -1402,8 +1402,29 @@ interface DeltaBlock {
     list?: { list?: string };
     "code-block"?: { "code-block"?: string };
     blockquote?: boolean;
+    /* What a PASTED image carries, and nothing else does: the width the editor
+       stored and the attachment's id. Named here because a real payload has
+       them and this type had only the marks — which typechecked fine until a
+       test wrote a real block, and then failed with "no properties in common",
+       an error about the type being wrong that reads as one about the test. */
+    width?: string;
+    "data-id"?: string;
   };
   "table-embed"?: { rows?: unknown[]; columns?: unknown[]; cells?: Record<string, { content?: { insert?: unknown }[] }> };
+  /*
+   * A PICTURE ARRIVES UNDER TWO DIFFERENT KEYS.
+   *
+   * Measured against a real card with both on it: a file dropped onto a comment
+   * comes back as `type: "attachment"` under `attachment`, and a screenshot
+   * pasted into the editor as `type: "image"` under `image`. Same CDN, same
+   * fields, two names — declaring only one of them leaves half the pictures
+   * printing their file name and nothing else.
+   *
+   * `text` on both is the file name, which is why an unhandled block used to
+   * read `image.png` on a line of its own.
+   */
+  attachment?: { url?: string; url_w_host?: string; title?: string; mimetype?: string; extension?: string };
+  image?: { url?: string; thumbnail_large?: string; title?: string; name?: string };
 }
 
 /**
@@ -1447,6 +1468,44 @@ function literal(text: string): string {
 const CHOSEN = (lang: string): string => (lang === "plain" || lang === "text" ? "" : lang);
 
 /**
+ * The picture or file a comment block carries, in whichever of ClickUp's two
+ * shapes it came, or `null` for an ordinary run of text.
+ *
+ * `image` blocks are always pictures. An `attachment` is whatever was dropped
+ * on the comment, so its `mimetype` decides between an inline image and a
+ * plain link — a PDF drawn with `![]()` is a broken image icon where a name
+ * used to be, which is worse than the bug.
+ */
+function blockFile(b: DeltaBlock): { url: string; name: string; image: boolean } | null {
+  const name = (typeof b.text === "string" && b.text) || "";
+  if (b.image) {
+    const url = b.image.url || b.image.thumbnail_large || "";
+    return url ? { url, name: name || b.image.title || b.image.name || "image", image: true } : null;
+  }
+  if (b.attachment) {
+    const url = b.attachment.url_w_host || b.attachment.url || "";
+    if (!url) return null;
+    const mime = b.attachment.mimetype ?? "";
+    return { url, name: name || b.attachment.title || "attachment", image: mime.startsWith("image/") };
+  }
+  return null;
+}
+
+/**
+ * `![alt](url)` for a picture, `[name](url)` for anything else.
+ *
+ * Both halves are narrowed to what the panel's markdown reader actually
+ * matches: its link pattern stops at the first space or `)`, and its alt text
+ * at the first `]`. A URL or a file name carrying either would otherwise be cut
+ * mid-token and print its own tail as prose.
+ */
+function fileMarkdown(f: { url: string; name: string; image: boolean }): string {
+  const url = f.url.replace(/[ ()<>]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  const label = f.name.replace(/[[\]\n]/g, " ").trim() || (f.image ? "image" : "file");
+  return (f.image ? "!" : "") + "[" + label + "](" + url + ")";
+}
+
+/**
  * One line's runs, as markdown.
  *
  * Adjacent runs that share an emphasis get ONE pair of markers around the lot.
@@ -1458,7 +1517,7 @@ const CHOSEN = (lang: string): string => (lang === "plain" || lang === "text" ? 
  * is not emphasis in most readers, and the space belongs to the sentence rather
  * than to the emphasised word.
  */
-function renderRuns(runs: { text: string; a: DeltaBlock["attributes"] }[]): string {
+function renderRuns(runs: { text: string; a: DeltaBlock["attributes"]; md?: boolean }[]): string {
   const shape = (r: { a: DeltaBlock["attributes"] }) => `${!!r.a?.bold}|${!!r.a?.italic}|${r.a?.link ?? ""}`;
   const out: string[] = [];
   for (let i = 0; i < runs.length;) {
@@ -1466,7 +1525,9 @@ function renderRuns(runs: { text: string; a: DeltaBlock["attributes"] }[]): stri
     while (j < runs.length && shape(runs[j]) === shape(runs[i])) j++;
     const a = runs[i].a;
     const body = runs.slice(i, j)
-      .map((r) => (r.a?.code ? "`" + r.text.replace(/`/g, "") + "`" : literal(r.text)))
+      // `md` is markdown this function wrote itself — an image or a file link.
+      // Escaping it would print the syntax instead of the picture.
+      .map((r) => (r.md ? r.text : r.a?.code ? "`" + r.text.replace(/`/g, "") + "`" : literal(r.text)))
       .join("");
     const lead = body.match(/^\s*/)![0];
     const tail = body.match(/\s*$/)![0];
@@ -1486,7 +1547,7 @@ export function commentMarkdown(blocks: DeltaBlock[]): string {
   const out: string[] = [];
   /** The runs of the line being built, before its newline arrives and says what
    *  kind of line it is. */
-  let line: { text: string; a: DeltaBlock["attributes"] }[] = [];
+  let line: { text: string; a: DeltaBlock["attributes"]; md?: boolean }[] = [];
   /** Consecutive `code-block` lines gather into one fence rather than becoming
    *  one fence each. */
   let fence: { lang: string; lines: string[] } | null = null;
@@ -1525,6 +1586,16 @@ export function commentMarkdown(blocks: DeltaBlock[]): string {
       continue;
     }
     if (b.type === "divider") { endLine(undefined); closeFence(); out.push("", "---", ""); continue; }
+    /*
+     * A picture stays on the line it was written on.
+     *
+     * Pushed as a run rather than pushed straight to `out`, because ClickUp
+     * puts a pasted screenshot mid-paragraph as often as on its own line, and
+     * the newline blocks around it already decide which it was. Ending the line
+     * here would break a sentence in half around its own evidence.
+     */
+    const file = blockFile(b);
+    if (file) { line.push({ text: fileMarkdown(file), a: undefined, md: true }); continue; }
     const raw = typeof b.text === "string" ? b.text : "";
     if (!raw) continue;
     const a = b.attributes;
@@ -3125,4 +3196,62 @@ export async function clickupFolderLists(folderId: string): Promise<CallResult<{
       lists: (r.data?.lists ?? []).filter((l) => l && !l.archived).map((l) => ({ id: String(l.id), name: l.name ?? "" })),
     },
   };
+}
+
+/*
+ * EVERY TAG THE SPACE HAS, not just the ones already in use.
+ *
+ * The picker offered the tags it could see on the cards it had loaded — seven
+ * of them on the board this was reported from, against 571 that actually exist
+ * in that space. So the common tags were reachable and everything else had to
+ * be typed from memory, exactly right, or it silently became a NEW tag with a
+ * near-identical name.
+ *
+ * By SPACE because that is where ClickUp keeps them: a tag belongs to a space
+ * and every list under it shares the set, which is also why one call answers
+ * for every card on a board.
+ *
+ * Cached hard. It is a property of the space rather than of any card, it is
+ * asked for the moment somebody opens the picker, and 571 names is a payload
+ * nobody should wait for twice.
+ */
+const spaceTagCache = new Map<string, { at: number; tags: string[] }>();
+const SPACE_TAG_TTL_MS = 30 * 60_000;
+/*
+ * Which space a card is in, remembered too — and this is the half that was
+ * costing the second.
+ *
+ * Caching only the tags left a card's own lookup on every open: measured, the
+ * first call took 0.84s and the "cached" one 0.96s, because the saved half was
+ * never the slow half. A card does not move between spaces, so this one never
+ * needs to expire within a session.
+ */
+const taskSpaceCache = new Map<string, string>();
+
+/** The tags of the space a task lives in, by task id. */
+export async function tagsForTask(taskId: string): Promise<CallResult<string[]>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  let space = taskSpaceCache.get(taskId);
+  if (!space) {
+    const t = await call<{ space?: { id?: string } }>(`/task/${encodeURIComponent(taskId)}`, token);
+    if (!t.ok) return { ...t, data: undefined };
+    space = t.data?.space?.id;
+    if (space) taskSpaceCache.set(taskId, space);
+  }
+  if (!space) return { ok: true, data: [] };
+
+  const hit = spaceTagCache.get(space);
+  if (hit && Date.now() - hit.at < SPACE_TAG_TTL_MS) return { ok: true, data: hit.tags };
+
+  const r = await call<{ tags?: { name?: string }[] }>(`/space/${encodeURIComponent(space)}/tag`, token);
+  if (!r.ok) return { ...r, data: undefined };
+  const tags = (r.data?.tags ?? [])
+    .map((x) => (x.name ?? "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  // Only a real answer is cached: a failure must not become "this space has no
+  // tags" for the next half hour.
+  spaceTagCache.set(space, { at: Date.now(), tags });
+  return { ok: true, data: tags };
 }

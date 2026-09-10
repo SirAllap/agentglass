@@ -22,7 +22,7 @@ import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { inScope } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
-import { boardHolding } from "./clickupviews.ts";
+import { boardHolding, knownStatuses } from "./clickupviews.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
@@ -1503,6 +1503,29 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
       },
     });
   }
+  /*
+   * A FIELD GITHUB DID NOT SEND IS NOT AN ANSWER ABOUT IT.
+   *
+   * GraphQL answers HTTP 200 with `{data, errors}` when only PART of the query
+   * failed — a timed-out connection, a field over the rate limit — and the
+   * nodes come back with that field `null` and everything else filled in.
+   * `ghGraphql` passes the body straight through and nothing reads `errors`,
+   * so a node whose `reviews` failed reached `humanVerdict` as "no reviews"
+   * and the row went out as `checksLoaded: true` with no verdict. The board
+   * cannot tell that from a real answer, `keepLoadedChecks` only rescues rows
+   * that admit the second pass has not run, and every header on screen reset
+   * to "No review asked for yet" — reported as the headers resetting after a
+   * while, which is exactly when a busy list starts hitting partial failures.
+   *
+   * So the field is dropped rather than answered. Absent means "this pass did
+   * not learn it", the client keeps what it had, and the one thing that never
+   * happens is a verdict replaced by a blank.
+   */
+  for (const [num, hit] of second) {
+    const n = (checksRes?.data?.search?.nodes ?? []).find((x: { number?: number }) => x?.number === num);
+    if (!Array.isArray(n?.reviews?.nodes)) delete (hit.stats as Partial<typeof hit.stats>).humanReview;
+  }
+
   const rows: PrSummary[] = bare.map((r) => {
     const hit = second.get(r.number);
     /*
@@ -1611,8 +1634,31 @@ export function rollupFromCounts(checkRun: StateCount[] | undefined, statusCtx: 
  * (title, state, labels, assignees, `updatedAt`) IS fresher in the new row and
  * is taken from it.
  */
-function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummary {
-  if (!old || next.checksLoaded) return next;
+export function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummary {
+  if (!old) return next;
+  /*
+   * A FIELD THIS ANSWER DOES NOT CARRY IS NOT AN ANSWER ABOUT IT.
+   *
+   * Everything below handles the FIRST-pass row, and this guard used to send a
+   * completed second pass straight through on the reading that a finished pass
+   * knows everything. GitHub disagrees: it answers HTTP 200 with
+   * `{data, errors}` when part of a query fails, so a row comes back whole
+   * except for the field that timed out. `checksLoaded` is true, `humanReview`
+   * is gone, and this wrote that row into `listCache` — which `saveDiskCache`
+   * then persists. That is why the board's review headers reset to "No review
+   * asked for yet" after a while AND stayed reset on coming back to the view:
+   * the blank had been cached, on disk, across restarts.
+   *
+   * An absent field falls back to what was known; a field that is present
+   * wins, including `null`, which is GitHub saying nobody has reviewed it.
+   */
+  const carried = { ...next } as Record<string, unknown>;
+  const before = old as unknown as Record<string, unknown>;
+  for (const k of ["humanReview", "card", "headSha", "openThreads"] as const) {
+    if (carried[k] === undefined && before[k] !== undefined) carried[k] = before[k];
+  }
+  if (next.checksLoaded) return carried as unknown as PrSummary;
+  next = carried as unknown as PrSummary;
   return {
     ...next,
     checks: next.checksLoaded ? next.checks : old.checks,
@@ -1731,6 +1777,10 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
       // Rows and their check rollups, in one request.
       // Put the rows on screen the moment they arrive; the checks land a beat
       // later and only fill in the dots.
+      /* The last full answer, taken before anything overwrites it: the early
+         callback below publishes into `listCache` itself, so by the time the
+         final write runs, what is in there is the half-loaded pass. */
+      const prior = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
       const page = await fetchList(repo, filter, state, after, (early) => {
         /*
          * The early rows, with the last full answer laid underneath them.
@@ -1768,8 +1818,14 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
       // on and nothing to carry over. Feed the per-PR cache anyway: the detail
       // view and the notification latch both read it.
       for (const r of page.rows) checkCache.set(`${repo.key}\u0000${r.number}`, { updatedAt: r.updatedAt, rollup: r.checks });
+      /* Through `carryOver` too. The comment above used to say there was
+         nothing to carry because the rollups came back with the rows — true of
+         the CHECKS, and not of a field GitHub failed to send at all. This is
+         the write `saveDiskCache` persists, so a blank that gets here outlives
+         the session that caused it. */
       listCache.set(key, {
-        at: Date.now(), prs: page.rows, loading: false, checksPending: false,
+        at: Date.now(), prs: page.rows.map((r) => carryOver(prior.get(r.number), r)),
+        loading: false, checksPending: false,
         total: page.total, hasNext: page.hasNext, cursor: page.cursor,
       });
       saveDiskCache();
@@ -1888,6 +1944,18 @@ export type PrFacetOptions = {
   labels: { name: string; color: string }[];
   milestones: string[];
   bases: string[];
+  /**
+   * Every status the tracker boards on this machine know, with its colour.
+   *
+   * NOT derived from the pull requests on screen, which was the bug reported:
+   * a board showing two statuses offered two, out of a workflow with eleven —
+   * and "show me the ones I am not looking at" is exactly the question that
+   * needs the other nine.
+   *
+   * Empty for anybody with no tracker, which is what keeps the field out of
+   * their filter bar altogether.
+   */
+  cardStatuses?: { status: string; color?: string; type?: string }[];
 };
 const facetCache = new Map<string, { at: number; data: PrFacetOptions }>();
 const FACET_TTL_MS = 5 * 60_000;
@@ -1914,6 +1982,9 @@ export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data
     labels: (labels ?? []).map((l: any) => ({ name: String(l?.name ?? ""), color: String(l?.color ?? "") })).filter((l) => l.name),
     milestones: (milestones ?? []).map((m: any) => String(m?.title ?? "")).filter(Boolean),
     bases: (branches ?? []).map((b: any) => String(b?.name ?? "")).filter(Boolean),
+    /* Free: the boards were cached with their own statuses beside their tasks,
+       so this is a read of a file this app keeps anyway. Nobody is asked. */
+    cardStatuses: knownStatuses().map((x) => ({ status: x.status, color: x.color, type: x.type })),
   };
   facetCache.set(repo.key, { at: Date.now(), data });
   return { ok: true, data };

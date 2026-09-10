@@ -60,13 +60,15 @@ describe("rail layout", () => {
     // dash and chat ship at the bottom, and that is where they turn up.
     expect(ids(r.utility)).toContain("dash");
     expect(ids(r.utility)).toContain("chat");
-    // Never hidden: a view nobody has had the chance to reject should not
-    // arrive already put away.
-    expect(r.hidden).toEqual([]);
+    // Nothing arrives hidden that was not SHIPPED hidden: a view nobody has
+    // had the chance to reject should not be put away for them, but a view
+    // this version stopped giving a seat to (the Clone) starts in the back
+    // pocket rather than being deleted.
+    expect(ids(r.hidden)).toEqual(ids(v.SHIPPED_RAIL.hidden));
     // Against the module's own list, not a number: the point is that nothing is
     // dropped, and hardcoding a count means every view added later fails a test
     // about something else.
-    expect(ids(r.work).length + ids(r.utility).length).toBe(v.VIEWS.length);
+    expect(ids(r.work).length + ids(r.utility).length + ids(r.hidden).length).toBe(v.VIEWS.length);
   });
 
   it("carries over a flat order from the old scheme, split by shipped drawer", async () => {
@@ -77,8 +79,8 @@ describe("rail layout", () => {
     const r = v.loadRail();
     expect(ids(r.work).slice(0, 2)).toEqual(["term", "git"]);
     expect(ids(r.utility)[0]).toBe("chat");
-    expect(r.hidden).toEqual([]);
-    expect(ids(r.work).length + ids(r.utility).length).toBe(v.VIEWS.length);
+    expect(ids(r.hidden)).toEqual(ids(v.SHIPPED_RAIL.hidden));
+    expect(ids(r.work).length + ids(r.utility).length + ids(r.hidden).length).toBe(v.VIEWS.length);
   });
 
   it("ignores a corrupt layout rather than throwing", async () => {
@@ -101,7 +103,10 @@ describe("rail layout", () => {
     expect(all).not.toContain("ghost");
     expect(ids(r.work)[0]).toBe("term");
     expect(all.length).toBe(new Set(all).size);
-    expect(ids(r.hidden)).toEqual(["git"]);
+    /* What the layout put away, plus what this version ships away. A view the
+       saved layout never heard of lands in its shipped drawer, and for a
+       hidden-by-default view that drawer is this one. */
+    expect(ids(r.hidden)).toEqual(["git", ...ids(v.SHIPPED_RAIL.hidden)]);
   });
 
   it("numbers the top drawer and nothing else", async () => {

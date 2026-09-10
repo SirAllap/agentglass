@@ -1357,6 +1357,192 @@ CREATE TABLE IF NOT EXISTS named_agent (
 );
 `);
 
+/*
+ * THE ORCHESTRATOR'S SEAT — one row per project, whether or not anybody is
+ * sitting in it (seat.ts).
+ *
+ * Keyed by checkout root rather than by name, because the seat is a property
+ * of a project and not of a machine: the rules a project runs by, the model it
+ * is worth paying for, and how much the seat is allowed to do are all answers
+ * that change between one repository and the next. The row survives the agent
+ * — `ended_at` closes a seating, the row keeps the settings and the last thing
+ * the seat said, so opening it again does not start from a blank doctrine.
+ *
+ * Liveness is NOT this row: like every named agent, the seat is alive while
+ * its pane exists, and `named_agent` holds that fact.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat (
+  root TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'claude',
+  model TEXT NOT NULL DEFAULT '',
+  powers TEXT NOT NULL DEFAULT 'speak',
+  started_at INTEGER NOT NULL DEFAULT 0,
+  ended_at INTEGER,
+  last_line TEXT NOT NULL DEFAULT '',
+  last_turn_at INTEGER NOT NULL DEFAULT 0
+);
+`);
+
+/*
+ * THE SEAT'S QUEUE — what a project's orchestrator has been asked to see done,
+ * and who it handed each one to (seatqueue.ts).
+ *
+ * Claimed at the START of a handing-out and not at the end, which is the one
+ * thing the clone's own queue had to learn twice: stamping `taken_at` when the
+ * work FINISHED left everything that failed looking untouched, and the next
+ * round picked it straight back up against the checkout the failure had left
+ * behind. `attempts` counts the goes; past a ceiling the seat is told to stop
+ * offering it and say so to a person instead.
+ *
+ * `taken_by` is a named agent's name, not a pane: panes are recycled by tmux
+ * and a row that outlives one would point at somebody else's work.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_task (
+  id TEXT PRIMARY KEY,
+  root TEXT NOT NULL,
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  weight INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL,
+  taken_at INTEGER,
+  taken_by TEXT NOT NULL DEFAULT '',
+  done_at INTEGER,
+  outcome TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_task_root ON seat_task (root, done_at, taken_at)`);
+/* WHAT WOULD PROVE IT IS DONE, written when the work is asked for and not
+ * argued about afterwards. Every published orchestration contract carries this
+ * field under some name — Orca calls it "observable acceptance" — because the
+ * failure it prevents is the one everybody reports: a worker that stops early
+ * reports "done" in prose, and without a named artefact nobody can tell that
+ * apart from the real thing. An ALTER rather than a column above, so a
+ * database made yesterday gains it too. */
+try { db.exec("ALTER TABLE seat_task ADD COLUMN proof TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+
+/*
+ * WHAT THE SEAT SAID, kept.
+ *
+ * One line per round is the whole report, and only the latest was kept — which
+ * made the view a status light. Four of them is the day: what needed a person
+ * this morning, what it handed out at lunch, and whether anything landed. The
+ * cost of that is one short row per round, and a round happens when the field
+ * changes rather than on a clock, so this grows in tens per day and not in
+ * thousands.
+ *
+ * Swept with the ninety-day records. A line older than that is not history,
+ * it is a log nobody will read.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_line (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  root TEXT NOT NULL,
+  line TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_line_root ON seat_line (root, at DESC)`);
+
+/*
+ * REPORTS FROM THE AGENTS DOING THE WORK.
+ *
+ * The one thing the orchestrator this feature was modelled on wanted first: a
+ * tray where every worker's report arrives in the same fixed shape, without it
+ * being pasted in five times by hand. Today each worker messages it, and the
+ * report lands in the most expensive context on the machine as prose that has
+ * to be read, re-read and remembered.
+ *
+ * So a report is a ROW, in the four fields the brief asks for. The seat drains
+ * them in one call instead of five, the view shows what is unread, and a
+ * report arriving is a change — which is what wakes the seat, so nobody polls.
+ *
+ * `read_at` rather than a delete: what an agent said is the record of what it
+ * said, and the seat having read it is a different fact from it not existing.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_report (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  root TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  session TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT '',
+  blocked TEXT NOT NULL DEFAULT '',
+  need TEXT NOT NULL DEFAULT '',
+  cost TEXT NOT NULL DEFAULT '',
+  raw TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  read_at INTEGER
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_report_root ON seat_report (root, read_at, at DESC)`);
+
+/*
+ * WHAT THE SEAT ASKS OF THE PERSON — the other direction of the tray.
+ *
+ * A report is a worker saying what it needs. This is the seat saying what IT
+ * needs, and the two are not the same list: one is work asking to be
+ * unblocked, the other is a decision asking to be made. The orchestrator here
+ * named the gap after a day of it living nowhere but a chat: "pusheado,
+ * re-sube gif-4", "bot limpio, pide revisor", "3 ramas sin conflicto, ¿push?"
+ * — every one of them something ready, waiting on one action only a person can
+ * take.
+ *
+ * Four fields and every one of them earns its place. `cost` and `recommend`
+ * because a decision handed over without what it costs and what the seat would
+ * do is a decision the person has to research before making. `proof` because
+ * "done" has to be a thing somebody could check — the same rule the queue
+ * already keeps for work.
+ *
+ * Not folded into `seat_task`: that queue is work to hand DOWN to an agent,
+ * and this is a question handed UP. Same shape, opposite direction, and one
+ * table would have made the view guess which was which.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_need (
+  id TEXT PRIMARY KEY,
+  root TEXT NOT NULL,
+  text TEXT NOT NULL,
+  cost TEXT NOT NULL DEFAULT '',
+  recommend TEXT NOT NULL DEFAULT '',
+  proof TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL,
+  done_at INTEGER,
+  outcome TEXT NOT NULL DEFAULT ''
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_need_root ON seat_need (root, done_at, created)`);
+
+/*
+ * AN ORCHESTRATOR THAT WAS ALREADY WORKING.
+ *
+ * The seat opens an agent and owns it. But the first orchestrator this feature
+ * was modelled on had been running a real project for a day when the seat was
+ * built, with five agents reporting to it and a context nobody wants to throw
+ * away — and "take the seat" would have replaced it with a stranger.
+ *
+ * So a session can be ADOPTED instead: the row points at a pane that already
+ * exists, and liveness is that pane, exactly as it is for a seat this app
+ * opened. Nothing is restarted and nothing is re-prompted; what changes is
+ * that the app knows who the orchestrator is.
+ */
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_session TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+/*
+ * A NAMED AGENT THIS APP DID NOT START.
+ *
+ * The registry held only what `startAgent` opened, so a person's own tmux tab
+ * running an agent did not exist as far as `broadcast`, `prompt` or `stop`
+ * were concerned — measured by the orchestrator here, whose whole fleet is
+ * tabs it opened by hand: "`list` da 0 con 2 tabs vivas". Enlisting one writes
+ * the same row, and this column is what keeps `stop` honest afterwards: a
+ * window somebody opened is not this app's to kill.
+ */
+try { db.exec("ALTER TABLE named_agent ADD COLUMN adopted INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
+
 /* What a run's branch pointed at when something last looked at it.
  *
  * Added after a merged branch was deleted by hand and the run that made it was
@@ -2028,6 +2214,19 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
     `DELETE FROM named_agent WHERE ended_at IS NOT NULL AND ended_at < ?`,
     [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000],
   );
+  /* The seat's own reports. A line is what it said at the time and the view
+     shows the last few; past ninety days it is a log nobody reads. Its task
+     rows are NOT swept: an item still waiting is a person's intent, and a
+     finished one is the record of what was asked and what came back. */
+  db.run(`DELETE FROM seat_line WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+  /* A worker's report, kept the same ninety days as the seat's own lines: it is
+     the other half of the same conversation. */
+  db.run(`DELETE FROM seat_report WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+  /* A decision the seat asked for, ONCE IT HAS BEEN TAKEN — the same ninety
+     days. One still waiting is never swept, whatever its age: an unanswered
+     question that quietly disappeared is exactly the failure this table was
+     built to end. */
+  db.run(`DELETE FROM seat_need WHERE done_at IS NOT NULL AND done_at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A role outlives its session by ninety days, then nothing needs it. */
   db.run(`DELETE FROM session_role WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A schedule that fired or was cancelled is a record, kept ninety days; one
@@ -2915,6 +3114,32 @@ function decentPrompt(p: string): boolean {
   if (!t || t.length < 3) return false;
   if (t.startsWith("<") || t.startsWith("/") || t.startsWith("!")) return false;
   if (/^(y|yes|no|ok|si|sí|vale|dale)\b/i.test(t) && t.length < 12) return false;
+  /*
+   * A QUESTION ABOUT A SCREENSHOT IS NOT A NAME.
+   *
+   * These three were on the Lantern, as the titles of three cards:
+   *
+   *   a line that is only a question mark and two attachments
+   *   a pasted transcript whose first line happens to be a sentence
+   *   a request that runs past the width and is cut off mid-word
+   *
+   * The first is a person pointing at a picture — the picture carried the
+   * subject and the words carried none of it. The second is a pasted
+   * transcript, whose first line happens to be a sentence. The third is a
+   * sentence long enough that the eighty characters it is cut to end
+   * mid-clause. All three are what somebody typed; none is what anybody would
+   * call the session, and a grid of cards is read by its titles.
+   *
+   * The pane id is the fallback, and it is the better answer here: "%44" says
+   * "this session has not named itself", which is true and short. A bad name
+   * says something false at the width of a card.
+   */
+  if (/\[Image #\d+\]|\bimage-cache\b|<system-reminder|```/i.test(t)) return false;
+  /* A paragraph is not a title: a name that has to be cut mid-word is one the
+     eye cannot use, and every session has a pane id that fits. */
+  if (t.length > 120) return false;
+  /* Three words of actual words. "esto?" and "mira esto" name nothing. */
+  if (t.split(/\s+/).filter((w) => /\p{L}{2,}/u.test(w)).length < 3) return false;
   return true;
 }
 

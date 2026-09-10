@@ -11,6 +11,7 @@
  * on the engine with this same board as its first message. Two copies of the
  * assembly would be two boards that could disagree.
  */
+import { existsSync } from "node:fs";
 import { tmux } from "./tmuxpane.ts";
 import * as AgentBoard from "./agentboard.ts";
 import * as Work from "./understudy-work.ts";
@@ -27,6 +28,8 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
 }
 
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
+import { isSeatSession } from "./seatrole.ts";
+import { seatPanes } from "./seatpanes.ts";
 export { LANTERN_PROMPT_MARK };
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
@@ -260,9 +263,32 @@ export async function boardNow(): Promise<LanternCard[]> {
   /* A status row the Lantern itself posted (a reminder that reached it before
      it was marked) is not a second agent: dropped before the merge, so the
      chat is one row, its pane's, and never "lantern" beside "Lantern". */
-  const said = AgentBoard.board().filter((a) => !isLanternSession(a.session));
-  const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting }).map((r) =>
-    isLanternSession(r.session) ? { ...r, role: "lantern" as const, needsYou: undefined, state: r.state === "waiting" ? "idle" : r.state } : r);
+  const said = AgentBoard.board().filter((a) => !isLanternSession(a.session) && !isSeatSession(a.session));
+  /*
+   * WHICH NAMED CHECKOUTS ARE ACTUALLY GONE — asked of the filesystem, once
+   * per distinct path, because the board drops a day-old row that names one.
+   *
+   * The question has to be this literal. Inferring it from "git does not list
+   * it and tmux showed no pane there" deleted `laptop-lid-closed-remote`,
+   * whose directory is `~`: never a git worktree, never absent. A row is only
+   * ever removed for a path this returned false for.
+   */
+  const gone = new Set<string>();
+  for (const wt of new Set(said.map((a) => (a.worktree ?? "").trim()).filter(Boolean))) {
+    if (!existsSync(wt)) gone.add(wt);
+  }
+  /* BY PANE AS WELL AS BY SESSION. A session id is not stable enough to rest
+     this on — see seatpanes.ts — and the cost of missing it was the seat being
+     woken every hour by a finding about itself. */
+  const chairs = seatPanes();
+  const rows: LanternCard[] = AgentBoard.merged({ said, hooks, panes, trees, runs, landedBy, names, waiting, gone }).map((r) => {
+    /* The two readers of this board, set aside the same way: the Lantern's
+       chat and the project's seat. Neither is somebody's work, and a "needs
+       you" on either is a person mid-conversation with it. */
+    const role = isLanternSession(r.session) ? "lantern" as const
+      : (isSeatSession(r.session) || (!!r.paneId && chairs.has(r.paneId))) ? "orchestrator" as const : null;
+    return role ? { ...r, role, needsYou: undefined, state: r.state === "waiting" ? "idle" as const : r.state } : r;
+  });
 
   /* The card's facts. Sessions in one query each; git per distinct worktree,
      cached, against the base the landed check already found. */
@@ -297,14 +323,61 @@ const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
  * terminal chat opens with, so the person asks the follow-up in their own
  * words against what is true now rather than what the pane text suggests.
  */
+/**
+ * A NAME THAT IS NOT SOMEBODY YOU CAN TALK TO.
+ *
+ * No pane this machine can see, AND quiet long enough that "it is between
+ * panes" stops being the likely story. Both halves are required: a live agent
+ * on a second tmux server has no pane here either, and it will have said
+ * something in the last two hours.
+ *
+ * Exported because it had exactly one reader and needed two: the readout the
+ * seat gets by CLI collapsed these, and the VIEW went on drawing all seventeen
+ * — thirteen of them dead for a day or two. One rule, both screens.
+ */
+const COLD_MS = 2 * 60 * 60_000;
+export const isGone = (r: { paneId?: string; needsYou?: unknown; saidAt?: number }, now = Date.now()): boolean =>
+  !r.paneId && !r.needsYou && (r.saidAt ?? 0) < now - COLD_MS;
+
 export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): string {
-  const rows = all.filter((r) => r.role !== "lantern");
-  const need = rows.filter((r) => r.needsYou);
-  const working = rows.filter((r) => !r.needsYou && r.state === "working");
-  const idle = rows.filter((r) => !r.needsYou && r.state === "idle");
+  const rows = all.filter((r) => !r.role);
+  /*
+   * A ROW IS NOT A PROCESS, and this list was reading as if it were.
+   *
+   * Measured by the orchestrator that lives off this readout, on its first
+   * round using it: sixteen of its rows were sessions that had ended one and
+   * two days earlier. A status line outlives the agent that wrote it on
+   * purpose — a row going quiet is information — but a name with no pane and
+   * no word since yesterday is not somebody you can go and talk to, and
+   * listing it beside the ones you can is what made a field of twenty read as
+   * twenty agents.
+   *
+   * Both halves are required: no pane THIS MACHINE CAN SEE, and quiet long
+   * enough that "it is between panes" stops being the likely story. A live
+   * agent on a second tmux server has no pane here either, and it will have
+   * said something in the last two hours.
+   *
+   * They are not dropped — the line is still a fact with a time on it — they
+   * are collapsed onto one line, which is also sixteen lines of somebody's
+   * context back.
+   */
+  const gone = rows.filter((r) => isGone(r, now));
+  const live = rows.filter((r) => !gone.includes(r));
+  const need = live.filter((r) => r.needsYou);
+  const working = live.filter((r) => !r.needsYou && r.state === "working");
+  const idle = live.filter((r) => !r.needsYou && r.state === "idle");
   const line = (r: AgentBoard.BoardRow) => {
     const bits = [r.name];
     if (r.needsYou) bits.push(`${waitWord(r.needsYou)} for ${ago(r.needsYou.since, now)} — "${r.needsYou.why}"`);
+    /*
+     * AND SINCE WHEN, because "idle" without a time is not an answer.
+     *
+     * Asked for in those words by the orchestrator that reads this: it wanted
+     * to know whether an agent is idle, working or dead AND how long it has
+     * been that way, without spending a `capture-pane` per agent to find out.
+     * The board already knows; it was simply not saying.
+     */
+    else if (r.saidAt) bits.push(r.state === "working" ? `moving, last ${ago(r.saidAt, now)} ago` : `quiet for ${ago(r.saidAt, now)}`);
     if (r.doing) bits.push(`on: ${r.doing}`);
     if (r.worktree || r.branch) bits.push([here(r.worktree), r.branch].filter(Boolean).join(" @ "));
     if (r.paneId) bits.push(`pane ${r.paneId}`);
@@ -315,6 +388,10 @@ export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): stri
   out.push(...need.map(line));
   out.push("", `Working (${working.length}):`, ...working.map(line));
   out.push("", `Idle (${idle.length}):`, ...idle.map(line));
+  if (gone.length) {
+    out.push("", `Gone (${gone.length}) — no pane here and quiet for hours; a name, not somebody to talk to:`,
+      `  ${gone.map((r) => r.name).join(", ")}`);
+  }
   return out.join("\n");
 }
 

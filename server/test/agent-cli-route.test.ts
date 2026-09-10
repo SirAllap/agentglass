@@ -256,3 +256,94 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(w.out.error).toContain("no agent");
   }, SLOW);
 });
+
+/*
+ * THE QUEUE, FROM THE CLI.
+ *
+ * The orchestrator could claim a task and finish one, and had no way at all to
+ * PUT one there: the only door was the view. Found by exercising all twenty-one
+ * verbs — a seat whose whole job is noticing things could not write one down.
+ */
+describe.skipIf(!have)("the queue through the CLI", () => {
+  test("a task can be added, listed and dropped without opening the view", async () => {
+    const root = process.env.AGENTGLASS_ROOT_FOR_TEST ?? dir;
+    const added = await cli("task", "the retry drops the last page", "--proof", "a failing test named in the report", "--root", root);
+    expect(added.out.ok, added.out.error).toBe(true);
+
+    const listed = await cli("tasks", "--root", root);
+    expect(listed.out.ok, JSON.stringify(listed.out)).toBe(true);
+    /* The queue answers at the top level, not under `result`: these routes are
+       the seat's own and predate the worker CLI's envelope. */
+    const tasks = ((listed.out as unknown as { tasks?: Array<Record<string, unknown>> }).tasks ?? []);
+    const mine = tasks.find((t) => t.title === "the retry drops the last page");
+    expect(mine, "the task did not come back in the queue").toBeDefined();
+    expect(mine?.proof).toBe("a failing test named in the report");
+
+    const dropped = await cli("drop", String(mine?.id ?? ""), "--root", root);
+    expect(dropped.out.ok).toBe(true);
+    const after = await cli("tasks", "--root", root);
+    const still = ((after.out as unknown as { tasks?: Array<Record<string, unknown>> }).tasks ?? [])
+      .find((t) => t.title === "the retry drops the last page");
+    expect(still, "a dropped task is still on the queue").toBeUndefined();
+  }, SLOW);
+});
+
+/*
+ * A TAB SOMEBODY OPENED THEMSELVES.
+ *
+ * The registry held only what `startAgent` opened, so for the orchestrator
+ * running a real project here — whose whole fleet is tmux tabs it opened by
+ * hand — `list` answered zero with two agents alive, and `broadcast`, its
+ * first ask, reached nobody. One message to N agents, with N of zero.
+ */
+describe.skipIf(!have)("enlisting a pane this app did not open", () => {
+  const tmuxCmd = (...args: string[]) => Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, ...args], {
+    env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ""}`, TMUX_TMPDIR: TMUX_TEST_TMPDIR },
+    stdout: "pipe", stderr: "pipe",
+  });
+
+  test("a hand-made window becomes an agent the verbs can reach, and stop lets it go", async () => {
+    /* A window this app did not make, running the same stub every other test
+       drives, named the way a person names a tab. */
+    const mk = tmuxCmd("new-session", "-d", "-s", "mine", "-n", "by-hand", "-c", wt, "claude");
+    expect(await mk.exited).toBe(0);
+    await Bun.sleep(600);
+
+    /* Before: it does not exist. */
+    const before = await cli("list");
+    expect((before.out.result?.agents ?? []).some((a) => a.name === "by-hand")).toBe(false);
+
+    const took = await cli("enlist", "by-hand");
+    expect(took.out.ok, took.out.error).toBe(true);
+
+    const after = await cli("list");
+    const row = (after.out.result?.agents ?? []).find((a) => a.name === "by-hand");
+    expect(row, "an enlisted tab is not in the list").toBeDefined();
+    expect(row?.cwd).toBe(wt);
+
+    /* And the verbs reach it: this is the whole point. */
+    const said = await cli("prompt", "by-hand", "PING-ENLISTED");
+    expect(said.out.ok, said.out.error).toBe(true);
+
+    /* Stop LETS GO of a window somebody else made: the row closes, the tab
+       stays. Killing it would be killing a day of somebody's context because a
+       verb was called on the name they lent it. */
+    const stopped = await cli("stop", "by-hand");
+    expect(stopped.out.ok).toBe(true);
+    expect(stopped.out.result?.killed).toBe(false);
+    const still = tmuxCmd("has-session", "-t", "=mine");
+    expect(await still.exited, "the tab was killed after being let go").toBe(0);
+
+    await tmuxCmd("kill-session", "-t", "=mine").exited;
+  }, SLOW);
+
+  test("a plain shell is refused, because prompting one types into somebody's command line", async () => {
+    const mk = tmuxCmd("new-session", "-d", "-s", "plain", "-n", "just-a-shell", "-c", wt);
+    expect(await mk.exited).toBe(0);
+    await Bun.sleep(400);
+    const r = await cli("enlist", "just-a-shell");
+    expect(r.out.ok).toBe(false);
+    expect(r.out.error).toContain("not an agent");
+    await tmuxCmd("kill-session", "-t", "=plain").exited;
+  }, SLOW);
+});

@@ -3,7 +3,7 @@
 // the handler; the DOM parts (hunk scroll, focus, input guard) mirror the
 // changes modal verbatim.
 import { test, expect } from "bun:test";
-import { afterViewed, stepFileIndex } from "../src/lib/prNav.ts";
+import { afterViewed, fileAtFloor, stepFileIndex } from "../src/lib/prNav.ts";
 
 test("j/k wrap around the file list", () => {
   expect(stepFileIndex(5, 0, 1)).toBe(1);
@@ -53,4 +53,42 @@ test("a file the list no longer holds — filtered away mid-tick — moves nothi
   // guard, viewing a filtered-out file threw you back to the top of the list.
   expect(afterViewed(FILES, "gone.ts", { oneFile: true, wasViewed: false })).toEqual({ kind: "stay" });
   expect(afterViewed(FILES, "gone.ts", { oneFile: false, wasViewed: false })).toEqual({ kind: "stay" });
+});
+
+/*
+ * WHICH FILE THE READER IS ON, while scrolling the all-files stack.
+ *
+ * The tree used to mark whatever was last clicked and then sit there: eight
+ * files into a pull request the rail was still explaining the first one. The
+ * numbers below are viewport tops of each file's card against a floor — the
+ * line just under the pinned toolbar — which is the same line the jump-to-file
+ * aligner parks a card on, so scrolling by hand and pressing `j` agree.
+ */
+test("the file at the floor is the last one that crossed it, not the biggest", () => {
+  // Three cards; the floor is at 100. The second has crossed, the third has not.
+  expect(fileAtFloor([-800, 40, 620], 100)).toBe(1);
+});
+
+test("at the very top the answer is the first file, not none", () => {
+  // Nothing has reached the floor yet — but the first file is what is on screen,
+  // and "none" is what left the rail saying "Nothing selected" beside a diff.
+  expect(fileAtFloor([300, 900], 100)).toBe(0);
+});
+
+test("scrolled past everything, the answer is the last file", () => {
+  expect(fileAtFloor([-2000, -1200, -300], 100)).toBe(2);
+});
+
+test("a card resting exactly on the floor counts as crossed", () => {
+  // The flicker case: a float top landing on the floor must not swap back and
+  // forth between two files on the frame where they meet.
+  expect(fileAtFloor([-500, 100], 100)).toBe(1);
+  expect(fileAtFloor([-500, 102], 100)).toBe(1);
+  expect(fileAtFloor([-500, 103], 100)).toBe(0);
+});
+
+test("an empty list has no answer", () => {
+  // -1 rather than 0: there is no file to select, and selecting index 0 of
+  // nothing is how a filter that hides everything ends up marking a ghost.
+  expect(fileAtFloor([], 100)).toBe(-1);
 });

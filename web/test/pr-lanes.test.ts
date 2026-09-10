@@ -250,8 +250,12 @@ describe("a conflict is not a green pull request", () => {
 
   it("caps a lane at something that fits on a screen", () => {
     // Forty cards in a column is a scroll inside a scroll — worse than the flat
-    // list the board replaced.
-    expect(LANE_CAP).toBeLessThanOrEqual(8);
+    // list the board replaced. What this holds is that a cap EXISTS and stays
+    // this side of a flat list; the number itself moved once already, when six
+    // turned out to hide seven cards there was room for and put a button in
+    // front of them.
+    expect(LANE_CAP).toBeLessThanOrEqual(25);
+    expect(LANE_CAP).toBeGreaterThanOrEqual(10);
   });
 });
 

@@ -7,7 +7,9 @@ import { describe, expect, test } from "bun:test";
 import type { PrSummary } from "../../shared/types.ts";
 import {
   parseQuery, serializeQuery, applyFilters, buildFacets, toggleFacet, activeCount, DEFAULT_SORT,
+  readPrField, builderFields, queryToRules,
 } from "../src/lib/prFilter.ts";
+import { applyWith } from "../src/components/tasks/filters.ts";
 
 let seq = 100;
 function pr(over: Partial<PrSummary> = {}): PrSummary {
@@ -258,5 +260,172 @@ describe("toggleFacet round-trips through the string", () => {
     expect(serializeQuery(f)).toBe("label:bug");
     f = toggleFacet(parseQuery(serializeQuery(f)), "labels", "bug");
     expect(serializeQuery(f)).toBe("");
+  });
+});
+
+/*
+ * THE TRACKER CARD BEHIND A PULL REQUEST.
+ *
+ * The board could say which card a pull request came from and could not narrow
+ * by what that card said. The example that decides the shape is the one that
+ * needs both directions: only the ones in a given status, or everything EXCEPT
+ * those.
+ *
+ * The card's status and its people are already on every row of the list, so
+ * this filters what the board is already drawing rather than asking anybody
+ * for anything.
+ */
+describe("filtering by the card behind the pull request", () => {
+  const carded = (status: string, people: string[] = []) => pr({
+    card: {
+      id: "c1", title: "a card", status, priority: null,
+      people: people.map((name) => ({ name, initials: name.slice(0, 2) })),
+    },
+  });
+
+  test("keeps only the ones whose card is in that status", () => {
+    const rows = [carded("READY FOR QA"), carded("IN DEVELOPMENT"), carded("READY FOR QA")];
+    expect(applyFilters(rows, parseQuery("cardstatus:\"READY FOR QA\"")).length).toBe(2);
+  });
+
+  test("a pull request with no card is NOT one of them", () => {
+    /*
+     * `[]`, not the fail-open `null` the checks facet uses. A question about
+     * card statuses is a question about rows that HAVE a card; a row with no
+     * card answered "maybe" would put every unlinked pull request in the
+     * result.
+     */
+    const rows = [carded("READY FOR QA"), pr()];
+    const kept = applyFilters(rows, parseQuery("cardstatus:\"READY FOR QA\""));
+    expect(kept.length).toBe(1);
+    expect(kept[0].card?.status).toBe("READY FOR QA");
+  });
+
+  test("the card's people are not the GitHub assignees", () => {
+    /*
+     * A name on a tracker board is not a username on a forge, and the two
+     * disagree often enough that one shared filter would be a wrong answer
+     * rather than a convenience.
+     */
+    const rows = [carded("IN QA", ["Ada Lovelace"]), pr({ assignees: ["Ada Lovelace"] })];
+    expect(applyFilters(rows, parseQuery("cardassignee:\"Ada Lovelace\"")).length).toBe(1);
+    expect(applyFilters(rows, parseQuery("assignee:\"Ada Lovelace\"")).length).toBe(1);
+  });
+
+  test("both card facets survive a round trip through the query string", () => {
+    // The query string is the state, so a filter that cannot be written down
+    // is a filter that vanishes on the next keystroke.
+    const q = 'cardstatus:"READY FOR QA" cardassignee:"Ada Lovelace"';
+    expect(serializeQuery(parseQuery(q))).toContain('cardstatus:"READY FOR QA"');
+    expect(serializeQuery(parseQuery(q))).toContain('cardassignee:"Ada Lovelace"');
+  });
+
+  test("offers nothing to somebody with no tracker at all", () => {
+    // Repo-wide: without ClickUp connected no row has a card, so the field has
+    // no options and never appears. His constraint, and it costs nothing.
+    const facets = buildFacets([pr(), pr()], parseQuery(""));
+    const status = facets.find((f) => f.queryKey === "cardstatus");
+    expect(status?.options.length ?? 0).toBe(0);
+  });
+});
+
+/*
+ * THE BOARD BORROWS THE TASKS BOARD'S QUERY BUILDER.
+ *
+ * The pills answer "which of these" and cannot answer "anything but these":
+ * there is no way to say `is not` in a checkbox list, and no way to ask for the
+ * ones with no milestone at all. Rather than grow a second grammar, the board
+ * reads its rows through the same engine — so these tests hold the three pieces
+ * of the translation, which is where a mismatch would hide.
+ */
+describe("the board through the rule engine", () => {
+  test("every field the pills know, the rules know too", () => {
+    // One table, read two ways. If a facet is ever added to one and not the
+    // other, this is the line that says so.
+    expect(readPrField(pr({ author: "ana" }), "author")).toEqual(["ana"]);
+    expect(readPrField(pr({ labels: [{ name: "backend", color: "" }] }), "label")).toEqual(["backend"]);
+    expect(readPrField(pr({ milestone: "v2" }), "milestone")).toEqual(["v2"]);
+  });
+
+  test("a field nobody has heard of narrows nothing instead of throwing", () => {
+    // A saved view from a future version must not break the board.
+    expect(readPrField(pr(), "invented-later")).toEqual([]);
+  });
+
+  test("`is not` keeps everything the pills would have dropped", () => {
+    const rows = [pr({ author: "ana" }), pr({ author: "bo" }), pr({ author: "cy" })];
+    const not = applyWith(rows, { join: "and", rules: [{ id: "r1", field: "author", op: "not", values: ["ana"] }] }, readPrField);
+    expect(not.map((p) => p.author)).toEqual(["bo", "cy"]);
+  });
+
+  test("`is not set` finds the ones with nothing there", () => {
+    // The question the pills cannot ask at all: which have no milestone.
+    const rows = [pr({ milestone: "v2" }), pr(), pr({ milestone: "v3" })];
+    const none = applyWith(rows, { join: "and", rules: [{ id: "r1", field: "milestone", op: "unset", values: [] }] }, readPrField);
+    expect(none.length).toBe(1);
+    expect(none[0].milestone ?? null).toBeNull();
+  });
+
+  test("the saved tabs open with their filters showing, not blank", () => {
+    // "Mine", "Failing" and the rest are hand-written query strings, and
+    // opening one has to FILL the builder rather than clear it.
+    const rules = queryToRules('author:ana label:backend');
+    expect(rules.map((r) => [r.field, r.op, r.values])).toEqual([
+      ["author", "is", ["ana"]],
+      ["label", "is", ["backend"]],
+    ]);
+  });
+
+  test("a field with no values on any row is not offered", () => {
+    // What keeps `Card status` invisible for everybody without a tracker.
+    const fields = builderFields([pr(), pr()], parseQuery(""));
+    expect(fields.some((f) => f.key === "cardstatus")).toBe(false);
+    expect(fields.some((f) => f.key === "author")).toBe(true);
+  });
+});
+
+/*
+ * THE WHOLE WORKFLOW, NOT THE PART ON SCREEN.
+ *
+ * "faltan muchos statuses" — the menu offered the two statuses the loaded pull
+ * requests happened to be in, out of a workflow with eleven. A filter that can
+ * only offer what is already visible cannot answer "show me the ones I am NOT
+ * looking at", which is the half it exists for.
+ */
+describe("the statuses the filter offers", () => {
+  const seeded = {
+    authors: [], assignees: [], labels: [], milestones: [], bases: [],
+    cardStatuses: [
+      { status: "to do", color: "#87909e" },
+      { status: "in development", color: "#f5c542" },
+      { status: "code review", color: "#e8912d" },
+      { status: "ready for qa", color: "#e05194" },
+    ],
+  };
+  const carded = (status: string) => pr({ card: { id: `c-${status}`, title: "x", status, priority: null } });
+
+  test("offers every status the boards know, not the ones on this page", () => {
+    const rows = [carded("in development"), carded("code review")];
+    const opts = buildFacets(rows, parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.map((o) => o.value)).toEqual(["to do", "in development", "code review", "ready for qa"]);
+  });
+
+  test("each one carries the colour the card draws it in", () => {
+    // So the option reads as the chip it filters rather than as a grey word.
+    const opts = buildFacets([carded("to do")], parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.find((o) => o.value === "ready for qa")?.tint).toBe("#e05194");
+  });
+
+  test("a status on a card but not in the seeded list is still offered", () => {
+    // The seed is a cache; a board read since could hold a status it predates,
+    // and dropping it would hide rows that are on screen.
+    const opts = buildFacets([carded("invented today")], parseQuery(""), seeded).find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.map((o) => o.value)).toContain("invented today");
+  });
+
+  test("no tracker, no statuses, no field", () => {
+    const opts = buildFacets([pr()], parseQuery(""), { authors: [], assignees: [], labels: [], milestones: [], bases: [] })
+      .find((f) => f.queryKey === "cardstatus")?.options ?? [];
+    expect(opts.length).toBe(0);
   });
 });

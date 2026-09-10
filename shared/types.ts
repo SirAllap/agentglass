@@ -1052,7 +1052,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks" | "understudy" | "lantern";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks" | "lantern" | "seat";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -1159,6 +1159,11 @@ export interface BrowserAskFrame {
     /* §12: DOM, network and console against one timeline, navigable
        afterwards — what happened, as an artefact rather than a reconstruction. */
     | "trace"
+    /* The inspector panel itself: open it, change its panel, scale it, or
+       photograph it. The last one is the point — Console and Network answer as
+       data through CDP, while Elements, Sources and Application answer as
+       nothing at all, so their pixels are the only reading of them there is. */
+    | "inspect"
     /* §2: the tree of one subtree instead of the page — a modal is fifteen
        nodes inside three hundred, and the rest is paid for every turn. */
     | "region"
@@ -3109,7 +3114,7 @@ export interface PrSummary {
      * Who the card is on — ClickUp's own people, not GitHub logins.
      *
      * Drawn first with `<Avatar login={...}>`, which asks GitHub for a portrait
-     * of "Antonio García" and gets a blank circle back: a name on a tracker
+     * of "Grace Hopper" and gets a blank circle back: a name on a tracker
      * board is not a username on a forge. The tracker already hands over the
      * photo, the initials and the colour it assigned each person, and the tasks
      * view has drawn them that way all along.
@@ -3489,6 +3494,14 @@ export interface PrActionResult { ok: boolean; error?: string; detail?: string }
 export interface HookSetupStatus {
   /** Our forwarder is present in settings.json right now. */
   installed: boolean;
+  /**
+   * The GATE hook is wired right now — a separate switch from the forwarder,
+   * because it is a separate bargain: telemetry may never stop a tool call,
+   * and the gate exists to hold one until a person decides.
+   */
+  gate: boolean;
+  /** The gate script ships with this build. False = the switch is unavailable. */
+  gateBundled: boolean;
   /** The hook scripts are shipped with this build (a source checkout, or a
    *  packaged install that carries hooks/). False = install is unavailable. */
   bundled: boolean;

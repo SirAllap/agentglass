@@ -30,6 +30,7 @@ const viewsSrc = read("web/src/components/workspace/views.ts");
 const workspaceSrc = read("web/src/components/workspace/Workspace.tsx");
 const controlSrc = read("server/src/control.ts");
 const iconsSrc = read("web/src/components/workspace/icons.tsx");
+const settingsSrc = read("web/src/components/SettingsModal.tsx");
 
 /** The `ViewId` union, in the order it is written. */
 const unionIds = (() => {
@@ -76,45 +77,47 @@ const BODY_EXEMPT: Record<string, string> = {
   dash: "rendered from the `dashboard` prop in the map above Body, because its data is built at the root",
 };
 
-describe("the understudy view is registered in all four places", () => {
-  it("is in the ViewId union", () => {
-    expect(unionIds).toContain("understudy");
+describe("the Clone view is retired, and left nothing dangling", () => {
+  /*
+   * It had a rail seat until 2026-09-08. What it existed for — the precedent
+   * bank — became the orchestrator's memory (seatmemory.ts), and what it kept
+   * beside that was a ledger of 145,807 rows of which 879 were ever scored and
+   * a work loop that had not run in a week. So the view went and its data did
+   * not: the tables are untouched and the consent list that fills the bank now
+   * lives on the Knowledge settings page, which is the only place it was ever
+   * a setting.
+   *
+   * Retiring a view means leaving all four registries agreeing, and the way
+   * that goes wrong is one of them keeping the id: the rail draws a tab whose
+   * body is `null`, or `POST /control {to:"understudy"}` opens nothing.
+   */
+  it("is out of the ViewId union", () => {
+    /* The union LINE, not the file: `understudy` is still a socket frame type
+       and an alarm kind, and neither is a view. A test that grepped the whole
+       file would have failed on those and taught somebody to delete them. */
+    const union = /export type ViewId =([^;]+);/.exec(typesSrc);
+    expect(union).not.toBeNull();
+    expect(union![1]).not.toContain("understudy");
   });
 
-  it("is in VIEWS, in the utility drawer, on the key the rail was given", () => {
-    const m = /\{\s*id:\s*"understudy",([^}]*)\}/.exec(viewsSrc);
-    expect(m).not.toBeNull();
-    const entry = m![1];
-    /* The LABEL is "Clone" and the id is still "understudy". He renamed what
-       he reads — "the name does the idea no justice, it is more of a clone" —
-       and the id is a key in the view registry, in the control bus and in his
-       saved layout, so renaming that would silently drop whatever pane
-       arrangement he already has. */
-    expect(entry).toContain('label: "Clone"');
-    expect(entry).toContain('key: "u"');
-    expect(entry).toContain("icon: UnderstudyIcon");
-    expect(entry).toContain('group: "utility"');
-    // A hint with something in it: the rail's tooltip and the shortcuts sheet
-    // both read it, and an empty one leaves a tab nobody can identify.
-    const hint = /hint:\s*"([^"]+)"/.exec(entry);
-    expect(hint).not.toBeNull();
-    expect(hint![1].length).toBeGreaterThan(20);
-    // And the icon it names is imported from where the icons live, rather than
-    // drawn in the list.
-    /* The import line grows as views are added — it is a list, and pinning its
-       last element made adding a view fail here rather than where it matters.
-       What this checks is that the icon comes from the icon module at all. */
-    expect(viewsSrc).toMatch(/import \{[^}]*UnderstudyIcon[^}]*\} from "\.\/icons\.tsx"/);
+  it("is out of VIEWS, so the rail cannot draw it", () => {
+    expect(viewsSrc).not.toMatch(/id:\s*"understudy"/);
   });
 
-  it("has a body for Workspace to render", () => {
-    expect(bodyIds).toContain("understudy");
-    expect(workspaceSrc).toContain("UnderstudyView");
-    expect(workspaceSrc).toContain("understudy/UnderstudyPanel.tsx");
+  it("is out of Workspace's body switch", () => {
+    expect(workspaceSrc).not.toContain('case "understudy"');
   });
 
-  it("is on the server's allowlist, or POST /control answers 400 for it", () => {
-    expect(controlIds).toContain("understudy");
+  it("is off the server's allowlist, so POST /control refuses it", () => {
+    expect(controlSrc).not.toContain('"understudy"');
+  });
+
+  it("but its settings page and its art are still here", () => {
+    /* The half that was worth keeping. A test that only checked the removal
+       would pass just as happily if somebody deleted the consent list too. */
+    expect(settingsSrc).toContain("What the orchestrator learns from");
+    expect(settingsSrc).toContain("<Teach active={open} />");
+    expect(iconsSrc).toContain("export function UnderstudyIcon");
   });
 });
 
@@ -150,8 +153,8 @@ describe("the four lists agree", () => {
   });
 });
 
-describe("the understudy glyph", () => {
-  it("is drawn in the shared icon file, at the shared size", () => {
+describe("the Clone glyph, still drawn for the Knowledge settings page", () => {
+  it("is in the shared icon file, at the shared size", () => {
     expect(iconsSrc).toContain("export function UnderstudyIcon({ size = ICON.md }: P)");
     // The shared attribute bag, not a private one: it carries viewBox 24,
     // stroke=currentColor and strokeWidth 2, which is what keeps the rail one

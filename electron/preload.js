@@ -178,6 +178,14 @@ contextBridge.exposeInMainWorld("agentglass", {
   /** The inspector's OWN zoom — not the app's, not the page's.
    * @param {{ guest: number; level: number }} req */
   browserDevtoolsZoom: (req) => ipcRenderer.invoke("ag:browserDevtoolsZoom", req),
+  /** A picture of the inspector itself — the page's own screenshot cannot see
+   *  it, because it is a view of the shell rather than part of the page.
+   *  @param {{ guest: number }} req */
+  browserDevtoolsShot: (req) => ipcRenderer.invoke("ag:browserDevtoolsShot", req),
+  /** Which panel the inspector shows. Not CDP: the panels belong to the
+   *  DevTools front-end, and CDP talks to the page being inspected.
+   *  @param {{ guest: number; panel: string }} req */
+  browserDevtoolsPanel: (req) => ipcRenderer.invoke("ag:browserDevtoolsPanel", req),
   /** …and the same zoom after a Ctrl+wheel or Ctrl+plus inside the inspector,
    *  which lands in that view and never reaches this one.
    * @param {(at: { guest: number; level: number }) => void} fn */
@@ -186,6 +194,16 @@ contextBridge.exposeInMainWorld("agentglass", {
     const h = (_e, at) => fn(at);
     ipcRenderer.on("ag:browser-devtools-zoom", h);
     return () => ipcRenderer.removeListener("ag:browser-devtools-zoom", h);
+  },
+  /** Whether a tab has an inspector open — from the shell, so the panel's own
+   *  open and a shell verb's open are one event and the tab cannot end up
+   *  showing a mark that disagrees with the view.
+   *  @param {(at: { guest: number; open: boolean }) => void} fn */
+  onDevtoolsOpen: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, at) => fn(at);
+    ipcRenderer.on("ag:browser-devtools-open", h);
+    return () => ipcRenderer.removeListener("ag:browser-devtools-open", h);
   },
   /** "Inspect" from the page's own context menu, with where it was clicked.
    * @param {(at: { x: number; y: number }) => void} fn */

@@ -247,10 +247,11 @@ fi
 #
 # Copied rather than symlinked: this outlives any particular build, and a
 # dangling skill is a tool an agent believes in and cannot use.
-if [ -f "$APP/resources/skills/browser-use/SKILL.md" ]; then
-  mkdir -p "$HOME/.claude/skills/browser-use"
-  cp "$APP/resources/skills/browser-use/SKILL.md" "$HOME/.claude/skills/browser-use/SKILL.md"
-fi
+for _s in browser-use orchestrator; do
+  [ -f "$APP/resources/skills/$_s/SKILL.md" ] || continue
+  mkdir -p "$HOME/.claude/skills/$_s"
+  cp "$APP/resources/skills/$_s/SKILL.md" "$HOME/.claude/skills/$_s/SKILL.md"
+done
 
 # Chromium won't run unsandboxed: it wants chrome-sandbox owned by root with
 # the setuid bit, and the namespace sandbox it would otherwise fall back to is

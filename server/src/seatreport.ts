@@ -1,0 +1,227 @@
+/*
+ * THE INBOX — reports from the agents doing the work, in the shape the brief
+ * asks for.
+ *
+ * The orchestrator this was modelled on had one thing at the top of its list:
+ * a tray where each agent's report arrives in the fixed format without it
+ * having to paste them five times. Today a worker messages the seat and the
+ * report lands as prose in the most expensive context on the machine, which is
+ * exactly the cost that made it demand a fixed shape in the first place — its
+ * first round of statuses came back forty lines per agent.
+ *
+ * So a report is a ROW with four fields, and the seat drains them in one call.
+ *
+ * PARSED, NOT DEMANDED. An agent that writes the four labels gets four fields;
+ * one that writes a paragraph gets that paragraph as its state and nothing is
+ * lost. A parser that refuses a report is a parser that turns a status into an
+ * argument about formatting, and the report is the thing that matters.
+ */
+import { db } from "./db.ts";
+import { board, saidBy } from "./agentboard.ts";
+import { agentNamed } from "./agentops.ts";
+
+export interface SeatReport {
+  id: number;
+  root: string;
+  agent: string;
+  session: string;
+  state: string;
+  blocked: string;
+  need: string;
+  cost: string;
+  raw: string;
+  at: number;
+  readAt: number | null;
+}
+
+interface Row {
+  id: number; root: string; agent: string; session: string;
+  state: string; blocked: string; need: string; cost: string; raw: string;
+  at: number; read_at: number | null;
+}
+
+const toReport = (r: Row): SeatReport => ({
+  id: r.id, root: r.root, agent: r.agent, session: r.session,
+  state: r.state, blocked: r.blocked, need: r.need, cost: r.cost, raw: r.raw,
+  at: r.at, readAt: r.read_at,
+});
+
+const insert = db.query<never, [string, string, string, string, string, string, string, string, number]>(`
+  INSERT INTO seat_report (root, agent, session, state, blocked, need, cost, raw, at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const unreadQ = db.query<Row, [string, number]>(
+  `SELECT * FROM seat_report WHERE root = ? AND read_at IS NULL ORDER BY at ASC LIMIT ?`);
+const recentQ = db.query<Row, [string, number]>(
+  `SELECT * FROM seat_report WHERE root = ? ORDER BY at DESC LIMIT ?`);
+const markQ = db.query<never, [number, string]>(
+  `UPDATE seat_report SET read_at = ? WHERE root = ? AND read_at IS NULL`);
+const countQ = db.query<{ n: number }, [string]>(
+  `SELECT COUNT(*) AS n FROM seat_report WHERE root = ? AND read_at IS NULL`);
+
+const line = (s: string) => String(s ?? "").replace(/\s+/g, " ").trim();
+
+/**
+ * Pull the four fields out of whatever an agent sent.
+ *
+ * The labels are matched loosely on purpose — an agent writing in its own
+ * language, or with a colon, a dash or nothing after the word, still lands in
+ * the right field. Anything before the first label is the state, because a
+ * report that opens with a sentence and then labels the rest is the common
+ * shape and dropping that sentence would drop the answer.
+ */
+export function parseReport(text: string): { state: string; blocked: string; need: string; cost: string } {
+  const raw = String(text ?? "");
+  /* Two details that are only obvious once they bite:
+     the bold markers sit on EITHER side of the separator — `**STATE**:` and
+     `**STATE:**` are both things people write — so both positions are optional;
+     and the word ends where the word ends, or `COSTE` matches the `cost` arm
+     and leaves an `E` at the head of the value. */
+  const WORDS = "state|estado|blocked|bloqueo|bloqueado|need|necesito|necesita|coste|costo|cost";
+  const LABEL = new RegExp(`^\\s*(?:\\*\\*)?\\s*(${WORDS})\\b\\s*(?:\\*\\*)?\\s*[:\\-–—]?\\s*(?:\\*\\*)?\\s*`, "i");
+  /*
+   * AND THE WHOLE REPORT ON ONE LINE, which is how it actually arrives.
+   *
+   * The shape this was written for puts each field on its own line. The
+   * orchestrator it was written FOR writes them in a row —
+   * `ESTADO: ... / BLOQUEO: ninguno / NECESITO: ... / COSTE: 0` — because that
+   * is the shape its own brief taught its agents, and measured against the
+   * real thing every field but the first landed in `state`. A parser that only
+   * accepts the shape it prefers is a parser that turns a status into an
+   * argument about formatting.
+   *
+   * The slash only separates when a LABEL follows it: a state that says
+   * "src/api / src/web" keeps its slash and stays one sentence.
+   */
+  const SPLIT = new RegExp(`\\s+[/|·]\\s+(?=(?:\\*\\*)?\\s*(?:${WORDS})\\b)`, "gi");
+  const bucket: Record<string, string[]> = { state: [], blocked: [], need: [], cost: [] };
+  const key = (w: string) => {
+    const l = w.toLowerCase();
+    if (l.startsWith("est") || l === "state") return "state";
+    if (l.startsWith("bloq") || l === "blocked") return "blocked";
+    if (l.startsWith("nece") || l === "need") return "need";
+    return "cost";
+  };
+  let where = "state";
+  for (const ln of raw.replace(SPLIT, "\n").split("\n")) {
+    const m = LABEL.exec(ln);
+    if (m) { where = key(m[1]!); bucket[where]!.push(ln.slice(m[0].length)); continue; }
+    bucket[where]!.push(ln);
+  }
+  const join = (k: string) => line(bucket[k]!.join(" ")).slice(0, 600);
+  return { state: join("state"), blocked: join("blocked"), need: join("need"), cost: join("cost") };
+}
+
+export function addReport(p: { root: string; agent: string; session?: string; text: string; now?: number }):
+{ ok: true; report: SeatReport } | { ok: false; error: string } {
+  const agent = line(p.agent).slice(0, 80);
+  if (!agent) return { ok: false, error: "a report says who it is from" };
+  const raw = String(p.text ?? "").slice(0, 8000);
+  if (!raw.trim()) return { ok: false, error: "an empty report is not a report" };
+  const f = parseReport(raw);
+  const at = p.now ?? Date.now();
+  insert.run(p.root, agent, line(p.session ?? ""), f.state, f.blocked, f.need, f.cost, raw, at);
+  /*
+   * AND THE BOARD LEARNS WHAT THIS AGENT IS ON.
+   *
+   * The row's `doing` is the last line the agent posted to the Lantern, and it
+   * goes stale the moment the work moves: measured on this machine, a row read
+   * "waiting to push" while three pushes had already happened. A report is the
+   * same agent saying the same kind of thing, in a fixed shape, minutes ago —
+   * so the freshest of the two wins and nobody has to post twice.
+   *
+   * ONLY FOR A NAME THE BOARD ALREADY HAS. `saidBy` writes a row keyed by
+   * name, so a report from a name nobody has seen would draw a second agent
+   * that does not exist — and the reporting name is whatever the worker's
+   * environment happened to call it.
+   */
+  if (f.state) {
+    /*
+     * A NAME THE MACHINE ALREADY KNOWS, by either door.
+     *
+     * The board's rows are agents that have POSTED a line; the registry's are
+     * agents this app opened. A worker started through `start` and reporting
+     * before it ever posted to the Lantern was in the second and not the
+     * first, so its report refreshed nothing — measured: a worker's `on:` line
+     * was still missing from the readout after it reported. Either door is proof
+     * enough that the name is somebody's, which is all this needs: what it
+     * must not do is invent a row for a name that came from a worker's
+     * environment and belongs to nobody.
+     */
+    const known = board().find((r) => r.name === agent);
+    const started = known ? null : agentNamed(agent);
+    if (known || started) {
+      saidBy({
+        name: agent, doing: f.state, at,
+        worktree: known?.worktree ?? started?.cwd, branch: known?.branch, session: known?.session,
+      });
+    }
+  }
+  const [last] = recentQ.all(p.root, 1);
+  return { ok: true, report: toReport(last!) };
+}
+
+export const unreadReports = (root: string, limit = 20): SeatReport[] => unreadQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
+export const recentReports = (root: string, limit = 8): SeatReport[] => recentQ.all(root, Math.max(1, Math.min(100, limit))).map(toReport);
+export const unreadCount = (root: string): number => countQ.get(root)?.n ?? 0;
+
+/*
+ * HOW MANY UNREAD REPORTS ARE WORTH A TURN.
+ *
+ * Not all of them, and the orchestrator that reads these drew the line itself:
+ * a report that says only what it is doing is something to note, and one that
+ * says it is stopped or needs a decision is something to act on. Waking for
+ * the first kind spends a whole turn of the most expensive context on the
+ * machine to learn that work is proceeding — which is the exact cost this
+ * whole arrangement exists to avoid.
+ *
+ * The quiet ones are still in the tray, still drawn, and still handed over by
+ * the next `inbox`. They simply do not ring the bell.
+ */
+/*
+ * "NOTHING" IS AN ANSWER, NOT A BLOCKER.
+ *
+ * The brief every worker is handed says it in as many words — `BLOCKED what is
+ * stopping you, or "nothing"` — so the ordinary report has both fields filled
+ * in with a word that means empty. Counting those as reasons to wake would
+ * make the rule fire on every report ever sent, which is the rule not
+ * existing. Caught by its own test before it shipped.
+ *
+ * Deliberately a short list of the words people actually type, in the two
+ * languages this machine writes in, and nothing cleverer: a report that says
+ * "nothing blocking except the container" is blocked, and must stay so.
+ */
+const NOTHING = /^(nothing|none|no|n\/?a|nada|ninguno|ninguna|ningun|sin bloqueo|-{1,2}|—|\.)\s*[.!]?$/i;
+const saysNothing = (v: string): boolean => !v.trim() || NOTHING.test(v.trim());
+
+/** Whether this report is one to act on: stopped, or asking for a decision. */
+export const worthWaking = (r: SeatReport): boolean => !saysNothing(r.blocked) || !saysNothing(r.need);
+
+export const unreadWorthWaking = (root: string): number =>
+  unreadReports(root, 100).filter(worthWaking).length;
+
+/** Everything unread, and it is read now. One call, which is the whole ask. */
+export function drainReports(root: string, now = Date.now()): SeatReport[] {
+  const out = unreadReports(root, 100);
+  if (out.length) markQ.run(now, root);
+  return out;
+}
+
+/** The inbox as the seat reads it in its prompt: who said what, shortest
+ *  first-useful order — anybody blocked or needing something, then the rest. */
+export function inboxReadout(root: string): string {
+  const rs = unreadReports(root, 20);
+  if (!rs.length) return "No unread reports.";
+  const urgent = rs.filter((r) => r.blocked || r.need);
+  const rest = rs.filter((r) => !r.blocked && !r.need);
+  const one = (r: SeatReport) => [
+    `- ${r.agent}: ${r.state || "(said nothing about its state)"}`,
+    r.blocked ? `    blocked: ${r.blocked}` : "",
+    r.need ? `    needs: ${r.need}` : "",
+    r.cost ? `    cost: ${r.cost}` : "",
+  ].filter(Boolean).join("\n");
+  const out: string[] = [];
+  if (urgent.length) out.push(`${urgent.length} of them are stopped or need something:`, ...urgent.map(one));
+  if (rest.length) out.push(urgent.length ? "" : `${rest.length} reports:`, ...rest.map(one));
+  return out.join("\n");
+}

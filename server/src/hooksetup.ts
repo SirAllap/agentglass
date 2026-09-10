@@ -252,6 +252,94 @@ function readCfg(path: string): { cfg: any } | { error: string } {
   }
 }
 
+/*
+ * THE GATE, WHICH IS A DIFFERENT BARGAIN AND SO A DIFFERENT SWITCH.
+ *
+ * The forwarder above is telemetry, and the rule beside it is that telemetry
+ * must never be able to stop a tool call — its command ends `|| exit 0` for
+ * exactly that reason. The gate is the opposite by design: it HOLDS a tool
+ * call until a person decides, and an outward one (a push, a comment, a
+ * review, a ticket, a message in a channel) is held closed.
+ *
+ * That is why it installs and uninstalls on its own, and why nothing here
+ * turns it on as a side effect of anything else. Until it existed, what held
+ * an outward call back was an agent remembering to hold it: it worked, and it
+ * worked by convention rather than by tooling. The tool existed and there was
+ * no switch.
+ *
+ * One PreToolUse entry, matcher `*`, and NO `|| exit 0`: swallowing the exit
+ * status is what makes telemetry advisory, and a gate whose refusal is
+ * swallowed is not a gate. `gate_event.py` allows on every failure it controls
+ * — an unreachable server, a timeout, a bad answer — so the honest failure
+ * mode is already inside the script rather than bolted on outside it.
+ */
+const GATE_MARKER = "gate_event.py";
+const isGate = (e: any): boolean => asArray(e?.hooks).some((h: any) => String(h?.command ?? "").includes(GATE_MARKER));
+
+export function gateCommand(python: string, script: string): string {
+  return `${python} "${script}"`;
+}
+
+export function installGate(cfg: any, script: string, python: string): void {
+  const hooks = cfg.hooks ?? (cfg.hooks = {});
+  /* Any earlier entry of ours goes first, so re-installing from a moved build
+     re-points the path instead of leaving two. */
+  const arr = asArray(hooks.PreToolUse).filter((e) => !isGate(e));
+  arr.push({ matcher: "*", hooks: [{ type: "command", command: gateCommand(python, script) }] });
+  hooks.PreToolUse = arr;
+}
+
+export function uninstallGate(cfg: any): void {
+  const hooks = cfg?.hooks;
+  if (!hooks) return;
+  const kept = asArray(hooks.PreToolUse).filter((e) => !isGate(e));
+  if (kept.length) hooks.PreToolUse = kept;
+  else delete hooks.PreToolUse;
+  if (hooks && Object.keys(hooks).length === 0) delete cfg.hooks;
+}
+
+/** Whether the gate hook is wired right now. */
+export function gateInstalled(): boolean {
+  const r = readCfg(settingsPath());
+  if (!("cfg" in r)) return false;
+  return asArray((r.cfg?.hooks ?? {}).PreToolUse).some(isGate);
+}
+
+/**
+ * Turn the gate on or off, writing the same backup the other install writes.
+ *
+ * Deliberately the same shape as `applyHooks` rather than a flag on it: two
+ * switches, two answers, and no way to get the gate by asking for telemetry.
+ */
+export function applyGate(action: "install" | "uninstall"): HookSetupResult {
+  const path = settingsPath();
+  const dir = hooksDir();
+  if (action === "install" && (!dir || !existsSync(join(dir, GATE_MARKER)))) {
+    return { ok: false, installed: false, changed: false, settingsPath: path, error: "the gate hook is not bundled with this build" };
+  }
+  const r = readCfg(path);
+  if ("error" in r) return { ok: false, installed: false, changed: false, settingsPath: path, error: r.error };
+  const cfg = r.cfg;
+  const before = stable(cfg);
+  if (action === "install") installGate(cfg, join(dir!, GATE_MARKER), hookPython());
+  else uninstallGate(cfg);
+  const installed = action === "install";
+  if (stable(cfg) === before) return { ok: true, installed, changed: false, settingsPath: path };
+
+  let backup: string | undefined;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    if (existsSync(path)) {
+      backup = `${path}.bak.agentglass.${stamp()}`;
+      copyFileSync(path, backup);
+    }
+    writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+  } catch (e: any) {
+    return { ok: false, installed: false, changed: false, settingsPath: path, error: String(e?.message ?? e) };
+  }
+  return { ok: true, installed, changed: true, backup, settingsPath: path };
+}
+
 export function hookStatus(): HookSetupStatus {
   const path = settingsPath();
   const r = readCfg(path);
@@ -260,7 +348,12 @@ export function hookStatus(): HookSetupStatus {
     const hooks = (r.cfg?.hooks ?? {}) as Record<string, unknown>;
     installed = Object.values(hooks).some((arr) => asArray(arr).some(isOurs));
   }
-  return { installed, bundled: hooksDir() !== null, settingsPath: path, python: hookPython() };
+  const dir = hooksDir();
+  return {
+    installed, bundled: dir !== null, settingsPath: path, python: hookPython(),
+    gate: "cfg" in r && asArray(((r.cfg?.hooks ?? {}) as any).PreToolUse).some(isGate),
+    gateBundled: dir !== null && existsSync(join(dir, GATE_MARKER)),
+  };
 }
 
 export function applyHooks(action: "install" | "uninstall"): HookSetupResult {
@@ -299,5 +392,6 @@ export function applyHooks(action: "install" | "uninstall"): HookSetupResult {
 // Exported for the test that pins parity with the Python installer's merge.
 export const _internal = {
   doInstall, doUninstall, isOurs, stable, EVENTS, MARKER,
+  installGate, uninstallGate, isGate, gateCommand, GATE_MARKER,
   installStatusLine, uninstallStatusLine, statusLineCommand, chainedFrom, shQuote, SL_MARKER,
 };

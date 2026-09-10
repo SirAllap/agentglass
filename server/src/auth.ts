@@ -274,7 +274,12 @@ export interface Caller {
    * is the fence going up before the thing that needs fencing arrives, which is
    * the only order in which a fence is ever built correctly.
    */
-  principal?: "understudy";
+  principal?: "understudy" | "seat";
+  /** When `principal` is `seat`: which project's chair, and what that chair
+   *  was granted. Carried on the caller rather than looked up per request so
+   *  the grant is the one made at seating — changing the setting afterwards
+   *  takes effect at the next seating, which is also what the prompt says. */
+  seat?: { root: string; powers: "speak" | "nudge" | "assign" };
   /** The plugin's name when `kind` is `plugin`. `allowed` grades it by scope
    *  like any other caller — the manifest declared a scope and a human approved
    *  it — but it is never a person's hand on a gate; see `kind`. */
@@ -303,6 +308,80 @@ export interface Caller {
  * a credential somebody finds later.
  */
 const understudyTokens = new Set<string>();
+
+/*
+ * Credentials carrying the SEAT's principal.
+ *
+ * Same shape and the same reasoning as the understudy's, with one difference
+ * that is the whole point of the feature: the seat is allowed to act, and how
+ * much is a setting. A seat granted `speak` holds a token that cannot prompt
+ * an agent, whatever its prompt says it may do — because a sentence in a
+ * prompt is a wish, and this is the wall. `refusedArg` learned the same lesson
+ * about permission flags arriving as parameters.
+ *
+ * In memory, minted at seating, revoked when the chair is emptied and gone on
+ * restart. A seat that comes back after a restart is seated again and gets a
+ * new one.
+ */
+const seatTokens = new Map<string, { root: string; powers: "speak" | "nudge" | "assign" }>();
+
+export function mintSeatToken(root: string, powers: "speak" | "nudge" | "assign"): string {
+  const t = `st_${randomBytes(24).toString("base64url")}`;
+  seatTokens.set(t, { root, powers });
+  return t;
+}
+
+export function revokeSeatTokens(root: string): void {
+  for (const [t, v] of seatTokens) if (v.root === root) seatTokens.delete(t);
+}
+
+/** How many are live, so a test can prove they do not accumulate. */
+export function seatTokenCount(): number { return seatTokens.size; }
+
+/**
+ * What a seat may ask for, by the powers its chair was given.
+ *
+ * Deny by default, like every other fence in this file: a POST that is not
+ * named here is refused whatever the powers, so a route added next month is
+ * out of the seat's reach until somebody decides otherwise. Reads are the
+ * understudy's reads — every view, minus the ones that are a shell wearing a
+ * GET.
+ */
+const SEAT_POST_NUDGE = new Set([
+  "/agents/named/prompt", "/agents/named/read", "/agents/named/wait",
+  /* One message to N agents is N prompts, so it sits with `prompt` and not a
+     step above it: it reaches only agents that are already running, and it
+     opens nobody. A seat that may unstick one may unstick five. */
+  "/agents/named/broadcast",
+  "/seat/say", "/seat/recall",
+]);
+/* `enlist` sits with start and stop rather than with prompt, and the reason is
+   the reach it grants: enlisting decides WHICH panes on this machine the seat's
+   other verbs can touch, including ones in projects that are none of its
+   business. Deciding who exists is the assigning half of the job. */
+const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys", "/agents/named/enlist"]);
+
+export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string): boolean {
+  if (method === "GET" || method === "HEAD") return !FULL_GET.has(pathname);
+  if (method !== "POST") return false;
+  /* Saying its line and asking the bank are not acts: allowed at every level.
+     Seating another orchestrator is NOT on this list at any level — a seat
+     that could open seats is a seat that can spend without a ceiling. */
+  /* Its own tray is the same kind of thing: `report` writes what an agent
+     said, `inbox` hands the seat what is waiting. Draining marks those rows
+     read, which is a change — but it is a change to the seat's own post, and a
+     chair that may not read its mail is not a chair. */
+  if (pathname === "/seat/say" || pathname === "/seat/recall"
+    || pathname === "/seat/report" || pathname === "/seat/inbox"
+    /* Asking the person for a decision is the opposite of acting without one:
+       a seat with no powers at all must still be able to say "this needs you",
+       or the only way it has to escalate is to do the thing itself. */
+    || pathname === "/seat/need" || pathname === "/seat/need/finish" || pathname === "/seat/need/drop") return true;
+  if (READ_POST.has(pathname)) return true;
+  if (powers === "speak") return false;
+  if (SEAT_POST_NUDGE.has(pathname)) return true;
+  return powers === "assign" && SEAT_POST_ASSIGN.has(pathname);
+}
 
 export function mintUnderstudyToken(): string {
   const t = `us_${randomBytes(24).toString("base64url")}`;
@@ -358,6 +437,8 @@ export function callerFor(req: Request, url: URL, token: string): Caller | null 
   if (understudyTokens.has(provided)) {
     return { kind: "machine", scope: "full", principal: "understudy" };
   }
+  const seat = seatTokens.get(provided);
+  if (seat) return { kind: "machine", scope: "full", principal: "seat", seat };
   const plugin = pluginTokens.get(provided);
   if (plugin) return { kind: "plugin", scope: plugin.scope, plugin: plugin.name };
   if (eq(provided, token)) return { kind: "machine", scope: "full" };
@@ -526,6 +607,10 @@ export function allowed(caller: Caller, method: string, pathname: string): boole
   // consulted together: an `||` on this line would give back everything the
   // separate function exists to take away.
   if (caller.principal === "understudy") return understudyAllows(method, pathname);
+  /* Same rule, same reason: a separate function, never an `||` with the scope
+     check — the seat's token says `full` so its reads work, and an `||` here
+     would hand back every write this exists to withhold. */
+  if (caller.principal === "seat") return seatAllows(caller.seat?.powers ?? "speak", method, pathname);
   return scopeAllows(caller.scope, scopeNeeded(method, pathname));
 }
 

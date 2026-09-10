@@ -96,3 +96,36 @@ describe("firing", () => {
     expect(await drainDueSchedules(NOW, deps), "nothing is claimed twice").toEqual([]);
   });
 });
+
+/*
+ * AN ID IS NOT A FLAG.
+ *
+ * `base64url` includes `-`, so about one id in sixty-four began with one — and
+ * an id that begins with a dash is not an argument to the worker CLI, it is a
+ * flag: Python's argparse answered "unrecognized arguments" with exit 2. So
+ * roughly one schedule in sixty-four could never be cancelled from the command
+ * line, at random, for as long as this has existed.
+ *
+ * It showed up as `agent-cli-route` failing once every few full runs and
+ * passing on its own, which is what a real bug looks like when it is rare —
+ * and it was very nearly written off as a slow machine.
+ */
+describe("the id a command line has to carry", () => {
+  test("never starts with a dash, however many are minted", () => {
+    /* Cancelled as they are minted, so the pending ceiling never bites and the
+       sample is big enough to catch a one-in-sixty-four shape. With three
+       hundred, a mint that could still start with a dash fails this better
+       than 99 times in 100. */
+    const ids: string[] = [];
+    for (let i = 0; i < 300; i++) {
+      const r = addSchedule({ name: `n${i}`, cwd: WT, when: "+30m", prompt: "x" });
+      if (!r.ok) continue;
+      ids.push(r.schedule.id);
+      cancelSchedule(r.schedule.id);
+    }
+    expect(ids.length).toBe(300);
+    expect(ids.filter((id) => id.startsWith("-")), "an id that argparse reads as a flag").toEqual([]);
+    /* And it says what it is an id of, the way the queue's do. */
+    expect(ids.every((id) => id.startsWith("sc_"))).toBe(true);
+  });
+});

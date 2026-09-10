@@ -27,7 +27,7 @@ const card = (over: Partial<ProviderTask> = {}): ProviderTask => ({
   tags: ["bug-intake", "ai-triaged"],
   list: "Checkout v2",
   assignees: [],
-  people: [{ name: "Alejandro Ferrán", initials: "AF" }],
+  people: [{ name: "Ada Lovelace", initials: "AL" }],
   sprint: "Sprint 42",
   ...over,
 });
@@ -64,8 +64,8 @@ describe("what the board's search box can find", () => {
   it("finds a card by a tag, a person, the sprint, the status and the list", () => {
     // All five are drawn on the row. None of them were searchable.
     expect(matchesQuery(card(), "bug-intake")).toBe(true);
-    expect(matchesQuery(card(), "Ferrán")).toBe(true);
-    expect(matchesQuery(card(), "AF")).toBe(true);
+    expect(matchesQuery(card(), "Lovelace")).toBe(true);
+    expect(matchesQuery(card(), "AL")).toBe(true);
     expect(matchesQuery(card(), "Sprint 42")).toBe(true);
     expect(matchesQuery(card(), "ready for engineering")).toBe(true);
     expect(matchesQuery(card(), "Checkout")).toBe(true);
@@ -90,7 +90,7 @@ describe("what the board's search box can find", () => {
   });
 
   it("matches an assignee reported as a plain name", () => {
-    const named = card({ people: undefined, assignees: ["Nuria Castells"] });
-    expect(matchesQuery(named, "castells")).toBe(true);
+    const named = card({ people: undefined, assignees: ["Katherine Johnson"] });
+    expect(matchesQuery(named, "johnson")).toBe(true);
   });
 });

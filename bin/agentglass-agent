@@ -49,6 +49,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -117,6 +118,31 @@ def call(path, body=None, method="POST", timeout=630):
         return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
 
 
+def text_call(path, timeout=30):
+    """A GET whose answer is meant to be read, not parsed.
+
+    The field readout exists because the thing reading it pays to read: a model
+    that re-reads its whole context every turn should not be handed JSON it has
+    to summarise back to itself. So the server writes the lines and this prints
+    them.
+    """
+    req = urllib.request.Request(f"{SERVER}{path}", method="GET", headers={"Origin": SERVER})
+    t = token()
+    if t:
+        req.add_header("Authorization", f"Bearer {t}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return True, r.read().decode("utf-8", "replace").rstrip()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace").strip()
+        try:
+            return False, json.loads(body).get("error") or f"server said {e.code}"
+        except json.JSONDecodeError:
+            return False, body or f"server said {e.code}"
+    except urllib.error.URLError as e:
+        return False, f"no agentglass at {SERVER} ({e.reason})"
+
+
 def emit(res):
     print(json.dumps(res))
     return 0 if res.get("ok") else 1
@@ -160,8 +186,10 @@ def main():
     p = sub.add_parser("list", help="every live named agent, as JSON")
     p.add_argument("--all", action="store_true", help="include ended ones, with endedAt")
 
-    p = sub.add_parser("stop", help="kill the agent's window")
+    p = sub.add_parser("stop", help="stop a named agent — a tab you enlisted is LET GO, not killed")
     p.add_argument("name")
+    p.add_argument("--kill", action="store_true",
+                   help="kill the window even for a tab you only enlisted: you mean the tab, not the registration")
 
     p = sub.add_parser("schedule", help="start an agent later: at a clock time, a date-time, or after a delay")
     p.add_argument("name")
@@ -176,6 +204,88 @@ def main():
 
     p = sub.add_parser("unschedule", help="cancel a schedule that has not fired")
     p.add_argument("id")
+
+    p = sub.add_parser("say", help="the orchestrator's one line for this round (run it from the project's checkout)")
+    p.add_argument("line", help="what a person should read: who needs them, what changed")
+    p.add_argument("--root", help="the project this is about (default: the current directory)")
+
+    p = sub.add_parser("enlist", help="take a tab you opened yourself under the app's hand, so broadcast, prompt and read reach it")
+    p.add_argument("name", help="what you will call it from now on")
+    p.add_argument("--pane", help="the tmux pane id (%%12). Exact, and the way to be sure")
+    p.add_argument("--window", help="the tmux window name, when it is not the same as <name>")
+
+    p = sub.add_parser("need", help="ask the person for the one action only they can take — and keep it on their screen until they take it")
+    p.add_argument("text", help="one line: what you are asking them to do")
+    p.add_argument("--cost", default="", help="what it costs them: 'one click', 'five minutes', 'a review round'")
+    p.add_argument("--recommend", default="", help="what you would do. Leave it out if you have no opinion rather than inventing one")
+    p.add_argument("--proof", default="", help="what would show it settled: a reviewer requested, a push landed")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("needs", help="what you have asked the person for and not had an answer to")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("settled", help="a decision you asked for has been taken (or no longer matters)")
+    p.add_argument("id")
+    p.add_argument("outcome", nargs="?", default="", help="one line: what came of it")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("task", help="put something on this project's queue — what you found, for whoever picks it up")
+    p.add_argument("title", help="one line: what is to be done")
+    p.add_argument("--proof", default="", help="what would prove it done: a test, a file, an output. An unstated proof is allowed and drawn as missing")
+    p.add_argument("--detail", default="", help="the rest of it, if a line is not enough")
+    p.add_argument("--weight", type=int, default=0, help="how big you think it is; 0 when you do not know")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("tasks", help="the queue as it stands: waiting, out, and what landed")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("drop", help="take a task off the queue")
+    p.add_argument("id")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("claim", help="take a queued task for a named agent, before you open it")
+    p.add_argument("id", help="the task id, as the queue gave it")
+    p.add_argument("--to", required=True, dest="to", help="the named agent that will carry it")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("finish", help="say how a queued task went")
+    p.add_argument("id")
+    p.add_argument("outcome", help="one line: what came of it")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("recall", help="what this person has already decided about something")
+    p.add_argument("question", help="in your own words, as ONE quoted argument")
+    p.add_argument("--root", help="the project (default: the current directory)")
+
+    p = sub.add_parser("orchestrate", help="put an orchestrator in a project's chair, or bring the one that is there")
+    p.add_argument("--project", help="the project's checkout (default: the current directory)")
+    p.add_argument("--powers", choices=["speak", "nudge", "assign"], help="what the chair may do (default: what the project already had, else speak)")
+    p.add_argument("--model", help="which model to seat (default: what this build calls cheapest-capable)")
+
+    p = sub.add_parser("adopt", help="tell the app that YOU are already this project's orchestrator (keeps your session and your context)")
+    p.add_argument("--project", help="the project's checkout (default: the current directory)")
+    p.add_argument("--pane", help="your tmux pane (default: $TMUX_PANE)")
+    p.add_argument("--session", default="", help="your session id, if you know it")
+    p.add_argument("--powers", choices=["speak", "nudge", "assign"], help="what the chair may do")
+
+    p = sub.add_parser("report", help="send your STATE/BLOCKED/NEED/COST to this project's orchestrator")
+    p.add_argument("text", nargs="?", default="", help="the report, as ONE quoted argument")
+    p.add_argument("--file", help="read the report from this file instead")
+    p.add_argument("--as", dest="who", help="your name (default: $AGENTGLASS_AGENT_NAME, else the tmux window)")
+    p.add_argument("--project", help="the project (default: the current directory)")
+
+    p = sub.add_parser("field", help="who is working in this project, what state, and since when — a few lines")
+    p.add_argument("--project", help="the project (default: the current directory)")
+    p.add_argument("--json", action="store_true", help="the rows as JSON instead of the readout")
+
+    p = sub.add_parser("inbox", help="every unread report, in one call, and marks them read")
+    p.add_argument("--project", help="the project (default: the current directory)")
+    p.add_argument("--peek", action="store_true", help="read without marking them read")
+
+    p = sub.add_parser("broadcast", help="one message to many named agents")
+    p.add_argument("text", help="the message, as ONE quoted argument")
+    p.add_argument("--to", help="comma-separated names (default: every live named agent)")
+    p.add_argument("--timeout", type=int, default=10000, help="ms to wait for each paste to land")
 
     sub.add_parser("health", help="is agentglass listening")
 
@@ -221,7 +331,7 @@ def main():
     if a.cmd == "send-keys":
         return emit(call("/agents/named/keys", {"name": a.name, "key": a.key}, timeout=30))
     if a.cmd == "stop":
-        return emit(call("/agents/named/stop", {"name": a.name}, timeout=30))
+        return emit(call("/agents/named/stop", {"name": a.name, "kill": bool(a.kill)}, timeout=30))
     if a.cmd == "schedule":
         text = a.prompt
         if a.file:
@@ -233,6 +343,97 @@ def main():
         return emit(call("/agents/schedule", method="GET", timeout=30))
     if a.cmd == "unschedule":
         return emit(call("/agents/schedule/cancel", {"id": a.id}, timeout=30))
+    if a.cmd == "report":
+        text = a.text
+        if a.file:
+            with open(a.file, encoding="utf-8") as f:
+                text = f.read()
+        if not text.strip():
+            return emit({"ok": False, "error": "nothing to report: pass the text or --file"})
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        # Your own name, in the order the app can know it: what it started you
+        # as, then the tmux window you are in, then the checkout you are in.
+        who = a.who or os.environ.get("AGENTGLASS_AGENT_NAME") or os.environ.get("TMUX_WINDOW_NAME") or os.path.basename(root)
+        return emit(call("/seat/report", {"root": root, "agent": who, "text": text}, timeout=30))
+    if a.cmd == "field":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        q = urllib.parse.urlencode({"root": root, **({"format": "json"} if a.json else {})})
+        if a.json:
+            return emit(call("/seat/field?" + q, method="GET", timeout=30))
+        ok, out = text_call("/seat/field?" + q)
+        print(out)
+        return 0 if ok else 1
+    if a.cmd == "inbox":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        return emit(call("/seat/inbox", {"root": root, "peek": bool(a.peek)}, timeout=30))
+    if a.cmd == "broadcast":
+        body = {"text": a.text, "timeout": a.timeout}
+        if a.to:
+            body["names"] = [n.strip() for n in a.to.split(",") if n.strip()]
+        return emit(call("/agents/named/broadcast", body, timeout=630))
+    if a.cmd == "adopt":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        pane = a.pane or os.environ.get("TMUX_PANE", "")
+        if not pane:
+            return emit({"ok": False, "error": "no pane: run this from inside your tmux pane, or pass --pane %N"})
+        body = {"root": root, "pane": pane, "session": a.session}
+        if a.powers:
+            body["powers"] = a.powers
+        return emit(call("/seat/adopt", body, timeout=60))
+    if a.cmd == "orchestrate":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        body = {"root": root}
+        if a.powers:
+            body["powers"] = a.powers
+        if a.model:
+            body["model"] = a.model
+        return emit(call("/seat/orchestrate", body, timeout=180))
+    if a.cmd == "recall":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/recall", {"root": root, "question": a.question}, timeout=30))
+    if a.cmd == "enlist":
+        body = {"name": a.name}
+        if a.pane:
+            body["pane"] = a.pane
+        if a.window:
+            body["window"] = a.window
+        return emit(call("/agents/named/enlist", body, timeout=30))
+    if a.cmd == "need":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/need", {
+            "root": root, "text": a.text, "cost": a.cost, "recommend": a.recommend, "proof": a.proof,
+        }, timeout=30))
+    if a.cmd == "needs":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        ok, out = text_call("/seat/needs?" + urllib.parse.urlencode({"root": root}))
+        print(out)
+        return 0 if ok else 1
+    if a.cmd == "settled":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/need/finish", {"root": root, "id": a.id, "outcome": a.outcome}, timeout=30))
+    if a.cmd == "task":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task", {
+            "root": root, "title": a.title, "proof": a.proof, "detail": a.detail, "weight": a.weight,
+        }, timeout=30))
+    if a.cmd == "tasks":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/tasks?root=" + urllib.parse.quote(root), method="GET", timeout=30))
+    if a.cmd == "drop":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task/drop", {"root": root, "id": a.id}, timeout=30))
+    if a.cmd == "claim":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task/claim", {"root": root, "id": a.id, "agent": a.to}, timeout=30))
+    if a.cmd == "finish":
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/task/finish", {"root": root, "id": a.id, "outcome": a.outcome}, timeout=30))
+    if a.cmd == "say":
+        # The seat runs IN its project's checkout, so the default root is the
+        # working directory: one less thing for a prompt to get wrong, and a
+        # line said from the wrong directory lands on the wrong project's view.
+        root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
+        return emit(call("/seat/say", {"root": root, "line": a.line}, timeout=30))
     return 2
 
 

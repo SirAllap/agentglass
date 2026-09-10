@@ -39,6 +39,23 @@ HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 SEND_EVENT = os.path.join(HOOKS_DIR, "send_event.py")
 MARKER = "send_event.py"  # substring that identifies a hook command as ours
 
+GATE = os.path.join(HOOKS_DIR, "gate_event.py")
+GATE_MARKER = "gate_event.py"
+# The gate is a SEPARATE switch, and never a side effect of installing the
+# forwarder.
+#
+# The forwarder is telemetry, and the rule beside `hook_command` is that
+# telemetry must never be able to stop a tool call — that is what its trailing
+# `|| exit 0` buys. The gate is the opposite on purpose: it holds a tool call
+# until a person decides, and an outward one (a push, a pull request, a
+# comment, a review, a merge, a ticket, a message in a channel) is held closed.
+#
+# So it has its own flag here and its own button in the app, and no `|| exit 0`:
+# swallowing the exit status is exactly what would turn a gate back into
+# telemetry. `gate_event.py` already allows on every failure it controls — an
+# unreachable server, a timeout, an answer it cannot read — so the honest
+# failure mode lives inside the script instead of being bolted on outside it.
+
 STATUSLINE = os.path.join(HOOKS_DIR, "statusline.sh")
 # Our status line, recognised by SHAPE rather than by a filename substring.
 #
@@ -190,6 +207,33 @@ def hook_command(python, send_event, event, add_chat):
     return cmd + (" || exit /b 0" if os.name == "nt" else " || exit 0")
 
 
+def _is_gate(entry):
+    return any(GATE_MARKER in h.get("command", "") for h in entry.get("hooks", []))
+
+
+def gate_command(python, gate):
+    return '%s "%s"' % (python, gate)
+
+
+def install_gate(cfg):
+    """One PreToolUse entry, matcher `*`, replacing any earlier one of ours."""
+    hooks = cfg.setdefault("hooks", {})
+    arr = [e for e in hooks.get("PreToolUse", []) if not _is_gate(e)]
+    arr.append({"matcher": "*", "hooks": [{"type": "command", "command": gate_command(_hook_python(), GATE)}]})
+    hooks["PreToolUse"] = arr
+
+
+def uninstall_gate(cfg):
+    hooks = cfg.get("hooks", {})
+    kept = [e for e in hooks.get("PreToolUse", []) if not _is_gate(e)]
+    if kept:
+        hooks["PreToolUse"] = kept
+    elif "PreToolUse" in hooks:
+        del hooks["PreToolUse"]
+    if "hooks" in cfg and not cfg["hooks"]:
+        del cfg["hooks"]
+
+
 def do_install(cfg):
     """Append our forwarder to each event, first stripping any prior agentglass
     entry (so a moved clone re-points cleanly). All other hooks are preserved."""
@@ -223,6 +267,9 @@ def do_uninstall(cfg):
 def main():
     ap = argparse.ArgumentParser(description="Install or remove agentglass Claude Code hooks.")
     ap.add_argument("--uninstall", action="store_true", help="remove the agentglass hooks")
+    ap.add_argument("--gate", action="store_true",
+                    help="the GATE hook instead of the forwarder: holds a tool call until you decide, "
+                         "and holds anything that leaves the machine closed. Its own switch on purpose")
     ap.add_argument("--project", default=None,
                     help="target <project>/.claude/settings.json instead of the global ~/.claude one")
     ap.add_argument("--postinstall", action="store_true",
@@ -243,10 +290,14 @@ def main():
         return 0 if args.postinstall else 1
 
     before = json.dumps(cfg, sort_keys=True)
-    do_uninstall(cfg) if args.uninstall else do_install(cfg)
+    what = "gate" if args.gate else "hooks"
+    if args.gate:
+        uninstall_gate(cfg) if args.uninstall else install_gate(cfg)
+    else:
+        do_uninstall(cfg) if args.uninstall else do_install(cfg)
     if json.dumps(cfg, sort_keys=True) == before:
         state = "removed" if args.uninstall else "already up to date"
-        print(f"[agentglass] hooks {state} in {path}")
+        print(f"[agentglass] {what} {state} in {path}")
         return 0
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -259,10 +310,10 @@ def main():
         f.write("\n")
 
     if args.uninstall:
-        print(f"[agentglass] hooks removed from {path}")
+        print(f"[agentglass] {what} removed from {path}")
     else:
-        print(f"[agentglass] hooks installed into {path}")
-        print(f"[agentglass] forwarder: {SEND_EVENT}")
+        print(f"[agentglass] {what} installed into {path}")
+        print(f"[agentglass] {'gate' if args.gate else 'forwarder'}: {GATE if args.gate else SEND_EVENT}")
         print("[agentglass] start a NEW Claude Code session for it to take effect.")
     return 0
 

@@ -47,11 +47,12 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { parseControlCmd } from "./control.ts";
+import { outwardAction, outwardLine } from "./outward.ts";
 import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation} from "./browserdrive.ts";
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, safeAbs as gitSafeAbs } from "./git.ts";
+import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, projectRootOf, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
   workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
@@ -98,7 +99,7 @@ import {
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -153,7 +154,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -165,7 +166,7 @@ import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAll
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
+import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, basename } from "node:path";
 import { tmpdir } from "node:os";
@@ -1367,7 +1368,16 @@ import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
 import * as AgentBoard from "./agentboard.ts";
-import { boardNow, lanternChat, noteLanternSession, hookSaysLantern, isLanternSession } from "./lantern.ts";
+import { boardNow, fieldReadout, lanternChat, noteLanternSession, hookSaysLantern, isLanternSession } from "./lantern.ts";
+import { hookSaysSeat, isSeatSession, noteSeatSession } from "./seatrole.ts";
+import * as Seat from "./seat.ts";
+import { readDoctrine, writeDoctrine } from "./seatdoctrine.ts";
+import { readBrief, writeBrief } from "./seatbrief.ts";
+import * as SeatQueue from "./seatqueue.ts";
+import * as SeatInbox from "./seatreport.ts";
+import * as SeatNeeds from "./seatneed.ts";
+import * as SeatWake from "./seatwake.ts";
+import { recall } from "./seatmemory.ts";
 import * as AgentOps from "./agentops.ts";
 import { nudgeText, nudgeChannel, sendNudge } from "./prnudge.ts";
 import * as Schedule from "./agentschedule.ts";
@@ -2441,6 +2451,17 @@ const server = Bun.serve<WsData>({
          * because a 403 for a principal that is supposed to only ever watch is
          * the single most interesting line this feature can produce.
          */
+        if (caller.principal === "seat") {
+          /* Its own sentence for the same reason the clone has one: the seat
+             has no scope to widen, it has powers, and the fix is a setting on
+             the project's chair — said here so whoever reads the 403 in a
+             pane is told where to go. */
+          recordFence(pathname, req.method);
+          return json({
+            ok: false,
+            error: `the orchestrator's seat may not ${req.method} ${pathname}: this chair is set to "${caller.seat?.powers ?? "speak"}"`,
+          }, 403);
+        }
         if (caller.principal === "understudy") {
           recordFence(pathname, req.method);
           return json({
@@ -2723,6 +2744,13 @@ const server = Bun.serve<WsData>({
          itself. The pane says so in its environment; the hook passes it on. */
       const lanternItself = hookSaysLantern(body) || isLanternSession(String(body.session_id ?? ""));
       if (lanternItself) noteLanternSession(String(body.session_id ?? ""));
+      /* The seat is the board's other reader, and gets set aside for the same
+         reason: an orchestrator that shows up among the agents it is keeping
+         would be reminded to say what it is on, and counted as somebody's
+         work. Its mark is the first line of a prompt this server composed,
+         so no session can talk its way into the role. */
+      const seatItself = hookSaysSeat(body) || isSeatSession(String(body.session_id ?? ""));
+      if (seatItself) noteSeatSession(String(body.session_id ?? ""));
       /*
        * THE LANTERN REMINDER RIDES THE ANSWER.
        *
@@ -2931,39 +2959,6 @@ const server = Bun.serve<WsData>({
      * and dated rather than hidden, because "nobody has touched this in an
      * hour" is the answer somebody is usually looking for.
      */
-    /*
-     * WHAT THE TAB IS FOR, IN THREE WORDS.
-     *
-     * The strip's names are stable (`AI01`, `AI02`) and stability is exactly
-     * what makes them say nothing: "I want them to always be AI0X... or for it
-     * to match the task being worked on", and the answer to that
-     * `or` is both. The number is the address; this is the label under it.
-     *
-     * Its own route rather than a field on the terminal frame, which is swept
-     * twice a second per attached client: a sentence an agent publishes every
-     * few minutes does not belong in a poll that fast, and the frame's pane
-     * format is read positionally by three parsers.
-     */
-    if (pathname === "/terminal/tab-hints") {
-      const board = AgentBoard.merged({ runs: Work.runningRuns().map((r) => ({
-        title: r.title, worktree: r.worktree, branch: r.branch, startedAt: r.startedAt,
-      })) }).filter((a) => a.doing && a.worktree);
-      const hints: Record<string, string> = {};
-      if (board.length) {
-        const r = await tmux(["list-panes", "-a", "-F", "#{window_id}\t#{pane_current_path}"]);
-        for (const line of (r.ok ? r.stdout : "").split("\n")) {
-          const [win = "", cwd = ""] = line.split("\t");
-          if (!win.startsWith("@") || !cwd || hints[win]) continue;
-          /* Longest worktree first, so a checkout inside another checkout is
-             answered by the inner one. */
-          const owner = board
-            .filter((a) => cwd.startsWith(a.worktree!))
-            .sort((a, b) => b.worktree!.length - a.worktree!.length)[0];
-          if (owner?.doing) hints[win] = owner.doing.slice(0, 120);
-        }
-      }
-      return json({ ok: true, hints });
-    }
     if (pathname === "/agents/board") {
       /* Every source at once — see lantern.ts, which the terminal's "Ask
          about the field" reads too, so the view and the chat cannot disagree. */
@@ -3089,6 +3084,14 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
     }
+    /* The gate is its own switch and never a flag on the one above: telemetry
+       may not stop a tool call, and this exists to hold one. */
+    if (pathname === "/hooks/gate" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: Record<string, unknown> = {};
+      try { b = (await req.json()) as Record<string, unknown>; } catch { /* no body is "turn it on" */ }
+      return json(applyGate(b.on === false ? "uninstall" : "install"));
+    }
 
     /**
      * Budgets: what is set, and where each stands right now.
@@ -3172,13 +3175,31 @@ const server = Bun.serve<WsData>({
       try { b = await req.json(); } catch { return json({ decision: "allow", reason: "bad request" }); }
       const ti = b.tool_input ?? {};
       const summary = String(ti.command || ti.file_path || ti.path || ti.pattern || ti.query || ti.description || b.tool_name || "").slice(0, 300);
+      /*
+       * OUTWARD ACTIONS ARE HELD CLOSED, AND SHOW THEIR TEXT.
+       *
+       * The rule every arrangement of agents on this machine runs by is that
+       * anything a colleague can see belongs to the person, and until now that
+       * line was held by each agent remembering it. This is the tool: a push,
+       * a pull request, a comment, a review, a merge, a ticket or a message in
+       * a channel is recognised (outward.ts), the line a person decides from
+       * says WHAT it does and quotes what would be sent, and nobody answering
+       * means it does NOT happen — the fail-open default exists so an absent
+       * human never blocks work, and work that has already left the machine
+       * cannot be blocked afterwards.
+       */
+      const out = outwardAction(String(b.tool_name || ""), ti);
+      const hold = out
+        ? [outwardLine(out), out.text ? `“${out.text.replace(/\s+/g, " ").trim().slice(0, 240)}”` : ""].filter(Boolean).join(" · ")
+        : budgetHoldFor(String(b.session_id || "unknown"), gateFailClosed());
       const decision = await submitGate(
         // The hook picks the id so it can re-attach to this exact request after
         // a dropped connection (see /gate/status). Shape-checked in gate.ts;
         // anything else falls back to a server-generated one.
         { id: typeof b.id === "string" ? b.id : undefined, source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
         Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000),
-        budgetHoldFor(String(b.session_id || "unknown"), gateFailClosed())
+        hold,
+        out ? true : undefined,
       );
       return json(decision);
     }
@@ -5664,6 +5685,13 @@ const server = Bun.serve<WsData>({
       }
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
+    /* Every tag the card's space has, for the picker. Separate from the card
+       itself because it is asked for on a click and answered from a cache —
+       see `tagsForTask` for why it is by space. */
+    if (pathname === "/clickup/tags") {
+      const r = await tagsForTask(url.searchParams.get("id") ?? "");
+      return json(r.ok ? { ok: true, tags: r.data ?? [] } : { ok: false, error: r.error });
+    }
     if (pathname.startsWith("/clickup/") && req.method === "POST") {
       // Assign somebody, move a card, set a field, add or drop a board, and
       // switch writing on. The change does not land on this machine, which is
@@ -6729,6 +6757,247 @@ const server = Bun.serve<WsData>({
      * workspace root, or the caller's — a bench tab hangs off a checkout even
      * when the conversation is about all of them.
      */
+    /*
+     * THE ORCHESTRATOR'S SEAT — open it, empty it, read it, and the one line
+     * the agent in it says each round.
+     *
+     * The project is named by the caller because a seat is not tied to the
+     * open project: `Seat.seatable` measures it against the project list this
+     * server already serves at `/projects`, and refuses anything else. Nothing
+     * about what the seat is told arrives from a client — `Seat.seatPrompt`
+     * composes it here from the project's doctrine and the board, the same
+     * property `/lantern/ticket` keeps.
+     */
+    if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
+    if (pathname === "/seat/wake" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { hours?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      const r = writeSeatSettings({ seatWakeHours: Number(b.hours) });
+      return json({ ...r, hours: seatWakeHours() }, r.ok ? 200 : 400);
+    }
+    /*
+     * THE FIELD, IN A FEW LINES, FOR SOMEBODY WHO PAYS TO READ.
+     *
+     * The second thing the orchestrator asked for: whether each agent is idle,
+     * working or dead and since when, without a pane capture and without eighty
+     * rows of listing. `/seat` answers that and a great deal more — the doctrine, the
+     * brief, the queue, a photograph of a pane — and the model reading it
+     * re-reads its whole context every turn. So the same facts, as text, with
+     * nothing else in the envelope.
+     */
+    /* The queue, read-only, for a seat that would rather not carry the whole
+       `/seat` answer to find out what is waiting. */
+    if (pathname === "/seat/tasks" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      return json({ ok: true, root: gate.root, tasks: SeatQueue.tasksFor(gate.root) });
+    }
+    /* What the seat has asked the person for, as text, for the same reason the
+       field is text: the thing reading it pays to read. */
+    if (pathname === "/seat/needs" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      if (url.searchParams.get("format") === "json") return json({ ok: true, root: gate.root, needs: SeatNeeds.needsFor(gate.root) });
+      return new Response(SeatNeeds.needReadout(gate.root), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+    }
+    if (pathname === "/seat/field" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const rows = Seat.fieldFor(gate.root, await boardNow().catch(() => []));
+      if (url.searchParams.get("format") === "json") {
+        return json({ ok: true, root: gate.root, field: rows, unread: SeatInbox.unreadCount(gate.root), stopped: SeatInbox.unreadWorthWaking(gate.root) });
+      }
+      /*
+       * THE TRAY IS PART OF THE FIELD.
+       *
+       * "Nobody is stopped on you" while a report in the tray says an agent is
+       * waiting for a decision is a true sentence about panes and a false one
+       * about the field — measured by the seat reading its own readout with a
+       * blocked report sitting unread. An agent stopped on a person is stopped
+       * whether the app worked it out from a hook or the agent said so itself.
+       */
+      const waiting = SeatInbox.unreadWorthWaking(gate.root);
+      const unread = SeatInbox.unreadCount(gate.root);
+      const tray = unread
+        ? `\n\n${unread} unread report${unread === 1 ? "" : "s"} in the tray${waiting ? `, ${waiting} of them stopped or asking for a decision` : ""}: run \`agentglass-agent inbox\`.`
+        : "";
+      return new Response(fieldReadout(rows) + tray, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+    }
+    if (pathname === "/seat" && req.method === "GET") {
+      const gate = Seat.seatable(url.searchParams.get("root") || workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      return json({ ok: true, ...(await Seat.seatStatus(gate.root)), doctrineText: readDoctrine(gate.root).text, tasks: SeatQueue.tasksFor(gate.root), needs: SeatNeeds.needsFor(gate.root), lines: Seat.seatLines(gate.root), floorHours: seatWakeHours(), models: claudeModels(), defaultModel: Seat.defaultSeatModel() });
+    }
+    if (pathname.startsWith("/seat/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: Record<string, unknown>;
+      try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const gate = Seat.seatable(typeof b.root === "string" && b.root ? b.root : workspaceRoot());
+      if ("error" in gate) return json({ ok: false, error: gate.error }, 400);
+      const root = gate.root;
+      const verb = pathname.slice("/seat/".length);
+
+      if (verb === "open") {
+        if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+        const powers = Seat.isPower(b.powers) ? b.powers : undefined;
+        const model = typeof b.model === "string" ? b.model : undefined;
+        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "close") return json(await Seat.closeSeat(root));
+      /* The seat's own report. Not `/agents/status`: that is the board, and
+         the seat is deliberately not on it. */
+      if (verb === "say") return json(Seat.seatSays(root, typeof b.line === "string" ? b.line : ""), 200);
+      if (verb === "settings") {
+        if (b.powers !== undefined && !Seat.isPower(b.powers)) return json({ ok: false, error: "powers: speak, nudge or assign" }, 400);
+        const row = Seat.seatRow(root);
+        Seat.setSeatSettings(root, typeof b.model === "string" ? b.model : row?.model ?? "", Seat.isPower(b.powers) ? b.powers : row?.powers ?? "speak");
+        return json({ ok: true, seat: Seat.seatRow(root) });
+      }
+      /*
+       * THE QUEUE. Four verbs and no fifth: a person adds and drops, the seat
+       * claims and finishes. Nothing here picks WHAT to work on — the seat
+       * does that, out loud, and this only records that it did.
+       */
+      /* The bank, asked on the seat's behalf. A POST because the question is
+         free text and a query string is the wrong place for a sentence. */
+      if (verb === "recall") return json({ ok: true, ...recall(String(b.question ?? "")) });
+      /*
+       * THE INBOX. `report` is what a worker sends; `inbox` is the seat
+       * draining it in one call rather than reading five messages. Both are
+       * allowed at every power level: reporting and reading are not acts.
+       */
+      if (verb === "report") {
+        const r = SeatInbox.addReport({ root, agent: String(b.agent ?? ""), session: String(b.session ?? ""), text: String(b.text ?? "") });
+        /*
+         * AND THE SEAT HEARS IT NOW, not at the next sweep.
+         *
+         * The wake rides the Lantern's look, which is fifteen minutes by
+         * default: right for a field that drifts, wrong for an agent saying it
+         * is stopped. Measured from the other side — a report saying "waiting
+         * for a decision" arrived nowhere, and was found by asking.
+         *
+         * Floated rather than awaited: the worker's answer is that its report
+         * was filed, and that is true whether or not there is anybody in the
+         * chair to tell.
+         */
+        if (r.ok && SeatInbox.worthWaking(r.report)) {
+          void SeatWake.wakeForReport(root, r.report.agent).catch(() => false);
+        }
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "inbox") {
+        /* Draining marks them read, which is why this is a POST: it changes
+           what the next caller sees. `peek` reads without claiming. */
+        const reports = b.peek === true ? SeatInbox.unreadReports(root) : SeatInbox.drainReports(root);
+        return json({ ok: true, reports, unread: SeatInbox.unreadCount(root) });
+      }
+      /*
+       * WHAT THE SEAT ASKS OF THE PERSON — the other direction of the tray.
+       * A report is a worker saying what it needs; this is the seat saying
+       * what it needs from the one person who can give it.
+       */
+      if (verb === "need") {
+        const r = SeatNeeds.addNeed({ root, text: b.text, cost: b.cost, recommend: b.recommend, proof: b.proof });
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "need/finish") {
+        const n = SeatNeeds.needById(String(b.id ?? ""));
+        if (!n || n.root !== root) return json({ ok: false, error: "no such decision in this project" }, 404);
+        SeatNeeds.finishNeed(n.id, String(b.outcome ?? ""));
+        return json({ ok: true, need: SeatNeeds.needById(n.id) });
+      }
+      if (verb === "need/drop") {
+        const n = SeatNeeds.needById(String(b.id ?? ""));
+        if (!n || n.root !== root) return json({ ok: false, error: "no such decision in this project" }, 404);
+        SeatNeeds.dropNeed(n.id);
+        return json({ ok: true });
+      }
+      if (verb === "task") {
+        const r = SeatQueue.addTask({ root, title: String(b.title ?? ""), detail: String(b.detail ?? ""), proof: String(b.proof ?? ""), weight: Number(b.weight ?? 0) });
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (verb === "task/drop") {
+        const t = SeatQueue.taskById(String(b.id ?? ""));
+        if (!t || t.root !== root) return json({ ok: false, error: "no such task in this project" }, 404);
+        SeatQueue.dropTask(t.id);
+        return json({ ok: true });
+      }
+      if (verb === "task/claim") {
+        const t = SeatQueue.taskById(String(b.id ?? ""));
+        if (!t || t.root !== root) return json({ ok: false, error: "no such task in this project" }, 404);
+        if (t.attempts >= SeatQueue.MAX_ATTEMPTS) return json({ ok: false, error: `that task has already beaten ${SeatQueue.MAX_ATTEMPTS} agents — it needs a person, not a third go` }, 409);
+        const agent = String(b.agent ?? "").trim();
+        if (!AgentOps.validName(agent)) return json({ ok: false, error: "claim it for a named agent" }, 400);
+        const got = SeatQueue.claimTask(t.id, agent);
+        /* 409 rather than 200-with-null: somebody got there first, and a seat
+           told "ok" would go and open an agent for work already in hand. */
+        return json(got ? { ok: true, task: got } : { ok: false, error: "somebody claimed that first" }, got ? 200 : 409);
+      }
+      if (verb === "task/finish") {
+        const t = SeatQueue.taskById(String(b.id ?? ""));
+        if (!t || t.root !== root) return json({ ok: false, error: "no such task in this project" }, 404);
+        SeatQueue.finishTask(t.id, String(b.outcome ?? ""));
+        return json({ ok: true, task: SeatQueue.taskById(t.id) });
+      }
+      if (verb === "doctrine") {
+        const r = writeDoctrine(root, typeof b.text === "string" ? b.text : "");
+        return json(r, r.ok ? 200 : 400);
+      }
+      /* The rules the seat HANDS OUT, as opposed to the ones it runs by. Two
+         files because they govern different people. */
+      if (verb === "brief") {
+        const r = writeBrief(root, typeof b.text === "string" ? b.text : "");
+        return json(r, r.ok ? 200 : 400);
+      }
+      /*
+       * ORCHESTRATE — "put somebody in this project's chair", from anywhere.
+       *
+       * The same seating the view's button does, reachable from a session in
+       * another project entirely, because that is how the ask arrives: a
+       * person working in one repository says "give this one an orchestrator"
+       * and should not have to go and find the view. Idempotent by the same
+       * rule as the button: an occupied chair answers with its occupant.
+       */
+      /*
+       * ADOPT — "the orchestrator for this project is already running, and it
+       * is me". For a session that has been working for hours with agents
+       * reporting to it: seating a fresh one would throw that away, and the
+       * only thing missing was the app knowing who it is.
+       *
+       * The pane is the identity, because the pane is what liveness rests on
+       * everywhere else here. A caller inside a pane knows its own id from
+       * $TMUX_PANE.
+       */
+      if (verb === "adopt") {
+        const r = await Seat.adoptSeat({
+          root,
+          session: String(b.session ?? ""),
+          pane: String(b.pane ?? ""),
+          powers: Seat.isPower(b.powers) ? b.powers : undefined,
+        });
+        if (!r.ok) return json(r, 400);
+        const d = readDoctrine(root), br = readBrief(root);
+        return json({ ok: true, already: r.already, seat: r.seat, doctrine: d.path, brief: br.path });
+      }
+      if (verb === "orchestrate") {
+        if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+        const powers = Seat.isPower(b.powers) ? b.powers : undefined;
+        const model = typeof b.model === "string" ? b.model : undefined;
+        const seeded = { doctrine: readDoctrine(root), brief: readBrief(root) };
+        const r = await Seat.openSeat({ root, powers, model, wakeHours: seatWakeHours() });
+        if (!r.ok) return json(r, 400);
+        return json({
+          ok: true, already: r.already, seat: r.seat, agent: r.agent,
+          /* Where its two rule files are, and whether this seating wrote them:
+             a caller that just created an orchestrator wants to know there is
+             something to edit, and where. */
+          doctrine: seeded.doctrine.path, doctrineSeeded: seeded.doctrine.seeded,
+          brief: seeded.brief.path, briefSeeded: seeded.brief.seeded,
+        });
+      }
+      return json({ ok: false, error: "no such seat verb" }, 404);
+    }
     if (pathname === "/lantern/ticket" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
@@ -6810,14 +7079,59 @@ const server = Bun.serve<WsData>({
       const verb = pathname.slice("/agents/named/".length);
       let b: Record<string, unknown>;
       try { b = (await req.json()) as Record<string, unknown>; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const timeoutMs0 = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
+      /*
+       * BROADCAST — one message, N agents.
+       *
+       * The orchestrator's own words for why: it was pasting the same
+       * paragraph five times, and each paste is a turn of the most expensive
+       * context on the machine. Every name is attempted and every outcome is
+       * reported: a partial send that read as a success would leave somebody
+       * waiting for an instruction that never arrived.
+       */
+      if (verb === "broadcast") {
+        const names = Array.isArray(b.names) ? b.names.filter((n): n is string => typeof n === "string") : [];
+        const text = typeof b.text === "string" ? b.text : "";
+        if (!text.trim()) return json({ ok: false, error: "nothing to send" }, 400);
+        const live = (await AgentOps.listAgents()).filter((a) => a.endedAt === null);
+        const want = names.length ? live.filter((a) => names.includes(a.name)) : live;
+        const missing = names.filter((n) => !live.some((a) => a.name === n));
+        const sent: { name: string; outcome: string }[] = [];
+        for (const a of want) {
+          const outcome = await AgentOps.promptAgent(a.paneId, text, timeoutMs0 || 10_000).catch(() => "gone");
+          sent.push({ name: a.name, outcome: String(outcome) });
+        }
+        return json({
+          ok: sent.some((x) => x.outcome === "sent" || x.outcome === "queued"),
+          result: { sent, missing, asked: want.length },
+        });
+      }
       if (!AgentOps.validName(b.name)) return json({ ok: false, error: "name: letters, digits, dot, dash or underscore, 64 at most" }, 400);
       const name = b.name;
       const timeoutMs = Math.min(600_000, Math.max(0, Number(b.timeout ?? 0) || 0));
 
       if (verb === "start") {
         const cwd = gitSafeAbs(b.cwd);
-        if (!cwd || !inScope(cwd) || !fsExists(cwd)) {
-          return json({ ok: false, error: "that directory is not in the open project" }, 400);
+        /*
+         * A SIBLING WORKTREE IS THE SAME PROJECT.
+         *
+         * `inScope` measures against the open project's directory, so
+         * `~/code/app-feature` — a worktree of `~/code/app`, cut by the very
+         * brief these agents are handed — read as somewhere else and the start
+         * was refused. Measured on a real project here: half the agents live in
+         * sibling worktrees, so half of them could not be started from the app
+         * at all.
+         *
+         * The rule widens to the REPOSITORY, not to the machine: a directory
+         * qualifies when git says it belongs to the project this app has open.
+         * `projectRootOf` is the reader that already answers that question —
+         * it strips `.worktrees/` and folds the rest through
+         * `--git-common-dir` — and it is the same fold the seat uses to decide
+         * where a report lands.
+         */
+        const sameProject = !!cwd && !!workspaceRoot() && projectRootOf(cwd) === workspaceRoot();
+        if (!cwd || (!inScope(cwd) && !sameProject) || !fsExists(cwd)) {
+          return json({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
         }
         const wanted = typeof b.kind === "string" ? b.kind : "claude";
         if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
@@ -6852,6 +7166,29 @@ const server = Bun.serve<WsData>({
         return json({ ok: true, result: { agent: r.agent, state: wait?.state ?? "starting", ready: wait?.reached ?? false } });
       }
 
+      /*
+       * ENLIST — a tab somebody opened, under this app's hand.
+       *
+       * Its first ask was one message to N agents, and for the orchestrator
+       * here the N was zero: every agent it runs is a tmux tab it opened by
+       * hand, and the registry held only what this app had started.
+       */
+      if (verb === "enlist") {
+        const r = await AgentOps.enlistAgent({
+          name, pane: typeof b.pane === "string" ? b.pane : undefined,
+          window: typeof b.window === "string" ? b.window : undefined,
+        });
+        if (r.ok) return json({ ok: true, result: { agent: r.agent } });
+        const why: Record<string, string> = {
+          "bad-name": "name: letters, digits, dot, dash or underscore, 64 at most",
+          exists: `an agent by that name is already live in pane ${r.detail}`,
+          "no-pane": "no pane by that id or window name on the engine",
+          "many-panes": `more than one window is called that (${r.detail}) — say which pane`,
+          "not-an-agent": `that pane is running ${r.detail}, not an agent — prompting it would type into a shell`,
+        };
+        return json({ ok: false, error: why[r.error] }, r.error === "exists" ? 409 : 400);
+      }
+
       const a = AgentOps.agentNamed(name);
       if (!a || a.endedAt !== null) return json({ ok: false, error: "no agent by that name" }, 404);
 
@@ -6884,8 +7221,11 @@ const server = Bun.serve<WsData>({
         return json({ ok, result: { name, key } }, ok ? 200 : 410);
       }
       if (verb === "stop") {
-        const ok = await AgentOps.stopAgent(a);
-        return json({ ok: true, result: { name, killed: ok } });
+        /* An enlisted tab is let go, not killed: it is somebody's own window
+           with their work in it. `kill: true` says the caller meant the window
+           and not the registration. The answer says which happened. */
+        const r = await AgentOps.stopAgent(a, Date.now(), b.kill === true || !a.adopted);
+        return json({ ok: r.ok, result: { name, killed: r.killed, letGo: !r.killed } });
       }
       return json({ ok: false, error: "no such verb" }, 404);
     }

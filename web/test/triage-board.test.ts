@@ -22,7 +22,7 @@ import { describe, expect, it } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TriageBoard } from "../src/components/TriageBoard.tsx";
-import { LANES } from "../src/lib/prLanes.ts";
+import { LANES, LANE_CAP } from "../src/lib/prLanes.ts";
 
 const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
 import type { PrSummary } from "../../shared/types.ts";
@@ -154,9 +154,13 @@ describe("the lanes", () => {
      * inside a scroll, and a lane that draws six without saying so has hidden
      * two pull requests and told you it had six.
      */
-    const html = full();
-    expect(drawn(html, "review")).toBe(6);
-    expect(heading(html, "review")).toBe("9");
+    /* Built from LANE_CAP rather than from a number typed here: the cap moved
+       once (six hid seven cards there was room for), and a test that spells the
+       old number out goes red for the change instead of for the bug. */
+    const long = Array.from({ length: LANE_CAP + 3 }, (_, i) => pr(400 + i));
+    const html = full({ review: long });
+    expect(drawn(html, "review")).toBe(LANE_CAP);
+    expect(heading(html, "review")).toBe(String(LANE_CAP + 3));
     expect(column(html, "review")).toContain("+3 more in this lane");
   });
 
@@ -240,9 +244,14 @@ describe("waiting is not the same as empty", () => {
   it("keeps the answer on screen while it refreshes", () => {
     // A refresh with last minute's board still on screen must not blank it: the
     // old answer is a better one than a skeleton, and it is about to be right.
-    const html = full({ loading: true });
-    expect(drawn(html, "review")).toBe(6);
-    expect(html).not.toContain("Reading the two lists");
+    /* Against the SAME board not refreshing, rather than against a number: what
+       this holds is that a refresh changes nothing on screen. The literal six
+       here was the old cap and went red when the cap moved, and counting the
+       fixture instead is no better — its rows are split across lanes, so its
+       length was never what this lane draws. */
+    expect(drawn(full({ loading: true }), "review")).toBe(drawn(full(), "review"));
+    expect(drawn(full({ loading: true }), "review")).toBeGreaterThan(0);
+    expect(full({ loading: true })).not.toContain("Reading the two lists");
   });
 
   it("offers the table from the empty state too, since that is the way out", () => {

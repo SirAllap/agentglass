@@ -95,6 +95,7 @@ import { ciOnlyApproved, setCiOnlyApproved } from "../lib/ciNotifyPref.ts";
 import { setTalkNotify, talkNotify, type TalkNotify } from "../lib/talkNotify.ts";
 import { RETENTION, setUnderstudyEnabled, useUnderstudy } from "./understudy/UnderstudyPanel.tsx";
 import { Appearance, closedCount } from "./understudy/Appearance.tsx";
+import { Teach } from "./understudy/Teach.tsx";
 import { Persona } from "./understudy/persona/Persona.tsx";
 import { setCosmetic, useCosmetic } from "./understudy/persona/cosmeticStore.ts";
 import { emitControl } from "../lib/controlBus.ts";
@@ -497,12 +498,12 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      every pane and every chat runs on, with a binary, a config and a restore of
      its own — three settings deep is not a row in a list of "is it installed". */
   { id: "tmux", label: "tmux", group: "Agents & work", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout scrollback resume socket status bar chat warm cli claude how new chats run", what: "What a pane runs on — the tmux binary, its config and prefix — and how a new chat picks one.", icon: PanesIcon },
-  { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup lantern reminder status what doing needs you ask sessions working on interval", what: "Wire Claude Code into this app, what the Lantern may ask of a session, and what else is installed.", icon: PlugIcon },
+  { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "Wire Claude Code into this app, what the Lantern may ask of a session, and what else is installed.", icon: PlugIcon },
   /* Filed beside Agents rather than under Your data, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
      watches agents work. It is here because the question people arrive with is
      "what is that face in the rail", and the face is about the work. */
-  { id: "understudy", label: "Clone", group: "Agents & work", kw: "clone shadow scorecard predict agreement watch score classes autonomy portrait persona art look how it looks", what: "The thing that watches you work and keeps score — and what it is never allowed to do.", status: true, icon: UnderstudyIcon },
+  { id: "understudy", label: "Knowledge", group: "Agents & work", kw: "knowledge clone learn sources teach precedents decisions bank recall exclusions never see private terms consent portrait persona art look how it looks scorecard watch score", what: "Where the orchestrator learns how you decide — what it may read, what it must never see, and the face it wears.", status: true, icon: UnderstudyIcon },
   /*
    * One page for everything outside this app.
    *
@@ -1140,12 +1141,24 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
   const on = !!frame?.enabled;
   return (
     <>
-      <Section title="Watching">
+      {/*
+       * WHAT IT LEARNS FROM, first — because that is what this page is for now.
+       *
+       * This used to be the Clone's settings page, under the Clone's view, and
+       * the consent list lived in the view rather than here. The view is gone
+       * and the bank it filled became the orchestrator's memory, so the thing
+       * that decides what the orchestrator knows about you belongs on a
+       * settings page and not behind a tab in a scoreboard.
+       */}
+      <Section title="What the orchestrator learns from">
+        <Teach active={open} />
+      </Section>
+      <Section title="Keeping score">
         <Toggle
           label="Let the clone watch"
           hint={frame?.halted
             ? "Halted — it is enabled and stopped. Switching it on again is what lowers the fence; there is no timer."
-            : "It writes down what it would have done and is scored against what you did. It never acts, and in this build it cannot be given anything to do."}
+            : "Separate from the knowledge above, and off is a reasonable answer: this writes down what a stand-in would have done and scores it against what you did. Reading the bank does not depend on it — the orchestrator remembers you either way."}
           on={on}
           onClick={() => {
             void setUnderstudyEnabled(!on).then((r) => {
@@ -1153,9 +1166,6 @@ function UnderstudyPane({ open, onLeave }: { open: boolean; onLeave: () => void 
               void refreshUnderstudy();
             });
           }} />
-        <Row label="Open the scorecard"
-          hint="Thirteen classes of decision, where each one stands, and the sentences saying what is in the way."
-          onClick={() => { emitControl({ cmd: "view", to: "understudy" }); onLeave(); }} />
       </Section>
       {err && <div className="px-3.5 pb-3 text-[12px]" style={{ color: "var(--error)" }}>{err}</div>}
       <UnderstudyLook classes={frame?.classes ?? []} />
@@ -1840,6 +1850,29 @@ function HooksPane({ open }: { open: boolean }) {
     return () => { live = false; };
   }, [open]);
 
+  /*
+   * THE GATE IS ITS OWN SWITCH, and the copy has to say why.
+   *
+   * The forwarder streams what happened. The gate HOLDS a tool call until
+   * somebody decides, and an outward one — a push, a pull request, a comment,
+   * a review, a merge, a ticket, a message in a channel — is held closed. Two
+   * different bargains, so two different buttons: nobody should acquire a
+   * thing that can stop their agents by asking for telemetry.
+   */
+  const gate = async (on: boolean) => {
+    setBusy(true); setErr(null); setNote(null);
+    const r = await api.hooksGate(on)
+      .catch(() => ({ ok: false, installed: false, changed: false, settingsPath: "", error: "Could not reach the server" }));
+    setBusy(false);
+    if (!r.ok) { setErr(r.error || "Could not update the gate"); return; }
+    setSt((cur) => (cur ? { ...cur, gate: on } : cur));
+    setNote(!r.changed
+      ? (on ? "The gate was already on." : "The gate was already off.")
+      : on
+        ? "The gate is on. Start a new Claude Code session for it to take effect."
+        : "The gate is off. Sessions already running keep it until they restart.");
+  };
+
   const act = async (kind: "install" | "uninstall") => {
     setBusy(true); setErr(null); setNote(null);
     const r = await (kind === "install" ? api.hooksInstall() : api.hooksUninstall())
@@ -1894,11 +1927,44 @@ function HooksPane({ open }: { open: boolean }) {
         {/* What the checklist below is FOR, which is read once. The checklist
                 itself already names the file it writes to, on its own step. */}
                 <Fold label="What wiring this actually changes">
-              Every Claude Code session streams here live, and gate approvals
-              (<span className="tabular-nums">PreToolUse</span>) reach the app instead of only the terminal.
+              Every Claude Code session streams here live — what ran, what it
+              cost, when it stopped for you. It watches; it never stops a tool
+              call, and its command ends in <span className="t-mono text-[11px]">|| exit 0</span> so that stays true
+              even if the script goes missing. Holding calls is the gate below, which is a separate switch.
               It edits <span className="t-mono text-[11px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>,
               backing it up first, and leaves your other hooks untouched.
                 </Fold>
+
+            {/* The gate. Below the forwarder because it is the stronger thing,
+                and read second for the same reason. */}
+            <div className="flex flex-col gap-1.5 px-2.5 py-2 rounded-lg"
+              style={{ background: "color-mix(in srgb, var(--primary) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 26%, transparent)" }}>
+              <div className="flex items-center gap-2">
+                <span className="text-[12px]" style={{ color: "var(--text)" }}>
+                  Hold what leaves this machine {st.gate ? "· on" : "· off"}
+                </span>
+                <span className="flex-1" />
+                {!st.gateBundled ? (
+                  <span className="text-[10.5px] t-dim2">not in this build</span>
+                ) : (
+                  <button onClick={() => void gate(!st.gate)} disabled={busy}
+                    className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
+                    style={st.gate
+                      ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 34%, transparent)", opacity: busy ? 0.5 : 1 }
+                      : { color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                    {busy ? "Working…" : st.gate ? "Turn the gate off" : "Turn the gate on"}
+                  </button>
+                )}
+              </div>
+              <span className="text-[10.5px]" style={{ color: "var(--text2)" }}>
+                A push, a pull request, a comment, a review, a merge, a ticket or a message in a channel
+                waits here with the text it would send, and nobody answering means it does not happen.
+                Everything local — writing code, running tests, cutting a worktree — is never held.
+              </span>
+              <span className="text-[9.5px] t-dim2">
+                Until you turn this on, that line is held by each agent remembering it.
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               {!st.installed ? null : (
                 <button onClick={() => act("uninstall")} disabled={busy}
@@ -1944,6 +2010,8 @@ function HooksPane({ open }: { open: boolean }) {
  * one session may be asked again.
  */
 function LanternSection({ open }: { open: boolean }) {
+  const [seatWake, setSeatWake] = useState(4);
+  useEffect(() => { if (open) void api.seatWake().then((r) => { if (r.ok) setSeatWake(r.hours); }).catch(() => {}); }, [open]);
   const [nudge, setNudge] = useState(true);
   const [minutes, setMinutes] = useState(20);
   const [watch, setWatch] = useState(true);
@@ -1998,6 +2066,14 @@ function LanternSection({ open }: { open: boolean }) {
         options={WATCH_STEPS.map((m) => ({ v: String(m), label: `${m} min` }))}
         onPick={(m) => save({ watchMinutes: Number(m) })} disabled={!watch}
         disabledHint="Nothing is looked at while the watch is off." />
+      {/* The seat's floor lives here because it rides the same look: the watch
+          re-reads the field, and the orchestrator is prompted only when what
+          it found CHANGED. This is how long a quiet field may stay quiet
+          before it gets a line anyway. */}
+      <Choice label="Wake the orchestrator at least every" value={String(seatWake)}
+        hint="The seat is woken when the field changes. This is the floor under that, so a quiet day still gets a line rather than a silence you cannot tell from a dead agent."
+        options={[1, 2, 4, 8, 12, 24].map((h) => ({ v: String(h), label: h === 1 ? "1 hour" : `${h} hours` }))}
+        onPick={(h) => { void api.seatWakeSave(Number(h)).then(() => setSeatWake(Number(h))); }} />
       <Choice label="How long the prompt cache stays warm" value={String(cacheTtl === 60 ? 60 : 5)}
         hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
         options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}

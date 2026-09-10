@@ -75,8 +75,12 @@ const waiters = new Map<string, Pending>();
 let onChange: () => void = () => {};
 export function onGateChange(fn: () => void) { onChange = fn; }
 
-/** What a timeout resolves to, under the configured policy. */
-function timeoutOutcome(): GateOutcome {
+/** What a timeout resolves to, under the configured policy — or under a
+ *  policy the route set for THIS request. An outward action (something a
+ *  colleague can see) is held closed whatever the machine's default is: the
+ *  fail-open default exists so an absent human never blocks work, and work
+ *  that has already left the machine cannot be un-blocked later. */
+function timeoutOutcome(failClosed = FAIL_CLOSED): GateOutcome {
   // Same audience as defaultReason(): a model deciding what to do next. This
   // one is emphatically NOT a judgement about the call — nobody looked at it —
   // and an agent that treats it as one will start avoiding a perfectly fine
@@ -143,8 +147,8 @@ function finish(
 
 /** Arm the expiry timer for a pending request. Anchored to the *original*
  *  deadline, so a reconnect (or a restart) never extends the window. */
-function arm(id: string, expires: number): ReturnType<typeof setTimeout> {
-  const t = setTimeout(() => finish(id, timeoutOutcome(), "timeout"), Math.max(0, expires - Date.now()));
+function arm(id: string, expires: number, failClosed?: boolean): ReturnType<typeof setTimeout> {
+  const t = setTimeout(() => finish(id, timeoutOutcome(failClosed), "timeout"), Math.max(0, expires - Date.now()));
   // Don't let a held gate keep the process alive on its own.
   (t as any).unref?.();
   return t;
@@ -171,7 +175,10 @@ export function submitGate(
    * policies are worth holding one for belongs to the route, which already
    * imports both halves.
    */
-  budget?: string
+  budget?: string,
+  /** Hold this ONE request closed when nobody answers, whatever the machine's
+   *  default is. The route sets it for outward actions; see outward.ts. */
+  failClosed?: boolean,
 ): Promise<GateOutcome> {
   // Floor the timeout: a negative value (a repo-local settings.json can set
   // AGENTGLASS_GATE_TIMEOUT=-1) makes setTimeout fire immediately, turning the
@@ -200,7 +207,7 @@ export function submitGate(
   const where = describeSession(source_app, session_id);
   return new Promise((resolve) => {
     waiters.set(id, { id, source_app, session_id, tool_name, summary, created, expires,
-      where, pane: pane ?? undefined, budget, resolve, timer: arm(id, expires) });
+      where, pane: pane ?? undefined, budget, resolve, timer: arm(id, expires, failClosed) });
     // The checkout and the tmux window, not a project name and eight
     // characters of a UUID. This is the alert that wakes a phone and expects a
     // decision from the lock screen; it was the least readable of the lot.

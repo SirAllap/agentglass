@@ -26,6 +26,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PrSummary } from "../../shared/types.ts";
+import { forgetCards } from "../src/lib/prCardStore.ts";
 
 const priorStorage = (globalThis as { localStorage?: unknown }).localStorage;
 const cell = new Map<string, string>();
@@ -72,7 +73,11 @@ const column = (html: string, lane: string): string => {
 };
 const drawn = (html: string, lane: string): number => (column(html, lane).match(/data-pr="/g) ?? []).length;
 
-beforeEach(() => cell.clear());
+/* The card store is an ambient input to every render here: a lookup another
+   file queued lands in it, and a row's own five-hour-old reading is then
+   replaced by a fresh one — which is what the rows below are asserting the age
+   of. Cleared so these draw from the row and nothing else. */
+beforeEach(() => { cell.clear(); forgetCards(); });
 
 describe("what is remembered", () => {
   test("nothing folded is stored as nothing, not as an empty list", () => {
@@ -488,7 +493,7 @@ describe("what the card finally says", () => {
 
   test("shows who the card is on, with the tracker's own face", () => {
     /* ClickUp's people, not GitHub logins: a name on a tracker board is not a
-       username on a forge, and `<Avatar login="Antonio García">` draws a blank
+       username on a forge, and `<Avatar login="Grace Hopper">` draws a blank
        circle. The tracker hands over the photo, the initials and the colour. */
     const html = inCard(withCard({ people: [{ name: "Antonio", initials: "AG", color: "#7b68ee" }] }));
     expect(html).toContain("Card assigned to Antonio");

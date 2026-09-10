@@ -46,7 +46,45 @@ const geom = () => {
   return { window: size ?? "", paneRows: Number(pane ?? 0) };
 };
 
-const settle = () => Bun.sleepSync(1200);
+/*
+ * WAIT FOR THE THING, NOT FOR A NUMBER OF MILLISECONDS.
+ *
+ * This was `sleepSync(1200)`, and 1200 ms is plenty on an idle laptop and not
+ * always enough under a full suite: attaching goes through `script`, a real
+ * pty and a fork, and the whole file then failed on whichever assertion the
+ * client had not reached yet. Measured as an intermittent — green in
+ * isolation, red once in a while inside `bun test` with four hundred other
+ * files and, once, with the installer restarting the app beside it.
+ *
+ * So each wait states its own condition and polls for it. A test that used to
+ * take 1200 ms of sleeping now usually takes a fraction of that, and the
+ * ceiling is generous enough that a loaded machine still gets there.
+ */
+const until = (ok: () => boolean, ms = 15_000): boolean => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (ok()) return true;
+    if (Date.now() > deadline) return false;
+    Bun.sleepSync(25);
+  }
+};
+
+/** How many clients tmux has actually accepted. `attach` returns before its
+ *  `script` has a pty, and this is the fact the sleep was standing in for. */
+const clients = (): number => tmux("list-clients", "-t", "probe").out.split("\n").filter(Boolean).length;
+
+/** Wait for one more client than there were, and for the window to have taken
+ *  its size from it — tmux resizes on the attach, not before. */
+const settleClients = (n: number) => {
+  until(() => clients() >= n);
+  const first = geom().paneRows;
+  /* One more beat only when nothing has moved yet: `largest` may leave the
+     size exactly where it was, which is a valid outcome and not a wait. */
+  until(() => geom().paneRows !== first, 1_000);
+};
+
+/** Wait for the pane to reach a size the assertion below is about. */
+const settleRows = (ok: (rows: number) => boolean) => until(() => ok(geom().paneRows));
 
 beforeEach(() => {
   tmux("kill-server");
@@ -59,18 +97,21 @@ afterEach(() => { tmux("kill-server"); });
 describe("who decides how big the window is", () => {
   it("fits the only client attached", () => {
     attach(80, 24);
-    settle();
+    settleClients(1);
+    settleRows((r) => r === 23);
     // 23 rather than 24: tmux keeps a row for its own status line.
     expect(geom().paneRows).toBe(23);
   });
 
   it("hands the window to a bigger client, leaving the small one looking at a corner", () => {
     attach(80, 24);
-    settle();
+    settleClients(1);
+    settleRows((r) => r === 23);
     const alone = geom().paneRows;
 
     attach(240, 60);
-    settle();
+    settleClients(2);
+    settleRows((r) => r > alone + 20);
     const shared = geom().paneRows;
 
     // This is the defect, in one line: the pane grew and the panel did not.
@@ -82,9 +123,11 @@ describe("who decides how big the window is", () => {
 
   it("gives it back when this client asks to be fitted", () => {
     attach(80, 24);
-    settle();
+    settleClients(1);
+    settleRows((r) => r === 23);
     attach(240, 60);
-    settle();
+    settleClients(2);
+    settleRows((r) => r > 30);
     expect(geom().paneRows).toBeGreaterThan(30);
 
     /*
@@ -97,7 +140,7 @@ describe("who decides how big the window is", () => {
      * is the only thing the button says.
      */
     tmux("resize-window", "-t", "probe", "-x", "80", "-y", "24");
-    settle();
+    settleRows((r) => r < 30);
 
     // Back to something a small client can see all of.
     expect(geom().paneRows).toBeLessThan(30);
@@ -127,7 +170,8 @@ describe("the fit action sizes the window to the client, not taller", () => {
     // A bigger client makes the window taller than the 59 rows we will ask for,
     // exactly as a real terminal or a second window does under `largest`.
     attach(267, 65);
-    settle();
+    settleClients(1);
+    until(() => geom().window.startsWith("267x"));
     const before = geom();
     expect(before.window.split("x")[0]).toBe("267");
     expect(Number(before.window.split("x")[1])).toBeGreaterThan(59);
@@ -142,7 +186,7 @@ describe("the fit action sizes the window to the client, not taller", () => {
     // land whether or not the fit set it; 200 can only be there if it did.
     const ok = runAction({ pid: 0, socket: ["-S", SOCK], session: "probe", id: sid }, "fit", win, undefined, 200, 59);
     expect(ok).toBe(true);
-    settle();
+    until(() => geom().window === "200x59");
 
     // Sized to the panel, not left at the bigger client's grid — and it holds
     // against that client, which is still attached.
