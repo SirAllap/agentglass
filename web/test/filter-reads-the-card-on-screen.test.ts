@@ -8,13 +8,30 @@
  * then matched nothing at all: the rule was set, the button counted it, and not
  * one card left its lane.
  */
-import { test, expect, beforeEach } from "bun:test";
+import { test, expect, beforeEach, afterEach } from "bun:test";
 import { applyWith, type FilterSet } from "../src/components/tasks/filters.ts";
 import { readPrField } from "../src/lib/prFilter.ts";
 import { withCard, forgetCards } from "../src/lib/prCardStore.ts";
 import type { PrSummary } from "../../shared/types.ts";
 
+/*
+ * THE STORE IS A MODULE SINGLETON AND `bun test` IS ONE PROCESS.
+ *
+ * Whatever this file leaves in it is what the next file renders against, and
+ * `api.clickupFind` is stubbed here to answer for any reference at all — so an
+ * entry left behind turns another file's "no card cached" into a card. That is
+ * exactly what happened: three tests in another file went red on the runner and
+ * nowhere else, because the order differs and this ran first there.
+ *
+ * Cleared on both sides, and the queue is drained before the stub is put back:
+ * a lookup still in flight resolves through whichever function is installed
+ * when it lands, not the one that was there when it was queued.
+ */
 beforeEach(() => forgetCards());
+afterEach(async () => {
+  await new Promise((r) => setTimeout(r, 0));
+  forgetCards();
+});
 
 /** A row as the list hands it over with a stale cache: an id in the branch and
  *  no card attached. */
@@ -30,10 +47,12 @@ test("a row whose card only the store knows is still read by the filter", async 
   const store = await import("../src/lib/prCardStore.ts");
   const api = (await import("../src/lib/api.ts")).api as unknown as Record<string, unknown>;
   const before = api.clickupFind;
-  api.clickupFind = async (query: string) => ({
-    ok: true,
-    task: { id: query, customId: query, title: "a card", status: "in review", priority: null, people: [] },
-  });
+  /* Only this file's own references. A stub that answers for ANY reference is
+     the leak: a lookup another file queued resolves through it and that file's
+     "no card cached" becomes a card. */
+  api.clickupFind = async (query: string) => (/^ORBIT-104[23]$/.test(query)
+    ? { ok: true, task: { id: query, customId: query, title: "a card", status: "in review", priority: null, people: [] } }
+    : (before as (q: string) => Promise<unknown>)(query));
   try {
     const rows = [bare(1, "ORBIT-1042"), bare(2, "ORBIT-1043")];
     /* First pass: nobody has an answer yet, so nothing is enriched — and a
@@ -73,10 +92,9 @@ test("a stale card is replaced by a fresher reading, and a fresh one is left alo
   const store = await import("../src/lib/prCardStore.ts");
   const api = (await import("../src/lib/api.ts")).api as unknown as Record<string, unknown>;
   const before = api.clickupFind;
-  api.clickupFind = async (query: string) => ({
-    ok: true,
-    task: { id: query, customId: query, title: "a card", status: "code review", priority: null, people: [{ name: "Someone Else" }] },
-  });
+  api.clickupFind = async (query: string) => (query === "ORBIT-1050"
+    ? { ok: true, task: { id: query, customId: query, title: "a card", status: "code review", priority: null, people: [{ name: "Someone Else" }] } }
+    : (before as (q: string) => Promise<unknown>)(query));
   try {
     /* Half an hour old, and the row says what the board said then. */
     const stale = {
