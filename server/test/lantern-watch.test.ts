@@ -93,3 +93,52 @@ describe("the one notification a look sends", () => {
     expect(n.body).toContain("and 2 more on the Lantern");
   });
 });
+
+/*
+ * A DEAD SESSION IS NOT FORGOTTEN WORK.
+ *
+ * A session that ended two days ago has exactly the shape this looks for:
+ * idle, carrying a `doing` from when it was alive, quiet ever since. So it was
+ * reported as forgotten work on every single look, for ever — and every one of
+ * those woke the seat. Measured from the other side, in the seat's own words:
+ * six wakes in one night, five of them about sessions dead for days, on the
+ * most expensive context on the machine.
+ */
+describe("who is worth asking about", () => {
+  const NOW = Date.now();
+
+  test("a name with no pane, quiet for days, is not asked about at all", () => {
+    const f = findings({
+      rows: [row({ name: "died-on-monday", doing: "the retry fix", saidAt: NOW - 48 * 60 * 60_000 })],
+      namedNow: [], namedBefore: null, now: NOW,
+    });
+    expect(f, "a session dead for two days was reported as forgotten work").toEqual([]);
+  });
+
+  test("but quiet for an hour with no pane still is: it may be alive elsewhere", () => {
+    /* No pane HERE is not no pane: an agent on a second tmux server looks
+       exactly like this, and it will have spoken recently. The two thresholds
+       differ for that reason — this is not simply a longer silence. */
+    const f = findings({
+      rows: [row({ name: "maybe-elsewhere", doing: "the retry fix", saidAt: NOW - FORGOTTEN_AFTER_MS - 60_000 })],
+      namedNow: [], namedBefore: null, now: NOW,
+    });
+    expect(f.map((x) => x.kind)).toEqual(["forgotten"]);
+  });
+
+  test("and one with a pane is asked about however long it has been quiet", () => {
+    const f = findings({
+      rows: [row({ name: "napping", paneId: "%7", doing: "the retry fix", saidAt: NOW - 48 * 60 * 60_000 })],
+      namedNow: [], namedBefore: null, now: NOW,
+    });
+    expect(f.map((x) => x.kind)).toEqual(["forgotten"]);
+  });
+
+  test("somebody stopped on a person is never dropped, whatever its age", () => {
+    const f = findings({
+      rows: [row({ name: "waiting", saidAt: NOW - 48 * 60 * 60_000, needsYou: { kind: "permission", why: "needs your permission", since: NOW - 48 * 60 * 60_000 } })],
+      namedNow: [], namedBefore: null, now: NOW,
+    });
+    expect(f.map((x) => x.kind)).toEqual(["waiting"]);
+  });
+});
