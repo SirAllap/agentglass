@@ -831,9 +831,9 @@ export function TriageBoard({
                         * IT HOLDS SOMETHING, and then it draws no control
                         * rather than a dead one. At zero it folds like any
                         * other: an empty lane is asking nothing, and it was
-                        * still taking 268px of a board that does not fit five
-                        * columns — "no puedo plegar la primera columna", said
-                        * under a heading reading `0 NEEDS YOUR REVIEW`.
+                        * still taking 268px of a board that does not fit
+                        * five columns — a lane that cannot be folded under a
+                        * heading reading `0 NEEDS YOUR REVIEW`.
                         */}
                       {foldable(l.id, all.length) && (
                         <button onClick={() => toggleFold(l.id, all.length)}

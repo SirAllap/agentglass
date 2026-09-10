@@ -1,8 +1,8 @@
 /*
  * Which pane the "waiting on you" panel offers to take you to.
  *
- * The complaint this whole thread came from: "no sé de qué agente habla y no sé
- * en qué pane y no me lleva a ningún sitio". The last third took three rounds.
+ * The panel used to name no agent, name no pane, and go nowhere when pressed.
+ * The last of those three took three rounds.
  * The panel could only join a session to a pane by the directory the agent was
  * running in, and that join has to decline whenever two agents share a
  * worktree — which on this machine is most of the time, so the honest answer

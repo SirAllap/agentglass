@@ -371,10 +371,9 @@ export function ViewRail({
           *
           * It used to be two. A drag raised a dashed bin of its own directly
           * ABOVE this button, so the moment you picked something up there were
-          * two dashed squares stacked in the corner of the rail: one to drop it
-          * into and one that opens the drawer it lands in. Reported as "es muy
-          * raro… ese botón debería ser el de agregar" — which it now is, in both
-          * directions.
+          * two dashed squares stacked in the corner of the rail: one to drop
+          * it into and one that opens the drawer it lands in. One button, in
+          * both directions, is what that should always have been.
           *
           * Shown while dragging even with nothing hidden yet, or the first view
           * you ever put away would have nowhere to be dropped.

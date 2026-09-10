@@ -5,8 +5,8 @@
  * headers written at five different times had drifted, and switching views made
  * the frame twitch. What it never fixed is what goes IN the bar, so the drift
  * moved one level down — a chip at 11.5px here, one at 10px there, a segmented
- * control with its own border and inner padding in a third. Reported, in the
- * author's words: "no hay homogeneidad… parece que estoy en otra app".
+ * control with its own border and inner padding in a third. The effect is
+ * that switching views reads as switching applications.
  *
  * Nothing here is invented. The numbers are the ones the panels already agree
  * on, counted across the six view files:
@@ -328,8 +328,7 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
    * correct for a toolbar toggle, wrong here: the pull-request header turned
    * into two grey words with arrows after them, and grey text with punctuation
    * reads as a caption that happens to have an arrow, not as something you can
-   * press. Reported the moment it shipped: "usa ese chip que usas en los demás,
-   * así está en armonía y no parece otra cosa."
+   * press — and as the one header in the app that does not match the others.
    *
    * The fill and the hairline are the Git panel's, which is the header that had
    * this right — they are what say "this is a control".

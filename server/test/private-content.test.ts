@@ -74,17 +74,46 @@ describe("nothing private is in the tree", () => {
   test("a comment does not quote a message somebody sent", () => {
     /*
      * The heuristic is language. This codebase is written in English, and every
-     * one of these got in as a quoted Spanish sentence — so a Spanish function
-     * word between quotes is the shape of the thing, and it is nearly free of
-     * false positives: a real Spanish string in the product would be a
-     * translation file, and there is none.
+     * one of these got in as a quoted Spanish sentence — so a quoted run with
+     * three different Spanish function words in it is the shape of the thing.
      *
-     * Deliberately narrow. It is a tripwire for the mistake that was actually
-     * made, not a language detector; the rule it protects is written in
-     * CLAUDE.md and a person reading a failure here should go and read it.
+     * The first version of this rule looked for one word from a list of twelve
+     * and looked at raw source, and it found four of the twenty-three that were
+     * actually in the tree. Both halves were wrong:
+     *
+     *   A comment wraps. `"la app sigue\n * rota"` is one quote to a reader and
+     *   two lines to a regex, so the comment is FLATTENED before it is read.
+     *
+     *   One word is not a signal. "de" and "la" are in half the identifiers in
+     *   any codebase; three distinct ones inside one pair of quotes is not an
+     *   accident.
+     *
+     * Deliberately still a tripwire for the mistake that was actually made, and
+     * not a language detector — the rule it protects is written in CLAUDE.md,
+     * and somebody reading a failure here should go and read that.
      */
-    const SPANISH = /(?:"|«|`)[^"«`\n]{0,120}\b(?:cuando|porque|entonces|debería|deberia|tengo que|puedas|para que|movil|móvil|gracias|vale)\b[^"«`\n]{0,120}(?:"|»|`)/i;
-    expect(hits(SPANISH)).toEqual([]);
+    const SPANISH = /\b(?:la|el|los|las|un|una|que|de|del|en|es|no|si|al|lo|se|con|por|para|más|pero|como|esto|esta|este|sigue|roto|rota|puedo|puedes|hay|está|estoy|tengo|quiero|cuando|porque|entonces|donde|nada|todo|muy|bien|mal|vale|gracias|movil|móvil|pantalla|boton|botón|aqui|aquí|abajo|arriba|deberia|debería|solo|sólo|ni|ve|otra|hacer|desde|sin|sobre|entre|hasta|entonces)\b/gi;
+    const COMMENT = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
+    const QUOTED = /["“«]([^"”»]{8,260})["”»]/g;
+
+    const quoted = scanned.flatMap(({ path, text }) => {
+      const found: string[] = [];
+      for (const comment of text.match(COMMENT) ?? []) {
+        // Unwrapped: the leading `*` of each line goes, and so does the break.
+        const flat = comment.replace(/\s*\n\s*\*?\s*/g, " ");
+        for (const [, run] of flat.matchAll(QUOTED)) {
+          const words = new Set((run.match(SPANISH) ?? []).map((w) => w.toLowerCase()));
+          if (words.size >= 3) found.push(`${path}: ${run.slice(0, 60)}`);
+        }
+      }
+      return found;
+    });
+
+    expect(
+      quoted,
+      "a comment is quoting somebody's own words. Say what the defect WAS — "
+      + "who mentioned it, and in which language, is not documentation.",
+    ).toEqual([]);
   });
 
   test("and the rules it enforces are written down", () => {

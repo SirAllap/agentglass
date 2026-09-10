@@ -159,8 +159,8 @@ describe("a glyph is not a control", () => {
    * CHARACTER walked straight past all of them. The branch list's tick box was
    * `☐` at 11px inside a `<span onClick>`: seven pixels of outline, no tick you
    * could see when it was on, no role, no keyboard, and a target the size of
-   * the glyph. Reported as "el checkbox es ENANO, ni se ve", on the one list
-   * where knowing what you have selected is the entire feature.
+   * the glyph — on the one list where knowing what you have selected is the
+   * entire feature.
    *
    * So: a box, a tick, a caret or a spinner that IS the control gets drawn.
    * A glyph sitting next to a word ("⌫ 3 gone", "▣ stash some files…") is

@@ -147,8 +147,8 @@ export function PrFilterBar({
           *
           * These pills are built from the pull requests that have been loaded,
           * so the bar used to appear a second or two after everything else and
-          * shove the board down as it landed — reported as "tarda en cargar,
-          * entonces como que salta". Drawn from the static facet table instead
+          * shove the board down as it landed, which reads as the board jumping
+          * under the cursor. Drawn from the static facet table instead
           * while there is nothing to count, dimmed and inert: same row, same
           * height, same place, filling in rather than arriving.
           */}

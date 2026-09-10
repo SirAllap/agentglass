@@ -1,10 +1,10 @@
 /*
  * A new tab opens in the project on screen.
  *
- * Reported with two screenshots: the panel's chip said the repository was
- * `~/code/orbit`, the prompt in the tab that had just been opened said
- * `~/code/agentglass-work`, and the ask was not subtle — "SIEMPRE SIEMPRE
- * SIEMPRE debe abrirse desde la raíz del proyecto seleccionado".
+ * Found with the two paths side by side: the panel's chip said the repository
+ * was `~/code/orbit`, and the prompt in the tab that had just been opened said
+ * `~/code/agentglass-work`. A new tab opens at the root of the project on
+ * screen, always — there is no second reading of that.
  *
  * `new-window` with no `-c` starts in the SESSION's directory, and the session
  * was created by the server, so its directory is wherever the server was
