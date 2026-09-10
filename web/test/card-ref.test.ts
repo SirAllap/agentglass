@@ -173,7 +173,27 @@ describe("what the chip should do, given what this machine has", () => {
     // rather than a convention. Out to the browser, since there is no board
     // here to land in.
     expect(chipAction(addressed, { connected: false }))
-      .toEqual({ in: "clickup", url: "https://clickup.com/t/8ab12cd34" });
+      .toEqual({ in: "away", url: "https://clickup.com/t/8ab12cd34" });
+  });
+
+  it("sends another tracker's item out, never into this board", () => {
+    /*
+     * The half this file was missing. A Jira or Linear address is certain
+     * about WHICH item, and certainly not one ClickUp can find — looking it up
+     * there returns nothing, which reads as the card having been deleted.
+     */
+    const elsewhere = cardRef({ body: "https://acme.atlassian.net/browse/WEB-1042" });
+    expect(chipAction(elsewhere, { connected: true, prefix: "ORBIT-" }))
+      .toEqual({ in: "away", url: "https://acme.atlassian.net/browse/WEB-1042" });
+    expect(looksLikeOurs(elsewhere!, "ORBIT-")).toBe(false);
+  });
+
+  it("and an issue this pull request closes is one of those", () => {
+    // The reference every public repository has and no tracker is needed for.
+    const issue = cardRef({ body: "Fixes #12", url: "https://github.com/acme/widget/pull/91" });
+    expect(issue).toMatchObject({ label: "#12", tracker: "github" });
+    expect(chipAction(issue, { connected: true, prefix: "ORBIT-" }))
+      .toEqual({ in: "away", url: "https://github.com/acme/widget/issues/12" });
   });
 
   it("opens the card here once ClickUp is connected", () => {
