@@ -152,8 +152,8 @@ describe("the lane that cannot be folded", () => {
     /* The half the first version got wrong. The argument for never folding this
        lane is entirely about a lane that is asking you for something; at zero it
        asks nothing, and it was still taking 268px of a board that does not fit
-       five columns. Reported looking straight at it: "no puedo plegar la primera
-       columna", under a heading reading `0 NEEDS YOUR REVIEW`. */
+       five columns — a lane that cannot be folded under a heading reading
+       `0 NEEDS YOUR REVIEW`. */
     const empty = { mine: [pr(1)], review: [], total: 40 };
     /* Counted rather than matched on one attribute: `column()` cuts from this
        lane's marker to the next one's, and what distinguishes "offers a fold"

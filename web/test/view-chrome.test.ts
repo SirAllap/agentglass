@@ -8,8 +8,8 @@
  * with its own border and inner padding in a third — visibly taller than the
  * chips doing the same job beside it.
  *
- * Reported, in the author's words: "las vistas tienen que tener las secciones
- * homogéneas, que no parezca que estoy en otra app".
+ * The result reads as switching applications rather than switching views, and
+ * the sections of one view have to match the sections of the next.
  *
  * The canon is not a preference stated here. It is what the panels already
  * agree on, counted across the view files when this was written:

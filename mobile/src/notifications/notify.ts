@@ -16,8 +16,8 @@
  * release of SDK 53" as an UNCAUGHT error — a red box over whatever you were
  * looking at, on every cold start. This file is reached from the host store,
  * which is reached from the tab layout, so that is not "notifications are
- * off", it is expo-router failing to build a route. That is what "la app sigue
- * rota" was.
+ * off" — it is expo-router failing to build a route, and what it looks like
+ * from outside is an app that will not start.
  *
  * So it is required inside the functions, once, behind a try, and behind the
  * Expo Go check that stops it being attempted at all. A phone that cannot

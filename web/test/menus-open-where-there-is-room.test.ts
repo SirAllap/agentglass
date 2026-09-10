@@ -6,10 +6,10 @@
  * nobody could reach. `Select` — which is the app's replacement for every native
  * dropdown — never did, and it always opened downward from the trigger.
  *
- * Reported on the ClickUp status picker: "este desplegable está mal, está como
- * dentro del contenedor y no puedo ver todas las opciones, además debe abrirse
- * para arriba, al estar tan cerca de la parte baja". Two faults in one sentence,
- * and this file holds both halves of the answer — the control portals out of
+ * Found on the ClickUp status picker, near the bottom of the window: it was
+ * clipped by its own container, so the options at the end could not be seen,
+ * and it opened downward when the room was above it. Two faults, and this file
+ * holds both halves of the answer — the control portals out of
  * whatever clips it, and it flips when down does not fit.
  *
  * Source text: the decision is three lines of layout maths in a

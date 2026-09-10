@@ -247,9 +247,9 @@ describe("who gets to be beside your code", () => {
 });
 
 /*
- * Reported from the app, against a real pull request, as two questions asked in
- * one breath: «¿qué significan los comentarios de la derecha? ¿y por qué al
- * seleccionar un file unos tienen unos comentarios y otros otro?»
+ * Two questions a reader of this section could not answer from it: what the
+ * comments on the right of a file MEAN, and why two files selected in turn
+ * carry entries that look nothing like each other.
  *
  * Both are this section failing at the only thing it promises. Every entry
  * opened with the literal text of an HTML comment — a marker a machine writes

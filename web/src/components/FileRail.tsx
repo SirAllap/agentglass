@@ -174,8 +174,9 @@ export function FileRail({
    * The review note being written, and a way to write it.
    *
    * The rail used to carry the three verdicts and the Submit and no field, so
-   * everything except an approval bounced you to another tab — "si quiero hacer
-   * la review desde aquí no tengo input para meter texto, entonces es inútil".
+   * everything except an approval bounced you to another tab. A rail you can
+   * finish a review from except when you have something to say is a rail you
+   * leave every time.
    *
    * It is the SAME draft the Review tab holds, not a second one: two boxes with
    * two bodies is a way to lose the one you typed in the other.

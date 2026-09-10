@@ -285,9 +285,8 @@ export function RowAction({ label, danger, disabled, onClick, title }: {
  *
  * It was the character `☐` at 11px — which renders as a seven-pixel outline
  * with no tick you can see when it is ON, in a list where the whole point is
- * knowing which rows you have selected. Reported as "el checkbox es ENANO, ni
- * se ve", and it was not a control at all: a `<span>` with an onClick, no role,
- * no keyboard, no target.
+ * knowing which rows you have selected. It was not a control at all either:
+ * a `<span>` with an onClick, no role, no keyboard, no target.
  *
  * Drawn now, at `ICON.sm` inside the app's own `HIT` square — the same
  * geometry every other icon-only control in this app has — with a real tick and

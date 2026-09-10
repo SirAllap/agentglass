@@ -850,8 +850,8 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
    *
    * ── why the rate is measured and not a constant ───────────────────────────
    * This shipped at one notch per three rows, because three rows is what a
-   * desktop wheel sends, and the complaint came back the same day: "el scroll
-   * con el dedo es pesimo, apenas se mueve unos pixeles". Three rows is true
+   * desktop wheel sends, and a drag of the whole screen then moved the pane a
+   * few pixels — unusable, the same day it shipped. Three rows is true
    * about a desktop and irrelevant here, because HOW FAR A NOTCH GOES IS NOT
    * OURS TO DECIDE. A notch is a request; the program on the other end picks
    * the distance. Measured on this machine, on the same pane, minutes apart:

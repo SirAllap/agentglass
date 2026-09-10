@@ -351,8 +351,8 @@ export function commitRows(
     title: <span className="truncate" style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
     /* `clip`, and capped: this is the one chip in the app whose text is not a
        word but a list of branch names, and on a busy commit it is longer than
-       the subject it sits beside. Uncapped it ate the row and drew itself over
-       the date and author — reported as "se ve por encima del texto". */
+       the subject it sits beside. Uncapped it ate the row and drew itself
+       over the date and the author. */
     chips: l.refs
       ? <span className="chip-ref"><Chip tone="good" clip title={l.refs}>{l.refs}</Chip></span>
       : undefined,
