@@ -81,11 +81,26 @@ afterAll(async () => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * Longer than bun's five seconds, and for the same reason the boot above is.
+ *
+ * Every test below speaks to a real server over HTTP, and one of the routes —
+ * `/docker/overview` — probes for a tool that may not be installed, which is a
+ * process spawn rather than a lookup. Measured on ubuntu-latest: that test
+ * timed out at exactly 5000ms while the two after it then failed in
+ * milliseconds against a server that was no longer answering, so the whole
+ * file reads as three defects when it is one slow probe.
+ *
+ * The number is not a guess about the route. It is "long enough that a failure
+ * here means something is wrong, rather than that the runner was busy".
+ */
+const SLOW = 30_000;
+
 describe("what the Now screen reads", () => {
   test("gates come wrapped", async () => {
     const body = await get<{ gates: unknown }>("/gate/pending");
     expect(Array.isArray(body.gates)).toBe(true);
-  });
+  }, SLOW);
 
   test("sessions come BARE — the one that was got wrong", async () => {
     const body = await get<unknown>("/sessions?limit=100");
@@ -93,13 +108,13 @@ describe("what the Now screen reads", () => {
     // Stated as its own assertion so a future wrapper shows up as this line
     // rather than as an empty queue nobody can explain.
     expect((body as { sessions?: unknown }).sessions).toBeUndefined();
-  });
+  }, SLOW);
 
   test("containers come wrapped", async () => {
     const body = await get<{ containers: unknown; available: unknown }>("/docker/overview");
     expect(Array.isArray(body.containers)).toBe(true);
     expect(typeof body.available).toBe("boolean");
-  });
+  }, SLOW);
 
   test("and the queue builds from all three without throwing", async () => {
     /*
@@ -122,7 +137,7 @@ describe("what the Now screen reads", () => {
       now: Date.now(),
     });
     expect(Array.isArray(queue)).toBe(true);
-  });
+  }, SLOW);
 
   test("a theme is null before anybody picks one, rather than a guess", async () => {
     // The other route the app reads on every foreground. Null and a palette
@@ -130,5 +145,5 @@ describe("what the Now screen reads", () => {
     // following the computer or falling back to what it ships.
     const body = await get<{ theme: unknown }>("/theme/current");
     expect(body.theme).toBeNull();
-  });
+  }, SLOW);
 });
