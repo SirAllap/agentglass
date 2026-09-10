@@ -46,6 +46,9 @@ describe("the promises SECURITY.md makes about retention", () => {
       "db.ts:named_agent",
       "db.ts:reminders",
       "db.ts:seat_line",
+      /* A decision already taken. One still waiting is never swept, whatever its
+         age: a question that quietly disappeared is the failure it exists to end. */
+      "db.ts:seat_need",
       "db.ts:seat_report",
       /* What a session is to the app (the Lantern's chat): a mark that
          outlives its session by ninety days, then nothing needs it. */
@@ -113,7 +116,7 @@ describe("the promises SECURITY.md makes about retention", () => {
     for (const t of ["events_fts", "events", "sessions", "gates", "reminders",
                      "understudy_snapshots", "understudy_ledger",
                      "understudy_proposals", "understudy_shifts", "understudy_acts",
-                     "understudy_work", "understudy_asked", "understudy_help", "named_agent", "session_role", "agent_schedule", "seat_line", "seat_report"]) {
+                     "understudy_work", "understudy_asked", "understudy_help", "named_agent", "session_role", "agent_schedule", "seat_line", "seat_report", "seat_need"]) {
       expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(`DELETE FROM ${t}`);
     }
 

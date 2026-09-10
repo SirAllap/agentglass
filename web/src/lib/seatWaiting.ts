@@ -10,9 +10,19 @@
  * ask "what have we got left?" six times, and each time the answer was
  * reassembled by hand out of a head and a list nobody else could see.
  */
-import type { SeatFieldRow, SeatReportRow, SeatTask } from "./api.ts";
+import type { SeatFieldRow, SeatNeed, SeatReportRow, SeatTask } from "./api.ts";
 
 export interface Waiting {
+  /**
+   * WHAT THE SEAT ITSELF IS ASKING FOR, and the pile it used most.
+   *
+   * Something finished that needs one action only a person can take: re-upload
+   * the GIF, ask for a reviewer, say yes to a push. Its own account of why this
+   * is a separate kind: "el `asked` de los agentes es lo que ELLOS piden; el
+   * `ready` es lo que YO le pido a él" — and before this it lived nowhere but
+   * a chat, so it was lost the moment the conversation moved on.
+   */
+  ready: SeatNeed[];
   /** An agent sitting at a prompt. There is a pane to go to, and it is the
    *  cheapest thing on the list to clear. */
   stopped: SeatFieldRow[];
@@ -37,12 +47,28 @@ export interface Waiting {
 const reachable = (field: SeatFieldRow[], name: string): boolean =>
   field.some((f) => !f.gone && f.name === name);
 
-export function whatWaits(field: SeatFieldRow[], reports: SeatReportRow[], tasks: SeatTask[], maxAttempts = 2): Waiting {
+/*
+ * THE ORDER IS THE SEAT'S, and its reason is better than the obvious one.
+ *
+ * The first draft put `stopped` first, because an agent at a prompt is the
+ * cheapest thing to clear. It corrected that: what the person takes time to
+ * decide is the only part of the day that cannot be recovered — a decision of
+ * theirs waited hours — while an agent parked at a prompt is rarely what is
+ * holding the day up. So: what is asked of them first, then the work that will
+ * be lost if nobody says it, then the cheap ones.
+ */
+export function whatWaits(
+  field: SeatFieldRow[], reports: SeatReportRow[], tasks: SeatTask[], needs: SeatNeed[] = [], maxAttempts = 2,
+): Waiting {
+  const ready = needs.filter((n) => !n.doneAt);
   const stopped = field.filter((r) => !r.gone && r.needsYou);
   /* A report counts once, by which of the two it is: an agent that is here and
      asking, or an agent that asked and left. */
   const asked = reports.filter((r) => (r.blocked || r.need) && reachable(field, r.agent));
   const orphaned = reports.filter((r) => r.blocked && !reachable(field, r.agent));
   const beaten = tasks.filter((t) => !t.doneAt && !t.takenAt && t.attempts >= maxAttempts);
-  return { stopped, asked, orphaned, beaten, count: stopped.length + asked.length + orphaned.length + beaten.length };
+  return {
+    ready, asked, orphaned, stopped, beaten,
+    count: ready.length + asked.length + orphaned.length + stopped.length + beaten.length,
+  };
 }

@@ -1481,6 +1481,42 @@ CREATE TABLE IF NOT EXISTS seat_report (
 db.run(`CREATE INDEX IF NOT EXISTS seat_report_root ON seat_report (root, read_at, at DESC)`);
 
 /*
+ * WHAT THE SEAT ASKS OF THE PERSON — the other direction of the tray.
+ *
+ * A report is a worker saying what it needs. This is the seat saying what IT
+ * needs, and the two are not the same list: one is work asking to be
+ * unblocked, the other is a decision asking to be made. The orchestrator here
+ * named the gap after a day of it living nowhere but a chat: "pusheado,
+ * re-sube gif-4", "bot limpio, pide revisor", "3 ramas sin conflicto, ¿push?"
+ * — every one of them something ready, waiting on one action only a person can
+ * take.
+ *
+ * Four fields and every one of them earns its place. `cost` and `recommend`
+ * because a decision handed over without what it costs and what the seat would
+ * do is a decision the person has to research before making. `proof` because
+ * "done" has to be a thing somebody could check — the same rule the queue
+ * already keeps for work.
+ *
+ * Not folded into `seat_task`: that queue is work to hand DOWN to an agent,
+ * and this is a question handed UP. Same shape, opposite direction, and one
+ * table would have made the view guess which was which.
+ */
+db.run(`
+CREATE TABLE IF NOT EXISTS seat_need (
+  id TEXT PRIMARY KEY,
+  root TEXT NOT NULL,
+  text TEXT NOT NULL,
+  cost TEXT NOT NULL DEFAULT '',
+  recommend TEXT NOT NULL DEFAULT '',
+  proof TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL,
+  done_at INTEGER,
+  outcome TEXT NOT NULL DEFAULT ''
+);
+`);
+db.run(`CREATE INDEX IF NOT EXISTS seat_need_root ON seat_need (root, done_at, created)`);
+
+/*
  * AN ORCHESTRATOR THAT WAS ALREADY WORKING.
  *
  * The seat opens an agent and owns it. But the first orchestrator this feature
@@ -2186,6 +2222,11 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   /* A worker's report, kept the same ninety days as the seat's own lines: it is
      the other half of the same conversation. */
   db.run(`DELETE FROM seat_report WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
+  /* A decision the seat asked for, ONCE IT HAS BEEN TAKEN — the same ninety
+     days. One still waiting is never swept, whatever its age: an unanswered
+     question that quietly disappeared is exactly the failure this table was
+     built to end. */
+  db.run(`DELETE FROM seat_need WHERE done_at IS NOT NULL AND done_at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A role outlives its session by ninety days, then nothing needs it. */
   db.run(`DELETE FROM session_role WHERE at < ?`, [Date.now() - UNDERSTUDY_STUB_DAYS * 86_400_000]);
   /* A schedule that fired or was cancelled is a record, kept ninety days; one
