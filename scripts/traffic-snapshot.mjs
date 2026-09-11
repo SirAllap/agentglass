@@ -20,7 +20,7 @@
  *
  * Usage: bun scripts/traffic-snapshot.mjs <data-dir>
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const dir = process.argv[2];
@@ -36,6 +36,15 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+/** Every Actions runner sets GITHUB_API_URL, so this is not a seam invented
+ *  for the tests — it is the one the platform already provides, and the tests
+ *  point it at a stub rather than the script keeping a second way in. */
+const API = process.env.GITHUB_API_URL || "https://api.github.com";
+
+/** What the responses said about the credential's own lifetime. Every
+ *  authenticated response carries it and all four calls agree, so last wins. */
+let expiry = null;
+
 /** The day a timestamp falls in. The API returns midnight UTC either way, but
  *  it has shipped both `2026-07-27T00:00:00Z` and an epoch in milliseconds. */
 const dayOf = (t) =>
@@ -44,13 +53,14 @@ const dayOf = (t) =>
 const today = new Date().toISOString().slice(0, 10);
 
 async function get(path) {
-  const r = await fetch(`https://api.github.com/repos/${REPO}/traffic/${path}`, {
+  const r = await fetch(`${API}/repos/${REPO}/traffic/${path}`, {
     headers: {
       accept: "application/vnd.github+json",
       "user-agent": "agentglass-traffic",
       authorization: `Bearer ${TOKEN}`,
     },
   });
+  expiry = r.headers.get("github-authentication-token-expiration") ?? expiry;
   if (r.status === 401) {
     /*
      * A different fault from the one below, with a different fix, and the
@@ -151,6 +161,56 @@ const [views, clones, referrers, paths] = await Promise.all([
   get("popular/referrers"),
   get("popular/paths"),
 ]);
+
+/**
+ * Days of notice left on the credential, or null when it does not say.
+ *
+ * An absent header is not zero days, it is no answer: GitHub omits it for a
+ * token that never expires. Two spellings come back — `2026-10-11 00:00:00
+ * UTC` and a bare `2026-10-11` — so the value is parsed rather than assumed.
+ */
+const runwayOf = (header) => {
+  if (!header) return null;
+  const at = new Date(header.trim());
+  return Number.isNaN(+at) ? null : Math.floor((+at - Date.now()) / 86_400_000);
+};
+
+/*
+ * Fourteen days of notice, because fourteen days is what is at stake.
+ *
+ * A dead token costs days of history and starts costing them the morning it
+ * dies, so the warning is given in the same currency as the loss: a full
+ * window of runway, while the token still works and nothing is gone yet.
+ *
+ * The alternative was measured the hard way. A token expired at the end of
+ * August; the run went red every morning and said so only in a log, and by
+ * the time anyone opened one the window had rolled past every day it had —
+ * a fortnight that no longer exists anywhere, including at GitHub.
+ *
+ * This only prints. Failing the run over a token that still works would throw
+ * away a day of data to complain about a day that has not happened yet.
+ */
+const RUNWAY_DAYS = 14;
+
+const runway = runwayOf(expiry);
+if (runway === null) {
+  console.log("traffic: the token reports no expiry date");
+} else if (runway <= RUNWAY_DAYS) {
+  console.error(
+    `traffic: the token expires in ${runway} day${runway === 1 ? "" : "s"}, on ${expiry}.\n` +
+      "  Mint a replacement with Administration: read on this repo and save it as\n" +
+      "  the TRAFFIC_TOKEN secret before then.\n" +
+      "  Nothing is lost yet. The day it expires is the first day that is.",
+  );
+} else {
+  console.log(`traffic: the token has ${runway} days left`);
+}
+
+// Raised only when it is short, so the threshold above is the only copy of
+// that number and the workflow reacts to the verdict instead of re-deciding it.
+if (runway !== null && runway <= RUNWAY_DAYS && process.env.GITHUB_ENV) {
+  appendFileSync(process.env.GITHUB_ENV, `TRAFFIC_TOKEN_DAYS=${runway}\n`);
+}
 
 const days = merge(
   "views.csv",

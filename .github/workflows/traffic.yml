@@ -25,6 +25,7 @@ on:
 # the PAT stays read-only, which is the whole reason to scope it that way.
 permissions:
   contents: write
+  issues: write # for the health issue below — see the step's own note
 
 concurrency:
   group: traffic
@@ -75,3 +76,78 @@ jobs:
           fi
           git commit -qm "traffic: $(date -u +%Y-%m-%d)"
           git push -u origin traffic-data
+
+      # A log is a place nobody opens. The fortnight this job lost was lost
+      # with the failure written down every single morning, in a file that has
+      # to be gone looking for — so the state of the record is raised as one
+      # issue instead, kept current rather than reposted, and closed by the
+      # first run that succeeds. `always()` because the interesting case is
+      # precisely the one where the step above has already failed.
+      - name: Raise it where it will be seen
+        if: always()
+        uses: actions/github-script@v9
+        env:
+          # The job, not the reading step: a push that gets refused leaves that
+          # step green and the day's traffic just as unrecorded.
+          JOB: ${{ job.status }}
+          # Set by the script, and only when the token is close to expiring:
+          # the threshold is its decision, and this step does not re-take it.
+          DAYS: ${{ env.TRAFFIC_TOKEN_DAYS }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const marker = '<!-- traffic-health -->'
+            const { owner, repo } = context.repo
+
+            const broke = process.env.JOB !== 'success'
+            const days = process.env.DAYS ? Number(process.env.DAYS) : null
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            })
+            const existing = issues.find((i) => !i.pull_request && i.body?.includes(marker))
+
+            if (!broke && days === null) {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: "Today's snapshot went in. Closing — the record is being kept again.",
+                })
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number,
+                  state: 'closed', state_reason: 'completed',
+                })
+              }
+              return
+            }
+
+            const title = broke
+              ? 'The traffic record is not being kept'
+              : `The traffic token expires in ${days} days`
+
+            const what = broke
+              ? [
+                  `Today's snapshot did not go in. [What failed is in the run](${process.env.RUN}).`,
+                  '',
+                  'If it is the token, which it has been before: a **401** is the credential itself — expired, revoked or replaced — and a **403** is a valid credential without the access. Both are fixed the same way, with a fine-grained PAT carrying **Administration: read** on this repository, saved as the `TRAFFIC_TOKEN` secret.',
+                ]
+              : [
+                  `The \`TRAFFIC_TOKEN\` secret expires in **${days} days**.`,
+                  '',
+                  "Today's snapshot went in fine, which is the point of saying it now: nothing has been lost yet. Mint a replacement with **Administration: read** on this repository and save it as the `TRAFFIC_TOKEN` secret before then.",
+                ]
+
+            const body = [
+              marker,
+              ...what,
+              '',
+              'GitHub serves fourteen days of traffic and rolls none of it up, so a day this job misses is a day that stops existing anywhere — here or at GitHub. Keeping those days is the entire reason the job runs.',
+              '',
+              'This issue closes itself on the next run that succeeds.',
+            ].join('\n')
+
+            if (existing) {
+              await github.rest.issues.update({ owner, repo, issue_number: existing.number, title, body })
+            } else {
+              await github.rest.issues.create({ owner, repo, title, body })
+            }
