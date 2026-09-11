@@ -51,6 +51,32 @@ async function get(path) {
       authorization: `Bearer ${TOKEN}`,
     },
   });
+  if (r.status === 401) {
+    /*
+     * A different fault from the one below, with a different fix, and the
+     * number is the only thing that says which — so it says it in words.
+     *
+     * 401 is the credential itself: expired, revoked or regenerated. A
+     * fine-grained PAT expires, and the default when you mint one is thirty
+     * days, so this arrives about a month after somebody sets it up and works
+     * perfectly in between. 403 is a token that IS valid and is not allowed to
+     * read this, which is the case below.
+     *
+     * Worth spelling out because of what it costs. GitHub keeps fourteen days
+     * of traffic and rolls nothing up; this job exists to turn that window
+     * into a history. A run that fails is a day that cannot be recovered by
+     * anybody, including GitHub, and a token nobody notices has expired takes
+     * a fortnight of the record with it before the gap is visible.
+     */
+    console.error(
+      `traffic: 401 on /${path}. The token is not valid — expired, revoked or replaced.\n` +
+        "  A fine-grained PAT expires; thirty days is the default when you mint one.\n" +
+        "  Fix: mint a new one with Administration: read on this repo, save it as\n" +
+        "  the TRAFFIC_TOKEN secret, and re-run this workflow.\n" +
+        "  Every day this stays broken is a day of traffic nobody can get back.",
+    );
+    process.exit(1);
+  }
   if (r.status === 403 || r.status === 404) {
     // The one failure worth spelling out. Every traffic endpoint needs *push*
     // access, which the default Actions token does not always carry, and the
