@@ -227,7 +227,7 @@ jobs:
       # that built it, before anything else can touch the bytes.
       - name: Attest the installers
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             electron/dist-app/*.AppImage
