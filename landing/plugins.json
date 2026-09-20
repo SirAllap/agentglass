@@ -3,6 +3,33 @@
   "owner": "SirAllap",
   "plugins": [
     {
+      "id": "context-diet",
+      "title": "Context Diet",
+      "publisher": "agentglass",
+      "verified": false,
+      "scope": "read",
+      "draws": [
+        "panel",
+        "settings"
+      ],
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/SirAllap/context-diet",
+        "ref": null
+      },
+      "description": "Almost nothing an agent charges you for is what it writes — it is the conversation so far, read again, on every turn. This ships three workers pinned to the model each job needs (find, build, check) so the reading happens where it is not re-read, and a `read`-scope panel that keeps the tally: not how many turns are large, but how much of all the re-reading those turns carry.\n\nIt is one plugin with two halves — the panel here, and skills and agents in Claude Code — because two different programs ",
+      "categories": [
+        "agents",
+        "context",
+        "delegation",
+        "subagents",
+        "cost",
+        "haiku"
+      ],
+      "added": "2026-09-20",
+      "preview": "https://raw.githubusercontent.com/SirAllap/context-diet/HEAD/preview.png"
+    },
+    {
       "id": "local-review",
       "title": "Local Review",
       "publisher": "agentglass",
