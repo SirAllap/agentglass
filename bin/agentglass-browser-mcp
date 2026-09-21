@@ -865,15 +865,6 @@ TOOLS = [
             "tell whose it is. A container left behind is a login nobody meant to keep.\n\n"
             "Pass the name to browser_newtab to open into it."
         ),
-        "description": (
-            "THE DEVTOOLS PROTOCOL, whole. Everything the Inspector can do, by its own method names: "
-            "Debugger.setBreakpointByUrl and Debugger.resume; DOMDebugger.setDOMBreakpoint to stop when "
-            "a subtree changes, which is how you answer 'who deleted this row'; HeapProfiler and "
-            "Profiler for leaks and hot code; Network.setBlockedURLs; Accessibility.getFullAXTree. "
-            "Pass events=true instead of a method to drain what the protocol sent while you were not "
-            "asking — a debugger pause, a DOM breakpoint firing. Counts as ACTING for read-only mode, "
-            "because the protocol can navigate, click and evaluate."
-        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -881,9 +872,6 @@ TOOLS = [
                 "drop": {"type": "string", "description": "Throw one away, with everything in it."},
                 "force": {"type": "boolean", "description": "Drop a container somebody else created. Without it the drop is refused and the refusal names them."},
                 "identity": {"type": "string", "description": "Who is asking, for the ledger. Defaults to the name this server works as."},
-                "method": {"type": "string", "description": "A CDP method, e.g. Debugger.enable"},
-                "params": {"type": "object", "description": "That method's parameters."},
-                "events": {"type": "boolean", "description": "Drain buffered CDP events instead of sending a command."},
             },
         },
     },

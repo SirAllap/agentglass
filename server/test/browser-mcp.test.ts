@@ -193,6 +193,53 @@ describe.skipIf(!HAVE_PY)("the MCP server", () => {
 
   /* A screenshot is an image, not a wall of base64 in a text block: a model
      that has to be told "this is a PNG" cannot look at it. */
+  /*
+   * THE ONE SCHEMA BUG THAT SHIPPED, AND THE CLASS AROUND IT.
+   *
+   * `browser_profiles` once carried TWO `description` keys — Python keeps the
+   * last, so the tool an agent saw described the CDP protocol, and its schema
+   * merged CDP's `method`/`params`/`events` into the profiles surface. That is
+   * the MCP playing a different game from the relay it forwards to. This check
+   * parses the TOOLS literal itself, so the class — a repeated literal key
+   * (last wins), a schema field that names another tool's verb — is held
+   * mechanically rather than by remembering to look at one dict.
+   */
+  test("every tool dict is exactly one tool's schema", async () => {
+    const dump = `
+import ast, json
+tree = ast.parse(open(${JSON.stringify(MCP)}).read())
+tools = None
+for node in ast.walk(tree):
+    if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "TOOLS" for t in node.targets):
+        tools = node.value
+out = []
+for el in tools.elts:
+    keys = [k.value for k in el.keys]
+    props = {}
+    for k, v in zip(el.keys, el.values):
+        if k.value == "name": name = v.value
+        if k.value == "inputSchema":
+            for a, b in zip(v.keys or [], v.values or []):
+                if a.value == "properties":
+                    props = sorted(p.value for p in b.keys)
+    dup = sorted(k for k in set(keys) if keys.count(k) > 1)
+    out.append({"name": name, "props": props, "dup": dup})
+print(json.dumps(out))
+`;
+    const p = Bun.spawn(["python3", "-c", dump], {
+      env: { PATH: process.env.PATH ?? "" }, stdout: "pipe", stderr: "pipe",
+    });
+    const out = await new Response(p.stdout).text();
+    await p.exited;
+    const tools = JSON.parse(out.trim()) as { name: string; props: string[]; dup: string[] }[];
+    expect(tools.length).toBeGreaterThan(60);
+    for (const t of tools) expect(t.dup, `${t.name}: repeated literal key — last wins`).toEqual([]);
+    const profiles = tools.find((t) => t.name === "browser_profiles")!;
+    /* CDP's `method`/`params`/`events` beside profile CRUD is the exact leak
+       this test exists for. */
+    expect(profiles.props).toEqual(["drop", "force", "identity", "make"]);
+  });
+
   test("a screenshot comes back as an image", async () => {
     await openWindow();
     answers = { shot: { ok: true, value: { url: "u", title: "t", png: "data:image/png;base64,iVBORw0KGgo=" } } };
