@@ -509,6 +509,51 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect(entries[0]!.ok).toBe(false);
   });
 
+  describe("the structured read verbs", () => {
+    test("markdown, links, count, search and extract observe — read-only lets them through", () => {
+      process.env.AGENTGLASS_BROWSER_READONLY = "1";
+      try {
+        for (const op of ["markdown", "links", "count", "search", "extract"]) {
+          const body = op === "extract" ? { fields: { price: ".price" } }
+            : op === "search" ? { query: "price" }
+            : op === "count" ? { selector: ".price" }
+            : {};
+          expect("ask" in parseAsk(op, body), `${op} was refused under read-only`).toBe(true);
+        }
+      } finally {
+        delete process.env.AGENTGLASS_BROWSER_READONLY;
+      }
+    });
+
+    test("extract validates every field before it becomes page JavaScript", () => {
+      expect("error" in parseAsk("extract", {})).toBe(true);
+      expect("error" in parseAsk("extract", { fields: [] })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: {} })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: { "bad name": ".price" } })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: { price: 5 } })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: { price: "a\nb" } })).toBe(true);
+      const over = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`f${i}`, `.x${i}`]));
+      expect("error" in parseAsk("extract", { fields: over })).toBe(true);
+      const ok = parseAsk("extract", { fields: { price: ".product-price", title: "h1" } });
+      if (!("ask" in ok)) throw new Error("unreachable");
+      expect(ok.ask.args.fields).toEqual({ price: ".product-price", title: "h1" });
+    });
+
+    test("search and count validate their one argument", () => {
+      expect("error" in parseAsk("search", {})).toBe(true);
+      expect("error" in parseAsk("search", { query: "" })).toBe(true);
+      expect("error" in parseAsk("search", { query: "x".repeat(201) })).toBe(true);
+      expect("error" in parseAsk("search", { query: "a\nb" })).toBe(true);
+      const q = parseAsk("search", { query: "  price  " });
+      if (!("ask" in q)) throw new Error("unreachable");
+      expect(q.ask.args.query).toBe("price");
+      expect("error" in parseAsk("count", { selector: ".\n" })).toBe(true);
+      const c = parseAsk("count", {});
+      if (!("ask" in c)) throw new Error("unreachable");
+      expect(c.ask.args.selector).toBeUndefined();
+    });
+  });
+
   test("a completed call is audited too, oldest first, with a growing id", async () => {
     setBrowserSink({ send: (a) => queueMicrotask(() => settleBrowser(a.id, { ok: true, value: "Dashboard" })), listeners: () => 1 });
     noteBrowserReady("w1", true);

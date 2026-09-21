@@ -170,6 +170,14 @@ export interface DrivableWebview {
  *  are not. */
 const MAX_TEXT = 20_000;
 
+/* The structured verbs' own ceilings. Each is a wall against a page that
+   answers the question an agent actually asked by answering it a thousand
+   times: metric tons of nav links, a field that matched half the page. */
+const MAX_LINKS = 250;
+const MAX_MATCHES = 25;
+const MAX_EXTRACT_FIELD = 2_000;
+const EXTRACT_FIELD_LIMIT = 30;
+
 interface TabSettings {
   cache: "normal" | "bypass";
   ignoreCertErrors: boolean;
@@ -1068,6 +1076,187 @@ async function runVerb(
         const value = await el.executeJavaScript(
           `({ url: location.href, title: document.title,
               text: (document.body ? document.body.innerText : "").slice(0, ${MAX_TEXT}) })`,
+        );
+        return { ok: true, value };
+      }
+
+      case "markdown": {
+        /* `read`'s RAG-ready half: the same page, walked as markdown rather
+           than a wall of innerText — headings, lists and links that an
+           embedding can actually tell apart. No dependency: the walker is a
+           few branches over the same tree `observe` already reads, bounded by
+           the same slice a plain `read` gets. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const NL = String.fromCharCode(10);
+             const TIC = String.fromCharCode(96);
+             const fence = TIC.repeat(3);
+             const MAX = ${MAX_TEXT};
+             const parts = [];
+             let used = 0, truncated = false;
+             const dead = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, HEAD: 1, LINK: 1, META: 1, TITLE: 1 };
+             const visible = (n) => {
+               if (n.nodeType !== 1) return true;
+               if (n.hidden || dead[n.tagName]) return false;
+               if (n.getAttribute && n.getAttribute("aria-hidden") === "true") return false;
+               const cs = (typeof window !== "undefined" && window.getComputedStyle)
+                 ? window.getComputedStyle(n)
+                 : (typeof getComputedStyle !== "undefined" ? getComputedStyle(n) : null);
+               return !cs || (cs.display !== "none" && cs.visibility !== "hidden");
+             };
+             const budget = (s) => {
+               if (!s || used >= MAX) return;
+               if (used + s.length > MAX) { s = s.slice(0, MAX - used); truncated = true; }
+               parts.push(s); used += s.length;
+             };
+             const inline = (c) => {
+               let s = "";
+               for (const k of c.childNodes || []) {
+                 if (used >= MAX) { truncated = true; break; }
+                 if (!k) continue;
+                 if (k.nodeType === 3) s += (k.textContent || "").replace(/\\s+/g, " ");
+                 else if (k.nodeType === 1) {
+                   if (!visible(k)) continue;
+                   const t = k.tagName.toLowerCase();
+                   if (t === "br") s += " ";
+                   else if (t === "img") s += "![" + (k.getAttribute("alt") || "") + "](" + (k.getAttribute("src") || "") + ")";
+                   else if (t === "a") {
+                     const x = inline(k); const href = k.getAttribute("href") || "";
+                     s += x ? "[" + x + "](" + href + ")" : href ? "[" + (k.innerText || "") + "](" + href + ")" : "";
+                   }
+                   else if (t === "code") s += TIC + (k.innerText || "") + TIC;
+                   else if (t === "b" || t === "strong") s += "**" + inline(k) + "**";
+                   else if (t === "i" || t === "em") s += "*" + inline(k) + "*";
+                   else s += inline(k);
+                 }
+               }
+               return s.replace(/\\s+/g, " ").trim();
+             };
+             const emit = (n) => {
+               if (used >= MAX) { truncated = true; return; }
+               for (const c of n.childNodes || []) {
+                 if (used >= MAX) { truncated = true; break; }
+                 if (!c) continue;
+                 if (c.nodeType === 3) { const t = (c.textContent || "").replace(/\\s+/g, " ").trim(); if (t) budget(t + " "); }
+                 else if (c.nodeType === 1) {
+                   if (!visible(c)) continue;
+                   const t = c.tagName.toLowerCase();
+                   if (t === "h1" || t === "h2" || t === "h3" || t === "h4" || t === "h5" || t === "h6") {
+                     const x = inline(c); if (x) budget(NL + "#".repeat(+t[1]) + " " + x + NL);
+                   }
+                   else if (t === "p") { const x = inline(c); if (x) budget(NL + x + NL); }
+                   else if (t === "li") { const x = inline(c); if (x) budget(NL + "- " + x); }
+                   else if (t === "pre") { const x = (c.innerText || "").replace(/\\s+$/, ""); budget(NL + fence + NL + x + NL + fence + NL); }
+                   else if (t === "blockquote") { const x = inline(c); if (x) budget(NL + "> " + x + NL); }
+                   else if (t === "hr") budget(NL + "---" + NL);
+                   else if (t === "img") budget(NL + "![" + (c.getAttribute("alt") || "") + "](" + (c.getAttribute("src") || "") + ")" + NL);
+                   else emit(c);
+                 }
+               }
+             };
+             emit(document.body || document.documentElement);
+             return { url: location.href, title: document.title,
+                      markdown: parts.join("").slice(0, ${MAX_TEXT}), truncated };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "extract": {
+        /* A field→selector map answered in one round trip, where the plan used
+           to be observe→html→parse. Each value is the FIRST match's text — the
+           same "choose the first" rule every other single-selector verb uses —
+           and a selector that matched nothing is called out rather than
+           guessed at, because a null next to the other fields is what stops an
+           agent hallucinating a value into a field that was never there. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const fields = ${jsLit(ask.args.fields)};
+             const out = {};
+             const notFound = [];
+             let i = 0;
+             for (const name in fields) {
+               if (i++ >= ${EXTRACT_FIELD_LIMIT}) break;
+               const e = fields[name] ? document.querySelector(fields[name]) : null;
+               if (!e) { notFound.push(name); out[name] = null; continue; }
+               out[name] = (e.innerText || e.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${MAX_EXTRACT_FIELD});
+             }
+             return { url: location.href, title: document.title, fields: out, notFound };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "links": {
+        /* Everything a page links to, resolved ONCE, so an agent does not read
+           the html to answer "what pages does this reach". Deduplicated by
+           text+href and capped, with the real total kept — the cap is the
+           caller's token budget speaking, not licence to lie about how many
+           there were. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const MAX = ${MAX_LINKS};
+             const out = [];
+             const seen = {};
+             let total = 0;
+             const as = document.querySelectorAll ? document.querySelectorAll("a[href]") : [];
+             for (let i = 0; i < as.length; i++) {
+               const href = as[i].getAttribute("href") || "";
+               if (!href || href.charAt(0) === "#" || /^(javascript|mailto|tel|data):/i.test(href)) continue;
+               total++;
+               const text = (as[i].innerText || as[i].textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
+               const key = href + "|" + text;
+               if (seen[key]) continue;
+               if (out.length >= MAX) break;
+               seen[key] = true;
+               out.push({ text, href });
+             }
+             return { url: location.href, title: document.title, total, links: out, dropped: total - out.length };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "count": {
+        /* How many things match, in one number. Without a selector it counts
+           the interactive inventory (the same shape `observe`'s tree is built
+           from), which is the honest answer to "how much is there to do here"
+           when the caller does not know what to point at yet. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const q = ${jsLit(String(ask.args.selector ?? ""))};
+             const interactive = "a,button,input,select,textarea,summary,h1,h2,h3,h4,h5,h6,[role],[data-testid]";
+             const all = q ? document.querySelectorAll(q) : document.querySelectorAll(interactive);
+             return { selector: q || null, scope: q ? "selector" : "interactive", count: all.length };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "search": {
+        /* A text search across the page's own content — the thing an agent
+           means by "find the price" before it has a selector to point at.
+           Capped matches, real count, and the href when the match lives in a
+           link, so a hit is actionable instead of a line of text. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const query = ${jsLit(String(ask.args.query ?? ""))};
+             const needle = query.toLowerCase();
+             const MAX = ${MAX_MATCHES};
+             const nodes = document.querySelectorAll
+               ? document.querySelectorAll("a,button,h1,h2,h3,h4,h5,h6,p,li,td,th,strong,em,[role],[data-testid]") : [];
+             const matches = [];
+             let count = 0;
+             for (let i = 0; i < nodes.length; i++) {
+               const t = (nodes[i].innerText || nodes[i].textContent || "").replace(/\\s+/g, " ").trim();
+               if (!t || t.toLowerCase().indexOf(needle) === -1) continue;
+               count++;
+               if (matches.length >= MAX) continue;
+               const href = nodes[i].tagName === "A" ? (nodes[i].getAttribute("href") || "") : "";
+               matches.push({ text: t.slice(0, 300), href });
+             }
+             return { query, count, matches, truncated: count > matches.length };
+           })()`,
         );
         return { ok: true, value };
       }

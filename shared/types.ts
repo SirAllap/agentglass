@@ -1088,7 +1088,8 @@ export interface BrowserAskFrame {
   /** Kept in step with BrowserOp in server/src/browserdrive.ts by hand, and the
    *  compiler notices when it drifts: the server assigns one to the other. */
   op:
-    | "open" | "read" | "click" | "type" | "wait" | "shot"
+    | "open" | "read" | "markdown" | "extract" | "links" | "count" | "search"
+    | "click" | "type" | "wait" | "shot"
     | "back" | "forward" | "scroll" | "press" | "text"
     /* The tab verbs. The panel has had tabs since it had a panel; these are
        what let an agent reach them — see BrowserOp for why `open` still

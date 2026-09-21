@@ -1338,3 +1338,134 @@ describe("cookies --set is backed by the jar it claims", () => {
     expect(r.ok).toBe(false);
     expect((r as { error: string }).error).toContain("a");  });
 });
+
+/*
+ * The structured readers: markdown, extract, links, count, search.
+ *
+ * A tiny DOM, not a real page — the point is that the snippet this builds is
+ * run for real, through `new Function`, against something that behaves like a
+ * page (querySelector, innerText, childNodes), so the code is tested where it
+ * runs, not as a string. A stand-in that never evaluates the snippet was
+ * already the failure mode these five verbs are here to close.
+ */
+describe("structured readers", () => {
+  type TN = { nodeType: number; tagName?: string; childNodes: TN[]; textContent: string; innerText: string; hidden?: boolean; getAttribute(n: string): string | null; attributes?: Record<string, string> };
+
+  function text(s: string): TN {
+    return { nodeType: 3, textContent: s, innerText: s, childNodes: [], getAttribute: () => null, attributes: {} };
+  }
+
+  function el(tag: string, children: TN[] = [], attrs: Record<string, string> = {}): TN {
+    const n: TN = {
+      nodeType: 1, tagName: tag.toUpperCase(), childNodes: children,
+      textContent: "", innerText: "", hidden: false, attributes: attrs,
+      getAttribute: (name: string) => (attrs[name] ?? null),
+    };
+    n.innerText = children.map((c) => (c.nodeType === 3 ? c.textContent : c.innerText)).join(" ");
+    n.textContent = n.innerText;
+    return n;
+  }
+
+  function buildDoc() {
+    const pricingLink = el("a", [text("price list")], { href: "/pricing" });
+    const dupLink = el("a", [text("price list")], { href: "/pricing" });
+    const jsLink = el("a", [text("careful")], { href: "javascript:alert(1)" });
+    const hashLink = el("a", [text("top")], { href: "#top" });
+    const priceEl = el("div", [text("$12")], { class: "price" });
+    const body = el("body", [
+      el("h1", [text("Prices")]),
+      el("p", [text("See the "), pricingLink, text(" for details")]),
+      el("ul", [el("li", [text("Alpha")]), el("li", [text("Beta")])]),
+      dupLink, jsLink, hashLink,
+      el("button", [text("Buy now")]),
+      el("input", [], { type: "text" }),
+      priceEl,
+    ]);
+    const parts = (s: string) => s.split(",").map((p) => p.trim());
+    const doc = {
+      body, title: "Demo", documentElement: body,
+      querySelector: (s: string) => doc.querySelectorAll(s)[0] ?? null,
+      querySelectorAll(s: string): TN[] {
+        const ps = parts(s);
+        const match = (n: TN) => ps.some((p) => {
+          if (!p) return false;
+          if (p.startsWith("[")) return !!(n.attributes || {})[p.slice(1, -1)];
+          if (p.startsWith("#")) return (n.attributes || {}).id === p.slice(1);
+          if (p.startsWith(".")) return ((n.attributes || {}).class || "").split(/\s+/).includes(p.slice(1));
+          const parsed = /^([a-z0-9]*)(\[([a-zA-Z0-9_-]+)\])?$/.exec(p)!;
+          const tag = parsed[1]!, attr = parsed[3];
+          if (attr && !(n.attributes || {})[attr]) return false;
+          return tag ? (n.tagName || "").toLowerCase() === tag : true;
+        });
+        const out: TN[] = [];
+        const walk = (n: TN) => { if (match(n)) out.push(n); n.childNodes.forEach(walk); };
+        walk(body);
+        return out;
+      },
+    } as const;
+    return { doc };
+  }
+
+  function run(code: string, page: { doc: { body: TN; querySelector: (s: string) => TN | null; querySelectorAll: (s: string) => TN[] } }) {
+    const win = { getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) };
+    return new Function("document", "window", "location", "getComputedStyle", `return ${code}`)(
+      page.doc, win, { href: "https://example.com/app" }, win.getComputedStyle,
+    );
+  }
+
+  test("markdown turns headings, links and lists into readable markdown", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("markdown"));
+    expect(r.ok).toBe(true);
+    const md = (r as { value: { markdown: string } }).value.markdown;
+    expect(md).toContain("# Prices");
+    expect(md).toContain("[price list](/pricing)");
+    expect(md).toContain("- Alpha");
+    expect(md).toContain("- Beta");
+    expect(el0.ran[0]).toContain(".slice(0, 20000)");
+  });
+
+  test("extract pulls named fields by selector and names the nulls", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("extract", { fields: { title: "h1", price: ".price", nope: ".nope" } }));
+    expect(r.ok).toBe(true);
+    const v = (r as { value: { fields: Record<string, string | null>; notFound: string[] } }).value;
+    expect(v.fields.title).toBe("Prices");
+    expect(v.fields.price).toBe("$12");
+    expect(v.fields.nope).toBeNull();
+    expect(v.notFound).toEqual(["nope"]);
+  });
+
+  test("links returns every link, deduplicates, and keeps the real total", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("links"));
+    expect(r.ok).toBe(true);
+    const v = (r as { value: { total: number; links: { text: string; href: string }[]; dropped: number } }).value;
+    expect(v.total).toBe(2);
+    expect(v.links).toEqual([{ text: "price list", href: "/pricing" }]);
+    expect(v.dropped).toBe(1);
+  });
+
+  test("count with a selector gives the match count, without it counts interactive elements", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r1 = await runBrowserAsk(el0, ask("count", { selector: ".price" }));
+    expect((r1 as { value: { count: number } }).value.count).toBe(1);
+    const r2 = await runBrowserAsk(el0, ask("count", {}));
+    expect((r2 as { value: { count: number; scope: string } }).value.scope).toBe("interactive");
+    expect((r2 as { value: { count: number } }).value.count).toBeGreaterThanOrEqual(3);
+  });
+
+  test("search finds the right elements and brings back their hrefs", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("search", { query: "price" }));
+    expect(r.ok).toBe(true);
+    const v = (r as { value: { count: number; matches: { text: string; href: string }[] } }).value;
+    expect(v.count).toBeGreaterThanOrEqual(2);
+    expect(v.matches.some((m) => m.href === "/pricing")).toBe(true);
+  });
+});

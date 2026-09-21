@@ -64,7 +64,8 @@ import { diskAllows, diskEnabled } from "./disk.ts";
  * than not having tabs at all.
  */
 export type BrowserOp =
-  | "open" | "read" | "click" | "type" | "wait" | "shot"
+  | "open" | "read" | "markdown" | "extract" | "links" | "count" | "search"
+  | "click" | "type" | "wait" | "shot"
   | "back" | "forward" | "scroll" | "press" | "text"
   | "tabs" | "tab" | "newtab" | "closetab"
   | "console" | "network" | "resize" | "zoom" | "html" | "waitfor" | "observe"
@@ -81,7 +82,8 @@ export type BrowserOp =
 /** Every verb, exported so a test can hold the CLI and the MCP to it — see
  *  `browser-cli.test.ts`. Seven §3 verbs once shipped reachable by neither. */
 export const BROWSER_OPS: readonly BrowserOp[] = [
-  "open", "read", "click", "type", "wait", "shot",
+  "open", "read", "markdown", "extract", "links", "count", "search",
+  "click", "type", "wait", "shot",
   "back", "forward", "scroll", "press", "text",
   "tabs", "tab", "newtab", "closetab",
   "console", "network", "resize", "zoom", "html", "waitfor", "observe",
@@ -153,7 +155,7 @@ export interface BrowserReply {
  *  and an agent learns nothing from a minute of silence that it would not
  *  learn in fifteen seconds. */
 const TIMEOUT_MS: Record<BrowserOp, number> = {
-  open: 45_000, read: 15_000, click: 15_000, type: 15_000, wait: 45_000, shot: 20_000,
+  open: 45_000, read: 15_000, markdown: 20_000, extract: 15_000, links: 15_000, count: 15_000, search: 15_000, click: 15_000, type: 15_000, wait: 45_000, shot: 20_000,
   // Going back is a navigation and gets a navigation's patience; the rest are a
   // round trip to the page and nothing more.
   back: 45_000, forward: 45_000, scroll: 15_000, press: 15_000, text: 15_000,
@@ -637,7 +639,8 @@ function readonlyMode(): boolean {
  *  verb that is not in it is acting by default — see `isActing` — rather than
  *  quietly falling on the safe-to-run side because nobody classified it. */
 const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
-  "read", "shot", "text", "html", "console", "network", "observe",
+  "read", "markdown", "extract", "links", "count", "search",
+  "shot", "text", "html", "console", "network", "observe",
   "tabs", "frames", "health", "waitfor", "wait",
   /* `listeners` and a coverage READ only look. `cdp` is deliberately NOT
      here: the protocol can navigate, click, set a breakpoint and evaluate, so
@@ -821,11 +824,13 @@ export interface PageSecrets {
  *   agent put on the clipboard, and nothing measured says a password went
  *   through it. The shareable script export withholds it instead.
  * - `select --value`: an option's value is markup, not a secret.
+ * - `extract --fields`: names and selectors, the shape of a dataset, not
+ *   credentials — the same reason `select --value` is exempt.
  * - `fake --body` and `intercept --body`: a response the agent wrote itself,
  *   to a page it is testing.
  * - `settings set`: a preference, and `settings get` prints it back anyway.
  */
-export const valueCarryingExemptForTest: readonly string[] = ["clipboard", "select", "fake", "intercept", "settings"];
+export const valueCarryingExemptForTest: readonly string[] = ["clipboard", "select", "extract", "fake", "intercept", "settings"];
 const VALUE_CARRYING: Record<string, (
   out: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -2683,9 +2688,51 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       break;
     }
     case "read":
+    case "markdown":
+    case "links":
     case "back":
     case "forward":
       break;
+    case "extract": {
+      /* A field→selector map, validated here on purpose: the values become
+         page JS (via `jsLit` on the other side of the wire), so a value that
+         is not a selector or a name that is not a clean key is refused rather
+         than pasted. The count is capped so one ask cannot mine a whole page
+         into an agent's context field by field. */
+      if (typeof b.fields !== "object" || b.fields === null || Array.isArray(b.fields)) {
+        return { error: "extract needs a fields object: { name: selector, ... }" };
+      }
+      const entries = Object.entries(b.fields as Record<string, unknown>);
+      if (entries.length === 0) return { error: "extract needs at least one field: { name: selector }" };
+      if (entries.length > 30) return { error: "extract caps at 30 fields in one call" };
+      const fields: Record<string, string> = {};
+      for (const [name, sel] of entries) {
+        if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name)) {
+          return { error: `field ${name}: name must be letters, digits, . _ - up to 64 chars` };
+        }
+        if (!okSelector(sel)) return { error: `field ${name}: selector must be a short, single-line CSS selector` };
+        fields[name] = sel;
+      }
+      args.fields = fields;
+      break;
+    }
+    case "count": {
+      if (b.selector !== undefined) {
+        if (!okSelector(b.selector)) return { error: "selector must be a short, single-line CSS selector" };
+        args.selector = b.selector;
+      }
+      break;
+    }
+    case "search": {
+      /* A bare text search, not a selector: the longest thing a caller should
+         mean by "search" is a short phrase. A paste is a search engine's job. */
+      const q = typeof b.query === "string" ? b.query.trim() : "";
+      if (!q || q.length > 200 || /[\r\n]/.test(q)) {
+        return { error: "query must be a phrase up to 200 chars, on one line" };
+      }
+      args.query = q;
+      break;
+    }
   }
   /* §9: `--page` addresses a specific tab instead of the active one. Tab
      operations work on the tab list itself rather than a page inside a tab, so

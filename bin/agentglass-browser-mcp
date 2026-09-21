@@ -295,6 +295,51 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "browser_markdown",
+        "description": "The page rendered as MARKDOWN — headings, lists, links and code blocks kept, so a language model can tell a heading from a paragraph instead of reading one flat wall of innerText. The RAG-ready version of browser_read; nothing else is spent on it. Capped at the same length as read.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_links",
+        "description": "Every link on the current page, deduplicated by text plus href, in one answer: { total, links: [{ text, href }], dropped }. Use this instead of reading the html to answer what this page reaches.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_count",
+        "description": "How many elements match a CSS selector — one number. With no selector, it counts the page's INTERACTIVE elements (links, buttons, inputs, headings, roles), which is the honest answer to 'how much is there to do here' when you do not have a selector yet.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector to count. Omitted: counts the interactive inventory instead."},
+            },
+        },
+    },
+    {
+        "name": "browser_search",
+        "description": "A text search across the page's own content — what you mean by 'find the price' before you have a selector to point at. Returns up to 25 matches with their text (300 chars each) and the href when the match is in a link, plus the real total.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The phrase to find, case-insensitive."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "browser_extract",
+        "description": "Pull named fields by selector in ONE round trip — the alternative to observe→html→parse. Pass a map of field name to CSS selector; each field's value is the FIRST match's text (capped at 2000 chars). A selector that matched NOTHING comes back null and is named in notFound, so you never invent a value into a field that was not there.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "type": "object",
+                    "description": "{ \"price\": \".product-price\", \"title\": \"h1\" } — up to 30 fields.",
+                },
+            },
+            "required": ["fields"],
+        },
+    },
+    {
         # ONE CALL INSTEAD OF SIX. Reported by an agent who drove this all day:
         # "what I need is a call that returns the whole state, not six verbs I
         # poll in turn — every read/text/shot is a new process and I write

@@ -49,7 +49,8 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 ## The verbs, by what you reach for them for
 
 ```
-look        observe · read · text · html · region · shot · frames · console · network
+look        observe · read · markdown · text · html · region · shot ·
+            frames · console · network · extract · links · count · search
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 act         click · type · select · check · fill · hover · dblclick · rightclick
             focus · blur · press · scroll · drag · upload
@@ -66,6 +67,25 @@ pretend     emulate · resize · clock · settings
 evidence    shot · shot --with-inspector · record · pdf · save · download · audit --script
 batch       do (and `lanes` for several pages at once)
 ```
+
+## The structured readers — what an agent actually wants from a page
+
+`read` gives you the page, but as one wall of text. When the question is a
+question, not "give me the page", reach for the verb that answers it:
+
+```bash
+agentglass-browser markdown                    # the page as markdown — headings, lists, code, links
+agentglass-browser extract --field price=.price --field title=h1   # named fields, one round trip
+agentglass-browser links                       # what this page reaches, deduplicated
+agentglass-browser count "[data-testid=row]"   # how many match (omit the selector: interactive count)
+agentglass-browser search "shipping"           # find text, get the matches with their hrefs
+```
+
+All five are reads, all five are clamped by `--max-tokens` and the same
+redaction seam as everything else, and only `extract` and `search` take
+arguments — the other three answer with the whole page in the right shape.
+`extract`'s answer names the fields that matched nothing, so you never invent
+a value for a field that was not there.
 
 ## The things worth knowing before you start
 
