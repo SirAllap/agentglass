@@ -127,6 +127,7 @@ are:
 | `AGENTGLASS_TASK_WRITE_DISABLED` | — | `1` → make the **Tasks** view's local list read-only: no add, done, edit, delete or tag change reaches your Taskwarrior store. Reminders, which are the app's own, are unaffected. |
 | `AGENTGLASS_CLICKUP_WRITE` | — | `1` → allow **writes to a ClickUp board** (status, assignee, comments, checklists). Off by default, the opposite of the local list — a status change on a shared board fires automations and notifies people. Also a runtime toggle (`POST /clickup/writes`). See SECURITY.md. |
 | `AGENTGLASS_BROWSER_READONLY` | — | `1` → when an agent drives the built-in browser (`agentglass-browser`, the MCP server), every **acting** verb — clicks, typing, `eval`, `cdp`, init scripts, uploads — is refused; reading, screenshots, the console and network logs keep working. |
+| `AGENTGLASS_MCP_HTTP` | — | `HOST:PORT` → serve the MCP server (`agentglass-browser-mcp`) over **Streamable HTTP** instead of stdio, e.g. `127.0.0.1:8765`. The same flag exists as `--http HOST:PORT`. Against an allowed outside device and API clients (`http://` until a reverse proxy terminates TLS): serves the same tools, fetches the app server's own `AGENTGLASS_TOKEN` (refusing to bind off loopback without one ≥ 32 chars), and only answers to the bound address — DNS rebinding, a foreign browser `Origin` and any body over 1 MiB are refused. Loopback without a token is fine, mirroring the server itself. |
 | `AGENTGLASS_UNDERSTUDY` | — | `0` → force the **Clone** off whatever its settings file says. It can force off, never on: recording must not start because of a variable inherited from a shell. |
 | `AGENTGLASS_PRIVATE_TERMS` | `~/.config/agentglass/private-terms.txt` | The Clone's private-terms list — one pattern per line of names that must never leave a private repository. With the app's own file absent, `~/.config/git/private-terms.txt` is honoured. Without any list the Clone refuses to learn. |
 | `AGENTGLASS_STATE_DIR` | `~/.local/state/agentglass` | Where a server keeps its mutable state — the tmux socket and config, pane records, the judge's private room, and (unless `AGENTGLASS_DB` names a file) its database. A second server pointed here runs beside the real one without touching its history. |
@@ -340,6 +341,13 @@ over plain `http://` to any host that is not this machine.
   `browser_cdp` sends raw DevTools Protocol commands to the page's session — and
   every acting tool is refused under `AGENTGLASS_BROWSER_READONLY=1`. It does not
   offer `ignoreCertErrors`.
+
+- **The same server over HTTP** — `agentglass-browser-mcp --http 127.0.0.1:8765`
+  (or `AGENTGLASS_MCP_HTTP=127.0.0.1:8765`) makes it a Streamable-HTTP MCP
+  endpoint: point a client at that URL and it lands on the identical tools/list
+  and tools/call. Nothing that was not already ratified passes — the shared
+  token, an allowlisted `Origin`, sessions capped at 64, a connection limit and
+  the byte cap above — and `localhost` stays auth-free the way the server does.
 
 ---
 

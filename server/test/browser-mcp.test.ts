@@ -659,3 +659,191 @@ print(json.dumps(out))
     expect(sent.map((s) => s.body.pageExplicit)).toEqual([undefined, undefined, true, undefined]);
   });
 });
+
+describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
+  /* The same binary, one `--http` flag later, driven over the wire with fetch.
+     The stand-in window is the same one the stdio tests use, so a tool call
+     here proves the transport didn't fork the dispatch, not that the relay
+     changed. The fences are the point: a transport that lets the browser be
+     driven from another device gets the token/host/origin triad, or it gets
+     nobody's browser to drive. */
+  const TOKEN = "agx-http-test-token-0123456789abcdef-0123456789abcdef"; // ≥ 32 chars
+  const mcpUrl = () => `http://127.0.0.1:${httpPort}`;
+  let httpPort = 0;
+  let mcp: ReturnType<typeof Bun.spawn> | null = null;
+
+  beforeAll(async () => {
+    httpPort = await freePort();
+    mcp = Bun.spawn(["python3", MCP], {
+      env: {
+        PATH: process.env.PATH ?? "",
+        AGENTGLASS_SERVER: base,
+        AGENTGLASS_TOKEN: TOKEN,
+        AGENTGLASS_MCP_HTTP: `127.0.0.1:${httpPort}`,
+      },
+      stdout: "ignore", stderr: "pipe",
+    });
+    for (let i = 0; i < 100; i++) {
+      try {
+        const probe = await fetch(mcpUrl() + "/", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "ping" }),
+        });
+        if (probe.ok) break;
+      } catch { /* not up yet */ }
+      await Bun.sleep(100);
+    }
+    await openWindow();
+  }, SERVER_BOOT_MS);
+
+  afterAll(() => {
+    try { mcp?.kill(); } catch { /* already gone */ }
+  });
+
+  test("initialize over JSON: names itself and issues a session id", async () => {
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      }),
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("mcp-session-id")).toMatch(/^agx-/);
+    const j = await r.json() as { result: { serverInfo: { name: string }; capabilities: { tools: unknown } } };
+    expect(j.result.serverInfo.name).toBe("agentglass-browser");
+    expect(j.result.capabilities.tools).toBeDefined();
+  });
+
+  test("a missing or wrong bearer token is refused", async () => {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" });
+    const none = await fetch(mcpUrl() + "/", { method: "POST", body });
+    expect(none.status).toBe(401);
+    const wrong = await fetch(mcpUrl() + "/", {
+      method: "POST", headers: { authorization: "Bearer nope" }, body,
+    });
+    expect(wrong.status).toBe(401);
+  });
+
+  test("a notification is answered with the empty 202 the spec wants", async () => {
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    });
+    expect(r.status).toBe(202);
+    expect(await r.text()).toBe("");
+  });
+
+  test("honours text/event-stream and lists the same TOOLS the stdio server does", async () => {
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", authorization: `Bearer ${TOKEN}`,
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }),
+    });
+    expect(r.status).toBe(202);
+    expect(r.headers.get("content-type")).toContain("text/event-stream");
+    const raw = await r.text();
+    expect(raw.startsWith("event: message\ndata: ")).toBe(true);
+    const payload = JSON.parse(raw.slice(raw.indexOf("\ndata: ") + 7)) as { result: { tools: { name: string }[] } };
+    const names = payload.result.tools.map((t) => t.name);
+    for (const expectName of ["browser_open", "browser_read", "browser_markdown", "browser_links", "browser_count", "browser_search", "browser_extract"]) {
+      expect(names, `tools/list over HTTP must still carry ${expectName}`).toContain(expectName);
+    }
+  });
+
+  test("a tool call reaches the same relay the stdio server uses", async () => {
+    // open first: read without a tab is refused by the ownership layer before
+    // the relay — the refusal itself is the dispatch working, and the happy
+    // path needs a tab to exist.
+    answers["open"] = { ok: true, value: { id: "t-http", url: base + "/", title: "Dashboard" } };
+    const opened = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 10, method: "tools/call",
+        params: { name: "browser_open", arguments: { url: base + "/" } },
+      }),
+    });
+    expect(opened.status).toBe(200);
+
+    answers["read"] = { ok: true, value: { url: base + "/", title: "Dashboard", text: "hello from the stand-in" } };
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 4, method: "tools/call",
+        params: { name: "browser_read", arguments: {} },
+      }),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json() as { result: { content: { type: string; text: string }[] } };
+    expect(j.result.content[0]!.text).toContain("hello from the stand-in");
+  });
+
+  test("the caps hold: oversized body, oversized batch, wrong host, foreign origin", async () => {
+    const big = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      body: "x".repeat(1024 * 1024 + 1),
+    });
+    expect(big.status).toBe(431);
+    const many = Array.from({ length: 9 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" }));
+    const batched = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify(many),
+    });
+    expect(batched.status).toBe(400);
+    // Host naming a different authority → 421: the DNS-rebinding shape. The
+    // catch is the Host header, so it is sent raw — bun's fetch pins the URL's
+    // own host and gives no way to lie.
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 5, method: "ping" });
+    const rebindStatus = await new Promise<number>((resolve, reject) => {
+      import("node:http").then(({ request }) => {
+        const req = request({
+          hostname: "127.0.0.1",
+          port: httpPort,
+          path: "/",
+          method: "POST",
+          headers: { host: "attacker.example", authorization: `Bearer ${TOKEN}` },
+        }, (res) => {
+          res.resume();
+          res.on("end", () => resolve(res.statusCode ?? 0));
+        }).on("error", reject);
+        req.end(body);
+      });
+    });
+    expect(rebindStatus).toBe(421);
+    // A foreign browser origin → 403 even with the right token in hand (CSWSH).
+    const foreign = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, origin: "http://evil.example" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 6, method: "ping" }),
+    });
+    expect(foreign.status).toBe(403);
+    // GET is not a transport here.
+    const get = await fetch(mcpUrl() + "/");
+    expect(get.status).toBe(405);
+  });
+
+  test("a non-loopback bind refuses to start without AGENTGLASS_TOKEN", async () => {
+    const refused = Bun.spawn(["python3", MCP], {
+      env: {
+        PATH: process.env.PATH ?? "",
+        AGENTGLASS_SERVER: base,
+        AGENTGLASS_MCP_HTTP: `0.0.0.0:${await freePort()}`,
+      },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    const code = await refused.exited;
+    const err = await new Response(refused.stderr).text();
+    expect(code).toBe(2);
+    expect(err).toContain("refusing to bind");
+  });
+});

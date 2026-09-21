@@ -30,17 +30,32 @@ is installed, not one where a package tree was.
 
     claude mcp add agentglass-browser -- agentglass-browser-mcp
 
+The same server also speaks MCP's Streamable-HTTP transport over a plain, local
+socket — `agentglass-browser-mcp --http 127.0.0.1:8765` (or
+AGENTGLASS_MCP_HTTP=127.0.0.1:8765) — which is the one an agent runtime on
+another device can reach. Its fences are the app's own: the Bearer token is
+AGENTGLASS_TOKEN, non-loopback binds refuse to start without one, and every
+request is checked against the same caps obscura runs. See the "Streamable-HTTP
+transport" section below.
+
 Environment:
     AGENTGLASS_SERVER   default http://localhost:4000
     AGENTGLASS_TOKEN    only needed if the server was started with one
+    AGENTGLASS_MCP_HTTP HOST:PORT — serve MCP over Streamable HTTP instead of stdio
 """
+import hmac
+import ipaddress
 import json
 import os
 import re
+import secrets
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 
 def _server_or_die(url):
@@ -1732,17 +1747,255 @@ def run(name, args):
     return {"content": [{"type": "text", "text": json.dumps(value)}]}
 
 
-def reply(msg_id, result=None, error=None):
+def make_reply(msg_id, result=None, error=None):
     out = {"jsonrpc": "2.0", "id": msg_id}
     if error is not None:
         out["error"] = error
     else:
         out["result"] = result
-    sys.stdout.write(json.dumps(out) + "\n")
-    sys.stdout.flush()
+    return out
 
 
-def main():
+def handle_message(msg):
+    """One JSON-RPC message in, one response dict out (or None for a
+    notification, which by definition takes no reply). Shared by the stdio loop
+    and the HTTP handler so the two transports cannot drift apart."""
+    method = msg.get("method")
+    msg_id = msg.get("id")
+    # A notification has no id and takes no answer. `initialized` is the one
+    # every client sends, and answering it is a protocol error.
+    if msg_id is None:
+        return None
+    if method == "initialize":
+        return make_reply(msg_id, {
+            "protocolVersion": PROTOCOL,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": NAME, "version": VERSION},
+            "instructions": (
+                "This is the person's own browser, in their window, signed in as they are. "
+                "They can see every page it opens. Open what the task needs and leave it "
+                "somewhere reasonable; do not go rummaging. The browser pane does not have "
+                "to be the view on screen — every tool works while they are reading "
+                "something else, and taking the screen off them is not part of the job.\n\n"
+                "OTHER AGENTS MAY BE DRIVING THIS SAME BROWSER. Start with browser_open: it "
+                "mints a tab in a container of your own, and every tool after it goes to that "
+                "tab, so nothing you do lands on somebody else's page and nothing they do "
+                "moves yours. Until you have one, any tool that acts on a page is refused "
+                "rather than sent to whichever tab is in front."
+            ),
+        })
+    if method == "tools/list":
+        return make_reply(msg_id, {"tools": TOOLS})
+    if method == "tools/call":
+        params = msg.get("params") or {}
+        return make_reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
+    if method == "ping":
+        return make_reply(msg_id, {})
+    return make_reply(msg_id, error={"code": -32601, "message": f"method not found: {method}"})
+
+
+# ── Streamable-HTTP transport ──────────────────────────────────────────────
+#
+# `--http HOST:PORT` (or AGENTGLASS_MCP_HTTP=HOST:PORT) serves the SAME server
+# over MCP's Streamable-HTTP transport: one JSON-RPC message per POST, answered
+# as a single JSON object, or as a one-frame SSE stream when the client asks
+# for events. The tools and the calls are byte-for-byte the stdio ones; only
+# how the bytes arrive changes. This is what lets an agent runtime on another
+# device drive the signed-in browser, instead of needing a pipe on this box.
+#
+# The fences are the app's own, not a new set. The Bearer token is
+# AGENTGLASS_TOKEN, and binding anywhere but loopback refuses to start without
+# one (32+ chars — the same floor the app's own docs set). The Host header must
+# name the bound authority, so a DNS-rebinding page cannot point a hostname at
+# this port and have the token let it in. A browser Origin is refused unless it
+# means this app's own server or talks https — the cross-site shape obscura
+# blocks with its origin allowlist. Three caps follow its model: a 1 MiB body
+# (a forged Content-Length is how a parser OOMs), an 8-message batch, and a
+# bounded number of concurrent handlers.
+
+_HTTP_BODY_MAX = 1024 * 1024
+_HTTP_BATCH_MAX = 8
+_HTTP_CONN_MAX = 16
+_HTTP_SESSIONS_MAX = 64
+_HTTP_READ_DEADLINE = 30
+_SLOTS = threading.BoundedSemaphore(_HTTP_CONN_MAX)
+_SESSIONS = {}
+
+
+def _loopback(host):
+    if not host:
+        return False
+    if host in ("localhost", "::1"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _origin_ok(origin):
+    """The cross-site half of the fence. A programmatic MCP client sends no
+    Origin at all — that is the normal case and it is allowed; only a present
+    Origin is judged, because a present one almost always means a browser."""
+    if not origin:
+        return True
+    if origin == SERVER or origin.startswith("https://"):
+        return True
+    u = urlsplit(origin)
+    return _loopback(u.hostname) and not os.environ.get("AGENTGLASS_TOKEN")
+
+
+class _McpHttp(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    timeout = _HTTP_READ_DEADLINE
+
+    def log_message(self, *a):
+        pass
+
+    def _reply(self, status, payload, headers=None, sse=False):
+        self.send_response(status)
+        self.send_header("Content-Type", "text/event-stream" if sse else "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        origin = self.headers.get("Origin", "")
+        if origin and _origin_ok(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        if headers:
+            for k, v in headers.items():
+                self.send_header(k, v)
+        body = (f"event: message\ndata: {json.dumps(payload)}\n\n" if sse
+                else json.dumps(payload)).encode()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _reject(self, code, text):
+        # A check that fails before the body is read leaves unread bytes that
+        # the next keep-alive request would parse as its request line. Closing
+        # is the honest answer — the client opens a fresh socket.
+        self.close_connection = True
+        return self._reply(code, {"error": text}, {"Connection": "close"})
+
+    def do_GET(self):
+        # No server-to-client notification stream: this server never pushes
+        # anything, so the SSE GET the Streamable-HTTP spec allows has nothing
+        # to say. POST is the whole protocol, and a client that GETs learns that.
+        self.send_response(405)
+        self.send_header("Allow", "POST, OPTIONS")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_OPTIONS(self):
+        origin = self.headers.get("Origin", "")
+        if origin and not _origin_ok(origin):
+            return self._reject(403, "origin refused")
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_POST(self):
+        if not _SLOTS.acquire(blocking=False):
+            return self._reject(503, "server at capacity — try again shortly")
+        try:
+            return self._post()
+        finally:
+            _SLOTS.release()
+
+    def _post(self):
+        if self.path != "/":
+            return self._reject(404, "only POST / speaks MCP")
+        token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+        if token:
+            want = self.headers.get("Authorization", "")
+            have = want[7:] if want[:7].lower() == "bearer " else ""
+            if have and not hmac.compare_digest(have, token):
+                return self._reject(401, "wrong bearer token")
+            if not have:
+                return self._reject(401, "missing bearer token")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._reject(400, "bad content-length")
+        if length > _HTTP_BODY_MAX:
+            return self._reject(431, f"body over {_HTTP_BODY_MAX} bytes")
+        bind_host = self.server.server_address[0] if self.server.server_address else ""
+        host = self.headers.get("Host", "")
+        if host and bind_host not in ("0.0.0.0", "::") and urlsplit("http://" + host).hostname != bind_host:
+            return self._reject(421, "host header does not name the bound address")
+        origin = self.headers.get("Origin", "")
+        if origin and not _origin_ok(origin):
+            return self._reject(403, "origin refused")
+        body = self.rfile.read(length) if length else b""
+        try:
+            msg = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return self._reject(400, "body is not valid JSON")
+        batch = msg if isinstance(msg, list) else [msg]
+        if len(batch) > _HTTP_BATCH_MAX:
+            return self._reject(400, f"batch over {_HTTP_BATCH_MAX} messages")
+        replies = []
+        session = None
+        for m in batch:
+            if m.get("method") == "initialize" and len(_SESSIONS) < _HTTP_SESSIONS_MAX and not session:
+                session = "agx-" + secrets.token_hex(8)
+                _SESSIONS[session] = time.time()
+            r = handle_message(m)
+            if r is not None:
+                replies.append(r)
+        if not replies:
+            # Notifications only — nothing to answer, and the spec says 202 not
+            # 204, because the client expects a representation of the request.
+            self.send_response(202)
+            if session:
+                self.send_header("Mcp-Session-Id", session)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        payload = replies[0] if len(replies) == 1 else replies
+        headers = {"Mcp-Session-Id": session} if session else None
+        if "text/event-stream" in self.headers.get("Accept", ""):
+            return self._reply(202, payload, headers, sse=True)
+        return self._reply(200, payload, headers)
+
+
+def _run_http(bind):
+    host, _, port = bind.partition(":")
+    if not host or not port.isdigit():
+        print(f"--http wants HOST:PORT, got {bind!r}", file=sys.stderr)
+        return 2
+    token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    if token and len(token) < 32:
+        print("AGENTGLASS_TOKEN must be at least 32 chars to serve MCP over HTTP", file=sys.stderr)
+        return 2
+    if not _loopback(host) and not token:
+        print(f"refusing to bind {host}: serving MCP over HTTP off loopback needs "
+              "AGENTGLASS_TOKEN (32+ chars)", file=sys.stderr)
+        return 2
+    httpd = ThreadingHTTPServer((host, int(port)), _McpHttp)
+    print(f"agentglass-browser MCP over Streamable HTTP on http://{host}:{port}/" +
+          (" (token required)" if token else " (loopback, no token)"), file=sys.stderr)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def main(argv=None):
+    import argparse
+    _ap = argparse.ArgumentParser(prog="agentglass-browser-mcp", add_help=False)
+    _ap.add_argument("--http", metavar="HOST:PORT",
+                     help="serve MCP over Streamable HTTP instead of stdio")
+    args, _ = _ap.parse_known_args(argv)
+    http_bind = args.http or os.environ.get("AGENTGLASS_MCP_HTTP")
+    if http_bind:
+        return _run_http(http_bind)
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -1751,39 +2004,11 @@ def main():
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
-        method = msg.get("method")
-        msg_id = msg.get("id")
-        # A notification has no id and takes no answer. `initialized` is the one
-        # every client sends, and answering it is a protocol error.
-        if msg_id is None:
+        r = handle_message(msg)
+        if r is None:
             continue
-        if method == "initialize":
-            reply(msg_id, {
-                "protocolVersion": PROTOCOL,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": NAME, "version": VERSION},
-                "instructions": (
-                    "This is the person's own browser, in their window, signed in as they are. "
-                    "They can see every page it opens. Open what the task needs and leave it "
-                    "somewhere reasonable; do not go rummaging. The browser pane does not have "
-                    "to be the view on screen — every tool works while they are reading "
-                    "something else, and taking the screen off them is not part of the job.\n\n"
-                    "OTHER AGENTS MAY BE DRIVING THIS SAME BROWSER. Start with browser_open: it "
-                    "mints a tab in a container of your own, and every tool after it goes to that "
-                    "tab, so nothing you do lands on somebody else's page and nothing they do "
-                    "moves yours. Until you have one, any tool that acts on a page is refused "
-                    "rather than sent to whichever tab is in front."
-                ),
-            })
-        elif method == "tools/list":
-            reply(msg_id, {"tools": TOOLS})
-        elif method == "tools/call":
-            params = msg.get("params") or {}
-            reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
-        elif method == "ping":
-            reply(msg_id, {})
-        else:
-            reply(msg_id, error={"code": -32601, "message": f"method not found: {method}"})
+        sys.stdout.write(json.dumps(r) + "\n")
+        sys.stdout.flush()
     return 0
 
 
