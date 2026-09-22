@@ -27,12 +27,16 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+/* Read before this file sets them: every test file shares one process, and
+   what afterAll puts back has to be what was there, not this file's own. */
+const REAL_TMPDIR = process.env.TMUX_TMPDIR;
+const REAL_STATE = process.env.AGENTGLASS_STATE_DIR;
+const REAL_SOCKET = process.env.AGENTGLASS_TMUX_SOCKET;
 const SOCKET = `agx-resume-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
 const TMPDIR = join(tmpdir(), `agx-resume-tmp-${process.pid}`);
-process.env.AGENTGLASS_STATE_DIR = join(tmpdir(), `agx-resume-state-${process.pid}`);
-const REAL_TMPDIR = process.env.TMUX_TMPDIR;
-const REAL_STATE = process.env.AGENTGLASS_STATE_DIR;
+const STATE = join(tmpdir(), `agx-resume-state-${process.pid}`);
+process.env.AGENTGLASS_STATE_DIR = STATE;
 
 let restore: typeof import("../src/tmuxrestore.ts");
 let pane: typeof import("../src/tmuxpane.ts");
@@ -80,7 +84,9 @@ afterAll(async () => {
      directory this file deletes is the next file's problem. */
   if (REAL_STATE === undefined) delete process.env.AGENTGLASS_STATE_DIR;
   else process.env.AGENTGLASS_STATE_DIR = REAL_STATE;
-  for (const d of [TMPDIR, CWD, process.env.AGENTGLASS_STATE_DIR!]) {
+  if (REAL_SOCKET === undefined) delete process.env.AGENTGLASS_TMUX_SOCKET;
+  else process.env.AGENTGLASS_TMUX_SOCKET = REAL_SOCKET;
+  for (const d of [TMPDIR, CWD, STATE]) {
     try { rmSync(d, { recursive: true, force: true }); } catch { /* never made */ }
   }
 });
