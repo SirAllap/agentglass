@@ -96,3 +96,10 @@ test("a held gate says so in its own words", () => {
   const v = fleetVerdict([blocked("orbit-web", "gate", { needsYou: { kind: "gate", why: "", since: now } })], now)!;
   expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web held at the gate");
 });
+
+test("a board that could not be read is unknown, not 'nothing running'", () => {
+  // The store answers [] when its first read fails, so the rows alone would
+  // draw a calm green line over a field nobody could see.
+  expect(fleetVerdict([], now, true)).toBeNull();
+  expect(fleetVerdict([working("orbit-api")], now, true)).toBeNull();
+});

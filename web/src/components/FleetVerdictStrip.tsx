@@ -9,7 +9,7 @@
  * poll of its own.
  */
 import { useSyncExternalStore } from "react";
-import { subscribeLantern, lanternRows } from "../lib/lanternStore.ts";
+import { subscribeLantern, lanternRows, lanternFailed } from "../lib/lanternStore.ts";
 import { fleetVerdict, type VerdictClause, type VerdictTone } from "../lib/fleetVerdict.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
 
@@ -17,7 +17,8 @@ const ink: Record<VerdictTone, string> = { calm: "var(--success)", warn: "var(--
 
 export function FleetVerdictStrip({ onOpenLantern }: { onOpenLantern: () => void }) {
   const rows = useSyncExternalStore(subscribeLantern, lanternRows, lanternRows);
-  const v = fleetVerdict(rows);
+  const failed = useSyncExternalStore(subscribeLantern, lanternFailed, lanternFailed);
+  const v = fleetVerdict(rows, Date.now(), failed);
   if (!v) return null;
   const loud = v.tone !== "calm";
   /* One agent with a pane: go to it. Several, or none reachable: the Lantern,

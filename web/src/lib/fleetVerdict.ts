@@ -38,10 +38,11 @@ export interface FleetVerdict { tone: VerdictTone; clauses: VerdictClause[] }
 const waitWord = (w: NonNullable<LanternRow["needsYou"]>) =>
   w.kind === "permission" ? "needs your permission" : "held at the gate";
 
-/** Null until the board has been read once: "not known yet" must not be drawn
- *  as "all nominal". */
-export function fleetVerdict(all: LanternRow[] | null, now = Date.now()): FleetVerdict | null {
-  if (!all) return null;
+/** Null until the board has been read, and whenever the last read failed: "not
+ *  known" must not be drawn as "all nominal". The store answers [] when its
+ *  first read fails, so the rows alone cannot tell the two apart. */
+export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed = false): FleetVerdict | null {
+  if (!all || failed) return null;
   const rows = all.filter((r) => !r.role);
   const need = rows.filter((r) => r.needsYou && r.needsYou.kind !== "input");
   const stuck = rows.filter((r) => isForgotten(r, now));
