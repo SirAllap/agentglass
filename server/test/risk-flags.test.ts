@@ -193,7 +193,25 @@ describe("what a second review found", () => {
       `private_key = "./certs/orbit2.pem"`,
       `private_key = "/etc/orbit/tls2.key"`,
       `secret: "https://vault.orbit.dev/v1/kv"`,
+      `private_key: "certs/server2.key"`,
+      `secret: "secrets/app-2.json"`,
     ]) expect(changeRisks("/w/orbit/src/config.py", added(l), 0)).toEqual([]);
+  });
+
+  test("a value that names itself or is a lowercase identifier is not a credential", () => {
+    // A seed or a login spec says `password: "password123"`; a config file
+    // names a secret-manager entry `stripe_webhook_v2`. Neither is what a
+    // reviewer should read first. A made-up password with nothing to say it
+    // is a test one is still flagged.
+    for (const l of [
+      `password: "password123"`,
+      `const password = "test1234";`,
+      `secret: "OrbitSecret2"`,
+      `secret: "stripe_webhook_v2"`,
+      `api_key: "orbit_api_key_2"`,
+      `password: "fake-pass-9"`,
+    ]) expect(changeRisks("/w/orbit/test/login.spec.ts", added(l), 0)).toEqual([]);
+    expect(kinds(changeRisks("/w/orbit/docker-compose.yml", added(`POSTGRES_PASSWORD: "harbor7Lantern"`), 0))).toEqual(["secret"]);
   });
 
 

@@ -61,7 +61,17 @@ const PLACEHOLDER = /[<>{}$]|example|changeme|your|xxxx|dummy|placeholder|redact
 const NAME_NOT_SECRET = [
   /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/,
   /^(?:\.{0,2}\/|~\/|[a-z][a-z0-9+.-]*:\/\/|x-|arn:)/i,
+  // A relative path (`certs/server2.key`): a slash plus a dot or a hyphen,
+  // which base64 never has.
+  /^(?=.*\/)(?=.*[.-])[\w.\/-]+$/,
+  // A lowercase identifier with two underscores or more — a secret manager's
+  // entry (`stripe_webhook_v2`), an i18n key. A password rarely looks like it.
+  /^[a-z][a-z0-9]*(?:_[a-z0-9]+){2,}$/,
 ];
+/** A value that says it is a test one (`test1234`, `fake-pass-9`) or names
+ *  itself (`password123`): a seed, a login spec or a compose file for local
+ *  use. Not what a reviewer should read first. */
+const TEST_VALUE = /test|fake|mock|sample|password|passwd|secret/i;
 const MIXED = /[A-Za-z].*\d|\d.*[A-Za-z]/;
 /** Past this a line is generated (a bundle, a lockfile's integrity blob), and
  *  the assignment rule is the one that could backtrack on it. */
@@ -129,7 +139,7 @@ function secretIn(line: string): string | null {
   if (line.length > LONG_LINE) return null;
   const m = ASSIGNED.exec(line);
   const v = m?.[1];
-  if (v && !PLACEHOLDER.test(v) && !NAME_NOT_SECRET.some((re) => re.test(v)) && MIXED.test(v)) return "a hard-coded credential";
+  if (v && !PLACEHOLDER.test(v) && !TEST_VALUE.test(v) && !NAME_NOT_SECRET.some((re) => re.test(v)) && MIXED.test(v)) return "a hard-coded credential";
   return null;
 }
 
