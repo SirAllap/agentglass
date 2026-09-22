@@ -412,7 +412,6 @@ export default function App() {
         else setAwaitingPick(false);
       }).catch(() => {
         if (!live) return;
-        gaveUp = true;
         setAwaitingPick(false);
         timer = setTimeout(ask, wait);
         wait = Math.min(wait * 2, 5000);

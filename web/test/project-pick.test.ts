@@ -181,7 +181,9 @@ describe("the first run waits for an answer", () => {
     expect(APP).toContain("return () => { live = false; clearTimeout(release); if (timer) clearTimeout(timer); };");
   });
   test("a server that does not answer lets the views in rather than leave them out", () => {
-    expect(APP).toMatch(/\.catch\(\(\) => \{\s*if \(!live\) return;\s*gaveUp = true;\s*setAwaitingPick\(false\);/);
+    // Released without giving up: a server that was not up yet and answers
+    // "nothing open" on the retry still holds the views behind the picker.
+    expect(APP).toMatch(/\.catch\(\(\) => \{\s*if \(!live\) return;\s*setAwaitingPick\(false\);/);
   });
   test("closing the picker, either way, lets the views in", () => {
     expect(APP).toMatch(/<ProjectPicker [^>]*onClose=\{\(\) => \{ setProjectOpen\(false\); setAwaitingPick\(false\); \}\}/);
