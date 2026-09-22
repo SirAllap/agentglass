@@ -11,6 +11,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-collisions-"));
+const priorDb = process.env.AGENTGLASS_DB;
 process.env.AGENTGLASS_DB = join(dir, "collisions.db");
 delete process.env.AGENTGLASS_ROOT;
 process.env.XDG_CONFIG_HOME = dir;
@@ -24,7 +25,8 @@ beforeAll(async () => {
   col = await import("../src/collisions.ts");
 });
 afterAll(() => {
-  delete process.env.AGENTGLASS_DB;
+  if (priorDb === undefined) delete process.env.AGENTGLASS_DB;
+  else process.env.AGENTGLASS_DB = priorDb;
 });
 
 const keys = (cmd: string, cwd: string | null = "/work/orbit") =>
@@ -170,6 +172,13 @@ describe("findCollisions", () => {
 });
 
 describe("getCollisions", () => {
+  // db.ts is one module for the whole `bun test` process, so the events table
+  // holds whatever any other file inserted near `now`. Only this file's
+  // sessions are read back.
+  const ours = (out: ReturnType<typeof col.getCollisions>, ids: string[]) =>
+    out
+      .map((c) => ({ ...c, parties: c.parties.filter((p) => ids.includes(p.session_id)) }))
+      .filter((c) => c.parties.length > 0);
   const ev = (session_id: string, at: number, hook: string, tool: string | null, input: Record<string, unknown>, cwd: string) => ({
     source_app: "orbit",
     session_id,
@@ -200,7 +209,7 @@ describe("getCollisions", () => {
     db.insertEvent(ev("stale-d", now - 3 * 60 * 60_000, "PreToolUse", "Bash", { command: url }, "/work/wt-d") as any);
     db.insertEvent(ev("live-e", now - 10_000, "PreToolUse", "Read", { file_path: "/work/wt-e/README.md" }, "/work/wt-e") as any);
 
-    const out = col.getCollisions(now, () => []);
+    const out = ours(col.getCollisions(now, () => []), ["live-a", "live-b", "gone-c", "stale-d", "live-e"]);
     expect(out.map((c) => c.resource)).toEqual(["postgres localhost:5432/acme_dev"]);
     expect(out[0].parties.map((s) => s.session_id).sort()).toEqual(["live-a", "live-b"]);
     expect(out[0].parties.find((s) => s.session_id === "live-b")?.checkout).toBe("/work/wt-b");
@@ -209,7 +218,7 @@ describe("getCollisions", () => {
   test("a port a process is listening on counts for the checkout it runs in", () => {
     db.insertEvent(ev("live-f", now - 10_000, "PreToolUse", "Bash", { command: "bun test" }, "/work/wt-f") as any);
     db.insertEvent(ev("live-g", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5555/api" }, "/work/wt-g") as any);
-    const out = col.getCollisions(now, () => [{ port: 5555, addr: "127.0.0.1", pid: 4242, proc: "bun", cwd: "/work/wt-f/web" }]);
+    const out = ours(col.getCollisions(now, () => [{ port: 5555, addr: "127.0.0.1", pid: 4242, proc: "bun", cwd: "/work/wt-f/web" }]), ["live-f", "live-g"]);
     const hit = out.find((c) => c.resource === "port 5555");
     expect(hit).toBeDefined();
     expect(hit!.parties.map((s) => `${s.session_id}:${s.via}`).sort()).toEqual(["live-f:listening", "live-g:command"]);
