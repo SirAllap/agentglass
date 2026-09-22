@@ -218,4 +218,11 @@ describe("what a second review found", () => {
     expect(changeRisks("/w/orbit/certs/orbit.pub.key", added("x"), 0)).toEqual([]);
     expect(kinds(changeRisks("/w/orbit/certs/server.key", added("x"), 0))).toEqual(["secret"]);
   });
+
+
+  test("prose inside a migrations folder is not a migration", () => {
+    expect(changeRisks("/w/orbit/src/migrations/README.md", added("x"), 0)).toEqual([]);
+    expect(changeRisks("/w/orbit/db/migrate/NOTES.txt", added("x"), 0)).toEqual([]);
+    expect(kinds(changeRisks("/w/orbit/src/migrations/0003_add_thing.sql", added("x"), 0))).toEqual(["migration"]);
+  });
 });

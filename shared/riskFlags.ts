@@ -193,9 +193,10 @@ export function changeRisks(
   else if (depLine) out.push({ kind: "deps", reason: "a dependency was added, removed or re-versioned" });
 
   // Folders, not words: `db/migrate/` is Rails' migrations; a script called
-  // `migrate-users.ts` is not a migration.
+  // `migrate-users.ts` is not a migration, and neither is the README beside
+  // them.
   const dirs = rel.split("/").slice(0, -1).map((d) => d.toLowerCase());
-  if (dirs.includes("migrations") || dirs.includes("migrate") || (dirs.includes("alembic") && dirs.includes("versions"))) {
+  if (!DOC_EXT.test(base) && (dirs.includes("migrations") || dirs.includes("migrate") || (dirs.includes("alembic") && dirs.includes("versions")))) {
     out.push({ kind: "migration", reason: "a database migration changed" });
   }
 
