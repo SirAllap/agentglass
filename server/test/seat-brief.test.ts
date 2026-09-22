@@ -99,7 +99,8 @@ describe("the seat is told to hand it out", () => {
        exited 0 closed its tab and took its answer with it. */
     const house = Seat.houseBlock("assign", 4, ROOT);
     expect(house).toContain("--keep");
-    expect(house).toContain("tmux new-window");
+    /* Forbidden, not recommended: the words around the command say which. */
+    expect(house).toContain("never with a bare `tmux new-window");
     expect(house).not.toContain("`claude --dangerously-skip-permissions");
   });
 
