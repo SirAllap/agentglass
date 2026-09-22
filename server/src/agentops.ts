@@ -140,6 +140,9 @@ export type StartResult =
    *  wrapper for a binary that is not there. The window is already closed. */
   | { ok: false; error: "died" }
   | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "bad-args" };
+/** Every refusal `startAgent` can answer, so a caller's table of wordings is
+ *  checked for a new one rather than printing `undefined`. */
+export type StartError = Extract<StartResult, { ok: false }>["error"];
 
 /**
  * The yolo flag is a PERMISSION, not a parameter, exactly as on `/terminal/agent`:

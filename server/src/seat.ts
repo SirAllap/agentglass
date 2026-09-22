@@ -433,7 +433,7 @@ export async function openSeat(p: {
   });
   if (!r.ok) {
     revokeSeatTokens(root);
-    const why: Record<string, string> = {
+    const why: Record<AgentOps.StartError, string> = {
       exists: "an agent is already running under the seat's name",
       "no-cli": "that agent CLI is not installed here",
       "no-window": "tmux would not open a window for the seat",

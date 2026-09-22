@@ -7372,7 +7372,8 @@ const server = Bun.serve<WsData>({
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
         });
         if (!r.ok) {
-          const why: Record<string, string> = {
+          /* `arg-refused` is answered below, with the flag in it. */
+          const why: Record<Exclude<AgentOps.StartError, "arg-refused">, string> = {
             exists: "an agent by that name is still running",
             "no-cli": "that agent CLI is not installed here",
             "no-window": "tmux would not open a window for it",
