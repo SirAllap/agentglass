@@ -870,6 +870,24 @@ const VALUE_CARRYING: Record<string, (
   storage(out, args) {
     if (args.set === true && typeof args.value === "string") out.value = REDACTED;
   },
+  /* The same two positions, reached through the raw protocol: `session load`
+     and `session import` write cookies and localStorage with `cdp`, so the
+     rows above never see a single value of a whole imported session. Only the
+     methods that WRITE a cookie or a stored item — a `value` anywhere else in
+     the protocol is not a credential by position. */
+  cdp(out, args) {
+    const params = args.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) return;
+    const p = params as Record<string, unknown>;
+    const blank = (o: unknown) =>
+      o && typeof o === "object" && typeof (o as Record<string, unknown>).value === "string"
+        ? { ...(o as Record<string, unknown>), value: REDACTED } : o;
+    if (args.method === "Network.setCookie" || args.method === "DOMStorage.setDOMStorageItem") {
+      out.params = blank({ ...(out.params as Record<string, unknown>), value: p.value });
+    } else if ((args.method === "Network.setCookies" || args.method === "Storage.setCookies") && Array.isArray(p.cookies)) {
+      out.params = { ...(out.params as Record<string, unknown>), cookies: p.cookies.map(blank) };
+    }
+  },
 };
 
 /** The ops the table covers, for a lock that notices when a value-carrying

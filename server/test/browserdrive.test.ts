@@ -668,6 +668,37 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
     expect(JSON.stringify(out)).not.toContain(sessionid);
   });
 
+  test("a cookie or a stored value sent through `cdp` goes by position as well", () => {
+    /*
+     * `session load` and `session import` write cookies with
+     * `Network.setCookie` and localStorage with `DOMStorage.setDOMStorageItem`,
+     * through the `cdp` verb — so the `cookies` and `storage` rows above never
+     * see them, and every value of an imported session would sit in the audit
+     * log in clear.
+     */
+    const sid = "kq3zr9x1v7b2n5m8t4w6y0p3s1d7f9g2";
+    const one = redactAskForTest("cdp", args("cdp", {
+      method: "Network.setCookie", params: { name: "__Host-orbit_sid", value: sid, url: "https://www.orbit.example/" },
+    }));
+    expect((one.params as Record<string, unknown>).name).toBe("__Host-orbit_sid");
+    expect(JSON.stringify(one)).not.toContain(sid);
+    const many = redactAskForTest("cdp", args("cdp", {
+      method: "Network.setCookies", params: { cookies: [{ name: "a", value: sid }, { name: "b", value: `${sid}2` }] },
+    }));
+    expect(JSON.stringify(many)).not.toContain(sid);
+    expect(JSON.stringify(many)).toContain('"name":"b"');
+    const stored = redactAskForTest("cdp", args("cdp", {
+      method: "DOMStorage.setDOMStorageItem",
+      params: { storageId: { securityOrigin: "https://www.orbit.example", isLocalStorage: true }, key: "device", value: sid },
+    }));
+    expect((stored.params as Record<string, unknown>).key).toBe("device");
+    expect(JSON.stringify(stored)).not.toContain(sid);
+    // Any other method keeps its params: a `value` in Runtime.evaluate's
+    // answer shape is not a credential by position.
+    const other = redactAskForTest("cdp", args("cdp", { method: "Emulation.setTimezoneOverride", params: { timezoneId: "Europe/Madrid" } }));
+    expect((other.params as Record<string, unknown>).timezoneId).toBe("Europe/Madrid");
+  });
+
   test("a stored value goes by position too, benign ones included, and that is the trade", () => {
     const token = "opaque-session-9f2c-not-a-token-shape";
     const secret = redactAskForTest("storage", args("storage", { set: true, key: "authToken", value: token }));
@@ -706,7 +737,7 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
      * deliberately absent — the comment on the table says why — and if it is
      * ever added this list must move with it.
      */
-    expect([...valueCarryingOpsForTest].sort()).toEqual(["cookies", "fill", "storage", "type"]);
+    expect([...valueCarryingOpsForTest].sort()).toEqual(["cdp", "cookies", "fill", "storage", "type"]);
   });
 
   test("the replay script emits a real `fill`, with the pairs and the marker", () => {
