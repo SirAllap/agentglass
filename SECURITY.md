@@ -731,12 +731,15 @@ because the browser resolves it again when it connects and a name may answer
 differently the second time. So the desktop app also runs an **egress guard**:
 a proxy on a loopback port that every browsing session is pointed at, which
 resolves each name once per connection, refuses any answer in those ranges,
-opens the socket to the address it judged, refuses a name that answers a public
-and a private address in one set, and refuses a name that has ever answered a
-public address when it later answers a private or loopback one — the DNS
-rebinding shapes. A public name is remembered for the life of the app and never
-forgotten to make room; when the memory is full (100k names) a new public name
-is refused by name rather than let through unpinned. A name that has only ever
+opens the socket to the address it judged, reaches a name that answers a public
+and a private address in one set at the public ones only, and refuses a name
+that has ever answered a public address when it later answers a private or
+loopback one — the DNS rebinding shapes. A public name is remembered for the
+life of the app and never forgotten to make room; when the memory is full (100k
+names) a new public name is refused by name rather than let through unpinned,
+for every tab until a restart. The memory does not survive a restart, while a
+persistent profile's service workers and cache do: a page kept from an earlier
+run meets a guard that has not seen its name yet. A name that has only ever
 answered private (a hosts-file entry, a LAN box) is judged fresh every time and
 stays allowed, so nothing about local development changes.
 `AGENTGLASS_BROWSER_EGRESS=off` turns the guard off; a proxy set through the

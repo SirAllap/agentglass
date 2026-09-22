@@ -30,11 +30,14 @@
 //     name with one public record and one link-local one is a name whose owner
 //     wants the second used.
 //   - an answer set that mixes a public address with a private one (loopback,
-//     RFC1918, CGNAT, unique-local) refuses the whole name. That is
-//     multiple-A-record rebinding: the page loads from the public address,
-//     that port closes, and the next connection falls through to 127.0.0.1
-//     under the same origin. The first version pinned such a name private and
-//     tried the addresses in order, which is exactly that.
+//     RFC1918, CGNAT, unique-local) is reached at its public addresses only,
+//     and the name is public from then on. Multiple-A-record rebinding is the
+//     page loading from the public address, that port closing, and the next
+//     connection falling through to 127.0.0.1 under the same origin; the
+//     first version pinned such a name private and tried the addresses in
+//     order, which is exactly that. Refusing the name outright closed it too,
+//     and broke a dual-stack LAN box (an RFC1918 A record beside a global
+//     AAAA), which a home network with IPv6 hands out as a matter of course.
 //   - a name is remembered by class, and "public" is sticky: a name that has
 //     EVER answered public is public from then on, and a private answer for
 //     it is refused. That is the rebinding shape. The first version pinned the
@@ -67,6 +70,13 @@
 //   - a laptop whose VPN turns a public name private mid-session meets the
 //     rebinding rule, because from here the two are the same event. The
 //     refusal names the way out: a restart, or AGENTGLASS_BROWSER_EGRESS=off.
+//   - the pins live in memory, and a restart forgets them while a `persist:`
+//     partition does not forget its service workers and cache. A page kept
+//     from an earlier run can ask its own name again after a restart, when
+//     that name already answers loopback, and nothing says it was public.
+//   - the memory is one per app, not per site: a page that walks 100k fresh
+//     subdomains fills it, and every new public name is refused, for every
+//     tab, until a restart. Loud and bounded, not silent — but a denial.
 //   - there is no authentication on the port. It answers loopback only, and
 //     everything it does is refuse: a process on this machine that can reach
 //     it can reach the network directly and gain nothing by going through.
@@ -202,15 +212,11 @@ function createResolver(opts = {}) {
       const why = blockedAddress(a.address);
       if (why) return { ok: false, reason: `${host} resolves to ${a.address}, which is ${why}` };
     }
+    const pub = answers.filter((a) => !privateAddress(a.address));
+    /* A mixed set is reached at its public addresses only: the private ones
+       never reach the socket, so there is nothing to fall through to. */
+    if (pub.length) answers = pub;
     const priv = answers.find((a) => privateAddress(a.address));
-    const pub = answers.find((a) => !privateAddress(a.address));
-    if (priv && pub) {
-      return {
-        ok: false,
-        reason: `${host} answers both a public address (${pub.address}) and a private or loopback one (${priv.address}) — `
-          + "a name whose owner wants the second reached under the first's origin, the multiple-record shape of DNS rebinding, refused.",
-      };
-    }
     const pinnedPublic = remember.get(host) === "public";
     if (priv && pinnedPublic) {
       return {

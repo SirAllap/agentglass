@@ -72,7 +72,7 @@ describe("what an address is", () => {
   });
 });
 
-describe("the resolver: every answer judged, a mixed set refused, and a name that ever answered public pinned public", () => {
+describe("the resolver: every answer judged, a mixed set reached only at its public addresses, and a name that ever answered public pinned public", () => {
   const A = (...ips: string[]): Answer[] => ips.map((address) => ({ address, family: address.includes(":") ? 6 : 4 }));
 
   test("a name that answers the metadata address is refused, and so is a name that answers it among others", async () => {
@@ -124,21 +124,31 @@ describe("the resolver: every answer judged, a mixed set refused, and a name tha
      a page's own hostname ending up at a loopback or LAN address under an
      origin that address trusts — wearing a different DNS answer. */
 
-  test("a name that answers a public AND a private address in one set is refused outright: multiple-A-record rebinding", async () => {
+  test("a name that answers a public AND a private address in one set is reached only at the public one: multiple-A-record rebinding", async () => {
     // The first version pinned such a name private (any private answer made
     // the class private) and connected in order: the page loaded from the
     // public address, then that port closed and the next connection fell
-    // through to 127.0.0.1 under the same origin.
-    const resolve = guard.createResolver({ lookup: async () => A("93.184.216.34", "127.0.0.1") });
+    // through to 127.0.0.1 under the same origin. Now the private addresses
+    // of a mixed set are never handed to the socket, and the name is public
+    // from then on.
+    let answer = A("93.184.216.34", "127.0.0.1");
+    const resolve = guard.createResolver({ lookup: async () => answer });
     const r = await resolve("both.example");
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.reason).toContain("127.0.0.1");
-      expect(r.reason).toMatch(/public.*private|private.*public/);
-    }
-    // And not remembered as private for a later, cleaner answer to lean on.
-    const later = guard.createResolver({ lookup: async () => A("10.0.0.7", "203.0.113.9") });
-    expect((await later("both.example")).ok).toBe(false);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.addresses).toEqual(["93.184.216.34"]);
+    answer = A("127.0.0.1");
+    const later = await resolve("both.example");
+    expect(later.ok, "and pinned public, so loopback alone next time is the rebinding shape").toBe(false);
+  });
+
+  test("a dual-stack LAN box — RFC1918 A record, global AAAA — keeps working, at its global address", async () => {
+    // Refusing every mixed set outright broke this ordinary shape, which a
+    // home network with IPv6 hands out for its own boxes.
+    const resolve = guard.createResolver({ lookup: async () => A("192.168.1.5", "2001:db8::5") });
+    const r = await resolve("nas.home.arpa");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.addresses).toEqual(["2001:db8::5"]);
+    expect((await resolve("nas.home.arpa")).ok, "the same set twice is the same answer").toBe(true);
   });
 
   test("a name pinned private first, then public, then private again is refused: pre-pinning", async () => {
