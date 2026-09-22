@@ -807,6 +807,32 @@ export interface Insight {
   ts: number;
 }
 
+/** A runtime resource that lives outside every working tree. */
+export type CollisionKind = "port" | "postgres" | "redis" | "sqlite" | "socket" | "datadir" | "env" | "compose";
+
+/** One live session's side of a collision: where it runs and what it did. */
+export interface CollisionParty {
+  source_app: string;
+  session_id: string;
+  /** The checkout it runs in — the thing that is supposed to keep it apart. */
+  checkout: string;
+  /** How it touched the resource: a command it ran, a file tool it pointed at
+   *  the path, or a process in its checkout that is listening on the port. */
+  via: "command" | "file" | "listening";
+  /** The command, path or listener, credentials masked. */
+  evidence: string;
+  ts: number;
+}
+
+/** Two or more live sessions, in different checkouts, on one resource. A
+ *  possibility read out of what they ran, never a verdict. */
+export interface Collision {
+  kind: CollisionKind;
+  /** The resource as a person names it: "port 3000", "postgres localhost:5432/acme_dev". */
+  resource: string;
+  parties: CollisionParty[];
+}
+
 export interface DiffHunk {
   oldStart: number;
   oldLines: number;
