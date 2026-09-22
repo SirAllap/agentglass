@@ -82,3 +82,17 @@ describe("why the machine is being kept awake", () => {
     expect(agentIsWorking(now, quiet)).toBe(false);
   });
 });
+
+describe("the named agents are a tmux question, asked at most every ten seconds", () => {
+  test("a second poll inside the window reuses the answer instead of asking tmux again", async () => {
+    let calls = 0;
+    const d = { ...deps({}), hookedWorking: () => 0, namedAlive: () => { calls++; return Promise.resolve(2); } };
+    const now = Date.now();
+    workingWhy(now, d);
+    await Promise.resolve();
+    expect(workingWhy(now + 1_000, d).named, "the answer from the first ask").toBe(2);
+    expect(calls, "asked once in ten seconds").toBe(1);
+    workingWhy(now + 11_000, d);
+    expect(calls).toBe(2);
+  });
+});

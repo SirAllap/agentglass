@@ -46,8 +46,6 @@ const LIVE_DEPS: AgentWorkingDeps = {
   hookedWorking: (now) => new Set(recentPaneAgents({ sinceMs: FRESH_MS, now }).map((r) => r.sessionId)).size,
   namedAlive: () => namedAlive().then((a) => a.length).catch(() => 0),
 };
-let namedCount = 0;
-let namedAskedAt = 0;
 
 /** What is keeping the machine awake, counted by source. The desktop draws
  *  it beside the power button: "awake" alone does not say whether that is a
@@ -70,15 +68,22 @@ export function workingWhy(now = Date.now(), deps: AgentWorkingDeps = LIVE_DEPS)
 
 /* The named agents are a tmux question, asked at most every ten seconds:
    this is polled by the shell every few seconds and must stay synchronous
-   for its callers; the count from the last ask is the answer until then. */
+   for its callers; the count from the last ask is the answer until then.
+   The time is checked BEFORE asking: checked after, the ask — a `list-panes`
+   and the registry's writes — ran on every poll and only its answer was
+   throttled. Kept per set of deps, so a test's own deps never read the live
+   answer or each other's. */
+const asked = new WeakMap<AgentWorkingDeps, { at: number; count: number }>();
 function namedNow(now: number, deps: AgentWorkingDeps): number {
-  const named = deps.namedAlive?.();
+  if (!deps.namedAlive) return 0;
+  const last = asked.get(deps);
+  if (last && now - last.at <= 10_000) return last.count;
+  const named = deps.namedAlive();
   if (typeof named === "number") return named;
-  if (named && now - namedAskedAt > 10_000) {
-    namedAskedAt = now;
-    void named.then((n) => { namedCount = n; });
-  }
-  return namedCount;
+  const entry = { at: now, count: last?.count ?? 0 };
+  asked.set(deps, entry);
+  void named.then((n) => { entry.count = n; }, () => { /* keep the last count */ });
+  return entry.count;
 }
 
 export const anyWorking = (w: WorkingWhy): boolean => w.chats + w.runs + w.hooked + w.named > 0;
