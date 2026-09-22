@@ -30,6 +30,7 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { isSeatSession } from "./seatrole.ts";
 import { seatPanes } from "./seatpanes.ts";
+import { isGone } from "../../shared/fieldRules.ts";
 export { LANTERN_PROMPT_MARK };
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
@@ -317,28 +318,16 @@ const ago = (t: number, now: number) => {
 const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
   w.kind === "permission" ? "needs your permission" : w.kind === "gate" ? "held at the gate" : "waiting for your next prompt";
 
+/** A name that is not somebody you can talk to — the rule and why it has two
+ *  halves live in shared/fieldRules.ts, beside the watch's "forgotten". */
+export { isGone };
+
 /**
  * The field as text — Lantern's "what's going on" readout, in its order:
  * who needs you first, then every agent, working before idle. What the
  * terminal chat opens with, so the person asks the follow-up in their own
  * words against what is true now rather than what the pane text suggests.
  */
-/**
- * A NAME THAT IS NOT SOMEBODY YOU CAN TALK TO.
- *
- * No pane this machine can see, AND quiet long enough that "it is between
- * panes" stops being the likely story. Both halves are required: a live agent
- * on a second tmux server has no pane here either, and it will have said
- * something in the last two hours.
- *
- * Exported because it had exactly one reader and needed two: the readout the
- * seat gets by CLI collapsed these, and the VIEW went on drawing all seventeen
- * — thirteen of them dead for a day or two. One rule, both screens.
- */
-const COLD_MS = 2 * 60 * 60_000;
-export const isGone = (r: { paneId?: string; needsYou?: unknown; saidAt?: number }, now = Date.now()): boolean =>
-  !r.paneId && !r.needsYou && (r.saidAt ?? 0) < now - COLD_MS;
-
 export function fieldReadout(all: AgentBoard.BoardRow[], now = Date.now()): string {
   const rows = all.filter((r) => !r.role);
   /*

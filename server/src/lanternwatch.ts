@@ -35,7 +35,8 @@
  * than a pile.
  */
 import * as AgentBoard from "./agentboard.ts";
-import { isGone, boardNow } from "./lantern.ts";
+import { boardNow } from "./lantern.ts";
+import { FORGOTTEN_AFTER_MS, isForgotten } from "../../shared/fieldRules.ts";
 import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
 import { pushLantern } from "./alerts.ts";
@@ -54,10 +55,10 @@ export interface Finding {
   since: number;
 }
 
-/** How long a said-but-not-done agent may be quiet before it is "forgotten".
- *  An hour: shorter than that is a long tool call or a lunch, and the point
- *  of this kind is work that has sat since before you last looked. */
-export const FORGOTTEN_AFTER_MS = 60 * 60_000;
+/* The rules for "gone" and "forgotten" live in shared/fieldRules.ts, so the
+   dashboard's verdict strip counts stuck work by the same rule this watch
+   notifies about. */
+export { FORGOTTEN_AFTER_MS };
 
 const ago = (t: number, now: number) => {
   const m = Math.max(0, Math.round((now - t) / 60_000));
@@ -106,28 +107,9 @@ export function findings(p: {
       });
       continue;
     }
-    /* "Said what it was on, never said done, quiet for an hour." A row the
-       hooks made without a status post has no `doing`, and an idle pane that
-       never claimed a task is not forgotten work — it is a shell. */
-    /*
-     * A DEAD SESSION IS NOT FORGOTTEN WORK.
-     *
-     * The shape of a session that ended two days ago is exactly the shape this
-     * looks for: idle, with a `doing` from when it was alive, and quiet ever
-     * since. So it was reported as forgotten work every single look, for ever
-     * — and every one of those woke the seat. Measured from the other side, in
-     * the seat's own words: six wakes in a night, five of them about sessions
-     * dead for days, on the most expensive context on the machine.
-     *
-     * `isGone` is the rule the field and the view already share: no pane this
-     * machine can see, AND quiet long enough that "it is between panes" has
-     * stopped being the likely story. An agent quiet for an hour with no pane
-     * here is still worth asking about — it may be alive on another tmux
-     * server — which is why the two thresholds differ and why this is not just
-     * a longer silence.
-     */
-    if (isGone(r, now)) continue;
-    if (r.state === "idle" && r.doing && r.saidAt && now - r.saidAt >= FORGOTTEN_AFTER_MS) {
+    /* Claimed work gone quiet for an hour, not a dead session — the rule and
+       the measurement that shaped it are in shared/fieldRules.ts. */
+    if (isForgotten(r, now)) {
       out.push({
         kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt,
         line: `${r.name} said it was on "${r.doing}" and has been quiet for ${ago(r.saidAt, now)} — done, or stuck?`.slice(0, 200),
