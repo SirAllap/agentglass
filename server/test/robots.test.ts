@@ -1,0 +1,120 @@
+/*
+ * robots.txt, honoured on request. The parser is held to the standard's
+ * three rules — the longest user-agent match picks the group, the longest
+ * path pattern picks the rule, Allow wins a tie — and the gate on `open` is
+ * run against a robots.txt served by a stand-in, so what is tested is what
+ * an agent meets: a refusal that names the file, the path and the switch.
+ */
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { __setRobotsFetch, parseRobots, robotsAllows, robotsRefusal, ROBOTS_ENV } from "../src/robots.ts";
+import { askBrowser, noteBrowserReady, parseAsk, resetBrowserDrive, setBrowserSink, settleBrowser } from "../src/browserdrive.ts";
+
+const FILE = `
+# a site with opinions
+User-agent: *
+Disallow: /private/
+Allow: /private/shared/
+Disallow: /*.pdf$
+
+User-agent: agentglass
+User-agent: agentglass-browser
+Disallow: /admin
+Allow: /admin/help
+
+User-agent: other
+Disallow: /
+`;
+
+describe("reading a robots.txt", () => {
+  test("groups are runs of user-agent lines followed by their rules", () => {
+    const groups = parseRobots(FILE);
+    expect(groups.map((g) => g.agents)).toEqual([["*"], ["agentglass", "agentglass-browser"], ["other"]]);
+    expect(groups[1]!.rules).toEqual([{ allow: false, pattern: "/admin" }, { allow: true, pattern: "/admin/help" }]);
+  });
+
+  test("the group naming us wins over *, and inside it the longest pattern wins, Allow on a tie", () => {
+    expect(robotsAllows(FILE, "/admin")).toBe(false);
+    expect(robotsAllows(FILE, "/admin/users")).toBe(false);
+    expect(robotsAllows(FILE, "/admin/help")).toBe(true);
+    // Our group does not mention /private, and a group is the whole answer.
+    expect(robotsAllows(FILE, "/private/x")).toBe(true);
+    // A stranger gets the * group.
+    expect(robotsAllows(FILE, "/private/x", "somebot")).toBe(false);
+    expect(robotsAllows(FILE, "/private/shared/x", "somebot")).toBe(true);
+    expect(robotsAllows(FILE, "/docs/report.pdf", "somebot")).toBe(false);
+    expect(robotsAllows(FILE, "/docs/report.pdfx", "somebot")).toBe(true);
+    // A tie between Allow and Disallow of the same length goes to Allow.
+    expect(robotsAllows("User-agent: *\nDisallow: /a\nAllow: /a\n", "/a")).toBe(true);
+  });
+
+  test("no group for us and no *: everything is allowed; an empty or comment-only file too", () => {
+    expect(robotsAllows("User-agent: other\nDisallow: /\n", "/anything")).toBe(true);
+    expect(robotsAllows("", "/x")).toBe(true);
+    expect(robotsAllows("# nothing here\n", "/x")).toBe(true);
+    expect(robotsAllows("User-agent: *\nDisallow:\n", "/x"), "an empty Disallow allows").toBe(true);
+  });
+});
+
+describe("the gate on open", () => {
+  let served: Record<string, string> = {};
+  const fetched: string[] = [];
+  /** A robots.txt per host, and a 404 for the rest. Setting it again also
+   *  empties the cache, which is how each test starts from nothing read. */
+  const standIn = (async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    fetched.push(url);
+    const body = served[new URL(url).host];
+    return body === undefined ? new Response("nope", { status: 404 }) : new Response(body, { status: 200 });
+  }) as typeof fetch;
+  beforeAll(() => __setRobotsFetch(standIn));
+  afterAll(() => { __setRobotsFetch(null); delete process.env[ROBOTS_ENV]; });
+  afterEach(() => { delete process.env[ROBOTS_ENV]; resetBrowserDrive(); });
+
+  test("a disallowed path is refused by name, an allowed one and a missing file are not", async () => {
+    served = { "orbit.example": "User-agent: *\nDisallow: /internal/\n" };
+    __setRobotsFetch(standIn);
+    const why = await robotsRefusal("https://orbit.example/internal/report?x=1");
+    expect(why).not.toBeNull();
+    expect(why).toContain("https://orbit.example/robots.txt");
+    expect(why).toContain("/internal/report?x=1");
+    expect(why).toContain(ROBOTS_ENV);
+    expect(await robotsRefusal("https://orbit.example/public")).toBeNull();
+    expect(await robotsRefusal("https://nofile.example/internal/x"), "no robots.txt is no rule").toBeNull();
+    expect(await robotsRefusal("not a url")).toBeNull();
+  });
+
+  test("one fetch per origin: the file is cached", async () => {
+    fetched.length = 0;
+    await robotsRefusal("https://orbit.example/a");
+    await robotsRefusal("https://orbit.example/b");
+    await robotsRefusal("https://orbit.example/internal/c");
+    expect(fetched.filter((u) => u.startsWith("https://orbit.example/")).length).toBeLessThanOrEqual(1);
+  });
+
+  test("with the switch on, `open` is refused before it reaches the window; off, it goes through", async () => {
+    served = { "orbit.example": "User-agent: agentglass\nDisallow: /internal/\n" };
+    __setRobotsFetch(standIn);
+    const reached: string[] = [];
+    setBrowserSink({ send: (ask) => { reached.push(ask.op); settleBrowser(ask.id, { ok: true, value: { url: "https://orbit.example/internal/x", title: "t" } }); }, listeners: () => 1 });
+    noteBrowserReady("w-robots", true);
+    const parsed = parseAsk("open", { url: "https://orbit.example/internal/x" });
+    if (!("ask" in parsed)) throw new Error(parsed.error);
+
+    process.env[ROBOTS_ENV] = "1";
+    const refused = await askBrowser(parsed.ask);
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("robots.txt disallows /internal/x");
+    expect(reached).toEqual([]);
+
+    const allowed = parseAsk("open", { url: "https://orbit.example/public" });
+    if (!("ask" in allowed)) throw new Error(allowed.error);
+    expect((await askBrowser(allowed.ask)).ok).toBe(true);
+    expect(reached).toEqual(["open"]);
+
+    delete process.env[ROBOTS_ENV];
+    const off = parseAsk("open", { url: "https://orbit.example/internal/x" });
+    if (!("ask" in off)) throw new Error(off.error);
+    expect((await askBrowser(off.ask)).ok).toBe(true);
+    expect(reached).toEqual(["open", "open"]);
+  });
+});

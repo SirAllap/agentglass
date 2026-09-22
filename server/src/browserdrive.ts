@@ -37,6 +37,7 @@ import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSy
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { configPath, inScope, workspaceRoot } from "./config.ts";
+import { robotsOn, robotsRefusal } from "./robots.ts";
 import { diskAllows, diskEnabled } from "./disk.ts";
 
 /** What the panel can be asked to do. Each one is implemented there; nothing
@@ -3459,6 +3460,17 @@ function activeBlock(rows: readonly TabRow[]): TabRow | null {
 
 export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
   if (asker) return asker(ask);
+  /* robots.txt, when the operator asked for it — see robots.ts for why it is
+     off by default. Here rather than in `parseAsk` because it is a fetch, and
+     here rather than in the route because `do` steps arrive through this door
+     too. The refusal is audited like any other. */
+  if ((ask.op === "open" || ask.op === "newtab") && typeof ask.args.url === "string" && robotsOn()) {
+    const why = await robotsRefusal(ask.args.url);
+    if (why) {
+      recordAudit(ask.op, ask.args, false, why);
+      return { ok: false, error: why };
+    }
+  }
   /*
    * §11: two verbs the window cannot answer on its own.
    *
