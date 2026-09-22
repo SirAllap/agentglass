@@ -230,6 +230,11 @@ describe("what a second review found", () => {
     expect(kinds(changeRisks("/w/orbit/src/client.ts", added(`const k = "${SK}";`), 0))).toEqual(["secret"]);
     const SK_PROJ = "sk-proj-" + "a1B2c3D4e5F6-g7H8i9J0k1L2m3N4o5P6q7R8";
     expect(kinds(changeRisks("/w/orbit/src/client.ts", added(`const k = "${SK_PROJ}";`), 0))).toEqual(["secret"]);
+    // Providers that put their own words between `sk-` and the key.
+    for (const k of ["sk-svcacct-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "sk-or-v1-" + "9f8e7d6c5b4a3210".repeat(4)]) {
+      expect(kinds(changeRisks("/w/orbit/scripts/call.sh", added(`curl -H "Authorization: Bearer ${k}"`), 0))).toEqual(["secret"]);
+    }
+    expect(changeRisks("/w/orbit/src/app.css", added(`.sk-folding__cube_container_element_wrapper_x { }`), 0)).toEqual([]);
   });
 
 

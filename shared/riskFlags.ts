@@ -31,9 +31,11 @@ const SECRET_SHAPES: [RegExp, string][] = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key"],
   [/\b[sr]k_live_[A-Za-z0-9]{16,}/, "a Stripe live key"],
   [/\bAIza[0-9A-Za-z_-]{35}\b/, "a Google API key"],
-  // A hyphen only after a known prefix: unprefixed, `sk-` plus a long
-  // kebab-case run is a CSS class (`.sk-loading-spinner-…`), not a key.
-  [/\bsk-(?:(?:ant|proj)-[A-Za-z0-9_-]{32,}|[A-Za-z0-9_]{32,})/, "an API key"],
+  // The key itself is one long run of letters and digits; a provider may put up
+  // to two short words before it (`sk-svcacct-`, `sk-or-v1-`). A CSS class
+  // (`.sk-loading-spinner-…`, `.sk-folding__cube_…`) never has a 32-character
+  // segment, so it is not read as one.
+  [/\bsk-(?:(?:ant|proj)-[A-Za-z0-9_-]{32,}|(?:[A-Za-z0-9]{1,10}-){0,2}[A-Za-z0-9]{32,})/, "an API key"],
 ];
 
 /**
