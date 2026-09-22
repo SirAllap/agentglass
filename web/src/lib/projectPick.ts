@@ -38,6 +38,18 @@ export function nextScope(ticked: readonly string[], current: readonly string[])
   return [...ticked];
 }
 
+/**
+ * What a click on one project's row opens, or null to just close the picker.
+ *
+ * A project that is not open opens on its own, the one-click path. One that is
+ * already open changes nothing, even with others open beside it: narrowing to
+ * it reloaded the app, and the row is where a hand reaching for its tick box
+ * lands. Unticking the others is how to narrow.
+ */
+export function clickScope(root: string, workspaces: readonly string[]): string[] | null {
+  return workspaces.includes(root) ? null : [root];
+}
+
 /** "All projects" is open when the scope is exactly the added folders. */
 export function allOpen(workspaces: readonly string[], roots: readonly string[]): boolean {
   return roots.length > 0 && sameSet(workspaces.map(trim), roots.map(trim));

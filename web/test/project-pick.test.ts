@@ -9,7 +9,7 @@
  * harness, so they live in lib/projectPick.ts and are asserted here.
  */
 import { describe, expect, test } from "bun:test";
-import { allOpen, autoPick, firstRun, initialTicks, inOpenProjects, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
+import { allOpen, autoPick, clickScope, firstRun, initialTicks, inOpenProjects, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
 
 // Comment lines out, so a sentence about the gate cannot stand in for the gate.
 const APP = (await Bun.file(new URL("../src/App.tsx", import.meta.url)).text())
@@ -46,6 +46,22 @@ describe("what the Open button sends", () => {
   });
   test("nothing ticked sends nothing — unticking everything is not 'the whole machine'", () => {
     expect(nextScope([], [ORBIT])).toBeNull();
+  });
+});
+
+describe("what a click on one row opens", () => {
+  test("a project that is not open opens on its own", () => {
+    expect(clickScope(LANDER, [ORBIT])).toEqual([LANDER]);
+    expect(clickScope(ORBIT, [])).toEqual([ORBIT]);
+  });
+  test("one that is already open changes nothing, even with others open beside it", () => {
+    // With two open, a click on one of them reloaded the app on that one alone
+    // — easy to do by accident, reaching for its tick box.
+    expect(clickScope(ORBIT, [ORBIT, LANDER])).toBeNull();
+    expect(clickScope(ORBIT, [ORBIT])).toBeNull();
+  });
+  test("the row asks the rule", () => {
+    expect(PICKER).toContain("const choose = (root: string) => { const next = clickScope(root, workspaces); if (next) void openScope(next); else close(); };");
   });
 });
 

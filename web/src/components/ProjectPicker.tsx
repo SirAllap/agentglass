@@ -31,7 +31,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { FolderIcon, MonitorIcon, PlusIcon } from "../lib/glyphIcons.tsx";
 import { GitIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { allOpen, autoPick, firstRun, initialTicks, nextScope, rootsToAdd } from "../lib/projectPick.ts";
+import { allOpen, autoPick, clickScope, firstRun, initialTicks, nextScope, rootsToAdd } from "../lib/projectPick.ts";
 
 /** Set once the user has answered the startup question (either way), so an
  *  unscoped instance doesn't re-ask on every reload. */
@@ -288,7 +288,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
       location.reload();
     } catch (e) { failed(e); }
   };
-  const choose = (root: string) => { void openScope([root]); };
+  const choose = (root: string) => { const next = clickScope(root, workspaces); if (next) void openScope(next); else close(); };
 
   /** Add a folder to the list, and open its project straight away when it held
    *  exactly one and nothing is open yet — see autoPick. */
