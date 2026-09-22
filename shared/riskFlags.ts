@@ -153,7 +153,10 @@ export function changeRisks(
   const p = filePath.replace(/\\/g, "/");
   const base = p.slice(p.lastIndexOf("/") + 1);
   const root = opts.root?.replace(/\\/g, "/").replace(/\/+$/, "");
-  const rel = root && p.startsWith(root + "/") ? p.slice(root.length) : p;
+  // Always from a leading slash, so the folder tests below read a relative
+  // path (`.github/workflows/ci.yml`, no root) the same as an absolute one.
+  const below = root && p.startsWith(root + "/") ? p.slice(root.length) : p;
+  const rel = below.startsWith("/") ? below : "/" + below;
 
   // Secrets: a line that carries one beats a file whose name says it might.
   let secret: RiskFlag | null = null;

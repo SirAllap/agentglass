@@ -225,4 +225,10 @@ describe("what a second review found", () => {
     expect(changeRisks("/w/orbit/db/migrate/NOTES.txt", added("x"), 0)).toEqual([]);
     expect(kinds(changeRisks("/w/orbit/src/migrations/0003_add_thing.sql", added("x"), 0))).toEqual(["migration"]);
   });
+
+
+  test("a relative path with no root still finds the CI folders", () => {
+    expect(kinds(changeRisks(".github/workflows/ci.yml", added("x"), 0))).toEqual(["ci"]);
+    expect(kinds(changeRisks("db/migrations/0042_widen.py", added("x"), 0))).toEqual(["migration"]);
+  });
 });
