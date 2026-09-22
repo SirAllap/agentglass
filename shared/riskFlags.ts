@@ -104,8 +104,11 @@ const MANIFESTS = new Set([
  *  value with a word and does not match; the package's own `version`, the
  *  free-text fields that can start with a digit (`"description": "2 ways…"`,
  *  `"license": "0BSD"`) and the `engines` pins are excluded by name. No bare
- *  URL form: `homepage` and `repository` hold those too. */
-const PKG_DEP_LINE = /^\s*"(?!(?:version|description|license|name|author|node|npm|bun|yarn|pnpm)")[@\w./-]+"\s*:\s*"(?:[\^~<>=*]|\d|workspace:|npm:|file:|link:|git\+|git:|github:|latest")/;
+ *  URL form: `homepage` and `repository` hold those too. A denylist cannot
+ *  close the class — a `"port": "8080"` under `config` still reads as a
+ *  dependency; telling which object a line sits in needs the hunk's context,
+ *  which a rebuilt Edit does not have. */
+const PKG_DEP_LINE = /^\s*"(?!(?:version|description|displayName|keywords|title|license|name|author|node|npm|bun|yarn|pnpm|vscode)")[@\w./-]+"\s*:\s*"(?:[\^~<>=*]|\d|workspace:|npm:|file:|link:|git\+|git:|github:|latest")/;
 
 const AUTH_WORDS = new Set([
   "auth", "authn", "authz", "authentication", "authorization", "authorize", "oauth", "oauth2",
