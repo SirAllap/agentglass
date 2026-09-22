@@ -89,6 +89,18 @@ describe("adding and removing a folder", () => {
     expect(setRepoDir(code, false).roots).toEqual(["/elsewhere/not-here"]);
   });
 
+  test("two servers on one config file do not drop each other's folders", async () => {
+    // Two processes, each with its own cached copy of the file.
+    const a = await import("../src/config.ts?a" + Math.random().toString(36).slice(2));
+    const b = await import("../src/config.ts?b" + Math.random().toString(36).slice(2));
+    const work = join(dir, "work");
+    mkdirSync(work);
+    expect(a.configuredRepoDirs()).toEqual([]); // A has read the file, and holds it
+    b.setRepoDir(code, true);
+    a.setRepoDir(work, true);
+    expect(JSON.parse(readFileSync(cfg, "utf8")).repoDirs).toEqual([code, work]);
+  });
+
   test("with the folders set in the environment, the answer says the file is not what is read", () => {
     process.env.AGENTGLASS_REPO_DIRS = code;
     const r = setRepoDir(code, true);

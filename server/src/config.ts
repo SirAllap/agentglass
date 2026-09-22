@@ -702,11 +702,15 @@ export function setRepoDir(pathIn: unknown, added: boolean): { ok: boolean; root
       return fail(`no such folder: ${target}`);
     }
   }
-  const raw = config().repoDirs;
-  const written = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string" && !!d.trim()) : [];
-  const next = written.filter((d) => resolve(expand(d.trim())) !== target);
-  if (added) next.push(target);
-  const res = mergeConfig({ repoDirs: next.length ? next : undefined }, "the project folders");
+  // Edited against the file as it is now, not this process's cached copy: a
+  // second server on the same config may have added a folder since.
+  const res = mergeConfig((existing) => {
+    const raw = existing.repoDirs;
+    const written = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string" && !!d.trim()) : [];
+    const next = written.filter((d) => resolve(expand(d.trim())) !== target);
+    if (added) next.push(target);
+    return { repoDirs: next.length ? next : undefined };
+  }, "the project folders");
   if (!res.ok) return fail(res.error ?? "could not save that");
   // The environment wins over the file, so a folder added here is saved but not
   // what this process lists until that variable is gone. Say so rather than
@@ -828,7 +832,14 @@ export function writeTmuxSettings(fields: {
  * would have been a second copy of the same read-check-merge-write, with the
  * same three failure messages worded slightly differently.
  */
-function mergeConfig(fields: Record<string, unknown>, what: string): { ok: boolean; persisted: boolean; error?: string } {
+function mergeConfig(
+  /** The fields, or — for a setting that is edited rather than replaced, like
+   *  a list — a function of what the file says NOW, read just before writing.
+   *  This process's cached copy can be older than the file: another server on
+   *  the same config may have written it since. */
+  fields: Record<string, unknown> | ((existing: Record<string, unknown>) => Record<string, unknown>),
+  what: string,
+): { ok: boolean; persisted: boolean; error?: string } {
   const path = configPath();
   if (realConfigOffLimits(path)) {
     return { ok: false, persisted: false, error: "not persisted: tests write settings only under os.tmpdir()" };
@@ -848,7 +859,7 @@ function mergeConfig(fields: Record<string, unknown>, what: string): { ok: boole
   try {
     mkdirSync(dirname(path), { recursive: true });
     const merged: Record<string, unknown> = { ...existing };
-    for (const [k, v] of Object.entries(fields)) {
+    for (const [k, v] of Object.entries(typeof fields === "function" ? fields(existing) : fields)) {
       if (v === undefined) delete merged[k]; else merged[k] = v;
     }
     writeFileSync(path, JSON.stringify(merged, null, 2) + "\n");
