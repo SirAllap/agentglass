@@ -3881,7 +3881,7 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
         const add = fresh.get(id) ?? [];
         // Newer first, so the reason kept for a kind and file is the latest one.
         const flags = add.length
-          ? sessionRisks([...add, ...old.map((f) => ({ file_path: f.file, risks: [f] }))])
+          ? sessionRisks([...add, ...old.map((f) => ({ id: f.change, file_path: f.file, risks: [f] }))])
           : old;
         riskMemo.delete(id);
         riskMemo.set(id, { through: top, flags });

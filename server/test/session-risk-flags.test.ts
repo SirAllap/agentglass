@@ -157,6 +157,24 @@ describe("what a first review found", () => {
   });
 });
 
+describe("what a second review found", () => {
+  test("a flag read on an earlier poll still names its change after a newer flag lands", () => {
+    // The roll-up re-ranks what it remembered together with what just arrived,
+    // and the change id is what the diff uses to fetch a flagged edit older
+    // than its window. Re-ranked without it, the early key was a red chip with
+    // no file behind it again as soon as the session raised anything else.
+    db.insertEvent(write("risk-carry", "config/app.yml", `access_key: ${AWS}\n`, T0 + 1_000) as any);
+    for (let i = 0; i < 45; i++) db.insertEvent(edit("risk-carry", `src/f${i}.ts`, "a", "b", T0 + 2_000 + i) as any);
+    bySession();
+    db.insertEvent(edit("risk-carry", "src/authGuard.ts", "a", "b", T0 + 3_000) as any);
+    const row = bySession().get("risk-carry")!;
+    expect(row.risks?.every((r) => typeof r.change === "number")).toBe(true);
+    process.env.AGENTGLASS_ROOT = ROOT;
+    const d = db.getSession("risk-carry")!;
+    expect(d.changes.some((c) => c.file_path.endsWith("config/app.yml") && c.risks?.[0]?.kind === "secret")).toBe(true);
+  });
+});
+
 const src = await Bun.file(new URL("../src/db.ts", import.meta.url)).text();
 test("the roll-up's first read of a session goes through the session index, not the event-type one", () => {
   // Measured: without the hint SQLite picks idx_events_type and a new session's
