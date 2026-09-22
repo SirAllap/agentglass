@@ -391,9 +391,9 @@ def index_executables(root):
     env.update(GIT_TERMINAL_PROMPT="0", GIT_LFS_SKIP_SMUDGE="1")
     try:
         r = subprocess.run(
-            ["git", "-c", "core.fsmonitor=false", "--git-dir", os.path.join(root, ".git"), "--work-tree", root,
+            ["git", "-C", root, "-c", "core.fsmonitor=false", "--git-dir", os.path.join(root, ".git"), "--work-tree", root,
              "ls-files", "--stage", "-z"],
-            cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError:
         return found
     if r.returncode != 0:

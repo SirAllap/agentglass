@@ -283,6 +283,19 @@ describe("contentHash and the executable bit", () => {
     expect(hashOf(join(repo, "sub"), "win32")).toBe(hashOf(alone, "win32"));
   });
 
+  /*
+   * Windows looks for a bare command in the working directory before PATH,
+   * and the folder being hashed is a stranger's checkout: git is started
+   * from somewhere else and pointed at the folder with -C.
+   */
+  test("git is not started from inside the folder it reads", () => {
+    const from = SOURCES.indexOf("function indexExecutables(");
+    expect(from).toBeGreaterThan(-1);
+    const body = SOURCES.slice(from, SOURCES.indexOf("\n}\n", from));
+    expect(body).toContain('"-C", dir');
+    expect(body).not.toMatch(/cwd:\s*dir\b/);
+  });
+
   test("a link is still a link, whatever mode the entry reports", () => {
     const linux = checkout(0o755);
     symlinkSync("run.sh", join(linux, "go"));

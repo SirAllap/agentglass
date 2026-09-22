@@ -9,6 +9,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
 
 /**
@@ -264,7 +265,9 @@ export function contentHash(dir: string, files: string[], platform: NodeJS.Platf
  * subfolder of a checkout is judged by its own folder, as the copy the app
  * installs from carries no `.git`, and no `GIT_*` variable from this
  * process's environment picks another index. A `.git` git cannot read is
- * the same as none, and the disk decides.
+ * the same as none, and the disk decides. Git starts from the temp folder
+ * and is pointed here with -C: Windows looks for a bare command in the
+ * working directory first, and this folder is a stranger's checkout.
  */
 function indexExecutables(dir: string): Set<string> {
   const found = new Set<string>();
@@ -273,8 +276,8 @@ function indexExecutables(dir: string): Set<string> {
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_") && v !== undefined) env[k] = v;
   try {
     const p = Bun.spawnSync(
-      ["git", "-c", "core.fsmonitor=false", "--git-dir", join(dir, ".git"), "--work-tree", dir, "ls-files", "--stage", "-z"],
-      { cwd: dir, env, stdout: "pipe", stderr: "ignore", stdin: "ignore" },
+      ["git", "-C", dir, "-c", "core.fsmonitor=false", "--git-dir", join(dir, ".git"), "--work-tree", dir, "ls-files", "--stage", "-z"],
+      { cwd: tmpdir(), env, stdout: "pipe", stderr: "ignore", stdin: "ignore" },
     );
     if (p.exitCode !== 0) return found;
     for (const entry of p.stdout.toString("utf8").split("\0")) {
