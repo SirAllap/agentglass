@@ -170,9 +170,11 @@ const PERMISSION_FLAGS = new Set<string>([
      writable directories. Codex: the approval policy (`-a`) and the sandbox
      level. Gemini, and the Qwen Code CLI forked from it: the yolo shorthand
      and the approval mode, whose value is a separate word the pattern below
-     never sees. Kept with both spellings where the CLI accepts both. */
+     never sees. OpenCode: `--auto`, which approves whatever is not explicitly
+     denied — "dangerous" is in its help text, not in its name. Kept with both
+     spellings where the CLI accepts both. */
   "--permission-mode", "--settings", "--mcp-config", "--sandbox", "-a", "--ask-for-approval",
-  "-y", "--approval-mode",
+  "-y", "--approval-mode", "--auto",
   "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--add-dir",
 ]);
 

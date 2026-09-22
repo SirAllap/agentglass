@@ -115,6 +115,16 @@ describe("start refuses before it reaches the engine", () => {
     }
   });
 
+  test("OpenCode's --auto, whose help text says dangerous but whose name does not", async () => {
+    /* `opencode --auto` approves every permission that is not explicitly
+       denied. The word pattern reads the flag, not its help, so it passed with
+       chatBypass off and OpenCode started with its prompts answered. */
+    for (const args of [["--auto"], ["--auto=true"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+      expect(await startAgent({ ...base, yoloAllowed: false, name: "w", kind: "opencode", args })).toEqual({ ok: false, error: "arg-refused", flag: args[0]! });
+    }
+  });
+
   test("the bypass flag of EVERY kind launch.ts knows is in the gate, so a new vendor cannot arrive without it", () => {
     for (const [kind, s] of Object.entries(SPELLINGS)) {
       expect(refusedArg([s.bypass]), `${kind}'s ${s.bypass} passed`).toBe(s.bypass);
