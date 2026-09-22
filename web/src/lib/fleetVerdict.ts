@@ -40,16 +40,20 @@ export interface FleetVerdict {
   /** Every count, the zeros too: the KPI tiles under the strip draw these, so
    *  the two cannot show different numbers on one screen. */
   counts: { running: number; stuck: number; need: number };
+  /** The last read failed and these are the rows from the one before it. */
+  stale: boolean;
 }
 
 const waitWord = (w: NonNullable<LanternRow["needsYou"]>) =>
   w.kind === "permission" ? "needs your permission" : "held at the gate";
 
-/** Null until the board has been read, and whenever the last read failed: "not
- *  known" must not be drawn as "all nominal". The store answers [] when its
- *  first read fails, so the rows alone cannot tell the two apart. */
-export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed = false): FleetVerdict | null {
-  if (!all || failed) return null;
+/** Null until the board has been read: "not known" must not be drawn as "all
+ *  nominal". The store answers [] when its first read fails, so the rows alone
+ *  cannot tell the two apart — `everRead` does. A failed read after a good one
+ *  keeps the last answer, marked `stale`, so a server restart does not pull
+ *  the line out from under the panels. */
+export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed = false, everRead = false): FleetVerdict | null {
+  if (!all || (failed && !everRead)) return null;
   const rows = all.filter((r) => r.role !== "lantern");
   const need = rows.filter((r) => attention(r, now) === "blocked");
   const stuck = rows.filter((r) => { const a = attention(r, now); return a === "left" || a === "forgotten"; });
@@ -83,5 +87,6 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
   return {
     tone: need.length ? "critical" : stuck.length ? "warn" : "calm", clauses,
     counts: { running: running.length, stuck: stuck.length, need: need.length },
+    stale: failed,
   };
 }

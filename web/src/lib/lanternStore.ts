@@ -24,6 +24,9 @@ let watch: LanternWatch | null = null;
 let cacheTtlMin = 5;
 let readAt = 0;
 let error = false;
+/** Whether any read has ever succeeded: a failure after one is a stale
+ *  answer, a failure before one is no answer at all. */
+let known = false;
 const listeners = new Set<() => void>();
 /** How many subscribers want the fast clock — the view, when it is on screen. */
 let watching = 0;
@@ -46,6 +49,7 @@ export async function refreshLantern(): Promise<void> {
       if (r.ok && r.watch) watch = r.watch;
       if (r.ok && typeof r.cacheTtlMinutes === "number") cacheTtlMin = r.cacheTtlMinutes;
       error = !r.ok;
+      if (r.ok) known = true;
     } catch {
       // Keep the last answer on screen: a server that is restarting is not the
       // same as nobody being around, and blanking the list would say it was.
@@ -99,6 +103,7 @@ export function subscribeLantern(l: () => void, fast = false): () => void {
 
 export const lanternRows = (): LanternRow[] | null => rows;
 export const lanternFailed = (): boolean => error;
+export const lanternKnown = (): boolean => known;
 /** What the watch last found, from the same answer. */
 export const lanternWatch = (): LanternWatch | null => watch;
 /** The provider's prompt-cache window, from Settings — what the cards count down. */

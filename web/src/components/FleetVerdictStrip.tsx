@@ -11,7 +11,7 @@
  * the same store for the life of the app, so this adds no poll of its own.
  */
 import { useSyncExternalStore } from "react";
-import { subscribeLantern, lanternRows, lanternFailed } from "../lib/lanternStore.ts";
+import { subscribeLantern, lanternRows, lanternFailed, lanternKnown } from "../lib/lanternStore.ts";
 import { fleetVerdict, type FleetVerdict, type VerdictClause, type VerdictTone } from "../lib/fleetVerdict.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
 
@@ -20,7 +20,8 @@ const ink: Record<VerdictTone, string> = { calm: "var(--success)", warn: "var(--
 export function useFleetVerdict(): FleetVerdict | null {
   const rows = useSyncExternalStore(subscribeLantern, lanternRows, lanternRows);
   const failed = useSyncExternalStore(subscribeLantern, lanternFailed, lanternFailed);
-  return fleetVerdict(rows, Date.now(), failed);
+  const known = useSyncExternalStore(subscribeLantern, lanternKnown, lanternKnown);
+  return fleetVerdict(rows, Date.now(), failed, known);
 }
 
 export function FleetVerdictStrip({ verdict: v, onOpenLantern }: { verdict: FleetVerdict | null; onOpenLantern: () => void }) {
@@ -37,7 +38,9 @@ export function FleetVerdictStrip({ verdict: v, onOpenLantern }: { verdict: Flee
         background: loud ? `color-mix(in srgb, ${ink[v.tone]} ${v.tone === "critical" ? 14 : 12}%, transparent)` : "transparent",
         borderColor: loud ? `color-mix(in srgb, ${ink[v.tone]} 35%, transparent)` : "color-mix(in srgb, var(--text) 12%, transparent)",
         color: "var(--text2)",
+        opacity: v.stale ? 0.6 : 1,
       }}
+      title={v.stale ? "The board could not be read just now; this is its last answer" : undefined}
     >
       <span aria-hidden className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: ink[v.tone] }} />
       <span className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap">
@@ -57,6 +60,7 @@ export function FleetVerdictStrip({ verdict: v, onOpenLantern }: { verdict: Flee
           </span>
         ))}
       </span>
+      {v.stale && <span className="shrink-0 ml-auto text-[10px]" style={{ color: "var(--text4)" }}>stale</span>}
     </section>
   );
 }

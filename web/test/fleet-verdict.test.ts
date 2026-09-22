@@ -219,3 +219,29 @@ test("how long is floored — ninety minutes quiet is 1h, not 2h", () => {
   expect(fleetVerdict([waitedFor("orbit-api", 47 * 60 * min)], now)!.clauses[1].text).toBe("orbit-api waiting for your next prompt for 1d");
   expect(code(verdictSrc)).toContain("howLong(");
 });
+
+/*
+ * A FAILED POLL AFTER A GOOD ONE IS THE LAST ANSWER, NOT NO ANSWER.
+ *
+ * Any failed read dropped the strip, so every panel under it jumped up a
+ * line and back down on the next good poll — through every server restart.
+ * The store keeps the last good rows for exactly this; the strip now draws
+ * them marked stale. Only a board that was never read is still no line.
+ */
+test("a failed read after a good one keeps the last verdict, marked stale", () => {
+  const v = fleetVerdict([working("orbit-api"), blocked("orbit-web")], now, true, true)!;
+  expect(v).not.toBeNull();
+  expect(v.stale).toBe(true);
+  expect(v.counts).toEqual({ running: 1, stuck: 0, need: 1 });
+  expect(fleetVerdict([working("orbit-api")], now)!.stale).toBe(false);
+  // Never read: the store's [] is not an answer, stale or otherwise.
+  expect(fleetVerdict([], now, true, false)).toBeNull();
+});
+
+test("the strip says it is stale in words, and keeps its height", () => {
+  const body = stripSrc.slice(stripSrc.indexOf("export function FleetVerdictStrip("));
+  expect(body).toContain("v.stale");
+  expect(body).toMatch(/>\s*stale\s*</);
+  const hook = stripSrc.slice(stripSrc.indexOf("export function useFleetVerdict("), stripSrc.indexOf("export function FleetVerdictStrip("));
+  expect(hook).toContain("lanternKnown");
+});
