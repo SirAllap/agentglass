@@ -62,6 +62,19 @@ const REDIS_URL = /\brediss?:\/\/(?:[^@\s/'"]*@)?([^/\s?'":]*)(?::(\d+))?(?:\/(\
 const HOST_PORT = /(?:^|[^\w.])(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})\b/g;
 const PORT_ENV = /(?:^|\s)PORT=(\d{2,5})\b/g;
 
+/**
+ * Programs whose port flag names the server they connect to, not one they bind.
+ *
+ * Two checkouts on two databases of the one local Postgres is the normal setup,
+ * and `psql -p 5432` in both is not a collision any more than the port inside
+ * a database URL is.
+ */
+const CLIENTS = new Set([
+  "ssh", "scp", "sftp", "rsync",
+  "psql", "pg_dump", "pg_dumpall", "pg_restore", "pg_isready", "pgcli", "createdb", "dropdb",
+  "redis-cli", "redis-benchmark", "mysql", "mysqldump", "mysqladmin", "mariadb", "mongosh", "mongo",
+]);
+
 const tokensOf = (seg: string) => [...seg.matchAll(TOKEN)].map((m) => m[1] ?? m[2] ?? m[3]);
 const guessable = (p: string) => p.length > 0 && !/[$*?`{}]/.test(p);
 
@@ -164,8 +177,9 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
       const next = eq > 0 ? t.slice(eq + 1) : toks[i + 1];
 
       // A listening port by flag. `-p` is a port only as a whole number or a
-      // docker publish spec; ssh's and scp's `-p` point at another machine.
-      if ((flag === "--port" || flag === "--publish" || (flag === "-p" && !/^(?:ssh|scp|sftp|rsync)$/.test(prog))) && next) {
+      // docker publish spec. A client's port is the server it talks to — ssh's
+      // is another machine, psql's the one Postgres every checkout shares.
+      if ((flag === "--port" || flag === "--publish" || flag === "-p") && next && !CLIENTS.has(prog)) {
         const m = /^(?:(?:\d{1,3}\.){3}\d{1,3}:)?(\d{2,5})(?::\d+)?(?:\/\w+)?$/.exec(next);
         const composeProjectFlag = composeAt >= 0 && i > composeAt && flag === "-p" && !toks.slice(composeAt + 1, i).some((x) => !x.startsWith("-"));
         if (m && portOk(+m[1]) && !composeProjectFlag) add({ kind: "port", key: m[1] });

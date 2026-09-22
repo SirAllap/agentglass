@@ -50,6 +50,19 @@ describe("claimsFromCommand", () => {
     expect(keys("git log -p -3")).toEqual([]);
   });
 
+  test("a database client's port is the server it talks to, not one it binds", () => {
+    // Two checkouts each on their own database of the one local Postgres is
+    // the normal setup; the server's port in a client's flags is not shared
+    // by them any more than it is inside a URL.
+    expect(keys("psql -h localhost -p 5432 -d acme_a")).toEqual([]);
+    expect(keys("PGPASSWORD=x psql -p 5433 -d acme_b")).toEqual([]);
+    expect(keys("pg_dump --port=5432 acme_a")).toEqual([]);
+    expect(keys("redis-cli -p 6379 ping")).toEqual([]);
+    expect(keys("mysql -h 127.0.0.1 --port 3306 acme")).toEqual([]);
+    // The server itself still claims it.
+    expect(keys("redis-server --port 6390")).toEqual(["port 6390"]);
+  });
+
   test("postgres and redis URLs name the database, never the credentials", () => {
     const pg = col.claimsFromCommand("DATABASE_URL=postgres://app:hunter2@127.0.0.1:5432/acme_dev bunx prisma migrate dev", "/work/orbit");
     expect(pg.map((c) => `${c.kind} ${c.key}`)).toEqual(["postgres localhost:5432/acme_dev"]);
