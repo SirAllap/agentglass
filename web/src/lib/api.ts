@@ -1714,8 +1714,9 @@ const realApi = {
     post<{ ok: boolean; error?: string }>("/plugins/enable", { name }),
   pluginDisable: (name: string) =>
     post<{ ok: boolean }>("/plugins/disable", { name }),
-  pluginRemove: (name: string) =>
-    post<{ ok: boolean }>("/plugins/remove", { name }),
+  /** Its settings are kept for a reinstall unless `dropSettings`. */
+  pluginRemove: (name: string, dropSettings = false) =>
+    post<{ ok: boolean }>("/plugins/remove", { name, dropSettings }),
   /** What every enabled plugin has drawn in the panels it declared. */
   pluginPanels: (plugin?: string, panel?: string) => get<{ ok: boolean; panels: PluginPanel[] }>(
     plugin && panel ? `/plugins/panels?plugin=${encodeURIComponent(plugin)}&panel=${encodeURIComponent(panel)}` : "/plugins/panels"),
@@ -2261,7 +2262,7 @@ const demoApi: typeof realApi = {
   pluginInstall: (_source: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
   pluginEnable: (_name: string) => D({ ok: false, error: "not available in the demo" }),
   pluginDisable: (_name: string) => D({ ok: false }),
-  pluginRemove: (_name: string) => D({ ok: false }),
+  pluginRemove: (_name: string, _dropSettings?: boolean) => D({ ok: false }),
   pluginPanels: (_plugin?: string, _panel?: string) => D({ ok: true, panels: [] as PluginPanel[] }),
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   pluginSettings: (_name: string) => D({ ok: false, fields: [] as Field[], values: {}, error: "not available in the demo" }),

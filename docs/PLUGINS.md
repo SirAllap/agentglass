@@ -301,7 +301,8 @@ has no Reply, and offers Resolve, Dismiss, Reopen and Copy. The person's choice
 outranks the plugin's: a note they resolved stays resolved when the plugin sends
 it again, and the plugin hears the change as an event, so its next pass can take
 it into account. Removing a plugin removes its notes; disabling it keeps them
-readable.
+readable. Removing it keeps what was chosen on its settings page, so a reinstall
+comes back configured; the remove dialog (or `--drop-settings`) clears them too.
 
 A worked plugin that uses all four is
 [local-review](https://github.com/SirAllap/agentglass-local-review): it reviews
@@ -318,6 +319,7 @@ keeps the findings in the pull request view.
     agentglass-plugin list --json
     agentglass-plugin enable <name> --approve
     agentglass-plugin disable | update | remove <name>
+    agentglass-plugin remove <name> --drop-settings  # its settings go too
     agentglass-plugin settings <name>               # what it holds
     agentglass-plugin settings <name> style=security
 

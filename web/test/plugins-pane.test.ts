@@ -100,3 +100,16 @@ describe("a card that grows does not drag its neighbour with it", () => {
     expect(grid.slice(0, 200)).toContain("minmax(360px, 1fr)");
   });
 });
+
+describe("removing a plugin keeps what was typed into its settings", () => {
+  test("the remove confirmation offers to drop the settings, and does not by default", () => {
+    // Uninstalling to reinstall a fresh copy used to reset a settings page a
+    // person had filled in. The server now keeps them unless told otherwise;
+    // this is the one place a person tells it otherwise.
+    const remove = pane.slice(pane.indexOf("const remove = async () => {"));
+    expect(remove.slice(0, remove.indexOf("};"))).toContain("api.pluginRemove(plugin.name, dropSettings)");
+    expect(pane).toContain("const [dropSettings, setDropSettings] = useState(false);");
+    expect(pane).toMatch(/\{confirmRemove && hasSettings && \(/);
+    expect(pane).toContain("Also remove its settings");
+  });
+});

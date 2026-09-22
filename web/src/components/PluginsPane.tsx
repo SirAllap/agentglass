@@ -332,6 +332,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [dropSettings, setDropSettings] = useState(false);
 
   // The one fact the whole trust model rests on: is what is on disk right
   // now the thing a human last looked at, or has it started asking for
@@ -383,9 +384,10 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
 
   const remove = async () => {
     setBusy(true);
-    await api.pluginRemove(plugin.name);
+    await api.pluginRemove(plugin.name, dropSettings);
     setBusy(false);
     setConfirmRemove(false);
+    setDropSettings(false);
     onChanged();
   };
 
@@ -484,7 +486,15 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
 
       {updateError && <Alert tone="error">{updateError}</Alert>}
 
-      <div className="mt-auto pt-1.5 flex items-center justify-between">
+      {/* Kept by default: what was typed into the settings page belongs to
+          the person, and a reinstall picks it back up. */}
+      {confirmRemove && hasSettings && (
+        <label className="mt-auto pt-1.5 flex items-center gap-2 self-end text-[11px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
+          <input type="checkbox" checked={dropSettings} onChange={(e) => setDropSettings(e.target.checked)} disabled={busy} />
+          <span>Also remove its settings</span>
+        </label>
+      )}
+      <div className={`${confirmRemove && hasSettings ? "" : "mt-auto "}pt-1.5 flex items-center justify-between`}>
         <span className="text-[10.5px] t-dim">installed {fmtAgo(plugin.installedAt)}</span>
         {confirmRemove ? (
           <span className="flex items-center gap-1.5">
@@ -493,7 +503,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
               style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
               {busy ? "Removing…" : "Remove"}
             </button>
-            <button onClick={() => setConfirmRemove(false)} disabled={busy}
+            <button onClick={() => { setConfirmRemove(false); setDropSettings(false); }} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
               Keep it

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   validateManifest, validPluginName, manifestHash, installPlugin, updatePlugin, enablePlugin, disablePlugin,
-  removePlugin, listPlugins, masterEnabled, setMaster, __resetPlugins,
+  removePlugin, listPlugins, masterEnabled, setMaster, __resetPlugins, pluginSettings, setPluginSettings,
   MANIFEST_NAME, pluginsConfigDir, pluginsPath, appVersion, versionAtLeast,
 } from "../src/plugins.ts";
 import { callerFor, pluginTokenCount } from "../src/auth.ts";
@@ -325,6 +325,60 @@ describe("remove", () => {
     expect(ok).toBe(true);
     expect(existsSync(installDir)).toBe(false);
     expect(listPlugins()).toHaveLength(0);
+  });
+
+  /*
+   * What a person typed into a plugin's settings page — a review prompt they
+   * spent an afternoon on — is theirs, not the plugin's. Uninstalling to
+   * reinstall a fresh copy used to take it along with the folder, and the
+   * reinstall came back with the defaults.
+   */
+  test("uninstall keeps the plugin's settings for a reinstall unless asked to drop them", async () => {
+    const withSettings = { ...okManifest, contributes: { settings: [{ key: "prompt", type: "text", label: "Review prompt" }] } };
+    const src = fixture(withSettings);
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(setPluginSettings("watcher", { prompt: "flag anything touching orbit/billing" }).ok).toBe(true);
+
+    expect(await removePlugin("watcher")).toBe(true);
+    expect(listPlugins()).toHaveLength(0);
+    expect(readFileSync(pluginsPath(), "utf8")).toContain("orbit/billing");
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.prompt, "a reinstall came back with the defaults").toBe("flag anything touching orbit/billing");
+
+    expect(await removePlugin("watcher", { dropSettings: true })).toBe(true);
+    expect(readFileSync(pluginsPath(), "utf8"), "asked to drop them, and they stayed on disk").not.toContain("orbit/billing");
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.prompt ?? "").toBe("");
+  });
+
+  test("kept settings go back only to a plugin from the same place, not to any plugin with that name", async () => {
+    // A name is not an identity: a different plugin installed under it from
+    // somewhere else would otherwise read what was typed for the first one.
+    const withToken = { ...okManifest, contributes: { settings: [{ key: "token", type: "text", label: "Token" }] } };
+    const src = fixture(withToken);
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(setPluginSettings("watcher", { token: "orbit-secret-1042" }).ok).toBe(true);
+    expect(await removePlugin("watcher")).toBe(true);
+
+    expect((await installPlugin(fixture(withToken))).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.token ?? "", "another source inherited the kept settings").toBe("");
+
+    // Nor does the stranger throw them away: back to the original source, and
+    // they are still there.
+    expect(await removePlugin("watcher")).toBe(true);
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.token, "a plugin from elsewhere wiped the kept settings").toBe("orbit-secret-1042");
+  });
+
+  test("kept settings can still be dropped after the plugin is gone", async () => {
+    const withSettings = { ...okManifest, contributes: { settings: [{ key: "prompt", type: "text", label: "Review prompt" }] } };
+    expect((await installPlugin(fixture(withSettings))).ok).toBe(true);
+    expect(setPluginSettings("watcher", { prompt: "orbit-only" }).ok).toBe(true);
+    expect(await removePlugin("watcher")).toBe(true);
+    expect(await removePlugin("watcher"), "nothing installed and nothing asked: still not found").toBe(false);
+    expect(await removePlugin("watcher", { dropSettings: true })).toBe(true);
+    expect(readFileSync(pluginsPath(), "utf8")).not.toContain("orbit-only");
+    expect(await removePlugin("watcher", { dropSettings: true }), "nothing left to drop").toBe(false);
   });
 
   // `plugins.json` is a file on disk; a record whose `installDir` points

@@ -4695,10 +4695,10 @@ const server = Bun.serve<WsData>({
 
     if (pathname === "/plugins/remove" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { name?: unknown };
-      try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      let b: { name?: unknown; dropSettings?: unknown };
+      try { b = (await req.json()) as { name?: unknown; dropSettings?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
-      const ok = await removePlugin(b.name);
+      const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
       return json({ ok }, ok ? 200 : 404);
     }
 
