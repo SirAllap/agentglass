@@ -1,0 +1,5 @@
+# The same scratch HOME and the same guard as the server suite: these tests
+# import server modules and boot a server, and see server/test/isolation.ts for
+# what a run that reaches the person's own agentglass directories has cost.
+[test]
+preload = ["../server/test/isolation.ts"]

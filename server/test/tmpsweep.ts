@@ -44,44 +44,9 @@ const fs = createRequire(import.meta.url)("node:fs") as Fs;
 const TMP = resolve(tmpdir());
 
 /*
- * THE SUITE MUST NOT WRITE THE SETTINGS OF WHOEVER RUNS IT.
- *
- * `understudy.json` lives under XDG_CONFIG_HOME, and `AGENTGLASS_DB` does not
- * move it — so every `setOpenProject`, `setEnabled` or `setMode` in a test went
- * straight into the real file. Eight test files did exactly that.
- *
- * Measured: running the suite emptied the open-project setting on this
- * machine, which is the fence the work loop is bounded by. Three unrelated
- * ingest tests then failed, because they partition their material against
- * whatever name was left behind — passing alone and failing together, the
- * shape that costs an hour to find.
- *
- * Here rather than in eight `beforeAll`s, for the same reason the sweep below
- * is here: eight places is eight chances to forget, and the ninth file
- * somebody adds tomorrow gets it for free. `storePath()` reads the variable on
- * every call, so setting it is enough — nothing is imported, and in particular
- * the database is untouched, which a preload that imported the module would
- * open before any test could point it somewhere safe.
+ * The settings, the database and the rest of a person's agentglass state are
+ * kept out of reach by isolation.ts, the preload listed before this one.
  */
-/*
- * AND IT REDIRECTS EVEN WHEN THE VARIABLE IS ALREADY SET.
- *
- * `if (!XDG_CONFIG_HOME)` protected only a machine that had not set it. On one
- * that points it at the real `~/.config`, every test wrote the owner's own
- * settings — which is the case this guard exists for.
- *
- * Measured on this machine, this morning, with the deputy stuck: the fence read
- * `agentglass`, one test file ran, and the fence read `""`. The suite had been
- * emptying it a dozen times a night — the whole "it has nowhere to work" was
- * the tests, not the deputy.
- *
- * A test process has no business writing anybody's config, so it never gets to
- * see the real one: pointed at a fresh directory unless it is ALREADY inside
- * the machine's temp directory, which is this preload's own doing on a re-entry.
- */
-if (!process.env.XDG_CONFIG_HOME || !resolve(process.env.XDG_CONFIG_HOME).startsWith(TMP + "/")) {
-  process.env.XDG_CONFIG_HOME = fs.mkdtempSync(resolve(TMP, "agx-test-config-"));
-}
 /** Every scratch directory this process was handed, newest last. */
 const made: string[] = [];
 

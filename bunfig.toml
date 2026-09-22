@@ -10,6 +10,7 @@
 # the owner's own setting a dozen times a night, and the deputy declining every
 # task with "it has nowhere to work" was that, not the deputy.
 #
-# See server/test/tmpsweep.ts for what the preload does and why it lives there.
+# See server/test/isolation.ts and server/test/tmpsweep.ts for what the two
+# preloads do and why they live there; isolation.ts has to come first.
 [test]
-preload = ["./server/test/tmpsweep.ts"]
+preload = ["./server/test/isolation.ts", "./server/test/tmpsweep.ts"]
