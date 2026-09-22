@@ -3245,15 +3245,25 @@ export function wasPromptOf(sessionId: string, text: string): boolean {
 /**
  * The same question of every session, for when the pane's conversation is not
  * the one the prompt was given to: `/clear` starts a new session in the same
- * pane, and the argument on the command line was submitted to the old one. A
- * scan of the UserPromptSubmit rows rather than an indexed lookup, so the
- * caller remembers the answer per process instead of asking every sweep.
+ * pane, and the argument on the command line was submitted to the old one.
+ *
+ * SINCE A MOMENT, and the caller gives the moment the process was born. Asked
+ * of everything ever, the question matched a flag's VALUE — `--model opus`,
+ * with "opus" typed as a prompt in some session weeks ago; prompts of one
+ * word are in this table — and the value was dropped from the flags, so the
+ * resume line read `claude --model --resume <id>`: the flag eats the id, and
+ * the id becomes a positional prompt. A prompt on this process's command line
+ * was submitted after this process started, so nothing older can be it. Zero
+ * asks of everything, for a machine that cannot say when a process started.
+ *
+ * A range on the timestamp index rather than a scan, so the caller can ask
+ * every sweep until the answer is yes.
  */
-const promptSeenAnywhere = db.query<{ one: number }, [string]>(
-  `SELECT 1 AS one FROM events WHERE hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
-export function wasPromptAnywhere(text: string): boolean {
+const promptSeenSince = db.query<{ one: number }, [number, string]>(
+  `SELECT 1 AS one FROM events WHERE timestamp >= ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+export function wasPromptAnywhere(text: string, sinceMs = 0): boolean {
   if (!text) return false;
-  try { return promptSeenAnywhere.get(text) !== null; } catch { return false; }
+  try { return promptSeenSince.get(Math.max(0, sinceMs), text) !== null; } catch { return false; }
 }
 
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {

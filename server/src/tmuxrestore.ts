@@ -571,10 +571,13 @@ const bornYet = (argv: readonly string[]): boolean =>
  * than the retention window reappears after an app restart.
  */
 const promptVerdicts = new Set<string>();
-function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[]): boolean {
+function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[], bornAt: number): boolean {
   const key = `${pid}\0${text}`;
   if (promptVerdicts.has(key)) return true;
-  const yes = sessions.some((id) => !!id && wasPromptOf(id, text)) || wasPromptAnywhere(text);
+  /* Of every session only since this process was born: a prompt on its
+     command line was submitted after that, and a flag's value that somebody
+     typed as a prompt in some other session last month is not it. */
+  const yes = sessions.some((id) => !!id && wasPromptOf(id, text)) || wasPromptAnywhere(text, bornAt ? bornAt - NOTE_SLACK_MS : 0);
   if (!yes) return false;
   if (promptVerdicts.size > 2000) promptVerdicts.clear();
   promptVerdicts.add(key);
@@ -788,7 +791,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
           const noteFits = !!note && noteIsThisAgents(note, under);
           const resumed = resumeIdIn(under.argv);
           const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
-          const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, note?.session_id]));
+          const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, note?.session_id], under.startedAt));
           /* A conversation, or nothing: the born-with line is blanked so a
              pane whose id could not be found comes back as a shell rather
              than as its command line, prompt and all. */

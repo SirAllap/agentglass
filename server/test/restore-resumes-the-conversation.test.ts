@@ -157,6 +157,24 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(later!.agentArgs).toContain("opus");
   }, 20_000);
 
+  test("a flag's value that somebody once typed as a prompt, in another session, before this agent existed, is still a value", async () => {
+    /*
+     * The prompt question is asked of every argument that is not a flag,
+     * the value after `--model` included. Asked of every session ever, a
+     * prompt as short as "opus" — prompts of one word are in the table —
+     * dropped the value, and the resume line became `claude --model --resume
+     * <id>`: the flag eats the id, and the id becomes a positional prompt.
+     */
+    const STRAY = "8e9f0a1b-2c3d-4e5f-9a6b-7c8d9e0f1a2b";
+    db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
+      ["orbit", STRAY, "UserPromptSubmit", JSON.stringify({ prompt: "opus" }), Date.now() - 3_600_000]);
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "value", "-c", CWD, ...fakeClaude("--model", "opus")]);
+    const got = await photographed("value");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    const args = got!.agentArgs ?? [];
+    expect(args[args.indexOf("--model") + 1], "the value after --model").toBe("opus");
+  }, 20_000);
+
   test("a pane that was itself restored carries its id on its own line", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "second", "-c", CWD, ...fakeClaude("--dangerously-skip-permissions", "--resume", OTHER)]);
     const got = await photographed("second");
