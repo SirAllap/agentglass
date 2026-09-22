@@ -1297,9 +1297,24 @@ def main():
     p.add_argument("value")
     p = sub.add_parser("reload", help="reload, ignoring the cache by default")
     p.add_argument("--keep-cache", dest="keepCache", action="store_true")
-    p = sub.add_parser("cookies", help="read the page's cookies, or set one")
+    p = sub.add_parser(
+        "cookies", help="read the page's cookies, or set one",
+        description="A plain --set NAME VALUE is written by the page itself, as document.cookie. "
+                    "Any attribute below, or a __Host-/__Secure- name, goes through the browser's "
+                    "own jar instead — the only way to set an HttpOnly cookie — and the answer "
+                    "names what landed without printing the value. A __Host- name is Secure, "
+                    "host-only and at / without being told.")
     p.add_argument("--set", nargs=2, metavar=("NAME", "VALUE"), default=None)
     p.add_argument("--path", default="/")
+    p.add_argument("--domain", default=None,
+                   help="make it a domain cookie (sent to every subdomain); omitted = host-only")
+    p.add_argument("--secure", action="store_true", default=None)
+    p.add_argument("--http-only", dest="httpOnly", action="store_true", default=None)
+    p.add_argument("--same-site", dest="sameSite", choices=["Strict", "Lax", "None"], default=None)
+    p.add_argument("--expires", type=float, default=None,
+                   help="seconds since the epoch; omitted = a session cookie")
+    p.add_argument("--partition-key", dest="partitionKey", default=None, metavar="TOP_LEVEL_SITE",
+                   help="a partitioned (CHIPS) cookie, e.g. https://example.com")
     sub.add_parser("frames", help="iframes, service workers and shadow roots on this page")
 
     sub.add_parser("tabs", help="what tabs are open, with the active one marked")
@@ -2048,7 +2063,14 @@ def main():
     elif a.cmd == "reload":
         body = {"bypassCache": not a.keepCache}
     elif a.cmd == "cookies":
-        body = {"set": {"name": a.set[0], "value": a.set[1], "path": a.path}} if a.set else {}
+        if a.set:
+            set_ = {"name": a.set[0], "value": a.set[1], "path": a.path}
+            for k in ("domain", "secure", "httpOnly", "sameSite", "expires", "partitionKey"):
+                if getattr(a, k) is not None:
+                    set_[k] = getattr(a, k)
+            body = {"set": set_}
+        else:
+            body = {}
     elif a.cmd == "frames":
         body = {}
     elif a.cmd == "resize":

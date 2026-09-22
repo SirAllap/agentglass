@@ -1,6 +1,7 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { COLLECTOR, observeScript } from "./browserObserve.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
+import { cookieSetParams, needsProtocol } from "./cookieSet.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -2544,6 +2545,29 @@ async function runVerb(
            the page itself sees, which is the thing an agent is reasoning
            about. HttpOnly cookies are invisible here and that is honest —
            they are invisible to the page too. */
+        const wanted = ask.args.set as Record<string, unknown> | undefined;
+        if (wanted && needsProtocol(wanted)) {
+          /* Except a write the page cannot make. document.cookie has no way to
+             say HttpOnly, and `__Host-x=1; path=/` without `Secure` is dropped
+             by Chromium without a word — measured. Those go through the
+             session's own jar, and the answer names what landed rather than
+             echoing the jar back, which would print the value. */
+          const built = cookieSetParams(wanted, el.getURL());
+          if ("error" in built) return { ok: false, error: built.error };
+          const r = await cdp("Network.setCookie", built.params);
+          const accepted = r.ok && (r.result as { success?: boolean } | undefined)?.success !== false;
+          if (!accepted) return { ok: false, error: `cookie "${built.params.name}" was refused: ${r.error || "the browser did not accept it"}` };
+          const back = await cdp("Network.getCookies", { urls: [built.params.url] });
+          const held = ((back.result as { cookies?: Array<{ name: string }> } | undefined)?.cookies ?? [])
+            .some((c) => c.name === built.params.name);
+          // A partitioned cookie is only visible from inside its partition,
+          // which a plain getCookies is not; its `success` is the whole answer.
+          if (!held && !built.params.partitionKey) {
+            return { ok: false, error: `cookie "${built.params.name}" was not set — it is not in the jar for ${built.params.url} after the write` };
+          }
+          const { value: _value, ...landed } = built.params;
+          return { ok: true, value: { set: landed } };
+        }
         if (ask.args.set) {
           const c = ask.args.set as { name: string; value: string; path?: string; domain?: string };
           await el.executeJavaScript(

@@ -2409,7 +2409,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       if (b.set !== undefined) {
         const c = b.set as Record<string, unknown>;
         if (!c || typeof c !== "object" || typeof c.name !== "string" || typeof c.value !== "string") {
-          return { error: "set must be { name, value, domain?, path? }" };
+          return { error: "set must be { name, value, domain?, path?, secure?, httpOnly?, sameSite?, expires?, partitionKey? }" };
         }
         args.set = c;
       }

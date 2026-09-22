@@ -1069,7 +1069,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "set": {"type": "object", "description": "{ name, value, path?, domain? }"},
+                "set": {"type": "object", "description": "{ name, value, path?, domain?, secure?, httpOnly?, "
+                        "sameSite? (Strict|Lax|None), expires? (epoch seconds), partitionKey? (top-level site) }. "
+                        "Any attribute, or a __Host-/__Secure- name, is written through the browser's jar (so "
+                        "HttpOnly works) and the answer omits the value."},
             },
         },
     },
