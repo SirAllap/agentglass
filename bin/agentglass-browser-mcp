@@ -2042,7 +2042,7 @@ def handle_message(msg):
 
 # ── Streamable-HTTP transport ──────────────────────────────────────────────
 #
-# `--http HOST:PORT` (or AGENTGLASS_MCP_HTTP=HOST:PORT) serves the SAME server
+# `--http [HOST:]PORT` (or AGENTGLASS_MCP_HTTP) serves the SAME server
 # over MCP's Streamable-HTTP transport: one JSON-RPC message per POST, answered
 # as a single JSON object, or as a one-frame SSE stream when the client asks
 # for events. The tools and the calls are byte-for-byte the stdio ones; only
@@ -2193,7 +2193,10 @@ class _McpHttp(BaseHTTPRequestHandler):
         have = want[7:] if want[:7].lower() == "bearer " else ""
         if not have:
             return self._reject(401, "missing bearer token")
-        if not hmac.compare_digest(have, self.server.mcp_token):
+        # Bytes, not str: compare_digest raises on a str outside ASCII, and a
+        # header arrives decoded as latin-1, so one such byte would kill the
+        # handler instead of being a wrong token.
+        if not hmac.compare_digest(have.encode("utf-8", "surrogateescape"), self.server.mcp_token.encode()):
             return self._reject(401, "wrong bearer token")
         if self.headers.get("Origin"):
             return self._reject(403, "a web page is not a caller of this endpoint")
@@ -2280,7 +2283,7 @@ def _run_http(bind, expose=False):
     if token and len(token) < 32:
         print("AGENTGLASS_MCP_TOKEN must be at least 32 chars to serve MCP over HTTP", file=sys.stderr)
         return 2
-    if token and hmac.compare_digest(token, os.environ.get("AGENTGLASS_TOKEN", "").strip()):
+    if token and token == os.environ.get("AGENTGLASS_TOKEN", "").strip():
         print("AGENTGLASS_MCP_TOKEN must not be AGENTGLASS_TOKEN: the endpoint's token opens the "
               "browser, and only the browser — the app's token stays with the app", file=sys.stderr)
         return 2

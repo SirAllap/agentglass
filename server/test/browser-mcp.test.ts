@@ -815,6 +815,20 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     expect(app.status, "the app token opens the app, not this endpoint").toBe(401);
   });
 
+  test("a bearer with bytes outside ASCII is a 401, not a dropped connection", async () => {
+    // hmac.compare_digest raises on a str that is not ASCII, and the header
+    // arrives decoded as latin-1, so one such byte used to kill the handler.
+    const { request } = await import("node:http");
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request({
+        hostname: "127.0.0.1", port: httpPort, path: "/", method: "POST",
+        headers: { authorization: Buffer.from("Bearer caf\xe9", "latin1").toString("latin1"), "content-type": "application/json" },
+      }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); }).on("error", reject);
+      req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }));
+    });
+    expect(status).toBe(401);
+  });
+
   test("with no AGENTGLASS_MCP_TOKEN the endpoint mints one, says it on stderr, and answers to nothing else", async () => {
     /* Loopback used to be auth-free "the way the server is". It is not any
        more: a page on any site can reach 127.0.0.1 with a request the browser
