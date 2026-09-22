@@ -176,6 +176,9 @@ const PERMISSION_FLAGS = new Set<string>([
   "--permission-mode", "--settings", "--mcp-config", "--sandbox", "-a", "--ask-for-approval",
   "-y", "--approval-mode", "--auto",
   "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--add-dir",
+  /* Gemini's and Qwen Code's own name for the option `--add-dir` is only an
+     alias of. */
+  "--include-directories",
 ]);
 
 /** The words a permission flag is made of, whatever the flag is called. */

@@ -115,6 +115,15 @@ describe("start refuses before it reaches the engine", () => {
     }
   });
 
+  test("the Qwen Code and Gemini name for extra directories, not only its alias", () => {
+    /* `--add-dir` is refused, and in both CLIs it is only the alias of
+       `--include-directories`, which reaches the same option under its own
+       name and passed. */
+    for (const args of [["--include-directories", "/"], ["--include-directories=/"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+    }
+  });
+
   test("OpenCode's --auto, whose help text says dangerous but whose name does not", async () => {
     /* `opencode --auto` approves every permission that is not explicitly
        denied. The word pattern reads the flag, not its help, so it passed with
