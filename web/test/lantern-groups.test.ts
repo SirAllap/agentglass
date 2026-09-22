@@ -19,12 +19,12 @@ describe("the field, grouped", () => {
     const g = groupLantern([
       row("orbit-1042", { state: "working" }),
       row("orbit-2001", { state: "idle" }),
-      row("code-dir-cleanup", { state: "idle", gone: true }),
-      row("slack-bar-plugin", { state: "idle", gone: true }),
+      row("orbit-3001-cleanup", { state: "idle", gone: true }),
+      row("orbit-3002-plugin", { state: "idle", gone: true }),
     ]);
     expect(g.working.map((r) => r.name)).toEqual(["orbit-1042"]);
     expect(g.idle.map((r) => r.name)).toEqual(["orbit-2001"]);
-    expect(g.gone.map((r) => r.name)).toEqual(["code-dir-cleanup", "slack-bar-plugin"]);
+    expect(g.gone.map((r) => r.name)).toEqual(["orbit-3001-cleanup", "orbit-3002-plugin"]);
   });
 
   test("a wait outranks everything, gone included", () => {

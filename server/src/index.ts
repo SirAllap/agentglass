@@ -3008,11 +3008,12 @@ const server = Bun.serve<WsData>({
      * A PERSON CLEARING A LINE, whoever posted it.
      *
      * `done` above is the agent's own way out and is keyed on its session,
-     * because that route is tokenless on loopback. This one is not tokenless:
-     * it is authenticated like every other route, so the caller is the person
-     * at the view (or a process they gave the token to), and a line whose
-     * session ended without saying done — the case the board filled up with —
-     * can be taken off by the one party the field belongs to.
+     * because that route is tokenless on loopback whatever the install. This
+     * one is authenticated like every other route: behind the token where one
+     * is set, and on a loopback-only install without one, open to local
+     * callers like the rest. A line whose session ended without saying done —
+     * the case the board filled up with — can then be taken off by the person
+     * at the view.
      */
     if (pathname === "/agents/forget" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

@@ -297,8 +297,9 @@ hold for you, and nothing else: `POST /understudy/work/unask` takes one task
 back out of the Clone's queue; `POST /agents/status` with `done: true` drops a
 session's own "what it is working on" line, and only when the same session that
 wrote it asks; `POST /agents/forget` drops such a line by name whoever wrote it
-— the Lantern's clear button, behind the token like every other route, for a
-session that ended without saying so; and `POST /bench/note` with empty text
+— the Lantern's clear button, authenticated like every other route (so, on a
+loopback-only install with no token, open to local callers like the rest), for
+a session that ended without saying so; and `POST /bench/note` with empty text
 deletes that checkout's bench note, a file of its own under the data directory.
 None of the four touches an event, a session or a decision.
 
