@@ -25,7 +25,7 @@ import { readFileSync, readlinkSync, writeFileSync, mkdirSync, existsSync, rmSyn
 import { failed } from "./refused.ts";
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
-import { tmux, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.ts";
+import { tmux, validSessionName, tmuxSocket, setCaptureHook, KEPT_MARK } from "./tmuxpane.ts";
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
@@ -913,10 +913,23 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
          * the pane says what is there, which CLI it is, and with what flags.
          */
         const pid = p.pid ?? 0;
+        /*
+         * THE WRAPPER THAT KEEPS A PANE AFTER ITS CLI EXITS is a shell by
+         * name, and not one a person types in: `sh -c '<cli>; printf …;
+         * exec sleep 86400'` (`agentglass-agent start --keep`, a layout tab
+         * opened with a command). Its `sh` is the pane's foreground for as
+         * long as the CLI runs, so the rule below took it for a shell with
+         * nothing running and photographed the whole line — a one-shot's
+         * prompt came back at the next boot and ran again, and a Claude in
+         * one lost its conversation. The walk goes through it to the CLI,
+         * which is its only child; once the CLI has exited there is only the
+         * `sleep`, and the pane is a shell. The line itself is never kept.
+         */
+        const wrapped = startCommand.includes(KEPT_MARK);
         /* No walk under a pane whose foreground is its shell: nothing is
            running in it, and a job a person backgrounded is not its agent. */
-        const found = pid && !SHELLS.has(p.command) ? agentUnder(pid) : null;
-        const under = found && isForeground(found, p.command) ? found : null;
+        const found = pid && (wrapped || !SHELLS.has(p.command)) ? agentUnder(pid) : null;
+        const under = found && (wrapped || isForeground(found, p.command)) ? found : null;
         if (under && under.name === claudeName()) {
           /*
            * The id: the hook's note first, because it is the newer fact — a
@@ -943,8 +956,8 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
            nothing to run — which tmux gives a restored pane anyway. */
         const root = pid ? argvOf(pid).filter((a) => !/[\n\r\0]/.test(a)).slice(0, 64) : [];
         const startArgv = under ? withoutPromptFlags(under.name, under.argv)
-          : bornYet(root) && !isBareShell(root) && !isKeepAlive(root) ? root : [];
-        panes.push({ ...p, startCommand, ...(startArgv.length ? { startArgv } : {}) });
+          : !wrapped && bornYet(root) && !isBareShell(root) && !isKeepAlive(root) ? root : [];
+        panes.push({ ...p, startCommand: wrapped ? "" : startCommand, ...(startArgv.length ? { startArgv } : {}) });
       }
       if (panes.length) out.push({ ...w, panes });
     }
@@ -1103,7 +1116,9 @@ export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bi
     return [bin, ...(pane.agentArgs ?? []), "--resume", id];
   }
   if (pane.startArgv?.length) return [...pane.startArgv];
-  if (pane.startCommand) return ["sh", "-c", pane.startCommand];
+  /* A photograph from before the capture knew the wrapper carries its line;
+     replayed, it runs the CLI's prompt again. */
+  if (pane.startCommand && !pane.startCommand.includes(KEPT_MARK)) return ["sh", "-c", pane.startCommand];
   return [];
 }
 

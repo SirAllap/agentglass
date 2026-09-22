@@ -27,7 +27,7 @@
  * prompt looks like.
  */
 import { db } from "./db.ts";
-import { tmux, engineWindowRunning } from "./tmuxpane.ts";
+import { tmux, engineWindowRunning, KEPT_MARK } from "./tmuxpane.ts";
 import { paneCommand } from "./tmuxlayout.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
 import { agentKind } from "../../shared/agentKinds.ts";
@@ -111,7 +111,7 @@ export async function paneAlive(paneId: string): Promise<boolean> {
  * taken for one.
  */
 const KEPT_EXITED = (current: string, start: string): boolean =>
-  current === "sleep" && start.includes("the CLI exited");
+  current === "sleep" && start.includes(KEPT_MARK);
 
 async function panesAlive(): Promise<Set<string>> {
   const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_start_command}"]).catch(() => null);

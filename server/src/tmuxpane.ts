@@ -551,6 +551,11 @@ export function engineWindowName(s: unknown): string | null {
   return name || null;
 }
 
+/** Words the exit-surviving wrapper leaves in a pane's born-with line — the
+ *  one here and `paneCommand` in tmuxlayout.ts both print them — so a reader
+ *  of `#{pane_start_command}` can tell the wrapper from a person's own `sh`. */
+export const KEPT_MARK = "[agentglass] the CLI exited";
+
 export function newSessionArgv(name: string, cwd: string, argv: string[]): string[] {
   const quoted = argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
   const cmd = `${quoted}; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' "$?"; exec sleep 86400`;

@@ -417,6 +417,55 @@ describe("a corpse and the photograph it is read from", () => {
   }, 20_000);
 });
 
+describe("a pane run through the wrapper that keeps it after the CLI exits", () => {
+  /*
+   * `agentglass-agent start --keep` (and every tab the layout opens with a
+   * command) runs the CLI as `sh -c '<cli>; printf …; exec sleep 86400'`.
+   * The pane's foreground is that `sh`, which the capture takes for a shell
+   * with nothing running, so it never walked to the CLI: a one-shot was
+   * photographed as the whole wrapper line, prompt and all, and came back at
+   * the next boot running its prompt again — for a day after it had
+   * finished, too; and a Claude in one lost its conversation.
+   */
+  let layout: typeof import("../src/tmuxlayout.ts");
+  beforeAll(async () => { layout = await import("../src/tmuxlayout.ts"); });
+  const wrapped = (argv: string[]) => ["sh", "-c", layout.paneCommand(argv)];
+  const fakeOneShot = (...args: string[]) =>
+    ["bash", "-c", `exec -a opencode /bin/sh -c 'while :; do sleep 1; done' -- "$@"`, "x", ...args];
+
+  test("a Claude in it keeps its conversation", async () => {
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptclaude", "-c", CWD, ...wrapped(fakeClaude("--model", "opus", "--resume", OTHER))]);
+    const got = await photographed("keptclaude");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.agentSession).toBe(OTHER);
+    expect(got!.startCommand, "the wrapper line is never replayed").toBe("");
+  }, 20_000);
+
+  test("a one-shot in it comes back as itself without its prompt", async () => {
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptshot", "-c", CWD, ...wrapped(fakeOneShot("--prompt", BRIEF))]);
+    const got = await photographed("keptshot");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.startCommand).toBe("");
+    expect(got!.startArgv?.[0]).toBe("opencode");
+    expect(got!.startArgv, "the prompt was said once").not.toContain(BRIEF);
+  }, 20_000);
+
+  test("once the CLI has exited it is a shell, not the line again", async () => {
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptdone", "-c", CWD, ...wrapped(["echo", BRIEF])]);
+    await Bun.sleep(300);
+    const got = await photographed("keptdone");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.startCommand).toBe("");
+    expect(got!.startArgv).toBeUndefined();
+    expect(restore.runArgs("all", got!, "/opt/agentglass/bin/claude")).toEqual([]);
+  }, 20_000);
+
+  test("and a photograph taken before this rule, carrying the wrapper line, is not replayed either", () => {
+    const old = { id: "%1", index: 0, active: true, command: "sleep", path: "/tmp", startCommand: `"'qwen' '-p' '${BRIEF}'; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' \"$?\"; exec sleep 86400"` };
+    expect(restore.runArgs("all", old, "/opt/agentglass/bin/claude")).toEqual([]);
+  });
+});
+
 describe("what the pane is told to run", () => {
   const BIN = "/opt/agentglass/bin/claude";
   test("a conversation is resumed by its id, whatever line the pane was born from", () => {
