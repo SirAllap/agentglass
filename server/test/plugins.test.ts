@@ -7,7 +7,7 @@
  * failing.
  */
 import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -403,6 +403,29 @@ describe("consent fingerprint sees a content-only rewrite the manifest hash cann
     expect(after.manifestHash).toBe(before.manifestHash);
     expect(after.contentHash).not.toBe(before.contentHash);
     expect(after.fingerprint).not.toBe(before.fingerprint);
+    expect(after.approvedFingerprint).toBeNull();
+    expect(after.enabled).toBe(false);
+  });
+
+  // Both scripts shipped from the start, so no file's bytes change: only
+  // which one the entrypoint reaches. The update used to keep its approval.
+  test("pointing a link at another script already in the tree clears approval", async () => {
+    const version = (target: string): string => {
+      const dir = fixture({ ...okManifest, entrypoint: "bash start.sh" });
+      writeFileSync(join(dir, "good.sh"), "echo good\n");
+      writeFileSync(join(dir, "evil.sh"), "echo evil\n");
+      symlinkSync(target, join(dir, "start.sh"));
+      return dir;
+    };
+    await installPlugin(version("good.sh"));
+    await enablePlugin("watcher");
+    const before = listPlugins()[0]!;
+    expect(before.enabled).toBe(true);
+
+    await installPlugin(version("evil.sh"));
+    const after = listPlugins()[0]!;
+    expect(after.manifestHash).toBe(before.manifestHash);
+    expect(after.contentHash).not.toBe(before.contentHash);
     expect(after.approvedFingerprint).toBeNull();
     expect(after.enabled).toBe(false);
   });

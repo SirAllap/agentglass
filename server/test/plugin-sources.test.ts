@@ -3,9 +3,9 @@
  * to before trusting any of it.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   pluginGitUrlError, catalogueUrlError, pluginRefError, walkPluginDir, contentHash,
   MAX_FILES,
@@ -98,12 +98,38 @@ describe("walkPluginDir", () => {
     expect(r.error).toContain("outside");
   });
 
-  test("a symlink that stays inside the plugin directory is fine", () => {
+  test("a symlink that stays inside the plugin directory is fine, and is one of its entries", () => {
+    const d = dir();
+    writeFileSync(join(d, "real.txt"), "hi");
+    symlinkSync("real.txt", join(d, "link.txt"));
+    const r = walkPluginDir(d);
+    expect(r.ok).toBe(true);
+    expect(r.files.sort()).toEqual(["link.txt", "real.txt"]);
+  });
+
+  /*
+   * The walk runs on a staging folder and the plugin is then copied
+   * somewhere else, so a link is judged by what it says, not only by where
+   * it lands today. An absolute one names the staging folder and dangles in
+   * the copy; one that climbs out and back in by the folder's own name finds
+   * a different folder once the plugin is installed under another.
+   */
+  test("a link to an absolute path is refused, even one that lands inside", () => {
     const d = dir();
     writeFileSync(join(d, "real.txt"), "hi");
     symlinkSync(join(d, "real.txt"), join(d, "link.txt"));
     const r = walkPluginDir(d);
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("link.txt");
+  });
+
+  test("a link that climbs out and back in by the folder's name is refused", () => {
+    const d = dir();
+    writeFileSync(join(d, "real.txt"), "hi");
+    symlinkSync(join("..", basename(d), "real.txt"), join(d, "link.txt"));
+    const r = walkPluginDir(d);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("outside");
   });
 
   test("more than the file cap is refused", () => {
@@ -132,5 +158,47 @@ describe("contentHash", () => {
     writeFileSync(join(d, "a.txt"), "changed");
     const after = contentHash(d, ["a.txt"]);
     expect(before).not.toBe(after);
+  });
+
+  /*
+   * What runs is what the entrypoint names, and a link decides that as much
+   * as a file does. Both scripts were in the tree from the first commit; an
+   * update that only points the link at the other one used to hash the
+   * same, keep its approval, and run something nobody had agreed to.
+   */
+  test("changes when a link inside the folder is pointed at another file", () => {
+    const d = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(d, "good.sh"), "echo good\n");
+    writeFileSync(join(d, "evil.sh"), "echo evil\n");
+    symlinkSync("good.sh", join(d, "run.sh"));
+    const before = contentHash(d, walkPluginDir(d).files);
+    rmSync(join(d, "run.sh"));
+    symlinkSync("evil.sh", join(d, "run.sh"));
+    expect(walkPluginDir(d).ok).toBe(true);
+    expect(contentHash(d, walkPluginDir(d).files)).not.toBe(before);
+  });
+
+  test("a link is not a file that holds its target's name", () => {
+    const d = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(d, "good.sh"), "echo good\n");
+    symlinkSync("good.sh", join(d, "run.sh"));
+    const linked = contentHash(d, walkPluginDir(d).files);
+    rmSync(join(d, "run.sh"));
+    writeFileSync(join(d, "run.sh"), "good.sh");
+    expect(contentHash(d, walkPluginDir(d).files)).not.toBe(linked);
+  });
+
+  /*
+   * Names and bytes used to be run together with NULs between them, and a
+   * NUL is a byte a file may hold: one file carrying the next entry inside
+   * it hashed exactly like the two files it spelled out.
+   */
+  test("one file cannot pass for two", () => {
+    const one = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(one, "a.txt"), "x\0run.sh\0echo pwned\n");
+    const two = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(two, "a.txt"), "x");
+    writeFileSync(join(two, "run.sh"), "echo pwned\n");
+    expect(contentHash(one, ["a.txt"])).not.toBe(contentHash(two, ["a.txt", "run.sh"]));
   });
 });

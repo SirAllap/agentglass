@@ -8,8 +8,8 @@
  * enough to read.
  */
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
 
 /**
  * "Where did this come from" as a closed set of shapes rather than a free
@@ -98,6 +98,7 @@ export const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
 export interface WalkResult {
   ok: boolean;
   error: string | null;
+  /** Every entry `contentHash` reads: the files, and the links as links. */
   files: string[];
   totalBytes: number;
 }
@@ -115,6 +116,16 @@ export interface WalkResult {
  * outside `dir` — a symlink inside the copied tree pointing at `/etc/passwd`
  * or back out to the host filesystem is the obvious way a "small, harmless"
  * plugin folder stops being either.
+ *
+ * A link that stays inside is one of the plugin's entries, never followed:
+ * `contentHash` reads what it says, because which script an entrypoint
+ * reaches is as much the plugin as the script. It is also judged by that
+ * text, not only by where it lands today — this runs on a staging folder
+ * and the plugin is copied somewhere else afterwards. An absolute link names
+ * the staging folder and dangles in the copy, and one that climbs out and
+ * back in by the folder's own name finds another folder once the plugin is
+ * installed under a different one. So a link is relative, and read from the
+ * folder's root it never climbs above it.
  */
 export function walkPluginDir(dir: string): WalkResult {
   const root = realpathSync(dir);
@@ -133,6 +144,16 @@ export function walkPluginDir(dir: string): WalkResult {
       try { real = realpathSync(child); } catch { return `could not resolve ${relative(root, child)}`; }
       if (real !== root && !real.startsWith(root + sep)) {
         return `${relative(root, child)} resolves outside the plugin directory`;
+      }
+      if (ent.isSymbolicLink()) {
+        const rel = relative(root, child);
+        const target = readlinkSync(child);
+        if (isAbsolute(target)) return `${rel} is a link to an absolute path; a plugin's links are relative`;
+        const read = normalize(join(dirname(rel), target));
+        if (read === ".." || read.startsWith(".." + sep)) return `${rel} is a link that climbs outside the plugin directory`;
+        files.push(rel);
+        if (files.length > MAX_FILES) return `more than ${MAX_FILES} files`;
+        continue;
       }
       if (ent.isDirectory()) {
         const err = walk(child);
@@ -157,17 +178,32 @@ export function walkPluginDir(dir: string): WalkResult {
 
 /**
  * A content identity for the parts an update could quietly rewrite without
- * touching the manifest at all — the entrypoint script, whatever it loads.
- * File paths are sorted first so the hash does not depend on directory
- * iteration order, which readdir makes no promise about.
+ * touching the manifest at all — the entrypoint script, whatever it loads,
+ * and the links that decide which of them runs.
+ *
+ * Each entry is its path, a NUL, `f` for a file or `l` for a link, the
+ * sha256 of the file's bytes or of the link's text, and a newline. A path
+ * holds no NUL and the digest is fixed-length, so no entry can be read as
+ * the end of one and the start of the next. The layout before this ran raw
+ * bytes together with NULs between them, and a file carrying a NUL and the
+ * next entry inside it hashed exactly like the two files it spelled out.
+ *
+ * Paths are sorted by their UTF-8 bytes, which is the order Python's
+ * `sorted` gives the CLI's copy of this; readdir makes no promise about
+ * order at all, and sorting by UTF-16 unit disagreed with the CLI about
+ * names past the BMP.
  */
 export function contentHash(dir: string, files: string[]): string {
   const h = createHash("sha256");
-  for (const f of [...files].sort()) {
+  for (const f of [...files].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
+    const p = join(dir, f);
+    const link = lstatSync(p).isSymbolicLink();
+    const bytes = link ? readlinkSync(p, { encoding: "buffer" }) : readFileSync(p);
     h.update(f);
     h.update("\0");
-    h.update(readFileSync(join(dir, f)));
-    h.update("\0");
+    h.update(link ? "l" : "f");
+    h.update(createHash("sha256").update(bytes).digest("hex"));
+    h.update("\n");
   }
   return h.digest("hex");
 }

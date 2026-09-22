@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { validateManifest } from "../src/plugins.ts";
 import { contentHash, walkPluginDir } from "../src/plugin-sources.ts";
 
@@ -154,6 +154,11 @@ describe("the CLI's copy of the manifest rules", () => {
       writeFileSync(join(dir, "Zed.md"), "# capital sorts before lower in bytes\n");
       writeFileSync(join(dir, "icon.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a, 0xff]));
       writeFileSync(join(dir, "empty"), "");
+      // One name past the BMP and one just under its top: UTF-16 puts the
+      // first ahead, code points put it behind, and the two walks once
+      // sorted one way each.
+      writeFileSync(join(dir, "\u{1D537}.md"), "outside the BMP\n");
+      writeFileSync(join(dir, "ｚ.md"), "inside the BMP\n");
       mkdirSync(join(dir, ".git", "objects"), { recursive: true });
       writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
       symlinkSync("lib/a.py", join(dir, "alias.py"));
@@ -192,6 +197,21 @@ describe("the CLI's copy of the manifest rules", () => {
       }
     });
 
+    test("moves when a link inside the folder is pointed at another file", () => {
+      const dir = tree();
+      try {
+        const before = cliHash(dir).sha256;
+        rmSync(join(dir, "alias.py"));
+        symlinkSync("lib/deep/b.py", join(dir, "alias.py"));
+        const after = cliHash(dir);
+        expect(after.ok).toBe(true);
+        expect(after.sha256).not.toBe(before);
+        expect(after.sha256).toBe(contentHash(dir, walkPluginDir(dir).files));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     test("refuses what the app refuses: a link that leaves the folder", () => {
       const dir = tree();
       try {
@@ -203,6 +223,24 @@ describe("the CLI's copy of the manifest rules", () => {
         expect(cli.error).toContain("outside");
       } finally {
         rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("and a link to an absolute path, or out and back in by the folder's name", () => {
+      const absolute = tree();
+      const around = tree();
+      try {
+        symlinkSync(join(absolute, "lib", "a.py"), join(absolute, "abs.py"));
+        symlinkSync(join("..", basename(around), "lib", "a.py"), join(around, "around.py"));
+        for (const dir of [absolute, around]) {
+          expect(walkPluginDir(dir).ok).toBe(false);
+          const cli = cliHash(dir);
+          expect(cli.ok).toBe(false);
+          expect(cli.exit).toBe(1);
+        }
+      } finally {
+        rmSync(absolute, { recursive: true, force: true });
+        rmSync(around, { recursive: true, force: true });
       }
     });
   });

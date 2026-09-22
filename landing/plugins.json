@@ -17,7 +17,7 @@
         "url": "https://github.com/SirAllap/context-diet",
         "ref": "1e6f95f3e4d75ba7768675d4a4bb4df3da03589d"
       },
-      "sha256": "164a9adf5e6a8be82efbf678cc9d221c6351a09671272e0ad31126aa5b3c8fc3",
+      "sha256": "aa53a9193e115ea4f1ba511fc0fb45b5cc4b075b4bfd22e838291cf4d9a88197",
       "description": "Almost nothing an agent charges you for is what it writes — it is the conversation so far, read again, on every turn. This ships three workers pinned to the model each job needs (find, build, check) so the reading happens where it is not re-read, and a `read`-scope panel that keeps the tally: not how many turns are large, but how much of all the re-reading those turns carry.\n\nIt is one plugin with two halves — the panel here, and skills and agents in Claude Code — because two different programs ",
       "categories": [
         "agents",
@@ -47,7 +47,7 @@
         "url": "https://github.com/SirAllap/agentglass-local-review",
         "ref": "71be38acb81705145b2f2f53c9493d91d9e9bc2c"
       },
-      "sha256": "c2d89ffff018ec8e5971de99c1b521b7b568b5f37f32bd5a62b171e93309b35e",
+      "sha256": "9b3523fc678cbba9e6ed2b95f192829145261c54d5a7c44abf14905d7629a526",
       "description": "Reviews your pull requests on this machine with the agent and model you choose, inside a sandbox with no writable checkout, no GitHub login and no reach into your home directory. The findings appear inside the pull request in agentglass, marked local, and nothing is ever posted to GitHub. It costs whatever the model costs — it starts an agent, and the spend caps are yours to set.",
       "categories": [
         "review",

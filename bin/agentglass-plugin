@@ -295,10 +295,11 @@ def cmd_validate(args):
 #
 # `walkPluginDir` and `contentHash` from server/src/plugin-sources.ts, in
 # Python. The walk decides what "the plugin" is — `.git` is not part of it, a
-# link that leaves the folder refuses the whole thing, a link that stays is
-# skipped rather than followed — and the hash is over the sorted relative
-# paths and the bytes of each, separated by NULs. Every one of those details
-# is a way for the two to disagree, and the test runs both over one tree.
+# link that leaves the folder refuses the whole thing, a link that stays is an
+# entry of its own rather than followed — and the hash is one framed line per
+# entry: path, NUL, `f` or `l`, the sha256 of the bytes or of the link's text,
+# newline, in UTF-8 byte order. Every one of those details is a way for the
+# two to disagree, and the test runs both over one tree.
 
 MAX_FILES = 2000
 MAX_TOTAL_BYTES = 50 * 1024 * 1024
@@ -327,9 +328,21 @@ def walk_plugin_dir(folder):
                 return f"could not resolve {rel}"
             if real != root and not real.startswith(root + os.sep):
                 return f"{rel} resolves outside the plugin directory"
-            # The entry's own type, never the target's: a link inside the
-            # folder is neither a file nor a directory here, so it is skipped
-            # rather than read twice.
+            # The entry's own type, never the target's: a link is hashed by
+            # what it says, and judged by it too — relative, and never above
+            # the folder even on its way back in, because the folder is
+            # installed somewhere other than where it was walked.
+            if ent.is_symlink():
+                target = os.readlink(child)
+                if os.path.isabs(target):
+                    return f"{rel} is a link to an absolute path; a plugin's links are relative"
+                read = os.path.normpath(os.path.join(os.path.dirname(rel), target))
+                if read == os.pardir or read.startswith(os.pardir + os.sep):
+                    return f"{rel} is a link that climbs outside the plugin directory"
+                files.append(rel)
+                if len(files) > MAX_FILES:
+                    return f"more than {MAX_FILES} files"
+                continue
             if ent.is_dir(follow_symlinks=False):
                 why = walk(child)
                 if why:
@@ -354,16 +367,21 @@ def walk_plugin_dir(folder):
 
 def content_hash(folder, files):
     import hashlib
+    root = os.path.realpath(folder)
     h = hashlib.sha256()
-    # `sorted` on str is by code point; the app sorts by UTF-16 unit. They
-    # agree on everything but names with characters outside the BMP, which
-    # is not a file name a plugin has had yet.
-    for rel in sorted(files):
-        h.update(rel.encode("utf-8"))
-        h.update(b"\0")
-        with open(os.path.join(os.path.realpath(folder), rel), "rb") as f:
-            h.update(f.read())
-        h.update(b"\0")
+    # By UTF-8 bytes, which is what the app sorts by. `surrogateescape` hands
+    # back the bytes of a name that is not UTF-8 instead of stopping here; the
+    # app cannot read such a name the same way, so it fails the comparison
+    # rather than this command.
+    for rel in sorted(files, key=lambda r: r.encode("utf-8", "surrogateescape")):
+        path = os.path.join(root, rel)
+        if os.path.islink(path):
+            kind, payload = b"l", os.fsencode(os.readlink(path))
+        else:
+            with open(path, "rb") as f:
+                kind, payload = b"f", f.read()
+        h.update(rel.encode("utf-8", "surrogateescape"))
+        h.update(b"\0" + kind + hashlib.sha256(payload).hexdigest().encode("ascii") + b"\n")
     return h.hexdigest()
 
 

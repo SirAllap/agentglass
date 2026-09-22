@@ -72,7 +72,10 @@ nothing is coerced into a wider shape than what was declared.
 The folder itself is refused before the manifest is read when it holds more
 than 2000 files, a file over 10 MB, or more than 50 MB in total, and when any
 symlink in it resolves outside the folder — an install is a copy, and a copy
-that follows a link out is a copy of something else. A local install takes an
+that follows a link out is a copy of something else. A link is also refused
+when it is absolute, or climbs above the folder on its way back in: the folder
+is checked where it was fetched and installed somewhere else. A link that stays
+inside is kept as a link. A local install takes an
 absolute path; a relative one is refused rather than resolved against whatever
 directory the server happens to be in.
 
@@ -120,8 +123,9 @@ whether to enable the plugin at all; a plugin cannot obtain `full` by writing
 2. **Review** shows what the manifest declares: publisher, description, the
    entrypoint command, the scope asked for. What was reviewed is recorded as a
    fingerprint over the scope, the presence of an executable entrypoint and a
-   content hash of **every file** in the folder (`.git` excluded) — not the name,
-   and not the manifest alone.
+   content hash of **every file and every link** in the folder (`.git`
+   excluded; a link by where it points) — not the name, and not the manifest
+   alone.
 3. **Enable** is a per-plugin switch under a master switch. Enabling mints the
    token and starts the process; disabling stops it and revokes the token.
    Turning the master switch off stops every plugin.
