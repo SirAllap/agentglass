@@ -42,16 +42,25 @@ describe("a plugin's words, drawn", () => {
     expect(html).not.toContain("<script");
   });
 
+  // A text scan of named files, not of what they import: a sink in a module
+  // outside this list passes. The markdown renderer is on it because a plugin's
+  // tree hands it the plugin's own text; anything else a screen here starts
+  // rendering plugin text through has to be added by hand.
   test("no screen that draws a manifest has a raw-HTML sink", () => {
     const dir = new URL("../src/components/plugins/", import.meta.url);
     const files = [
       ...readdirSync(dir).filter((f) => f.endsWith(".tsx")).map((f) => new URL(f, dir)),
       new URL("../src/components/PluginsPane.tsx", import.meta.url),
+      new URL("../src/lib/markdown.tsx", import.meta.url),
     ];
     // A count, so a folder that moved does not pass by checking nothing.
-    expect(files.length).toBeGreaterThanOrEqual(9);
+    expect(files.length).toBeGreaterThanOrEqual(10);
     for (const f of files) {
-      const src = readFileSync(f, "utf8");
+      // Comment lines out: markdown.tsx names the sink it refuses to use.
+      const src = readFileSync(f, "utf8")
+        .split("\n")
+        .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l))
+        .join("\n");
       for (const sink of ["dangerouslySetInnerHTML", "innerHTML", "insertAdjacentHTML", "outerHTML"]) {
         expect(src.includes(sink), `${f.pathname.split("/").pop()} uses ${sink}`).toBe(false);
       }
