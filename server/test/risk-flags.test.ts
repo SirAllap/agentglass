@@ -211,4 +211,11 @@ describe("what a second review found", () => {
     const SK_PROJ = "sk-proj-" + "a1B2c3D4e5F6-g7H8i9J0k1L2m3N4o5P6q7R8";
     expect(kinds(changeRisks("/w/orbit/src/client.ts", added(`const k = "${SK_PROJ}";`), 0))).toEqual(["secret"]);
   });
+
+
+  test("a public key file is not a key file", () => {
+    expect(changeRisks("/w/orbit/certs/public_key.pem", added("x"), 0)).toEqual([]);
+    expect(changeRisks("/w/orbit/certs/orbit.pub.key", added("x"), 0)).toEqual([]);
+    expect(kinds(changeRisks("/w/orbit/certs/server.key", added("x"), 0))).toEqual(["secret"]);
+  });
 });

@@ -72,6 +72,10 @@ const DOTENV_EXAMPLE = /\.(?:example|sample|template|dist|defaults?)$/;
 /** A `.pem` is as often a public certificate as a key, so only one named as a
  *  key counts; a PEM private key in the content is caught by SECRET_SHAPES. */
 const KEY_FILE = /\.(?:p12|pfx|key)$|^id_(?:rsa|dsa|ecdsa|ed25519)$|(?:key|private)[^/]*\.pem$/i;
+/** `public_key.pem`, `orbit.pub.key`, `publicKey.pem`: the half that is meant
+ *  to be shared. A `.key` that is not a key at all (a Keynote deck) is still
+ *  flagged; the name says nothing to tell it apart. */
+const PUBLIC_KEY = /(?:^|[^A-Za-z])(?:pub|public|PUB|PUBLIC|Pub|Public)(?![a-z])/;
 
 const CI_NAMES = new Set([".gitlab-ci.yml", "Jenkinsfile", "azure-pipelines.yml", "bitbucket-pipelines.yml", ".travis.yml"]);
 const CI_DIRS = ["/.github/workflows/", "/.github/actions/", "/.circleci/", "/.buildkite/"];
@@ -177,7 +181,7 @@ export function changeRisks(
     }
   }
   if (!secret && DOTENV.test(base) && !DOTENV_EXAMPLE.test(base)) secret = { kind: "secret", reason: "a dotenv file was written — it usually holds live credentials" };
-  if (!secret && KEY_FILE.test(base)) secret = { kind: "secret", reason: "a key file was written" };
+  if (!secret && KEY_FILE.test(base) && !PUBLIC_KEY.test(base)) secret = { kind: "secret", reason: "a key file was written" };
   if (secret) out.push(secret);
 
   if (CI_NAMES.has(base) || CI_DIRS.some((d) => rel.includes(d))) {
