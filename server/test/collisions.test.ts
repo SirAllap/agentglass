@@ -179,6 +179,16 @@ describe("maskEvidence", () => {
       "pg_dump --password=s3cr3t acme",
       "DATABASE_URL=postgres://app:s3cr3t@localhost/acme bun dev",
       "API_TOKEN=abc.def bun dev",
+      'curl -u "admin:s3cr3t" http://localhost:3000/',
+      "curl --user 'admin:s3cr3t' localhost:3000",
+      'curl -H "X-Api-Key: abc.def" -H "PRIVATE-TOKEN: abc.def" -H "Cookie: session=abc.def" localhost:3000',
+      "STRIPE_KEY=abc.def SENDGRID_KEY=s3cr3t bun dev",
+      "redis-cli -a s3cr3t -p 6379 ping",
+      "mongosh -u admin -p s3cr3t",
+      "sshpass -p s3cr3t ssh build@ci",
+      'mysql --password "s3cr3t" acme',
+      "psql postgres://app:Zm9v/s3cr3t@localhost:5432/acme_dev",
+      "psql postgres://app:p@s3cr3t@localhost/acme",
     ];
     for (const c of cases) {
       const out = col.maskEvidence(c);
@@ -189,6 +199,9 @@ describe("maskEvidence", () => {
     expect(col.maskEvidence("curl -u admin:s3cr3t http://localhost:3000/")).toContain("localhost:3000");
     expect(col.maskEvidence("docker run -p 8080:80 nginx")).toBe("docker run -p 8080:80 nginx");
     expect(col.maskEvidence("mkdir -p dist")).toBe("mkdir -p dist");
+    expect(col.maskEvidence("docker run -u 1000:1000 -p8080:80 app")).toBe("docker run -u 1000:1000 -p8080:80 app");
+    expect(col.maskEvidence('git commit -m "Use bearer auth in the client"')).toBe('git commit -m "Use bearer auth in the client"');
+    expect(col.maskEvidence("mysql acme < dump.sql && find . -print -prune")).toBe("mysql acme < dump.sql && find . -print -prune");
   });
 });
 

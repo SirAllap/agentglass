@@ -362,19 +362,24 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
 
 /**
  * Masks what a command would hand a reader: URL userinfo, secret-named values,
- * `-u user:pass`, an Authorization header or bearer token, `--password`, and
- * mysql's glued `-p<password>`.
+ * `-u user:pass`, auth-shaped headers and bearer tokens, `--password`, and the
+ * password flags of the clients that take one (`redis-cli -a`, `mongosh -p`,
+ * `sshpass -p`, mysql's glued `-p<password>`).
+ *
+ * The evidence is the whole command, so a secret in any segment would show
+ * whenever another segment makes a claim.
  */
 export function maskEvidence(s: string): string {
-  const mysql = /\b(?:mysql|mariadb|mysqldump|mysqladmin)\b/.test(s);
   return s
-    .replace(/(:\/\/)[^@\s/'"]*@/g, "$1…@")
-    .replace(/\b([A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|PRIVATE_KEY)[A-Z0-9_]*=)\S+/gi, "$1…")
-    .replace(/(\s(?:-u|--user)(?:=|\s+)?)[^\s:'"]*:[^\s'"]+/g, "$1…")
-    .replace(/(authorization:\s*(?:(?:bearer|token|basic)\s+)?)[^\s'"]+/gi, "$1…")
-    .replace(/(\bbearer\s+)(?!…)[^\s'"]+/gi, "$1…")
-    .replace(/(--password(?:=|\s+))\S+/gi, "$1…")
-    .replace(/(\s-p)(?=\S)(?!…)\S+/g, (m, p1) => (mysql ? `${p1}…` : m))
+    .replace(/(:\/\/)[^\s'"]*@/g, "$1…@")
+    .replace(/\b([\w-]*(?:PASSWORD|PASSWD|SECRET|TOKEN|KEY|CREDENTIALS?)[\w-]*=)(?:"[^"]*"|'[^']*'|\S+)/gi, "$1…")
+    .replace(/(\s(?:-u|--user)(?:=|\s+))(['"]?)(?!\d+:\d+\b)[^\s:'"]*:[^\s'"]+\2/g, "$1$2…$2")
+    .replace(/(\b(?:authorization|cookie|[\w-]*(?:api[-_]?key|token|secret)[\w-]*):\s*(?:(?:bearer|token|basic)\s+)?)(?!…)[^\s'"]+/gi, "$1…")
+    .replace(/(\bbearer\s+)(?!…)(?=[^\s'"]*[\d._-])[^\s'"]{6,}/gi, "$1…")
+    .replace(/(--password(?:=|\s+))(?:"[^"]*"|'[^']*'|\S+)/gi, "$1…")
+    .replace(/(\bredis-cli\b[^;&|\n]*?\s-a\s+)\S+/g, "$1…")
+    .replace(/(\b(?:mongosh|mongo|sshpass)\b[^;&|\n]*?\s-p\s+)\S+/g, "$1…")
+    .replace(/(\b(?:mysql|mariadb|mysqldump|mysqladmin)\b[^;&|\n]*?\s-p)(?=[^\s…])\S+/g, "$1…")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 160);
