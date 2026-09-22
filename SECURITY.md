@@ -673,11 +673,28 @@ skip-permissions mode (`--yolo`) is granted only if Settings allow it
 are refused when they are permission-shaped: any vendor's bypass flag, anything
 beginning `--dangerously-`, anything containing *bypass*, *skip-permission*,
 *dangerous*, *yolo* or *full-auto*, and `--permission-mode`, `--settings`,
-`--mcp-config`, `--sandbox`, `-a`/`--ask-for-approval`, `--allowedTools`,
-`--allowed-tools`, `--disallowedTools`, `--disallowed-tools` and `--add-dir`.
-The refusal is a 400 that names the flag; nothing is silently dropped. What an
-agent is allowed to do is decided in Settings, not in the arguments of the
-request that starts it.
+`--mcp-config`, `--sandbox`/`-s`, `-a`/`--ask-for-approval`, `-y`,
+`--approval-mode`, `--auto`, `--approve-for-me`, `--allowedTools`,
+`--allowed-tools`, `--disallowedTools`, `--disallowed-tools`, `--add-dir` and
+`--include-directories`. A refused one-letter flag counts inside a group or with
+its value glued on (`-cy`, `-anever`). A Codex config override, `-c key=value`
+or `--config key=value` in any of its spellings (one word or two, quoted or
+not, glued), is refused when its key touches the approval policy, the sandbox,
+permissions, a project's trust level, a profile or MCP servers. The refusal is
+a 400 that names the flag; nothing is silently dropped. What an agent is
+allowed to do is decided in Settings, not in the arguments of the request that
+starts it.
+
+A **worker role** (`start --role`) adds a lock: a deny list of publishing,
+history-rewriting and network commands, handed to the CLI in its own rule
+syntax. On OpenCode the lock is merged with the directory's config, so each
+start asks OpenCode for the merged rules and refuses when a project rule wins
+over the lock. The lock is a list of command prefixes, not a sandbox. A project
+**OpenCode plugin** (`.opencode/plugin/`, or one named in the project's
+opencode.json) is arbitrary code that OpenCode runs inside the worker, and the
+lock does not cover it: a plugin can run any command itself without asking the
+permission system. A role on OpenCode is only as locked as the plugins in that
+checkout are trusted.
 
 ## The browser, driven by an agent
 

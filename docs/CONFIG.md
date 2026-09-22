@@ -328,7 +328,9 @@ over plain `http://` to any host that is not this machine.
   `gone`), `read` (its screen), `send-keys` (one named key: `enter`, `escape`,
   arrows, `tab`, `space`, `backspace`, `ctrl-c`), `list`, `stop`; and on a clock,
   `schedule`, `schedules`, `unschedule`; plus `health`. `--yolo` is granted only if
-  Settings allow it, and a permission-shaped flag after `--` is refused.
+  Settings allow it, and a permission-shaped flag after `--` is refused — Codex's
+  `-c`/`--config` overrides of the approval policy or the sandbox included
+  (SECURITY.md has the list).
   `start --role scout|builder|verifier` seats the CLI and model Settings ▸ Worker
   roles picks for that role, with its lock: push, commit, merge, rebase, reset,
   checkout, the network clients, `sudo` and `rm` are denied in the layer of that
@@ -337,7 +339,8 @@ over plain `http://` to any host that is not this machine.
   the merged rules and refuses when a project rule wins over the lock — and a
   scout or a verifier may not edit files either; a `--model` or `--agent` after `--` is
   refused, since those are the role's, and so is `--yolo`. It is a list of command prefixes, not a
-  sandbox — `sh -c '…'` is not a command named `git push`.
+  sandbox — `sh -c '…'` is not a command named `git push`. A project OpenCode
+  plugin is arbitrary code run inside the worker and is not covered by the lock.
   `python3 bin/agentglass-agent --help` is the reference.
 - **`agentglass-browser`** — the built-in browser as a shell command: open, read,
   click, type, screenshot, network log, cookies, profiles, and more, through the

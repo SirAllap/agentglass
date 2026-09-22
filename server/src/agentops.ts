@@ -173,10 +173,12 @@ const PERMISSION_FLAGS = new Set<string>([
      level. Gemini, and the Qwen Code CLI forked from it: the yolo shorthand
      and the approval mode, whose value is a separate word the pattern below
      never sees. OpenCode: `--auto`, which approves whatever is not explicitly
-     denied — "dangerous" is in its help text, not in its name. Kept with both
-     spellings where the CLI accepts both. */
+     denied — "dangerous" is in its help text, not in its name. Codex again:
+     `-s`, the short `--sandbox`, and `--approve-for-me`, which hands its
+     approvals to an automatic reviewer. Kept with both spellings where the CLI
+     accepts both. */
   "--permission-mode", "--settings", "--mcp-config", "--sandbox", "-a", "--ask-for-approval",
-  "-y", "--approval-mode", "--auto",
+  "-y", "--approval-mode", "--auto", "-s", "--approve-for-me",
   "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--add-dir",
   /* Gemini's and Qwen Code's own name for the option `--add-dir` is only an
      alias of. */
@@ -193,6 +195,31 @@ const PERMISSION_FLAGS = new Set<string>([
  */
 const SHORT_REFUSED = new Set([...PERMISSION_FLAGS].filter((f) => /^-[A-Za-z]$/.test(f)).map((f) => f[1]!));
 
+/**
+ * Codex's `-c key=value` / `--config key=value` overrides any key of its
+ * config.toml, so `-c approval_policy=never` is `-a never` by another name, and
+ * its value is a separate word the flag checks above never read. A key is
+ * refused when any segment of its dotted path is one of these: the approval
+ * policy and its reviewer, the sandbox and its permissions, a project's trust
+ * level (a trusted project gets looser defaults), a profile (which can carry
+ * any of them) and MCP servers (tools the operator never saw, as
+ * `--mcp-config` is for Claude). Names as codex-cli 0.155.1 has them.
+ */
+const CODEX_LOOSE_KEY = /approv|sandbox|permission|trust_level|^profiles?$|mcp_servers/;
+
+/** Whether one Codex override loosens what the agent may do. Quotes are the
+ *  TOML's or the caller's and change nothing: `"approval_policy"="never"` is
+ *  the same key. A whole table set at once is read for the same names inside
+ *  it, since `projects={…={trust_level=…}}` names the key only in its value. */
+function codexOverrideLoosens(override: string): boolean {
+  const eq = override.indexOf("=");
+  if (eq < 0) return false;
+  const key = override.slice(0, eq).replace(/["']/g, "").trim();
+  if (key.split(".").some((seg) => CODEX_LOOSE_KEY.test(seg.trim()))) return true;
+  const value = override.slice(eq + 1).trim();
+  return value.startsWith("{") && /approv|sandbox|permission|trust_level|profile|mcp_servers/.test(value);
+}
+
 /** The words a permission flag is made of, whatever the flag is called. */
 const PERMISSION_WORDS = /bypass|skip-permission|dangerous|yolo|full-auto/;
 
@@ -202,13 +229,22 @@ const PERMISSION_WORDS = /bypass|skip-permission|dangerous|yolo|full-auto/;
  * it one string at a time.
  */
 export function refusedArg(args: string[]): string | null {
-  for (const a of args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
     if (!a.startsWith("-")) continue;
     const name = a.split("=", 1)[0]!;
     if (PERMISSION_FLAGS.has(name)) return a;
     if (!name.startsWith("--") && [...name.slice(1)].some((c) => SHORT_REFUSED.has(c))) return a;
     if (a.startsWith("--dangerously-")) return a;
     if (PERMISSION_WORDS.test(a.toLowerCase())) return a;
+    // A Codex override: `-c k=v` as two words, `--config=k=v` / `-c=k=v` as
+    // one, or clap's glued short form `-ck=v`. Named with its value, so the
+    // refusal says which key.
+    if (name === "-c" || name === "--config") {
+      const joined = a.length > name.length;
+      const override = joined ? a.slice(name.length + 1) : args[i + 1];
+      if (override !== undefined && codexOverrideLoosens(override)) return joined ? a : `${a} ${override}`;
+    } else if (/^-c[^-=]/.test(a) && codexOverrideLoosens(a.slice(2))) return a;
   }
   return null;
 }

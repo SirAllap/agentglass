@@ -136,6 +136,40 @@ describe("start refuses before it reaches the engine", () => {
     }
   });
 
+  test("a Codex config override that loosens approvals or the sandbox, in every spelling", () => {
+    /* `codex -c key=value` overrides any key of config.toml, so
+       `-c approval_policy=never` is `-a never` under another name, and the value
+       rides as its own word, which the gate skipped as a positional. Also its
+       short `-s` for `--sandbox`, and `--approve-for-me`. Measured against
+       codex-cli 0.155.1's --help. */
+    const refused: [string[], string][] = [
+      [["-c", "approval_policy=never"], "-c approval_policy=never"],
+      [["--config", "sandbox_mode=danger-full-access"], "--config sandbox_mode=danger-full-access"],
+      [["--config=approval_policy=never"], "--config=approval_policy=never"],
+      [["-c=sandbox_mode=danger-full-access"], "-c=sandbox_mode=danger-full-access"],
+      [["-capproval_policy=never"], "-capproval_policy=never"],
+      [["-c", 'approval_policy="never"'], '-c approval_policy="never"'],
+      [["-c", '"approval_policy"="never"'], '-c "approval_policy"="never"'],
+      [["-c", 'sandbox_mode = "danger-full-access"'], '-c sandbox_mode = "danger-full-access"'],
+      [["-c", "'sandbox_mode=danger-full-access'"], "-c 'sandbox_mode=danger-full-access'"],
+      [["-c", "sandbox_workspace_write.network_access=true"], "-c sandbox_workspace_write.network_access=true"],
+      [["-c", 'sandbox_permissions=["disk-full-read-access"]'], '-c sandbox_permissions=["disk-full-read-access"]'],
+      [["-c", 'projects."/srv/acme".trust_level="trusted"'], '-c projects."/srv/acme".trust_level="trusted"'],
+      [["-c", 'projects={"/srv/acme"={trust_level="trusted"}}'], '-c projects={"/srv/acme"={trust_level="trusted"}}'],
+      [["-c", "profile=loose"], "-c profile=loose"],
+      [["-c", 'profiles.loose.approval_policy="never"'], '-c profiles.loose.approval_policy="never"'],
+      [["-c", "approvals_reviewer=auto"], "-c approvals_reviewer=auto"],
+      [["-c", 'default_permissions="full"'], '-c default_permissions="full"'],
+      [["-c", 'mcp_servers.tools.command="/tmp/tools"'], '-c mcp_servers.tools.command="/tmp/tools"'],
+      [["-s", "danger-full-access"], "-s"],
+      [["--approve-for-me"], "--approve-for-me"],
+    ];
+    for (const [args, named] of refused) expect(refusedArg(["--model", "x", ...args]), JSON.stringify(args)).toBe(named);
+    for (const args of [["-c", 'model="o3"'], ["--config", "shell_environment_policy.inherit=all"], ["-c", 'model_reasoning_effort="high"'], ["-c"], ["-c", 'instructions="ask for approval first"']]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBeNull();
+    }
+  });
+
   test("OpenCode's --auto, whose help text says dangerous but whose name does not", async () => {
     /* `opencode --auto` approves every permission that is not explicitly
        denied. The word pattern reads the flag, not its help, so it passed with
