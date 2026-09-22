@@ -1633,7 +1633,7 @@ export interface GateRow {
   expires: number;
   decision: "allow" | "deny" | null;
   reason: string | null;
-  resolution: "human" | "timeout" | "restart" | null;
+  resolution: "human" | "timeout" | "restart" | "rule" | null;
   decided_at: number | null;
   /** Who, when a person decided. NULL for a timeout, a restart, and for every
    *  row written before this column existed — an absent actor is not `local`. */
@@ -1668,7 +1668,7 @@ export function resolveGateRow(
   id: string,
   decision: "allow" | "deny",
   reason: string,
-  resolution: "human" | "timeout" | "restart",
+  resolution: "human" | "timeout" | "restart" | "rule",
   decided_at = Date.now(),
   /** Only ever set for a human. The clock is not an actor. */
   decided_by: string | null = null,

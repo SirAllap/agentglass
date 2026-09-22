@@ -44,8 +44,9 @@ import { getUsage, ingestStatusline } from "./usage.ts";
 import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
-import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
+import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd } from "./control.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation} from "./browserdrive.ts";
@@ -3194,15 +3195,36 @@ const server = Bun.serve<WsData>({
        * human never blocks work, and work that has already left the machine
        * cannot be blocked afterwards.
        */
+      // The hook picks the id so it can re-attach to this exact request after
+      // a dropped connection (see /gate/status). Shape-checked in gate.ts;
+      // anything else falls back to a server-generated one.
+      const greq = { id: typeof b.id === "string" ? b.id : undefined, source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary };
+      // A retry of an id already sent is answered from what was recorded, before
+      // any rule is consulted: a rule or a budget that changed in between must
+      // not turn a request somebody is deciding into a second, different answer.
+      const again = validGateId(greq.id) ? awaitGate(greq.id) : null;
+      if (again) return json(await again);
+      const cwd = gateCwd(b.cwd, greq.session_id);
       const out = outwardAction(String(b.tool_name || ""), ti);
+      /*
+       * RULES DECIDE BEFORE ANYBODY IS ASKED — gaterules.ts.
+       *
+       * A deny is answered now and written to history. An allow is answered
+       * now with an EMPTY reason, which the hook reads as "agentglass has no
+       * opinion": Claude Code's own permission prompt still runs, so an allow
+       * list means "do not hold this" and never "skip every other check". And
+       * an outward action is never let through by one — the allow list is
+       * about what a person need not see, and a push is by definition
+       * something they do.
+       */
+      const rule = gateRuleFor(greq.tool_name, cwd);
+      if (rule.kind === "deny") return json(denyByRule(greq, rule.reason));
+      if (rule.kind === "allow" && !out) return json({ decision: "allow", reason: "" });
       const hold = out
         ? [outwardLine(out), out.text ? `“${out.text.replace(/\s+/g, " ").trim().slice(0, 240)}”` : ""].filter(Boolean).join(" · ")
-        : budgetHoldFor(String(b.session_id || "unknown"), gateFailClosed());
+        : budgetHoldFor(greq.session_id, gateFailClosed(), cwd);
       const decision = await submitGate(
-        // The hook picks the id so it can re-attach to this exact request after
-        // a dropped connection (see /gate/status). Shape-checked in gate.ts;
-        // anything else falls back to a server-generated one.
-        { id: typeof b.id === "string" ? b.id : undefined, source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
+        greq,
         Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000),
         hold,
         out ? true : undefined,
@@ -3317,7 +3339,7 @@ const server = Bun.serve<WsData>({
       const error = ok ? undefined
         : !held?.decision ? "that request is not one this server is holding"
         : `already ${held.decision === "deny" ? "denied" : "allowed"} by ${
-            held.resolution === "human" ? "somebody else" : "the timeout"} — this answer arrived too late`;
+            held.resolution === "human" ? "somebody else" : held.resolution === "rule" ? "a gate rule" : "the timeout"} — this answer arrived too late`;
       noteAction(clientIp, `/gate/${decision}`,
         { tool: held?.tool_name, summary: held?.summary }, { ok, error }, asActor(caller));
       /*

@@ -744,14 +744,15 @@ export interface PendingGate {
 }
 
 /** A gate request that has been resolved. `resolution` is who resolved it:
- *  a human from the dashboard, the timeout, or a restart that found the window
- *  already closed. The last one is why this record exists — an outcome nobody
- *  chose is exactly the one that must not disappear. */
+ *  a human from the dashboard, the timeout, a restart that found the window
+ *  already closed, or a rule in config.json that denied it on arrival. The
+ *  last three are why this record exists — an outcome nobody chose is exactly
+ *  the one that must not disappear. */
 export interface GateRecord extends PendingGate {
   expires: number;
   decision: "allow" | "deny";
   reason: string | null;
-  resolution: "human" | "timeout" | "restart" | null;
+  resolution: "human" | "timeout" | "restart" | "rule" | null;
   decided_at: number | null;
   /** *Which* human — a paired device's name, or the address the answer came
    *  from. NULL when nobody decided: a timeout is not an actor, and neither is
@@ -3700,6 +3701,23 @@ export interface Budget {
   /** In USD, matching every other cost in this app. */
   limit: number;
   period: BudgetPeriod;
+}
+
+/**
+ * What the gate does with a call by rule, without waiting for a person. See
+ * server/src/gaterules.ts. Read from `gateRules` in config.json.
+ */
+export interface GateRule {
+  /** Project root this applies to. Empty means the whole machine. */
+  root: string;
+  /** Tool names let through without a hold. A trailing `*` matches a prefix. */
+  allow: string[];
+  /** Tool names denied outright. Wins over `allow`. */
+  deny: string[];
+  /** What happens to a tool on neither list. */
+  otherwise: "allow" | "hold" | "deny";
+  /** What happens to a call once a budget covering it is over. */
+  overBudget: "hold" | "deny";
 }
 
 /** A budget, and where it stands right now. */

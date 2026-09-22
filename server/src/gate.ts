@@ -106,7 +106,7 @@ export const validGateId = (id: unknown): id is string => typeof id === "string"
 function finish(
   id: string,
   out: GateOutcome,
-  resolution: "human" | "timeout" | "restart",
+  resolution: "human" | "timeout" | "restart" | "rule",
   /** Who, when a person decided. The timeout path leaves this null on purpose:
    *  an outcome nobody chose must not arrive carrying an actor. */
   by: string | null = null,
@@ -224,6 +224,39 @@ export function submitGate(
     pushGate(where, tool_name, budget ? (summary ? `${budget} · ${summary}` : budget) : summary, pane ?? undefined);
     onChange();
   });
+}
+
+/**
+ * Deny a call on arrival because a rule said so — see gaterules.ts.
+ *
+ * Written to the same table as every other gate, and resolved in the same
+ * breath, so the denial shows up in gate history and in "What needs you" beside
+ * the timeouts the next time either is read: a call stopped with nobody watching is exactly the kind of outcome
+ * a person has to be able to find afterwards. It never enters the queue and
+ * never pushes a notification — there is nothing to decide, and a runaway loop
+ * being denied fifty times must not become fifty buzzes.
+ *
+ * The route asks awaitGate first, so a hook retrying an id it already sent is
+ * answered from the recorded row and never reaches here twice.
+ */
+export function denyByRule(
+  req: { source_app: string; session_id: string; tool_name: string; summary: string; id?: string },
+  reason: string,
+): GateOutcome {
+  const id = validGateId(req.id) ? req.id : crypto.randomUUID();
+  const now = Date.now();
+  const { source_app, session_id, tool_name, summary } = req;
+  // The record is for the person; the answer is for the hook. A database that
+  // throws here must not turn the denial into a 500 — a fail-open hook reads
+  // that as "allow", and the call the rule stopped would run.
+  try {
+    recordGate({ id, source_app, session_id, tool_name, summary, created: now, expires: now });
+    resolveGateRow(id, "deny", reason, "rule", now);
+    onChange();
+  } catch (e) {
+    console.warn("[gate] a rule's denial was not recorded:", e instanceof Error ? e.message : e);
+  }
+  return { decision: "deny", reason };
 }
 
 /**

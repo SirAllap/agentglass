@@ -6,7 +6,7 @@
 // find. Environment variables still win, so a one-off `AGENTGLASS_…=x bun run`
 // overrides the file without editing it.
 
-import type { Budget } from "../../shared/types.ts";
+import type { Budget, GateRule } from "../../shared/types.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter } from "node:path";
@@ -81,6 +81,10 @@ interface Config {
   /** Spending limits somebody set. See budget.ts. Hand-edited freely like the
    *  rest of this file, so every field is checked on read. */
   budgets?: Budget[];
+  /** What the gate decides without a person. See gaterules.ts. Hand-edited
+   *  only — there is no route that writes it — so every field is checked on
+   *  read, like budgets. */
+  gateRules?: GateRule[];
   /** Projects the picker should stop offering. Absolute paths. See
    *  hiddenProjects(). */
   hiddenProjects?: string[];
@@ -219,6 +223,69 @@ export function readBudgets(): Budget[] {
       limit: r.limit,
       period: r.period,
     });
+  }
+  return out;
+}
+
+/**
+ * The gate rules on disk, checked field by field.
+ *
+ * A rule that cannot be read is not repaired, for the reason readBudgets gives:
+ * `"otherwise": "denny"` meaning deny is a guess. It is not dropped either. A
+ * dropped project rule hands its project to whatever the machine-wide rule
+ * says, and a strict project with one typo under a lax machine rule would then
+ * let through exactly what it was written to stop. So an unreadable rule keeps
+ * its root and holds everything there for a person — the one outcome that was
+ * already the gate's behaviour before rules existed. A typo costs an
+ * interruption, never a call that ran unseen.
+ *
+ * A root that is not absolute once `~` is expanded covers nothing a person
+ * could mean, so it is said about and skipped. Parsed once per read of the
+ * file: /gate calls this on every gated call, and a bad rule must be logged
+ * once, not once a call.
+ */
+const parsedGateRules = new WeakMap<Config, GateRule[]>();
+export function readGateRules(): GateRule[] {
+  const cfg = config();
+  const known = parsedGateRules.get(cfg);
+  if (known) return known;
+  const out = parseGateRules(cfg.gateRules);
+  parsedGateRules.set(cfg, out);
+  return out;
+}
+
+function parseGateRules(raw: unknown): GateRule[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    console.error(`[config] ignoring "gateRules" in ${configPath()}: expected an array`);
+    return [];
+  }
+  const names = (v: unknown): string[] | null =>
+    v === undefined ? [] : Array.isArray(v) && v.every((n) => typeof n === "string" && n.length > 0) ? v : null;
+  const out: GateRule[] = [];
+  for (const g of raw) {
+    if (!g || typeof g !== "object" || Array.isArray(g)) continue;
+    const r = g as Partial<Record<keyof GateRule, unknown>>;
+    const given = typeof r.root === "string" ? expand(r.root.trim()) : "";
+    if (given && !given.startsWith("/")) {
+      console.error(`[config] ignoring a gate rule whose root is not an absolute path: ${given}`);
+      continue;
+    }
+    // resolve() drops a trailing slash, which would otherwise stop a root from
+    // covering itself and count as one character "deeper" than its twin.
+    const root = given ? resolve(given) : "";
+    const allow = names(r.allow), deny = names(r.deny);
+    const otherwise = r.otherwise ?? "hold", overBudget = r.overBudget ?? "hold";
+    const problem = !allow || !deny ? "its allow or deny is not a list of tool names"
+      : otherwise !== "allow" && otherwise !== "hold" && otherwise !== "deny" ? `an unknown "otherwise": ${String(otherwise)}`
+      : overBudget !== "hold" && overBudget !== "deny" ? `an unknown "overBudget": ${String(overBudget)}`
+      : "";
+    if (problem) {
+      console.error(`[config] a gate rule for ${root || "every project"} has ${problem} — holding every call there for a person instead`);
+      out.push({ root, allow: [], deny: [], otherwise: "hold", overBudget: "hold" });
+      continue;
+    }
+    out.push({ root, allow: allow!, deny: deny!, otherwise: otherwise as GateRule["otherwise"], overBudget: overBudget as GateRule["overBudget"] });
   }
   return out;
 }

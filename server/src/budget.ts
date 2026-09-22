@@ -150,6 +150,11 @@ export function overBudgetFor(
   return worst;
 }
 
+/** "Over budget · $x of $y this month for orbit" — the one phrasing of the
+ *  fact, shared by the hold, the insight and a gate rule's denial. */
+export const overBudgetLine = (s: BudgetStatus): string =>
+  `Over budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)} for ${budgetScopeLabel(s.budget)}`;
+
 /**
  * The sentence a person reads while an agent is held at the gate.
  *
@@ -166,7 +171,7 @@ export function overBudgetFor(
  * phrasings of it read as two problems.
  */
 export function budgetHoldReason(s: BudgetStatus, failClosed = false): string {
-  const head = `Over budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)} for ${budgetScopeLabel(s.budget)}`;
+  const head = overBudgetLine(s);
   return failClosed
     ? `${head} — agentglass is fail-closed, so if you do nothing this call is denied when the hold expires.`
     : `${head} — nothing is blocked by the budget itself: if you do nothing this call proceeds when the hold expires.`;
@@ -189,17 +194,23 @@ export function budgetHoldReason(s: BudgetStatus, failClosed = false): string {
  * by a fail-closed one. An annotation must not be able to block a tool call by
  * crashing.
  */
-export function budgetHoldFor(session: string, failClosed: boolean): string | undefined {
+export function budgetHoldFor(session: string, failClosed: boolean, cwd?: string): string | undefined {
   try {
-    // The gate payload carries no cwd. The hook records a pane note that does,
-    // which is how describeSession recovers it too. No pane note means no
-    // project, and no project means no project budget — overBudgetFor refuses
-    // to guess one.
-    const pane = paneForSession(session);
-    const over = overBudgetFor(pane ? paneAgentNote(pane)?.cwd ?? "" : "");
+    // The route passes the directory the hook reported. Without one, the pane
+    // note the hook records carries it, which is how describeSession recovers
+    // it too. No pane note means no project, and no project means no project
+    // budget — overBudgetFor refuses to guess one.
+    const over = overBudgetFor(cwd || sessionCwd(session));
     return over ? budgetHoldReason(over, failClosed) : undefined;
   } catch (e) {
     console.warn("[gate] budget check skipped:", e instanceof Error ? e.message : e);
     return undefined;
   }
+}
+
+/** Where a session's calls run, as far as its pane note knows — or "" when it
+ *  has none, which every caller must read as "unknown", never as a place. */
+export function sessionCwd(session: string): string {
+  const pane = paneForSession(session);
+  return pane ? paneAgentNote(pane)?.cwd ?? "" : "";
 }
