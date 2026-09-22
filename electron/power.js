@@ -28,12 +28,16 @@
  *
  * `block-weak` arrived in systemd 257. An older logind refuses the mode at
  * once ("Invalid mode specification", exit 1, measured on 261 with a bogus
- * mode), and the lock is then taken in DELAY mode instead — which stops
- * nothing: a delay lock only holds a suspend for InhibitDelayMaxSec before
- * logind goes ahead. On such a system the sleep half is the display blocker
- * alone, and that is said here rather than pretended otherwise. The lid
- * switch has no weak or delay mode in logind, and blocking it is what was
- * wanted.
+ * mode), and the lock is then taken in plain BLOCK mode instead — which,
+ * before 257, is the same thing under the old name: org.freedesktop.login1(5)
+ * says block locks were "honoured only by unprivileged users, excluding the
+ * user owning the inhibitor", and that 257 enforces them on everyone and
+ * offers the old behaviour as block-weak. So on a logind too old for the
+ * weak spelling, block already lets the owner's own suspend through. The
+ * first version fell back to DELAY, which holds a suspend for
+ * InhibitDelayMaxSec and then lets it go — nothing at all, on every Debian 12
+ * and Ubuntu 24.04 (systemd 252 and 255). The lid switch has no weak or
+ * delay mode in logind, and blocking it is what was wanted.
  *
  * Three failure modes are the whole difference between this working and this
  * being a lie, and each gets its own paragraph below: `systemd-inhibit` not
@@ -126,7 +130,8 @@ function saveMode(m) {
  * no-op, not a leaked second lock.
  * @param {"sleep" | "lid"} which
  * @param {string} [mode] the logind mode; the sleep lock's default is
- *   `block-weak`, and `delay` is what it falls back to when logind refuses it.
+ *   `block-weak`, and `block` is what it falls back to when logind refuses it
+ *   (see the header: before 257, block is weak).
  */
 function spawnInhibit(which, mode = which === "sleep" ? "block-weak" : "block") {
   if (inhibitChild[which] || inhibitUnavailable) return;
@@ -156,7 +161,7 @@ function spawnInhibit(which, mode = which === "sleep" ? "block-weak" : "block") 
     // Only a refusal (exit 1) that this process did not cause; a child killed
     // by `killInhibit` exits by signal, and one killed by the suspend itself
     // is the resume handler's to replace.
-    if (mode === "block-weak" && code === 1 && !releasedByUs.has(child) && held) spawnInhibit(which, "delay");
+    if (mode === "block-weak" && code === 1 && !releasedByUs.has(child) && held) spawnInhibit(which, "block");
   });
 }
 
@@ -307,13 +312,12 @@ function init(opts) {
   /*
    * And the moment logind announces the suspend, the sleep lock is let go.
    *
-   * By then the suspend is happening whatever the lock says. What the release
-   * buys is the fallback case: a delay lock makes logind wait for its holder,
-   * up to InhibitDelayMaxSec (five seconds by default), before going ahead —
-   * a grace for saving state, and there is none to save here — so a person
-   * who pressed suspend would sit through five seconds of nothing. `held` is
-   * left as it is: the resume handler above re-asserts everything on the way
-   * back.
+   * By then the suspend is happening whatever the lock says: the lock is
+   * weak, and the person's own request went through it. Letting go here is
+   * bookkeeping — a child that would otherwise be found dead after the
+   * resume, and a lock that must not read as "held" while the machine is
+   * asleep. `held` is left as it is: the resume handler above re-asserts
+   * everything on the way back.
    */
   powerMonitor?.on("suspend", () => { killInhibit("sleep"); });
   applyMode();

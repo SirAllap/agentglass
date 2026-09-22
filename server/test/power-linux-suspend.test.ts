@@ -14,16 +14,17 @@
  *   sleep              BLOCK-WEAK — enforced against logind's own idle action
  *                                   and not against the user who holds it, so
  *                                   the menu's suspend goes through and the
- *                                   machine still does not doze off. DELAY on
+ *                                   machine still does not doze off. BLOCK on
  *                                   a logind too old for it (before 257), which
- *                                   refuses the mode at once; delay stops
- *                                   nothing, and is what is left.
+ *                                   refuses the mode at once: there, block IS
+ *                                   weak — honoured for everyone but the user
+ *                                   who holds it — and delay holds nothing.
  *   handle-lid-switch  BLOCK      — closing the lid on a running agent must not
  *                                   end the run; logind offers no weak or delay
  *                                   mode for a lid switch.
  *
  * And the moment logind says it is going down, the sleep lock is let go at
- * once rather than making the person wait out a delay.
+ * once.
  *
  * Driven for real in a child process, with a stubbed `electron` and a
  * `systemd-inhibit` on PATH that writes down how it was called.
@@ -142,10 +143,14 @@ describe("the Linux inhibitor", () => {
     expect(lidLock?.ended, "the lid lock was not").toBeUndefined();
   });
 
-  test("falls back to a delay lock on a logind that refuses block-weak, and to nothing worse", async () => {
+  test("falls back to a block lock on a logind that refuses block-weak — which is weak there — never to delay", async () => {
+    /* Before 257 a block lock was honoured only for other, unprivileged users
+       — not for the one holding it — which is exactly what block-weak spells
+       out on 257 and later. A delay lock, the first fallback, holds a suspend
+       for InhibitDelayMaxSec and then lets it go: nothing. */
     const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 500));`, { AGX_STUB_NO_WEAK: "1" });
     const sleepModes = t.calls.filter((c) => whatOf(c) === "sleep").map((c) => `${modeOf(c)}:${c.ended ?? "held"}`);
-    expect(sleepModes).toEqual(["block-weak:REFUSED", "delay:TERM"]);
+    expect(sleepModes).toEqual(["block-weak:REFUSED", "block:TERM"]);
     expect(t.calls.filter((c) => whatOf(c) === "handle-lid-switch")).toHaveLength(1);
   });
 
