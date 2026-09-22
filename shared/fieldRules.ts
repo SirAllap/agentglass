@@ -4,16 +4,16 @@
  * The server's watch, the CLI readout and the dashboard all look at the same
  * board and each needs to know which rows are dead names and which are claimed
  * work gone quiet. Twice a rule like this was written on one side and the
- * other side went on deciding for itself; living here, the watch that sends
- * the notification and the strip that shows the verdict cannot disagree about
- * who is stuck.
+ * other side went on deciding for itself. `attention` is the one sort both the
+ * watch's notification and the dashboard's strip read, so they cannot disagree
+ * about who is stuck or who needs you.
  */
 
 /** The fields these rules read — a BoardRow on the server, a LanternRow here. */
 export interface FieldRow {
   role?: string;
   paneId?: string;
-  needsYou?: unknown;
+  needsYou?: { kind: string; since: number };
   saidAt?: number;
   doing?: string;
   state?: "working" | "waiting" | "idle";
@@ -66,3 +66,30 @@ export const FORGOTTEN_AFTER_MS = 60 * 60_000;
 export const isForgotten = <R extends FieldRow>(r: R, now = Date.now()): r is R & { doing: string; saidAt: number } =>
   !r.role && !r.needsYou && !isGone(r, now)
   && r.state === "idle" && !!r.doing && !!r.saidAt && now - r.saidAt >= FORGOTTEN_AFTER_MS;
+
+/**
+ * WHAT A ROW ASKS OF A PERSON, for every reader that tells one.
+ *
+ * - `blocked`: a permission or a held gate — it cannot go on without you, now.
+ * - `left`: a turn that ended and nobody came back to for an hour. Under the
+ *   hour it is nothing: that is most sessions most of the time.
+ * - `forgotten`: claimed work gone quiet for an hour (`isForgotten`).
+ *
+ * The watch and the strip each had a copy of this, and the copies differed on
+ * `left`: the watch pushed "orbit-api is waiting for your next prompt — 3h"
+ * while the strip, which set every ended turn aside, read "nothing running"
+ * in the calm colour. Both call this now.
+ *
+ * The Lantern's own chat is never anybody's attention. A seat (`role`
+ * "orchestrator") is sorted like any agent here; the watch alone sets seats
+ * aside, because its findings wake the seat and a seat must not be woken about
+ * itself. So a seat stopped on a permission is on the strip and not in the
+ * notification — the one difference, and it is the reader's, not the rule's.
+ */
+export type Attention = "blocked" | "left" | "forgotten";
+export function attention(r: FieldRow, now = Date.now()): Attention | null {
+  if (r.role === "lantern") return null;
+  const w = r.needsYou;
+  if (w) return w.kind !== "input" ? "blocked" : now - w.since >= FORGOTTEN_AFTER_MS ? "left" : null;
+  return isForgotten(r, now) ? "forgotten" : null;
+}

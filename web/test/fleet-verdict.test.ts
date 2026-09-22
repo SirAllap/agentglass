@@ -9,8 +9,10 @@
 //   stuck      vs  claimed work quiet under the hour           (not yet)
 //   stuck      vs  a dead session with an old claim            (gone)
 //   running    vs  the Lantern's own chat                      (role)
+//   stuck      vs  a turn that ended minutes ago               (not yet)
 import { test, expect } from "bun:test";
 import { fleetVerdict } from "../src/lib/fleetVerdict.ts";
+import { attention } from "../../shared/fieldRules.ts";
 import type { LanternRow } from "../src/components/LanternView.tsx";
 
 const now = 1_800_000_000_000;
@@ -112,4 +114,59 @@ test("a board that could not be read is unknown, not 'nothing running'", () => {
   // draw a calm green line over a field nobody could see.
   expect(fleetVerdict([], now, true)).toBeNull();
   expect(fleetVerdict([working("orbit-api")], now, true)).toBeNull();
+});
+
+/*
+ * THE STRIP AND THE WATCH'S NOTIFICATION ARE ONE RULE.
+ *
+ * They were two: the watch pushed "orbit-api is waiting for your next prompt —
+ * 3h" while the strip, which left every ended turn out, read "nothing
+ * running" in the calm colour. Both now sort a row by `attention` in
+ * shared/fieldRules.ts, and the watch's side of this is asserted against the
+ * same rule in server/test/lantern-watch.test.ts.
+ */
+const waitedFor = (name: string, ms: number) =>
+  row(name, { state: "waiting", needsYou: { kind: "input", why: "Claude is waiting for your input", since: now - ms } });
+
+test("a turn nobody came back to for three hours is stuck, as the watch notifies it", () => {
+  const v = fleetVerdict([waitedFor("orbit-api", 3 * 60 * min)], now)!;
+  expect(v.tone).toBe("warn");
+  expect(v.clauses.find((c) => c.kind === "stuck")).toMatchObject({
+    count: 1, tone: "warn", text: "orbit-api waiting for your next prompt for 3h",
+  });
+  expect(v.clauses.some((c) => c.kind === "need")).toBe(false);
+});
+
+test("the same turn three minutes old is neither stuck nor a need", () => {
+  const v = fleetVerdict([waitedFor("orbit-api", 3 * min)], now)!;
+  expect(v.tone).toBe("calm");
+  expect(v.clauses).toHaveLength(1);
+});
+
+test("every row the rule flags is on the line, and no other", () => {
+  const rows: LanternRow[] = [
+    working("a-api"), row("b-shell"), blocked("c-web"), blocked("d-docs", "gate"),
+    waitedFor("e-fresh", 20 * min), waitedFor("f-stale", 61 * min),
+    quiet("g-migrate"), quiet("h-soon", { saidAt: now - 30 * min }),
+    quiet("i-dead", { paneId: undefined, saidAt: now - 3 * 24 * 60 * min }),
+    working("j-lantern", { role: "lantern" }), blocked("k-lantern", "permission", { role: "lantern" }),
+  ];
+  const by = (k: string) => rows.filter((r) => attention(r, now) === k).length;
+  const v = fleetVerdict(rows, now)!;
+  const count = (k: string) => v.clauses.find((c) => c.kind === k)?.count ?? 0;
+  expect(count("need")).toBe(by("blocked"));
+  expect(count("stuck")).toBe(by("left") + by("forgotten"));
+  expect([count("need"), count("stuck")]).toEqual([2, 2]);
+});
+
+const verdictSrc = await Bun.file(new URL("../src/lib/fleetVerdict.ts", import.meta.url)).text();
+const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+
+test("the strip decides nothing about a wait or a silence by itself", () => {
+  // A second copy of the rule is how the strip and the watch came apart.
+  const src = code(verdictSrc);
+  expect(src).toContain("attention(");
+  expect(src).not.toContain("isForgotten(");
+  expect(src).not.toContain("FORGOTTEN_AFTER_MS");
+  expect(src).not.toMatch(/kind\s*[!=]==?\s*"input"/);
 });

@@ -36,7 +36,7 @@
  */
 import * as AgentBoard from "./agentboard.ts";
 import { boardNow } from "./lantern.ts";
-import { FORGOTTEN_AFTER_MS, isForgotten } from "../../shared/fieldRules.ts";
+import { FORGOTTEN_AFTER_MS, attention } from "../../shared/fieldRules.ts";
 import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
 import { pushLantern } from "./alerts.ts";
@@ -55,9 +55,8 @@ export interface Finding {
   since: number;
 }
 
-/* The rules for "gone" and "forgotten" live in shared/fieldRules.ts, so the
-   dashboard's verdict strip counts stuck work by the same rule this watch
-   notifies about. */
+/* Who needs a person is decided in shared/fieldRules.ts (`attention`), so the
+   dashboard's verdict strip counts by the same rule this watch notifies by. */
 export { FORGOTTEN_AFTER_MS };
 
 const ago = (t: number, now: number) => {
@@ -95,24 +94,19 @@ export function findings(p: {
      * one line, by the mark the board already carries.
      */
     if ((r as { role?: string }).role) continue;
-    if (r.needsYou) {
-      /* A turn that ended is not urgent: the agent finished and is waiting
-         for whatever you say next, which is most sessions most of the time.
-         It becomes a finding the way forgotten work does — after an hour of
-         nobody coming back to it. A permission or a gate is urgent at once. */
-      if (r.needsYou.kind === "input" && now - r.needsYou.since < FORGOTTEN_AFTER_MS) continue;
+    /* Who needs a person is `attention`, the rule the dashboard's strip reads
+       as well: a permission or a gate at once, a turn that ended only after
+       an hour of nobody coming back to it, claimed work quiet for an hour. */
+    const a = attention(r, now);
+    if (a === "blocked" || a === "left") {
       out.push({
-        kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou.since,
-        line: `${r.name} ${waitWord(r.needsYou)} — ${ago(r.needsYou.since, now)}${r.needsYou.why ? `: ${r.needsYou.why}` : ""}`.slice(0, 200),
+        kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou!.since,
+        line: `${r.name} ${waitWord(r.needsYou!)} — ${ago(r.needsYou!.since, now)}${r.needsYou!.why ? `: ${r.needsYou!.why}` : ""}`.slice(0, 200),
       });
-      continue;
-    }
-    /* Claimed work gone quiet for an hour, not a dead session — the rule and
-       the measurement that shaped it are in shared/fieldRules.ts. */
-    if (isForgotten(r, now)) {
+    } else if (a === "forgotten") {
       out.push({
-        kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt,
-        line: `${r.name} said it was on "${r.doing}" and has been quiet for ${ago(r.saidAt, now)} — done, or stuck?`.slice(0, 200),
+        kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt!,
+        line: `${r.name} said it was on "${r.doing}" and has been quiet for ${ago(r.saidAt!, now)} — done, or stuck?`.slice(0, 200),
       });
     }
   }

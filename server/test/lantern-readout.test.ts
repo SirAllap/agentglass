@@ -106,6 +106,6 @@ describe("one rule for both screens", () => {
     expect(isGone({ saidAt: NOW - 40 * 60 * 60_000 }, NOW)).toBe(true);
     expect(isGone({ paneId: "%3", saidAt: NOW - 40 * 60 * 60_000 }, NOW)).toBe(false);
     expect(isGone({ saidAt: NOW - 60_000 }, NOW)).toBe(false);
-    expect(isGone({ saidAt: NOW - 40 * 60 * 60_000, needsYou: { kind: "input" } }, NOW)).toBe(false);
+    expect(isGone({ saidAt: NOW - 40 * 60 * 60_000, needsYou: { kind: "input", since: NOW - 60_000 } }, NOW)).toBe(false);
   });
 });

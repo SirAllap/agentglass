@@ -5,21 +5,23 @@
  * and left "is anything wrong right now" to whoever could read them all. This
  * is that answer, in one line, and it is a re-read of the Lantern's board
  * rather than a new source: the same rows the rail's pip and the Lantern view
- * already poll, sorted by the rules they already use — a permission or a held
- * gate is what needs you (`lanternNeed`), claimed work quiet for an hour is
- * stuck (the watch's "forgotten", from shared/fieldRules.ts, which already
- * leaves dead names out). The rows it counts are the rows the Lantern view
- * draws, so a clause that opens the view finds what it counted.
+ * already poll, sorted by `attention` in shared/fieldRules.ts — the same call
+ * the watch makes before it sends a notification, so the line and the push
+ * cannot tell two stories. A permission or a held gate is what needs you (and
+ * is exactly what the rail's pip counts); claimed work quiet for an hour, or a
+ * turn that ended and nobody came back to for an hour, is stuck. The rows it
+ * counts are the rows the Lantern view draws, so a clause that opens the view
+ * finds what it counted.
  *
- * A turn that ended and waits for its next prompt is not in the line. It is
- * most sessions most of the time, and a verdict that counts it is a verdict
- * that is never calm.
+ * A turn that ended under the hour is not in the line. It is most sessions
+ * most of the time, and a verdict that counts it is a verdict that is never
+ * calm.
  *
  * Pure, and `now` is an argument, so it is tested here and not through a
  * render.
  */
 import type { LanternRow } from "../components/LanternView.tsx";
-import { isForgotten } from "../../../shared/fieldRules.ts";
+import { attention } from "../../../shared/fieldRules.ts";
 import { ago } from "./fileRecents.ts";
 
 export type VerdictTone = "calm" | "warn" | "critical";
@@ -44,8 +46,8 @@ const waitWord = (w: NonNullable<LanternRow["needsYou"]>) =>
 export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed = false): FleetVerdict | null {
   if (!all || failed) return null;
   const rows = all.filter((r) => r.role !== "lantern");
-  const need = rows.filter((r) => r.needsYou && r.needsYou.kind !== "input");
-  const stuck = rows.filter((r) => isForgotten(r, now));
+  const need = rows.filter((r) => attention(r, now) === "blocked");
+  const stuck = rows.filter((r) => { const a = attention(r, now); return a === "left" || a === "forgotten"; });
   const running = rows.filter((r) => !r.needsYou && r.state === "working");
 
   const calm = !need.length && !stuck.length;
@@ -57,7 +59,9 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
     const one = stuck.length === 1 ? stuck[0] : null;
     clauses.push({
       kind: "stuck", count: stuck.length, tone: "warn", paneId: one?.paneId,
-      text: one ? `${one.name} quiet for ${ago(one.saidAt!, now).replace(/ ago$/, "")} on "${one.doing}"` : `${stuck.length} stuck`,
+      text: !one ? `${stuck.length} stuck`
+        : one.needsYou ? `${one.name} waiting for your next prompt for ${ago(one.needsYou.since, now).replace(/ ago$/, "")}`
+        : `${one.name} quiet for ${ago(one.saidAt!, now).replace(/ ago$/, "")} on "${one.doing}"`,
     });
   }
   if (need.length) {
