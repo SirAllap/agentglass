@@ -128,6 +128,17 @@ describe("what the picker lists", () => {
     setWorkspaceRoots([]);
   });
 
+  test("opening a project outside the folders gives it a row on the very next read", async () => {
+    const open = makeRepo(join(dir, "elsewhere", "opened"));
+    makeRepo(join(code, "orbit"));
+    setRepoDir(code, true);
+    expect(await picker()).toEqual([join(code, "orbit")]);
+    // Scoped from somewhere other than the picker, so no folder was added.
+    setWorkspaceRoots([open]);
+    expect(await picker()).toContain(open);
+    setWorkspaceRoots([]);
+  });
+
   test("looking for projects is still there when it is asked for", async () => {
     const known = makeRepo(join(dir, "known"));
     const found = (await discoverRepos([], [known], { ignoreScope: true })).map((r) => r.root);

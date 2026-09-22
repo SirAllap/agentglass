@@ -9,7 +9,7 @@ import { seedWorktree, type SeedReport } from "./worktreeseed.ts";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
-import { configuredRepoDirs, workspaceRoots, scopeKey, inScope, hiddenProjects } from "./config.ts";
+import { configuredRepoDirs, workspaceRoots, inScope, hiddenProjects } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { observe, noteResolved, noteReopened, stopFor, forget } from "./mergesession.ts";
 import { entered, backoff } from "./loopwatch.ts";
@@ -555,9 +555,13 @@ export async function discoverRepos(
   // `\\1` between the two lists, so a removed project and a known root cannot
   // add up to the key of a different pair.
   // So are the added folders, and which list is being asked for: adding a
-  // folder in the picker has to list its projects on the very next read.
+  // folder in the picker has to list its projects on the very next read. The
+  // picker's list keys on the scope too, because it always carries the open
+  // projects' rows. The scope is joined with its own separator, so two open
+  // projects cannot read as one open project and one hidden one.
   const only = configuredRepoDirs();
-  const key = [opts.ignoreScope ? (opts.rootsOnly ? "roots" : "*") : scopeKey(), ...hide, "\\1", ...knownRoots, "\\2", ...only].join("\\0");
+  const scope = workspaceRoots().join("\\3");
+  const key = [opts.ignoreScope ? (opts.rootsOnly ? "roots\\3" + scope : "*") : scope, ...hide, "\\1", ...knownRoots, "\\2", ...only].join("\\0");
   const hit = repoCache.get(key);
   // Held longer while a shell is in use or the loop is stalling: this sweep is
   // eighteen `git status` calls on a worktree-heavy repo, and none of them is
