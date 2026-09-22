@@ -137,7 +137,15 @@ describe("wired into CI", () => {
   test("it is a job of its own that runs the script on every pull request", () => {
     expect(job.length).toBeGreaterThan(100);
     expect(job).toContain("python3 scripts/catalogue-check.py landing/plugins.json");
-    expect(job, "and it never skips, so it can be a required check").not.toMatch(/^    if:/m);
+    expect(job, "and it never skips, so it can be a required check").not.toMatch(/^    if: (?!\$\{\{ !cancelled\(\) \}\})/m);
+  });
+
+  test("a failed file list is a failure, not a skipped check that reads as passed", () => {
+    /* A job skipped because what it needs failed reports "skipped", and a
+       required check that was skipped does not block a merge. So it runs
+       after a failed `changes` too, and says so in red. */
+    expect(job).toContain("    if: ${{ !cancelled() }}");
+    expect(job).toContain("if: needs.changes.result != 'success'");
   });
 
   test("the check it runs is the base branch's, not the pull request's", () => {

@@ -217,12 +217,21 @@ jobs:
   # stranger's repository, so it holds no secret and keeps no credentials.
   catalogue:
     needs: changes
+    # Not skipped when `changes` fails: a skipped job reports "skipped", and a
+    # required check that was skipped does not hold a merge back. It runs, and
+    # the first step turns a failed file list into a red check.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - name: The file list was read
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::the changes job did not say what this pull request touches, so nothing here can say it is safe"
+          exit 1
       - name: Nothing to check
-        if: github.event_name != 'pull_request' || needs.changes.outputs.catalogue != 'true'
+        if: needs.changes.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.catalogue != 'true')
         run: echo "this change does not touch landing/plugins.json"
       - name: A listing travels alone
         if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue == 'true' && needs.changes.outputs.catalogue_only != 'true'
