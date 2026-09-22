@@ -50,7 +50,6 @@ jobs:
       # never with this job's, and a job that has just cloned a stranger's
       # repository holds as little as it can.
       contents: read
-      pull-requests: write
       # The fallback below comments on the issue when the pull request cannot
       # be opened, and without this it failed too — "Resource not accessible
       # by integration" — so a listing stopped at a branch nobody was told
@@ -232,10 +231,27 @@ jobs:
           PY
           python3 -c "import json;json.load(open('landing/plugins.json'))"
 
+      # The identity that pushes the branch and opens the pull request: a
+      # GitHub App installed on this repository alone, with contents and pull
+      # requests and nothing else, minted here for this run and gone within
+      # the hour. It replaced a personal token of a repository admin, whom
+      # the ruleset lets bypass it always — a leak of that one secret was a
+      # push to main and a release tag. The App is not an admin, has no
+      # bypass, and its pushes still trigger CI, which is what the required
+      # checks and auto-merge wait on.
+      - name: A token for this one pull request
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CATALOGUE_APP_ID }}
+          private-key: ${{ secrets.CATALOGUE_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Open a pull request with it
         env:
           GH_TOKEN: ${{ github.token }}
-          CATALOGUE_PR_TOKEN: ${{ secrets.CATALOGUE_PR_TOKEN }}
+          CATALOGUE_TOKEN: ${{ steps.app.outputs.token }}
           ISSUE: ${{ github.event.issue.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           NAME: ${{ steps.entry.outputs.name }}
@@ -257,13 +273,12 @@ jobs:
           Listing is not auditing: this says the repository is public, the
           manifest is one the app accepts, and somebody with write access said
           yes. It says nothing about what the plugin does."
-          # Pushed with the same token that opens the pull request, not with
-          # this job's. A ref pushed by GITHUB_TOKEN does not trigger a
-          # workflow run — GitHub's guard against a workflow feeding itself —
-          # so `build` never reported on the pull request and the required
-          # check sat "Expected" for ever. Pushing as a real identity is what
-          # makes CI run, and CI is what auto-merge is waiting for.
-          git push "https://x-access-token:${CATALOGUE_PR_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
+          # Pushed with the App's token, not this job's. A ref pushed by
+          # GITHUB_TOKEN does not trigger a workflow run — GitHub's guard
+          # against a workflow feeding itself — so `build` never reported on
+          # the pull request and the required check sat "Expected" for ever.
+          # Pushing as another identity is what makes CI run.
+          git push "https://x-access-token:${CATALOGUE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
           # No status is written here. This job used to post `build=success`
           # on its own commit, with `statuses: write`, and that one grant let
           # the only guard on main be satisfied by the workflow it guards.
@@ -281,18 +296,17 @@ jobs:
           $(cat /tmp/pr-body.md)
 
           Read the submission check on the issue before merging — it says what installing this costs and which lines are worth an eye."
-          # Opened with a token of its own, not this job's. GitHub forbids
+          # Opened with the App's token, not this job's. GitHub forbids
           # Actions from opening pull requests here, and the switch that would
           # allow it is the same one that lets a bot approve reviews — a
           # catalogue whose only reviewer is a person does not hand that away.
-          # A fine-grained token scoped to pull requests on this repository
-          # buys the one capability without the other.
-          if GH_TOKEN="${CATALOGUE_PR_TOKEN:-$GH_TOKEN}" gh pr create --title "catalogue: list $NAME" --body "$body" --base main --head "$branch" 2>/tmp/pr.err; then
-            # Merged by the check, not by anybody's approval. `protect-main`
-            # requires `build` and requires no review, so auto-merge lands the
-            # entry the moment the check is green and deletes the branch after
-            # it. Nothing here approves anything.
-            GH_TOKEN="${CATALOGUE_PR_TOKEN:-$GH_TOKEN}" gh pr merge --auto --squash "$branch" || \
+          # The App buys the one capability without the other.
+          if GH_TOKEN="$CATALOGUE_TOKEN" gh pr create --title "catalogue: list $NAME" --body "$body" --base main --head "$branch" 2>/tmp/pr.err; then
+            # Merged by the checks, not by anybody's approval: auto-merge
+            # lands the entry once CI's `build` and `catalogue` are green on
+            # it. Nothing here approves anything, and nothing here reports a
+            # check.
+            GH_TOKEN="$CATALOGUE_TOKEN" gh pr merge --auto --squash "$branch" || \
               echo "::warning::pull request opened but auto-merge could not be enabled"
             exit 0
           fi

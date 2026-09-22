@@ -179,4 +179,30 @@ describe("the job holds nothing it does not use", () => {
     expect(code).toContain("python3 scripts/plugin-baseline.py /tmp/plugin > /tmp/baseline.json");
     expect(code).toContain("git -C /tmp/plugin rev-parse HEAD");
   });
+
+  /*
+   * The pull request was pushed and opened with a personal token of a
+   * repository admin, and the ruleset lets admins bypass it always: one leaked
+   * secret was a push to main and a release tag. A GitHub App installed on
+   * this repository has the two permissions the listing needs, no bypass, and
+   * a token that lives an hour — minted per run, here.
+   */
+  test("the pull request is pushed and opened with an app token minted for this run", () => {
+    expect(code).not.toContain("CATALOGUE_PR_TOKEN");
+    const mint = code.slice(code.indexOf("uses: actions/create-github-app-token@"));
+    expect(mint.length, "the workflow mints an app token").toBeLessThan(code.length);
+    expect(mint).toContain("app-id: ${{ secrets.CATALOGUE_APP_ID }}");
+    expect(mint).toContain("private-key: ${{ secrets.CATALOGUE_APP_KEY }}");
+    expect(mint).toContain("permission-contents: write");
+    expect(mint).toContain("permission-pull-requests: write");
+    expect(code).toContain("CATALOGUE_TOKEN: ${{ steps.app.outputs.token }}");
+    expect(code).toContain('git push "https://x-access-token:${CATALOGUE_TOKEN}@github.com/');
+    expect(code).toContain('GH_TOKEN="$CATALOGUE_TOKEN" gh pr create');
+    expect(code).toContain('GH_TOKEN="$CATALOGUE_TOKEN" gh pr merge --auto');
+  });
+
+  test("and the job's own token keeps only what reading and commenting need", () => {
+    expect(perms).not.toContain("pull-requests:");
+    expect(perms).toContain("issues: write");
+  });
 });
