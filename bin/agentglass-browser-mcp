@@ -53,6 +53,7 @@ import os
 import re
 import secrets
 import socket
+import socketserver
 import sys
 import threading
 import time
@@ -2279,7 +2280,17 @@ def _parse_bind(bind):
     return host, int(port)
 
 
-class _McpHttpServer6(ThreadingHTTPServer):
+class _McpHttpServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind asks getfqdn() for the bound address — a
+        # reverse lookup that took five seconds for 0.0.0.0, so the start-up
+        # line and the off-loopback warning arrived after the port was
+        # already serving. The name is only ever used for CGI's SERVER_NAME.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = str(self.server_address[0]), self.server_address[1]
+
+
+class _McpHttpServer6(_McpHttpServer):
     # socketserver is IPv4 unless told: `[::1]:PORT` parsed and then died
     # in bind with gaierror.
     address_family = socket.AF_INET6
@@ -2313,7 +2324,7 @@ def _run_http(bind, expose=False, allow_hosts=()):
     if minted:
         token = secrets.token_urlsafe(32)
     six = ":" in host
-    httpd = (_McpHttpServer6 if six else ThreadingHTTPServer)((host, port), _McpHttp)
+    httpd = (_McpHttpServer6 if six else _McpHttpServer)((host, port), _McpHttp)
     httpd.mcp_token = token
     httpd.allowed_hosts = {h.strip().lower() for h in allow_hosts if h.strip()}
     # getsockname's spelling of the bind, and the operator's: `localhost`

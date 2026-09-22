@@ -1212,6 +1212,33 @@ print(json.dumps({b: m._parse_bind(b) for b in ["8765", "127.0.0.1:8765", "[::1]
     expect(noOptIn.err).toContain("--expose");
   });
 
+  test("an exposed bind starts at once and warns that the token crosses the network in the clear", async () => {
+    /* HTTPServer.server_bind asks for the fully-qualified name of the bound
+       address, a reverse lookup that took five seconds for 0.0.0.0 on a
+       machine with no answer for it — the warning arrived after the port
+       was already serving. */
+    const p = Bun.spawn(["python3", MCP, "--http", `0.0.0.0:${await freePort()}`, "--expose"], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, AGENTGLASS_MCP_TOKEN: TOKEN },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    try {
+      const reader = p.stderr.getReader();
+      let err = "";
+      const started = Date.now();
+      while (!/WARNING[^\n]*\n/.test(err) && Date.now() - started < 4000) {
+        const next = await Promise.race([reader.read(), Bun.sleep(4000).then(() => ({ value: undefined, done: true }))]);
+        if (next.done) break;
+        err += new TextDecoder().decode(next.value);
+      }
+      expect(Date.now() - started, "start-up did not wait on a reverse lookup").toBeLessThan(2000);
+      expect(err).toContain("WARNING");
+      expect(err).toContain("in the clear");
+      expect(err).not.toContain(TOKEN);
+    } finally {
+      p.kill();
+    }
+  });
+
   test("a token shorter than 32 chars, or equal to the app's, refuses to start", async () => {
     const short = await startsWith({ AGENTGLASS_MCP_HTTP: `127.0.0.1:${await freePort()}`, AGENTGLASS_MCP_TOKEN: "short" });
     expect(short.code).toBe(2);
