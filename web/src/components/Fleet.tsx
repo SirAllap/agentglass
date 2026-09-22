@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, BranchIcon, ClockIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, BranchIcon, ClockIcon, CrossIcon, DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import { stuckBecause, type AgentCard, type AgentOutcome } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle, fmtAgo, modelLabelOf } from "../lib/format.ts";
 import { RunLanes, legDirs } from "./RunLane.tsx";
 import { runsOf, subscribeRuns, watchRuns } from "../lib/runStore.ts";
+import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
+import { collisionChip, collisionTitle, collisionsFor } from "../lib/collisions.ts";
+import type { Collision } from "../../../shared/types.ts";
 
 // "now ago" reads wrong — fmtAgo already returns "now" for the freshest events.
 const ago = (ts: number) => {
@@ -168,9 +172,10 @@ function Spark({ data, color }: { data: number[]; color: string }) {
   );
 }
 
-function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolean; onSelect?: (a: AgentCard) => void }) {
+function SessionCard({ a, selected, onSelect, collisions }: { a: AgentCard; selected: boolean; onSelect?: (a: AgentCard) => void; collisions: Collision[] }) {
   const st = STATUS[a.status];
   const model = modelLabelOf(a.model_name);
+  const shared = collisionsFor(collisions, a.source_app, a.session_id);
   return (
     <motion.div
       onClick={() => onSelect?.(a)}
@@ -235,8 +240,20 @@ function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolea
         )}
         <span className="chip shrink-0" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{model}</span>
       </div>
-      <div className="mt-1 flex items-center justify-between">
-        <span className="text-[11px] t-dim2 truncate" title={evidenceNote(a)}>{a.lastAction || st.hint}</span>
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {/* Another checkout is on the same port, database, .env or compose
+              project. On the row, because the row is where you decide which
+              agent's green to believe; worded as a possibility, because it is
+              read out of commands and not proven. */}
+          {shared.length > 0 && (
+            <span className="chip shrink-0" title={collisionTitle(shared)}
+              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+              <WarningIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{collisionChip(shared)}
+            </span>
+          )}
+          <span className="text-[11px] t-dim2 truncate" title={evidenceNote(a)}>{a.lastAction || st.hint}</span>
+        </div>
         <Spark data={a.spark} color={st.color} />
       </div>
       {/* subagents this session spawned — the real parent→child structure */}
@@ -265,8 +282,15 @@ function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolea
   );
 }
 
-export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; activeApp?: string; onSelect?: (a: AgentCard) => void }) {
+export function Fleet({ agents, activeApp, onSelect, active = true }: { agents: AgentCard[]; activeApp?: string; onSelect?: (a: AgentCard) => void; active?: boolean }) {
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+
+  // Sessions in different checkouts on one out-of-tree resource. Fifteen
+  // seconds, like the insights beside it: the server reads `ss` for each ask.
+  const [collisions, setCollisions] = useState<Collision[]>([]);
+  const loadCollisions = () => { api.collisions().then((r) => setCollisions(r.collisions)).catch(() => {}); };
+  useEffect(() => { if (active) loadCollisions(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [active]);
+  usePoll(active, loadCollisions, 15_000);
 
   /*
    * The runs on this machine, and the sessions they have claimed.
@@ -351,7 +375,7 @@ export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; ac
           runs={runs}
           cards={agents}
           renderCard={(a) => (
-            <SessionCard key={a.key} a={a} selected={!!activeApp && a.source_app === activeApp} onSelect={onSelect} />
+            <SessionCard key={a.key} a={a} selected={!!activeApp && a.source_app === activeApp} onSelect={onSelect} collisions={collisions} />
           )}
         />
         {/* An adopted leg can have no session card at all — that is the normal
@@ -380,7 +404,7 @@ export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; ac
                 {!collapsed && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-2 overflow-hidden">
                     {list.map((a) => (
-                      <SessionCard key={a.key} a={a} selected={!!activeApp && a.source_app === activeApp} onSelect={onSelect} />
+                      <SessionCard key={a.key} a={a} selected={!!activeApp && a.source_app === activeApp} onSelect={onSelect} collisions={collisions} />
                     ))}
                   </motion.div>
                 )}
