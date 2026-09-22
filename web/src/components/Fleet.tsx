@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, BranchIcon, ClockIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, BranchIcon, ClockIcon, CrossIcon, DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { riskChip, riskTitle } from "../lib/riskView.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { stuckBecause, type AgentCard, type AgentOutcome } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
@@ -171,6 +172,7 @@ function Spark({ data, color }: { data: number[]; color: string }) {
 function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolean; onSelect?: (a: AgentCard) => void }) {
   const st = STATUS[a.status];
   const model = modelLabelOf(a.model_name);
+  const risk = riskChip(a.risks);
   return (
     <motion.div
       onClick={() => onSelect?.(a)}
@@ -254,6 +256,16 @@ function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolea
           </div>
         );
       })()}
+      {/* What its edits touched that deserves reading first. On the card rather
+          than only in the diff, because the card is where you decide which
+          session to open. Nothing flagged draws nothing — see riskView. */}
+      {risk && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] min-w-0" style={{ color: risk.tone }}
+          title={`Review first:\n${riskTitle(a.risks)}`}>
+          <span aria-hidden className="flex shrink-0"><WarningIcon size={ICON.xs} /></span>
+          <span className="truncate">{risk.text}</span>
+        </div>
+      )}
       <div className="mt-1.5 flex items-center gap-3 text-[10px] t-dim2 tabular-nums">
         <span>{a.tools} tools</span>
         {a.errors > 0 && <span style={{ color: "var(--error)" }}>{a.errors} err</span>}

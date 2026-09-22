@@ -1,4 +1,4 @@
-import type { WatchEvent, OpenToolCall, Liveness, SessionRollup } from "../../../shared/types.ts";
+import type { WatchEvent, OpenToolCall, Liveness, SessionRollup, SessionRisk } from "../../../shared/types.ts";
 import { agentKey, fmtMs, sessionTitle } from "./format.ts";
 import { providerOf, UNKNOWN } from "../../../shared/models.ts";
 import { sessionWorktree } from "./worktree.ts";
@@ -132,6 +132,10 @@ export interface AgentCard {
    *  agents on one project are otherwise indistinguishable in the fleet — which
    *  is the normal case for anyone who works a worktree per ticket. */
   worktree: string | null;
+  /** What this session's edits touched that a reviewer should read first —
+   *  from the session row, where the server rolls them up. Empty until the
+   *  sessions poll has seen it, and when nothing was flagged. */
+  risks: SessionRisk[];
 }
 
 const STALL_MS = 20_000;
@@ -263,6 +267,7 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     ctxTs: 0,
     ctxLimit: 200_000,
     worktree: null,
+    risks: [],
   };
 }
 
@@ -301,7 +306,7 @@ export function buildTitles(sessions: { session_id: string; source_app?: string;
  *
  * The sessions poll already runs for the titles; these are the same rows.
  */
-type RollupFields = "cost_usd" | "input_tokens" | "output_tokens" | "equiv_tokens" | "tool_count";
+type RollupFields = "cost_usd" | "input_tokens" | "output_tokens" | "equiv_tokens" | "tool_count" | "risks";
 export type RollupLookup = ReadonlyMap<string, Pick<SessionRollup, RollupFields>>;
 
 export function buildRollups(sessions: SessionRollup[]): RollupLookup {
@@ -310,6 +315,7 @@ export function buildRollups(sessions: SessionRollup[]): RollupLookup {
     m.set(s.session_id, {
       cost_usd: s.cost_usd, input_tokens: s.input_tokens,
       output_tokens: s.output_tokens, equiv_tokens: s.equiv_tokens, tool_count: s.tool_count,
+      risks: s.risks,
     });
   }
   return m;
@@ -470,6 +476,7 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       a.cost = Math.max(a.cost, r.cost_usd);
       a.tokens = Math.max(a.tokens, weighted(r));
       a.tools = Math.max(a.tools, r.tool_count);
+      if (r.risks) a.risks = r.risks;
     }
     const since = now - a.lastSeen;
     // A session that ended can't still be running a tool, whatever pair we

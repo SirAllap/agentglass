@@ -30,6 +30,8 @@ import { useIncremental } from "../../lib/useIncremental.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLines.tsx";
 import { ThemePicker, Toggle } from "./DiffControls.tsx";
+import { WarningIcon } from "../../lib/glyphIcons.tsx";
+import { riskColor, riskTitle } from "../../lib/riskView.ts";
 
 export type PresetDiffProps = {
   open: boolean;
@@ -158,6 +160,12 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
                     <span className="text-[11.5px] truncate" style={{ color: "var(--text)" }}>{name}</span>
                     {dir && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{dir}</span>}
                   </span>
+                  {c.risks?.length ? (
+                    <span className="shrink-0 flex" title={riskTitle(c.risks)} aria-label={`Review first: ${c.risks.map((r) => r.reason).join("; ")}`}
+                      style={{ color: riskColor(c.risks.map((r) => r.kind)) }}>
+                      <WarningIcon size={ICON.xs} />
+                    </span>
+                  ) : null}
                   <span className="shrink-0 text-[10px] tabular-nums">
                     {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
                     {c.deletions > 0 && <span style={{ color: "var(--error)" }}> −{c.deletions}</span>}
@@ -179,6 +187,15 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
           {selected && (
             <div className="px-4 py-2 shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}>
               <p className="text-[12px] truncate" style={{ color: "var(--text)" }}>{selected.file_path}</p>
+              {/* The reasons in words above the diff they are about, so the
+                  line a flag names can be found without hovering anything. */}
+              {selected.risks?.map((r) => (
+                <p key={`${r.kind}:${r.line ?? ""}`} className="mt-0.5 text-[11px] flex items-center gap-1.5"
+                  style={{ color: riskColor([r.kind]) }}>
+                  <span aria-hidden className="flex shrink-0"><WarningIcon size={ICON.xs} /></span>
+                  <span className="truncate">{r.reason}{r.line ? ` · line ${r.line}` : ""}</span>
+                </p>
+              ))}
             </div>
           )}
           <div className="agx-scroll flex-1 min-h-0 overflow-auto">
