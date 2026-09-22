@@ -30,7 +30,10 @@ import { budgetStatus, overBudgetFor, overBudgetLine, sessionCwd } from "./budge
  *    follows the laxer rule, and a model that `cd`s moves with it.
  *  - reading a shell command. `Bash` on an allow list lets through every
  *    command outward.ts does not recognise as outward, and that is a
- *    heuristic: `bash -c 'git push'` is not recognised.
+ *    heuristic: it reads inside `bash -c` and `eval`, but `g=git; $g push`
+ *    is not recognised. An outward match is never released by an allow
+ *    rule, except one made only by a generic MCP verb, and only by a rule
+ *    that names that exact tool.
  *  - a settings pane. The rules live in config.json and nothing writes them,
  *    which is also what keeps them out of reach of the token every agent on the
  *    machine holds — budgets needed a kill switch for exactly that.
@@ -39,7 +42,9 @@ import { budgetStatus, overBudgetFor, overBudgetLine, sessionCwd } from "./budge
 export type RuleVerdict =
   /** No rule covers this call: the gate behaves exactly as it did before. */
   | { kind: "none" }
-  | { kind: "allow" }
+  /** `exact` when the allow list names this tool rather than matching it by a
+   *  prefix — the only allow that may release a generic outward match. */
+  | { kind: "allow"; exact?: boolean }
   | { kind: "hold" }
   | { kind: "deny"; reason: string };
 
@@ -102,7 +107,7 @@ export function gateRuleVerdict(tool: string, cwd: string, rules: GateRule[], ov
       ? { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${overBudgetLine(over)}, and the rule for ${where} denies calls once a budget is over. Every further call will be denied too until the period rolls over or the limit is raised — stop and tell a person rather than trying another tool.` }
       : { kind: "hold" };
   }
-  if (r.allow.some((p) => matches(tool, p))) return { kind: "allow" };
+  if (r.allow.some((p) => matches(tool, p))) return { kind: "allow", exact: r.allow.includes(tool) };
   if (r.otherwise === "deny") {
     return { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${tool} is not on the allow list for ${where}. ${retry}` };
   }

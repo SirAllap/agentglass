@@ -3215,11 +3215,15 @@ const server = Bun.serve<WsData>({
        * list means "do not hold this" and never "skip every other check". And
        * an outward action is never let through by one — the allow list is
        * about what a person need not see, and a push is by definition
-       * something they do.
+       * something they do — save the one exception below.
        */
       const rule = gateRuleFor(greq.tool_name, cwd);
       if (rule.kind === "deny") return json(denyByRule(greq, rule.reason));
-      if (rule.kind === "allow" && !out) return json({ decision: "allow", reason: "" });
+      // The one exception: an outward match made only by a generic MCP verb
+      // (`create_entities` on a memory store) is released by an allow rule
+      // that names that exact tool. A prefix never saw the tool it would be
+      // releasing; a name is a person saying which kind of `create` this is.
+      if (rule.kind === "allow" && (!out || (out.generic && rule.exact))) return json({ decision: "allow", reason: "" });
       const hold = out
         ? [outwardLine(out), out.text ? `“${out.text.replace(/\s+/g, " ").trim().slice(0, 240)}”` : ""].filter(Boolean).join(" · ")
         : budgetHoldFor(greq.session_id, gateFailClosed(), cwd);

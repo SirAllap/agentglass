@@ -25,7 +25,7 @@ beforeAll(async () => {
   mkdirSync(join(dir, "agentglass"), { recursive: true });
   writeFileSync(join(dir, "agentglass", "config.json"), JSON.stringify({
     gateRules: [
-      { allow: ["Read"], deny: ["WebFetch"] },
+      { allow: ["Read", "mcp__memory__create_entities", "mcp__notes__*"], deny: ["WebFetch"] },
       { root: ORBIT, allow: ["Bash", "Read"] },
     ],
   }));
@@ -161,5 +161,19 @@ describe("a project rule follows the directory the hook reports", () => {
     // apply and the machine's rule holds the call.
     const id = nextId();
     expect(await ask(id, "Bash", { command: "ls" }, "code/orbit")).toBe("held");
+  });
+});
+
+describe("a local tool whose name reads as outward", () => {
+  test("is released by an allow rule that names it exactly", async () => {
+    // `create` is the verb of a memory store as well as of a pull request.
+    // Naming the one tool is a person saying which this is.
+    expect(await ask(nextId(), "mcp__memory__create_entities", { entities: [] })).toEqual({ decision: "allow", reason: "" });
+  });
+
+  test("but not by a prefix, which never saw the tool it would be releasing", async () => {
+    const id = nextId();
+    expect(await ask(id, "mcp__notes__delete_note", { id: "n-1" })).toBe("held");
+    expect((await pending()).some((g) => g.id === id)).toBe(true);
   });
 });

@@ -394,9 +394,15 @@ A hold only helps while somebody is watching. `gateRules` in
   deepest `root` that covers the call wins; a rule without one covers
   everything. A project's linked worktrees count.
 - An outward action agentglass recognises (a push, a comment, a message) is
-  never let through by an allow list — it is still held for you, closed. That
-  recognition is a heuristic: with `Bash` on an allow list, a push hidden inside
-  `bash -c '…'` is not recognised and runs. Allow `Bash` only where that is fine.
+  never let through by an allow list — it is still held for you, closed. It
+  reads inside `bash -c`, `sh -c` and `eval` (after `env` or `sudo` too),
+  treats `gh api` with fields as a write (GraphQL only when it is a mutation),
+  and counts any MCP tool whose name says push, create, send, merge, delete,
+  post or comment. It is still a heuristic: `g=git; $g push` is not
+  recognised, so allow `Bash` only where that is fine.
+- A local MCP tool caught only by that verb list — a memory store's
+  `create_entities` — is released by an allow rule that names it exactly.
+  A `*` prefix does not release it.
 
 Rules only see calls the hook is wired for, so an allow list is most useful
 with a broad matcher (`"matcher": "*"`). They name tools, not arguments, and a

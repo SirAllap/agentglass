@@ -138,3 +138,177 @@ describe("the parser", () => {
     expect(outwardShell(`gh pr create --body="short one"`)?.text).toBe("short one");
   });
 });
+
+/*
+ * The ways around the obvious — #109.
+ *
+ * A gate rule can put `Bash` or a whole MCP server on an allow list, and from
+ * then on the only thing between an agent and a push is this file. The three
+ * shapes below are the ones a review found walking straight through it: a
+ * command wrapped in another shell, `gh api` writing through fields alone, and
+ * an MCP verb this file had never been told about.
+ */
+describe("wrapped in another shell", () => {
+  test("bash -c, sh -c and a login shell are read inside", () => {
+    expect(bash(`bash -c 'git push origin main'`)?.kind).toBe("push");
+    expect(bash(`bash -lc "cd ~/code/orbit && git push"`)?.kind).toBe("push");
+    const o = bash(`sh -c "gh pr comment 1042 --body 'looks fine to me'"`);
+    expect(o?.kind).toBe("comment");
+    expect(o?.text).toBe("looks fine to me");
+  });
+
+  test("eval is read inside, and so is a shell inside a shell", () => {
+    expect(bash(`eval "git push --force-with-lease"`)?.kind).toBe("push");
+    expect(bash(`bash -c "sh -c 'git push'"`)?.kind).toBe("push");
+  });
+
+  test("but a wrapped read is still a read, and a quoted wrapper is still an argument", () => {
+    expect(bash(`bash -c 'git status && git log -3'`)).toBeNull();
+    expect(bash(`grep -rn "bash -c 'git push'" docs/`)).toBeNull();
+    expect(bash(`bash -c 'git push --dry-run'`)).toBeNull();
+  });
+});
+
+describe("gh api writing through its fields", () => {
+  test("fields without a method are a POST, which is what gh sends", () => {
+    const o = bash(`gh api repos/acme/orbit/issues/1042/comments -f body="ship it"`);
+    expect(o).not.toBeNull();
+    expect(o?.text).toBe("ship it");
+    expect(bash(`gh api repos/acme/orbit/labels -F name=bug`)).not.toBeNull();
+  });
+
+  test("every spelling of a writing method", () => {
+    expect(bash(`gh api --method=PATCH repos/acme/orbit/pulls/7`)).not.toBeNull();
+    expect(bash(`gh api -XDELETE repos/acme/orbit/git/refs/heads/old`)).not.toBeNull();
+    expect(bash(`gh api --method PUT repos/acme/orbit/pulls/7/merge`)).not.toBeNull();
+  });
+
+  test("an explicit GET with fields is a search, not a write", () => {
+    expect(bash(`gh api -X GET search/issues -f q="repo:acme/orbit is:open"`)).toBeNull();
+    expect(bash(`gh api repos/acme/orbit/pulls/7`)).toBeNull();
+  });
+});
+
+describe("an MCP verb that acts outside", () => {
+  test("push, create, send, merge, delete, post and comment, on any server", () => {
+    expect(outwardAction("mcp__github__push_files", { branch: "main" })?.kind).toBe("push");
+    for (const t of [
+      "mcp__github__create_issue",
+      "mcp__github__create_or_update_file",
+      "mcp__mail__send_email",
+      "mcp__acme__deleteRecord",
+      "mcp__forum__post_reply",
+      "mcp__wiki__add_comment",
+      "mcp__forge__merge_branch",
+    ]) expect(outwardAction(t, {})).not.toBeNull();
+  });
+
+  test("but not a read, not a verb inside a longer word, and not a built-in tool", () => {
+    expect(outwardAction("mcp__github__get_file_contents", {})).toBeNull();
+    expect(outwardAction("mcp__orbit__search_docs", {})).toBeNull();
+    expect(outwardAction("mcp__orbit__list_postings", {})).toBeNull();
+    expect(outwardAction("TaskCreate", {})).toBeNull();
+  });
+
+  test("and the line a person reads names the tool", () => {
+    expect(outwardLine(outwardAction("mcp__mail__send_email", {})!)).toContain("mcp__mail__send_email");
+  });
+});
+
+/*
+ * What a second review of the above found. Each case was run against the
+ * first version of it: some were caught before it and missed after, some were
+ * reads it began holding closed — and a false positive here is not an
+ * interruption, it is a denial when nobody answers.
+ */
+describe("wrappers, the second pass", () => {
+  test("a wrapper does not hide what comes after it on the same line", () => {
+    expect(bash(`bash -c 'sleep 5' & git push`)?.kind).toBe("push");
+    expect(bash(`bash -c 'echo hi' 2>&1 & gh pr merge 7`)?.kind).toBe("merge");
+    expect(bash(`git push origin $( bash -c 'git branch --show-current' )`)?.kind).toBe("push");
+  });
+
+  test("a redirect with an ampersand is not a second command", () => {
+    expect(bash(`make test 2>&1 | tail -5`)).toBeNull();
+    expect(bash(`make test &> build.log`)).toBeNull();
+  });
+
+  test("every spelling of a shell that runs a string", () => {
+    for (const cmd of [
+      `/bin/bash -c 'git push'`,
+      `/usr/bin/sh -c "git push"`,
+      `bash --login -c 'git push'`,
+      `bash -o pipefail -c 'git push'`,
+      `fish -c 'git push'`,
+      `bash -c git\\ push`,
+      `env FOO=1 bash -c 'git push'`,
+      `sudo -u deploy sh -c 'git push'`,
+    ]) expect(bash(cmd)?.kind).toBe("push");
+  });
+
+  test("escaped and adjacent quotes are one argument, as the shell reads them", () => {
+    expect(bash(`bash -c "git commit -m \\"wip\\" && git push"`)?.kind).toBe("push");
+    expect(bash(`bash -c "bash -c \\"git push\\""`)?.kind).toBe("push");
+    expect(bash(`bash -c 'git'' push'`)?.kind).toBe("push");
+  });
+
+  test("eval and sh -c are wrappers only where a command starts", () => {
+    expect(bash(`git push origin eval`)?.kind).toBe("push");
+    expect(bash(`echo eval git push`)?.kind).toBe("push");
+    expect(bash(`grep -n "sh -c" notes.md`)).toBeNull();
+  });
+
+  test("a shell wrapped deeper than it is worth reading is held, not passed", () => {
+    expect(bash(`sh -c "sh -c 'sh -c \\"sh -c ls\\"'"`)).not.toBeNull();
+  });
+
+  test("a long run of flags does not stall the classifier", () => {
+    const t0 = performance.now();
+    bash(`bash -${"c".repeat(100_000)}"`);
+    expect(performance.now() - t0).toBeLessThan(200);
+  });
+});
+
+describe("gh api, the second pass", () => {
+  test("a GraphQL query is a read; a mutation is a write", () => {
+    expect(bash(`gh api graphql -f query='query { viewer { login } }'`)).toBeNull();
+    expect(bash(`gh api graphql -F owner=acme -F name=orbit -f query='query($owner:String!){ repository(owner:$owner){ id } }'`)).toBeNull();
+    const o = bash(`gh api graphql -f query='mutation { addComment(input:{subjectId:"X", body:"hi"}) { clientMutationId } }'`);
+    expect(o).not.toBeNull();
+    expect(o?.text).toContain("mutation");
+    expect(bash(`gh api graphql --input query.json`)).not.toBeNull();
+  });
+
+  test("a quoted method and an attached field still count", () => {
+    expect(bash(`gh api -X 'DELETE' repos/acme/orbit/git/refs/heads/old`)).not.toBeNull();
+    expect(bash(`gh api repos/acme/orbit/issues/7/comments -fbody=hi`)?.text).toBe("hi");
+  });
+});
+
+describe("heredocs and dry runs", () => {
+  test("the body of a heredoc is text, not commands", () => {
+    expect(bash(`cat <<'EOF' > notes.md\nthen git push it\nEOF`)).toBeNull();
+    expect(bash(`cat <<EOF > notes.md\ngit push\nEOF\ngit push`)?.kind).toBe("push");
+  });
+
+  test("git push -n is a dry run", () => {
+    expect(bash(`git push -n origin main`)).toBeNull();
+  });
+});
+
+describe("MCP verbs, the second pass", () => {
+  test("plurals and capitalised runs are the same verb", () => {
+    expect(outwardAction("mcp__wiki__add_comments", {})).not.toBeNull();
+    expect(outwardAction("mcp__web__HTTPPost", {})).not.toBeNull();
+    expect(outwardAction("mcp__mail__sendsEmail", {})).not.toBeNull();
+    // A whole word, still: "resend" is not "send".
+    expect(outwardAction("mcp__orbit__resend_digest", {})).toBeNull();
+  });
+
+  test("a match on a generic verb says so, so an exact allow rule can release it", () => {
+    expect(outwardAction("mcp__memory__create_entities", {})?.generic).toBe(true);
+    // The server-specific lists are not generic: an allow rule never releases them.
+    expect(outwardAction("mcp__github__merge_pull_request", {})?.generic).toBeUndefined();
+    expect(bash("git push")?.generic).toBeUndefined();
+  });
+});
