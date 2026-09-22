@@ -28,10 +28,13 @@ function Spark({ values, color }: { values: number[]; color: string }) {
   );
 }
 
-/** `null` is "not known" — a board not read yet — and is drawn as a dash, never as 0. */
-function PulseCell({ k, v, u, accent }: { k: string; v: number | null; u: string; accent?: string }) {
+const STALE_TITLE = "The board could not be read just now; this is its last answer";
+
+/** `null` is "not known" — a board not read yet — and is drawn as a dash, never
+ *  as 0. `stale` is the last answer after a failed read, dimmed like the strip. */
+function PulseCell({ k, v, u, accent, stale }: { k: string; v: number | null; u: string; accent?: string; stale?: boolean }) {
   return (
-    <div className="px-4 py-3 min-w-0">
+    <div className="px-4 py-3 min-w-0" style={stale ? { opacity: 0.6 } : undefined} title={stale ? STALE_TITLE : undefined}>
       <div className="panel-eyebrow">{k}</div>
       <div className="text-[23px] font-semibold leading-none tabular-nums mt-1" style={{ color: v === null ? "var(--text4)" : accent ?? "var(--text)" }}>
         {v === null ? "–" : <NumberFlow value={v} />}
@@ -44,12 +47,13 @@ function PulseCell({ k, v, u, accent }: { k: string; v: number | null; u: string
 const CELL_BG = "color-mix(in srgb, var(--bg2) 66%, transparent)";
 
 /** A status cell that only lights up when it needs attention. */
-function StatusCell({ k, v, color }: { k: string; v: number | null; color: string }) {
+function StatusCell({ k, v, color, stale }: { k: string; v: number | null; color: string; stale?: boolean }) {
   const hot = (v ?? 0) > 0;
   return (
     <div
       className="flex items-center gap-3 px-4 py-3 min-w-0"
-      style={{ background: hot ? `color-mix(in srgb, ${color} 11%, transparent)` : CELL_BG }}
+      style={{ background: hot ? `color-mix(in srgb, ${color} 11%, transparent)` : CELL_BG, opacity: stale ? 0.6 : 1 }}
+      title={stale ? STALE_TITLE : undefined}
     >
       <span
         className="h-2.5 w-2.5 rounded-full shrink-0"
@@ -98,6 +102,7 @@ export function Kpis({
   const working = fleet?.counts.running ?? null;
   const need = fleet?.counts.need ?? null;
   const stuck = fleet?.counts.stuck ?? 0;
+  const stale = fleet?.stale ?? false;
   const failed = t?.errors ?? 0;
   const tools = t?.tool_calls ?? 0;
   // Health is a *tool* failure rate, so its numerator has to be tool failures.
@@ -179,7 +184,7 @@ export function Kpis({
       {/* pulse — the live tempo, grouped */}
       <motion.div {...enter} transition={{ delay: 0.05, type: "spring", stiffness: 300, damping: 26 }} className="panel">
         <div className="grid grid-cols-3 h-full" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", gap: "1px" }}>
-          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u={stuck > 0 ? `${stuck} stuck` : "Live agents"} accent="var(--success)" /></div>
+          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u={stuck > 0 ? `${stuck} stuck` : "Live agents"} accent="var(--success)" stale={stale} /></div>
           <div style={{ background: CELL_BG }}><PulseCell k="Events / min" v={epm} u="Throughput" accent="var(--info)" /></div>
           <div style={{ background: CELL_BG }}><PulseCell k="Tools run" v={tools} u={`${(t?.events ?? 0).toLocaleString()} events`} /></div>
         </div>
@@ -189,7 +194,7 @@ export function Kpis({
       <motion.div {...enter} transition={{ delay: 0.1, type: "spring", stiffness: 300, damping: 26 }} className="panel">
         <div className="grid grid-cols-2 flex-1" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", gap: "1px" }}>
           <StatusCell k="Failed" v={failed} color="var(--error)" />
-          <StatusCell k="Needs you" v={need} color="var(--error)" />
+          <StatusCell k="Needs you" v={need} color="var(--error)" stale={stale} />
         </div>
         <div
           className="px-4 py-2 text-[10px] t-dim2 text-right tabular-nums"

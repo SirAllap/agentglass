@@ -198,6 +198,13 @@ test("the KPI tiles count agents from the verdict, not from the cards", () => {
   expect(kpisSrc).toContain("fleet?.counts.need");
 });
 
+test("a stale verdict dims the tiles as it dims the strip", () => {
+  // Same object, same freshness: a dimmed "stale" line over tiles at full
+  // strength says the numbers are both old and current.
+  expect(kpisSrc).toContain("fleet?.stale");
+  expect(kpisSrc.match(/stale=\{stale\}/g)).toHaveLength(2);
+});
+
 test("the dashboard reads the verdict once and gives both the same one", () => {
   expect(dashSrc.match(/useFleetVerdict\(/g)).toHaveLength(1);
   const name = dashSrc.match(/const (\w+) = useFleetVerdict\(/)?.[1];
