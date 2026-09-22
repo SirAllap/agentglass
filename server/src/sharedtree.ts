@@ -166,28 +166,81 @@ export function recentSessions(now = Date.now()): SessionSeen[] {
 }
 
 /**
- * The files these sessions edited, newest first — read for the live sessions
- * themselves, not taken from the Diff list's own "last 300 edits of anybody".
+ * How far back an edit still makes its session an author.
+ *
+ * A day: long enough that an agent in a pane still has its morning's work
+ * counted in the evening, short enough that the read stays small. The ceiling:
+ * a session that is still live but has not written here for a day is no
+ * longer named, though its uncommitted files may still be on disk.
+ */
+export const EDITS_MS = 24 * 60 * 60_000;
+
+/**
+ * The files these sessions edited inside the window — read for the live
+ * sessions themselves, not taken from the Diff list's own "last 300 edits of
+ * anybody".
  *
  * That list was the first source, and on a busy fleet it is less than an hour
  * deep: two sessions still sharing a checkout, the mixed file still dirty on
  * disk, and the flag went off because other agents had pushed their edits out
- * of the window. Only the path is read — no hunks, no diff.
+ * of the window. A row cap does the same thing further away, so there is none:
+ * the time window is the bound, and it is the same for every session.
+ *
+ * Kept between calls and read forward. This runs on the server loop every time
+ * the working list is rebuilt, every two seconds while agents are editing, and
+ * a Write's payload is the whole file: parsed afresh each time, twenty sessions
+ * of a thousand 20 KB writes cost 38 ms per rebuild, and still 14 ms with the
+ * window alone. A session's window is read once, when it turns up among the
+ * live; after that only events newer than the last one read are, which
+ * between two rebuilds is a handful. Events are appended and never rewritten,
+ * and a late hook with an old timestamp still takes a new id, so reading
+ * forward by id misses nothing. A session that drops out of the live set is
+ * forgotten, and read whole again if it comes back.
  */
-export function editsBy(ids: string[], cap = 4000): TreeEdit[] {
-  if (!ids.length) return [];
-  const holes = ids.map(() => "?").join(",");
+const kept = new Map<string, TreeEdit[]>();
+let readTo = 0;
+
+export function editsBy(ids: string[], now = Date.now()): TreeEdit[] {
+  const since = now - EDITS_MS;
+  const want = new Set(ids);
+  for (const id of kept.keys()) if (!want.has(id)) kept.delete(id);
   try {
-    return db.query<{ session_id: string; timestamp: number; fp: string | null }, (string | number)[]>(`
-      SELECT session_id, timestamp,
-        COALESCE(json_extract(payload, '$.tool_response.filePath'), json_extract(payload, '$.tool_input.file_path'),
-                 json_extract(payload, '$.tool_input.filePath')) AS fp
-      FROM events
-      WHERE hook_event_type = 'PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit') AND session_id IN (${holes})
-      ORDER BY timestamp DESC LIMIT ?`).all(...ids, cap)
-      .filter((r): r is typeof r & { fp: string } => typeof r.fp === "string" && r.fp.startsWith("/"))
-      .map((r) => ({ session_id: r.session_id, file_path: physical(r.fp), timestamp: r.timestamp }));
-  } catch { return []; }
+    const top = db.query<{ top: number | null }, []>("SELECT MAX(id) AS top FROM events").get()?.top ?? 0;
+    const fresh = [...want].filter((id) => !kept.has(id));
+    const known = [...want].filter((id) => kept.has(id));
+    for (const id of fresh) kept.set(id, []);
+    for (const e of [...editsIn(fresh, since, 0, top), ...editsIn(known, since, readTo, top)]) kept.get(e.session_id)!.push(e);
+    // Never back: a prune that emptied the table reads MAX(id) as nothing, and
+    // ids resume above the old top, so going back would read the same edits twice.
+    readTo = Math.max(readTo, top);
+  } catch { kept.clear(); readTo = 0; return []; }
+  const out: TreeEdit[] = [];
+  for (const [id, edits] of kept) {
+    const live = edits.filter((e) => e.timestamp >= since);
+    if (live.length !== edits.length) kept.set(id, live);
+    out.push(...live);
+  }
+  return out;
+}
+
+/** One read: `ids`' edits since `since`, with an id in (after, upTo]. From the
+ *  start it is a range in idx_events_first_prompt; forward from a last read it
+ *  is a range of ids. The unary `+` says which: it takes a column out of the
+ *  planner's hands, and left to itself the planner picks either index for
+ *  either read — the whole table by id, or the whole window again. */
+function editsIn(ids: string[], since: number, after: number, upTo: number): TreeEdit[] {
+  if (!ids.length || upTo <= after) return [];
+  const holes = ids.map(() => "?").join(",");
+  const range = after
+    ? `id > ? AND id <= ? AND +hook_event_type = 'PostToolUse' AND +session_id IN (${holes}) AND +timestamp >= ?`
+    : `+id > ? AND +id <= ? AND hook_event_type = 'PostToolUse' AND session_id IN (${holes}) AND timestamp >= ?`;
+  return db.query<{ session_id: string; timestamp: number; fp: unknown }, (string | number)[]>(`
+    SELECT session_id, timestamp,
+      COALESCE(json_extract(payload, '$.tool_response.filePath'), json_extract(payload, '$.tool_input.file_path'),
+               json_extract(payload, '$.tool_input.filePath')) AS fp
+    FROM events WHERE ${range} AND tool_name IN ('Edit','Write','MultiEdit')`).all(after, upTo, ...ids, since)
+    .filter((r): r is typeof r & { fp: string } => typeof r.fp === "string" && r.fp.startsWith("/"))
+    .map((r) => ({ session_id: r.session_id, file_path: physical(r.fp), timestamp: r.timestamp }));
 }
 
 /**

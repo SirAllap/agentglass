@@ -1822,7 +1822,9 @@ setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); rowsCache.cl
  * list itself is re-read every two, and `listPanes` is synchronous: up to four
  * tmux spawns per socket plus a walk of /proc per pane, none of it worth a late
  * keystroke in the terminal that shares this thread. An agent arriving in or
- * leaving a pane is a ten-second question; the edits are read fresh each time.
+ * leaving a pane is a ten-second question; the edits are read forward from
+ * the last rebuild, so each one costs this thread only the events since
+ * (sharedtree.ts).
  *
  * Names are held for a minute for the same reason: a nameless session's name
  * is its first decent prompt, found by parsing its prompts, and a name changes

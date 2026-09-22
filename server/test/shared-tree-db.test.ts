@@ -17,7 +17,7 @@ process.env.AGENTGLASS_DB = join(mkdtempSync(join(tmpdir(), "agx-shared-tree-db-
 
 const { db, insertEvent } = await import("../src/db.ts");
 const { normalize } = await import("../src/ingest.ts");
-const { recentSessions } = await import("../src/sharedtree.ts");
+const { recentSessions, editsBy, EDITS_MS } = await import("../src/sharedtree.ts");
 
 const NOW = Date.now();
 const ingest = (session_id: string, hook_event_type: string, timestamp: number, payload: Record<string, unknown> = {}) =>
@@ -58,5 +58,51 @@ describe("recentSessions", () => {
     const p = plan(sql[0]!);
     expect(p).not.toContain("TEMP B-TREE");
     expect(p).toContain("idx_events_first_prompt");
+  });
+});
+
+describe("editsBy", () => {
+  test("an edit older than the window is not read at all", () => {
+    write("s-window", "/home/dev/code/orbit/old.ts", NOW - EDITS_MS - 60_000);
+    write("s-window", "/home/dev/code/orbit/new.ts", NOW - 60_000);
+    expect(editsBy(["s-window"], NOW).map((e) => e.file_path)).toEqual(["/home/dev/code/orbit/new.ts"]);
+  });
+
+  test("a busy session does not push a quieter one's edits out", () => {
+    // The cap was global and newest first: four thousand edits by one session
+    // and its co-author vanished, which is the flag going off on a busy fleet.
+    write("s-quiet", "/home/dev/code/orbit/quiet.ts", NOW - 120_000);
+    db.transaction(() => { for (let i = 0; i < 4001; i++) write("s-loud", `/home/dev/code/orbit/f${i % 40}.ts`, NOW - 60_000 + i); })();
+    const got = editsBy(["s-quiet", "s-loud"]);
+    expect(got.some((e) => e.session_id === "s-quiet")).toBe(true);
+  });
+
+  test("a session's window is read once from the index, and after that only what is new", () => {
+    write("s-memo", "/home/dev/code/orbit/memo.ts", NOW - 30_000);
+    const first = watching(() => editsBy(["s-memo"], NOW));
+    expect(first.value.map((e) => e.file_path)).toEqual(["/home/dev/code/orbit/memo.ts"]);
+    const whole = first.sql.filter((s) => s.includes("json_extract"));
+    expect(whole).toHaveLength(1);
+    expect(plan(whole[0]!)).toMatch(/idx_events_first_prompt \(hook_event_type=\? AND session_id=\? AND timestamp>\?\)/);
+    // A hook that arrives late, stamped before the last read: a new id all the same.
+    write("s-memo", "/home/dev/code/orbit/late.ts", NOW - 40_000);
+    const again = watching(() => editsBy(["s-memo"], NOW));
+    expect(again.value.map((e) => e.file_path).sort()).toEqual(["/home/dev/code/orbit/late.ts", "/home/dev/code/orbit/memo.ts"]);
+    const forward = again.sql.filter((s) => s.includes("json_extract"));
+    expect(forward).toHaveLength(1);
+    expect(plan(forward[0]!)).toContain("rowid>? AND rowid<?");
+  });
+
+  test("a session that leaves the live set and comes back is read whole again", () => {
+    write("s-back", "/home/dev/code/orbit/back.ts", NOW - 30_000);
+    editsBy(["s-back"], NOW);
+    editsBy(["s-other"], NOW);
+    expect(editsBy(["s-back"], NOW).map((e) => e.file_path)).toEqual(["/home/dev/code/orbit/back.ts"]);
+  });
+
+  test("an edit that ages out of the window between two reads is dropped", () => {
+    write("s-aging", "/home/dev/code/orbit/aging.ts", NOW - EDITS_MS + 60_000);
+    expect(editsBy(["s-aging"], NOW)).toHaveLength(1);
+    expect(editsBy(["s-aging"], NOW + 120_000)).toEqual([]);
   });
 });
