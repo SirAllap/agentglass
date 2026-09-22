@@ -278,7 +278,7 @@ function TypeChip({ label, count, on, onClick }: { label: string; count: number;
  * where it will draw, then the sentence it describes itself with, with the
  * one button that does anything at the end of the line.
  */
-function Offer({ entry, owner, onInstalled }: { entry: Entry; owner: string; onInstalled: () => void }) {
+export function Offer({ entry, owner, onInstalled }: { entry: Entry; owner: string; onInstalled: () => void }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -424,18 +424,7 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
               </Field>
             )}
 
-            <Field label="What is cloned">
-              {/* The exact source, because this is the sentence the install
-                  acts on: a name in a list is not what lands on the disk. */}
-              <span className="t-mono text-[11.5px] break-all" style={{ color: "var(--text2)" }}>
-                {entry.source.url}{entry.source.ref ? `@${entry.source.ref}` : ""}
-              </span>
-              <span className="block text-[11px] t-dim mt-1">
-                {entry.source.ref
-                  ? "Pinned to that ref."
-                  : "Its default branch, at whatever it points to when you press Install."}
-              </span>
-            </Field>
+            <WhatIsCloned entry={entry} />
 
             {(entry.added || entry.minApp) && (
               <Field label="Listed">
@@ -464,6 +453,45 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
         </div>
       </div>
     </Portal>
+  );
+}
+
+/**
+ * The sentence the install acts on: a name in a list is not what lands on the
+ * disk, the repository at a ref is.
+ *
+ * A commit is printed short, as git prints one, with all forty characters in
+ * the title — the short form is what a person compares against a repository
+ * page, and the full one is there for the person who wants to be sure. It is
+ * the only kind of ref that names bytes; a branch or a tag is a pointer its
+ * author can move, and the line under it says which of the two this is. When
+ * the entry also carries a content hash, the install refuses a tree that does
+ * not match it, and that is said too — only then, because a promise the
+ * server does not keep is worse than none.
+ *
+ * Exported for the test, which renders it: there is no renderer in this
+ * project, and the dialog it sits in is a portal that draws nothing without
+ * a document.
+ */
+export function WhatIsCloned({ entry }: { entry: Entry }) {
+  const ref = entry.source.ref;
+  const commit = ref !== null && /^[0-9a-f]{40}$/.test(ref);
+  return (
+    <Field label="What is cloned">
+      <span className="t-mono text-[11.5px] break-all" style={{ color: "var(--text2)" }}>
+        {entry.source.url}
+        {commit ? <> at <span title={ref}>{ref.slice(0, 7)}</span></> : ref ? `@${ref}` : ""}
+      </span>
+      <span className="block text-[11px] t-dim mt-1">
+        {commit
+          ? entry.sha256
+            ? "Pinned to that commit. The install refuses any files that do not hash to what this list says, so a push after the listing does not reach you."
+            : "Pinned to that commit."
+          : ref
+            ? "A branch or a tag, which its author can move: you get whatever it points to when you press Install."
+            : "Its default branch, at whatever it points to when you press Install."}
+      </span>
+    </Field>
   );
 }
 

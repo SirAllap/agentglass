@@ -11,8 +11,11 @@
  * source, because there is no renderer in this project.
  */
 import { describe, expect, test } from "bun:test";
-import { matching, tintOf, types } from "../src/components/plugins/Market.tsx";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Offer, WhatIsCloned, matching, tintOf, types } from "../src/components/plugins/Market.tsx";
 import type { Catalogue } from "../../shared/types.ts";
+import { domOf } from "./htmlAttrs.ts";
 
 const market = await Bun.file(new URL("../src/components/plugins/Market.tsx", import.meta.url)).text();
 const pane = await Bun.file(new URL("../src/components/PluginsPane.tsx", import.meta.url)).text();
@@ -176,5 +179,65 @@ describe("the list is the project's, and only the project's", () => {
   test("read fresh, and said so", () => {
     expect(code(market)).toContain("api.pluginCatalogueFetch(MARKET_URL)");
     expect(code(market)).toContain("https://sirallap.github.io/agentglass/plugins.json");
+  });
+});
+
+/*
+ * A catalogue entry is a stranger's text: the manifest's publisher, the
+ * submission's description. React renders strings as text, and nothing in
+ * this screen says so out loud — so the day somebody reaches for markup to
+ * bold a word, a description becomes a script. Rendered here and handed to a
+ * real HTML parser, which is the only judge of what a browser would build.
+ */
+describe("a stranger's words stay words", () => {
+  const HOSTILE = {
+    description: '<img src=x onerror="alert(1)"> reviews things',
+    publisher: '<script>alert(2)</script><a href="javascript:alert(3)">acme</a>',
+    title: "<b>Orbit</b>",
+  };
+
+  test("the row puts title, publisher and description in as text", async () => {
+    const html = renderToStaticMarkup(React.createElement(Offer, {
+      entry: entry({ id: "orbit", ...HOSTILE }), owner: "acme", onInstalled: () => {},
+    }));
+    const built = await domOf(html);
+    for (const tag of ["img", "script", "a", "b"]) expect(built.tags, `a <${tag}> was built from the entry`).not.toContain(tag);
+    expect(built.attrs.map((a) => a.name)).not.toContain("onerror");
+    // And the words are still there, for a person to read.
+    expect(html).toContain("&lt;img src=x");
+    expect(html).toContain("&lt;script&gt;alert(2)");
+  });
+
+  test("the details' source line puts the URL and the ref in as text too", async () => {
+    const html = renderToStaticMarkup(React.createElement(WhatIsCloned, {
+      entry: entry({ id: "orbit", source: { kind: "git", url: "https://github.com/acme/orbit\"><img src=x>", ref: "<img src=y>" } }),
+    }));
+    expect((await domOf(html)).tags).not.toContain("img");
+  });
+});
+
+describe("what a pinned entry says it installs", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const render = (over: Partial<Entry>) => renderToStaticMarkup(React.createElement(WhatIsCloned, { entry: entry({ id: "orbit", ...over }) }));
+
+  test("a commit is shown short, the way git prints one, with the whole of it a hover away", () => {
+    const html = render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: SHA }, sha256: "a".repeat(64) });
+    expect(html).toContain(">0123456<");
+    expect(html).toContain(`title="${SHA}"`);
+    expect(html).not.toContain(`@${SHA}`);
+  });
+
+  test("and says the install is held to the listed hash only when there is one", () => {
+    const pinned = render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: SHA }, sha256: "a".repeat(64) });
+    expect(pinned).toContain("refuses");
+    const commitOnly = render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: SHA } });
+    expect(commitOnly).not.toContain("refuses");
+    expect(commitOnly).toContain("0123456");
+  });
+
+  test("a branch is a ref somebody can move, and an unpinned entry is whatever the branch holds", () => {
+    expect(render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: "main" } })).toContain("@main");
+    expect(render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: "main" } })).toContain("can move");
+    expect(render({})).toContain("default branch");
   });
 });
