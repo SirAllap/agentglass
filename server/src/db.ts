@@ -3279,6 +3279,16 @@ export function newestPromptId(): number {
   try { return newestPrompt.get()?.id ?? 0; } catch { return 0; }
 }
 
+/** The first prompt this conversation was sent since a moment, or "": the
+ *  one a command line carries, when it carried one. idx_events_first_prompt
+ *  to the row, then its payload. */
+const firstPromptSinceQ = db.query<{ prompt: string | null }, [string, number]>(
+  `SELECT json_extract(payload, '$.prompt') AS prompt FROM events WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ? AND timestamp >= ? ORDER BY timestamp LIMIT 1`);
+export function firstPromptSince(sessionId: string, sinceMs = 0): string {
+  if (!sessionId) return "";
+  try { return firstPromptSinceQ.get(sessionId, Math.max(0, sinceMs))?.prompt ?? ""; } catch { return ""; }
+}
+
 /** Has this conversation been sent any prompt since a moment? A covering
  *  lookup on idx_events_first_prompt. */
 const promptedSinceQ = db.query<{ one: number }, [string, number]>(

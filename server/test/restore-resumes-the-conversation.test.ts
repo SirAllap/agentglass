@@ -385,6 +385,30 @@ describe("a corpse and the photograph it is read from", () => {
     expect(got!.agentSession, "a carried window's conversation").not.toBe(STRANGER);
     expect(got!.agentArgs ?? []).not.toContain("--dangerously-skip-permissions");
   }, 20_000);
+
+  test("a corpse photographed with a brief on its line, whose hook came in after, comes back without it", async () => {
+    /* Alive, the brief could not yet be told from a flag; the prompt was
+       ingested, and the CLI died before the next sweep. The corpse was
+       photographed with the arguments of the last live photograph, brief
+       and all, and the restore would have run it again. */
+    const CORPSE = "3d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a";
+    const TASK = "Read the file /home/someone/briefs/orbit-1044.md and follow it exactly.";
+    const stop = join(CWD, "stop-brief");
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "dbrief", "-c", CWD, ...fakeCrashingClaude(stop, "--model", "opus", TASK)]);
+    const id = await paneOf("dbrief");
+    await Bun.sleep(250);
+    wt.notePaneAgent({ pane: id, sessionId: CORPSE, transcriptPath: "/tmp/t.jsonl", cwd: CWD });
+    const alive = await photographed("dbrief");
+    expect(alive!.agentArgs, "alive, before the hook").toContain(TASK);
+    db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
+      ["orbit", CORPSE, "UserPromptSubmit", JSON.stringify({ prompt: TASK }), Date.now()]);
+    await dieWhen("dbrief", stop);
+    const dead = await photographed("dbrief");
+    expect(dead!.dead).toBe(true);
+    expect(dead!.agentSession).toBe(CORPSE);
+    expect(dead!.agentArgs, "the brief came back as a flag").not.toContain(TASK);
+    expect(dead!.agentArgs).toContain("opus");
+  }, 20_000);
 });
 
 describe("what the pane is told to run", () => {

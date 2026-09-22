@@ -29,7 +29,7 @@ import { tmux, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.t
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
-import { wasPromptOf, wasPromptAnywhere, newestPromptId, promptedSince } from "./db.ts";
+import { wasPromptOf, wasPromptAnywhere, newestPromptId, promptedSince, firstPromptSince } from "./db.ts";
 import { agentNamed } from "./paneloc.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
@@ -887,7 +887,16 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
           const note = was || !bornClaude ? null : paneAgentNote(p.id);
           const noteFits = !!note && noteIsThisAgents(note, { cwd: p.path, startedAt }, server);
           const agentSession = was ? was.agentSession : noteFits ? note!.session_id : undefined;
-          panes.push({ ...p, path: p.path || was?.path || "", startCommand: "", ...(agentSession ? { agentSession, ...(was?.agentArgs ? { agentArgs: was.agentArgs } : {}) } : {}) });
+          /* The flags of the last live photograph — which may have been
+             taken before the command-line prompt's hook came in, when the
+             prompt could not yet be told from a flag. It can now: the
+             conversation's first prompt since this server started is the
+             one a command line carries, so that is taken off. Only that one,
+             and only exactly: a flag's value typed later as an answer stays
+             a value. */
+          const first = was?.agentArgs?.length && agentSession ? firstPromptSince(agentSession, startedAt - NOTE_SLACK_MS) : "";
+          const agentArgs = was?.agentArgs ? agentArgsOf(["", ...was.agentArgs], (text) => !!first && text === first) : undefined;
+          panes.push({ ...p, path: p.path || was?.path || "", startCommand: "", ...(agentSession ? { agentSession, ...(agentArgs?.length ? { agentArgs } : {}) } : {}) });
           continue;
         }
         /*
