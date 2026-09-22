@@ -724,10 +724,17 @@ export function panelRepoDirs(): string[] {
  * answer finds and removes them. Only the file is touched: forgetting a folder
  * never goes near the folder.
  */
-/** The whole disk and the whole home folder: the machine by another name.
- *  Every added folder is walked for repositories on the thread that answers
- *  the picker, so neither is taken as one. */
-const tooBroad = (abs: string) => abs === resolve("/") || abs === resolve(homedir());
+/** The whole disk, the home folder and the folder every home lives in: the
+ *  machine by another name. Every added folder is walked for repositories on
+ *  the thread that answers the picker, so none is taken as one. Compared by
+ *  where they really are, so a link to home — or a chooser that answers with
+ *  the real path of a linked home — is still home. */
+const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
+function tooBroad(abs: string): boolean {
+  const home = resolve(homedir());
+  const broad = new Set([resolve("/"), home, dirname(home)].flatMap((p) => [p, real(p)]));
+  return broad.has(abs) || broad.has(real(abs));
+}
 
 export function setRepoDir(pathIn: unknown, added: boolean): { ok: boolean; roots: string[]; persisted: boolean; error?: string; note?: string } {
   const fail = (error: string) => ({ ok: false as const, roots: configuredRepoDirs(), persisted: false, error });

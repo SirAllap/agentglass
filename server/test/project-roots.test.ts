@@ -13,7 +13,7 @@
  * real module against real repositories in a temp directory.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { configuredRepoDirs, fileRoots, repoDirsUnstated, seedRepoDirs, setRepoDir, setWorkspaceRoots, workspaceRoots } from "../src/config.ts";
@@ -89,12 +89,19 @@ describe("adding and removing a folder", () => {
   test("the whole disk or the whole home folder is refused, as a folder to walk", () => {
     // Every added folder is walked for repositories on the thread that answers
     // the picker, and these two are the whole machine by another name.
-    for (const p of ["/", homedir(), homedir() + "/"]) {
+    // The folder every home lives in is every person's home at once.
+    for (const p of ["/", homedir(), homedir() + "/", join(homedir(), "..")]) {
       const r = setRepoDir(p, true);
       expect(r.ok).toBe(false);
       expect(r.error).toContain("too broad");
     }
     expect(configuredRepoDirs()).toEqual([]);
+  });
+
+  test("the home folder reached through a link is still the home folder", () => {
+    const link = join(dir, "home-link");
+    symlinkSync(homedir(), link);
+    expect(setRepoDir(link, true).ok).toBe(false);
   });
 
   test("one written by hand can still be taken off the list", () => {
