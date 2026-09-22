@@ -278,7 +278,7 @@ function TypeChip({ label, count, on, onClick }: { label: string; count: number;
  * where it will draw, then the sentence it describes itself with, with the
  * one button that does anything at the end of the line.
  */
-function Offer({ entry, owner, onInstalled }: { entry: Entry; owner: string; onInstalled: () => void }) {
+export function Offer({ entry, owner, onInstalled }: { entry: Entry; owner: string; onInstalled: () => void }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
