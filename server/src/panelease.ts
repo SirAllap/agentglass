@@ -91,7 +91,15 @@ const REAL: LeaseIo = {
      * whole budget. So the window this app opens for a run is put back to
      * tmux's default here, at the same moment it is stamped.
      */
-    if (ok) await tmux(["set-option", "-w", "-t", windowId, "remain-on-exit", "off"]);
+    if (ok) {
+      await tmux(["set-option", "-w", "-t", windowId, "remain-on-exit", "off"]);
+      /* Set after the fact, and a command that had already failed by then is
+         a corpse the option no longer reaps (measured): it would carry the
+         stamp and be waited on. So it is closed here, the way it would have
+         been a moment earlier. */
+      const dead = await tmux(["display-message", "-p", "-t", windowId, "#{pane_dead}"]);
+      if (dead.ok && dead.stdout.trim() === "1") await tmux(["kill-window", "-t", windowId]);
+    }
     return ok;
   },
   readStamp: async (windowId) => {

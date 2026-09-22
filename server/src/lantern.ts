@@ -176,11 +176,14 @@ async function gitFactsFor(path: string, base: string, now: number): Promise<Git
 }
 
 export async function boardNow(): Promise<LanternCard[]> {
-  const panes = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}"])
+  /* A dead pane — the engine keeps one whose command failed — is not a pane
+     somebody can be sent to: left in, a crashed agent's row never folds and
+     its Go button lands on a status line. */
+  const panes = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}\t#{pane_dead}"])
     .then((r) => (r.ok ? r.stdout.split("\n") : []).map((l) => {
-      const [paneId = "", name = "", cwd = ""] = l.split("\t");
-      return { paneId, name, cwd };
-    }).filter((x) => x.paneId.startsWith("%")))
+      const [paneId = "", name = "", cwd = "", dead = ""] = l.split("\t");
+      return { paneId, name, cwd, dead };
+    }).filter((x) => x.paneId.startsWith("%") && x.dead !== "1").map(({ dead: _d, ...x }) => x))
     .catch(() => [] as { paneId: string; name: string; cwd: string }[]);
   const runs = Work.runningRuns().map((r) => ({
     title: r.title, worktree: r.worktree, branch: r.branch, startedAt: r.startedAt,

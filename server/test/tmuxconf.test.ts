@@ -50,6 +50,10 @@ test("a tab whose program failed is kept, dead, rather than closed without a wor
      and only a crash leaves a status line where it was. The windows this app
      opens for a run put it back to off themselves — see panelease.ts. */
   expect(conf.confContent()).toContain("set -g remain-on-exit failed");
+  /* And a pane born as a plain shell — empty start command — still closes
+     when the shell exits, whatever its status: `false` then Ctrl-D is not a
+     program that failed. */
+  expect(conf.confContent()).toContain(`set-hook -g pane-died 'if-shell -F "#{==:#{pane_start_command},}" "kill-pane"'`);
 });
 
 test("append mode runs the override after the base and re-asserts status off last", () => {

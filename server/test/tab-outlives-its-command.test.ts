@@ -39,6 +39,7 @@ process.env.AGENTGLASS_STATE_DIR = join(tmpdir(), `agx-tabdies-state-${process.p
 process.env.AGENTGLASS_RESTORE_SETTLE_MS = "400";
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const REAL_XDG = process.env.XDG_CONFIG_HOME;
+const REAL_STATE = process.env.AGENTGLASS_STATE_DIR;
 process.env.XDG_CONFIG_HOME = join(tmpdir(), `agx-tabdies-home-${process.pid}`);
 
 let conf: typeof import("../src/tmuxconf.ts");
@@ -55,6 +56,19 @@ async function windowsOf(session: string): Promise<string[]> {
 }
 const show = async (target: string, format: string) =>
   (await pane.tmux(["display-message", "-p", "-t", target, format])).stdout.trim();
+/* A login shell takes its time to come up under a full suite, and tmux takes
+   a beat to act on its exit: poll, never a fixed sleep. */
+async function until(cond: () => Promise<boolean>, ms = 8000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (await cond()) return true; await Bun.sleep(150); }
+  return cond();
+}
+/** Type `exit 1` at a shell once it is at its prompt, and wait for tmux to act. */
+async function exitShell(target: string, shell: RegExp): Promise<void> {
+  expect(await until(async () => shell.test(await show(target, "#{pane_current_command}")))).toBe(true);
+  await Bun.sleep(300);
+  await pane.tmux(["send-keys", "-t", target, "exit 1", "Enter"]);
+}
 
 beforeAll(async () => {
   mkdirSync(TMPDIR, { recursive: true });
@@ -85,6 +99,10 @@ afterAll(async () => {
   for (const d of [TMPDIR, process.env.AGENTGLASS_STATE_DIR!, join(tmpdir(), `agx-tabdies-home-${process.pid}`)]) {
     try { rmSync(d, { recursive: true, force: true }); } catch { /* never made */ }
   }
+  /* Every test file shares one process: a state dir left pointing at a
+     directory this file has just deleted is the next file's problem. */
+  if (REAL_STATE === undefined) delete process.env.AGENTGLASS_STATE_DIR;
+  else process.env.AGENTGLASS_STATE_DIR = REAL_STATE;
 });
 
 describe("a tab on the engine", () => {
@@ -96,6 +114,16 @@ describe("a tab on the engine", () => {
     await Bun.sleep(400);
     expect(await windowsOf(S), "the failed program's tab is the one that must still be there").toEqual(["crashed", "keeps"]);
     expect(await show(`=${S}:crashed`, "#{pane_dead} #{pane_dead_status}")).toBe("1 3");
+  }, 20_000);
+
+  test("a plain shell that exits with a status closes as it always did", async () => {
+    /* An interactive shell exits with the status of its last command, so
+       `false` then Ctrl-D would otherwise leave every Terminal tab a corpse
+       (measured). A pane born with no command is the shell's own tab, and
+       the engine's pane-died hook closes it. */
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "shell"]);
+    await exitShell(`=${S}:shell`, /^(bash|fish|zsh|sh|dash|ksh)$/);
+    expect(await until(async () => !(await windowsOf(S)).includes("shell")), "the shell's own tab is not a program that failed").toBe(true);
   }, 20_000);
 
   test("a dead pane is photographed as a shell, never as the command that failed", async () => {
@@ -142,5 +170,10 @@ describe("a restore on that engine", () => {
     expect(r.ok).toBe(true);
     expect(await windowsOf(name)).toEqual(["dies", "keeps"]);
     expect(await show(`=${name}:dies`, "#{pane_dead}"), "a restored desk is somewhere to type, not a status line").toBe("0");
+    /* And that shell closes on exit like a plain tab, although its pane was
+       born with a command: the pane option was put back to off. */
+    await exitShell(`=${name}:dies`, /^(bash|fish|zsh|sh|dash|ksh)$/);
+    expect(await until(async () => !(await windowsOf(name)).includes("dies"))).toBe(true);
+    expect(await windowsOf(name)).toEqual(["keeps"]);
   }, 20_000);
 });

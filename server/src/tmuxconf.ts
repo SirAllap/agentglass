@@ -26,7 +26,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, readdirSync
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { resolveTmuxBin, tmuxStateDir } from "./tmuxbin.ts";
+import { resolveTmuxBin, tmuxStateDir, tmuxVersion } from "./tmuxbin.ts";
 import { tmuxConfMode, tmuxOverride, writeTmuxSettings, tmuxConfBroken, setTmuxConfBroken, tmuxPrefix, configPath, configDirRedirected } from "./config.ts";
 
 /** The generated base config. Kept here rather than in tmuxpane.ts because the
@@ -67,24 +67,41 @@ setw -g pane-base-index 1
 set -g renumber-windows on
 # Claude Code asks for this by name and warns in the pane without it.
 set -g focus-events on
-# A tab whose program FAILED stays, dead, with the status on it; a tab whose
-# program ended on purpose closes as before.
-#
-# tmux's default is off: a window closes the instant its command exits, and
-# for a program that crashed that is a tab gone from the strip in the same
-# second with nothing to say why. Measured on the owner's desk on 2026-09-21:
-# five tabs running agent CLIs — started by hand with \`tmux new-window "cli …"\`,
-# so without the wrapper this app's own windows carry to hold the pane open —
-# vanished over one afternoon, and the only trace of any of them was a pane id
-# in a note. \`failed\` keeps the pane for a non-zero status or a signal, so the
-# tab reads "Pane is dead (status 1, …)" where the program was; a clean exit —
-# /exit, Ctrl-D — still closes it.
-#
-# The windows this app opens for a RUN are the exception and set this back to
-# off on themselves (panelease.ts): a run's end is read from its window
-# closing, and a corpse would be read as a run still going.
-set -g remain-on-exit failed
 `;
+
+/**
+ * A tab whose PROGRAM failed stays, dead, with the status on it. A shell that
+ * exits closes as it always did.
+ *
+ * tmux's default closes a window the instant its command exits, and for a
+ * program that crashed that is a tab gone from the strip in the same second
+ * with nothing to say why: five tabs running agent CLIs, each started by hand
+ * with `tmux new-window "cli …"` and so without the wrapper this app's own
+ * windows carry, vanished over one afternoon (2026-09-21). `failed` keeps the
+ * pane for a non-zero status or a signal, so the tab reads "Pane is dead
+ * (status 1, …)" where the program was.
+ *
+ * Not for a pane born as a plain shell, and that is the hook: an interactive
+ * shell exits with the status of its LAST command, so `false` then Ctrl-D
+ * would leave every Terminal tab, console and bench as a corpse (measured).
+ * A pane tmux started with no command has an empty `pane_start_command`, and
+ * `pane-died` — which only fires for a pane kept by this option — closes it
+ * on the spot. The windows this app opens and watches for their exit set the
+ * option back to off on themselves (panelease.ts, agentops.ts).
+ *
+ * `failed` is a tmux 3.2 value; an older tmux would refuse the whole line and
+ * report it on the first attach, so it is left out there.
+ */
+export function keepFailedPanesLines(): string {
+  const bin = resolveTmuxBin();
+  const m = /(\d+)\.(\d+)/.exec(bin ? tmuxVersion(bin) ?? "" : "");
+  const known = m ? Number(m[1]) * 100 + Number(m[2]) : 0;
+  if (known < 302) return "# remain-on-exit failed: needs tmux 3.2, and this tmux is older.\n";
+  return "# A tab whose program failed stays with the status on it; a shell that exits\n"
+    + "# closes as always (see keepFailedPanesLines in tmuxconf.ts).\n"
+    + "set -g remain-on-exit failed\n"
+    + "set-hook -g pane-died 'if-shell -F \"#{==:#{pane_start_command},}\" \"kill-pane\"'\n";
+}
 
 /**
  * The config file we write. `confPath()` and `writeConf()` are separate because
@@ -230,7 +247,7 @@ export function confContent(): string {
   // cannot hand the status bar back to tmux — the UI owns it.
   const user = override.trim();
   const body = user ? `\n# --- user override (settings panel) ---\n${user}\n` : "";
-  return `${BASE}${prefixLines()}${body}\n# The UI owns the status line. Re-asserted after any override.\nset -g status off\n`;
+  return `${BASE}${keepFailedPanesLines()}${prefixLines()}${body}\n# The UI owns the status line. Re-asserted after any override.\nset -g status off\n`;
 }
 
 let written: string | null = null;

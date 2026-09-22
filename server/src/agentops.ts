@@ -247,6 +247,12 @@ export async function startAgent(p: {
      screen is yanked by a tick. */
   const opened = await engineWindowRunning(p.root, p.name, argv, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, AGENTS_SESSION, false);
   if (!opened) return { ok: false, error: "no-window" };
+  /* A window this app opened and watches: its closing is how `reconcile`
+     learns the agent ended, so it closes on any exit rather than keeping the
+     corpse the engine keeps for a person's own tabs (tmuxconf.ts). Left on,
+     every firing that failed at launch would leave one more dead window in
+     the agents session, and `wait until=gone` would wait out its budget. */
+  await tmux(["set-option", "-w", "-t", opened.windowId, "remain-on-exit", "off"]);
   const startedAt = p.now ?? Date.now();
   upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, startedAt);
   return { ok: true, agent: { name: p.name, kind: kind.id, cwd: p.cwd, paneId: opened.paneId, windowId: opened.windowId, startedAt, endedAt: null } };
@@ -373,9 +379,11 @@ export async function enlistAgent(p: { name: string; pane?: string; window?: str
   if (existing && existing.endedAt === null && await paneAlive(existing.paneId)) {
     return { ok: false, error: "exists", detail: existing.paneId };
   }
-  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_start_command}"]);
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_start_command}\t#{pane_dead}"]);
   if (!r.ok) return { ok: false, error: "no-pane" };
-  const rows = r.stdout.split("\n").map((l) => l.split("\t")).filter((c) => c.length >= 5);
+  /* A dead pane — the engine keeps one whose command failed — is a status
+     line, not an agent to enlist. */
+  const rows = r.stdout.split("\n").map((l) => l.split("\t")).filter((c) => c.length >= 5 && c[6] !== "1");
   const wanted = p.pane
     ? rows.filter((c) => c[0] === p.pane)
     : rows.filter((c) => c[2] === (p.window ?? p.name));
