@@ -7376,6 +7376,7 @@ const server = Bun.serve<WsData>({
             exists: "an agent by that name is still running",
             "no-cli": "that agent CLI is not installed here",
             "no-window": "tmux would not open a window for it",
+            died: "the agent CLI exited as soon as it was launched",
             "bad-name": "bad name",
             "yolo-refused": "skipping permissions is off in Settings (chatBypass)",
             "bad-args": "args must be plain strings",

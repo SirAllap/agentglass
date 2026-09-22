@@ -136,6 +136,9 @@ export type StartResult =
   /** A pass-through arg that would change what the agent is ALLOWED to do,
    *  named, so the caller is told which one rather than left to bisect. */
   | { ok: false; error: "arg-refused"; flag: string }
+  /** The CLI exited before the window was a moment old: a bad flag, a
+   *  wrapper for a binary that is not there. The window is already closed. */
+  | { ok: false; error: "died" }
   | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "bad-args" };
 
 /**
@@ -253,6 +256,16 @@ export async function startAgent(p: {
      every firing that failed at launch would leave one more dead window in
      the agents session, and `wait until=gone` would wait out its budget. */
   await tmux(["set-option", "-w", "-t", opened.windowId, "remain-on-exit", "off"]);
+  /* Set after the fact, and a command that had already failed by then is a
+     corpse the option no longer reaps (measured on the lease path, which
+     checks the same way): a CLI that fails at launch is exactly the fast
+     failure that beats the second tmux call. So it is closed here, and the
+     caller is told, rather than handed an agent whose pane is a dead one. */
+  const dead = await tmux(["display-message", "-p", "-t", opened.windowId, "#{pane_dead}"]);
+  if (dead.ok && dead.stdout.trim() === "1") {
+    await tmux(["kill-window", "-t", opened.windowId]);
+    return { ok: false, error: "died" };
+  }
   const startedAt = p.now ?? Date.now();
   upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, startedAt);
   return { ok: true, agent: { name: p.name, kind: kind.id, cwd: p.cwd, paneId: opened.paneId, windowId: opened.windowId, startedAt, endedAt: null } };

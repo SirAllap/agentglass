@@ -32,6 +32,8 @@ let proc: ReturnType<typeof Bun.spawn> | null = null;
 const STUB = `#!/usr/bin/env bash
 # The real one is asked \`--help\` once, to learn whether it takes --name.
 case " $* " in *" --help "*) echo "  -n, --name <name>  session name"; exit 0;; esac
+# A CLI that fails at launch — a missing binary's wrapper, a bad flag.
+[ -e "$AGX_STUB_LOG.die" ] && exit 1
 printf '%s\\n' "$@" > "$AGX_STUB_LOG.argv"
 printf '\\033[2J\\033[H'
 printf 'Welcome to the stub\\n\\n❯ '
@@ -243,6 +245,30 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(gone.code).toBe(0);
     expect((await cli("schedules")).out.result).toEqual({ schedules: [] });
     expect((await cli("unschedule", String(sched.id))).code, "cancelled once, not twice").toBe(1);
+  }, SLOW);
+
+  test("a CLI that fails at launch leaves no corpse in the agents session", async () => {
+    /*
+     * The engine keeps a pane whose command failed (tmuxconf.ts), and the
+     * window this app opens for a named agent is put back to closing itself
+     * only AFTER it exists. A CLI that fails at once — a bad flag, a wrapper
+     * for a binary that is not there — is dead before that second call, and
+     * setting the option late does not reap it (measured on the lease path,
+     * which checks). It sat in the agents session as a dead window, and
+     * `reconcile` marked the agent ended without ever closing it.
+     */
+    writeFileSync(`${log}.die`, "");
+    try {
+      const { out } = await cli("start", "wdie", "--cwd", wt, "--timeout", "3000");
+      /* Either the launch was seen failing (refused), or the window closed
+         itself a moment later (gone). Never a corpse. */
+      if (out.ok) expect(out.result?.state).toBe("gone");
+      else expect(out.error).toContain("exited");
+      await Bun.sleep(300);
+      const rows = await panes();
+      expect(rows.filter((r) => r.endsWith("\tagents\twdie")), "a dead window was left in the agents session").toEqual([]);
+      expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wdie")).toBe(false);
+    } finally { rmSync(`${log}.die`, { force: true }); }
   }, SLOW);
 
   test("an agent whose CLI exits on its own is gone from the list without anybody stopping it", async () => {

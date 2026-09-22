@@ -437,6 +437,7 @@ export async function openSeat(p: {
       exists: "an agent is already running under the seat's name",
       "no-cli": "that agent CLI is not installed here",
       "no-window": "tmux would not open a window for the seat",
+      died: "the seat's CLI exited as soon as it was launched",
       "bad-name": "the seat's name is not one tmux can carry",
       "yolo-refused": "the seat runs unattended, and skipping permissions is off in Settings",
       "bad-args": "the model must be a plain string",
