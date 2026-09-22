@@ -25,7 +25,7 @@ import { readFileSync, readlinkSync, writeFileSync, mkdirSync, existsSync, rmSyn
 import { failed } from "./refused.ts";
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
-import { tmux, listPanes, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.ts";
+import { tmux, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.ts";
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
@@ -87,7 +87,7 @@ export interface RestoreState {
 }
 
 /*
- * WHY THIS FILE ONLY EVER GROWS.
+ * WHY THIS FILE NEVER SHRINKS AT BOOT.
  *
  * On the morning of 2026-08-25 the machine rebooted and Electron crash-looped
  * — six launches in twenty-three minutes, one of them a hard
@@ -104,9 +104,11 @@ export interface RestoreState {
  * simply whichever session outlasted the final interruption.
  *
  * So the invariant is: a session missing from a live snapshot is NOT evidence
- * that it should be forgotten. It might be gone; it might be mid-restore; the
- * app might be in the middle of dying. Only an explicit close removes an
- * entry — `forgetSession`, and nothing else.
+ * that it should be forgotten — until this process has put the desk back on
+ * this engine. Before that it might be gone; it might be mid-restore; the
+ * app might be in the middle of dying. After that, a session that leaves is
+ * one somebody closed (see `writeMerged`), and an explicit close removes an
+ * entry at any time — `forgetSession`.
  */
 
 /** A session is remembered until somebody explicitly closes it. This is how
@@ -622,15 +624,30 @@ function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[
  * Matched by name, then by the working directory of the first pane, because
  * the ids in the file belong to the tmux server that died.
  */
-function mergeWindows(old: CapturedWindow[], freshWins: CapturedWindow[]): CapturedWindow[] {
-  if (settled) return freshWins;
+function mergeWindows(old: CapturedWindow[], freshWins: CapturedWindow[], whole: boolean): CapturedWindow[] {
+  if (whole) return freshWins;
   const key = (w: CapturedWindow) => `${w.name ?? ""}\u0000${w.panes[0]?.path ?? ""}`;
   const have = new Set(freshWins.map(key));
   const missing = old.filter((w) => !have.has(key(w)));
   return missing.length ? [...freshWins, ...missing] : freshWins;
 }
 
-function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
+/*
+ * AND THE SAME RULE FOR THE SESSION ITSELF, once the desk is whole.
+ *
+ * A session an orchestrator opened for one job finished and was killed on
+ * purpose, and stayed in the file for a fortnight: every boot in "all" mode
+ * rebuilt it as `claude --resume <id>`, an idle process on a conversation
+ * that was over. "Merge, never replace" was written for the boot, where a
+ * missing session is ambiguous, and it is bounded here exactly as the window
+ * rule is: while this process has not put the desk back on THIS engine, a
+ * missing session is kept; after that, a session that is not there is one
+ * somebody closed. `whole` is false again the moment the engine is a
+ * different server from the one the desk was put back on — the tmux server
+ * dying and the engine remaking one session is the morning this file was
+ * written for, and a photograph of that is not evidence of anything.
+ */
+function writeMerged(fresh: CapturedSession[], now: number, whole: boolean): RestoreState {
   const seenNow = new Map(fresh.map((s) => [s.name, s]));
   const before = readRestoreState();
   const kept: CapturedSession[] = [];
@@ -639,11 +656,12 @@ function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
     if (seenNow.has(old.name)) {
       /* The fresh photograph of a live session wins — except for the windows
          it has not had a chance to bring back yet. */
-      const wins = mergeWindows(old.windows, seenNow.get(old.name)!.windows);
+      const wins = mergeWindows(old.windows, seenNow.get(old.name)!.windows, whole);
       if (wins.length !== seenNow.get(old.name)!.windows.length) carried.set(old.name, wins);
       continue;
     }
     if (forgotten.has(old.name)) continue;    // explicitly closed
+    if (whole) continue;                      // closed: the desk was whole and it left
     /* Nor carried forward: every file written before this rule still names the
        nine mirrors, and keeping them for fourteen days would mean fourteen days
        of a file that heals only if somebody edits it by hand. */
@@ -665,17 +683,18 @@ function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
   return state;
 }
 
-/** Sessions a person explicitly closed. The ONE way an entry leaves the file:
- *  everything else only ever adds. */
+/** Sessions a person explicitly closed. The one way an entry leaves the file
+ *  BEFORE the desk is whole: until then everything else only ever adds. */
 const forgotten = new Set<string>();
 
 /**
  * Forget a session because somebody closed it — not because it stopped
  * answering.
  *
- * This is the only subtraction in the whole file, and it is deliberate that it
- * takes an explicit call rather than being inferred: "it is not in the live
- * list" was exactly the inference that lost a day of work.
+ * The one subtraction that takes an explicit call rather than being
+ * inferred, and it is the only one that applies at boot: "it is not in the
+ * live list" was exactly the inference that lost a day of work, and it is
+ * trusted only once the desk has been put back (`writeMerged`).
  */
 export function forgetSession(name: string): void {
   forgotten.add(name);
@@ -708,7 +727,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    */
   if (restoring) { captureWanted = true; return null; }
   if (capturingHalted()) return null;
-  const names = await listPanes();
+  const { names, engine } = await liveSessions();
   /*
    * An empty socket is not "no sessions" — it is far more often tmux not
    * answering yet, or the app racing its own engine at boot. Writing an empty
@@ -810,7 +829,28 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
     }
     if (out.length) sessions.push({ name, windows: out });
   }
-  return writeMerged(sessions, now);
+  return writeMerged(sessions, now, deskIsWhole(engine));
+}
+
+/**
+ * The sessions on the engine, and which server that is.
+ *
+ * `#{pid}` and `#{start_time}` are the tmux server's own, the same on every
+ * line; together they name a server for its life, and a different pair is a
+ * server that died and was started again. That is what `deskIsWhole` asks.
+ */
+async function liveSessions(): Promise<{ names: string[]; engine: string }> {
+  const r = await tmux(["list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"]);
+  if (!r.ok) return { names: [], engine: "" }; // no server running yet is the common case, not an error
+  const names: string[] = [];
+  let engine = "";
+  for (const line of r.stdout.split("\n")) {
+    const [name = "", pid = "", started = ""] = line.split("\t");
+    if (!name.trim()) continue;
+    names.push(name.trim());
+    engine ||= `${pid.trim()}.${started.trim()}`;
+  }
+  return { names, engine };
 }
 
 /**
@@ -1039,7 +1079,13 @@ let captureWanted = false;
  * restore pass, and never false again in this process.
  */
 let settled = false;
-export function __resetRestoreSettled(): void { settled = false; }
+/** The engine (`liveSessions().engine`) the desk was put back on. */
+let settledOn = "";
+export function __resetRestoreSettled(): void { settled = false; settledOn = ""; }
+/** Whether the desk on THIS engine is the one this process put back: false
+ *  until the first pass finishes, and false again on a server that was
+ *  started since — a desk this process has not had its go at. */
+function deskIsWhole(engine: string): boolean { return settled && !!engine && engine === settledOn; }
 
 /** Whether a restore pass is in flight — a capture during one would be a
  *  photograph of a half-built desk. */
@@ -1065,6 +1111,7 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
      * harmlessly — the trade this whole file already makes, in the direction
      * it already chose.
      */
+    settledOn = (await liveSessions()).engine;
     settled = true;
     return r;
   } catch (e: any) {
@@ -1086,6 +1133,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
   if (!state || !state.sessions.length) return { ok: false, restored: 0, error: "nothing captured yet — no restore state" };
   /* Everything this pass built, so the sweep below can ask what survived. */
   const made: Made[] = [];
+  const { engine } = await liveSessions();
   for (const s of state.sessions) {
     /*
      * A mirror in the file is a mirror this build must not rebuild.
@@ -1122,7 +1170,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
        * process has finished its first pass, true forever after, so the repair
        * happens at boot and the promise holds every other minute of the day.
        */
-      if (settled) continue;
+      if (deskIsWhole(engine)) continue;
       const live = await windowTree(s.name).catch(() => [] as TmuxWindowDetail[]);
       const key = (n: string | undefined, path: string | undefined) => `${n ?? ""}\u0000${path ?? ""}`;
       const here = new Set(live.map((w) => key(w.name, w.panes[0]?.path)));
