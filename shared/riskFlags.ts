@@ -85,10 +85,11 @@ const MANIFESTS = new Set([
 ]);
 /** A package.json line naming a package and a version — `"left-pad": "^1.3.0"`.
  *  A script (`"test": "bun test"`, `"prepare": "git config …"`) starts its
- *  value with a word and does not match; the package's own `version` and the
- *  `engines` pins are excluded by name. No bare URL form: `homepage` and
- *  `repository` hold those too. */
-const PKG_DEP_LINE = /^\s*"(?!(?:version|node|npm|bun|yarn|pnpm)")[@\w./-]+"\s*:\s*"(?:[\^~<>=*]|\d|workspace:|npm:|file:|link:|git\+|git:|github:|latest")/;
+ *  value with a word and does not match; the package's own `version`, the
+ *  free-text fields that can start with a digit (`"description": "2 ways…"`,
+ *  `"license": "0BSD"`) and the `engines` pins are excluded by name. No bare
+ *  URL form: `homepage` and `repository` hold those too. */
+const PKG_DEP_LINE = /^\s*"(?!(?:version|description|license|name|author|node|npm|bun|yarn|pnpm)")[@\w./-]+"\s*:\s*"(?:[\^~<>=*]|\d|workspace:|npm:|file:|link:|git\+|git:|github:|latest")/;
 
 const AUTH_WORDS = new Set([
   "auth", "authn", "authz", "authentication", "authorization", "authorize", "oauth", "oauth2",

@@ -195,4 +195,11 @@ describe("what a second review found", () => {
       `secret: "https://vault.orbit.dev/v1/kv"`,
     ]) expect(changeRisks("/w/orbit/src/config.py", added(l), 0)).toEqual([]);
   });
+
+
+  test("a package.json description or licence that starts with a digit is not a dependency", () => {
+    expect(changeRisks("/w/orbit/package.json", added(`  "description": "2 ways to ship orbit",`), 0)).toEqual([]);
+    expect(changeRisks("/w/orbit/package.json", added(`  "license": "0BSD",`), 0)).toEqual([]);
+    expect(kinds(changeRisks("/w/orbit/package.json", added(`    "orbit-core": "2.1.0",`), 0))).toEqual(["deps"]);
+  });
 });
