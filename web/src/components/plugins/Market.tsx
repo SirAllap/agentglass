@@ -33,7 +33,7 @@ import { ExternalIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
-import type { Catalogue } from "../../../../shared/types.ts";
+import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
  *  its plugins page is drawn from. */
@@ -116,10 +116,32 @@ export function tintOf(id: string): string {
   return `var(--graph-${(h % 8) + 1})`;
 }
 
+const COMMIT = /^[0-9a-f]{40}$/;
+
+/**
+ * What the market offers for one entry, given how the plugin from the same
+ * repository is installed, if it is.
+ *
+ * Not installed is an install. Installed from the market at a commit other
+ * than the one listed — or at no commit, from before listings were pinned — is
+ * an update: a pinned install moves only by installing the listed version
+ * again, and this is the one place that version is offered. Installed at the
+ * listed commit is nothing. A plugin somebody installed from its own URL or a
+ * folder is theirs; the market does not offer to replace it.
+ */
+export function offerFor(entry: Entry, have: InstallSource | null): "install" | "update" | null {
+  if (!have) return "install";
+  if (have.kind !== "marketplace") return null;
+  const listed = entry.source.ref;
+  if (!listed || !COMMIT.test(listed)) return null;
+  return have.plugin.ref === listed ? null : "update";
+}
+
 export function Market({ installed, onInstalled }: {
-  /** Is this git source already on disk? Passed in rather than imported, so
-   *  this file and the page that renders it do not import each other. */
-  installed: (gitUrl: string) => boolean;
+  /** How the plugin from this git source is installed, or null. Passed in
+   *  rather than imported, so this file and the page that renders it do not
+   *  import each other. */
+  installed: (gitUrl: string) => InstallSource | null;
   onInstalled: () => void;
 }) {
   const [state, setState] = useState<State>({ kind: "loading" });
@@ -136,7 +158,7 @@ export function Market({ installed, onInstalled }: {
   useEffect(() => { void load(); }, [load]);
 
   const all = state.kind === "ok" ? state.catalogue.plugins : [];
-  const offered = useMemo(() => all.filter((e) => !installed(e.source.url)), [all, installed]);
+  const offered = useMemo(() => all.filter((e) => offerFor(e, installed(e.source.url)) !== null), [all, installed]);
   const kinds = useMemo(() => types(offered), [offered]);
   const found = useMemo(() => {
     const byType = type ? offered.filter((e) => (e.categories ?? []).includes(type)) : offered;
@@ -210,7 +232,9 @@ export function Market({ installed, onInstalled }: {
         )}
 
         {state.kind === "ok" && shown.map((entry) => (
-          <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled} />
+          <Offer key={entry.id} entry={entry} owner={state.catalogue.owner} onInstalled={onInstalled}
+            mode={offerFor(entry, installed(entry.source.url)) ?? "install"}
+            was={(() => { const h = installed(entry.source.url); return h?.kind === "marketplace" ? h.plugin.ref : null; })()} />
         ))}
 
         {state.kind === "ok" && found.length === 0 && (
@@ -278,7 +302,14 @@ function TypeChip({ label, count, on, onClick }: { label: string; count: number;
  * where it will draw, then the sentence it describes itself with, with the
  * one button that does anything at the end of the line.
  */
-export function Offer({ entry, owner, onInstalled }: { entry: Entry; owner: string; onInstalled: () => void }) {
+export function Offer({ entry, owner, onInstalled, mode, was = null }: {
+  entry: Entry; owner: string; onInstalled: () => void;
+  /** An update installs the listed version over the one on disk; settings
+   *  are kept and a changed declaration asks again, as any install does. */
+  mode: "install" | "update";
+  /** The commit installed now, for an update. */
+  was?: string | null;
+}) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -327,6 +358,13 @@ export function Offer({ entry, owner, onInstalled }: { entry: Entry; owner: stri
              one of those chips was the same weight as the plugin's name. */
           <div className="mt-2 text-[11.5px] t-dim">{draws.join(" · ")}</div>
         )}
+        {mode === "update" && (
+          <div className="mt-2 text-[11.5px] t-dim">
+            Installed at <span className="t-mono">{was ? was.slice(0, 7) : "its default branch"}</span>; the market lists{" "}
+            <span className="t-mono">{(entry.source.ref ?? "").slice(0, 7)}</span>. Updating installs the listed version,
+            and asks again if what it declares has changed.
+          </div>
+        )}
         {error && <div className="mt-2 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>}
       </div>
 
@@ -339,7 +377,7 @@ export function Offer({ entry, owner, onInstalled }: { entry: Entry; owner: stri
         <button onClick={install} disabled={busy}
           className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50 font-medium"
           style={{ color: "var(--bg)", background: "var(--primary)" }}>
-          {busy ? "Installing…" : "Install"}
+          {busy ? (mode === "update" ? "Updating…" : "Installing…") : (mode === "update" ? "Update" : "Install")}
         </button>
       </div>
 
@@ -485,7 +523,7 @@ export function WhatIsCloned({ entry }: { entry: Entry }) {
       <span className="block text-[11px] t-dim mt-1">
         {commit
           ? entry.sha256
-            ? "Pinned to that commit. The install refuses any files that do not hash to what this list says, so a push after the listing does not reach you."
+            ? "Pinned to that commit. The install refuses any files that do not hash to what this list says, so a push after the listing does not reach you. A newer version arrives the same way: the market lists it, and you install it again from here."
             : "Pinned to that commit."
           : ref
             ? "A branch or a tag, which its author can move: you get whatever it points to when you press Install."

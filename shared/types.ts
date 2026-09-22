@@ -4520,7 +4520,7 @@ export type InstallSource =
   | {
       kind: "marketplace";
       marketplace: { url: string; ref: string | null; resolvedCommit: string | null };
-      plugin: { url: string; ref: string | null };
+      plugin: { url: string; ref: string | null; sha256?: string };
     };
 
 export interface PublicPlugin {

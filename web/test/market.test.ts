@@ -13,8 +13,8 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Offer, WhatIsCloned, matching, tintOf, types } from "../src/components/plugins/Market.tsx";
-import type { Catalogue } from "../../shared/types.ts";
+import { Offer, WhatIsCloned, matching, offerFor, tintOf, types } from "../src/components/plugins/Market.tsx";
+import type { Catalogue, InstallSource } from "../../shared/types.ts";
 import { domOf } from "./htmlAttrs.ts";
 
 const market = await Bun.file(new URL("../src/components/plugins/Market.tsx", import.meta.url)).text();
@@ -59,7 +59,7 @@ describe("what the market offers", () => {
   test("an installed plugin is left out of the list, and said so underneath", () => {
     // The filter itself is one line in the component; what this holds is that
     // the page says how many it left out rather than quietly showing less.
-    expect(code(market)).toContain("all.filter((e) => !installed(e.source.url))");
+    expect(code(market)).toContain("all.filter((e) => offerFor(e, installed(e.source.url)) !== null)");
     expect(code(market)).toMatch(/already installed \$\{have === 1 \? "is" : "are"\} left out of this list/);
     expect(code(market)).toMatch(/Everything in the market is installed/);
   });
@@ -198,7 +198,7 @@ describe("a stranger's words stay words", () => {
 
   test("the row puts title, publisher and description in as text", async () => {
     const html = renderToStaticMarkup(React.createElement(Offer, {
-      entry: entry({ id: "orbit", ...HOSTILE }), owner: "acme", onInstalled: () => {},
+      entry: entry({ id: "orbit", ...HOSTILE }), owner: "acme", onInstalled: () => {}, mode: "install",
     }));
     const built = await domOf(html);
     for (const tag of ["img", "script", "a", "b"]) expect(built.tags, `a <${tag}> was built from the entry`).not.toContain(tag);
@@ -239,5 +239,59 @@ describe("what a pinned entry says it installs", () => {
     expect(render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: "main" } })).toContain("@main");
     expect(render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: "main" } })).toContain("can move");
     expect(render({})).toContain("default branch");
+  });
+});
+
+/*
+ * A pinned install updates one way: the market lists a newer commit and the
+ * person installs that listing again. The Update on an installed card
+ * re-fetched the commit it was already pinned to, which is a button that
+ * does nothing; and the market hid every installed entry, so the newer
+ * listing had nowhere to be offered.
+ */
+describe("a pinned install updates by installing the listed version again", () => {
+  const OLD = "1111111111111111111111111111111111111111";
+  const NEW = "2222222222222222222222222222222222222222";
+  const listed = entry({ id: "orbit", source: { kind: "git", url: "https://github.com/acme/orbit", ref: NEW }, sha256: "a".repeat(64) });
+  const market = (ref: string | null): InstallSource => ({
+    kind: "marketplace", marketplace: { url: "https://example.com/plugins.json", ref: null, resolvedCommit: ref },
+    plugin: { url: "https://github.com/acme/orbit", ref },
+  });
+
+  test("not installed is an install", () => {
+    expect(offerFor(listed, null)).toBe("install");
+  });
+
+  test("installed from the market at the listed commit is nothing to offer", () => {
+    expect(offerFor(listed, market(NEW))).toBeNull();
+  });
+
+  test("installed from the market at another commit, or at no commit, is an update to the listed one", () => {
+    expect(offerFor(listed, market(OLD))).toBe("update");
+    expect(offerFor(listed, market(null))).toBe("update");
+  });
+
+  test("a listing that pins nothing offers no update: there is no version to move to", () => {
+    expect(offerFor(entry({ id: "orbit" }), market(OLD))).toBeNull();
+  });
+
+  test("a plugin somebody installed from its own URL is theirs, and the market leaves it alone", () => {
+    expect(offerFor(listed, { kind: "git", url: "https://github.com/acme/orbit", ref: null })).toBeNull();
+    expect(offerFor(listed, { kind: "local-path", path: "/home/someone/orbit" })).toBeNull();
+  });
+
+  test("the update row says which version is installed and which is listed", () => {
+    const html = renderToStaticMarkup(React.createElement(Offer, {
+      entry: listed, owner: "acme", onInstalled: () => {}, mode: "update", was: OLD,
+    }));
+    expect(html).toContain(">Update<");
+    expect(html).toContain("1111111");
+    expect(html).toContain("2222222");
+    expect(html).toContain("asks again");
+  });
+
+  test("and the details say that is how a pinned install updates", () => {
+    const html = renderToStaticMarkup(React.createElement(WhatIsCloned, { entry: listed }));
+    expect(html).toContain("install it again from here");
   });
 });
