@@ -118,3 +118,53 @@ describe("per session", () => {
     expect(sessionRisks(many).length).toBeLessThanOrEqual(20);
   });
 });
+
+describe("what a first review found flagged that should not be", () => {
+  test("an identifier that only STARTS with a secret word, or a value that is a name, is not a secret", () => {
+    for (const l of [
+      `passwordLabel: "Password",`,
+      `"auth.password.label": "Password",`,
+      `const passwordInputId = "password-input";`,
+      `const apiKeyHeader = "X-Api-Key";`,
+      `SECRET_KEY_ENV = "DJANGO_SECRET_KEY"`,
+      `private_key_path = "/etc/ssl/private/orbit.pem"`,
+      `const accessTokenCookie = "orbit_access_token";`,
+      `API_KEY_ENV = "ORBIT_API_KEY"`,
+    ]) expect(changeRisks("/w/orbit/src/form.ts", added(l), 0)).toEqual([]);
+  });
+
+  test("the checkout's own folder name is not part of what the path says", () => {
+    const opts = { root: "/home/dev/code/orbit-sso-login" };
+    expect(changeRisks("/home/dev/code/orbit-sso-login/src/format.ts", added("x"), 0, opts)).toEqual([]);
+    expect(changeRisks("/home/dev/code/data-migrations-kit/src/util.ts", added("x"), 0, { root: "/home/dev/code/data-migrations-kit" })).toEqual([]);
+    // Inside the checkout the words still count.
+    expect(kinds(changeRisks("/home/dev/code/orbit-sso-login/src/auth/session.ts", added("x"), 0, opts))).toEqual(["auth"]);
+  });
+
+  test("policy, login and password are ordinary words; migrate counts as a folder, not a file", () => {
+    for (const p of ["/w/orbit/src/retryPolicy.ts", "/w/orbit/web/src/pages/PrivacyPolicy.tsx", "/w/orbit/src/LoginPage.tsx", "/w/orbit/src/PasswordInput.tsx", "/w/orbit/scripts/migrate-users.ts"]) {
+      expect(changeRisks(p, added("x"), 0)).toEqual([]);
+    }
+    expect(kinds(changeRisks("/w/orbit/db/migrate/20260101_add_orders.rb", added("x"), 0))).toEqual(["migration"]);
+    expect(kinds(changeRisks("/w/orbit/src/OAuth2Client.ts", added("x"), 0))).toEqual(["auth"]);
+  });
+
+  test("an engines pin and a script that runs git are not dependencies; a public certificate is not a key", () => {
+    expect(changeRisks("/w/orbit/package.json", added(`    "node": ">=18"`), 0)).toEqual([]);
+    expect(changeRisks("/w/orbit/package.json", added(`    "prepare": "git config core.hooksPath .githooks"`), 0)).toEqual([]);
+    expect(kinds(changeRisks("/w/orbit/package.json", added(`    "orbit-ui": "git+https://example.com/orbit-ui.git"`), 0))).toEqual(["deps"]);
+    expect(changeRisks("/w/orbit/certs/ca-bundle.pem", added("x"), 0)).toEqual([]);
+    expect(kinds(changeRisks("/w/orbit/certs/server-key.pem", added("x"), 0))).toEqual(["secret"]);
+  });
+
+  test("a line number is only given when the hunk knows where it is in the file", () => {
+    const h: DiffHunk[] = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [" a", "\\ No newline at end of file", `+k = "${GH}"`] }];
+    expect(changeRisks("/w/a.ts", h, 0)[0].line).toBe(2);
+    expect(changeRisks("/w/a.ts", h, 0, { lines: false })[0].line).toBeUndefined();
+  });
+
+  test("the session roll-up keeps the line and the change it came from", () => {
+    expect(sessionRisks([{ id: 7, file_path: "/w/a.yml", risks: [{ kind: "secret", reason: "r", line: 3 }] }]))
+      .toEqual([{ kind: "secret", reason: "r", line: 3, file: "/w/a.yml", change: 7 }]);
+  });
+});

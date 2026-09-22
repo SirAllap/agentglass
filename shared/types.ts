@@ -1027,6 +1027,9 @@ export interface RiskFlag {
 /** A session's flags, one per kind and file. */
 export interface SessionRisk extends RiskFlag {
   file: string;
+  /** The change it came from, so a diff that lists only the newest changes can
+   *  still fetch the flagged one. */
+  change?: number;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching
