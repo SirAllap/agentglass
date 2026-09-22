@@ -104,6 +104,26 @@ export interface WalkResult {
 }
 
 /**
+ * A path inside a plugin as its hash spells it: `/` between the parts on
+ * every platform. Windows' `\` made a Windows install hash every pinned
+ * tree to something no catalogue listed, since the catalogue's hash is made
+ * on Linux.
+ */
+export const hashPath = (rel: string, separator: string = sep): string => rel.split(separator).join("/");
+
+/**
+ * A link's target as its hash reads it. Git for Windows writes a link's
+ * target with `\` where the same link reads `/` everywhere else, so on
+ * Windows it is read back with `/`. Where git makes no links at all, the
+ * default there, a link arrives as a file holding its target: that hashes as
+ * a file, and a pinned plugin that ships a link is refused on that machine
+ * rather than installed with a script that is only a path.
+ */
+export function linkText(raw: Buffer, platform: NodeJS.Platform = process.platform): Buffer {
+  return platform === "win32" ? Buffer.from(raw.toString("latin1").replaceAll("\\", "/"), "latin1") : raw;
+}
+
+/**
  * Walk a plugin directory once, for two reasons at the same time: containment
  * and content identity share the same tree traversal, and doing it twice
  * would mean the two could disagree about what "the plugin" is.
@@ -146,7 +166,7 @@ export function walkPluginDir(dir: string): WalkResult {
         return `${relative(root, child)} resolves outside the plugin directory`;
       }
       if (ent.isSymbolicLink()) {
-        const rel = relative(root, child);
+        const rel = hashPath(relative(root, child));
         const target = readlinkSync(child);
         if (isAbsolute(target)) return `${rel} is a link to an absolute path; a plugin's links are relative`;
         const read = normalize(join(dirname(rel), target));
@@ -161,7 +181,7 @@ export function walkPluginDir(dir: string): WalkResult {
         continue;
       }
       if (!ent.isFile()) continue;
-      files.push(relative(root, child));
+      files.push(hashPath(relative(root, child)));
       if (files.length > MAX_FILES) return `more than ${MAX_FILES} files`;
       const size = statSync(real).size;
       if (size > MAX_ARTIFACT_BYTES) return `${relative(root, child)} is larger than ${MAX_ARTIFACT_BYTES / (1024 * 1024)}MB`;
@@ -198,7 +218,7 @@ export function contentHash(dir: string, files: string[]): string {
   for (const f of [...files].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
     const p = join(dir, f);
     const link = lstatSync(p).isSymbolicLink();
-    const bytes = link ? readlinkSync(p, { encoding: "buffer" }) : readFileSync(p);
+    const bytes = link ? linkText(readlinkSync(p, { encoding: "buffer" })) : readFileSync(p);
     h.update(f);
     h.update("\0");
     h.update(link ? "l" : "f");

@@ -296,4 +296,12 @@ describe("the listed commit is the one the check validated", () => {
     expect(code).toContain('[ "$sha" = "$VALIDATED" ]');
     expect(code).not.toContain("git clone --depth 1");
   });
+
+  // The pinned hash is taken over this checkout, and the app checks out with
+  // core.autocrlf off: a runner git that wrote CRLF would list a hash no
+  // install reaches.
+  test("the tree it hashes is checked out with the line endings the app uses", () => {
+    const code = yaml.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    expect(code).toContain("git -c core.autocrlf=false -c core.eol=lf -C /tmp/plugin checkout -q --detach FETCH_HEAD");
+  });
 });

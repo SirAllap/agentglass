@@ -59,11 +59,12 @@ def cli(verb, folder):
 def clone_at(url, sha, into):
     """A fresh clone of exactly one commit. `--branch` takes a branch or a
     tag and not a commit; GitHub serves a fetch by commit id, which is what
-    lets an entry pin one."""
+    lets an entry pin one. Checked out with the line endings the app uses,
+    so the bytes hashed here are the bytes an install hashes."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     for args in (["init", "-q", into],
                  ["-C", into, "fetch", "-q", "--depth", "1", "--", url, sha],
-                 ["-C", into, "checkout", "-q", "FETCH_HEAD"]):
+                 ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C", into, "checkout", "-q", "FETCH_HEAD"]):
         r = subprocess.run(["git", *args], capture_output=True, text=True, env=env)
         if r.returncode != 0:
             return (r.stderr.strip().splitlines() or ["git failed"])[-1][:300]

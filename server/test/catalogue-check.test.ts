@@ -67,15 +67,17 @@ const entry = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function check(base: unknown, head: unknown): { code: number | null; out: string } {
+/** `gitconfig`, when given, is the global git config the check runs under. */
+function check(base: unknown, head: unknown, gitconfig?: string): { code: number | null; out: string } {
   const at = mkdtempSync(join(root, "run-"));
   writeFileSync(join(at, "base.json"), JSON.stringify(base));
   writeFileSync(join(at, "head.json"), JSON.stringify(head));
+  if (gitconfig !== undefined) writeFileSync(join(at, "gitconfig"), gitconfig);
   const r = spawnSync("python3", [CHECK, join(at, "base.json"), join(at, "head.json")], {
     encoding: "utf8",
     env: {
       PATH: process.env.PATH, HOME: root,
-      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: gitconfig === undefined ? "/dev/null" : join(at, "gitconfig"),
       GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `url.file://${root}/.insteadOf`, GIT_CONFIG_VALUE_0: "https://github.com/",
     },
   });
@@ -96,6 +98,14 @@ describe("a listing that holds", () => {
 
   test("a pull request that touches no entry has nothing for this to pass", () => {
     expect(check(shelf([existing]), shelf([existing])).out).toContain("changes 0 entries");
+  });
+
+  // The app checks out with core.autocrlf off, so the check does too: a
+  // runner whose git wrote CRLF would pin a hash no install can reach.
+  test("a git that turns line endings to CRLF hashes the bytes an install gets", () => {
+    const r = check(shelf([existing]), shelf([existing, entry()]), "[core]\n\tautocrlf = true\n");
+    expect(r.out).toContain("one entry, pinned");
+    expect(r.code).toBe(0);
   });
 });
 

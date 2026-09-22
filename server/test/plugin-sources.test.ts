@@ -7,9 +7,11 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
-  pluginGitUrlError, catalogueUrlError, pluginRefError, walkPluginDir, contentHash,
+  pluginGitUrlError, catalogueUrlError, pluginRefError, walkPluginDir, contentHash, hashPath, linkText,
   MAX_FILES,
 } from "../src/plugin-sources.ts";
+
+const SOURCES = await Bun.file(new URL("../src/plugin-sources.ts", import.meta.url)).text();
 
 describe("pluginGitUrlError", () => {
   test("a plain https URL with no credentials is fine", () => {
@@ -200,5 +202,37 @@ describe("contentHash", () => {
     writeFileSync(join(two, "a.txt"), "x");
     writeFileSync(join(two, "run.sh"), "echo pwned\n");
     expect(contentHash(one, ["a.txt"])).not.toBe(contentHash(two, ["a.txt", "run.sh"]));
+  });
+});
+
+/*
+ * The catalogue's hash is made on Linux, and a Windows install has to reach
+ * the same value from the same commit. Windows spells a path inside the
+ * plugin with `\\`, and Git for Windows writes a link's target with it too,
+ * so both are read with `/` before they are hashed. There is no Windows in
+ * this test run: the two rules are tested where they are decided, and the
+ * walk and the hash are held to going through them.
+ */
+describe("a path and a link read the same on Windows", () => {
+  test("a path inside the plugin is spelled with / whatever the separator", () => {
+    expect(hashPath("lib\\deep\\b.py", "\\")).toBe("lib/deep/b.py");
+    expect(hashPath("lib/deep/b.py", "/")).toBe("lib/deep/b.py");
+  });
+
+  test("a link's target reads with / on Windows, and as written anywhere else", () => {
+    expect(linkText(Buffer.from("lib\\a.py"), "win32").toString()).toBe("lib/a.py");
+    expect(linkText(Buffer.from("odd\\name"), "linux").toString()).toBe("odd\\name");
+  });
+
+  const body = (name: string): string => {
+    const from = SOURCES.indexOf(`export function ${name}(`);
+    expect(from, `${name} is still there`).toBeGreaterThan(-1);
+    return SOURCES.slice(from, SOURCES.indexOf("\n}\n", from));
+  };
+
+  test("the walk names every entry through the first and the hash reads every link through the second", () => {
+    expect(body("walkPluginDir")).toContain("hashPath(relative(root, child))");
+    expect(body("walkPluginDir")).not.toMatch(/files\.push\(relative\(/);
+    expect(body("contentHash")).toContain("linkText(readlinkSync(");
   });
 });

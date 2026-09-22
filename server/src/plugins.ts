@@ -15,7 +15,7 @@
 // somewhere new asks again.
 import { createHash } from "node:crypto";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
+  cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -455,9 +455,16 @@ async function startProcess(rec: PluginRecord): Promise<void> {
   }
 }
 
+/**
+ * Every git a plugin install runs. The line endings are pinned because a
+ * catalogue's hash is taken over the bytes a checkout writes: Git for Windows
+ * installs with core.autocrlf on, and a checkout that turned every text file
+ * to CRLF hashed to something no catalogue had listed. A plugin's own
+ * `.gitattributes` still decides, the same way on every machine.
+ */
 async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok: boolean; err: string }> {
   try {
-    const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const p = Bun.spawn(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
     const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
     clearTimeout(timer);
@@ -672,7 +679,12 @@ async function finishInstall(
   if (!insidePluginsRoot(installDir)) return { ok: false, error: "plugin name would install outside the plugins folder" };
   rmSync(installDir, { recursive: true, force: true });
   mkdirSync(dirname(installDir), { recursive: true });
-  Bun.spawnSync(["cp", "-R", "--", staging, installDir]);
+  // The app's own copy, not `cp`, which Windows does not have; a link is
+  // copied as the link it is, not rewritten to where it pointed in staging.
+  try { cpSync(staging, installDir, { recursive: true, verbatimSymlinks: true }); } catch (e) {
+    rmSync(installDir, { recursive: true, force: true });
+    return { ok: false, error: `could not copy the plugin into place: ${e instanceof Error ? e.message : String(e)}` };
+  }
 
   const record: PluginRecord = {
     ...manifest,
@@ -732,7 +744,11 @@ export async function installPlugin(input: InstallInput): Promise<{ ok: true; pl
       let st;
       try { st = statSync(source.path); } catch { return { ok: false, error: "That path does not exist" }; }
       if (!st.isDirectory()) return { ok: false, error: "That path is not a folder" };
-      Bun.spawnSync(["cp", "-R", "--", source.path.endsWith("/") ? source.path : source.path + "/.", staging]);
+      // The folder's contents, through a link if the path is one, as
+      // `cp -R path/.` did before the copy stopped needing `cp`.
+      try { cpSync(realpathSync(source.path), staging, { recursive: true, verbatimSymlinks: true }); } catch (e) {
+        return { ok: false, error: `could not copy that folder: ${e instanceof Error ? e.message : String(e)}` };
+      }
     } else {
       const r = await fetchInto(staging, source.url, source.ref);
       if (!r.ok) return r;

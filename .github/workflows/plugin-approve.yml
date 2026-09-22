@@ -178,7 +178,7 @@ jobs:
           # id, and validates it again.
           git init -q /tmp/plugin
           git -C /tmp/plugin fetch -q --depth 1 "https://github.com/$REPO_NAME.git" "$VALIDATED"
-          git -C /tmp/plugin checkout -q --detach FETCH_HEAD
+          git -c core.autocrlf=false -c core.eol=lf -C /tmp/plugin checkout -q --detach FETCH_HEAD
           python3 bin/agentglass-plugin validate /tmp/plugin > /tmp/validate.json
           # The commit and the bytes this run looked at, which is what the
           # entry pins. The hash is the app's own walk (see `hash` in the

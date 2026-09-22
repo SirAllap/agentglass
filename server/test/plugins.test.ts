@@ -7,7 +7,7 @@
  * failing.
  */
 import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -506,10 +506,14 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
 
   type Out = { result: { ok: boolean; error?: string; plugin?: { resolvedCommit: string | null; installDir: string; source: unknown } }; runSh: string | null; listed: number; update?: { ok: boolean; error?: string }; runShAfterUpdate?: string | null; log: string };
 
-  /** One install in a fresh child with its own config, data and database. */
-  async function install(op: Record<string, unknown>): Promise<Out> {
+  /** One install in a fresh child with its own config, data and database.
+   *  `gitconfig` is the user's global git config for that child, and
+   *  `onlyGit` leaves the stub git as the one program on its PATH. */
+  async function install(op: Record<string, unknown>, how: { gitconfig?: string; onlyGit?: boolean } = {}): Promise<Out> {
     const at = mkdtempSync(join(root, "child-"));
     writeFileSync(join(root, "git.log"), "");
+    const globalConfig = how.gitconfig === undefined ? "/dev/null" : join(at, "gitconfig");
+    if (how.gitconfig !== undefined) writeFileSync(globalConfig, how.gitconfig);
     const script = join(at, "run.ts");
     writeFileSync(script, `
       import { installFromCatalogue, installPlugin, updatePlugin, listPlugins } from ${JSON.stringify(PLUGINS_TS)};
@@ -519,7 +523,9 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
       const guard = { hostCheck: async () => null, fetchImpl: (async () => new Response(JSON.stringify(op.catalogue), { status: 200 })) };
       const result = op.kind === "catalogue"
         ? await installFromCatalogue("https://catalogue.example/plugins.json", op.id, guard)
-        : await installPlugin({ kind: "git", url: op.url, ref: op.ref });
+        : op.kind === "local"
+          ? await installPlugin({ kind: "local-path", path: op.path })
+          : await installPlugin({ kind: "git", url: op.url, ref: op.ref });
       const at = (r) => r.ok && existsSync(join(r.plugin.installDir, "run.sh")) ? readFileSync(join(r.plugin.installDir, "run.sh"), "utf8") : null;
       const out = { result, runSh: at(result), listed: listPlugins().length };
       if (op.update && result.ok) {
@@ -528,11 +534,11 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
       }
       console.log(JSON.stringify(out));
     `);
-    const p = Bun.spawn(["bun", script], {
+    const p = Bun.spawn([process.execPath, script], {
       cwd: at, stdout: "pipe", stderr: "pipe",
       env: {
-        PATH: `${join(root, "bin")}:${process.env.PATH}`, HOME: at, NODE_ENV: "test",
-        GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+        PATH: how.onlyGit ? join(root, "bin") : `${join(root, "bin")}:${process.env.PATH}`, HOME: at, NODE_ENV: "test",
+        GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: globalConfig,
         XDG_CONFIG_HOME: join(at, "cfg"), XDG_DATA_HOME: join(at, "data"), XDG_CACHE_HOME: join(at, "cache"),
         AGENTGLASS_STATE_DIR: join(at, "state"), AGENTGLASS_DB: join(at, "agentglass.db"), TMUX_TMPDIR: join(at, "tmux"),
         OP: JSON.stringify(op),
@@ -624,6 +630,36 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     expect(r.result.ok).toBe(false);
     expect(r.log).toBe("");
     expect(r.listed).toBe(0);
+  }, 30_000);
+
+  /*
+   * Git for Windows installs with core.autocrlf on, so the checkout the app
+   * made rewrote every text file to CRLF, the tree hashed to something no
+   * catalogue listed, and every pinned install there was refused. The same
+   * setting reproduces it on any machine.
+   */
+  test("a user whose git turns line endings to CRLF still gets the listed bytes", async () => {
+    const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()) }, { gitconfig: "[core]\n\tautocrlf = true\n" });
+    expect(r.result.error ?? "").toBe("");
+    expect(r.result.ok).toBe(true);
+    expect(r.runSh).toBe("echo listed\n");
+  }, 30_000);
+
+  // `cp` is not a program Windows has. The copy into place is the app's own,
+  // and a link inside the plugin arrives as the same link.
+  test("installs where git is the only program there is, and keeps a link a link", async () => {
+    const pinnedInstall = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()) }, { onlyGit: true });
+    expect(pinnedInstall.result.error ?? "").toBe("");
+    expect(pinnedInstall.runSh).toBe("echo listed\n");
+
+    const folder = mkdtempSync(join(root, "folder-"));
+    writeFileSync(join(folder, MANIFEST_NAME), JSON.stringify({ ...okManifest, name: "orbit-clock", entrypoint: "sh run.sh" }));
+    writeFileSync(join(folder, "listed.sh"), "echo local\n");
+    symlinkSync("listed.sh", join(folder, "run.sh"));
+    const local = await install({ kind: "local", path: folder }, { onlyGit: true });
+    expect(local.result.error ?? "").toBe("");
+    expect(local.runSh).toBe("echo local\n");
+    expect(readlinkSync(join(local.result.plugin!.installDir, "run.sh"))).toBe("listed.sh");
   }, 30_000);
 
   test("an entry that pins nothing still installs the default branch, as a catalogue from elsewhere may", async () => {

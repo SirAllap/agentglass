@@ -321,7 +321,9 @@ def walk_plugin_dir(folder):
             if ent.name == ".git":
                 continue
             child = os.path.join(abs_dir, ent.name)
-            rel = os.path.relpath(child, root)
+            # With `/` on every platform, as the app spells it: the hash is
+            # the same wherever it is taken.
+            rel = os.path.relpath(child, root).replace(os.sep, "/")
             try:
                 real = os.path.realpath(child, strict=True)
             except OSError:
@@ -377,6 +379,8 @@ def content_hash(folder, files):
         path = os.path.join(root, rel)
         if os.path.islink(path):
             kind, payload = b"l", os.fsencode(os.readlink(path))
+            if os.name == "nt":
+                payload = payload.replace(b"\\", b"/")
         else:
             with open(path, "rb") as f:
                 kind, payload = b"f", f.read()
