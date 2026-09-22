@@ -2277,6 +2277,9 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   // the cache correct for every OTHER writer, which is the assumption that
   // failed. See rollupPaths().
   rollupPathCache = null;
+  // The risk roll-up remembers flags from edits this is about to delete; it is
+  // rebuilt from what is left on the next read.
+  riskMemo.clear();
   return db.transaction(() => {
     const rolled = foldExpiringEvents(cutoff);
     db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
@@ -3790,13 +3793,15 @@ function editHunk(oldS: string, newS: unknown) {
   };
 }
 
-function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange | null {
+function parseChange(r: ChangeRow, withRisks = true): import("../../shared/types.ts").FileChange | null {
   let payload: any;
   try { payload = JSON.parse(r.payload); } catch { return null; }
   const tr = payload.tool_response ?? {};
   const ti = payload.tool_input ?? {};
   const file_path = tr.filePath || ti.file_path || ti.filePath || "(unknown)";
   let hunks = Array.isArray(tr.structuredPatch) ? tr.structuredPatch : [];
+  // A rebuilt Edit hunk starts at line 1 of its own snippet, not of the file.
+  let placed = true;
   if (!hunks.length && r.tool_name === "Write" && typeof ti.content === "string") {
     const lines = ti.content.split("\n");
     hunks = [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((l: string) => "+" + l) }];
@@ -3807,11 +3812,13 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
   // that edits more than it writes means no diff at all.
   if (!hunks.length && r.tool_name === "Edit" && typeof ti.old_string === "string") {
     hunks = [editHunk(ti.old_string, ti.new_string)];
+    placed = false;
   }
   if (!hunks.length && r.tool_name === "MultiEdit" && Array.isArray(ti.edits)) {
     hunks = ti.edits
       .filter((e: any) => e && typeof e.old_string === "string")
       .map((e: any) => editHunk(e.old_string, e.new_string));
+    placed = false;
   }
   if (!hunks.length) return null;
   let additions = 0, deletions = 0;
@@ -3819,7 +3826,8 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
     if (l[0] === "+") additions++;
     else if (l[0] === "-") deletions++;
   }
-  const risks = changeRisks(file_path, hunks, deletions);
+  const root = payload.cwd || payload.cwd_path || payload.project_path || null;
+  const risks = withRisks ? changeRisks(file_path, hunks, deletions, { root, lines: placed }) : [];
   return { id: r.id, timestamp: r.timestamp, source_app: r.source_app, session_id: r.session_id, tool: r.tool_name, file_path, additions, deletions, hunks, ...(risks.length ? { risks } : {}) };
 }
 
@@ -3854,8 +3862,11 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
       const fresh = new Map<string, import("../../shared/types.ts").FileChange[]>();
       for (const [mark, group] of byMark) {
         const holes = group.map(() => "?").join(",");
+        // INDEXED BY: left to itself SQLite picks idx_events_type, and a new
+        // session's first read (mark 0) then walks every PostToolUse row in the
+        // table — measured 21 ms on 28k rows, against 1 ms by session.
         for (const r of db.query<ChangeRow, any[]>(
-          `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
+          `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events INDEXED BY idx_events_session
            WHERE session_id IN (${holes}) AND id > ? AND id <= ?
              AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')
            ORDER BY id DESC`).all(...group, mark, top)) {
@@ -3888,9 +3899,32 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
   } catch { /* flags are advisory; a database that cannot answer must not lose the list */ }
 }
 
+/**
+ * The session's newest changes, plus any flagged one older than those.
+ *
+ * The card rolls flags up over the whole session and the detail lists only the
+ * newest `limit` changes, so a key written early in a long session would be a
+ * red chip with no file behind it in the diff the card opens.
+ */
+function changesWithFlagged(sessionId: string, limit: number): import("../../shared/types.ts").FileChange[] {
+  const changes = getChanges(limit, sessionId);
+  const stub = { session_id: sessionId } as import("../../shared/types.ts").SessionRollup;
+  attachRisks([stub]);
+  const have = new Set(changes.map((c) => c.id));
+  const missing = [...new Set((stub.risks ?? []).map((r) => r.change).filter((id): id is number => id != null && !have.has(id)))];
+  if (!missing.length) return changes;
+  const older = db.query<ChangeRow, any[]>(
+    `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
+     WHERE id IN (${missing.map(() => "?").join(",")}) AND session_id = ?
+     ORDER BY timestamp DESC, id DESC`).all(...missing, sessionId);
+  return [...changes, ...older.map((r) => parseChange(r)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null)];
+}
+
 /** Recent file changes (Edit/Write/MultiEdit) with their diff hunks, parsed
- *  from the tool_response.structuredPatch Claude Code already provides. */
-export function getChanges(limit = 200, sessionId?: string): import("../../shared/types.ts").FileChange[] {
+ *  from the tool_response.structuredPatch Claude Code already provides.
+ *  `withRisks: false` for a caller that only wants the paths — the rules read
+ *  every added line, and on 500 changes that was half the call. */
+export function getChanges(limit = 200, sessionId?: string, withRisks = true): import("../../shared/types.ts").FileChange[] {
   const chg = scopeClause();
   const rows = sessionId
     ? db.query<ChangeRow, any[]>(
@@ -3901,7 +3935,7 @@ export function getChanges(limit = 200, sessionId?: string): import("../../share
         `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
          WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')${chg.clause}
          ORDER BY timestamp DESC, id DESC LIMIT ?`).all(...chg.args, limit);
-  return rows.map(parseChange).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
+  return rows.map((r) => parseChange(r, withRisks)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
 }
 
 /** Everything we know about one session — the deep-dive. */
@@ -4097,7 +4131,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     subagents: subRows.map((s) => ({ agent_id: s.agent_id, agent_type: s.agent_type || "subagent", events: s.n })),
     conversation: kept,
     timeline,
-    changes: getChanges(40, sessionId),
+    changes: changesWithFlagged(sessionId, 40),
   };
 }
 

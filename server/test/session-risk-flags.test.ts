@@ -120,3 +120,48 @@ describe("the session row rolls them up", () => {
     expect(b).toEqual(a);
   });
 });
+
+describe("what a first review found", () => {
+  test("a flagged edit older than the diff's window is still in the diff the card opens", () => {
+    // The card rolls up the whole session; the detail lists only the newest
+    // changes. A key written early and followed by a long session must not be
+    // a red chip with no file behind it.
+    db.insertEvent(write("risk-long", "config/app.yml", `access_key: ${AWS}\n`, T0 + 1_000) as any);
+    for (let i = 0; i < 45; i++) db.insertEvent(edit("risk-long", `src/f${i}.ts`, "a", "b", T0 + 2_000 + i) as any);
+    process.env.AGENTGLASS_ROOT = ROOT;
+    const d = db.getSession("risk-long")!;
+    expect(d.changes.some((c) => c.file_path.endsWith("config/app.yml") && c.risks?.[0]?.kind === "secret")).toBe(true);
+    expect(d.changes.length).toBe(41);
+  });
+
+  test("the directory the agent ran in is not read as part of the path", () => {
+    const wt = join(dir, "orbit-sso-login");
+    db.insertEvent(event({ session_id: "risk-wt", tool_name: "Edit", timestamp: T0 + 1_000,
+      payload: { project_path: ROOT, cwd: wt, tool_input: { file_path: join(wt, "src/format.ts"), old_string: "a", new_string: "b" } } }) as any);
+    process.env.AGENTGLASS_ROOT = ROOT;
+    expect(db.getChanges(5, "risk-wt")[0].risks).toBeUndefined();
+  });
+
+  test("an edit rebuilt from its strings gives no line number, because it does not know one", () => {
+    const GH = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
+    db.insertEvent(edit("risk-edit", "src/client.ts", "const t = null;", `const t = "${GH}";`, T0 + 1_000) as any);
+    process.env.AGENTGLASS_ROOT = ROOT;
+    const r = db.getChanges(5, "risk-edit")[0].risks!;
+    expect(r[0].kind).toBe("secret");
+    expect(r[0].line).toBeUndefined();
+  });
+
+  test("callers that only want the paths do not pay for the rules", () => {
+    process.env.AGENTGLASS_ROOT = ROOT;
+    expect(db.getChanges(50, "risk-s1", false).every((c) => c.risks === undefined)).toBe(true);
+  });
+});
+
+const src = await Bun.file(new URL("../src/db.ts", import.meta.url)).text();
+test("the roll-up's first read of a session goes through the session index, not the event-type one", () => {
+  // Measured: without the hint SQLite picks idx_events_type and a new session's
+  // first read walks every PostToolUse row in the table (21 ms on 28k rows
+  // against 1 ms).
+  const fn = src.slice(src.indexOf("function attachRisks("), src.indexOf("\n}\n", src.indexOf("function attachRisks(")));
+  expect(fn).toContain("INDEXED BY idx_events_session");
+});

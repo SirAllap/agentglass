@@ -211,7 +211,7 @@ let lastUnderstudyLearn: import("./understudy-ingest.ts").IngestResult | null = 
 
 /** Checkouts the loop may work in. The open project, and today only that. */
 async function openProjectRepos(): Promise<string[]> {
-  const paths = getChanges(300).map((c) => c.file_path);
+  const paths = getChanges(300, undefined, false).map((c) => c.file_path);
   const found = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
   const roots = found.map((r) => r.root);
 
@@ -4973,7 +4973,7 @@ const server = Bun.serve<WsData>({
       // launch the whole fan-out. They share one now. (The 15s repoCache behind
       // it still handles reuse across time; this handles reuse across callers.)
       return body(await singleFlight(`repos:${ignoreScope}`, async () => {
-        const paths = getChanges(300).map((c) => c.file_path);
+        const paths = getChanges(300, undefined, false).map((c) => c.file_path);
         // `hidden` rides along rather than being filtered out here: the picker
         // is the one surface that has to be able to show them again, and a list
         // it cannot see is a list it cannot restore from.
@@ -5023,7 +5023,7 @@ const server = Bun.serve<WsData>({
       return body(await singleFlight(`rows:${mode}`, async () => {
         const cached = rowsCache.get(mode);
         if (cached && Date.now() - cached.at < ROWS_TTL_MS) return cached.body;
-        const paths = getChanges(300).map((c) => c.file_path);
+        const paths = getChanges(300, undefined, false).map((c) => c.file_path);
         /* Every in-scope checkout, INCLUDING one on main or master. The old
            endpoint dropped those on the grounds that trunk is the base you cut
            from — true of a branch-vs-base diff, false of "what have I changed
@@ -6596,7 +6596,7 @@ const server = Bun.serve<WsData>({
       const want = url.searchParams.get("repo") || "";
       if (!/^[\w.-]+\/[\w.-]+$/.test(want)) return json({ ok: false, error: "repo must be owner/name" }, 400);
       return json(await singleFlight(`locate:${want}`, async () => {
-        const paths = getChanges(300).map((c) => c.file_path);
+        const paths = getChanges(300, undefined, false).map((c) => c.file_path);
         const known = knownProjects().map((p) => p.path);
         /*
          * The open project FIRST, and it is not an optimisation.
