@@ -1390,6 +1390,62 @@ def read_firefox_localstorage(path, domain, subdomains=True):
 DEFAULT_FIREFOX_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
 
 
+AUTH_WALL_PATH = re.compile(r"/(log[-_]?in|sign[-_]?in|signin|auth(?:orize|enticate)?|sso|sessions?/(?:new|confirm)|confirm[-_]?access|two[-_]?factor|mfa|challenge)(?:/|\?|$)", re.I)
+AUTH_WALL_QUERY = re.compile(r"[?&](reason|return[_-]?to|redirect(?:_uri)?|continue|next|ReturnUrl)=", re.I)
+# The exact words a strict site shows when it will not act on a copied session
+# — a message a person reads and an agent silently steps past.
+BOUNCE_TEXT = re.compile(r"signed in with another tab or window|your session (?:has )?expired|please (?:log|sign) ?in|confirm access", re.I)
+
+VERIFY_JS = (
+    "JSON.stringify({ url: location.href, title: document.title, "
+    "pw: !!document.querySelector('input[type=password]'), "
+    "text: (document.body ? document.body.innerText : '').slice(0, 4000) })"
+)
+
+
+def classify_auth_wall(url, title, has_password, text):
+    """Whether the page in front is a login / confirm wall — the shape a
+    copied session that reads but cannot act lands on. Returns (is_wall,
+    reason) where reason is the site's own `reason=` when it gave one, else a
+    short word for what tripped it."""
+    hit = BOUNCE_TEXT.search(text or "")
+    if hit:
+        return True, hit.group(0).lower()
+    if AUTH_WALL_PATH.search(url or ""):
+        m = re.search(r"[?&]reason=([^&]+)", url or "")
+        return True, (m.group(1) if m else "a login or confirm page")
+    if has_password and AUTH_WALL_QUERY.search(url or ""):
+        return True, "a login form with a return address"
+    if has_password and re.search(r"\b(sign|log)\s*in\b|confirm", (title or ""), re.I):
+        return True, "a login form"
+    return False, ""
+
+
+def session_verify(a, page):
+    if getattr(a, "url", None):
+        r = call("open", stamped(a, _at(page, {"url": a.url})))
+        if not r.get("ok"):
+            print(r.get("error") or f"could not open {a.url}", file=sys.stderr)
+            return 1
+    res = call("eval", stamped(a, _at(page, {"js": VERIFY_JS, "await": False})))
+    if not res.get("ok"):
+        print(res.get("error") or "could not read the page to verify it", file=sys.stderr)
+        return 1
+    raw = (res.get("value") or {}).get("value") or "{}"
+    try:
+        d = json.loads(raw)
+    except (TypeError, ValueError):
+        d = {}
+    is_wall, reason = classify_auth_wall(d.get("url", ""), d.get("title", ""), bool(d.get("pw")), d.get("text", ""))
+    if is_wall:
+        print(f"the session was rejected: this is {reason}, not the page the action should reach. "
+              f"A copied session can read pages and still be refused a sensitive action — align the "
+              f"user agent (session import --align-ua) and bring localStorage over on the site's origin.")
+        return 1
+    print(f"no login or confirm wall on {d.get('url', 'this page')} — the session looks accepted here")
+    return 0
+
+
 def session_import(a, page):
     kind, src = a.frm[0], a.frm[1]
     if kind != "firefox-profile":
@@ -1905,6 +1961,15 @@ def main():
                           "to the one the session signed in with")
     sp3.add_argument("--user-agent", dest="user_agent", default=None,
                      help="the exact user agent to align to (default: a recent Firefox)")
+    sp4 = sp.add_parser(
+        "verify",
+        help="say whether the page in front is a login/confirm wall — a rejected session, named",
+        description="A copied session can read pages and still be refused a sensitive action, "
+                    "which most sites do by redirecting to a login or confirm page rather than "
+                    "erroring — so an agent steps past it in silence. Run this on the page after "
+                    "the action (or with --url to open one first): it reports whether the browser "
+                    "landed on such a wall, with the site's own reason when it gave one.")
+    sp4.add_argument("--url", default=None, help="open this first, then verify (default: verify the page already in front)")
     p = sub.add_parser(
         "permissions",
         help="grant camera/mic/clipboard/geolocation for an origin, by API — instead "
@@ -2058,6 +2123,8 @@ def main():
             return 1
         if a.sessionCmd == "import":
             return session_import(a, page)
+        if a.sessionCmd == "verify":
+            return session_verify(a, page)
         return session_save(a.file, page, a) if a.sessionCmd == "save" else session_load(a.file, page, a)
 
     if a.cmd == "permissions":
