@@ -79,3 +79,15 @@ export function initialTicks(workspaces: readonly string[], listed: readonly { r
 export function autoPick(listed: readonly { root: string }[], workspaces: readonly string[]): string | null {
   return !workspaces.length && listed.length === 1 ? listed[0]!.root : null;
 }
+
+/**
+ * Is this the first run — the screen that asks for a folder instead of a list?
+ *
+ * Only with nothing to show and nothing open: no folder added, not looking,
+ * the list read, and no project open. The last is for somebody upgrading with
+ * a project open and no folders yet, who was told to add the folder their
+ * projects live in above the row of the project they had open.
+ */
+export function firstRun(listed: readonly unknown[] | null, roots: readonly string[], scanned: boolean, workspaces: readonly string[]): boolean {
+  return listed !== null && !roots.length && !scanned && !workspaces.length;
+}

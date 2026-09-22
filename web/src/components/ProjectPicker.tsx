@@ -31,7 +31,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { FolderIcon, MonitorIcon, PlusIcon } from "../lib/glyphIcons.tsx";
 import { GitIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { allOpen, autoPick, initialTicks, nextScope, rootsToAdd } from "../lib/projectPick.ts";
+import { allOpen, autoPick, firstRun, initialTicks, nextScope, rootsToAdd } from "../lib/projectPick.ts";
 
 /** Set once the user has answered the startup question (either way), so an
  *  unscoped instance doesn't re-ask on every reload. */
@@ -409,9 +409,10 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
   const sub = mode === "clone" ? "It is cloned on this machine, then opened"
     : mode === "new" ? "An empty folder with a git repository in it"
     : "One, or tick several to open them together";
-  // No folder yet, and not looking: the first run. Nothing on the machine has
-  // been looked at, and the one thing to do is say where the projects are.
-  const firstRun = repos !== null && !roots.length && !scanned;
+  // No folder yet, not looking and nothing open: the first run. Nothing on the
+  // machine has been looked at, and the one thing to do is say where the
+  // projects are.
+  const isFirstRun = firstRun(repos, roots, scanned, workspaces);
   const pending = nextScope(ticked, workspaces);
 
   return (
@@ -440,7 +441,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
 
                 {mode === "list" && (
                   <>
-                    {!firstRun && (
+                    {!isFirstRun && (
                       <div className="px-4 pt-3 shrink-0">
                         <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter projects…"
                           className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
@@ -451,7 +452,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                     <div className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 px-2 py-2" style={{ minHeight: 140 }}>
                       {repos === null && <div className="px-3 py-3 text-[11px] t-dim2">{scanned ? "Looking for projects…" : "Reading your folders…"}</div>}
 
-                      {firstRun && (
+                      {isFirstRun && (
                         <div className="px-4 py-6 flex flex-col items-center text-center gap-2">
                           <span className="grid place-items-center rounded-xl" style={{ width: 40, height: 40, background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary-hover)" }}>
                             <FolderIcon size={ICON.md} />
@@ -494,7 +495,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                           is about the filter; an empty list with folders added is
                           about the folders, and saying "no repos found" there reads
                           as a bug in discovery rather than a fact about them. */}
-                      {repos !== null && !firstRun && !shown.length && (terms.length ? (
+                      {repos !== null && !isFirstRun && !shown.length && (terms.length ? (
                         <div className="px-3 py-3 text-[11px] t-dim2">No repos match that filter</div>
                       ) : (
                         <div className="px-3 py-3 text-[11px] t-dim2 leading-relaxed">
@@ -544,7 +545,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                       {/* The sweep, only when asked for. It is how somebody
                           upgrading finds the projects they had open before
                           there were folders, without it ever being the default. */}
-                      {!scanned && !firstRun && repos !== null && (
+                      {!scanned && !isFirstRun && repos !== null && (
                         <button onClick={() => scan(true)} disabled={busy}
                           className="agx-btn w-full text-left px-3 py-1.5 mt-1 rounded-lg text-[10.5px]" style={{ color: "var(--text3)" }}>
                           Look for projects agents have worked in…
@@ -590,7 +591,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                       )}
                       <div className="text-[9.5px] uppercase tracking-wider mb-1.5" style={{ color: "var(--text4)" }}>Add</div>
                       <div className="flex flex-col gap-1.5">
-                        {CAN_BROWSE_FOLDER && !firstRun && (
+                        {CAN_BROWSE_FOLDER && !isFirstRun && (
                           <AddRow icon={<FolderIcon size={ICON.sm} />} title="Add a folder…" sub="Where your projects live — its git repos are listed here" onClick={() => void browse()} disabled={busy} />
                         )}
                         <AddRow icon="⌥" title="Clone from URL" sub="Clone a remote git repository onto this machine" onClick={() => { setMode("clone"); setError(""); }} disabled={busy} />
@@ -602,7 +603,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                           clipboard beats browsing to it. It adds the folder, like
                           the chooser — opening is the list's job. */}
                       <div className="flex items-center gap-2 mt-2">
-                        <FolderField value={path} onChange={setPath} onSubmit={() => void addRoot(path)} small autoFocus={firstRun && !CAN_BROWSE_FOLDER}
+                        <FolderField value={path} onChange={setPath} onSubmit={() => void addRoot(path)} small autoFocus={isFirstRun && !CAN_BROWSE_FOLDER}
                           placeholder={CAN_BROWSE_FOLDER ? "…or type a folder: ~/code" : "Type a folder: ~/code, or ~/code/my-project"} />
                         <button onClick={() => void addRoot(path)} disabled={busy || !path.trim()}
                           className="agx-btn text-[11px] px-3 py-1.5 rounded-lg font-medium shrink-0"

@@ -9,7 +9,7 @@
  * harness, so they live in lib/projectPick.ts and are asserted here.
  */
 import { describe, expect, test } from "bun:test";
-import { allOpen, autoPick, initialTicks, inOpenProjects, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
+import { allOpen, autoPick, firstRun, initialTicks, inOpenProjects, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
 
 // Comment lines out, so a sentence about the gate cannot stand in for the gate.
 const APP = (await Bun.file(new URL("../src/App.tsx", import.meta.url)).text())
@@ -97,6 +97,26 @@ describe("what starts ticked, and what opens by itself", () => {
   test("but never over a project already open, and never a guess among several", () => {
     expect(autoPick([{ root: ORBIT }], [LANDER])).toBeNull();
     expect(autoPick([{ root: ORBIT }, { root: LANDER }], [])).toBeNull();
+  });
+});
+
+describe("the first run's screen", () => {
+  const listed = [{ root: ORBIT }];
+  test("no folder, nothing open and not looking is the first run", () => {
+    expect(firstRun([], [], false, [])).toBe(true);
+  });
+  test("never over an open project, folders or not", () => {
+    // An upgrade with a project open and no folders yet was told to add the
+    // folder its projects live in, above the row of the project it had open.
+    expect(firstRun(listed, [], false, [ORBIT])).toBe(false);
+  });
+  test("not with a folder added, while looking, or before the list is read", () => {
+    expect(firstRun(listed, ["/home/dev/code"], false, [])).toBe(false);
+    expect(firstRun([], [], true, [])).toBe(false);
+    expect(firstRun(null, [], false, [])).toBe(false);
+  });
+  test("the screen asks the rule rather than keeping its own copy", () => {
+    expect(PICKER).toContain("const isFirstRun = firstRun(repos, roots, scanned, workspaces);");
   });
 });
 
