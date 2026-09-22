@@ -18,7 +18,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -188,8 +188,8 @@ describe("a new commit is a new report", () => {
   const COULD_NOT = "<!-- agentglass-plugin-submission -->\n## The catalogue check could not run\n";
   const bot = (id: number, body: string) => ({ id, login: "github-actions[bot]", type: "Bot", body });
 
-  /** The id of the comment to rewrite, or "" for a new one. */
-  function which(comments: unknown[], next: string): string {
+  /** The id of the comment to rewrite, or "" for a new one, and whether the report is held. */
+  function decide(comments: unknown[], next: string): { rewrite: string; held: boolean } {
     const at = mkdtempSync(join(dir, "say-"));
     writeFileSync(join(at, "comments.jsonl"), comments.map((c) => JSON.stringify(c)).join("\n") + "\n");
     writeFileSync(join(at, "comment.md"), next);
@@ -200,8 +200,11 @@ describe("a new commit is a new report", () => {
     });
     expect(r.stderr).toBe("");
     expect(r.status).toBe(0);
-    return r.stdout.trim();
+    const [rewrite = "", held = ""] = r.stdout.trim().split(" ");
+    expect(held, "the decision says whether the report is held").toMatch(/^(held|clear)$/);
+    return { rewrite: rewrite === "-" ? "" : rewrite, held: held === "held" };
   }
+  const which = (comments: unknown[], next: string): string => decide(comments, next).rewrite;
 
   test("the first report is a new comment", () => {
     expect(which([], report())).toBe("");
@@ -231,11 +234,141 @@ describe("a new commit is a new report", () => {
     expect(which([otherBot], report())).toBe("");
   });
 
+  /*
+   * A report about another commit or another repository than the one before
+   * it is held: it does not put `ready for listing` back by itself, however it
+   * came out, because a maintainer who read the report above it and labels
+   * now is approving what they did not read. It stays held when the same
+   * commit is checked again; only a person puts the label back.
+   */
+  const HELD = "\n<!-- agentglass-plugin-submission-held -->";
+  test("a report about another commit or repository than the last is held, and the first one is not", () => {
+    expect(decide([], report()).held).toBe(false);
+    expect(decide([bot(9, report())], report()).held).toBe(false);
+    expect(decide([bot(9, report({ commit: "f".repeat(40) }))], report()).held).toBe(true);
+    expect(decide([bot(9, report({ repository: "acme/orbit-other" }))], report()).held).toBe(true);
+  });
+
+  test("a held report stays held when the same commit is checked again", () => {
+    expect(decide([bot(9, report() + HELD)], report())).toEqual({ rewrite: "9", held: true });
+  });
+
+  test("a check that read nothing is not a report about something else", () => {
+    expect(decide([bot(9, COULD_NOT)], report()).held).toBe(false);
+    expect(decide([bot(8, report({ commit: "f".repeat(40) })), bot(9, COULD_NOT)], report()).held).toBe(true);
+    // …and it is not the report the next one is compared with.
+    expect(decide([bot(8, report()), bot(9, COULD_NOT)], report())).toEqual({ rewrite: "", held: false });
+    expect(decide([bot(8, report() + HELD), bot(9, COULD_NOT)], report()).held).toBe(true);
+    expect(decide([bot(9, report())], COULD_NOT).held).toBe(false);
+  });
+
   test("the marker says whether the check passed, which is what the approval lists on", () => {
     const passed = JSON.parse(comment(REPORT).match(/<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->/)![1]!);
     expect(passed.ready).toBe(true);
     const failed = JSON.parse(comment({ ...REPORT, "validate.json": { ok: false, error: "no manifest" } })
       .match(/<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->/)![1]!);
     expect(failed.ready).toBe(false);
+  });
+});
+
+/*
+ * The whole step, run with a stand-in `gh` that writes down what it was
+ * asked. The order is the point: a held report takes `ready for listing` and
+ * `approved for listing` off the issue BEFORE it is posted, so there is no
+ * moment in which the new report is on the issue and the old label still is.
+ */
+describe("the say step, run", () => {
+  function step(source: string): string {
+    const from = source.indexOf("      - name: Say it on the issue\n");
+    expect(from, "the workflow still says it on the issue").toBeGreaterThan(-1);
+    const body = source.slice(from).split("\n");
+    const at = body.findIndex((l) => l.trim() === "run: |");
+    const out: string[] = [];
+    for (const l of body.slice(at + 1)) {
+      if (l.trim() && !l.startsWith("          ")) break;
+      out.push(l.slice(10));
+    }
+    return out.join("\n");
+  }
+
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const report = (over: Record<string, unknown> = {}) =>
+    `<!-- agentglass-plugin-submission -->\n## What the catalogue check found\n\n<!-- agentglass-plugin-submission-result ${JSON.stringify({ repository: "acme/orbit-clock", commit: SHA, manifest: true, ready: true, ...over })} -->`;
+  const bot = (id: number, body: string) => ({ id, login: "github-actions[bot]", type: "Bot", body });
+  const GH = `#!/bin/sh
+printf '%s\\n' "$*" >> "$GH_LOG"
+case "$*" in
+  "api -X PATCH"*) cp report/comment.md "$POSTED" ;;
+  "issue comment"*) cp report/comment.md "$POSTED" ;;
+  *"approved for listing"*) [ -z "$FAIL_STRIP" ] || exit 1 ;;
+  *"--jq .state") echo open ;;
+  *join*) echo "plugin-submission,ready for listing" ;;
+  *"/comments --paginate"*) cat "$FIXTURE" ;;
+esac
+exit 0
+`;
+
+  function say(opts: { comments: unknown[]; next: string; verdict: "READY" | "NOT-READY"; failStrip?: boolean }) {
+    const at = mkdtempSync(join(dir, "step-"));
+    mkdirSync(join(at, "bin"));
+    mkdirSync(join(at, "report"));
+    writeFileSync(join(at, "bin", "gh"), GH, { mode: 0o755 });
+    writeFileSync(join(at, "fixture.jsonl"), opts.comments.map((c) => JSON.stringify(c)).join("\n") + "\n");
+    writeFileSync(join(at, "report", "comment.md"), opts.next);
+    writeFileSync(join(at, "report", "verdict"), opts.verdict);
+    writeFileSync(join(at, "step.sh"), step(yaml));
+    const r = spawnSync("bash", ["-e", "step.sh"], {
+      cwd: at, encoding: "utf8",
+      env: {
+        PATH: `${join(at, "bin")}:${process.env.PATH}`, ISSUE: "7", REPO: "acme/catalogue", GH_TOKEN: "x",
+        GH_LOG: join(at, "log"), POSTED: join(at, "posted"), FIXTURE: join(at, "fixture.jsonl"),
+        ...(opts.failStrip ? { FAIL_STRIP: "1" } : {}),
+      },
+    });
+    const read = (p: string) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
+    const log = read(join(at, "log")).split("\n").filter(Boolean);
+    return { code: r.status, log, posted: read(join(at, "posted")), edits: log.filter((l) => l.startsWith("issue edit")) };
+  }
+  const posting = (log: string[]) => log.findIndex((l) => l.startsWith("issue comment") || l.startsWith("api -X PATCH"));
+
+  test("a report about another commit takes both labels off first, and puts neither back", () => {
+    const r = say({ comments: [bot(9, report({ commit: "f".repeat(40) }))], next: report(), verdict: "READY" });
+    expect(r.code).toBe(0);
+    const strip = r.log.findIndex((l) => l.startsWith("issue edit") && l.includes("--remove-label ready for listing") && l.includes("--remove-label approved for listing"));
+    expect(strip, r.log.join("\n")).toBeGreaterThan(-1);
+    expect(r.log[strip]).toContain("--add-label changes needed");
+    expect(strip).toBeLessThan(posting(r.log));
+    expect(r.edits.some((l) => l.includes("--add-label ready for listing"))).toBe(false);
+    expect(r.posted).toContain("<!-- agentglass-plugin-submission-held -->");
+    expect(r.posted).toContain("ready for listing");
+  });
+
+  test("an edit naming another repository does the same", () => {
+    const r = say({ comments: [bot(9, report({ repository: "acme/orbit-other" }))], next: report(), verdict: "READY" });
+    expect(r.edits[0]).toContain("--remove-label approved for listing");
+    expect(r.edits.some((l) => l.includes("--add-label ready for listing"))).toBe(false);
+  });
+
+  test("the first report still says ready for listing by itself", () => {
+    const r = say({ comments: [], next: report(), verdict: "READY" });
+    expect(r.code).toBe(0);
+    expect(r.edits).toEqual([expect.stringContaining("--add-label ready for listing")]);
+    expect(r.posted).not.toContain("agentglass-plugin-submission-held");
+  });
+
+  test("a held report checked again leaves the labels to the maintainer, unless it no longer passes", () => {
+    const held = bot(9, report() + "\n<!-- agentglass-plugin-submission-held -->");
+    const again = say({ comments: [held], next: report(), verdict: "READY" });
+    expect(again.code).toBe(0);
+    expect(again.edits).toEqual([]);
+    expect(again.posted).toContain("<!-- agentglass-plugin-submission-held -->");
+    const red = say({ comments: [held], next: report({ ready: false }), verdict: "NOT-READY" });
+    expect(red.edits).toEqual([expect.stringContaining("--add-label changes needed")]);
+  });
+
+  test("labels that cannot be taken off stop the report from being posted", () => {
+    const r = say({ comments: [bot(9, report({ commit: "f".repeat(40) }))], next: report(), verdict: "READY", failStrip: true });
+    expect(r.code).not.toBe(0);
+    expect(posting(r.log)).toBe(-1);
   });
 });

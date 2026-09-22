@@ -89,6 +89,14 @@ jobs:
             *,"approved for listing",*) ;;
             *) echo "::error::the label was removed again before this run reached it"; exit 1 ;;
           esac
+          # The check takes `ready for listing` off when it reports on another
+          # commit or repository than before, and does not put it back; a
+          # person does, having read the new report. Without it, the report
+          # the label was given on may not be the one that is up now.
+          case ",$labels," in
+            *,"ready for listing",*) ;;
+            *) echo "::error::the issue does not carry ready for listing: the latest check is about another commit or repository, or did not pass. Read it, apply ready for listing, then label again"; exit 1 ;;
+          esac
 
       # Without its credentials: nothing from the clone runs today, and a step
       # that one day does (an install, a linter) must find no token in
@@ -123,9 +131,9 @@ jobs:
           repo=$(python3 -c 'import os,re;m=re.search(r"https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)",os.environ.get("BODY",""));print(f"{m.group(1)}/{m.group(2).removesuffix(".git")}" if m else "")')
           [ -n "$repo" ] || { echo "::error::no repository URL in the issue"; exit 1; }
           gh api --paginate "repos/$REPO/issues/$ISSUE/comments" \
-            --jq '.[] | {login: .user.login, type: .user.type, body, updated_at} | @json' > "$COMMENTS"
+            --jq '.[] | {login: .user.login, type: .user.type, body, created_at, updated_at} | @json' > "$COMMENTS"
           gh api --paginate "repos/$REPO/issues/$ISSUE/events" \
-            --jq '.[] | select(.event == "labeled") | {label: .label.name, created_at} | @json' > "$EVENTS"
+            --jq '.[] | select(.event == "labeled") | {label: .label.name, created_at, actor: .actor.login, actor_type: .actor.type} | @json' > "$EVENTS"
           git ls-remote "https://github.com/$repo.git" HEAD | cut -f1 > "$HEAD_FILE"
           REPO_NAMED="$repo" python3 - <<'PY'
           import json, os, re, sys
@@ -171,6 +179,19 @@ jobs:
               refuse("no approved-for-listing label event on this issue")
           if report.get("updated_at", "") >= labelled[-1]:
               refuse("the submission check wrote its latest report after the label was applied, or in the same second; read it again and label again")
+          # A held report is about another commit or repository than the one
+          # before it, and the check did not put `ready for listing` back on
+          # it. A person has to, after it was posted: otherwise the label this
+          # run started from may have been given on the report above it. The
+          # same second counts as before, and a report with no time as new.
+          if "<!-- agentglass-plugin-submission-held -->" in report["body"]:
+              posted = report.get("created_at") or "9999"
+              reread = [e for e in rows(env["EVENTS"])
+                        if e.get("label") == "ready for listing" and e.get("created_at", "") > posted
+                        and e.get("actor_type") != "Bot" and e.get("actor") != "github-actions[bot]"]
+              if not reread:
+                  refuse("the latest report is about another commit or repository than the one before it, and nobody has "
+                         "applied ready for listing since it was posted; read it, apply ready for listing, then label again")
           head = open(env["HEAD_FILE"]).read().strip()
           if head != commit:
               refuse(f"the repository has moved since the check read it: the report is about {commit[:12]} "

@@ -327,6 +327,43 @@ describe("the listed commit is the one the check validated", () => {
     expect(r.refused).toContain("after");
   });
 
+  /*
+   * A held report is one about another commit or repository than the report
+   * before it (see the say job). The label a maintainer gave after it may
+   * have been given on the report above it, so it lists only once a person
+   * has applied `ready for listing` again after it was posted.
+   */
+  const HELD = "\n<!-- agentglass-plugin-submission-held -->";
+  const heldReport = () => ({ ...bot(marker() + HELD), created_at: "2026-09-22T10:00:00Z" });
+  const ready = (created_at: string, actor = "maintainer", actor_type = "User") => ({ label: "ready for listing", created_at, actor, actor_type });
+
+  test("a held report lists nothing until a person applies ready for listing after it", () => {
+    const r = decide({ comments: [heldReport()] });
+    expect(r.code).toBe(1);
+    expect(r.refused).toContain("ready for listing");
+    const reread = decide({ comments: [heldReport()], events: [ready("2026-09-22T10:30:00Z"), ...LABELLED] });
+    expect(reread.stderr).toBe("");
+    expect(reread.output).toContain(`sha=${VALIDATED}`);
+  });
+
+  test("the check's own label, one from before the report, or one in its second is not a person reading it", () => {
+    for (const events of [
+      [ready("2026-09-22T10:30:00Z", "github-actions[bot]", "Bot")],
+      [ready("2026-09-22T09:30:00Z")],
+      [ready("2026-09-22T10:00:00Z")],
+    ]) expect(decide({ comments: [heldReport()], events: [...events, ...LABELLED] }).code).toBe(1);
+    // A held report with no time on it is not taken to be old.
+    const untimed = { ...bot(marker() + HELD) };
+    expect(decide({ comments: [untimed], events: [ready("2026-09-22T10:30:00Z"), ...LABELLED] }).code).toBe(1);
+  });
+
+  test("the comments and events it decides on carry the times and people it compares", () => {
+    const from = yaml.indexOf("      - name: Which commit the check validated\n");
+    const step = yaml.slice(from, yaml.indexOf("\n      - name:", from + 1));
+    expect(step).toContain("created_at, updated_at}");
+    expect(step).toContain("actor: .actor.login, actor_type: .actor.type}");
+  });
+
   test("the entry fetches that commit by id and checks it landed there", () => {
     const code = yaml.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
     expect(code).toContain('git ls-remote "https://github.com/$repo.git" HEAD');
@@ -399,5 +436,53 @@ describe("the listing merges on its own only behind the catalogue check", () => 
     expect(step).toContain('gh api --paginate "repos/$GITHUB_REPOSITORY/rules/branches/main"');
     expect(step).not.toContain('GH_TOKEN="$CATALOGUE_TOKEN" gh api --paginate "repos/$GITHUB_REPOSITORY/rules');
     expect(step).toContain("waits for a maintainer");
+  });
+});
+
+/*
+ * The label a held report took off has to be on the issue when the approval
+ * runs: the say job never puts `ready for listing` back on a held report, so
+ * its being there is a person having put it back.
+ */
+describe("the approval runs only on an issue that is ready for listing", () => {
+  function step(): string {
+    const from = yaml.indexOf("      - name: Is the person who labelled it allowed to?\n");
+    expect(from, "the workflow still checks who labelled it").toBeGreaterThan(-1);
+    const body = yaml.slice(from).split("\n");
+    const at = body.findIndex((l) => l.trim() === "run: |");
+    const out: string[] = [];
+    for (const l of body.slice(at + 1)) {
+      if (l.trim() && !l.startsWith("          ")) break;
+      out.push(l.slice(10));
+    }
+    return out.join("\n");
+  }
+
+  function run(labels: string): { code: number | null; stdout: string } {
+    const at = mkdtempSync(join(dir, "who-"));
+    mkdirSync(join(at, "bin"));
+    writeFileSync(join(at, "bin", "gh"), `#!/bin/sh
+case "$*" in
+  *permission*) echo write ;;
+  *"--jq .state") echo open ;;
+  *join*) echo "$LABELS" ;;
+esac
+`, { mode: 0o755 });
+    writeFileSync(join(at, "step.sh"), step());
+    const r = spawnSync("bash", ["-e", "step.sh"], {
+      cwd: at, encoding: "utf8",
+      env: { PATH: `${join(at, "bin")}:${process.env.PATH}`, ACTOR: "maintainer", REPO: "acme/catalogue", ISSUE: "7", GH_TOKEN: "x", LABELS: labels },
+    });
+    return { code: r.status, stdout: r.stdout };
+  }
+
+  test("with ready for listing on it, it goes on", () => {
+    expect(run("plugin-submission,ready for listing,approved for listing").code).toBe(0);
+  });
+
+  test("without it, nothing is listed and the run says why", () => {
+    const r = run("plugin-submission,changes needed,approved for listing");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("ready for listing");
   });
 });

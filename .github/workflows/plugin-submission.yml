@@ -284,9 +284,23 @@ jobs:
           # `ready for listing` back, and nothing on the issue said anything
           # had moved. Now the new commit arrives as a comment of its own, and
           # the one above it still says what the old commit was.
+          #
+          # And a report about another commit or another repository than the
+          # one before it is HELD. The maintainer who read the report above it
+          # and labels now would be approving what they never read, and the
+          # new comment alone did not stop that: the check put `ready for
+          # listing` back, and the approval listed the new commit. A held
+          # report takes `ready for listing` and `approved for listing` off
+          # the issue before it is posted and puts neither back, however it
+          # came out; a person reads it and applies `ready for listing` again.
+          # It stays held when the same commit is checked again. The first
+          # report on an issue is not held, and a check that read nothing is
+          # about nothing: it is not held, and it is not what the next report
+          # is compared with.
+          comments=$(mktemp)
           gh api "repos/$REPO/issues/$ISSUE/comments" --paginate \
-            --jq '.[] | {id, login: .user.login, type: .user.type, body} | @json' > /tmp/comments.jsonl
-          mine=$(COMMENTS=/tmp/comments.jsonl NEXT=report/comment.md python3 - <<'PY'
+            --jq '.[] | {id, login: .user.login, type: .user.type, body} | @json' > "$comments"
+          decision=$(COMMENTS="$comments" NEXT=report/comment.md python3 - <<'PY'
           import json, os, re
           MARK = re.compile(r"<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->")
           def about(body):
@@ -305,17 +319,43 @@ jobs:
           reports = [c for c in rows
                      if c.get("login") == "github-actions[bot]" and c.get("type") == "Bot"
                      and str(c.get("body", "")).startswith("<!-- agentglass-plugin-submission -->")]
-          if reports and about(reports[-1].get("body")) == about(open(os.environ["NEXT"]).read()):
-              print(reports[-1]["id"])
+          HELD = "<!-- agentglass-plugin-submission-held -->"
+          nxt = about(open(os.environ["NEXT"]).read())
+          # Held against the last report that was about something: a check
+          # that read nothing in between changes nothing about what was read.
+          last = next((r for r in reversed(reports) if about(r.get("body")) is not None), None)
+          if nxt is None or last is None:
+              held = False
+          elif about(last.get("body")) == nxt:
+              held = HELD in str(last.get("body", ""))
+          else:
+              held = True
+          rewrite = reports[-1]["id"] if reports and about(reports[-1].get("body")) == nxt else "-"
+          print(rewrite, "held" if held else "clear")
           PY
           )
+          read -r mine hold <<< "$decision"
+          [ "$mine" != "-" ] || mine=""
+          if [ "$hold" = held ]; then
+            printf '%s\n' "" "---" \
+              "**This report is about another commit or repository than the report before it**, so it does not put \`ready for listing\` back by itself, and an approval given before it no longer stands. A maintainer reads it, applies \`ready for listing\` again, and then \`approved for listing\`." \
+              "<!-- agentglass-plugin-submission-held -->" >> report/comment.md
+          fi
+          # Off before the report is up, and not quietly: a held report posted
+          # beside a `ready for listing` that stayed is the thing this closes,
+          # so if the labels cannot be taken off, nothing is posted.
+          if [ "$hold" = held ] && [ -z "$mine" ]; then
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "changes needed" \
+              --remove-label "ready for listing" --remove-label "approved for listing" \
+              || { echo "::error::could not take the labels off the issue; the report about the new commit is not posted"; exit 1; }
+          fi
           if [ -n "$mine" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$mine" -F body=@report/comment.md >/dev/null
           else
             gh issue comment "$ISSUE" --repo "$REPO" --body-file report/comment.md
           fi
-          if [ "$(cat report/verdict 2>/dev/null)" = "READY" ]; then
-            gh issue edit "$ISSUE" --repo "$REPO" --add-label "ready for listing" --remove-label "changes needed" || true
-          else
+          if [ "$(cat report/verdict 2>/dev/null)" != "READY" ]; then
             gh issue edit "$ISSUE" --repo "$REPO" --add-label "changes needed" --remove-label "ready for listing" || true
+          elif [ "$hold" != held ]; then
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "ready for listing" --remove-label "changes needed" || true
           fi
