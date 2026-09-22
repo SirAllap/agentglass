@@ -154,6 +154,18 @@ describe("the Linux inhibitor", () => {
     expect(t.calls.filter((c) => whatOf(c) === "handle-lid-switch")).toHaveLength(1);
   });
 
+  test("a logind that refused block-weak is not asked again after a resume", async () => {
+    /* The resume handler re-asserts every lock. A refusal is the logind's
+       version speaking, and it does not change while the app runs. */
+    const t = await drive(`
+      power.setMode("on"); await new Promise((r) => setTimeout(r, 500));
+      electron.__emit("suspend"); await new Promise((r) => setTimeout(r, 200));
+      electron.__emit("resume"); await new Promise((r) => setTimeout(r, 500));
+    `, { AGX_STUB_NO_WEAK: "1" });
+    const sleepModes = t.calls.filter((c) => whatOf(c) === "sleep").map((c) => modeOf(c));
+    expect(sleepModes).toEqual(["block-weak", "block", "block"]);
+  });
+
   test("`off` holds nothing", async () => {
     const t = await drive(`power.setMode("off"); await new Promise((r) => setTimeout(r, 200));`);
     expect(t.calls).toEqual([]);

@@ -125,6 +125,9 @@ function saveMode(m) {
   } catch { /* the mode still applies for this run; it just won't survive a restart */ }
 }
 
+/** Set once logind has refused `block-weak` (systemd before 257). */
+let weakRefused = false;
+
 /**
  * Spawn one lock. Idempotent: a second call while it is already running is a
  * no-op, not a leaked second lock.
@@ -133,7 +136,7 @@ function saveMode(m) {
  *   `block-weak`, and `block` is what it falls back to when logind refuses it
  *   (see the header: before 257, block is weak).
  */
-function spawnInhibit(which, mode = which === "sleep" ? "block-weak" : "block") {
+function spawnInhibit(which, mode = which === "sleep" && !weakRefused ? "block-weak" : "block") {
   if (inhibitChild[which] || inhibitUnavailable) return;
   const what = which === "sleep" ? "--what=sleep" : "--what=handle-lid-switch";
   const child = spawn(
@@ -161,7 +164,13 @@ function spawnInhibit(which, mode = which === "sleep" ? "block-weak" : "block") 
     // Only a refusal (exit 1) that this process did not cause; a child killed
     // by `killInhibit` exits by signal, and one killed by the suspend itself
     // is the resume handler's to replace.
-    if (mode === "block-weak" && code === 1 && !releasedByUs.has(child) && held) spawnInhibit(which, "block");
+    if (mode === "block-weak" && code === 1 && !releasedByUs.has(child) && held) {
+      /* The logind's version spoke, and it does not change while the app
+         runs: every later lock — the resume handler re-asserts them all —
+         goes straight to block. */
+      weakRefused = true;
+      spawnInhibit(which, "block");
+    }
   });
 }
 
