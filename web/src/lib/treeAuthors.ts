@@ -28,12 +28,7 @@ export function authorsIndex(authors: TreeAuthorsInfo[] | undefined): {
   const byRow = new Map<string, string[]>();
   for (const t of authors ?? []) {
     byRoot.set(t.root, t);
-    // Which of them touched which file is not sent — only that more than one
-    // did — so every author of the tree is named on an overlapping row. With
-    // three authors and two of them on the file that names one too many, and
-    // it is the honest reading of what is known.
-    const names = t.sessions.map((s) => s.name);
-    for (const p of t.overlap) byRow.set(`${t.root}\0${p}`, names);
+    for (const o of t.overlap) byRow.set(`${t.root}\0${o.path}`, o.sessions);
   }
   return { byRoot, byRow };
 }
@@ -51,7 +46,13 @@ export function sectionAuthors(
   return groupBy === "worktree" ? ix.byRoot.get(sectionKey) : undefined;
 }
 
-export function headingAuthors(t: TreeAuthorsInfo): { text: string; shared: boolean; title: string } {
+/**
+ * @param mixed how many of this section's rows are files more than one of them
+ *   edited. Counted from the rows, not from `overlap`: a file they both touched
+ *   and that has since been committed is not in the section, and a count that
+ *   does not match the marked rows below it reads as a bug.
+ */
+export function headingAuthors(t: TreeAuthorsInfo, mixed: number): { text: string; shared: boolean; title: string } {
   const names = t.sessions.map((s) => s.name);
   if (names.length < 2) {
     // "Is writing here", never "by": the rows are whatever git holds, and some
@@ -64,14 +65,14 @@ export function headingAuthors(t: TreeAuthorsInfo): { text: string; shared: bool
       title: `${names[0] ?? "One agent"} is the only live session writing into this checkout.`,
     };
   }
-  const n = t.overlap.length;
+  const n = mixed;
   return {
     text: `shared · ${names.length} sessions`,
     shared: true,
     title: `${joinNames(names)} are ${names.length === 2 ? "both" : "all"} writing into this checkout, so a change here can be any of theirs. `
       + (n
-        ? `${n} file${n === 1 ? " has" : "s have"} been edited by more than one of them, and a diff on disk cannot say whose hunk is whose — per-file attribution here is approximate. `
-        : "No file has been edited by more than one of them yet, so no file's diff is a mix of theirs. ")
+        ? `${n} file${n === 1 ? " here has" : "s here have"} been edited by more than one of them, and a diff on disk cannot say whose hunk is whose — per-file attribution here is approximate. `
+        : "No file here has been edited by more than one of them, so no diff in it is a mix of theirs. ")
       + "A worktree per agent keeps each section one agent's work.",
   };
 }

@@ -446,7 +446,7 @@ function List({
       {!groups.length && <p className="text-center py-10 text-[12px]" style={{ color: "var(--text4)" }}>{empty}</p>}
       {inc.rows.map((g) => {
         const by = sectionAuthors(who, groupBy, g.key);
-        const h = by ? headingAuthors(by) : null;
+        const h = by ? headingAuthors(by, g.rows.filter((r) => who.byRow.has(r.key)).length) : null;
         return (
           <section key={g.key} className="mb-1">
             <button
@@ -552,8 +552,9 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
           </span>
         )}
         {/* An agent glyph and a count, not a word: the row is narrow and the
-            file name is what it is for. The heading above says what the colour
-            means, and the tooltip names them. */}
+            file name is what it is for. The tooltip names them — in every
+            grouping, since a day or a folder has no "shared" heading above to
+            explain the colour. */}
         {authors && (
           <span className="text-[9.5px] px-1 rounded shrink-0 inline-flex items-center gap-0.5" title={rowAuthorsTitle(authors)}
             aria-label={`${authors.length} authors`}
