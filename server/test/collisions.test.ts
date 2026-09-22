@@ -79,6 +79,16 @@ describe("claimsFromCommand", () => {
     // shape of a commit message written by an agent.
     expect(keys("git commit -F - <<'EOF'\nfix: serve on localhost:3000\nPORT=3001 is the other one\nEOF")).toEqual([]);
     expect(keys('git commit -m "$(cat <<EOF\nuse localhost:3000\nEOF\n)" && PORT=3002 bun dev')).toEqual(["port 3002"]);
+    // A multi-line quoted message is one argument, not one command per line —
+    // the way commit messages and PR bodies are written without a heredoc.
+    expect(keys('git commit -m "fix(dev): pick a free port\n\nThe server on localhost:3000 now falls back."')).toEqual([]);
+    expect(keys('gh pr create --body "## Testing\n- PORT=5173 npm run dev\n- sqlite3 dev.db"')).toEqual([]);
+    expect(keys('git commit -m "a; b" && PORT=3006 bun dev')).toEqual(["port 3006"]);
+    // Only a real heredoc opener hides what follows it.
+    expect(keys("x=$((1<<8))\nPORT=3007 npm run dev")).toEqual(["port 3007"]);
+    expect(keys('echo "a << b"\nPORT=3008 npm run dev')).toEqual(["port 3008"]);
+    expect(keys("cat <<END-OF-MSG\nhello\nEND-OF-MSG\nPORT=3009 npm run dev")).toEqual(["port 3009"]);
+    expect(keys("cat <<\\EOF\ncurl localhost:4000\nEOF")).toEqual([]);
     // Reading an .env above the tree is still reading it.
     expect(keys("grep API_URL ../.env")).toEqual(["env /work/.env"]);
     // A port a process is started with still counts, as does one it is asked to reach.

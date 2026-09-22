@@ -15,8 +15,9 @@
 // lock. It is also a heuristic, and says so where it is shown.
 //
 // The ceilings, chosen rather than missed:
-// - A command is parsed one `&&`/`;`/`|` segment at a time, with `cd` followed,
-//   and quotes honoured inside a segment only. A `;` inside quotes splits early.
+// - A command is parsed one `&&`/`;`/`|`/newline segment at a time, split
+//   outside quotes only, with `cd` followed and heredoc bodies skipped. `$(…)`
+//   and backticks are not parsed: a separator inside an unquoted one splits.
 // - A path built from a variable or a glob is not guessed at.
 // - Ports and database files come from what a process is started with or asked
 //   to reach, never from text: the arguments of grep, echo, git and the like,
@@ -61,7 +62,6 @@ export interface Claim {
 }
 
 const MIN_PORT = 1024;
-const SEGMENT = /&&|\|\||[;|\n]/;
 const TOKEN = /"([^"]*)"|'([^']*)'|(\S+)/g;
 
 const LOCAL = new Set(["", "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "::", "[::]"]);
@@ -100,24 +100,58 @@ const TEXT = new Set([
 ]);
 
 /**
- * The command without its heredoc bodies.
+ * A command's segments: split on `&&`, `||`, `;`, `|` and newlines, but only
+ * outside quotes, and with heredoc bodies left out.
  *
- * A body is text fed to a program, one line per line: split on newlines, each
- * line of a commit message would be read as a command of its own.
+ * A quoted argument can span lines — a commit message or a PR body written
+ * without a heredoc — and a heredoc body is text fed to a program. Split
+ * naively, each of their lines was read as a command of its own, starting with
+ * whatever word the prose started with.
  */
-function stripHeredocs(command: string): string {
+export function segmentsOf(command: string): string[] {
   const out: string[] = [];
-  let until: string | null = null;
-  for (const line of command.split("\n")) {
-    if (until !== null) {
-      if (line.trim() === until) until = null;
+  let cur = "";
+  let quote: string | null = null;
+  const pending: string[] = [];
+  const cut = () => { out.push(cur); cur = ""; };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      cur += c;
+      if (c === "\\" && quote === '"' && i + 1 < command.length) cur += command[++i];
+      else if (c === quote) quote = null;
       continue;
     }
-    out.push(line);
-    const m = /<<-?\s*(['"]?)(\w+)\1/.exec(line.replace(/<<</g, ""));
-    if (m) until = m[2];
+    if (c === "\\" && i + 1 < command.length && command[i + 1] !== "\n") { cur += c + command[++i]; continue; }
+    if (c === '"' || c === "'") { quote = c; cur += c; continue; }
+    if (c === "<" && command[i + 1] === "<" && command[i + 2] !== "<" && command[i - 1] !== "<") {
+      // A heredoc opener: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`.
+      // Anything else after `<<` (`$((1<<8))`) is not one.
+      const m = /^<<-?[ \t]*(?:\\|(['"]))?([A-Za-z_][\w.-]*)\1?/.exec(command.slice(i));
+      if (m) { pending.push(m[2]); cur += m[0]; i += m[0].length - 1; continue; }
+    }
+    if (c === "\n") {
+      cut();
+      // The bodies of the heredocs this line opened, each up to its own terminator.
+      while (pending.length) {
+        const end = pending.shift()!;
+        let j = i + 1;
+        for (;;) {
+          const nl = command.indexOf("\n", j);
+          const line = command.slice(j, nl < 0 ? command.length : nl);
+          j = nl < 0 ? command.length : nl + 1;
+          if (line.trim() === end || nl < 0) break;
+        }
+        i = j - 1;
+      }
+      continue;
+    }
+    if ((c === "&" && command[i + 1] === "&") || (c === "|" && command[i + 1] === "|")) { cut(); i++; continue; }
+    if (c === ";" || c === "|") { cut(); continue; }
+    cur += c;
   }
-  return out.join("\n");
+  cut();
+  return out;
 }
 
 const tokensOf = (seg: string) => [...seg.matchAll(TOKEN)].map((m) => m[1] ?? m[2] ?? m[3]);
@@ -210,7 +244,7 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
   const out = new Map<string, Claim>();
   const add = (c: Claim | null) => { if (c) out.set(`${c.kind} ${c.key}`, c); };
   let here = cwd;
-  for (const raw of stripHeredocs(command).split(SEGMENT)) {
+  for (const raw of segmentsOf(command)) {
     let seg = raw;
     const toks = tokensOf(seg);
     if (!toks.length) continue;
