@@ -11,10 +11,11 @@
  * test, whichever one is right.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateManifest } from "../src/plugins.ts";
+import { contentHash, walkPluginDir } from "../src/plugin-sources.ts";
 
 const CLI = new URL("../../bin/agentglass-plugin", import.meta.url).pathname;
 
@@ -131,5 +132,78 @@ describe("the CLI's copy of the manifest rules", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  /*
+   * `hash` is what the catalogue pins an entry to, and the app is what
+   * refuses an install whose tree hashes to something else. If the two walks
+   * differ by one detail — a file order, a separator, a skipped directory —
+   * every listed plugin is refused on every machine, or none is checked at
+   * all. So the CLI's walk is measured against the app's over a tree built to
+   * exercise the details: nested folders, a `.git` directory to skip, a
+   * symlink that stays inside the folder, bytes that are not text, and names
+   * that sort differently by byte and by locale.
+   */
+  describe("and its content hash", () => {
+    function tree(): string {
+      const dir = mkdtempSync(join(tmpdir(), "agx-plugin-hash-"));
+      writeFileSync(join(dir, "plugin.json"), JSON.stringify(OK));
+      mkdirSync(join(dir, "lib", "deep"), { recursive: true });
+      writeFileSync(join(dir, "lib", "deep", "b.py"), "print('b')\n");
+      writeFileSync(join(dir, "lib", "a.py"), "print('a')\n");
+      writeFileSync(join(dir, "Zed.md"), "# capital sorts before lower in bytes\n");
+      writeFileSync(join(dir, "icon.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a, 0xff]));
+      writeFileSync(join(dir, "empty"), "");
+      mkdirSync(join(dir, ".git", "objects"), { recursive: true });
+      writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+      symlinkSync("lib/a.py", join(dir, "alias.py"));
+      return dir;
+    }
+
+    function cliHash(dir: string): { ok: boolean; sha256?: string; files?: number; error?: string; exit: number } {
+      const r = Bun.spawnSync(["python3", CLI, "hash", dir]);
+      return { ...(JSON.parse(r.stdout.toString() || "{}") as { ok: boolean; sha256?: string; files?: number; error?: string }), exit: r.exitCode };
+    }
+
+    test("is the app's hash, over the app's walk, to the byte", () => {
+      const dir = tree();
+      try {
+        const walked = walkPluginDir(dir);
+        expect(walked.ok, walked.error ?? "").toBe(true);
+        const cli = cliHash(dir);
+        expect(cli.exit).toBe(0);
+        expect(cli.sha256).toBe(contentHash(dir, walked.files));
+        expect(cli.files).toBe(walked.files.length);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("moves when one byte of one file moves, and not when the history does", () => {
+      const dir = tree();
+      try {
+        const before = cliHash(dir).sha256;
+        writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/other\n");
+        expect(cliHash(dir).sha256).toBe(before);
+        writeFileSync(join(dir, "lib", "a.py"), "print('A')\n");
+        expect(cliHash(dir).sha256).not.toBe(before);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("refuses what the app refuses: a link that leaves the folder", () => {
+      const dir = tree();
+      try {
+        symlinkSync("/etc/hostname", join(dir, "out.txt"));
+        expect(walkPluginDir(dir).ok).toBe(false);
+        const cli = cliHash(dir);
+        expect(cli.ok).toBe(false);
+        expect(cli.exit).toBe(1);
+        expect(cli.error).toContain("outside");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });

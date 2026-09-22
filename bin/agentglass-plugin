@@ -2,6 +2,7 @@
 """Install, switch on and check agentglass plugins, without the window.
 
     agentglass-plugin validate ~/code/my-plugin     # offline; 0 clean, 1 not
+    agentglass-plugin hash ~/code/my-plugin         # offline; the content hash a catalogue pins
     agentglass-plugin add https://github.com/you/my-plugin --approve
     agentglass-plugin list --json
     agentglass-plugin enable my-plugin --approve
@@ -33,6 +34,11 @@ It cannot check what a plugin DOES — see `enable`, which is where a person
 approves that. The rules it mirrors live in server/src/plugins.ts and
 shared/pluginUi.ts, and server/test/plugin-cli-validate.test.ts runs both over
 the same cases so the two cannot drift apart quietly.
+
+`hash` IS THE OTHER OFFLINE ONE. It prints the sha256 the app computes over a
+plugin folder at install — the same walk, the same exclusions — which is what
+a catalogue entry pins next to its commit. The app refuses an install whose
+tree hashes to anything else, so the listing describes bytes and not a branch.
 
 Everything else talks to the app over its HTTP API, with the same token the
 other CLIs here use.
@@ -285,6 +291,92 @@ def cmd_validate(args):
                  "warnings": warnings})
 
 
+# --------------------------------------------------------------------- hash
+#
+# `walkPluginDir` and `contentHash` from server/src/plugin-sources.ts, in
+# Python. The walk decides what "the plugin" is — `.git` is not part of it, a
+# link that leaves the folder refuses the whole thing, a link that stays is
+# skipped rather than followed — and the hash is over the sorted relative
+# paths and the bytes of each, separated by NULs. Every one of those details
+# is a way for the two to disagree, and the test runs both over one tree.
+
+MAX_FILES = 2000
+MAX_TOTAL_BYTES = 50 * 1024 * 1024
+MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+
+
+def walk_plugin_dir(folder):
+    """The relative paths the app would hash, or (None, why)."""
+    root = os.path.realpath(folder)
+    files, total = [], 0
+
+    def walk(abs_dir):
+        nonlocal total
+        try:
+            entries = list(os.scandir(abs_dir))
+        except OSError as e:
+            return e.strerror or str(e)
+        for ent in entries:
+            if ent.name == ".git":
+                continue
+            child = os.path.join(abs_dir, ent.name)
+            rel = os.path.relpath(child, root)
+            try:
+                real = os.path.realpath(child, strict=True)
+            except OSError:
+                return f"could not resolve {rel}"
+            if real != root and not real.startswith(root + os.sep):
+                return f"{rel} resolves outside the plugin directory"
+            # The entry's own type, never the target's: a link inside the
+            # folder is neither a file nor a directory here, so it is skipped
+            # rather than read twice.
+            if ent.is_dir(follow_symlinks=False):
+                why = walk(child)
+                if why:
+                    return why
+                continue
+            if not ent.is_file(follow_symlinks=False):
+                continue
+            files.append(rel)
+            if len(files) > MAX_FILES:
+                return f"more than {MAX_FILES} files"
+            size = os.stat(real).st_size
+            if size > MAX_ARTIFACT_BYTES:
+                return f"{rel} is larger than {MAX_ARTIFACT_BYTES // (1024 * 1024)}MB"
+            total += size
+            if total > MAX_TOTAL_BYTES:
+                return f"plugin is larger than {MAX_TOTAL_BYTES // (1024 * 1024)}MB in total"
+        return None
+
+    why = walk(root)
+    return (None, why) if why else (files, None)
+
+
+def content_hash(folder, files):
+    import hashlib
+    h = hashlib.sha256()
+    # `sorted` on str is by code point; the app sorts by UTF-16 unit. They
+    # agree on everything but names with characters outside the BMP, which
+    # is not a file name a plugin has had yet.
+    for rel in sorted(files):
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        with open(os.path.join(os.path.realpath(folder), rel), "rb") as f:
+            h.update(f.read())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def cmd_hash(args):
+    folder = os.path.abspath(os.path.expanduser(args.folder))
+    if not os.path.isdir(folder):
+        return emit({"ok": False, "error": f"{folder} is not a folder"})
+    files, why = walk_plugin_dir(folder)
+    if why:
+        return emit({"ok": False, "error": why})
+    return emit({"ok": True, "sha256": content_hash(folder, files), "files": len(files)})
+
+
 # -------------------------------------------------------------- the app's API
 
 def declaration(plugin):
@@ -359,6 +451,10 @@ def main():
     v = sub.add_parser("validate", help="check a plugin folder's manifest; needs no running agentglass")
     v.add_argument("folder")
     v.set_defaults(fn=cmd_validate)
+
+    h = sub.add_parser("hash", help="the content hash the app computes at install; needs no running agentglass")
+    h.add_argument("folder")
+    h.set_defaults(fn=cmd_hash)
 
     a = sub.add_parser("add", help="install from a git URL or a local folder")
     a.add_argument("source")
