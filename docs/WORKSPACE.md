@@ -82,6 +82,8 @@ Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. 
 
 ![diff viewer](../.github/assets/diff.png)
 
+**Each checkout says who is writing into it.** Grouped by worktree, a section heading names the live session whose edits land there — so the list reads per agent as well as per branch. When more than one live session is writing into the same checkout the heading is marked **shared** and names them, and a file more than one of them edited carries the mark too: its diff on disk is their work together, and nothing can say whose hunk is whose. A worktree per agent is what keeps each section one agent's work. Only edits the agent's hooks report by file (Edit, Write, MultiEdit) count toward this; a file changed through the shell is not attributed to anyone.
+
 ### 🌿 Source control — lazygit, in the workspace &nbsp;`g`
 
 A live view of any repo's working tree (repos are discovered from the fleet's own file paths). Stage / unstage / discard, **interactive hunk staging**, a commit composer, branches (checkout / create / delete), log, reflog, remotes, tags, worktrees and stashes — plus push / pull / fetch. Keyboard-driven (`j/k` move · `s/u` stage · `x` discard · `1`–`8` jump to a tab) and **write-gated**, so it's read-only until you opt in.
