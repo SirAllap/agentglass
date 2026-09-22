@@ -676,7 +676,8 @@ beginning `--dangerously-`, anything containing *bypass*, *skip-permission*,
 `--mcp-config`, `--sandbox`/`-s`, `-a`/`--ask-for-approval`, `-y`,
 `--approval-mode`, `--auto`, `--approve-for-me`, `--allowedTools`,
 `--allowed-tools`, `--disallowedTools`, `--disallowed-tools`, `--add-dir` and
-`--include-directories`. A refused one-letter flag counts inside a group or with
+`--include-directories`, and for Codex alone `-p`/`--profile` (a profile can
+set the approval policy; Claude's `-p` is print mode). A refused one-letter flag counts inside a group or with
 its value glued on (`-cy`, `-anever`). A Codex config override, `-c key=value`
 or `--config key=value` in any of its spellings (one word or two, quoted or
 not, glued), is refused when its key touches the approval policy, the sandbox,

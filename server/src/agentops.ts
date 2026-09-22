@@ -220,6 +220,14 @@ function codexOverrideLoosens(override: string): boolean {
   return value.startsWith("{") && /approv|sandbox|permission|trust_level|profile|mcp_servers/.test(value);
 }
 
+/**
+ * Flags refused for one CLI only, because another CLI spells something
+ * harmless the same way. Codex's `-p`/`--profile` layers a profile file over
+ * its config, and a profile can set `approval_policy = "never"`; Claude's `-p`
+ * is print mode.
+ */
+const KIND_FLAGS: Record<string, Set<string>> = { codex: new Set(["-p", "--profile"]) };
+
 /** The words a permission flag is made of, whatever the flag is called. */
 const PERMISSION_WORDS = /bypass|skip-permission|dangerous|yolo|full-auto/;
 
@@ -228,13 +236,15 @@ const PERMISSION_WORDS = /bypass|skip-permission|dangerous|yolo|full-auto/;
  * do, or null. Exported so the test can enumerate the gate rather than probe
  * it one string at a time.
  */
-export function refusedArg(args: string[]): string | null {
+export function refusedArg(args: string[], kind?: string): string | null {
+  const own = (kind && KIND_FLAGS[kind]) || new Set<string>();
+  const letters = new Set([...SHORT_REFUSED, ...[...own].filter((f) => /^-[A-Za-z]$/.test(f)).map((f) => f[1]!)]);
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (!a.startsWith("-")) continue;
     const name = a.split("=", 1)[0]!;
-    if (PERMISSION_FLAGS.has(name)) return a;
-    if (!name.startsWith("--") && [...name.slice(1)].some((c) => SHORT_REFUSED.has(c))) return a;
+    if (PERMISSION_FLAGS.has(name) || own.has(name)) return a;
+    if (!name.startsWith("--") && [...name.slice(1)].some((c) => letters.has(c))) return a;
     if (a.startsWith("--dangerously-")) return a;
     if (PERMISSION_WORDS.test(a.toLowerCase())) return a;
     // A Codex override: `-c k=v` as two words, `--config=k=v` / `-c=k=v` as
@@ -465,7 +475,7 @@ export async function startAgent(p: {
   if (!kind) return { ok: false, error: "no-cli" };
   const args = p.args ?? [];
   if (args.some((a) => typeof a !== "string" || /[\n\r\0]/.test(a))) return { ok: false, error: "bad-args" };
-  const refused = refusedArg(args) ?? (p.lockedRole ? args.find((a) => ROLE_FIXED.has(a.split("=", 1)[0]!)) ?? null : null);
+  const refused = refusedArg(args, kind.id) ?? (p.lockedRole ? args.find((a) => ROLE_FIXED.has(a.split("=", 1)[0]!)) ?? null : null);
   if (refused !== null) return { ok: false, error: "arg-refused", flag: refused };
   /* A role's lock is a deny list handed to the CLI, and whether each CLI still
      applies it with its prompts skipped is not measured here. A locked worker

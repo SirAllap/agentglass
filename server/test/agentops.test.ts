@@ -170,6 +170,17 @@ describe("start refuses before it reaches the engine", () => {
     }
   });
 
+  test("Codex's profile, for Codex only: Claude's -p is print mode and stays", async () => {
+    /* `codex -p loose` layers $CODEX_HOME/loose.config.toml over the config,
+       and a profile can set approval_policy=never. The same letter is
+       Claude's print mode, so this is refused by kind, not by name. */
+    for (const args of [["-p", "loose"], ["--profile", "loose"], ["--profile=loose"], ["-ploose"]]) {
+      expect(refusedArg(args, "codex"), JSON.stringify(args)).toBe(args[0]!);
+      expect(await startAgent({ ...base, yoloAllowed: false, name: "w", kind: "codex", args })).toEqual({ ok: false, error: "arg-refused", flag: args[0]! });
+    }
+    for (const kind of ["claude", undefined]) expect(refusedArg(["-p"], kind), String(kind)).toBeNull();
+  });
+
   test("OpenCode's --auto, whose help text says dangerous but whose name does not", async () => {
     /* `opencode --auto` approves every permission that is not explicitly
        denied. The word pattern reads the flag, not its help, so it passed with
