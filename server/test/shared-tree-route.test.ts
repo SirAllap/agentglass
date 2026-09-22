@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { freePort } from "./freePort.ts";
 import type { ChangeRowsResult } from "../../shared/types.ts";
 
 let dir = "", repo = "", linked = "", base = "";
@@ -22,13 +23,14 @@ let proc: ReturnType<typeof Bun.spawn> | null = null;
 const git = (cwd: string, ...args: string[]) =>
   Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
 
-const edit = (session_id: string, file_path: string) => fetch(base + "/ingest", {
+const hook = (session_id: string, hook_event_type: string, payload: Record<string, unknown>) => fetch(base + "/ingest", {
   method: "POST", headers: { "content-type": "application/json" },
-  body: JSON.stringify({
-    source_app: "orbit", session_id, hook_event_type: "PostToolUse", timestamp: Date.now(),
-    payload: { tool_name: "Edit", cwd: repo, tool_input: { file_path, old_string: "1", new_string: "2" } },
-  }),
+  body: JSON.stringify({ source_app: "orbit", session_id, hook_event_type, timestamp: Date.now(), payload: { cwd: repo, ...payload } }),
 });
+// Every session here stands in `repo` — the cwd is the parent for all of them,
+// as it is for an agent that reaches into a worktree by absolute path.
+const edit = (session_id: string, file_path: string) =>
+  hook(session_id, "PostToolUse", { tool_name: "Edit", tool_input: { file_path, old_string: "1", new_string: "2" } });
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-shared-tree-"));
@@ -46,7 +48,7 @@ beforeAll(async () => {
   writeFileSync(join(repo, "src", "app.ts"), "export const a = 2;\n");
   writeFileSync(join(linked, "src", "app.ts"), "export const a = 3;\n");
 
-  const port = 4960 + Math.floor(Math.random() * 30);
+  const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
     env: {
@@ -66,10 +68,15 @@ beforeAll(async () => {
     },
     stdout: "ignore", stderr: "ignore",
   });
-  for (let i = 0; i < 200; i++) {
-    try { if ((await fetch(base + "/health")).ok) break; } catch { /* not up yet */ }
-    await Bun.sleep(100);
+  let up = false;
+  for (let i = 0; i < 200 && !up; i++) {
+    try { up = (await fetch(base + "/health")).ok; } catch { /* not up yet */ }
+    if (!up) await Bun.sleep(100);
   }
+  if (!up) throw new Error("the server never answered /health");
+  // `/clear` before the others arrive: an edit to the same file, then the end.
+  await edit("sess-cleared", join(repo, "src", "app.ts"));
+  await hook("sess-cleared", "SessionEnd", { reason: "clear" });
   await edit("sess-a", join(repo, "src", "app.ts"));
   await edit("sess-b", join(repo, "src", "app.ts"));
   await edit("sess-c", join(linked, "src", "app.ts"));
@@ -87,10 +94,11 @@ test("two sessions in one checkout are both its authors; the one in its own work
   const by = new Map((r.authors ?? []).map((t) => [t.root, t]));
   const s = by.get(repo);
   expect(s).toBeDefined();
-  expect(s!.branch).toBe("main");
+  // Not sess-cleared: it ended, and sess-a is not sharing the tree with it.
   expect(s!.sessions.map((x) => x.id).sort()).toEqual(["sess-a", "sess-b"]);
-  expect(s!.overlap).toEqual(["src/app.ts"]);
-  // The worktree has one author, and the heading gets to say so.
+  expect(s!.overlap.map((o) => o.path)).toEqual(["src/app.ts"]);
+  // The worktree has one author, and the heading gets to say so — though
+  // sess-c stands in `repo`: where it wrote decides, not where it stands.
   expect(by.get(linked)?.sessions.map((x) => x.id)).toEqual(["sess-c"]);
   expect(by.get(linked)?.overlap).toEqual([]);
 });

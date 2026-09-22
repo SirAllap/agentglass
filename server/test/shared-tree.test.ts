@@ -15,22 +15,23 @@
  *     the wrong checkout;
  *   * a session that has gone away does not make a tree shared: what it left
  *     behind is history, not a second author at work;
- *   * the tree is where the session WROTE, not where it stands. An agent that
- *     sits in the parent repo and reaches into a worktree with absolute paths is
- *     that worktree's author, and five agents standing in one parent while each
- *     writes to its own checkout are not sharing anything.
+ *   * with three authors, a file two of them edited names those two;
+ *   * a session that ended with `/clear` is not a second author beside the one
+ *     that replaced it.
+ *
+ * That the tree is where a session WROTE and not where it stands is pinned in
+ * shared-tree-route.test.ts, where the sessions have a cwd to stand in.
  */
-import { describe, expect, test } from "bun:test";
-import { treeAuthors, liveSessions, type TreeEdit } from "../src/sharedtree.ts";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { treeAuthors, liveSessions, physical, type TreeEdit } from "../src/sharedtree.ts";
 
 const REPO = "/home/dev/code/orbit";
 const WT = "/home/dev/code/orbit-WEB-1042";
 const VENDOR = "/home/dev/code/orbit/vendor/lib";
-const TREES = [
-  { path: REPO, branch: "main" },
-  { path: WT, branch: "feat/web-1042" },
-  { path: VENDOR, branch: "main" },
-];
+const TREES = [{ path: REPO }, { path: WT }, { path: VENDOR }];
 
 const edit = (session_id: string, file_path: string, timestamp: number): TreeEdit =>
   ({ session_id, file_path, timestamp });
@@ -47,9 +48,8 @@ describe("sharedTrees", () => {
     ], TREES, all);
     expect(out).toHaveLength(1);
     expect(out[0]!.root).toBe(REPO);
-    expect(out[0]!.branch).toBe("main");
     expect(out[0]!.sessions).toEqual(["a", "b"]);
-    expect(out[0]!.overlap).toEqual(["src/app.ts"]);
+    expect(out[0]!.overlap).toEqual([{ path: "src/app.ts", sessions: ["a", "b"] }]);
   });
 
   test("one tree, different files: still shared, with nothing in the overlap", () => {
@@ -82,14 +82,6 @@ describe("sharedTrees", () => {
     ], TREES, (id) => id !== "gone")).toEqual([]);
   });
 
-  test("where it writes decides, not where it stands: agents in one parent writing to their own worktrees share nothing", () => {
-    // Both of these agents' cwd is REPO. Neither wrote there.
-    expect(sharedTrees([
-      edit("a", `${WT}/src/app.ts`, 2),
-      edit("b", `${VENDOR}/index.ts`, 1),
-    ], TREES, all)).toEqual([]);
-  });
-
   test("a file outside every known checkout is not attributed to any", () => {
     expect(sharedTrees([
       edit("a", "/tmp/scratch.sh", 2),
@@ -113,6 +105,16 @@ describe("sharedTrees", () => {
     ], TREES, all);
     expect(out[0]!.sessions).toEqual(["new", "mid", "old"]);
   });
+
+  test("with three authors, a file two of them edited names exactly those two", () => {
+    const out = sharedTrees([
+      edit("a", `${REPO}/src/app.ts`, 3),
+      edit("b", `${REPO}/src/other.ts`, 2),
+      edit("c", `${REPO}/src/app.ts`, 1),
+    ], TREES, all);
+    expect(out[0]!.sessions).toEqual(["a", "b", "c"]);
+    expect(out[0]!.overlap).toEqual([{ path: "src/app.ts", sessions: ["a", "c"] }]);
+  });
 });
 
 describe("treeAuthors", () => {
@@ -121,9 +123,9 @@ describe("treeAuthors", () => {
       edit("a", `${WT}/src/app.ts`, 2),
       edit("b", `${REPO}/src/app.ts`, 1),
     ], TREES, all);
-    expect(out.map((t) => [t.root, t.branch, t.sessions])).toEqual([
-      [WT, "feat/web-1042", ["a"]],
-      [REPO, "main", ["b"]],
+    expect(out.map((t) => [t.root, t.sessions])).toEqual([
+      [WT, ["a"]],
+      [REPO, ["b"]],
     ]);
   });
 });
@@ -132,15 +134,44 @@ describe("liveSessions", () => {
   const NOW = 10 * 60 * 60_000;
   test("heard from recently is live; quiet past the window is not", () => {
     const live = liveSessions([
-      { session_id: "recent", last_seen: NOW - 60_000 },
-      { session_id: "quiet", last_seen: NOW - 5 * 60 * 60_000 },
+      { session_id: "recent", last_seen: NOW - 60_000, gone: false },
+      { session_id: "quiet", last_seen: NOW - 5 * 60 * 60_000, gone: false },
     ], new Set(), NOW);
     expect(live.has("recent")).toBe(true);
     expect(live.has("quiet")).toBe(false);
   });
 
   test("an agent still in a pane is live however long it has been waiting on a person", () => {
-    const live = liveSessions([{ session_id: "waiting", last_seen: NOW - 5 * 60 * 60_000 }], new Set(["waiting"]), NOW);
+    const live = liveSessions([{ session_id: "waiting", last_seen: NOW - 5 * 60 * 60_000, gone: false }], new Set(["waiting"]), NOW);
     expect(live.has("waiting")).toBe(true);
+  });
+
+  test("a session that ended a minute ago is gone, not live for the rest of the window", () => {
+    // `/clear`: the old session's SessionEnd is its last word, and the one that
+    // replaced it in the same pane must not find it still sharing the tree.
+    const live = liveSessions([
+      { session_id: "cleared", last_seen: NOW - 60_000, gone: true },
+      { session_id: "after", last_seen: NOW - 30_000, gone: false },
+    ], new Set(), NOW);
+    expect([...live]).toEqual(["after"]);
+  });
+});
+
+describe("physical", () => {
+  // git names a checkout by its physical path; a hook names a file by the path
+  // the agent used. Through a symlinked directory the two never meet as strings.
+  const box = mkdtempSync(join(tmpdir(), "agx-physical-"));
+  const real = join(box, "real");
+  mkdirSync(join(real, "src"), { recursive: true });
+  symlinkSync(real, join(box, "link"));
+  afterAll(() => rmSync(box, { recursive: true, force: true }));
+
+  test("a file reached through a symlinked directory resolves to where git sees it", () => {
+    // realpath of the expectation too: the temp dir is itself a symlink on macOS.
+    expect(physical(join(box, "link", "src", "app.ts"))).toBe(join(realpathSync(real), "src", "app.ts"));
+  });
+
+  test("a file whose directory is gone keeps the path it was given", () => {
+    expect(physical(join(box, "deleted", "app.ts"))).toBe(join(box, "deleted", "app.ts"));
   });
 });

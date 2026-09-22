@@ -900,12 +900,12 @@ export interface ChangeRowsResult {
 /** One working tree and its live authors. See server/src/sharedtree.ts. */
 export interface TreeAuthorsInfo {
   root: string;
-  branch: string;
   /** Newest writer first, each with the name the rest of the app gives it. */
   sessions: { id: string; name: string }[];
-  /** Paths relative to `root` that more than one of them edited: the files
-   *  whose diff is genuinely approximate as attribution. */
-  overlap: string[];
+  /** Paths relative to `root` that more than one of them edited — the files
+   *  whose diff is genuinely approximate as attribution — each with the names
+   *  of exactly the sessions that edited it. */
+  overlap: { path: string; sessions: string[] }[];
 }
 
 /** One thing that happened in a session, in order — a message or a tool run.

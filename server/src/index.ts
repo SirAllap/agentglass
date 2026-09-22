@@ -148,7 +148,7 @@ import { listPanes, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWin
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote, paneHeldSessions } from "./panewt.ts";
-import { treeAuthors, liveSessions, lastSeenOf } from "./sharedtree.ts";
+import { treeAuthors, liveSessions, recentSessions, editsBy } from "./sharedtree.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { tmuxBinStatus, tmuxSocket } from "./tmuxbin.ts";
@@ -1819,24 +1819,47 @@ setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); rowsCache.cl
  * Rides on the working list rather than being a route of its own because the
  * list is the thing it qualifies: a section heading that names one branch and
  * may be two authors' work. The panes are read at most every ten seconds — the
- * list itself is re-read every two, and `listPanes` is a tmux call per socket
- * plus a walk of /proc, which is not worth a late keystroke in the terminal
- * that shares this thread. An agent that appears or leaves a pane is a
- * ten-second question; the edits themselves are read fresh every time.
+ * list itself is re-read every two, and `listPanes` is synchronous: up to four
+ * tmux spawns per socket plus a walk of /proc per pane, none of it worth a late
+ * keystroke in the terminal that shares this thread. An agent arriving in or
+ * leaving a pane is a ten-second question; the edits are read fresh each time.
+ *
+ * Names are held for a minute for the same reason: a nameless session's name
+ * is its first decent prompt, found by parsing its prompts, and a name changes
+ * about once in a session's life.
+ *
+ * Advisory, so it can never cost the list: a failure here is no authors, not an
+ * empty Diff view.
  */
 const PANES_HELD_TTL_MS = 10_000;
+const NAMES_TTL_MS = 60_000;
 let panesHeld: { at: number; ids: Set<string> } | null = null;
-function authorsNow(edits: { session_id: string; file_path: string; timestamp: number }[], repos: GitRepoRef[]): TreeAuthorsInfo[] {
-  if (!panesHeld || Date.now() - panesHeld.at > PANES_HELD_TTL_MS) {
-    let ids = new Set<string>();
-    try { ids = paneHeldSessions(listPanes(lastTmuxTarget()?.socket)); } catch { /* no tmux: last-seen alone decides */ }
-    panesHeld = { at: Date.now(), ids };
-  }
-  const live = liveSessions(lastSeenOf([...new Set(edits.map((e) => e.session_id))]), panesHeld.ids);
-  const trees = treeAuthors(edits, repos.map((r) => ({ path: r.root, branch: r.branch })), (id) => live.has(id));
-  if (!trees.length) return [];
-  const names = sessionNames([...new Set(trees.flatMap((t) => t.sessions))]);
-  return trees.map((t) => ({ ...t, sessions: t.sessions.map((id) => ({ id, name: names.get(id) ?? id.slice(0, 8) })) }));
+const authorNames = new Map<string, { at: number; name: string }>();
+function authorsNow(repos: GitRepoRef[]): TreeAuthorsInfo[] {
+  try {
+    if (!panesHeld || Date.now() - panesHeld.at > PANES_HELD_TTL_MS) {
+      let ids = new Set<string>();
+      try { ids = paneHeldSessions(listPanes(lastTmuxTarget()?.socket)); } catch { /* no tmux: last-seen alone decides */ }
+      panesHeld = { at: Date.now(), ids };
+    }
+    const live = liveSessions(recentSessions(), panesHeld.ids);
+    const trees = treeAuthors(editsBy([...live]), repos.map((r) => ({ path: r.root })), (id) => live.has(id));
+    if (!trees.length) return [];
+    const now = Date.now();
+    const ids = [...new Set(trees.flatMap((t) => t.sessions))];
+    const stale = ids.filter((id) => (authorNames.get(id)?.at ?? 0) < now - NAMES_TTL_MS);
+    if (stale.length) {
+      const got = sessionNames(stale);
+      if (authorNames.size > 500) authorNames.clear();
+      for (const id of stale) authorNames.set(id, { at: now, name: got.get(id) ?? id.slice(0, 8) });
+    }
+    const name = (id: string) => authorNames.get(id)?.name ?? id.slice(0, 8);
+    return trees.map((t) => ({
+      root: t.root,
+      sessions: t.sessions.map((id) => ({ id, name: name(id) })),
+      overlap: t.overlap.map((o) => ({ path: o.path, sessions: o.sessions.map(name) })),
+    }));
+  } catch { return []; }
 }
 
 /**
@@ -5052,8 +5075,7 @@ const server = Bun.serve<WsData>({
       return body(await singleFlight(`rows:${mode}`, async () => {
         const cached = rowsCache.get(mode);
         if (cached && Date.now() - cached.at < ROWS_TTL_MS) return cached.body;
-        const edits = getChanges(300);
-        const paths = edits.map((c) => c.file_path);
+        const paths = getChanges(300).map((c) => c.file_path);
         /* Every in-scope checkout, INCLUDING one on main or master. The old
            endpoint dropped those on the grounds that trunk is the base you cut
            from — true of a branch-vs-base diff, false of "what have I changed
@@ -5063,7 +5085,7 @@ const server = Bun.serve<WsData>({
         const scope = workspaceRoot();
         const result = await changeRows(repos, mode, scope, ROWS_MAX);
         // Committed rows are history; who is writing into a tree NOW is not a question about them.
-        if (mode === "working") result.authors = authorsNow(edits, repos);
+        if (mode === "working") result.authors = authorsNow(repos);
         const out = JSON.stringify(result);
         rowsCache.set(mode, { at: Date.now(), body: out });
         return out;
