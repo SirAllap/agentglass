@@ -84,10 +84,12 @@ const DOTENV_EXAMPLE = /\.(?:example|sample|template|dist|defaults?)$/;
 /** A `.pem` is as often a public certificate as a key, so only one named as a
  *  key counts; a PEM private key in the content is caught by SECRET_SHAPES. */
 const KEY_FILE = /\.(?:p12|pfx|key)$|^id_(?:rsa|dsa|ecdsa|ed25519)$|(?:key|private)[^/]*\.pem$/i;
-/** `public_key.pem`, `orbit.pub.key`, `publicKey.pem`: the half that is meant
- *  to be shared. A `.key` that is not a key at all (a Keynote deck) is still
- *  flagged; the name says nothing to tell it apart. */
-const PUBLIC_KEY = /(?:^|[^A-Za-z])(?:pub|public|PUB|PUBLIC|Pub|Public)(?![a-z])/;
+/** `public_key.pem`, `rsa_pubkey.pem`, `orbit.pub.key`: the half that is meant
+ *  to be shared. Only where "pub" sits against "key": a TLS private key is
+ *  often named after its host, and `pub.orbit.dev.key` is one. A `.key` that
+ *  is not a key at all (a Keynote deck) is still flagged; the name says
+ *  nothing to tell it apart. */
+const PUBLIC_KEY = /(?:^|[^A-Za-z])pub(?:lic)?[_.-]?key[^/]*\.(?:pem|key)$|\.pub\.key$/i;
 
 const CI_NAMES = new Set([".gitlab-ci.yml", "Jenkinsfile", "azure-pipelines.yml", "bitbucket-pipelines.yml", ".travis.yml"]);
 const CI_DIRS = ["/.github/workflows/", "/.github/actions/", "/.circleci/", "/.buildkite/"];

@@ -242,6 +242,9 @@ describe("what a second review found", () => {
     expect(changeRisks("/w/orbit/certs/public_key.pem", added("x"), 0)).toEqual([]);
     expect(changeRisks("/w/orbit/certs/orbit.pub.key", added("x"), 0)).toEqual([]);
     expect(kinds(changeRisks("/w/orbit/certs/server.key", added("x"), 0))).toEqual(["secret"]);
+    for (const b of ["pubkey.pem", "rsa_pubkey.pem", "publicKey.pem"]) expect(changeRisks(`/w/orbit/certs/${b}`, added("x"), 0)).toEqual([]);
+    // A TLS private key named after its host is still a key.
+    for (const b of ["pub.orbit.dev.key", "public-site.key"]) expect(kinds(changeRisks(`/w/orbit/certs/${b}`, added("x"), 0))).toEqual(["secret"]);
   });
 
 
