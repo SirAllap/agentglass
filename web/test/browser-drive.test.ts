@@ -1393,6 +1393,18 @@ describe("cookies --set with attributes goes through the protocol, not document.
     expect((r as { error: string }).error).toContain("Secure");
   });
 
+  test("an imported cookie names its own host, so a host-only one is set while the page is elsewhere", async () => {
+    // session import sets cookies before the tab is on the site; a host-only
+    // cookie must bind to ITS host, not to about:blank's.
+    const el = fakeGuest();
+    (el as { getURL: () => string }).getURL = () => "about:blank";
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "s", value: "v", host: "www.orbit.example", secure: true, httpOnly: true } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect(jar[0]).toMatchObject({ url: "https://www.orbit.example/", secure: true });
+    expect(jar[0]).not.toHaveProperty("domain");
+  });
+
   test("a write the protocol accepts but the jar does not hold is still a failure", async () => {
     const liar = async (method: string) => method === "Network.getCookies"
       ? { ok: true, result: { cookies: [] } } : { ok: true, result: { success: true } };

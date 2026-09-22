@@ -1151,6 +1151,210 @@ def session_load(path, page="", a=None):
     return 0
 
 
+# --- Importing a signed-in session straight from a Firefox-family profile ----
+#
+# `session load` reuses a file this tool wrote. `session import` reads the
+# browser you already log in with — Firefox, Zen, LibreWolf — so the first
+# import needs no prior save. The reading is LOCAL: this process opens the
+# profile the operator named, the same way it would open any file they pointed
+# it at, and the values go straight into `cookies --set`. There is no server
+# route that reads a jar, so this adds no way for an agent to ask the app for
+# somebody's logins that it did not already have on disk.
+#
+# Why not the picker's importer (server/src/cookieimport.ts)? That one is built
+# to bring MANY sites over safely and drops anything it cannot carry cleanly —
+# and two of those drops are exactly what a *sensitive action* needs. Measured
+# against a local strict server:
+#   * it skips SESSION cookies (no expiry). A site's "you re-authenticated
+#     recently" cookie is often one, and without it the POST bounces to a
+#     confirm-access page.
+#   * it turns every host-only cookie into whatever the row's dot said, which
+#     is right, but it also refuses partitioned ones.
+# A single-domain session import keeps the session cookies, because the whole
+# point is that one login, not a tidy jar.
+
+
+def _ff_expiry_seconds(expiry, user_version):
+    """Firefox stores expiry in milliseconds from schema 16 on (mirrors
+    server/src/cookieimport.ts, which measured it against schema 17). 0 is a
+    session cookie and stays 0."""
+    try:
+        e = float(expiry)
+    except (TypeError, ValueError):
+        return 0
+    if e <= 0:
+        return 0
+    return int(e / 1000) if user_version >= 16 else int(e)
+
+
+def _ff_same_site(raw):
+    """Firefox's constant to the name setCookie takes, or None to leave it
+    unset. 256 (SAMESITE_UNSET) is not corruption; 0 is None."""
+    return {0: "None", 1: "Lax", 2: "Strict"}.get(int(raw) if str(raw).lstrip("-").isdigit() else 256)
+
+
+def _domain_matches(host, domain, subdomains=True):
+    bare = host.lstrip(".").lower()
+    domain = domain.lstrip(".").lower()
+    return bare == domain or (subdomains and bare.endswith("." + domain))
+
+
+def _snapshot_sqlite(db):
+    """A private copy with its -wal, so a live Firefox is never opened. Returns
+    (path, dispose). The caller always disposes — cookie values live in it."""
+    import shutil
+    import tempfile
+    d = tempfile.mkdtemp(prefix="agx-import-")
+    os.chmod(d, 0o700)
+    copy = os.path.join(d, os.path.basename(db))
+    shutil.copyfile(db, copy)
+    if os.path.exists(db + "-wal"):
+        try:
+            shutil.copyfile(db + "-wal", copy + "-wal")
+        except OSError:
+            pass
+
+    def dispose():
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+    return copy, dispose
+
+
+def _profile_cookie_db(path):
+    """The cookies.sqlite for a profile PATH, or the path itself when it is
+    already the database."""
+    if os.path.isfile(path):
+        return path
+    db = os.path.join(path, "cookies.sqlite")
+    return db if os.path.exists(db) else None
+
+
+def read_firefox_cookies(path, domain, subdomains=True, now=None):
+    """Every live cookie for DOMAIN (and its subdomains) in a Firefox-family
+    profile, as `cookies --set` payloads — session cookies KEPT. Never prints a
+    value; the caller sends them and reports counts only.
+
+    Returns (payloads, skipped) where skipped counts expired / partitioned /
+    container cookies so the summary can say what did not come."""
+    import sqlite3
+    now = int(time.time()) if now is None else now
+    db = _profile_cookie_db(path)
+    if not db:
+        raise FileNotFoundError(f"no cookies.sqlite in {path}")
+    copy, dispose = _snapshot_sqlite(db)
+    payloads, skipped = [], {"expired": 0, "partitioned": 0, "not-domain": 0}
+    try:
+        conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            ver = conn.execute("PRAGMA user_version").fetchone()[0] or 0
+            rows = conn.execute(
+                "SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, originAttributes FROM moz_cookies"
+            ).fetchall()
+        finally:
+            conn.close()
+    finally:
+        dispose()
+    for host, name, value, cpath, expiry, secure, http_only, same_site, attrs in rows:
+        host = host or ""
+        if not host or not name:
+            continue
+        if not _domain_matches(host, domain, subdomains):
+            skipped["not-domain"] += 1
+            continue
+        # Containers and partitioned cookies carry originAttributes; setCookie
+        # has no place to put one, so importing it unpartitioned would change
+        # what it means.
+        if attrs:
+            skipped["partitioned"] += 1
+            continue
+        exp = _ff_expiry_seconds(expiry, ver)
+        if exp and exp <= now:
+            skipped["expired"] += 1
+            continue
+        p = {
+            "name": name,
+            "value": value or "",
+            "path": cpath if (cpath or "").startswith("/") else "/",
+            "host": host.lstrip("."),
+        }
+        if host.startswith("."):
+            p["domain"] = host
+        if int(secure or 0) == 1:
+            p["secure"] = True
+        if int(http_only or 0) == 1:
+            p["httpOnly"] = True
+        ss = _ff_same_site(same_site)
+        # SameSite=None is dropped by Chromium without Secure; leave it unset
+        # rather than lose the whole cookie to a refusal.
+        if ss and not (ss == "None" and not p.get("secure")):
+            p["sameSite"] = ss
+        if exp:
+            p["expires"] = exp
+        payloads.append(p)
+    return payloads, skipped
+
+
+# A Firefox-family user agent to align to when the operator asks. The session
+# was signed in from one of these, and a strict site that compares the request's
+# UA family to the session's rejects a Chromium one. Overridable with
+# --user-agent for a version that matches the source browser exactly.
+DEFAULT_FIREFOX_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
+
+
+def session_import(a, page):
+    kind, src = a.frm[0], a.frm[1]
+    if kind != "firefox-profile":
+        print(f"unknown source {kind!r} — the only source is firefox-profile <path> "
+              "(Firefox, Zen and LibreWolf share the format)", file=sys.stderr)
+        return 2
+    try:
+        payloads, skipped = read_firefox_cookies(src, a.domain, subdomains=not a.no_subdomains)
+    except (FileNotFoundError, OSError) as e:
+        print(f"could not read {src}: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 — sqlite errors vary by build
+        print(f"could not read cookies from {src}: {e}", file=sys.stderr)
+        return 1
+    if not payloads:
+        note = f" ({skipped['expired']} expired, {skipped['partitioned']} partitioned/container)" \
+            if (skipped["expired"] or skipped["partitioned"]) else ""
+        print(f"no live cookies for {a.domain} in that profile{note}", file=sys.stderr)
+        return 1
+    set_n, failed = 0, []
+    for p in payloads:
+        r = call("cookies", stamped(a, _at(page, {"set": p})))
+        if r.get("ok"):
+            set_n += 1
+        else:
+            failed.append((p["name"], r.get("error") or "refused"))
+    if a.align_ua:
+        ua = a.user_agent or DEFAULT_FIREFOX_UA
+        r = call("emulate", stamped(a, _at(page, {"userAgent": ua})))
+        if not r.get("ok"):
+            print(f"user agent not aligned: {r.get('error')}", file=sys.stderr)
+    # Names and counts only — never a value.
+    extra = []
+    if skipped["partitioned"]:
+        extra.append(f"{skipped['partitioned']} partitioned/container skipped")
+    if skipped["expired"]:
+        extra.append(f"{skipped['expired']} expired skipped")
+    print(f"{a.domain}: {set_n} cookies imported"
+          + (f" ({', '.join(extra)})" if extra else "")
+          + (f"; UA aligned to {'Firefox' if not a.user_agent else 'the given agent'}" if a.align_ua else ""))
+    for name, err in failed:
+        print(f"  cookie {name}: {err}", file=sys.stderr)
+    if failed:
+        return 1
+    print("Open the site and try the action. If it bounces you to a login or a "
+          "confirm-access page, the session is bound to something a cookie copy "
+          "cannot carry (a device key in localStorage, a client-hint the source "
+          "browser sent) — align the user agent with --align-ua, and import "
+          "localStorage while the tab is on the site.", file=sys.stderr)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="agentglass-browser", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1560,6 +1764,25 @@ def main():
     sp1.add_argument("file")
     sp2 = sp.add_parser("load", help="restore state from FILE onto the current page")
     sp2.add_argument("file")
+    sp3 = sp.add_parser(
+        "import",
+        help="bring a signed-in session straight from your Firefox/Zen/LibreWolf profile",
+        description="Reads the profile you already log in with — no prior `save` needed — and "
+                    "copies every live cookie for a domain (and its subdomains) with all its "
+                    "attributes, session cookies included, so a sensitive action survives and "
+                    "not just page reads. The profile is read locally by this process; values "
+                    "go straight into the browser and are never printed. Firefox, Zen and "
+                    "LibreWolf share the format.")
+    sp3.add_argument("--from", dest="frm", nargs=2, metavar=("KIND", "PATH"), required=True,
+                     help="firefox-profile <path to the profile dir or its cookies.sqlite>")
+    sp3.add_argument("--domain", required=True, help="the site to bring over, e.g. orbit.example")
+    sp3.add_argument("--no-subdomains", action="store_true",
+                     help="only the exact domain, not its subdomains (subdomains come by default)")
+    sp3.add_argument("--align-ua", dest="align_ua", action="store_true",
+                     help="also set the user agent to Firefox's, since a strict site compares it "
+                          "to the one the session signed in with")
+    sp3.add_argument("--user-agent", dest="user_agent", default=None,
+                     help="the exact user agent to align to (default: a recent Firefox)")
     p = sub.add_parser(
         "permissions",
         help="grant camera/mic/clipboard/geolocation for an origin, by API — instead "
@@ -1711,6 +1934,8 @@ def main():
         if refusal:
             print(refusal, file=sys.stderr)
             return 1
+        if a.sessionCmd == "import":
+            return session_import(a, page)
         return session_save(a.file, page, a) if a.sessionCmd == "save" else session_load(a.file, page, a)
 
     if a.cmd == "permissions":

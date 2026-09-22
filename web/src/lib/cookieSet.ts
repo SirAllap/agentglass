@@ -32,7 +32,7 @@ const ATTRS = ["secure", "httpOnly", "sameSite", "expires", "partitionKey"] as c
  *  keeps the page's own path, which is what the page itself would see. */
 export function needsProtocol(set: Record<string, unknown>): boolean {
   const name = String(set.name ?? "");
-  return /^__(Host|Secure)-/.test(name) || ATTRS.some((k) => set[k] !== undefined && set[k] !== false);
+  return /^__(Host|Secure)-/.test(name) || typeof set.host === "string" || ATTRS.some((k) => set[k] !== undefined && set[k] !== false);
 }
 
 export function cookieSetParams(set: Record<string, unknown>, pageUrl: string): { params: CookieSetParams } | { error: string } {
@@ -54,10 +54,16 @@ export function cookieSetParams(set: Record<string, unknown>, pageUrl: string): 
   if (sameSite === "None" && !secure) return { error: "SameSite=None needs Secure (--secure), or Chromium drops the cookie" };
   if (partition && !secure) return { error: "a partitioned cookie needs Secure (--secure)" };
 
-  let page: URL;
-  try { page = new URL(pageUrl); } catch { return { error: `the page's address (${pageUrl}) is not a URL to set a cookie for` }; }
-  const where = domain ? domain.replace(/^\./, "") : page.hostname;
-  const scheme = secure ? "https" : page.protocol.replace(/:$/, "");
+  // `host` is the cookie's own host, for an import that sets it before the tab
+  // is on the site — a host-only cookie must bind to its host, not the page's.
+  // The Domain attribute still comes from `domain` alone, so a host given here
+  // does not turn a host-only cookie into a domain one.
+  const hostArg = typeof set.host === "string" && set.host ? set.host.replace(/^\./, "") : undefined;
+  let page: URL | undefined;
+  try { page = new URL(pageUrl); } catch { page = undefined; }
+  const where = domain ? domain.replace(/^\./, "") : hostArg ?? page?.hostname;
+  if (!where) return { error: `no host to set the cookie for: the page's address (${pageUrl}) is not a URL and no host was given` };
+  const scheme = secure ? "https" : hostArg ? "https" : page?.protocol.replace(/:$/, "") ?? "https";
   const params: CookieSetParams = { name, value, url: `${scheme}://${where}${path}`, path };
   if (domain) params.domain = domain;
   if (secure) params.secure = true;
