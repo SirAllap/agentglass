@@ -477,8 +477,8 @@ const TOKEN = process.env.AGENTGLASS_READ_TOKEN ?? "";
 const ws = new WebSocket(`${URL_BASE.replace(/^http/, "ws")}/stream?token=${encodeURIComponent(TOKEN)}`);
 ws.addEventListener("message", (e) => {
   const frame = JSON.parse(String(e.data));
-  if (frame.type === "event" && frame.event?.hook_event_type === "Stop") {
-    console.log(new Date().toISOString(), "turn finished in", frame.event.session_id);
+  if (frame.type === "event" && frame.data?.hook_event_type === "Stop") {
+    console.log(new Date().toISOString(), "turn finished in", frame.data.session_id);
   }
 });
 ```
