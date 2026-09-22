@@ -241,8 +241,19 @@ export default function App() {
   // to start as null, which is a real answer ("no scope"), so a cockpit that
   // never got an answer displayed one anyway.
   const [workspace, setWorkspace] = useState<string | null | undefined>(undefined);
+  /** Every open project; `workspace` is the first. Empty until answered, and
+   *  when nothing is open. */
+  const [workspaces, setWorkspaces] = useState<string[]>([]);
 
   const [projectOpen, setProjectOpen] = useState(false);
+  /**
+   * The first run's question is still open: nothing is scoped, and nobody has
+   * answered the picker yet. The views wait behind it rather than fill
+   * themselves from a scope nobody chose — the whole machine, which is the very
+   * sweep the picker's first run exists not to do. Answering either way (opening
+   * projects reloads; closing it keeps the machine-wide view) lets them in.
+   */
+  const [awaitingPick, setAwaitingPick] = useState(false);
   const mountedAt = useRef(Date.now());
 
   // A live snapshot of "is any panel/overlay open", read by the global key
@@ -367,6 +378,7 @@ export default function App() {
       api.projects().then((p) => {
         if (!live) return;
         setWorkspace(p.workspace);
+        setWorkspaces(p.workspaces ?? (p.workspace ? [p.workspace] : []));
         // The app filter is hidden while a project is open (the scope already
         // says whose data this is). Clear it on the way in, or a filter set in
         // the whole-machine view would keep narrowing the panels from behind a
@@ -374,7 +386,7 @@ export default function App() {
         if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
         let answered = false;
         try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
-        if (!p.workspace && !answered) setProjectOpen(true);
+        if (!p.workspace && !answered) { setProjectOpen(true); setAwaitingPick(true); }
       }).catch(() => {
         if (!live) return;
         timer = setTimeout(ask, wait);
@@ -555,7 +567,7 @@ export default function App() {
       const project = who?.project ?? null;
       // A cockpit watches every project at once, so an alert from another one is
       // legitimate — but it must say which, or you go looking in the wrong tree.
-      const other = project && workspace && project !== workspace ? leafOf(project) : null;
+      const other = project && workspaces.length && !workspaces.includes(project) ? leafOf(project) : null;
       return {
         key: al.id,
         sessionId,
@@ -569,7 +581,7 @@ export default function App() {
         gated: !!sessionId && gates.some((g) => g.session_id === sessionId),
       };
     });
-  }, [alerts, agents, workspace, gates]);
+  }, [alerts, agents, workspaces, gates]);
 
   const openChatFor = useCallback((chatId: string) => {
     setChatFocus(chatId);
@@ -579,7 +591,7 @@ export default function App() {
    *  place in the app that can actually let a held tool call through. */
   const approveOnDash = useCallback(() => { goView("dash"); }, [goView]);
   const switchProject = useCallback((root: string) => {
-    void api.setWorkspace(root).then((r) => { if (r.ok) setWorkspace(r.workspace); }).catch(() => {});
+    void api.setWorkspace(root).then((r) => { if (r.ok) { setWorkspace(r.workspace); setWorkspaces(r.workspace ? [r.workspace] : []); } }).catch(() => {});
   }, []);
   useAlertSound(alerts.length, sound);
 
@@ -1025,6 +1037,7 @@ export default function App() {
 
       <TopBar
         workspace={workspace}
+        workspaces={workspaces}
         onOpenProject={() => setProjectOpen(true)}
         onOpenPalette={() => setPaletteOpen(true)}
         // On the dashboard the readings step back: the screen below is already
@@ -1047,7 +1060,7 @@ export default function App() {
         onNoteGoto={goFromNote}
       />
 
-      <Workspace
+      {!awaitingPick && <Workspace
         prJump={prJump}
         cardJump={cardJump}
         issueJump={issueJump}
@@ -1080,7 +1093,7 @@ export default function App() {
           />
           </LazyPanel>
         )}
-      />
+      />}
 
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
@@ -1254,7 +1267,7 @@ export default function App() {
         onZoom={zoom}
       />
       <HelpLegend open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <ProjectPicker open={projectOpen} workspace={workspace} onClose={() => setProjectOpen(false)} />
+      <ProjectPicker open={projectOpen} workspaces={workspaces} onClose={() => { setProjectOpen(false); setAwaitingPick(false); }} />
     </div>
   );
 }

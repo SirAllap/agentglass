@@ -1,11 +1,16 @@
-// Project picker — "which folder is this cockpit about?"
+// Project picker — "which projects is this cockpit about?"
 //
 // Shown on first open (when the instance isn't scoped yet) and reachable from
-// the header afterwards. Picking a project hands the server its directory: the
-// dashboard, git panel and terminal then work on exactly that folder — its
-// Makefile commands, its repos, its sessions — instead of everything on the
-// machine. The choice is persisted server-side (config.json), so the next
-// launch opens straight into the same project.
+// the header afterwards. Picking projects hands the server their directories:
+// the dashboard, git panel and terminal then work on exactly those — their
+// Makefile commands, their repos, their sessions — instead of everything on the
+// machine. One project is a click on its row; several are ticked and opened
+// together. The choice is persisted server-side (config.json), so the next
+// launch opens straight into the same projects.
+//
+// The list is drawn from the folders the person added, and a first run starts
+// with none: an empty picker that asks where the projects are, rather than one
+// pre-filled from every repository an agent was ever run in.
 //
 // It used to be a list and a path box, and the path box was the only way in for
 // a project the sweep had never seen. That is the least discoverable control
@@ -26,6 +31,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { FolderIcon, MonitorIcon, PlusIcon } from "../lib/glyphIcons.tsx";
 import { GitIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { allOpen, autoPick, initialTicks, nextScope, rootsToAdd } from "../lib/projectPick.ts";
 
 /** Set once the user has answered the startup question (either way), so an
  *  unscoped instance doesn't re-ask on every reload. */
@@ -176,11 +182,25 @@ function AddRow({ icon, title, sub, onClick, disabled }: { icon: ReactNode; titl
 
 type Mode = "list" | "clone" | "new";
 
-/** `workspace` may be undefined — the server has not answered yet. No row is
- *  marked open in that case, which is the honest rendering: the picker does not
- *  know either. */
-export function ProjectPicker({ open, workspace, onClose }: { open: boolean; workspace: string | null | undefined; onClose: () => void }) {
+/**
+ * `workspaces` is every open project, empty while none is — or while the server
+ * has not answered, in which case no row is marked open, which is the honest
+ * rendering: the picker does not know either.
+ *
+ * The list is the projects under the folders the person added and nothing
+ * else. It used to be every place the app had seen an agent run, which on a
+ * real machine includes a dotfiles checkout and an editor's config repo that
+ * nobody would call a project. That sweep is still one click away ("look for
+ * projects"), but never the default, and never on a first run.
+ */
+export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; workspaces: readonly string[]; onClose: () => void }) {
   const [repos, setRepos] = useState<GitRepoRef[] | null>(null);
+  /** The folders the list is drawn from. Server-side, in config.json. */
+  const [roots, setRoots] = useState<string[]>([]);
+  /** The list is the explicit sweep rather than the folders. */
+  const [scanned, setScanned] = useState(false);
+  /** Projects ticked to open together. Starts as the open ones. */
+  const [ticked, setTicked] = useState<string[]>([]);
   /** Paths this picker has been told to stop offering. Server-side, in the same
    *  config file as the scope, so it holds across restarts and across windows. */
   const [hidden, setHidden] = useState<string[]>([]);
@@ -202,42 +222,94 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
    *  can take minutes, and a spinner with no sentence reads as a hang. */
   const [working, setWorking] = useState("");
 
+  const load = (scan: boolean): Promise<GitRepoRef[]> => {
+    setRepos(null);
+    return api.gitReposAll(scan)
+      .then(({ repos, hidden, roots }) => { setRepos(repos); setHidden(hidden ?? []); setRoots(roots ?? []); return repos; })
+      .catch(() => { setRepos([]); return []; });
+  };
+
   useEffect(() => {
     if (!open) return;
     setError("");
     setMode("list");
-    setRepos(null);
     setShowHidden(false);
     setMenu(null);
-    api.gitReposAll()
-      .then(({ repos, hidden }) => { setRepos(repos); setHidden(hidden ?? []); })
-      .catch(() => setRepos([]));
+    setScanned(false);
+    void load(false).then((listed) => setTicked(initialTicks(workspaces, listed)));
+    // `workspaces` is read once per opening: the list must not re-tick itself
+    // under somebody who is halfway through choosing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const suggestedParent = useMemo(() => likelyParent(repos, workspace), [repos, workspace]);
+  const suggestedParent = useMemo(() => likelyParent(repos, workspaces[0]), [repos, workspaces]);
   // Only ever a default: once somebody edits it, their answer stands.
   useEffect(() => { if (open && !parent) setParent(suggestedParent); }, [open, suggestedParent, parent]);
 
-  const choose = (root: string | null) => {
+  const failed = (e: unknown) => { setBusy(false); setWorking(""); setError(e instanceof Error ? e.message : String(e)); };
+
+  /**
+   * Open these projects, together.
+   *
+   * Anything opened from outside the added folders — a scan result, a clone, a
+   * new project — becomes a folder of its own first, or it would be missing
+   * from this list the next time and there would be no way back to it.
+   */
+  const openScope = async (list: string[]) => {
     if (busy) return;
     markAnswered();
-    if (root === workspace) { onClose(); return; } // already there — nothing to change
+    if (!nextScope(list, workspaces)) { onClose(); return; } // already there — nothing to change
     setBusy(true);
     setError("");
-    setWorking("Switching project…");
-    api.setWorkspace(root)
-      .then((res) => {
-        if (!res.ok) { setBusy(false); setWorking(""); setError(res.error || "Could not switch project"); return; }
-        // A failed persist or an env override only affects the *next* launch —
-        // the switch itself worked — so say so without blocking the reload.
-        if (res.note) console.warn(`[agentglass] ${res.note}`);
-        else if (!res.persisted) console.warn("[agentglass] project choice applied but could not be saved — it won't survive a server restart");
-        // Everything on screen — events, repos, sessions — belongs to the old
-        // scope. A clean reload is the honest way to rescope all of it.
-        location.reload();
-      })
-      .catch((e) => { setBusy(false); setWorking(""); setError(String(e)); });
+    setWorking(list.length > 1 ? `Opening ${list.length} projects…` : "Switching project…");
+    try {
+      for (const p of rootsToAdd(list, roots)) {
+        const r = await api.setProjectRoot(p, true);
+        if (!r.ok) { failed(r.error || "Could not add that folder to the list"); return; }
+      }
+      const res = await api.setWorkspaces(list);
+      if (!res.ok) { failed(res.error || "Could not switch project"); return; }
+      // A failed persist or an env override only affects the *next* launch —
+      // the switch itself worked — so say so without blocking the reload.
+      if (res.note) console.warn(`[agentglass] ${res.note}`);
+      else if (!res.persisted) console.warn("[agentglass] project choice applied but could not be saved — it won't survive a server restart");
+      // Everything on screen — events, repos, sessions — belongs to the old
+      // scope. A clean reload is the honest way to rescope all of it.
+      location.reload();
+    } catch (e) { failed(e); }
   };
+  const choose = (root: string) => { void openScope([root]); };
+
+  /** Add a folder to the list, and open its project straight away when it held
+   *  exactly one and nothing is open yet — see autoPick. */
+  const addRoot = async (dir: string) => {
+    if (busy || !dir.trim()) return;
+    setBusy(true); setError(""); setWorking("Adding the folder…");
+    try {
+      const r = await api.setProjectRoot(dir.trim(), true);
+      if (!r.ok) { failed(r.error || "Could not add that folder"); return; }
+      if (r.note) console.warn(`[agentglass] ${r.note}`);
+      setPath("");
+      setScanned(false);
+      const listed = await load(false);
+      setBusy(false); setWorking("");
+      const only = autoPick(listed, workspaces);
+      if (only) void openScope([only]);
+    } catch (e) { failed(e); }
+  };
+
+  /** Take a folder off the list. The folder itself is never touched. */
+  const forgetRoot = (dir: string) => {
+    if (busy) return;
+    setError("");
+    api.setProjectRoot(dir, false)
+      .then((r) => { if (!r.ok) { setError(r.error || "Could not save that"); return; } void load(scanned); })
+      .catch((e) => setError(String(e)));
+  };
+
+  const scan = (on: boolean) => { setScanned(on); setQuery(""); void load(on); };
+  const toggleTick = (root: string) =>
+    setTicked((t) => (t.includes(root) ? t.filter((p) => p !== root) : [...t, root]));
 
   /**
    * Take a project off the list, or put it back.
@@ -261,12 +333,11 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
       });
   };
 
-  /** The system chooser, and then straight into the project. On a browser tab
-   *  there is nothing to open, so this focuses the path box instead of doing
-   *  nothing — see CAN_BROWSE_FOLDER. */
+  /** The system chooser, and the folder it answers goes on the list. Only
+   *  offered where there is a system chooser — see CAN_BROWSE_FOLDER. */
   const browse = async () => {
-    const picked = await chooseFolder(parent || undefined);
-    if (picked) choose(picked);
+    const picked = await chooseFolder(roots[0] || parent || undefined);
+    if (picked) void addRoot(picked);
   };
 
   const runClone = () => {
@@ -318,10 +389,14 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
   const shown = showHidden ? matching : matching.filter((r) => !isHidden(r));
   const hiddenHere = matching.filter(isHidden).length;
 
-  const title = mode === "clone" ? "Clone a repository" : mode === "new" ? "New project" : "Open a project";
+  const title = mode === "clone" ? "Clone a repository" : mode === "new" ? "New project" : "Open projects";
   const sub = mode === "clone" ? "It is cloned on this machine, then opened"
     : mode === "new" ? "An empty folder with a git repository in it"
-    : "A project — or a folder your projects live in";
+    : "One, or tick several to open them together";
+  // No folder yet, and not looking: the first run. Nothing on the machine has
+  // been looked at, and the one thing to do is say where the projects are.
+  const firstRun = repos !== null && !roots.length && !scanned;
+  const pending = nextScope(ticked, workspaces);
 
   return (
     <Portal>
@@ -349,44 +424,78 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
 
                 {mode === "list" && (
                   <>
-                    <div className="px-4 pt-3 shrink-0">
-                      <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter projects…"
-                        className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
-                        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
-                    </div>
+                    {!firstRun && (
+                      <div className="px-4 pt-3 shrink-0">
+                        <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter projects…"
+                          className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
+                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                      </div>
+                    )}
 
                     <div className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 px-2 py-2" style={{ minHeight: 140 }}>
-                      {/* machine-wide is a real choice, not just the absence of one */}
-                      <Row current={workspace === null} icon={<MonitorIcon size={ICON.sm} />} title="All repos/projects" sub="Every repo/project — no scope" onClick={() => choose(null)} disabled={busy} />
+                      {repos === null && <div className="px-3 py-3 text-[11px] t-dim2">{scanned ? "Looking for projects…" : "Reading your folders…"}</div>}
 
-                      {repos === null && <div className="px-3 py-3 text-[11px] t-dim2">Looking for repos…</div>}
+                      {firstRun && (
+                        <div className="px-4 py-6 flex flex-col items-center text-center gap-2">
+                          <span className="grid place-items-center rounded-xl" style={{ width: 40, height: 40, background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary-hover)" }}>
+                            <FolderIcon size={ICON.md} />
+                          </span>
+                          <div className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>Add the folder your projects live in</div>
+                          <div className="text-[11px] t-dim2 leading-relaxed" style={{ maxWidth: 380 }}>
+                            agentglass lists the git repositories inside the folders you add — <code>~/code</code>, or a single project — and nothing else on this machine.
+                          </div>
+                          {CAN_BROWSE_FOLDER ? (
+                            <button onClick={() => void browse()} disabled={busy}
+                              className="agx-btn mt-1 text-[12px] px-4 py-1.5 rounded-lg font-medium"
+                              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                              Add a folder…
+                            </button>
+                          ) : (
+                            <div className="text-[11px] mt-1" style={{ color: "var(--text2)" }}>Type its path below</div>
+                          )}
+                          <button onClick={() => scan(true)} disabled={busy} className="agx-btn text-[10.5px] px-2 py-1 rounded-md mt-1" style={{ color: "var(--text3)" }}>
+                            Or look for projects agents have already worked in
+                          </button>
+                        </div>
+                      )}
+
+                      {scanned && repos !== null && (
+                        <div className="flex items-center gap-2 px-3 pb-1.5 text-[10px]" style={{ color: "var(--text3)" }}>
+                          <span className="truncate">Found where agents have worked — opening one adds it to your list</span>
+                          <button onClick={() => scan(false)} className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded-md" style={{ color: "var(--primary-hover)" }}>Your folders</button>
+                        </div>
+                      )}
+
+                      {/* Everything under the added folders, as one choice. Not
+                          the machine: the machine is not on offer any more. */}
+                      {!scanned && roots.length > 0 && repos !== null && (
+                        <Row current={allOpen(workspaces, roots)} icon={<MonitorIcon size={ICON.sm} />} title="All projects"
+                          sub={roots.length === 1 ? `Everything in ${roots[0]}` : `Everything in your ${roots.length} folders`}
+                          onClick={() => void openScope(roots)} disabled={busy} />
+                      )}
+
                       {/* Two different empty states. A filter that matches nothing
-                          is about the filter; an empty list with no filter is about
-                          configuration, and saying "no repos found" there states a
-                          fact about the machine ("you have no code") when the true
-                          statement is about this app ("nothing is configured to
-                          look in"). The first reads as a bug in discovery, which is
-                          how it was reported. */}
-                      {repos !== null && !shown.length && (terms.length ? (
+                          is about the filter; an empty list with folders added is
+                          about the folders, and saying "no repos found" there reads
+                          as a bug in discovery rather than a fact about them. */}
+                      {repos !== null && !firstRun && !shown.length && (terms.length ? (
                         <div className="px-3 py-3 text-[11px] t-dim2">No repos match that filter</div>
                       ) : (
                         <div className="px-3 py-3 text-[11px] t-dim2 leading-relaxed">
-                          <div style={{ color: "var(--text2)" }}>Nothing found to open yet</div>
-                          <div className="mt-1">
-                            agentglass sweeps the folders your projects already live in, and the usual ones
-                            (<code>~/code</code>, <code>~/src</code>, <code>~/projects</code>…). If yours are somewhere else,
-                            browse to one below — or name the folders with <code>repoDirs</code> in your config.
-                          </div>
+                          {scanned
+                            ? "No projects found where agents have worked yet"
+                            : "No git repositories in your folders yet — add another folder below, or clone one"}
                         </div>
                       ))}
                       {shown.map((r) => (
-                        <Row key={r.root} current={r.root === workspace} icon={<GitIcon size={ICON.sm} />} disabled={busy} onClick={() => choose(r.root)}
+                        <Row key={r.root} current={workspaces.includes(r.root)} icon={<GitIcon size={ICON.sm} />} disabled={busy} onClick={() => choose(r.root)}
+                          ticked={ticked.includes(r.root)} onTick={() => toggleTick(r.root)}
                           hidden={isHidden(r)}
-                          // The open project has no menu: the only thing in it
-                          // is "take this off the list", and hiding the one you
+                          // An open project has no menu: the only thing in it
+                          // is "take this off the list", and hiding one you
                           // are standing in would take the row away and leave
                           // the scope exactly where it was.
-                          onMenu={r.root === workspace ? undefined : (x, y) => setMenu({ root: r.root, x, y })}
+                          onMenu={workspaces.includes(r.root) ? undefined : (x, y) => setMenu({ root: r.root, x, y })}
                           title={r.name} sub={r.root} right={r.branch}
                           meta={[
                             r.dirty > 0 ? `${r.dirty} change${r.dirty === 1 ? "" : "s"}` : "",
@@ -413,16 +522,60 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                           try it on. */}
                       {!!shown.length && !showHidden && hiddenHere === 0 && (
                         <div className="px-3 pt-1.5 pb-0.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
-                          Right-click a project to take it off this list
+                          Tick several to open them together · right-click one to take it off this list
                         </div>
+                      )}
+                      {/* The sweep, only when asked for. It is how somebody
+                          upgrading finds the projects they had open before
+                          there were folders, without it ever being the default. */}
+                      {!scanned && !firstRun && repos !== null && (
+                        <button onClick={() => scan(true)} disabled={busy}
+                          className="agx-btn w-full text-left px-3 py-1.5 mt-1 rounded-lg text-[10.5px]" style={{ color: "var(--text3)" }}>
+                          Look for projects agents have worked in…
+                        </button>
                       )}
                     </div>
 
+                    {/* Only once the ticks say something the scope does not. */}
+                    {pending && (
+                      <div className="flex items-center gap-2 px-4 py-2 border-t shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                        <span className="text-[11px] truncate" style={{ color: "var(--text2)" }}>
+                          {pending.length === 1 ? "1 project ticked" : `${pending.length} projects ticked`}
+                        </span>
+                        <button onClick={() => setTicked(initialTicks(workspaces, repos ?? []))} disabled={busy}
+                          className="agx-btn ml-auto text-[11px] px-3 py-1.5 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          Reset
+                        </button>
+                        <button onClick={() => void openScope(pending)} disabled={busy}
+                          className="agx-btn text-[11px] px-4 py-1.5 rounded-lg font-medium"
+                          style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                          {pending.length === 1 ? "Open it" : `Open ${pending.length} together`}
+                        </button>
+                      </div>
+                    )}
+
                     <div className="px-4 pt-2 pb-3 border-t shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                      <div className="text-[9.5px] uppercase tracking-wider mb-1.5" style={{ color: "var(--text4)" }}>Add a project</div>
+                      {roots.length > 0 && (
+                        <>
+                          <div className="text-[9.5px] uppercase tracking-wider mb-1" style={{ color: "var(--text4)" }}>Your folders</div>
+                          <div className="flex flex-col mb-2">
+                            {roots.map((r) => (
+                              <div key={r} className="flex items-center gap-2 pl-1 py-0.5 min-w-0">
+                                <span className="shrink-0 flex" style={{ color: "var(--text4)" }}><FolderIcon size={ICON.xs} /></span>
+                                <span className="text-[11px] truncate flex-1" style={{ color: "var(--text2)" }} title={r}>{r}</span>
+                                {/* A word, not an ✕: "remove" next to a folder
+                                    path reads as delete, and this only forgets. */}
+                                <button onClick={() => forgetRoot(r)} disabled={busy} title="Stop listing this folder's projects — the folder is not touched"
+                                  className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded-md" style={{ color: "var(--text3)" }}>Forget</button>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      <div className="text-[9.5px] uppercase tracking-wider mb-1.5" style={{ color: "var(--text4)" }}>Add</div>
                       <div className="flex flex-col gap-1.5">
-                        {CAN_BROWSE_FOLDER && (
-                          <AddRow icon={<FolderIcon size={ICON.sm} />} title="Browse folder…" sub="A project, a git repo, or a folder with many repos" onClick={() => void browse()} disabled={busy} />
+                        {CAN_BROWSE_FOLDER && !firstRun && (
+                          <AddRow icon={<FolderIcon size={ICON.sm} />} title="Add a folder…" sub="Where your projects live — its git repos are listed here" onClick={() => void browse()} disabled={busy} />
                         )}
                         <AddRow icon="⌥" title="Clone from URL" sub="Clone a remote git repository onto this machine" onClick={() => { setMode("clone"); setError(""); }} disabled={busy} />
                         <AddRow icon={<PlusIcon size={ICON.sm} />} title="Create new project" sub="Start from an empty folder" onClick={() => { setMode("new"); setError(""); }} disabled={busy} />
@@ -430,14 +583,15 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
 
                       {/* The typed path stays: a browser tab has no system
                           chooser, and pasting a path somebody already has on the
-                          clipboard beats browsing to it. */}
+                          clipboard beats browsing to it. It adds the folder, like
+                          the chooser — opening is the list's job. */}
                       <div className="flex items-center gap-2 mt-2">
-                        <FolderField value={path} onChange={setPath} onSubmit={() => path.trim() && choose(path.trim())} small
-                          placeholder={CAN_BROWSE_FOLDER ? "…or paste a path: ~/code/my-project" : "Type a folder: ~/code/my-project, or ~/code for everything in it"} />
-                        <button onClick={() => path.trim() && choose(path.trim())} disabled={busy || !path.trim()}
+                        <FolderField value={path} onChange={setPath} onSubmit={() => void addRoot(path)} small autoFocus={firstRun && !CAN_BROWSE_FOLDER}
+                          placeholder={CAN_BROWSE_FOLDER ? "…or type a folder: ~/code" : "Type a folder: ~/code, or ~/code/my-project"} />
+                        <button onClick={() => void addRoot(path)} disabled={busy || !path.trim()}
                           className="agx-btn text-[11px] px-3 py-1.5 rounded-lg font-medium shrink-0"
                           style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: path.trim() ? 1 : 0.5 }}>
-                          Open
+                          Add
                         </button>
                       </div>
                     </div>
@@ -543,11 +697,13 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
  * costs no width at all, holds the next item without redesigning anything, and
  * has room to say what "remove" does not mean.
  *
- * Which leaves the row a single control again, so it is a plain <button>: the
- * two-control version could not be, because a <button> inside a <button> is
- * invalid HTML that browsers resolve by dropping the inner one.
+ * The tick box is the one other control, and it sits beside the button in a
+ * plain <div> rather than inside it: a <button> cannot hold another control —
+ * browsers resolve that invalid HTML by dropping the inner one. So clicking the
+ * row still opens that one project, as it always did, and the box is how
+ * several are opened together.
  */
-function Row({ current, icon, title, sub, meta, right, onClick, disabled, hidden, onMenu }: {
+function Row({ current, icon, title, sub, meta, right, onClick, disabled, hidden, onMenu, ticked, onTick }: {
   current: boolean; icon: ReactNode; title: string; sub: string; meta?: string; right?: string;
   onClick: () => void; disabled?: boolean;
   /** Already off the list — drawn dimmed, and the menu offers the way back. */
@@ -555,23 +711,35 @@ function Row({ current, icon, title, sub, meta, right, onClick, disabled, hidden
   /** Absent means this row has nothing to offer on a right-click, so the
    *  browser's own menu is left alone rather than replaced by an empty one. */
   onMenu?: (x: number, y: number) => void;
+  /** Ticked to be opened together with others. Absent draws no box: "All
+   *  projects" is a choice of its own, not one more project to tick. */
+  ticked?: boolean;
+  onTick?: () => void;
 }) {
   return (
-    <button onClick={onClick} disabled={disabled}
+    <div className="flex items-center rounded-lg relative"
       onContextMenu={onMenu ? (e) => { e.preventDefault(); onMenu(e.clientX, e.clientY); } : undefined}
-      className="agx-btn w-full text-left pl-3 pr-3 py-2 rounded-lg flex items-center gap-2.5 relative"
       style={{ background: current ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", opacity: hidden ? 0.45 : 1 }}>
       {current && <span className="absolute left-0 top-1.5 bottom-1.5 rounded-full" style={{ width: 3, background: "var(--primary)" }} />}
-      <span className="shrink-0 flex" style={{ color: "var(--text3)" }}>{icon}</span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-[12px] truncate" style={{ color: "var(--text)", fontWeight: current ? 600 : 500 }}>
-          {title}
-          {!!meta && <span className="t-dim2 font-normal"> · {meta}</span>}
+      {/* A sibling of the row's button, never inside it: a control inside a
+          <button> is invalid HTML that browsers resolve by dropping it. */}
+      {onTick && (
+        <input type="checkbox" checked={!!ticked} onChange={onTick} disabled={disabled} aria-label={`Include ${title}`}
+          className="shrink-0 ml-3 cursor-pointer" style={{ accentColor: "var(--primary)" }} />
+      )}
+      <button onClick={onClick} disabled={disabled}
+        className={`agx-btn min-w-0 flex-1 text-left ${onTick ? "pl-2.5" : "pl-3"} pr-3 py-2 rounded-lg flex items-center gap-2.5`}>
+        <span className="shrink-0 flex" style={{ color: "var(--text3)" }}>{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12px] truncate" style={{ color: "var(--text)", fontWeight: current ? 600 : 500 }}>
+            {title}
+            {!!meta && <span className="t-dim2 font-normal"> · {meta}</span>}
+          </span>
+          <span className="block text-[10px] t-dim2 truncate" title={sub}>{sub}</span>
         </span>
-        <span className="block text-[10px] t-dim2 truncate" title={sub}>{sub}</span>
-      </span>
-      {!!right && <span className="shrink-0 text-[9.5px] t-dim2 truncate" style={{ maxWidth: 120 }}>{right}</span>}
-      {current && <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>Open</span>}
-    </button>
+        {!!right && <span className="shrink-0 text-[9.5px] t-dim2 truncate" style={{ maxWidth: 120 }}>{right}</span>}
+        {current && <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>Open</span>}
+      </button>
+    </div>
   );
 }

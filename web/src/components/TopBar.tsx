@@ -36,6 +36,7 @@ import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { scopeLabel, scopeTitle } from "../lib/projectPick.ts";
 
 export const TOP_BAR_H = 30;
 
@@ -418,7 +419,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 }
 
 export function TopBar({
-  workspace, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
+  workspace, workspaces, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
   needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
   filterProvider = "",
 }: {
@@ -426,6 +427,9 @@ export function TopBar({
    *  answer ("the whole machine"). The chip must not claim either while the
    *  server is still coming up underneath it. */
   workspace: string | null | undefined;
+  /** Every open project, when several were opened together. `workspace` is
+   *  the first of them. */
+  workspaces?: readonly string[];
   onOpenProject: () => void;
   onOpenPalette: () => void;
   /** Open the file finder. It had a chord and nothing else, which makes it a
@@ -459,6 +463,8 @@ export function TopBar({
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
+  // An older server answers with `workspace` alone; that one project is the list.
+  const open = workspaces?.length ? workspaces : workspace ? [workspace] : [];
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
   const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
   const upd = useSyncExternalStore(subscribeUpdate, updateState, updateState);
@@ -615,7 +621,7 @@ export function TopBar({
           carries the weight, since "which project am I in" is the one thing
           this corner exists to answer. */}
       <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1 py-1"
-        title={workspace ? `${workspace}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open a single project" : "Reading the open project…"}
+        title={workspace ? `${scopeTitle(open)}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open projects" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
           border: `1px solid color-mix(in srgb, var(--border) ${workspace ? 55 : 40}%, transparent)`,
@@ -627,7 +633,7 @@ export function TopBar({
               deliberate whole-machine view, and "not known yet" — which used
               to be indistinguishable from the second and had the bar quietly
               claiming "all repos" over a cockpit scoped to one project. */}
-          {workspace ? workspace.split("/").filter(Boolean).pop() : workspace === null ? "all repos" : "…"}
+          {workspace ? scopeLabel(open) : workspace === null ? "all repos" : "…"}
         </span>
         <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}>▾</span>
       </button>
