@@ -1028,6 +1028,32 @@ print(json.dumps({b: m._parse_bind(b) for b in ["8765", "127.0.0.1:8765", "[::1]
     });
   });
 
+  test("a batch item that is not an object is a JSON-RPC error, not a dropped connection", async () => {
+    // `[1]` used to raise inside the handler and close the socket with no
+    // reply; a parse-level mistake is answered as one.
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify([1, { jsonrpc: "2.0", id: 11, method: "ping" }]),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json() as { id: number | null; error?: { code: number }; result?: unknown }[];
+    expect(j.find((m) => m.error)?.error?.code).toBe(-32600);
+    expect(j.find((m) => m.id === 11)?.result).toEqual({});
+  });
+
+  test("the session table is a ring, not a quota: the 65th initialize still gets an id", async () => {
+    const init = () => fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } }),
+    });
+    for (let i = 0; i < 70; i++) await init();
+    const last = await init();
+    expect(last.status).toBe(200);
+    expect(last.headers.get("mcp-session-id")).toMatch(/^agx-/);
+  });
+
   test("a body that is not application/json is refused before it is parsed", async () => {
     // A text/plain POST is one a browser sends without a preflight; JSON is
     // the only content type a JSON-RPC client has a reason to send.

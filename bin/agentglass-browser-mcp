@@ -2056,7 +2056,13 @@ _HTTP_CONN_MAX = 16
 _HTTP_SESSIONS_MAX = 64
 _HTTP_READ_DEADLINE = 30
 _SLOTS = threading.BoundedSemaphore(_HTTP_CONN_MAX)
+# Session ids, newest last. The table is a ring: the oldest id is dropped to
+# make room, not the newest client refused — the first version stopped
+# issuing ids after 64 initializes and never took one back. Ids are issued
+# so a client that wants to send one can; the server holds no state per
+# session, so none is checked.
 _SESSIONS = {}
+_SESSIONS_LOCK = threading.Lock()
 
 
 def _loopback(host):
@@ -2194,9 +2200,15 @@ class _McpHttp(BaseHTTPRequestHandler):
         replies = []
         session = None
         for m in batch:
-            if m.get("method") == "initialize" and len(_SESSIONS) < _HTTP_SESSIONS_MAX and not session:
+            if not isinstance(m, dict):
+                replies.append(make_reply(None, error={"code": -32600, "message": "a message is a JSON object"}))
+                continue
+            if m.get("method") == "initialize" and not session:
                 session = "agx-" + secrets.token_hex(8)
-                _SESSIONS[session] = time.time()
+                with _SESSIONS_LOCK:
+                    while len(_SESSIONS) >= _HTTP_SESSIONS_MAX:
+                        del _SESSIONS[next(iter(_SESSIONS))]
+                    _SESSIONS[session] = time.time()
             r = handle_message(m)
             if r is not None:
                 replies.append(r)
