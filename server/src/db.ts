@@ -2277,11 +2277,17 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   // the cache correct for every OTHER writer, which is the assumption that
   // failed. See rollupPaths().
   rollupPathCache = null;
-  // The risk roll-up remembers flags from edits this is about to delete; it is
-  // rebuilt from what is left on the next read.
-  riskMemo.clear();
   return db.transaction(() => {
     const rolled = foldExpiringEvents(cutoff);
+    // The risk roll-up forgets only the sessions whose edits are about to go,
+    // and re-reads just those. Clearing all of it on every run, deleted or
+    // not, made the next poll re-parse every listed session's whole edit
+    // history on the event loop once an hour.
+    for (const { session_id } of db.query<{ session_id: string }, [number]>(
+      `SELECT DISTINCT session_id FROM events
+       WHERE timestamp < ? AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')`).all(cutoff)) {
+      riskMemo.delete(session_id);
+    }
     db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
     const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
     const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
@@ -3839,6 +3845,10 @@ function parseChange(r: ChangeRow, withRisks = true): import("../../shared/types
  * the dashboard, for a fact that only changes when an edit lands. So each read
  * parses only the edits past the watermark. The watermark is a row id, not a
  * timestamp: a backfill inserts old edits late, and those must still count.
+ *
+ * Its ceiling: the first poll after the server starts still reads every listed
+ * session from 0 in one go. Spreading that cold read over several polls is the
+ * next step and is not here.
  */
 const riskMemo = new Map<string, { through: number; flags: import("../../shared/types.ts").SessionRisk[] }>();
 const RISK_MEMO_MAX = 2000;

@@ -173,6 +173,33 @@ describe("what a second review found", () => {
     const d = db.getSession("risk-carry")!;
     expect(d.changes.some((c) => c.file_path.endsWith("config/app.yml") && c.risks?.[0]?.kind === "secret")).toBe(true);
   });
+
+  test("the hourly prune forgets only the sessions whose edits it deleted", () => {
+    // It used to forget every session on every run, deleted or not, and the
+    // next poll re-parsed the whole edit history of every listed session on
+    // the event loop. The kept session's edit is rewritten under the roll-up
+    // here, so a re-read would show up as its flag disappearing.
+    expect(db.RETENTION_DAYS).toBeGreaterThan(0);
+    const OLD = Date.now() - (db.RETENTION_DAYS + 5) * 86_400_000;
+    db.insertEvent(write("risk-prune-old", "config/old.yml", `access_key: ${AWS}\n`, OLD) as any);
+    db.insertEvent(edit("risk-prune-old", "src/a.ts", "a", "b", T0 + 1_000) as any);
+    db.insertEvent(write("risk-prune-keep", "config/keep.yml", `access_key: ${AWS}\n`, T0 + 1_000) as any);
+    const before = bySession();
+    expect(before.get("risk-prune-old")!.risks?.map((r) => r.kind)).toEqual(["secret"]);
+    expect(before.get("risk-prune-keep")!.risks?.map((r) => r.kind)).toEqual(["secret"]);
+    db.db.run(`UPDATE events SET payload = ? WHERE session_id = 'risk-prune-keep'`,
+      [JSON.stringify({ project_path: ROOT, tool_input: { file_path: join(ROOT, "config/keep.yml"), content: "region: eu-west-1\n" } })]);
+
+    db.pruneOldRows();
+    const after = bySession();
+    expect(after.get("risk-prune-old")).toBeDefined();
+    expect(after.get("risk-prune-old")!.risks).toBeUndefined();
+    expect(after.get("risk-prune-keep")!.risks?.map((r) => r.kind)).toEqual(["secret"]);
+
+    // A run that deletes nothing forgets nothing.
+    db.pruneOldRows();
+    expect(bySession().get("risk-prune-keep")!.risks?.map((r) => r.kind)).toEqual(["secret"]);
+  });
 });
 
 const src = await Bun.file(new URL("../src/db.ts", import.meta.url)).text();
