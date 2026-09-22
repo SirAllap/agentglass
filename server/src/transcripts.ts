@@ -234,6 +234,14 @@ for (const r of db
   .all()) {
   projectPaths.set(r.source_app, r.project_path);
 }
+/** The projects the database already knew when this process started — from an
+ *  earlier run, so from before any upgrade. Not the live list: on a fresh
+ *  install that grows as the scanner ingests, and an upgrade's seed taken from
+ *  it would be whatever the scan had reached by the first picker read. */
+const atStart = [...projectPaths.values()];
+export function projectsKnownAtStart(): string[] {
+  return atStart;
+}
 export function knownProjects(): { source_app: string; path: string }[] {
   return [...projectPaths].map(([source_app, path]) => ({ source_app, path })).sort(
     (a, b) => a.source_app.localeCompare(b.source_app)

@@ -9,7 +9,7 @@ import { seedWorktree, type SeedReport } from "./worktreeseed.ts";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
-import { configuredRepoDirs, workspaceRoots, inScope, hiddenProjects } from "./config.ts";
+import { configuredRepoDirs, panelRepoDirs, workspaceRoots, inScope, hiddenProjects } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { observe, noteResolved, noteReopened, stopFor, forget } from "./mergesession.ts";
 import { entered, backoff } from "./loopwatch.ts";
@@ -525,16 +525,17 @@ export function invalidateRepos(root?: string): void {
 /**
  * The projects the app knew before the picker listed folders: every place the
  * recent changes were made in and every project the scanner has seen, each as
- * the project it belongs to — a worktree folds into its main checkout — and
- * without the ones removed from the list. What an upgrade seeds the folders
- * with; see seedRepoDirs.
+ * the project it belongs to — a worktree folds into its main checkout. What an
+ * upgrade seeds the folders with; see seedRepoDirs. A project removed from the
+ * list is kept: the list goes on hiding it, and one outside every folder could
+ * never be shown again once put back.
  *
  * The same sources as the explicit "look for projects" sweep below, minus the
  * server's own checkout and AGENTGLASS_REPOS: those were listed because of how
  * this process was started, not because anybody worked there, and a fresh
  * install run from a checkout would otherwise never see its first run.
  */
-export async function knownProjectRoots(paths: string[], knownRoots: string[], hidden: readonly string[] = []): Promise<string[]> {
+export async function knownProjectRoots(paths: string[], knownRoots: string[]): Promise<string[]> {
   const dirs = new Set<string>();
   for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
   for (const r of knownRoots) { const a = safeAbs(r); if (a) dirs.add(a); }
@@ -542,8 +543,7 @@ export async function knownProjectRoots(paths: string[], knownRoots: string[], h
   const out = new Set<string>();
   for (const t of tops) {
     if (!t) continue;
-    const root = worktreeParent(t) ?? t;
-    if (!hidden.includes(root)) out.add(root);
+    out.add(worktreeParent(t) ?? t);
   }
   return [...out];
 }
@@ -745,10 +745,12 @@ export async function discoverRepos(
   // selected repo via workingTree().
   const out = (await Promise.all([...roots].map((r) => repoRef(r)))).filter((r): r is GitRepoRef => !!r);
   for (const r of out) { const n = folded.get(r.root); if (n) r.worktrees = n; }
-  // The panels are held to the added folders when there are any. The picker is
-  // not: its default list is already only those folders, and its explicit
+  // The panels are held to the added folders when there are any — the ones a
+  // person named, not a list an upgrade seeded (see panelRepoDirs). The picker
+  // is not: its default list is already only those folders, and its explicit
   // "look for projects" is asking precisely for what lies outside them.
-  const scoped = notHidden(!opts.ignoreScope && only.length ? within(out, only) : out, hide);
+  const held = opts.ignoreScope ? [] : panelRepoDirs();
+  const scoped = notHidden(held.length ? within(out, held) : out, hide);
   // Families stay together, most recently worked-in family first, the project
   // ahead of its own worktrees. Sorting the flat list alone scatters a repo's
   // checkouts through the dropdown, so `orbit` and `orbit-WEB-1042` end up

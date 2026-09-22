@@ -72,6 +72,10 @@ interface Config {
    *  removed from the picker, or by hand here. See setRepoDir(). No key at
    *  all is a config from before there were folders: see seedRepoDirs(). */
   repoDirs?: string[];
+  /** Set when an upgrade wrote `repoDirs` from what the app knew rather than
+   *  a person adding folders. Such a list never holds the unscoped panels:
+   *  see panelRepoDirs(). */
+  repoDirsSeeded?: boolean;
   /** Offer `bypassPermissions` — `claude --dangerously-skip-permissions` — as a
    *  chat mode. Off unless stated, and stated *here* rather than only in the
    *  environment: a desktop launcher passes no env, so AGENTGLASS_CHAT_BYPASS
@@ -374,11 +378,19 @@ let cachedFor: string | undefined;
  *  hand-editable file, and a junk entry costs itself rather than the scope. */
 function askedRoots(): string[] {
   const env = process.env.AGENTGLASS_ROOT;
+  return env ? [env] : askedInFile();
+}
+function askedInFile(): string[] {
   const raw = config().root;
-  return env ? [env]
-    : typeof raw === "string" ? [raw]
+  return typeof raw === "string" ? [raw]
     : Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string" && !!p.trim())
     : [];
+}
+/** The projects the config FILE opens, resolved, whatever the environment
+ *  says. What an upgrade seeds from: a scope given for one launch through
+ *  AGENTGLASS_ROOT is not a folder anybody asked to keep. */
+export function fileRoots(): string[] {
+  return [...new Set(askedInFile().map((a) => resolveScope(a)))];
 }
 export function workspaceRoots(): string[] {
   const asked = askedRoots();
@@ -686,6 +698,20 @@ export function configuredRepoDirs(): string[] {
 }
 
 /**
+ * The folders the unscoped panels are held to: the ones a person named.
+ *
+ * A list an upgrade seeded is every project the app knew that day, and holding
+ * the panels to it dropped a worktree beside its project, the projects agents
+ * work in later, and everything else the whole-machine view had shown. So
+ * once seeded, the file's list is the picker's alone — including folders added
+ * after, since they sit in the same list. The environment still holds them.
+ */
+export function panelRepoDirs(): string[] {
+  if (!process.env.AGENTGLASS_REPO_DIRS && config().repoDirsSeeded === true) return [];
+  return configuredRepoDirs();
+}
+
+/**
  * Add a folder the picker lists projects from, or forget one.
  *
  * These are the folders a person's projects live in — `~/code`, or one repo on
@@ -755,8 +781,10 @@ export function repoDirsUnstated(): boolean {
  * that folder listed its projects with none of them open and the first click
  * narrowed the scope to one of them for good, and everybody else found the
  * list cut down to what was open. So the first read writes down, once, what
- * the old config and the old list knew: the caller hands the open projects
- * first and then the projects the app knew (see knownProjectRoots).
+ * the old config and the old list knew: the caller hands the projects the
+ * file opens first (fileRoots) and then the ones an earlier run knew (see
+ * knownProjectRoots). A seeded list is marked, and never holds the unscoped
+ * panels: see panelRepoDirs.
  *
  * Kept as given, minus a path that is gone by now, the whole disk or home
  * folder (see tooBroad), and a path inside one kept before it, so ~/code and
@@ -774,7 +802,7 @@ export function seedRepoDirs(candidates: readonly string[]): { ok: boolean; root
       try { if (!statSync(abs).isDirectory()) continue; } catch { continue; }
       if (!kept.some((k) => isWithin(abs, k))) kept.push(abs);
     }
-    return { repoDirs: kept };
+    return { repoDirs: kept, repoDirsSeeded: kept.length ? true : undefined };
   }, "the project folders");
   return { ...res, roots: configuredRepoDirs() };
 }

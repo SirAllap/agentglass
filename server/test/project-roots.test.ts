@@ -16,7 +16,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { configuredRepoDirs, repoDirsUnstated, seedRepoDirs, setRepoDir, setWorkspaceRoots, workspaceRoots } from "../src/config.ts";
+import { configuredRepoDirs, fileRoots, repoDirsUnstated, seedRepoDirs, setRepoDir, setWorkspaceRoots, workspaceRoots } from "../src/config.ts";
 import { discoverRepos, invalidateRepos, knownProjectRoots } from "../src/gitwork.ts";
 
 const saved0 = {
@@ -217,9 +217,9 @@ describe("an upgrade from a config without folders", () => {
     const lander = makeRepo(join(code, "lander"));
     write({ root: code });
     expect(repoDirsUnstated()).toBe(true);
-    const r = seedRepoDirs(workspaceRoots());
+    const r = seedRepoDirs(fileRoots());
     expect(r.ok).toBe(true);
-    expect(onDisk()).toEqual({ root: code, repoDirs: [code] });
+    expect(onDisk()).toEqual({ root: code, repoDirs: [code], repoDirsSeeded: true });
     expect((await picker()).sort()).toEqual([lander, orbit].sort());
   });
 
@@ -227,15 +227,23 @@ describe("an upgrade from a config without folders", () => {
     const orbit = makeRepo(join(code, "orbit"));
     const known = makeRepo(join(dir, "elsewhere", "handbook"));
     write({ root: orbit });
-    seedRepoDirs([...workspaceRoots(), known]);
+    seedRepoDirs([...fileRoots(), known]);
     expect(onDisk().repoDirs).toEqual([orbit, known]);
   });
 
   test("a project inside a seeded folder is not seeded again beside it", () => {
     const orbit = makeRepo(join(code, "orbit"));
     write({ root: [code] });
-    seedRepoDirs([...workspaceRoots(), orbit]);
+    seedRepoDirs([...fileRoots(), orbit]);
     expect(onDisk().repoDirs).toEqual([code]);
+  });
+
+  test("an open project the environment chose is not written into the file", () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    process.env.AGENTGLASS_ROOT = orbit;
+    expect(workspaceRoots()).toEqual([orbit]);
+    expect(fileRoots()).toEqual([]);
+    delete process.env.AGENTGLASS_ROOT;
   });
 
   test("nothing to seed still says so, so a later start does not seed what the app learns since", () => {
@@ -271,19 +279,58 @@ describe("an upgrade from a config without folders", () => {
   });
 });
 
+describe("what seeded folders do to the unscoped panels", () => {
+  const panels = async () => (await discoverRepos([], [known, ...seen], {})).map((r) => r.root).sort();
+  let known = "";
+  let seen: string[] = [];
+  test("nothing: the list before the seed is the list after it", async () => {
+    // Seeding narrowed every unscoped cockpit to the projects known that day:
+    // a worktree beside its project, a project first worked in tomorrow, all
+    // gone from the shell, diff and chat dropdowns after one look at the picker.
+    const orbit = makeRepo(join(code, "orbit"));
+    const wt = join(code, "orbit-ORBIT-1042");
+    git(orbit, "worktree", "add", "-q", "-b", "orbit-1042", wt);
+    known = makeRepo(join(dir, "elsewhere", "handbook"));
+    seen = [orbit, wt]; // where agents have run
+    const before = await panels();
+    expect(before).toContain(wt);
+    seedRepoDirs([orbit]);
+    invalidateRepos();
+    expect(await panels()).toEqual(before);
+  });
+  test("nor after a folder is added beside the seeded ones", async () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    known = makeRepo(join(dir, "elsewhere", "handbook"));
+    seen = [];
+    seedRepoDirs([orbit]);
+    const work = join(dir, "work");
+    mkdirSync(work);
+    setRepoDir(work, true);
+    invalidateRepos();
+    expect(await panels()).toContain(known);
+  });
+  test("a folder added on a config that was never seeded still holds them, as before", async () => {
+    makeRepo(join(code, "orbit"));
+    known = makeRepo(join(dir, "elsewhere", "handbook"));
+    seen = [];
+    seedRepoDirs([]); // a fresh install: nothing known, nothing seeded
+    setRepoDir(code, true);
+    invalidateRepos();
+    expect(await panels()).toEqual([join(code, "orbit")]);
+  });
+});
+
 describe("the projects the app knew", () => {
-  test("each is its project's top, worktrees fold into their project, and removed ones stay removed", async () => {
+  test("each is its project's top, and worktrees fold into their project", async () => {
     const orbit = makeRepo(join(code, "orbit"));
     const lander = makeRepo(join(code, "lander"));
     const handbook = makeRepo(join(code, "handbook"));
     const wt = join(code, "orbit-ORBIT-1042");
     git(orbit, "worktree", "add", "-q", "-b", "orbit-1042", wt);
     mkdirSync(join(lander, "src"));
-    const found = await knownProjectRoots(
-      [join(lander, "src", "main.ts")],
-      [wt, handbook, join(dir, "gone")],
-      [handbook],
-    );
-    expect(found.sort()).toEqual([lander, orbit].sort());
+    // A removed project is seeded too: the list hides it, and a project
+    // outside every folder could never be shown again once put back.
+    const found = await knownProjectRoots([join(lander, "src", "main.ts")], [wt, handbook, join(dir, "gone")]);
+    expect(found.sort()).toEqual([handbook, lander, orbit].sort());
   });
 });

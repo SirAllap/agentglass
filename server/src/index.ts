@@ -163,8 +163,8 @@ import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, tmux } from "./tmuxpane.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
-import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
-import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, configPath, repoDirsUnstated, seedRepoDirs } from "./config.ts";
+import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
+import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
@@ -4996,8 +4996,11 @@ const server = Bun.serve<WsData>({
         // Never rejects: a seed that threw would otherwise answer every later
         // read with the same error, and the picker is the way out of anything.
         await (pickerSeed ??= (async () => {
-          const known = await knownProjectRoots(getChanges(300).map((c) => c.file_path), knownProjects().map((p) => p.path), hiddenProjects());
-          const r = seedRepoDirs([...workspaceRoots(), ...known]);
+          // Only what an earlier run left behind. A fresh install has none,
+          // and seeds nothing but a scope written in its config by hand.
+          const history = projectsKnownAtStart();
+          const known = history.length ? await knownProjectRoots(getChanges(300).map((c) => c.file_path), history) : [];
+          const r = seedRepoDirs([...fileRoots(), ...known]);
           if (!r.ok) console.error(`[picker] could not save the folders an upgrade seeds: ${r.error}`);
         })().catch((e) => console.error(`[picker] could not seed the folders: ${e instanceof Error ? e.message : e}`)));
       }

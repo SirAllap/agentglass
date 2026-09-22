@@ -69,6 +69,6 @@ test("the first picker read turns an old folder scope into a folder, and leaves 
   const r = await get("/git/repos?all=1");
   expect(r.roots).toEqual([code]);
   expect(r.repos.map((x: { root: string }) => x.root).sort()).toEqual([A, B].sort());
-  expect(saved()).toEqual({ root: code, repoDirs: [code] });
+  expect(saved()).toEqual({ root: code, repoDirs: [code], repoDirsSeeded: true });
   expect((await get("/projects")).workspaces).toEqual([code]);
 });
