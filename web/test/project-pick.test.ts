@@ -74,6 +74,8 @@ describe("an open folder that is not one project", () => {
     expect(openFolders([CODE, DOCS], [{ root: ORBIT }, { root: DOCS }])).toEqual([CODE]);
     expect(openFolders([ORBIT], [{ root: ORBIT }])).toEqual([]);
     expect(openFolders([], [{ root: ORBIT }])).toEqual([]);
+    // The same project spelled with a trailing slash is that project's row.
+    expect(openFolders([ORBIT + "/"], [{ root: ORBIT }])).toEqual([]);
   });
   test("gets a row of its own, marked open, unless 'All projects' already says it", () => {
     expect(PICKER).toMatch(/!allOpen\(workspaces, roots\) && openFolders\(workspaces, repos\)\.map\(\(w\) => \(\s*<Row key=\{w\} current icon=\{<FolderIcon/);

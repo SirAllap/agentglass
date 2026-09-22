@@ -81,9 +81,12 @@ export function inOpenProjects(dir: string, workspaces: readonly string[]): bool
  * The open paths the list has no project row for: a folder opened as a whole,
  * like a ~/code scope from before there were folders. Without a row of its own
  * nothing on the list says it is what is open.
+ *
+ * Its ceiling: an open linked worktree whose project is also listed is folded
+ * into that project's row by the server, and is called a folder here.
  */
 export function openFolders(workspaces: readonly string[], listed: readonly { root: string }[]): string[] {
-  return workspaces.filter((w) => !listed.some((r) => r.root === w));
+  return workspaces.filter((w) => !listed.some((r) => trim(r.root) === trim(w)));
 }
 
 /** Ticked when the picker opens: the open projects that the list can show. */
