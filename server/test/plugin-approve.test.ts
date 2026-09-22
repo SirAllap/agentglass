@@ -198,7 +198,18 @@ describe("the job holds nothing it does not use", () => {
     expect(code).toContain("CATALOGUE_TOKEN: ${{ steps.app.outputs.token }}");
     expect(code).toContain('git push "https://x-access-token:${CATALOGUE_TOKEN}@github.com/');
     expect(code).toContain('GH_TOKEN="$CATALOGUE_TOKEN" gh pr create');
-    expect(code).toContain('GH_TOKEN="$CATALOGUE_TOKEN" gh pr merge --auto');
+  });
+
+  /*
+   * The App opens the pull request and nothing else: it never merges. `gh pr
+   * merge --auto` merges at once when nothing is pending on the pull request,
+   * which is what a main with no required check looks like, so auto-merge is
+   * asked for with the mutation that only ever arms it.
+   */
+  test("the app token never merges: it arms auto-merge, which waits on the checks", () => {
+    expect(code).not.toContain("gh pr merge");
+    expect(code).toContain("enablePullRequestAutoMerge");
+    expect(code).toContain('GH_TOKEN="$CATALOGUE_TOKEN" gh api graphql');
   });
 
   test("and the job's own token keeps only what reading and commenting need", () => {
@@ -330,5 +341,63 @@ describe("the listed commit is the one the check validated", () => {
   test("the tree it hashes is checked out with the line endings the app uses", () => {
     const code = yaml.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
     expect(code).toContain("git -c core.autocrlf=false -c core.eol=lf -C /tmp/plugin checkout -q --detach FETCH_HEAD");
+  });
+});
+
+/*
+ * Auto-merge is only as good as what it waits on. The listing merges by
+ * itself only when main's rules make `catalogue` a required check; without
+ * that rule the pull request is opened and left for a person, and the issue
+ * says why, rather than merging on whatever else happens to be green.
+ */
+describe("the listing merges on its own only behind the catalogue check", () => {
+  /** The gate heredoc of the step that opens the pull request. */
+  function gate(source: string): string {
+    const from = source.indexOf("      - name: Open a pull request with it\n");
+    expect(from, "the workflow still opens a pull request").toBeGreaterThan(-1);
+    const step = source.slice(from, source.indexOf("\n      - name:", from + 1));
+    const m = step.match(/python3 - <<'PY'\n([\s\S]*?)\n\s*PY\n/);
+    expect(m, "and decides whether it may merge by itself in a PY heredoc").not.toBeNull();
+    const lines = m![1]!.split("\n");
+    const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.length - l.trimStart().length));
+    return lines.map((l) => l.slice(indent)).join("\n");
+  }
+
+  const checks = (...contexts: string[]) => ({
+    type: "required_status_checks", ruleset_source_type: "Repository", ruleset_id: 1,
+    parameters: { strict_required_status_checks_policy: false, required_status_checks: contexts.map((context) => ({ context, integration_id: 15368 })) },
+  });
+
+  /** Whether the gate lets auto-merge be armed over these rules (one per line, as `gh api --paginate --jq` prints them). */
+  function armed(rules: unknown[] | string): boolean {
+    const at = mkdtempSync(join(dir, "gate-"));
+    writeFileSync(join(at, "rules.jsonl"), typeof rules === "string" ? rules : rules.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    writeFileSync(join(at, "gate.py"), gate(yaml));
+    const r = spawnSync("python3", ["gate.py"], { cwd: at, encoding: "utf8", env: { PATH: process.env.PATH, RULES: join(at, "rules.jsonl") } });
+    expect(r.stderr).toBe("");
+    return r.stdout.trim() === "armed";
+  }
+
+  test("a main that requires the catalogue check lets the listing merge by itself", () => {
+    expect(armed([{ type: "deletion", parameters: {} }, checks("build", "catalogue")])).toBe(true);
+  });
+
+  test("a main that requires other checks, or none, leaves it for a person", () => {
+    expect(armed([checks("build")])).toBe(false);
+    expect(armed([{ type: "non_fast_forward" }])).toBe(false);
+    expect(armed([])).toBe(false);
+  });
+
+  test("rules that cannot be read leave it for a person too", () => {
+    expect(armed("not json\n")).toBe(false);
+    expect(armed([{ type: "required_status_checks", parameters: { required_status_checks: "catalogue" } }])).toBe(false);
+  });
+
+  test("the rules are read with the job's own token, and a person is told when the listing waits for them", () => {
+    const code = yaml.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    const step = code.slice(code.indexOf("- name: Open a pull request with it"), code.indexOf("- name: Say why nothing was listed"));
+    expect(step).toContain('gh api --paginate "repos/$GITHUB_REPOSITORY/rules/branches/main"');
+    expect(step).not.toContain('GH_TOKEN="$CATALOGUE_TOKEN" gh api --paginate "repos/$GITHUB_REPOSITORY/rules');
+    expect(step).toContain("waits for a maintainer");
   });
 });

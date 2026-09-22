@@ -380,13 +380,48 @@ jobs:
           # allow it is the same one that lets a bot approve reviews — a
           # catalogue whose only reviewer is a person does not hand that away.
           # The App buys the one capability without the other.
+          # Merged by the checks, not by anybody's approval, and never by the
+          # App: it opens the pull request and arms auto-merge, and GitHub
+          # merges once the checks main requires are green. Only when main's
+          # rules make `catalogue` one of them — auto-merge waits on whatever
+          # main requires, and a main that required nothing would merge the
+          # listing on nothing. So the rules are read first, with this job's
+          # own token, which can read them and write nothing.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/rules/branches/main" --jq '.[] | @json' > /tmp/rules.jsonl 2>/dev/null || : > /tmp/rules.jsonl
+          gate=$(RULES=/tmp/rules.jsonl python3 - <<'PY'
+          import json, os
+          required = set()
+          try:
+              for line in open(os.environ["RULES"]):
+                  if not line.strip():
+                      continue
+                  rule = json.loads(line)
+                  if isinstance(rule, dict) and rule.get("type") == "required_status_checks":
+                      checks = (rule.get("parameters") or {}).get("required_status_checks")
+                      if isinstance(checks, list):
+                          required |= {c.get("context") for c in checks if isinstance(c, dict)}
+          except (OSError, ValueError):
+              required = set()
+          print("armed" if "catalogue" in required else "waits")
+          PY
+          )
           if GH_TOKEN="$CATALOGUE_TOKEN" gh pr create --title "catalogue: list $NAME" --body "$body" --base main --head "$branch" 2>/tmp/pr.err; then
-            # Merged by the checks, not by anybody's approval: auto-merge
-            # lands the entry once CI's `build` and `catalogue` are green on
-            # it. Nothing here approves anything, and nothing here reports a
-            # check.
-            GH_TOKEN="$CATALOGUE_TOKEN" gh pr merge --auto --squash "$branch" || \
-              echo "::warning::pull request opened but auto-merge could not be enabled"
+            # The mutation that only arms auto-merge, not `gh pr merge --auto`,
+            # which merges at once when nothing is pending on the pull request.
+            if [ "$gate" = armed ] \
+              && pr=$(GH_TOKEN="$CATALOGUE_TOKEN" gh pr view "$branch" --json id --jq .id) \
+              && GH_TOKEN="$CATALOGUE_TOKEN" gh api graphql \
+                -f query='mutation($pr: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pr, mergeMethod: SQUASH}) { clientMutationId } }' \
+                -f pr="$pr" >/dev/null; then
+              exit 0
+            fi
+            if [ "$gate" = armed ]; then
+              why="auto-merge could not be armed on it"
+            else
+              why="\`main\` does not require the \`catalogue\` check, and a listing merges by itself only behind that check"
+            fi
+            echo "::warning::the pull request waits for a maintainer: $why"
+            gh issue comment "$ISSUE" --body "The pull request is open and waits for a maintainer to merge it: $why."
             exit 0
           fi
           echo "::warning::could not open the pull request: $(tail -1 /tmp/pr.err)"
