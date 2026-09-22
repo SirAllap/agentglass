@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { focusPaneAnywhere } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
+import { startSession } from "./tmuxIsolated.ts";
 
 // A private socket directory, shaped exactly as tmux's own — `<TMUX_TMPDIR>/
 // tmux-<uid>/<name>` — so `tmuxSockets`, which lists that directory, discovers
@@ -99,7 +100,8 @@ beforeEach(() => {
   // exact state the regression corrupts: a phone is looking at the desk, and
   // "take me to that agent" must move the client onto REAL, not leave it (or
   // drag it) onto the phone-sized mirror.
-  tmux("new-session", "-d", "-s", REAL, "-x", "200", "-y", "50", "sleep 300");
+  // Through `startSession`: the server killed a line above may still be going.
+  startSession([...T, "new-session", "-d", "-s", REAL, "-x", "200", "-y", "50", "sleep 300"], process.env);
   // Grouped onto REAL: same window, same pane, its own name — so `list-panes -a`
   // reports REAL's pane under BOTH sessions, and the mirror's name sorts first.
   tmux("new-session", "-d", "-t", REAL, "-s", MIRROR);
