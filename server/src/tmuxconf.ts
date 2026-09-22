@@ -67,6 +67,23 @@ setw -g pane-base-index 1
 set -g renumber-windows on
 # Claude Code asks for this by name and warns in the pane without it.
 set -g focus-events on
+# A tab whose program FAILED stays, dead, with the status on it; a tab whose
+# program ended on purpose closes as before.
+#
+# tmux's default is off: a window closes the instant its command exits, and
+# for a program that crashed that is a tab gone from the strip in the same
+# second with nothing to say why. Measured on the owner's desk on 2026-09-21:
+# five tabs running agent CLIs — started by hand with \`tmux new-window "cli …"\`,
+# so without the wrapper this app's own windows carry to hold the pane open —
+# vanished over one afternoon, and the only trace of any of them was a pane id
+# in a note. \`failed\` keeps the pane for a non-zero status or a signal, so the
+# tab reads "Pane is dead (status 1, …)" where the program was; a clean exit —
+# /exit, Ctrl-D — still closes it.
+#
+# The windows this app opens for a RUN are the exception and set this back to
+# off on themselves (panelease.ts): a run's end is read from its window
+# closing, and a corpse would be read as a run still going.
+set -g remain-on-exit failed
 `;
 
 /**

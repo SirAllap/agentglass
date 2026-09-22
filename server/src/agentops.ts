@@ -96,10 +96,18 @@ export async function paneAlive(paneId: string): Promise<boolean> {
   return (await panesAlive()).has(paneId);
 }
 
-/** Every pane on the engine right now — the one fact liveness rests on. */
+/** Every pane on the engine right now — the one fact liveness rests on.
+ *  A DEAD pane is not on it: the engine keeps a pane whose command failed
+ *  (tmuxconf.ts), and an agent that crashed is a status line in a tab, not
+ *  somebody to prompt, broadcast to or wait on. */
 async function panesAlive(): Promise<Set<string>> {
-  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}"]).catch(() => null);
-  return new Set(r?.ok ? r.stdout.split("\n").map((s) => s.trim()).filter((s) => s.startsWith("%")) : []);
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}"]).catch(() => null);
+  const out = new Set<string>();
+  for (const line of r?.ok ? r.stdout.split("\n") : []) {
+    const [id = "", dead = ""] = line.trim().split("\t");
+    if (id.startsWith("%") && dead !== "1") out.add(id);
+  }
+  return out;
 }
 
 /** The registry reconciled against the engine: a row whose pane is gone is

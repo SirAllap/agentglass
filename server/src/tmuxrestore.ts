@@ -524,6 +524,15 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
          * back as agents where their owner had left a prompt. What is running
          * now is the question, so ask what is running now.
          */
+        /*
+         * A CORPSE IS PHOTOGRAPHED AS A SHELL.
+         *
+         * The engine keeps a pane whose command failed (tmuxconf.ts), and tmux
+         * still reports the command it was born with. Replaying that at the
+         * next boot would run the failure again and hand back another corpse;
+         * a shell in the same directory is what the person can use.
+         */
+        if (p.dead) { panes.push({ ...p, startCommand: "" }); continue; }
         const agentSession = looksLikeAgent(p.command)
           ? (paneAgentNote(p.id)?.session_id || await resumeIdOf(name, w.id, p.id))
           : undefined;
@@ -891,6 +900,16 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
 
 type Made = { session: string; window: CapturedWindow; id: string };
 
+/** The shell the engine gives a new pane — `default-shell`, which tmux takes
+ *  from $SHELL at start. Asked once per pass; `/bin/sh` if it will not say. */
+let shellCache: string | null = null;
+async function engineShell(): Promise<string> {
+  if (shellCache) return shellCache;
+  const r = await tmux(["show-options", "-gv", "default-shell"]);
+  shellCache = r.ok && r.stdout.trim().startsWith("/") ? r.stdout.trim() : "/bin/sh";
+  return shellCache;
+}
+
 /**
  * How long to wait before asking whether what was built is still standing.
  *
@@ -968,8 +987,25 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
      * directory, which is `lazy`.
      */
     const want = m.window.panes.length;
-    const now = await tmux(["list-panes", "-t", `=${m.session}:${id}`, "-F", "#{pane_id}"]);
-    const have = now.ok ? now.stdout.split("\n").filter((l) => l.trim()).length : 0;
+    const now = await tmux(["list-panes", "-t", `=${m.session}:${id}`, "-F", "#{pane_id}\t#{pane_dead}"]);
+    const rows = now.ok ? now.stdout.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => l.split("\t")) : [];
+    /*
+     * AND A PANE WHOSE COMMAND DIED IS GIVEN A SHELL.
+     *
+     * The engine keeps a pane whose command failed (`remain-on-exit failed`,
+     * tmuxconf.ts), which is what saves a person's tab when a CLI crashes at
+     * three in the afternoon. At boot it is the wrong thing to keep: a
+     * `claude --resume` that would not start leaves "Pane is dead (status 1)"
+     * where the desk promised a place to type. `respawn-pane -k` with the
+     * engine's own shell turns the corpse back into that place, in the same
+     * directory, with the window, its name and its position untouched.
+     */
+    for (const [paneId = "", dead = ""] of rows) {
+      if (dead !== "1") continue;
+      const at = m.window.panes[rows.findIndex((r) => r[0] === paneId)]?.path || cwd;
+      await tmux(["respawn-pane", "-k", "-t", paneId, "-c", at, await engineShell()]);
+    }
+    const have = rows.length;
     if (have < want) await restorePanes(m.session, id, m.window.panes.slice(have), "lazy");
     await applyLayout(m.session, id, m.window.layout, want);
   }

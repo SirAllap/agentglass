@@ -78,8 +78,22 @@ export interface LeaseIo {
 }
 
 const REAL: LeaseIo = {
-  stamp: async (windowId, token) =>
-    (await tmux(["set-option", "-w", "-t", windowId, LEASE_OPTION, token])).ok,
+  stamp: async (windowId, token) => {
+    const ok = (await tmux(["set-option", "-w", "-t", windowId, LEASE_OPTION, token])).ok;
+    /*
+     * A LEASED WINDOW CLOSES ITSELF, whatever its exit status.
+     *
+     * The engine keeps a pane whose command failed (`remain-on-exit failed`,
+     * tmuxconf.ts), so a person's tab does not vanish without a word. A run
+     * is the one case where the window going IS the word: `leaseHeld` reads
+     * the stamp off the window, and the run loop reads its absence as the
+     * agent's end. A corpse would carry the stamp and be waited on for the
+     * whole budget. So the window this app opens for a run is put back to
+     * tmux's default here, at the same moment it is stamped.
+     */
+    if (ok) await tmux(["set-option", "-w", "-t", windowId, "remain-on-exit", "off"]);
+    return ok;
+  },
   readStamp: async (windowId) => {
     const r = await tmux(["show-options", "-w", "-v", "-t", windowId, LEASE_OPTION]);
     return r.ok ? r.stdout.trim() : "";

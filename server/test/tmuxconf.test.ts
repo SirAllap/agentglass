@@ -45,6 +45,13 @@ test("the base config never mentions the user's tmux.conf and keeps the status b
   expect(content).not.toContain("~/.tmux.conf");
 });
 
+test("a tab whose program failed is kept, dead, rather than closed without a word", () => {
+  /* `failed`, not `on`: a program that ended on purpose still takes its tab,
+     and only a crash leaves a status line where it was. The windows this app
+     opens for a run put it back to off themselves — see panelease.ts. */
+  expect(conf.confContent()).toContain("set -g remain-on-exit failed");
+});
+
 test("append mode runs the override after the base and re-asserts status off last", () => {
   const content = conf.confContent();
   const statusOff = [...content.matchAll(/set -g status off/g)].length;
