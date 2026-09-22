@@ -754,9 +754,30 @@ refusing. The verb is one that acts, so read-only mode refuses it.
 sessions, spend, tool latency, errors, the agent board, pending gates — and
 nothing else. It reaches the app only with GET requests (one request is built
 in the file, and a test holds it to GET), so no argument makes it write, kill
-or approve. What it reads is what the app's token already reads: run it with
-`AGENTGLASS_TOKEN` and it can see every session in scope, prompts' titles and
-error text included.
+or approve.
+
+What it reads is what the app's token reads, and that is a lot. For every
+session in scope: its title, project, model and spend, and the text of its
+recent failed tool calls. The agent board, with what each agent says it is
+doing. Every held gate, with the tool and the call it holds. And, through
+`cockpit_session`, a session's own text: its conversation, each message up
+to 20,000 characters; its timeline, with each tool's output up to 4,000
+characters — a `printenv`, a `cat` of a config file; its file changes with
+their diffs; its first prompt and its last answer.
+
+That text comes for the caller's own session only: the one Claude Code names
+in `CLAUDE_CODE_SESSION_ID` when it starts the server over stdio. Another
+session's is left out, and the answer says what it withheld and why, unless
+`AGENTGLASS_COCKPIT_TRANSCRIPTS=all` is set. Over HTTP no session is the
+caller's own, so there it takes that setting too, and with it on, anyone
+holding the cockpit token reads every session's text.
+
+This is the tool's default, not a boundary. The app token the cockpit carries
+reads `/session` directly, as the desk does, so any process holding that token
+— an agent's own shell included — reads every transcript without going through
+this server. What the default stops is the agent that asks its tools rather
+than writing a `curl`: the helpful one, and the one an injected instruction
+sends to read its neighbours.
 
 Over HTTP it runs behind the browser MCP server's transport, imported rather
 than copied: a loopback bind unless `--expose`, any `Origin` refused, only
