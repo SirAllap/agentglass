@@ -36,21 +36,30 @@ const SECRET_SHAPES: [RegExp, string][] = [
 
 /**
  * A quoted literal assigned to something whose name ENDS in a secret word:
- * `DB_PASSWORD = "…"`, `"api_key": "…"`. Ending, because an identifier that
- * only starts with one is almost always about the secret rather than holding
- * it — `passwordLabel`, `apiKeyHeader`, `SECRET_KEY_ENV`, `private_key_path`
- * were each a red chip on an ordinary form or settings edit before this.
+ * `DB_PASSWORD = "…"`, `"api_key": "…"`, `aws_secret_access_key = "…"`.
+ * Ending, because an identifier that only starts with one is almost always
+ * about the secret rather than holding it — `passwordLabel`, `apiKeyHeader`,
+ * `SECRET_KEY_ENV`, `private_key_path` were each a red chip on an ordinary
+ * form or settings edit before this.
  * Nothing is matched before the word: whatever prefixes it (`DB_`) is allowed
  * anyway, and a pattern for the prefix is what made a 4000-character snake_case
  * line cost 180 ms.
  */
-const ASSIGNED = /(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?\s*[:=]\s*["']([^"'\s]{8,})["']/i;
+const ASSIGNED = /(?:password|passwd|secret|(?:api|secret|access)[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)["']?\s*[:=]\s*["']([^"'\s]{8,})["']/i;
 /** Values that are a hole to fill in, not a secret. */
 const PLACEHOLDER = /[<>{}$]|example|changeme|your|xxxx|dummy|placeholder|redacted|\*\*\*/i;
 /** Values that are a name rather than a secret: an environment variable's
- *  (`ORBIT_API_KEY`), a path, a header, an ARN. And a real credential mixes
- *  letters with digits; a word on its own is a label. */
-const NAME_NOT_SECRET = /^[A-Z0-9_]+$|\/|^x-|^arn:/i;
+ *  (`ORBIT_API_KEY`), a path, a URL, a header, an ARN. And a real credential
+ *  mixes letters with digits; a word on its own is a label.
+ *
+ *  The variable name is matched case-SENSITIVELY and needs an underscore: with
+ *  `/i` the shape was every letters-and-digits value, which is most real keys
+ *  and passwords, and not one of them was flagged. A path is one that STARTS
+ *  like a path: a slash anywhere also skipped base64, whose alphabet has one. */
+const NAME_NOT_SECRET = [
+  /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/,
+  /^(?:\.{0,2}\/|~\/|[a-z][a-z0-9+.-]*:\/\/|x-|arn:)/i,
+];
 const MIXED = /[A-Za-z].*\d|\d.*[A-Za-z]/;
 /** Past this a line is generated (a bundle, a lockfile's integrity blob), and
  *  the assignment rule is the one that could backtrack on it. */
@@ -113,7 +122,7 @@ function secretIn(line: string): string | null {
   if (line.length > LONG_LINE) return null;
   const m = ASSIGNED.exec(line);
   const v = m?.[1];
-  if (v && !PLACEHOLDER.test(v) && !NAME_NOT_SECRET.test(v) && MIXED.test(v)) return "a hard-coded credential";
+  if (v && !PLACEHOLDER.test(v) && !NAME_NOT_SECRET.some((re) => re.test(v)) && MIXED.test(v)) return "a hard-coded credential";
   return null;
 }
 

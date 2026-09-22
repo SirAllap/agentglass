@@ -168,3 +168,31 @@ describe("what a first review found flagged that should not be", () => {
       .toEqual([{ kind: "secret", reason: "r", line: 3, file: "/w/a.yml", change: 7 }]);
   });
 });
+
+describe("what a second review found", () => {
+  // Assembled from pieces like the others, and each one plainly invented.
+  const HEX = "9f8e7d6c" + "5b4a32109f8e";
+  const ALNUM = "orbit4Harbor" + "7Lantern";
+  const SLASHED = "orbit/7Lantern" + "/Harbor42+q";
+
+  test("a credential made only of letters and digits is caught, and so is one with a slash inside", () => {
+    // The rule that skips an environment variable's NAME was case-insensitive,
+    // so it skipped every letters-and-digits value as well; and any slash was
+    // read as a path. Only a value with punctuation was ever flagged.
+    for (const l of [
+      `API_KEY = "${HEX}"`,
+      `DB_PASSWORD = "${ALNUM}"`,
+      `secret: "${ALNUM}"`,
+      `aws_secret_access_key = "${SLASHED}"`,
+    ]) expect(kinds(changeRisks("/w/orbit/src/config.py", added(l), 0))).toEqual(["secret"]);
+  });
+
+  test("a name, a path and a URL assigned to a secret word are still not secrets", () => {
+    for (const l of [
+      `API_KEY = "ORBIT_API_KEY2"`,
+      `private_key = "./certs/orbit2.pem"`,
+      `private_key = "/etc/orbit/tls2.key"`,
+      `secret: "https://vault.orbit.dev/v1/kv"`,
+    ]) expect(changeRisks("/w/orbit/src/config.py", added(l), 0)).toEqual([]);
+  });
+});
