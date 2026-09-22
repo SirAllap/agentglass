@@ -13,6 +13,7 @@
 import { test, expect } from "bun:test";
 import { fleetVerdict } from "../src/lib/fleetVerdict.ts";
 import { attention } from "../../shared/fieldRules.ts";
+import { __setLanternRows, lanternNeed } from "../src/lib/lanternStore.ts";
 import type { LanternRow } from "../src/components/LanternView.tsx";
 
 const now = 1_800_000_000_000;
@@ -245,3 +246,17 @@ test("the strip says it is stale in words, and keeps its height", () => {
   const hook = stripSrc.slice(stripSrc.indexOf("export function useFleetVerdict("), stripSrc.indexOf("export function FleetVerdictStrip("));
   expect(hook).toContain("lanternKnown");
 });
+
+test("the rail's pip is the strip's need count, from the same rule", () => {
+  const rows = [blocked("a-web"), blocked("b-docs", "gate"), waitedFor("c-api", 3 * 60 * min), blocked("d-seat", "permission", { role: "orchestrator" }), blocked("e-lantern", "permission", { role: "lantern" })];
+  __setLanternRows(rows);
+  try {
+    expect(lanternNeed()).toBe(fleetVerdict(rows, now)!.counts.need);
+    expect(lanternNeed()).toBe(3);
+  } finally { __setLanternRows(null); }
+  const store = code(storeSrc);
+  const need = store.slice(store.indexOf("export const lanternNeed"));
+  expect(need.slice(0, need.indexOf(";\n"))).toContain("attention(");
+});
+
+const storeSrc = await src("../src/lib/lanternStore.ts");

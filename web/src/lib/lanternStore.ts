@@ -18,6 +18,7 @@
  */
 import { api } from "./api.ts";
 import type { LanternRow, LanternWatch } from "../components/LanternView.tsx";
+import { attention } from "../../../shared/fieldRules.ts";
 
 let rows: LanternRow[] | null = null;
 let watch: LanternWatch | null = null;
@@ -110,8 +111,10 @@ export const lanternWatch = (): LanternWatch | null => watch;
 export const lanternCacheTtlMs = (): number => cacheTtlMin * 60_000;
 /** How many agents CANNOT go on without a person right now — a permission
  *  or a held gate — the rail's number. A turn that merely ended is waiting,
- *  not blocked, and is not a number that follows you around the app. */
-export const lanternNeed = (): number => rows?.filter((r) => r.needsYou && r.needsYou.kind !== "input" && r.role !== "lantern").length ?? 0;
+ *  not blocked, and is not a number that follows you around the app. Sorted
+ *  by `attention`, the rule the dashboard's strip counts "needs you" by, so
+ *  the pip and the strip are one number. */
+export const lanternNeed = (): number => rows?.filter((r) => attention(r) === "blocked").length ?? 0;
 
 /** For tests that render the view with a known board. */
 export function __setLanternRows(next: LanternRow[] | null): void { rows = next; readAt = Date.now(); emit(); }
