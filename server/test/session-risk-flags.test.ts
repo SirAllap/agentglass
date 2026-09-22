@@ -201,6 +201,22 @@ describe("what a second review found", () => {
     expect(bySession().get("risk-prune-keep")!.risks?.map((r) => r.kind)).toEqual(["secret"]);
   });
 
+  test("a long session whose oldest edits expire keeps its flags without a re-read", () => {
+    // A session older than the retention window loses an edit on every run,
+    // and forgetting it whole meant re-reading its full history every hour.
+    // Only the flags whose own edit went are dropped; the rest stay, which the
+    // rewritten payload below would expose if they were read again.
+    const OLD = Date.now() - (db.RETENTION_DAYS + 5) * 86_400_000;
+    db.insertEvent(write("risk-straddle", "config/old.yml", `access_key: ${AWS}\n`, OLD) as any);
+    db.insertEvent(edit("risk-straddle", "src/plain.ts", "a", "b", OLD + 1_000) as any);
+    db.insertEvent(edit("risk-straddle", "src/authGuard.ts", "a", "b", T0 + 1_000) as any);
+    expect(bySession().get("risk-straddle")!.risks?.map((r) => r.kind).sort()).toEqual(["auth", "secret"]);
+    db.db.run(`UPDATE events SET payload = ? WHERE session_id = 'risk-straddle' AND timestamp > ?`,
+      [JSON.stringify({ project_path: ROOT, tool_input: { file_path: join(ROOT, "src/plain2.ts"), old_string: "a", new_string: "b" } }), OLD + 5_000]);
+    db.pruneOldRows();
+    expect(bySession().get("risk-straddle")!.risks?.map((r) => r.kind)).toEqual(["auth"]);
+  });
+
   test("the chip and the diff it opens count only edits inside the open project", () => {
     // The change list is scoped to the open project and the roll-up was not:
     // a session that also wrote in another checkout carried that checkout's

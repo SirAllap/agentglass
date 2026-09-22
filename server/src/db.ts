@@ -19,7 +19,7 @@ import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
 import { workspaceRoot, scopeRoots, isWithin, sessionInScope } from "./config.ts";
-import { changeRisks, sessionRisks } from "../../shared/riskFlags.ts";
+import { changeRisks, sessionRisks, SESSION_RISK_CAP } from "../../shared/riskFlags.ts";
 
 /**
  * Where the database lives.
@@ -2279,14 +2279,33 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   rollupPathCache = null;
   return db.transaction(() => {
     const rolled = foldExpiringEvents(cutoff);
-    // The risk roll-up forgets only the sessions whose edits are about to go,
-    // and re-reads just those. Clearing all of it on every run, deleted or
-    // not, made the next poll re-parse every listed session's whole edit
-    // history on the event loop once an hour.
-    for (const { session_id } of db.query<{ session_id: string }, [number]>(
-      `SELECT DISTINCT session_id FROM events
+    // The risk roll-up drops only the flags whose own edit is about to go.
+    // Clearing all of it on every run, deleted or not, made the next poll
+    // re-parse every listed session's whole edit history on the event loop
+    // once an hour; forgetting a whole session did the same every hour to one
+    // that runs longer than the retention window. Dropping a flag is exact
+    // because the memo keeps the newest flag per kind and file: an older one
+    // it shadowed is older still, so it is going too. Not quite for a
+    // backfilled edit, which is newest by row id and oldest by time; the flag
+    // it shadowed stays lost until the session is read again. A session at the
+    // cap may have dropped flags this would let back in, so it is re-read.
+    const expiring = new Map<string, Set<number>>();
+    for (const { session_id, id } of db.query<{ session_id: string; id: number }, [number]>(
+      `SELECT session_id, id FROM events
        WHERE timestamp < ? AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')`).all(cutoff)) {
-      riskMemo.delete(session_id);
+      if (!riskMemo.has(session_id)) continue;
+      const g = expiring.get(session_id);
+      if (g) g.add(id); else expiring.set(session_id, new Set([id]));
+    }
+    for (const [sid, gone] of expiring) {
+      const m = riskMemo.get(sid)!;
+      const kept = m.flags.filter((f) => f.change == null || !gone.has(f.change));
+      if (kept.length === m.flags.length) continue;
+      if (m.flags.length >= SESSION_RISK_CAP) riskMemo.delete(sid);
+      else {
+        m.flags = kept;
+        for (const id of gone) m.where.delete(id);
+      }
     }
     db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
     const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
