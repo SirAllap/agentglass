@@ -286,6 +286,27 @@ describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
   });
 });
 
+describe.skipIf(!HAVE_PY)("what the cockpit sends the app", () => {
+  test("no Origin header: a GET needs none, and one set by hand passes for the app's own page", async () => {
+    const seen: Record<string, string>[] = [];
+    const app = Bun.serve({
+      port: 0, hostname: "127.0.0.1",
+      fetch(req) { seen.push(Object.fromEntries(req.headers)); return Response.json([]); },
+    });
+    try {
+      const { result } = await call("cockpit_sessions", {}, { AGENTGLASS_SERVER: `http://127.0.0.1:${app.port}` });
+      expect(result.isError).toBeFalsy();
+      expect(seen.length).toBeGreaterThan(0);
+      for (const h of seen) {
+        expect(h.origin).toBeUndefined();
+        expect(h.accept).toBe("application/json");
+      }
+    } finally {
+      app.stop(true);
+    }
+  });
+});
+
 describe.skipIf(!HAVE_PY)("the size ceiling", () => {
   /* The rule the issue puts above the tool list: a result over the ceiling is
      not cut in the middle, it is a smaller well-formed answer with a field

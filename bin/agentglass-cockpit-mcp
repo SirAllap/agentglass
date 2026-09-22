@@ -124,8 +124,10 @@ def get(path, params=None, timeout=30):
     wrong — the caller is a model, and an exception would break the transport
     instead of telling it anything."""
     q = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v is not None})
+    # No Origin: the app's reads take a request without one, and one set here
+    # would pass this process off as the app's own page.
     req = urllib.request.Request(f"{SERVER}{path}{'?' + q if q else ''}", method="GET",
-                                 headers={"Origin": SERVER, "Accept": "application/json"})
+                                 headers={"Accept": "application/json"})
     token = os.environ.get("AGENTGLASS_TOKEN")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
