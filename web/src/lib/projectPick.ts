@@ -30,8 +30,8 @@ export function scopeTitle(workspaces: readonly string[]): string {
  * What the Open button sends, or null when it would change nothing.
  *
  * Nothing ticked is null too, not "the whole machine": unticking the last box
- * on the way to ticking another one is not a request to unscope the cockpit,
- * and the picker no longer offers the whole machine at all.
+ * on the way to ticking another one is not a request to unscope the cockpit.
+ * The whole machine is a row of its own in the picker.
  */
 export function nextScope(ticked: readonly string[], current: readonly string[]): string[] | null {
   if (!ticked.length || sameSet(ticked, current)) return null;

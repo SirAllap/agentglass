@@ -34,7 +34,8 @@ tab. From the list:
 - click a **project** → that repo and its worktrees, nothing else;
 - **tick several** and open them together → all of them, and nothing beside
   them (the header reads `orbit +2`);
-- pick **All projects** → everything under the folders you added.
+- pick **All projects** → everything under the folders you added;
+- pick **Every project on this machine** → no scope at all.
 
 Nothing outside your folders is looked at unless you ask: **Look for projects
 agents have worked in** lists the repos agents have already run in, and opening

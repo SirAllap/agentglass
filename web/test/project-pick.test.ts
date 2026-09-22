@@ -143,6 +143,24 @@ describe("the first run waits for an answer", () => {
   });
 });
 
+describe("the whole machine", () => {
+  // Leaving a scope for the unscoped view was a choice some people had made on
+  // purpose, and once they opened anything the picker had no way back to it
+  // but a hand edit of config.json.
+  test("is a row of its own, open when nothing is", () => {
+    expect(PICKER).toMatch(/<Row current=\{!workspaces\.length\} icon=\{<MonitorIcon size=\{ICON\.sm\} \/>\} title="Every project on this machine"/);
+  });
+  test("choosing it sends no projects at all", () => {
+    expect(PICKER).toContain('title="Every project on this machine"');
+    expect(PICKER).toMatch(/title="Every project on this machine"[^>]*onClick=\{\(\) => void openScope\(\[\]\)\}/);
+  });
+  test("an empty choice is not dropped as 'nothing changed' on its way", () => {
+    // nextScope answers null for an empty list, so that unticking the last box
+    // is not a request for the machine; the row has to get past that check.
+    expect(PICKER).toContain("if (list.length ? !nextScope(list, workspaces) : !workspaces.length) { onClose(); return; }");
+  });
+});
+
 describe("the picker's plumbing", () => {
   test("a folder that opens its one project is not added a second time, as that project", () => {
     // openScope checked what to add against this render's folders, which did

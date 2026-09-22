@@ -266,10 +266,12 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
   const openScope = async (list: string[], known: readonly string[] = roots) => {
     if (busy) return;
     markAnswered();
-    if (!nextScope(list, workspaces)) { onClose(); return; } // already there — nothing to change
+    // Already there — nothing to change. An empty list is the whole machine,
+    // which nextScope does not answer for: see the row that sends it.
+    if (list.length ? !nextScope(list, workspaces) : !workspaces.length) { onClose(); return; }
     setBusy(true);
     setError("");
-    setWorking(list.length > 1 ? `Opening ${list.length} projects…` : "Switching project…");
+    setWorking(list.length > 1 ? `Opening ${list.length} projects…` : list.length ? "Switching project…" : "Opening the whole machine…");
     try {
       for (const p of rootsToAdd(list, known)) {
         const r = await api.setProjectRoot(p, true);
@@ -484,9 +486,9 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                       )}
 
                       {/* Everything under the added folders, as one choice. Not
-                          the machine: the machine is not on offer any more. */}
+                          the machine: that is its own row, at the bottom. */}
                       {!scanned && roots.length > 0 && repos !== null && (
-                        <Row current={allOpen(workspaces, roots)} icon={<MonitorIcon size={ICON.sm} />} title="All projects"
+                        <Row current={allOpen(workspaces, roots)} icon={<FolderIcon size={ICON.sm} />} title="All projects"
                           sub={roots.length === 1 ? `Everything in ${roots[0]}` : `Everything in your ${roots.length} folders`}
                           onClick={() => void openScope(roots)} disabled={busy} />
                       )}
@@ -541,6 +543,15 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                         <div className="px-3 pt-1.5 pb-0.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
                           Tick several to open them together · right-click one to take it off this list
                         </div>
+                      )}
+                      {/* No scope at all, the way it was before there were
+                          folders: some people chose it on purpose, and without
+                          a row for it the way back was a hand edit of the
+                          config. Last, because it is the one choice that is not
+                          about the list above it. */}
+                      {!scanned && !isFirstRun && repos !== null && (
+                        <Row current={!workspaces.length} icon={<MonitorIcon size={ICON.sm} />} title="Every project on this machine"
+                          sub="No scope — the panels are not held to any one project" onClick={() => void openScope([])} disabled={busy} />
                       )}
                       {/* The sweep, only when asked for. It is how somebody
                           upgrading finds the projects they had open before
