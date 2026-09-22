@@ -48,6 +48,7 @@ import { Workspace } from "./components/workspace/Workspace.tsx";
 import { VIEW_IDS, visibleIds, isVisibleView, moveView, loadRail, subscribeRail, SHIPPED_RAIL, loadLastView, type ViewId } from "./components/workspace/views.ts";
 import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
+import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
@@ -1022,6 +1023,7 @@ export default function App() {
       {/* Above everything, because when it shows, nothing below it is real. */}
       <ServerBanner />
       <GitMissingBanner />
+      <DbNoticeBanner />
 
       <TopBar
         workspace={workspace}

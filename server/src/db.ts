@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync, copyFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type {
@@ -14,6 +14,7 @@ import type {
   TypeCount,
   OpenToolCall,
   UsageDay,
+  DbNotice,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
@@ -69,17 +70,82 @@ function defaultDbPath(): string {
    * server started from `server/` in a checkout that once had one read that
    * old history instead of the current one — real sessions, weeks stale, and
    * nothing on screen to say which file it was. The data dir is the answer
-   * whatever the cwd; the stray file is named once, at startup, and never
-   * opened.
+   * whatever the cwd.
+   *
+   * That same file is the whole history of anyone who ran from source before
+   * the data dir won, and part of it — gate decisions, notes, the activity
+   * log — is hook-only and no transcript rescan brings it back. So when the
+   * data dir has no database yet, the stray one is COPIED there, once. Never
+   * moved, never merged: two histories are not combined automatically, and
+   * the original stays byte for byte where it was. When both exist, the
+   * stray one is not opened, and it is named on stderr and to the app
+   * (`dbNotice`), because a line among the dev server's output is a line
+   * nobody reads.
    */
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (local !== data && existsSync(local)) {
-      console.warn(`[db] ignoring ${local} in the working directory; the database is ${data} (set AGENTGLASS_DB to use a specific file)`);
+      if (!existsSync(data) && copyInto(local, data)) {
+        notice = { kind: "copied", stray: local, db: data };
+        console.warn(`[db] copied ${local} to ${data}, which is the database from now on; the original is untouched and no longer used`);
+      } else if (readImported(data) !== local) {
+        notice = { kind: "ignored", stray: local, db: data };
+        console.warn(`[db] ignoring ${local} in the working directory; the database is ${data} (to use the other file instead: stop agentglass, then mv ${local} ${data} — that replaces the current history; or set AGENTGLASS_DB)`);
+      }
     }
     return data;
   } catch {
     return local; // unwritable data dir — better a local file than no database
+  }
+}
+
+let notice: DbNotice | null = null;
+/** What the app should say about a second database, or null. Decided once,
+ *  at startup, with the path. */
+export const dbNotice = (): DbNotice | null => notice;
+
+/** Next to the database: which stray file it was copied from, so the next
+ *  start does not report that file as a second history. It only ever silences
+ *  the notice — a data dir whose database was deleted gets a fresh copy. Its
+ *  ceiling: an old build that keeps writing to the stray file after the copy
+ *  is not noticed. */
+const importedMarker = (data: string): string => `${data}.imported-from`;
+function readImported(data: string): string | null {
+  try { return readFileSync(importedMarker(data), "utf8").trim(); } catch { return null; }
+}
+
+/**
+ * Copy a database, with whatever of it is still in its `-wal` file, and only
+ * if the copy opens as a database. The source is read and nothing else: no
+ * connection is opened on it, because even a read-only one can leave a
+ * `-shm` behind. The copy is assembled under a temporary name, checked,
+ * checkpointed and renamed, so a crash half-way never leaves a data-dir
+ * database for the next start to trust. A copy taken while another server is
+ * writing the source can be torn; `quick_check` refuses that one, and the
+ * start goes on with an empty database and the "ignored" notice.
+ */
+function copyInto(src: string, dst: string): boolean {
+  const tmp = `${dst}.copying`;
+  const clear = () => { for (const s of ["", "-wal", "-shm"]) rmSync(tmp + s, { force: true }); };
+  try {
+    clear();
+    copyFileSync(src, tmp);
+    if (existsSync(src + "-wal")) copyFileSync(src + "-wal", tmp + "-wal");
+    const c = new Database(tmp);
+    let ok = false;
+    try {
+      ok = (c.query("PRAGMA quick_check").get() as { quick_check: string } | null)?.quick_check === "ok";
+      if (ok) c.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    } finally { c.close(); }
+    if (!ok) { clear(); return false; }
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, dst);
+    clear();
+    try { writeFileSync(importedMarker(dst), src + "\n", { mode: 0o600 }); } catch { /* the copy stands; the next start just says "ignored" */ }
+    return true;
+  } catch {
+    clear();
+    return false;
   }
 }
 
