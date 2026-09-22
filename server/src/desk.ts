@@ -27,8 +27,8 @@
  * `kernel.yama.ptrace_scope=0`, root, a core dump kept where this user can read
  * it, or the renderer's debugging port when AGENTGLASS_DEBUG_PORT is set — and
  * so does a script running in the app's own window. It answers the Origin
- * forgery, not every forgery: the device store is a file this user can write
- * (SECURITY.md). And a server started by hand has no desk, so the Origin rule
+ * forgery; the device store, the other way in, is held in memory (devices.ts).
+ * And a server started by hand has no desk, so the Origin rule
  * and its limit stand there (mayReleaseAHold in index.ts).
  */
 import { closeSync, readFileSync } from "node:fs";

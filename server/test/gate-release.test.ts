@@ -29,7 +29,8 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
@@ -74,12 +75,15 @@ function spawnServer(dir: string, port: number, extra: Record<string, string> = 
  * AGENTGLASS_DESK_FD naming that descriptor and the pid holding the other end.
  * `key: null` closes the pipe with nothing in it — a desk whose key never came.
  */
+const stderrOf = new Map<ChildProcess, () => string>();
 function spawnFromDesk(dir: string, port: number, key: string | null): ChildProcess {
   const child = spawn("bun", ["run", SERVER_SRC], {
     env: serverEnv(dir, port, { AGENTGLASS_DESK_FD: `3:${process.pid}` }),
     stdio: ["ignore", "ignore", "pipe", "pipe"],
   });
-  child.stderr?.resume();
+  let said = "";
+  child.stderr?.on("data", (c) => { said = (said + c).slice(-8000); });
+  stderrOf.set(child, () => said);
   const pipe = child.stdio[3] as Writable;
   pipe.on("error", () => { /* the server went away before reading it */ });
   pipe.end(key === null ? "" : `${key}\n`);
@@ -101,9 +105,8 @@ const savedXdg = process.env.XDG_CONFIG_HOME;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-gaterelease-"));
-  // Minted into the store the server will read. devices.ts re-reads the file on
-  // every lookup, so writing it before the first authenticated request is the
-  // whole of the ordering requirement.
+  // Minted into the store the server will read. The server loads it once, when
+  // it starts, so writing it before the spawn is the ordering requirement.
   process.env.XDG_CONFIG_HOME = dir;
   const { issueDevice } = await import("../src/devices.ts");
   phone = issueDevice("Pixel 9", "answer").token;
@@ -343,6 +346,29 @@ describe("on a server the desktop app started, an Origin no longer lets a hold g
     const r = await decide(id, phone, undefined, {}, dBase);
     expect(r.status).toBe(200);
     expect((await held).decision).toBe("allow");
+  });
+
+  test("a device written into the store behind the server's back answers nothing, and the desk is told", async () => {
+    // The file is 0600 and this user's, so a process that is the user can add
+    // a row with a hash of a token it chose. The server loaded the store when
+    // it started and changes it only through pairing, so the row is not read.
+    const forged = "a-token-the-held-agent-chose-for-itself-0123456789";
+    const path = join(dDir, "agentglass", "devices.json");
+    const store = JSON.parse(readFileSync(path, "utf8")) as { devices: Record<string, unknown>[] };
+    store.devices.push({ id: "f0f0f0f0f0f0f0f0", label: "Pixel 9", scope: "answer", createdAt: Date.now(),
+      hash: createHash("sha256").update(forged).digest("hex") });
+    writeFileSync(path, JSON.stringify(store, null, 2));
+
+    const id = nextId();
+    const held = hold(id, 30_000, dBase);
+    await queued(id, dBase);
+    const r = await decide(id, forged, undefined, {}, dBase);
+    expect(r.status).not.toBe(200);
+    expect(await isPending(id, dBase)).toBe(true);
+    // The phone paired before is still the phone, and the change was noticed.
+    expect((await decide(id, phone, undefined, {}, dBase)).status).toBe(200);
+    expect((await held).decision).toBe("allow");
+    expect(stderrOf.get(dProc!)?.()).toContain("devices.json changed outside agentglass");
   });
 
   test("accepting a pairing asks for the key as well, so an agent cannot finish the ceremony itself", async () => {

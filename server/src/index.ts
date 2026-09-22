@@ -40,7 +40,7 @@ import {
   releaseDatabaseClaim,
   noteWaitFromHook,
 } from "./db.ts";
-import { maybeAlert, setAlertSink } from "./alerts.ts";
+import { maybeAlert, setAlertSink, pushDeviceStoreChanged } from "./alerts.ts";
 import { noteAction, actorOf, type ActorSource } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
@@ -1374,7 +1374,7 @@ import { bunBin, NO_BUN } from "./bunbin.ts";
 import { understudyRunEnv } from "./understudy-runenv.ts";
 import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
 import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
-import { activeDevices, markSeen, revokeDevice, devices, publicDevice, type Scope } from "./devices.ts";
+import { activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
@@ -1665,8 +1665,8 @@ function asActor(c: Caller | null | undefined): ActorSource | null {
  *     is a string: `curl -H "Origin: agentglass://app"` with the machine token
  *     released the agent's own call, for the helpful agent that reads "approve
  *     it" as the next step and for the one an injected instruction sends alike.
- *     What the key does not close is the device store above it: devices.json
- *     is a file this user can write, and a device added there answers too.
+ *     The device store above it is read once, at start, for the same reason:
+ *     a row planted in devices.json afterwards is not a device (devices.ts).
  *   * or, on a server started by hand, an **Origin** this server vouches for.
  *     No desk started it, so there is no key, and the client a person uses
  *     there without pairing first is a browser, which attaches `Origin` to
@@ -1902,6 +1902,10 @@ setInterval(() => {
   }
   // Never a reason to hold the process open on its own.
 }, LIVE_PING_MS).unref?.();
+
+// Read once, now: a row planted in the file after this is not a device (devices.ts).
+whenStoreTampered(pushDeviceStoreChanged);
+devices();
 
 // Let the alert path reach a connected client, which raises a native OS
 // notification (cross-platform) instead of the Linux-only notify-send.

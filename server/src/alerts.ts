@@ -340,6 +340,15 @@ export function pushLantern(title: string, body: string, pane?: string) {
   if (shouldSend("lantern:watch")) deliver(title, body, 2, pane);
 }
 
+/** The paired-devices file changed behind the server's back (devices.ts). Critical:
+ *  somebody may have tried to give themselves a device, and the person should know. */
+export function pushDeviceStoreChanged(path: string) {
+  if (shouldSend("devices:tampered")) {
+    deliver("⚠ Paired devices changed outside agentglass",
+      `${path} was edited by something other than pairing. The change is ignored; check Settings › Remote.`, 2);
+  }
+}
+
 export function pushReminder(id: string, title: string, when: string) {
   if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id });
 }

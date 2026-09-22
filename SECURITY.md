@@ -259,8 +259,8 @@ reads it before anything it starts could inherit the pipe, and from then on a
 release carries that key or a paired device's credential, and an `Origin` counts
 for nothing (`server/src/desk.ts`). Accepting a pairing asks for the same,
 because a device accepted is a device that releases holds. That closes the
-`Origin` forgery. It does not close every forgery, and the device store below is
-the one that is left.
+`Origin` forgery. The other way in was the device store, and the server now
+holds that in memory (below).
 
 What is left, at no more than its real value:
 
@@ -278,12 +278,19 @@ What is left, at no more than its real value:
   script running in the app's own window, as it reads the token. A key is only
   good for the sidecar it was minted for, so one read out of a crashed sidecar
   opens nothing the next one holds.
-- **Nor is the device store.** `devices.json` is `0600` on this same machine,
-  which is the same *already you* the bullet above ends on, and the server reads
-  it on every request: a process that writes a device of its own into it has a
-  credential that answers gates, the desktop app's server included. Closing that
-  needs the store signed with a key the desk keeps across launches; it is the
-  next thing after this and is not here.
+- **The device store is read once.** `devices.json` is `0600` on this same
+  machine, which is the same *already you* the bullet above ends on. The server
+  used to read it on every request, so a process that wrote a device of its own
+  into it held a credential that answered gates. Now the server loads it when it
+  starts and changes it only through pairing: a row written behind its back is
+  not a device, the change is said on stderr and as an urgent notification at
+  the desk, and the next pairing write puts the server's own set back. A row
+  planted and then followed by a restart is loaded — the file is the store.
+- **Out of scope: a process that is you and sets out to.** One that can edit
+  the store and restart the server, or replace the app's files or the server's
+  binary, can make it trust anything. Nothing a server running as you checks
+  holds against code running as you with that intent; what these rules remove
+  is the accident, the helpful agent and the one an injected instruction sends.
 
 The record can only say what the caller proved, and it is worth reading it that
 way. A paired device signs its own line with the name that was accepted when it
