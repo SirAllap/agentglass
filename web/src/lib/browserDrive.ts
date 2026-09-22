@@ -583,10 +583,14 @@ function resolveOne(selLit: string, body: string): string {
        minted its own e17, which then got the click. Now ids never repeat
        across documents (see the stamp in browserObserve.ts), so an id not
        minted by an observe of THIS document is refused whether or not some
-       node carries it — a page wearing an id it was not given is not a page
-       to act on — and an id minted here but not found is one the page has
+       node carries it, and an id minted here but not found is one the page has
        dropped since. Each is its own sentence, and all of them end in
        "observe again", which is the only move that fixes any of them.
+       The ceiling: the record of which ids were minted lives in the page's
+       own main world (__agxSeq, __agxRanges, data-agx-e), so this
+       catches a page that navigated and minted its own ids by accident, not
+       a hostile page that forges the record on purpose. Holding the ranges
+       on the driver's side, per document, is what that would take.
     */
     if (__id) {
       const __from = (${ID_ORIGIN})(__raw);
