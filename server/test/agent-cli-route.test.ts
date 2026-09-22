@@ -286,7 +286,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
       const { out } = await cli("start", "wkeep", "--cwd", wt, "--keep", "--timeout", "5000");
       expect(out.ok, out.error).toBe(true);
       expect(out.result?.state, "the wait ends when the CLI does").toBe("gone");
-      const paneId = (out.result?.agent as Record<string, string>).paneId;
+      const paneId = String((out.result?.agent as Record<string, string> | undefined)?.paneId ?? "");
       for (let i = 0; i < 30 && (await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"); i++) await Bun.sleep(100);
       expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"), "an agent whose CLI has exited is not live").toBe(false);
       expect((await panes()).some((r) => r.endsWith("\tagents\twkeep")), "the tab is still there").toBe(true);
