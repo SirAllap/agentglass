@@ -74,8 +74,9 @@ import { agentCwdsUnder } from "./paneloc.ts";
  * against it when it loads: rebuilt with a two-column key, SQLite refuses
  * that statement, so an older build installed afterwards could not start,
  * and one still running would fail every hook it was sent (both measured on
- * a copy of the table). So `pane_note` is created beside it, filled from it
- * once, and `pane_agent` is left for whichever older build still writes it.
+ * a copy of the table). So `pane_note` is created beside it, brought up to
+ * date from it at every start, and `pane_agent` is left for whichever older
+ * build still writes it.
  *
  * Ceiling: the pid is a server's name for its life, not forever — a server
  * after a reboot can draw the pid of the one before it. Its row then carries
@@ -86,7 +87,6 @@ import { agentCwdsUnder } from "./paneloc.ts";
  * Exported so the migration can be run against a database built by hand.
  */
 export function ensurePaneNoteTable(d: Database): void {
-  const existed = !!d.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pane_note'").get();
   d.exec(`
 CREATE TABLE IF NOT EXISTS pane_note (
   pane_id         TEXT NOT NULL,
@@ -98,14 +98,27 @@ CREATE TABLE IF NOT EXISTS pane_note (
   PRIMARY KEY (pane_id, server)
 )`);
   d.exec("CREATE INDEX IF NOT EXISTS idx_pane_note_session ON pane_note (session_id, at)");
-  if (existed) return;
-  /* Once, when the table is new: the notes an older build wrote. A table from
-     before the server was recorded has no such column, and its rows name none. */
+  /* At every start, not once: the notes an older build wrote since. One run
+     on the same database writes the old table only, and a Claude that
+     `/clear`ed while it was up has its new conversation there alone. Copied
+     only when this table was made, the note here kept the conversation from
+     before the `/clear`, dated after the process started, so the restore
+     took it for this agent's and a reboot resumed the wrong one. Only a newer
+     row replaces a note, so a note this build wrote since is never set back,
+     and nothing moves when nothing was written. A table from before the
+     server was recorded has no such column, and its rows name none.
+     Ceiling: two builds running on one database at once are brought
+     together at the next start, not while both run. */
   const cols = d.query<{ name: string }, []>("PRAGMA table_info(pane_agent)").all().map((c) => c.name);
   if (!cols.length) return;
   const server = cols.includes("server") ? "server" : "''";
-  d.exec(`INSERT OR IGNORE INTO pane_note (pane_id, session_id, transcript_path, cwd, at, server)
-SELECT pane_id, session_id, transcript_path, cwd, at, ${server} FROM pane_agent`);
+  /* `WHERE true`: without it SQLite reads the `ON` as the start of a join. */
+  try {
+    d.exec(`INSERT INTO pane_note (pane_id, session_id, transcript_path, cwd, at, server)
+SELECT pane_id, session_id, transcript_path, cwd, at, ${server} FROM pane_agent WHERE true
+ON CONFLICT(pane_id, server) DO UPDATE SET session_id = excluded.session_id, transcript_path = excluded.transcript_path,
+  cwd = excluded.cwd, at = excluded.at WHERE excluded.at > pane_note.at`);
+  } catch { /* a read-only database keeps the notes it has */ }
 }
 
 /** How long a row outlives its last hook. A pane id is only reused within a

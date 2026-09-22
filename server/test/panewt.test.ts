@@ -229,11 +229,56 @@ describe("the pane note", () => {
     /* A second server's %1 is a row of its own in the new table. */
     d.run(`INSERT INTO pane_note VALUES ('%1', 'other', '/o.jsonl', '/home/dev/code/orbit', 7, '/tmp/tmux-1000/default,2')`);
     expect(d.query("SELECT COUNT(*) AS n FROM pane_note WHERE pane_id = '%1'").get()).toEqual({ n: 2 });
-    /* Copied once: a second run does not bring the old table's rows back. */
-    d.run("DELETE FROM pane_note WHERE session_id = 'kept'");
-    ensurePaneNoteTable(d);
-    expect(d.query("SELECT COUNT(*) AS n FROM pane_note").get()).toEqual({ n: 2 });
     d.close();
+  });
+
+  test("what an older build wrote since is brought forward at every start, and a newer note is never set back", () => {
+    /* An older build run on the same database writes the old table only.
+       A Claude that `/clear`ed while it was up has its new conversation
+       there; copied once, the new table kept the one from before the
+       `/clear`, dated after the process started, and a reboot resumed it. */
+    const d = new Database(":memory:");
+    d.exec(`CREATE TABLE pane_agent (pane_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, transcript_path TEXT NOT NULL, cwd TEXT NOT NULL, at INTEGER NOT NULL, server TEXT NOT NULL DEFAULT '')`);
+    const SRV = "/tmp/tmux-1000/agentglass,1";
+    const now = Date.now();
+    d.run(`INSERT INTO pane_agent VALUES ('%1', 'before-clear', '/a.jsonl', '/home/dev/code/orbit', ?, ?)`, [now - 3_000, SRV]);
+    ensurePaneNoteTable(d);
+    /* The older build: a `/clear` in %1, a fresh agent in %2. */
+    d.run(`INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at, server) VALUES ('%1', 'after-clear', '/b.jsonl', '/home/dev/code/orbit', ?, ?)
+      ON CONFLICT(pane_id) DO UPDATE SET session_id = excluded.session_id, transcript_path = excluded.transcript_path, at = excluded.at`, [now - 2_000, SRV]);
+    d.run(`INSERT INTO pane_agent VALUES ('%2', 'fresh', '/c.jsonl', '/home/dev/code/orbit', ?, ?)`, [now - 2_000, SRV]);
+    /* And this build again, whose own note for a third pane is newer than
+       anything the older one wrote for it. */
+    d.run(`INSERT INTO pane_note VALUES ('%3', 'newest', '/n.jsonl', '/home/dev/code/orbit', ?, ?)`, [now, SRV]);
+    d.run(`INSERT INTO pane_agent VALUES ('%3', 'stale', '/s.jsonl', '/home/dev/code/orbit', ?, ?)`, [now - 1_000, SRV]);
+    ensurePaneNoteTable(d);
+    const rows = () => d.query<{ pane_id: string; session_id: string; transcript_path: string }, []>(
+      "SELECT pane_id, session_id, transcript_path FROM pane_note ORDER BY pane_id").all();
+    expect(rows()).toEqual([
+      { pane_id: "%1", session_id: "after-clear", transcript_path: "/b.jsonl" },
+      { pane_id: "%2", session_id: "fresh", transcript_path: "/c.jsonl" },
+      { pane_id: "%3", session_id: "newest", transcript_path: "/n.jsonl" },
+    ]);
+    /* Idempotent: nothing moves when nothing was written. */
+    ensurePaneNoteTable(d);
+    expect(rows().map((r) => r.session_id)).toEqual(["after-clear", "fresh", "newest"]);
+    d.close();
+  });
+
+  test("a read-only database is opened as it is, the sync that runs at every start included", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-panenote-ro-"));
+    try {
+      const file = join(dir, "notes.db");
+      const w = new Database(file);
+      w.exec(`CREATE TABLE pane_agent (pane_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, transcript_path TEXT NOT NULL, cwd TEXT NOT NULL, at INTEGER NOT NULL, server TEXT NOT NULL DEFAULT '')`);
+      ensurePaneNoteTable(w);
+      w.run(`INSERT INTO pane_agent VALUES ('%1', 'later', '/l.jsonl', '/home/dev/code/orbit', 9, '')`);
+      w.close();
+      const r = new Database(file, { readonly: true });
+      expect(() => ensurePaneNoteTable(r)).not.toThrow();
+      expect(r.query("SELECT COUNT(*) AS n FROM pane_note").get()).toEqual({ n: 0 });
+      r.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   test("a table from before the server was recorded is copied with no server", () => {
