@@ -56,7 +56,9 @@ test("the agent edits the line, the comment turns stale and keeps the code it wa
   const c = comment({ snippet: captureSnippet(hunks, "RIGHT", 11, 11) });
   const edited: DiffHunk[] = [{ ...hunks[0]!, lines: hunks[0]!.lines.map((l) => l.startsWith("+") ? "+const total = subtotal(items);" : l) }];
   expect(isStale(c, edited)).toBe(true);
-  expect(c.snippet).toEqual(["+const total = sum(items.map((i) => i.price));"]);
+  const sent = composeReview("/code/orbit", { intro: "", outro: "", comments: [c] }, new Set([c.id]));
+  expect(sent).toContain("+const total = sum(items.map((i) => i.price));");
+  expect(sent).not.toContain("subtotal");
 });
 
 test("the anchor falling out of the diff altogether is stale too", () => {
@@ -236,4 +238,18 @@ test("the tray is keyed by checkout, so an armed Discard does not carry to anoth
   // armed state survives selecting a file in another checkout, and the second
   // press throws away that checkout's review instead.
   expect(PAGE).toMatch(/<ReviewTray key=\{root\}/);
+});
+
+test("Send review only fills a composer; it never starts a run", () => {
+  // A run costs tokens and goes to whoever the chat points at; the chat is where
+  // that is seen before it happens. So the view must not even import the send.
+  const imp = PAGE.match(/import \{([^}]*)\} from "\.\.\/\.\.\/lib\/chatStore\.ts"/);
+  expect(imp).not.toBeNull();
+  expect(imp![1]!.split(",").map((n) => n.trim().split(/\s+/)[0])).not.toContain("send");
+  const from = PAGE.indexOf("const deliver = useCallback(");
+  expect(from).toBeGreaterThan(-1);
+  const deliver = PAGE.slice(from, PAGE.indexOf("\n  }, [", from))
+    .split("\n").filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join("\n");
+  expect(deliver).toContain("c.draft = withDraft(");
+  expect(deliver).not.toMatch(/\bsend\(|chatSend|sendMessage/);
 });
