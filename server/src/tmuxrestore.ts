@@ -555,20 +555,30 @@ const bornYet = (argv: readonly string[]): boolean =>
  * Asked of the pane's own conversation first (an indexed lookup), then of
  * every session — after `/clear` the pane holds a new conversation and the
  * argument on its command line was submitted to the old one, which the note
- * no longer names. The argv of a process never changes, so the answer is
- * kept for the process's life rather than asked every ten seconds; the map
- * dies with this server, which is the stated ceiling: a prompt older than
- * the retention window reappears after an app restart.
+ * no longer names. The argv of a process never changes, so a YES is kept for
+ * the process's life rather than asked every ten seconds.
+ *
+ * ONLY A YES. The first photograph of a new pane can run before the CLI has
+ * submitted its command-line prompt: the sweep is every ten seconds and on
+ * every app window, and in interactive mode the prompt goes in after the TUI
+ * is up — on a fresh worktree, after the person has accepted the trust
+ * dialog, which can take minutes. A "no" cached at that moment was permanent,
+ * every later sweep photographed the brief as a flag, and the restore ran it
+ * again: the very replay the previous commit was written to stop. A no is a
+ * question not yet answered, and it is asked again on the next sweep.
+ *
+ * The map dies with this server, which is the stated ceiling: a prompt older
+ * than the retention window reappears after an app restart.
  */
-const promptVerdicts = new Map<string, boolean>();
+const promptVerdicts = new Set<string>();
 function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[]): boolean {
   const key = `${pid}\0${text}`;
-  const had = promptVerdicts.get(key);
-  if (had !== undefined) return had;
+  if (promptVerdicts.has(key)) return true;
   const yes = sessions.some((id) => !!id && wasPromptOf(id, text)) || wasPromptAnywhere(text);
+  if (!yes) return false;
   if (promptVerdicts.size > 2000) promptVerdicts.clear();
-  promptVerdicts.set(key, yes);
-  return yes;
+  promptVerdicts.add(key);
+  return true;
 }
 
 /**

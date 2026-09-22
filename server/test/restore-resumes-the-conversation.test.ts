@@ -132,6 +132,31 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.agentSession).toBeUndefined();
   }, 20_000);
 
+  test("a prompt whose hook has not been ingested yet is still recognised on the next sweep", async () => {
+    /*
+     * The first photograph of a new pane can run before the CLI has submitted
+     * its command-line prompt — in interactive mode that happens after the
+     * TUI is up, and on a fresh worktree after the person accepts the trust
+     * dialog, which can take minutes. "Not a prompt" was cached for the life
+     * of the process, so every later sweep photographed the brief as a flag
+     * and the restore ran it again.
+     */
+    const LATE = "Read the file /home/someone/briefs/orbit-1043.md and follow it exactly.";
+    const LATE_ID = "3d4e5f60-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "late", "-c", CWD, ...fakeClaude("--model", "opus", LATE)]);
+    const id = await paneOf("late");
+    await Bun.sleep(250);
+    expect(wt.notePaneAgent({ pane: id, sessionId: LATE_ID, transcriptPath: "/tmp/t.jsonl", cwd: CWD })).toBe(true);
+    const early = await photographed("late");
+    expect(early, "the pane is in the picture").not.toBeUndefined();
+    expect(early!.agentArgs, "no hook yet: the prompt cannot be told from a value, and stays").toContain(LATE);
+    db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
+      ["orbit", LATE_ID, "UserPromptSubmit", JSON.stringify({ prompt: LATE }), Date.now()]);
+    const later = await photographed("late");
+    expect(later!.agentArgs, "the hook arrived: the brief is out of the flags").not.toContain(LATE);
+    expect(later!.agentArgs).toContain("opus");
+  }, 20_000);
+
   test("a pane that was itself restored carries its id on its own line", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "second", "-c", CWD, ...fakeClaude("--dangerously-skip-permissions", "--resume", OTHER)]);
     const got = await photographed("second");
