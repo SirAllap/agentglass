@@ -65,6 +65,7 @@ import { diskAllows, diskEnabled } from "./disk.ts";
  */
 export type BrowserOp =
   | "open" | "read" | "markdown" | "extract" | "links" | "count" | "search"
+  | "interactive" | "forms" | "attr"
   | "click" | "type" | "wait" | "shot"
   | "back" | "forward" | "scroll" | "press" | "text"
   | "tabs" | "tab" | "newtab" | "closetab"
@@ -83,6 +84,7 @@ export type BrowserOp =
  *  `browser-cli.test.ts`. Seven §3 verbs once shipped reachable by neither. */
 export const BROWSER_OPS: readonly BrowserOp[] = [
   "open", "read", "markdown", "extract", "links", "count", "search",
+  "interactive", "forms", "attr",
   "click", "type", "wait", "shot",
   "back", "forward", "scroll", "press", "text",
   "tabs", "tab", "newtab", "closetab",
@@ -155,7 +157,7 @@ export interface BrowserReply {
  *  and an agent learns nothing from a minute of silence that it would not
  *  learn in fifteen seconds. */
 const TIMEOUT_MS: Record<BrowserOp, number> = {
-  open: 45_000, read: 15_000, markdown: 20_000, extract: 15_000, links: 15_000, count: 15_000, search: 15_000, click: 15_000, type: 15_000, wait: 45_000, shot: 20_000,
+  open: 45_000, read: 15_000, markdown: 20_000, extract: 15_000, links: 15_000, count: 15_000, search: 15_000, interactive: 15_000, forms: 15_000, attr: 15_000, click: 15_000, type: 15_000, wait: 45_000, shot: 20_000,
   // Going back is a navigation and gets a navigation's patience; the rest are a
   // round trip to the page and nothing more.
   back: 45_000, forward: 45_000, scroll: 15_000, press: 15_000, text: 15_000,
@@ -640,6 +642,7 @@ function readonlyMode(): boolean {
  *  quietly falling on the safe-to-run side because nobody classified it. */
 const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
   "read", "markdown", "extract", "links", "count", "search",
+  "interactive", "forms", "attr",
   "shot", "text", "html", "console", "network", "observe",
   "tabs", "frames", "health", "waitfor", "wait",
   /* `listeners` and a coverage READ only look. `cdp` is deliberately NOT
@@ -2690,9 +2693,26 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
     case "read":
     case "markdown":
     case "links":
+    case "interactive":
+    case "forms":
     case "back":
     case "forward":
       break;
+    case "attr": {
+      /* One element, some of its attributes. The names become page JS, so
+         they are held to what an attribute name can be; the count is capped
+         for the same reason `extract` caps its fields. */
+      if (!okSelector(b.selector)) return { error: "attr needs a selector, or an id from an observation" };
+      args.selector = b.selector;
+      if (b.names !== undefined) {
+        if (!Array.isArray(b.names) || b.names.length > 20) return { error: "names must be a list of up to 20 attribute names" };
+        for (const n of b.names) {
+          if (typeof n !== "string" || !/^[A-Za-z_:][\w:.-]{0,63}$/.test(n)) return { error: `${String(n)} is not an attribute name` };
+        }
+        args.names = b.names;
+      }
+      break;
+    }
     case "extract": {
       /* A field→selector map, validated here on purpose: the values become
          page JS (via `jsLit` on the other side of the wire), so a value that

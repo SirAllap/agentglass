@@ -174,6 +174,11 @@ const MAX_TEXT = 20_000;
    answers the question an agent actually asked by answering it a thousand
    times: metric tons of nav links, a field that matched half the page. */
 const MAX_LINKS = 250;
+/** The interactive inventory's caps: elements listed per call, forms
+ *  described per call, and what one form or the loose set may hold. */
+const MAX_INTERACTIVE = 300;
+const MAX_FORMS = 20;
+const MAX_FIELDS = 60;
 const MAX_MATCHES = 25;
 const MAX_EXTRACT_FIELD = 2_000;
 const EXTRACT_FIELD_LIMIT = 30;
@@ -1369,6 +1374,161 @@ async function runVerb(
            })()`,
         );
         return { ok: true, value };
+      }
+
+      case "interactive": {
+        /*
+         * Every element that can be acted on, with what acting on it needs:
+         * the id a verb takes, the role, the name, and the href, value,
+         * checked state or options that `observe`'s tree leaves out because
+         * it describes the whole page. Ids are minted from the window's
+         * counter like `observe`'s, so the next click accepts them; a hidden
+         * element is counted and not listed, because an agent does not click
+         * what it cannot see, and a hidden input is not listed at all — it
+         * is data, not a control.
+         */
+        const base = reserveIds(MAX_INTERACTIVE);
+        const value = await el.executeJavaScript(
+          `(() => {
+             window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+             const firstId = window.__agxSeq + 1;
+             const stamp = (n) => {
+               if (!n.dataset.agxE) { window.__agxSeq = (window.__agxSeq || 0) + 1; n.dataset.agxE = "e" + window.__agxSeq; }
+               return n.dataset.agxE;
+             };
+             const clean = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, 80);
+             const name = (n, tag, type) => clean(
+               n.getAttribute("aria-label") || (n.labels && n.labels[0] && n.labels[0].innerText)
+               || n.getAttribute("placeholder") || n.getAttribute("title")
+               || (tag === "input" && /^(submit|button|reset)$/.test(type) ? n.value : n.innerText) || "",
+             );
+             const PICK = "a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=menuitemcheckbox],[role=option],[role=combobox],[role=textbox],[role=slider],[contenteditable],[tabindex]";
+             const out = [];
+             let total = 0, hidden = 0;
+             const seen = new Set();
+             for (const n of document.querySelectorAll(PICK)) {
+               if (seen.has(n)) continue;
+               seen.add(n);
+               const tag = n.tagName.toLowerCase();
+               const type = tag === "input" ? String(n.type || "text").toLowerCase() : "";
+               if (type === "hidden") continue;
+               if (n.getAttribute("tabindex") === "-1" && !/^(a|button|input|select|textarea|summary)$/.test(tag) && !n.getAttribute("role")) continue;
+               total++;
+               const r = n.getBoundingClientRect();
+               const cs = getComputedStyle(n);
+               if (!r.width || !r.height || cs.display === "none" || cs.visibility === "hidden") { hidden++; continue; }
+               if (out.length >= ${MAX_INTERACTIVE}) continue;
+               const role = n.getAttribute("role") || (tag === "a" ? "link" : tag === "input" ? type : tag);
+               const row = { e: stamp(n), role, name: name(n, tag, type), at: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
+               if (n.id) row.id = n.id;
+               const testid = n.getAttribute("data-testid");
+               if (testid) row.testid = testid;
+               if (tag === "a") row.href = String(n.href || n.getAttribute("href") || "").slice(0, 500);
+               if (tag === "input" || tag === "textarea") {
+                 if (!/^(checkbox|radio|submit|button|reset|file|image)$/.test(type)) {
+                   row.value = type === "password" ? "(hidden)" : String(n.value == null ? "" : n.value).slice(0, 200);
+                 }
+                 if (n.placeholder) row.placeholder = String(n.placeholder).slice(0, 80);
+               }
+               if (type === "checkbox" || type === "radio") row.checked = !!n.checked;
+               if (tag === "select") {
+                 row.value = String(n.value == null ? "" : n.value).slice(0, 200);
+                 row.options = Array.from(n.options || []).slice(0, 40).map((o) => o.value);
+               }
+               if (n.disabled || n.getAttribute("aria-disabled") === "true") row.disabled = true;
+               out.push(row);
+             }
+             if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+             return { url: location.href, title: document.title, total, hidden, elements: out,
+                      dropped: Math.max(0, total - hidden - out.length), seq: window.__agxSeq };
+           })()`,
+        ) as Record<string, unknown>;
+        releaseIds(base, MAX_INTERACTIVE, Number(value?.seq));
+        if (value && typeof value === "object") delete value.seq;
+        return { ok: true, value };
+      }
+
+      case "forms": {
+        /*
+         * The page as forms: each with its fields (label, type, value with a
+         * password masked, options), the button that submits it, and where
+         * it goes — plus the fields that belong to no form, which on a
+         * single-page app is most of them. Hidden inputs are counted, not
+         * listed: a CSRF token is not a field anybody fills.
+         */
+        const base = reserveIds(MAX_FORMS * (MAX_FIELDS + 6) + MAX_FIELDS);
+        const value = await el.executeJavaScript(
+          `(() => {
+             window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+             const firstId = window.__agxSeq + 1;
+             const stamp = (n) => {
+               if (!n.dataset.agxE) { window.__agxSeq = (window.__agxSeq || 0) + 1; n.dataset.agxE = "e" + window.__agxSeq; }
+               return n.dataset.agxE;
+             };
+             const clean = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, 80);
+             const label = (n) => clean((n.labels && n.labels[0] && n.labels[0].innerText) || n.getAttribute("aria-label") || n.getAttribute("placeholder") || "");
+             const isHidden = (n) => n.tagName === "INPUT" && String(n.type || "").toLowerCase() === "hidden";
+             const field = (n) => {
+               const tag = n.tagName.toLowerCase();
+               const type = tag === "select" ? "select" : tag === "textarea" ? "textarea" : String(n.type || "text").toLowerCase();
+               const row = { e: stamp(n), name: String(n.name || ""), type, label: label(n) };
+               if (type === "checkbox" || type === "radio") row.checked = !!n.checked;
+               else row.value = type === "password" ? "(hidden)" : String(n.value == null ? "" : n.value).slice(0, 200);
+               if (tag === "select") row.options = Array.from(n.options || []).slice(0, 40).map((o) => o.value);
+               if (n.required) row.required = true;
+               if (n.disabled) row.disabled = true;
+               if (n.placeholder) row.placeholder = String(n.placeholder).slice(0, 80);
+               return row;
+             };
+             const forms = Array.from(document.querySelectorAll("form")).slice(0, ${MAX_FORMS}).map((f) => {
+               const all = Array.from(f.querySelectorAll("input,select,textarea"));
+               const shown = all.filter((n) => !isHidden(n));
+               const submit = Array.from(f.querySelectorAll("button,input[type=submit],input[type=image]"))
+                 .filter((b) => b.tagName !== "BUTTON" || !/^(button|reset)$/i.test(b.getAttribute("type") || ""))
+                 .slice(0, 5)
+                 .map((b) => ({ e: stamp(b), text: clean(b.innerText || b.value || b.getAttribute("aria-label") || "") }));
+               const row = {
+                 e: stamp(f),
+                 action: String(f.action || f.getAttribute("action") || "").slice(0, 500),
+                 method: String(f.method || f.getAttribute("method") || "get").toLowerCase(),
+                 fields: shown.slice(0, ${MAX_FIELDS}).map(field),
+                 hiddenFields: all.length - shown.length,
+                 submit,
+               };
+               if (f.id) row.id = f.id;
+               const nm = f.getAttribute("name");
+               if (nm) row.name = nm;
+               return row;
+             });
+             const loose = Array.from(document.querySelectorAll("input,select,textarea")).filter((n) => !n.form && !isHidden(n)).slice(0, ${MAX_FIELDS}).map(field);
+             if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+             return { url: location.href, title: document.title, forms, loose, seq: window.__agxSeq };
+           })()`,
+        ) as Record<string, unknown>;
+        releaseIds(base, MAX_FORMS * (MAX_FIELDS + 6) + MAX_FIELDS, Number(value?.seq));
+        if (value && typeof value === "object") delete value.seq;
+        return { ok: true, value };
+      }
+
+      case "attr": {
+        /* The attributes of ONE element — the ones named, or all of them
+           when none is — resolved the way a click resolves, so an id from
+           any inventory works and two matches are refused with the count.
+           A password's value attribute is masked like its value. */
+        const names = Array.isArray(ask.args.names) ? (ask.args.names as unknown[]).filter((n): n is string => typeof n === "string") : [];
+        const r = await el.executeJavaScript(resolveOne(selRaw, `
+          const names = ${JSON.stringify(names)};
+          const secret = e.tagName === "INPUT" && /^password$/i.test(e.type || "");
+          const list = names.length ? names : (e.getAttributeNames ? e.getAttributeNames() : []).slice(0, 50);
+          const attributes = {};
+          for (const n of list) {
+            const v = e.getAttribute(n);
+            attributes[n] = v === null ? null : (secret && n === "value") ? "(hidden)" : String(v).slice(0, 500);
+          }
+          return { kind: "ok", tag: e.tagName.toLowerCase(), e: e.dataset.agxE || undefined, attributes };
+        `)) as { kind: string; tag?: string; e?: string; attributes?: Record<string, string | null> } | null;
+        if (!r || r.kind !== "ok") return { ok: false, error: selectorError(rawSel, r as never) };
+        return { ok: true, value: { selector: rawSel, tag: r.tag, e: r.e, attributes: r.attributes } };
       }
 
       case "search": {

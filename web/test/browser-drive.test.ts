@@ -1687,3 +1687,157 @@ describe("stale ids say why, and say to observe again", () => {
     expect((r.value as Record<string, unknown>).seq).toBeUndefined();
   });
 });
+
+/*
+ * The interactive inventory: `interactive`, `forms` and `attr`. Run for real
+ * through `new Function` against a page-shaped stand-in with a form in it, so
+ * the shape an agent gets is the shape the code produces, not the shape a
+ * stub was told to return. Ids come from the same counter as `observe`, so
+ * the next click accepts them — that is what makes an inventory usable.
+ */
+describe("the interactive inventory", () => {
+  type N = {
+    tagName: string; attributes: Record<string, string>; children: N[]; dataset: Record<string, string>;
+    innerText: string; textContent: string; id: string; name: string; type: string; value: string;
+    checked: boolean; disabled: boolean; required: boolean; placeholder: string; href: string; action: string; method: string;
+    form: N | null; labels: { innerText: string }[]; options: { value: string; text: string }[]; parentElement: N | null;
+    getAttribute(n: string): string | null; getAttributeNames(): string[]; getBoundingClientRect(): { x: number; y: number; width: number; height: number; top: number; left: number };
+    querySelectorAll(sel: string): N[]; contains(o: unknown): boolean; scrollIntoView(): void; click(): void;
+  };
+  function node(tag: string, attrs: Record<string, string> = {}, children: N[] = [], text = ""): N {
+    const n: N = {
+      tagName: tag.toUpperCase(), attributes: attrs, children, dataset: {},
+      innerText: text || children.map((c) => c.innerText).join(" "), textContent: text, id: attrs.id ?? "", name: attrs.name ?? "",
+      type: attrs.type ?? (tag === "input" ? "text" : tag === "button" ? "submit" : ""), value: attrs.value ?? "",
+      checked: "checked" in attrs, disabled: "disabled" in attrs, required: "required" in attrs, placeholder: attrs.placeholder ?? "",
+      href: attrs.href ? `https://example.com${attrs.href}` : "", action: attrs.action ? `https://example.com${attrs.action}` : "", method: attrs.method ?? "get",
+      form: null, labels: attrs["aria-labelledby"] ? [{ innerText: attrs["aria-labelledby"] }] : [], options: [], parentElement: null,
+      getAttribute: (k) => (k in attrs ? attrs[k]! : null), getAttributeNames: () => Object.keys(attrs),
+      getBoundingClientRect: () => (attrs.hidden !== undefined ? { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0 } : { x: 10, y: 10, width: 100, height: 20, top: 10, left: 10 }),
+      querySelectorAll: (sel) => query(n, sel, false),
+      contains: () => false, scrollIntoView() {}, click() {},
+    };
+    for (const c of children) c.parentElement = n;
+    return n;
+  }
+  /** Comma-separated simple selectors: tag, [attr], [attr=val], #id, chained. */
+  function matches(n: N, simple: string): boolean {
+    const m = /^([a-z0-9]*)((?:#[\w-]+|\[[^\]]+\])*)$/.exec(simple.trim());
+    if (!m) return false;
+    if (m[1] && n.tagName.toLowerCase() !== m[1]) return false;
+    for (const part of m[2]!.match(/#[\w-]+|\[[^\]]+\]/g) ?? []) {
+      if (part.startsWith("#")) { if (n.id !== part.slice(1)) return false; continue; }
+      const [k, v] = part.slice(1, -1).split("=");
+      const val = v?.replace(/^['"]|['"]$/g, "");
+      if (k === "data-agx-e") { if (n.dataset.agxE !== val) return false; continue; }
+      if (!(k! in n.attributes)) return false;
+      if (v !== undefined && n.attributes[k!] !== val) return false;
+    }
+    return true;
+  }
+  function query(root: N, sel: string, self: boolean): N[] {
+    const parts = sel.split(",").map((s) => s.trim()).filter(Boolean);
+    const out: N[] = [];
+    const walk = (n: N, top: boolean) => { if ((!top || self) && parts.some((p) => matches(n, p))) out.push(n); n.children.forEach((c) => walk(c, false)); };
+    walk(root, true);
+    return out;
+  }
+  function buildPage() {
+    const user = node("input", { name: "user", type: "text", placeholder: "you@example.com", required: "", "aria-labelledby": "Email" });
+    const pw = node("input", { name: "pw", type: "password", value: "hunter2" });
+    const remember = node("input", { name: "remember", type: "checkbox", checked: "" });
+    const plan = node("select", { name: "plan" });
+    plan.options = [{ value: "free", text: "Free" }, { value: "pro", text: "Pro" }];
+    plan.value = "pro";
+    const token = node("input", { name: "csrf", type: "hidden", value: "abc" });
+    const go = node("button", { type: "submit" }, [], "Sign in");
+    const form = node("form", { id: "login", action: "/session", method: "post" }, [user, pw, remember, plan, token, go]);
+    for (const f of [user, pw, remember, plan, token, go]) f.form = form;
+    const search = node("input", { name: "q", type: "search", placeholder: "Search" });
+    const link = node("a", { href: "/pricing", "data-testid": "pricing" }, [], "Pricing");
+    const dead = node("button", { disabled: "" }, [], "Nope");
+    const ghost = node("button", { hidden: "" }, [], "Ghost");
+    const body = node("body", {}, [node("h1", {}, [], "Sign in"), form, search, link, dead, ghost]);
+    const win: Record<string, unknown> = {};
+    const document = {
+      title: "Sign in", body, querySelectorAll: (sel: string) => query(body, sel, true), querySelector: (sel: string) => query(body, sel, true)[0] ?? null,
+      elementFromPoint: () => null,
+    };
+    const run = (code: string) => new Function("window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", `return ${code}`)(
+      win, document, { href: "https://example.com/login" }, (n: N) => ({ display: n.attributes.hidden !== undefined ? "none" : "block", visibility: "visible", opacity: "1" }), 1200, 800);
+    const el = fakeGuest((code) => (code.includes("__agxLog = log") ? 1 : run(code)));
+    return { el, win, nodes: { user, pw, remember, plan, token, go, form, search, link, dead, ghost } };
+  }
+
+  test("interactive lists what can be acted on, with what an agent needs to act: href, value, checked, options", async () => {
+    resetStableIds();
+    const page = buildPage();
+    const r = await runBrowserAsk(page.el, ask("interactive", {}));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    const v = r.value as { total: number; hidden: number; elements: Record<string, unknown>[]; seq?: number };
+    expect(v.seq).toBeUndefined();
+    const by = (name: string) => v.elements.find((e) => e.name === name);
+    expect(by("Pricing")).toMatchObject({ role: "link", href: "https://example.com/pricing", testid: "pricing" });
+    expect(by("Email")).toMatchObject({ role: "text", placeholder: "you@example.com" });
+    expect(by("pw")?.value ?? v.elements.find((e) => e.role === "password")?.value, "a password never travels").toBe("(hidden)");
+    expect(v.elements.find((e) => e.role === "checkbox")).toMatchObject({ checked: true });
+    expect(v.elements.find((e) => e.role === "select")).toMatchObject({ value: "pro", options: ["free", "pro"] });
+    expect(by("Nope")).toMatchObject({ disabled: true });
+    expect(v.elements.some((e) => e.role === "hidden"), "a hidden input is not something to act on").toBe(false);
+    expect(by("Ghost"), "an invisible button is counted, not listed").toBeUndefined();
+    expect(v.hidden).toBe(1);
+    expect(v.elements.every((e) => /^e\d+$/.test(String(e.e)))).toBe(true);
+  });
+
+  test("its ids are minted from the same counter as observe, so a click accepts them", async () => {
+    resetStableIds();
+    const other = buildPage();
+    await runBrowserAsk(other.el, ask("observe", {}));
+    const page = buildPage();
+    const r = await runBrowserAsk(page.el, ask("interactive", {}));
+    const link = (r.value as { elements: { name: string; e: string }[] }).elements.find((e) => e.name === "Pricing")!;
+    expect(link.e).not.toBe("e1");
+    const clicked = await runBrowserAsk(page.el, ask("text", { selector: link.e }));
+    expect(clicked.ok, JSON.stringify(clicked)).toBe(true);
+  });
+
+  test("forms come back as forms: fields with labels, the submit, and the fields that belong to none", async () => {
+    resetStableIds();
+    const page = buildPage();
+    const r = await runBrowserAsk(page.el, ask("forms", {}));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    const v = r.value as { forms: Record<string, unknown>[]; loose: Record<string, unknown>[]; seq?: number };
+    expect(v.seq).toBeUndefined();
+    expect(v.forms).toHaveLength(1);
+    const f = v.forms[0] as { id: string; action: string; method: string; fields: Record<string, unknown>[]; hiddenFields: number; submit: Record<string, unknown>[] };
+    expect(f).toMatchObject({ id: "login", action: "https://example.com/session", method: "post", hiddenFields: 1 });
+    expect(f.fields.map((x) => x.name)).toEqual(["user", "pw", "remember", "plan"]);
+    expect(f.fields[0]).toMatchObject({ label: "Email", required: true, type: "text" });
+    expect(f.fields[1]).toMatchObject({ type: "password", value: "(hidden)" });
+    expect(f.fields[3]).toMatchObject({ type: "select", value: "pro", options: ["free", "pro"] });
+    expect(f.submit).toHaveLength(1);
+    expect(f.submit[0]).toMatchObject({ text: "Sign in" });
+    expect(v.loose.map((x) => x.name)).toEqual(["q"]);
+    // Every id is an id a verb will take.
+    expect(/^e\d+$/.test(String(f.submit[0]!.e))).toBe(true);
+    expect(/^e\d+$/.test(String(f.fields[0]!.e))).toBe(true);
+  });
+
+  test("attr answers the attributes asked for, null for one that is not there, and all of them when none is named", async () => {
+    resetStableIds();
+    const page = buildPage();
+    const some = await runBrowserAsk(page.el, ask("attr", { selector: "a", names: ["href", "data-testid", "rel"] }));
+    expect(some.ok, JSON.stringify(some)).toBe(true);
+    expect(some.value).toMatchObject({ tag: "a", attributes: { href: "/pricing", "data-testid": "pricing", rel: null } });
+    const all = await runBrowserAsk(page.el, ask("attr", { selector: "#login" }));
+    expect(all.ok).toBe(true);
+    expect((all.value as { attributes: Record<string, string> }).attributes).toEqual({ id: "login", action: "/session", method: "post" });
+    // A password's value attribute is as secret as its value.
+    const pw = await runBrowserAsk(page.el, ask("attr", { selector: "input[type=password]", names: ["value", "name"] }));
+    expect((pw.value as { attributes: Record<string, unknown> }).attributes).toEqual({ value: "(hidden)", name: "pw" });
+    // Two matches is a refusal with the count, same as click.
+    const many = await runBrowserAsk(page.el, ask("attr", { selector: "button", names: ["type"] }));
+    expect(many.ok).toBe(false);
+    expect(many.error).toContain("matched");
+  });
+});

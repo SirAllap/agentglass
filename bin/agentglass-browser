@@ -667,7 +667,7 @@ def budget_value(value, max_tokens):
     # the tail goes (nothing is more or less relevant in a link list), and
     # `extract`'s fields shrink each value instead of dropping whole fields —
     # a field a caller asked for by name is what it came to find.
-    for key in ("links", "matches"):
+    for key in ("links", "matches", "elements"):
         arr = value.get(key)
         if _size(value) <= budget_chars:
             break
@@ -750,6 +750,13 @@ def summarize(cmd, value):
         fields = value.get("fields") or {}
         found = sum(1 for v in fields.values() if v is not None)
         return f"{found}/{len(fields)} fields" + (f", no match: {', '.join(value['notFound'])}" if value.get("notFound") else "")
+    if cmd == "interactive":
+        els = value.get("elements") or []
+        return f"{len(els)} of {value.get('total', len(els))} interactive" + (f", {value['hidden']} hidden" if value.get("hidden") else "")
+    if cmd == "forms":
+        return f"{len(value.get('forms') or [])} forms, {len(value.get('loose') or [])} loose fields"
+    if cmd == "attr":
+        return f"{len(value.get('attributes') or {})} attributes of <{value.get('tag', '?')}>"
     if cmd == "search":
         return f"{value.get('count', 0)} match(es) for {value.get('query', '')!r} ({len(value.get('matches') or [])} shown)"
     if cmd in ("whoami", "profiles"):
@@ -1281,6 +1288,13 @@ def main():
     p.add_argument("selector", nargs="?")
     p = sub.add_parser("search", help="find text on the page and get the matches back")
     p.add_argument("query")
+    # The interactive inventory: what can be acted on, the forms as forms,
+    # and one element's attributes — each with ids a verb takes.
+    p = sub.add_parser("interactive", help="every element that can be acted on, with id, role, name and href/value/options")
+    p = sub.add_parser("forms", help="the forms on the page: fields with labels, the submit, where it goes, and loose fields")
+    p = sub.add_parser("attr", help="attributes of one element — the ones named, or all of them")
+    p.add_argument("selector")
+    p.add_argument("names", nargs="*", help="attribute names; none means all of them")
     p = sub.add_parser("extract", help="pull named fields by selector in one round trip")
     p.add_argument("--field", action="append", default=[], metavar="NAME=SELECTOR",
                    help="one field to pull (name selector). Repeat for more.")
@@ -2190,6 +2204,12 @@ def main():
         body = {"selector": a.selector} if a.selector else {}
     elif a.cmd == "search":
         body = {"query": a.query}
+    elif a.cmd in ("interactive", "forms"):
+        body = {}
+    elif a.cmd == "attr":
+        body = {"selector": a.selector}
+        if a.names:
+            body["names"] = a.names
     elif a.cmd == "markdown":
         body = {}
     elif a.cmd == "links":

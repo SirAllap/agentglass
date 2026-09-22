@@ -51,6 +51,7 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 ```
 look        observe · read · markdown · text · html · region · shot ·
             frames · console · network · extract · links · count · search
+            interactive · forms · attr
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 act         click · type · select · check · fill · hover · dblclick · rightclick
             focus · blur · press · scroll · drag · upload
@@ -79,13 +80,18 @@ agentglass-browser extract --field price=.price --field title=h1   # named field
 agentglass-browser links                       # what this page reaches, deduplicated
 agentglass-browser count "[data-testid=row]"   # how many match (omit the selector: interactive count)
 agentglass-browser search "shipping"           # find text, get the matches with their hrefs
+agentglass-browser interactive                 # what can be acted on: id, role, name, href/value/options
+agentglass-browser forms                       # the forms as forms: fields with labels, the submit, loose fields
+agentglass-browser attr e17 href data-testid   # one element's attributes (no names: all of them)
 ```
 
-All five are reads, all five are clamped by `--max-tokens` and the same
-redaction seam as everything else, and only `extract` and `search` take
-arguments — the other three answer with the whole page in the right shape.
+All eight are reads, all eight are clamped by `--max-tokens` and the same
+redaction seam as everything else, and only `extract`, `search` and `attr`
+take arguments — the others answer with the whole page in the right shape.
 `extract`'s answer names the fields that matched nothing, so you never invent
-a value for a field that was not there.
+a value for a field that was not there. `interactive` and `forms` hand out
+the same ids `observe` does, so what they list is what the next `click` or
+`fill` takes; a password's value never travels in any of them.
 
 ## The things worth knowing before you start
 

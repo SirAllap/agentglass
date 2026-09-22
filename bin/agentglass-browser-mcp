@@ -355,6 +355,28 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_interactive",
+        "description": "Every element that can be acted on, with what acting on it needs: the id a verb takes (e17), role, accessible name, and the href, value, checked state or select options that browser_observe's tree leaves out. Hidden elements are counted, not listed; hidden inputs are not controls and are left out. { total, hidden, elements: [...], dropped }.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_forms",
+        "description": "The page as forms: each with its fields (id, name, type, label, value with passwords masked, options, required), the button that submits it, its action and method, and how many hidden inputs it carries — plus `loose`, the fields that belong to no form, which on a single-page app is most of them.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_attr",
+        "description": "The attributes of ONE element: the names asked for (null for one that is not there), or all of them when none is named. Resolves like a click — an id from any inventory works, and two matches are refused with the count.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector or an id like e17."},
+                "names": {"type": "array", "items": {"type": "string"}, "description": "Attribute names to read. Omit for all of them."},
+            },
+            "required": ["selector"],
+        },
+    },
+    {
         # ONE CALL INSTEAD OF SIX. Reported by an agent who drove this all day:
         # "what I need is a call that returns the whole state, not six verbs I
         # poll in turn — every read/text/shot is a new process and I write

@@ -525,6 +525,28 @@ describe("§16 — origins, read-only, audit, redaction", () => {
       }
     });
 
+    test("attr takes a selector and up to twenty attribute names, and refuses what is not a name", () => {
+      expect("error" in parseAsk("attr", {})).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: "href" })).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: ["href", "x y"] })).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: ["on\nload"] })).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: Array.from({ length: 21 }, (_, i) => `a${i}`) })).toBe(true);
+      const ok = parseAsk("attr", { selector: "e17", names: ["href", "data-testid", "aria-label"] });
+      if (!("ask" in ok)) throw new Error("unreachable");
+      expect(ok.ask.args).toMatchObject({ selector: "e17", names: ["href", "data-testid", "aria-label"] });
+      const all = parseAsk("attr", { selector: "#login" });
+      if (!("ask" in all)) throw new Error("unreachable");
+      expect(all.ask.args.names).toBeUndefined();
+      // The inventories take nothing, and all three are observing, so read-only mode admits them.
+      process.env.AGENTGLASS_BROWSER_READONLY = "1";
+      try {
+        for (const op of ["interactive", "forms"]) expect("ask" in parseAsk(op, {}), op).toBe(true);
+        expect("ask" in parseAsk("attr", { selector: "a" })).toBe(true);
+      } finally {
+        delete process.env.AGENTGLASS_BROWSER_READONLY;
+      }
+    });
+
     test("extract validates every field before it becomes page JavaScript", () => {
       expect("error" in parseAsk("extract", {})).toBe(true);
       expect("error" in parseAsk("extract", { fields: [] })).toBe(true);
