@@ -18,11 +18,16 @@
  * and the only answer that does not make a missing file a wall.
  *
  * One fetch per origin per hour. The fetch goes through `guardedFetch` like
- * every address this server did not choose, with the host check relaxed to
- * the browser's own policy: loopback and the LAN are where the pages a local
- * developer opens live, and a dev server's robots.txt is as real as any.
+ * every address this server did not choose, with the host check held to the
+ * browser's own policy on every hop, redirects included: loopback and the LAN
+ * are where the pages a local developer opens live, and a dev server's
+ * robots.txt is as real as any; link-local and the unspecified address are
+ * refused on the literal and on what a name resolves to. The first version
+ * turned the check off, and this fetch runs in the SERVER — the browser's
+ * egress guard never sees it — so a robots.txt that answered 302 to the
+ * metadata address had the server read it and leak allow/refuse as one bit.
  */
-import { guardedFetch } from "./net.ts";
+import { browserUnfetchableHost, dnsResolver, guardedFetch, type Resolver } from "./net.ts";
 
 export const ROBOTS_ENV = "AGENTGLASS_BROWSER_ROBOTS";
 export const ROBOTS_AGENT = "agentglass";
@@ -99,10 +104,13 @@ export function robotsAllows(text: string, path: string, agent = ROBOTS_AGENT): 
 interface Cached { text: string | null; at: number }
 const cache = new Map<string, Cached>();
 let fetchImpl: typeof fetch | null = null;
+let lookupImpl: Resolver = dnsResolver;
 
-/** For tests: a fetch that answers a robots.txt without a network. Null restores the real one. */
-export function __setRobotsFetch(fn: typeof fetch | null): void {
+/** For tests: a fetch that answers a robots.txt without a network, and a
+ *  resolver that answers what the test says. Null restores the real ones. */
+export function __setRobotsFetch(fn: typeof fetch | null, resolver?: Resolver): void {
   fetchImpl = fn;
+  lookupImpl = resolver ?? dnsResolver;
   cache.clear();
 }
 
@@ -113,7 +121,7 @@ async function robotsFor(origin: string, now: number): Promise<string | null> {
   try {
     const r = await guardedFetch(`${origin}/robots.txt`, { signal: AbortSignal.timeout(8000), headers: { "user-agent": `${ROBOTS_AGENT}/robots` } },
       (u) => (u.protocol === "http:" || u.protocol === "https:" ? null : "robots.txt is fetched over http(s) only"),
-      { ...(fetchImpl ? { fetchImpl } : {}), hostCheck: async () => null });
+      { ...(fetchImpl ? { fetchImpl } : {}), hostCheck: (h) => browserUnfetchableHost(h, lookupImpl) });
     if (r.res && r.res.ok) {
       const body = await r.res.text();
       text = body.length > MAX_BYTES ? body.slice(0, MAX_BYTES) : body;

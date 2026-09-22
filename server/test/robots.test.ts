@@ -66,13 +66,16 @@ describe("the gate on open", () => {
     const body = served[new URL(url).host];
     return body === undefined ? new Response("nope", { status: 404 }) : new Response(body, { status: 200 });
   }) as typeof fetch;
-  beforeAll(() => __setRobotsFetch(standIn));
+  /** Every invented name is public on paper; the real resolver would say
+   *  they do not exist, and a name that does not resolve is not fetched. */
+  const publicName = async () => [{ address: "203.0.113.9", family: 4 }];
+  beforeAll(() => __setRobotsFetch(standIn, publicName));
   afterAll(() => { __setRobotsFetch(null); delete process.env[ROBOTS_ENV]; });
   afterEach(() => { delete process.env[ROBOTS_ENV]; resetBrowserDrive(); });
 
   test("a disallowed path is refused by name, an allowed one and a missing file are not", async () => {
     served = { "orbit.example": "User-agent: *\nDisallow: /internal/\n" };
-    __setRobotsFetch(standIn);
+    __setRobotsFetch(standIn, publicName);
     const why = await robotsRefusal("https://orbit.example/internal/report?x=1");
     expect(why).not.toBeNull();
     expect(why).toContain("https://orbit.example/robots.txt");
@@ -81,6 +84,38 @@ describe("the gate on open", () => {
     expect(await robotsRefusal("https://orbit.example/public")).toBeNull();
     expect(await robotsRefusal("https://nofile.example/internal/x"), "no robots.txt is no rule").toBeNull();
     expect(await robotsRefusal("not a url")).toBeNull();
+  });
+
+  test("the fetch is held to the browser's own policy on every hop: link-local by redirect or by name is never reached", async () => {
+    /* The first version turned the host check off entirely (a no-op
+       hostCheck), so with the switch on, an `open` of https://evil.example/x
+       made the SERVER — not the browser, so the egress guard never saw it —
+       GET evil.example/robots.txt, follow its 302 to 169.254.169.254, and
+       leak allow/refuse as one bit of the body. Loopback and the LAN stay
+       fetchable, as they are for the browser; link-local and the unspecified
+       address are not, on the literal and on what a name resolves to. */
+    fetched.length = 0;
+    served = { "orbit.example": "User-agent: *\nDisallow: /\n" };
+    const redirecting = (async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      fetched.push(url);
+      if (url.startsWith("https://hop.example/")) return new Response("", { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } });
+      if (url.startsWith("http://169.254.")) return new Response("User-agent: *\nDisallow: /\n", { status: 200 });
+      return standIn(input);
+    }) as typeof fetch;
+    __setRobotsFetch(redirecting, async (host) => (host === "meta.example" ? [{ address: "169.254.169.254", family: 4 }] : [{ address: "203.0.113.9", family: 4 }]));
+    expect(await robotsRefusal("https://hop.example/anything"), "a redirect to link-local is not followed, and the verdict is allow").toBeNull();
+    expect(fetched.some((u) => u.includes("169.254")), "the second hop was never made").toBe(false);
+    expect(await robotsRefusal("https://meta.example/anything"), "a name that resolves link-local is not fetched").toBeNull();
+    expect(fetched.some((u) => u.startsWith("https://meta.example/"))).toBe(false);
+    expect(await robotsRefusal("http://169.254.169.254/anything")).toBeNull();
+    expect(fetched.some((u) => u.startsWith("http://169.254."))).toBe(false);
+    // Loopback is where a dev server lives, and its robots.txt is fetched.
+    served = { "127.0.0.1:9": "User-agent: *\nDisallow: /\n", "orbit.example": "User-agent: *\nDisallow: /\n" };
+    __setRobotsFetch(redirecting, publicName);
+    expect(await robotsRefusal("http://127.0.0.1:9/x")).not.toBeNull();
+    expect(await robotsRefusal("https://orbit.example/x"), "a public name still resolves and is fetched").not.toBeNull();
+    __setRobotsFetch(standIn, publicName);
   });
 
   test("one fetch per origin: the file is cached", async () => {
@@ -93,7 +128,7 @@ describe("the gate on open", () => {
 
   test("with the switch on, `open` is refused before it reaches the window; off, it goes through", async () => {
     served = { "orbit.example": "User-agent: agentglass\nDisallow: /internal/\n" };
-    __setRobotsFetch(standIn);
+    __setRobotsFetch(standIn, publicName);
     const reached: string[] = [];
     setBrowserSink({ send: (ask) => { reached.push(ask.op); settleBrowser(ask.id, { ok: true, value: { url: "https://orbit.example/internal/x", title: "t" } }); }, listeners: () => 1 });
     noteBrowserReady("w-robots", true);
