@@ -748,6 +748,21 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
   if (restoring) { captureWanted = true; return null; }
   if (capturingHalted()) return null;
   const { names, engine, startedAt, server } = await liveSessions();
+  /* A server this process has not put the desk back on (see `settledOn`):
+     photographed as a desk that is not whole — nothing is forgotten — and put
+     back once it has been seen on two sweeps. Not on the first: a server seen
+     once may be one somebody is in the middle of killing and starting again
+     (the conf reset, a script), and a pass racing that builds on the dying
+     one. */
+  let putBack = false;
+  if (engine) {
+    const on = settledOn.get(deskKey());
+    if (on === "") settledOn.set(deskKey(), engine);
+    else if (on && on !== engine && !putBackOn.has(engine)) {
+      if (seenNew === engine) { putBackOn.add(engine); putBack = true; }
+      else seenNew = engine;
+    }
+  }
   /*
    * An empty socket is not "no sessions" — it is far more often tmux not
    * answering yet, or the app racing its own engine at boot. Writing an empty
@@ -873,7 +888,10 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
     }
     if (out.length) sessions.push({ name, windows: out });
   }
-  return writeMerged(sessions, now, deskIsWhole(engine), engine, before);
+  const state = writeMerged(sessions, now, deskIsWhole(engine), engine, before);
+  /* The pass photographs again when it is done (`captureWanted`). */
+  if (putBack) { void restoreLayout(); captureWanted = true; }
+  return state;
 }
 
 /**
@@ -1120,27 +1138,59 @@ export function __clearCrashLoop(): void { crashLoop = null; }
 let restoring = false;
 let captureWanted = false;
 /*
- * WHETHER THIS PROCESS HAS HAD ITS GO AT PUTTING THE DESK BACK.
+ * WHETHER THIS PROCESS HAS HAD ITS GO AT PUTTING THE DESK BACK — ON THIS
+ * ENGINE.
  *
- * Until it has, a photograph is not evidence that a window is gone — see
- * `writeMerged`. After it has, the desk is whatever a person has made of it
- * and the camera is believed. False at boot, true from the end of the first
- * restore pass, and never false again in this process.
+ * Until it has, a photograph is not evidence that a window or a session is
+ * gone — see `writeMerged`. After it has, the desk is whatever a person has
+ * made of it and the camera is believed.
+ *
+ * Per engine, because the ids and the desk are one tmux server's: the value
+ * is the server (`liveSessions().engine`) the desk was put back on, read at
+ * the end of the pass. "" when no server was running then — the pass had
+ * nothing to build, and whatever server starts next begins from this
+ * process's desk, so the first one a capture sees is adopted. A DIFFERENT
+ * server later — the last session closed and tmux exited, the conf was
+ * reset, tmux crashed — is a desk this process has not had its go at, and
+ * `captureLayout` runs one restore pass on it (`putBackOn`). Bound to the
+ * first server alone, the desk was never whole again after either case, and
+ * a tab closed after that was kept and rebuilt at the next boot (measured).
+ *
+ * Keyed by socket and state directory as well: every test file shares one
+ * process, and a desk put back on one file's socket is not another's.
  */
-let settled = false;
-/** The engine (`liveSessions().engine`) the desk was put back on. */
-let settledOn = "";
-export function __resetRestoreSettled(): void { settled = false; settledOn = ""; }
-/** Whether the desk on THIS engine is the one this process put back: false
- *  until the first pass finishes, and false again on a server that was
- *  started since — a desk this process has not had its go at. */
-function deskIsWhole(engine: string): boolean { return settled && !!engine && engine === settledOn; }
+const settledOn = new Map<string, string>();
+const deskKey = (): string => `${tmuxSocket()}\u0000${restoreDir()}`;
+/** Engines a pass has already been asked for, so a pass that fails is not
+ *  asked for again every sweep. */
+const putBackOn = new Set<string>();
+/** A new server seen by one sweep, waiting for a second. */
+let seenNew = "";
+export function __resetRestoreSettled(): void { settledOn.delete(deskKey()); }
+/** Whether the desk on THIS engine is the one this process put back. */
+function deskIsWhole(engine: string): boolean {
+  const on = settledOn.get(deskKey());
+  return on !== undefined && !!engine && on === engine;
+}
 
 /** Whether a restore pass is in flight — a capture during one would be a
  *  photograph of a half-built desk. */
 export function isRestoring(): boolean { return restoring; }
 
+/*
+ * ONE PASS AT A TIME. The boot, the Settings button and a new server
+ * (`captureLayout`) can each ask for one; two at once would each see the
+ * other's half-built sessions as missing windows and build them twice.
+ */
+let passInFlight: Promise<unknown> | null = null;
 export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promise<{ ok: boolean; restored: number; error?: string }> {
+  while (passInFlight) await passInFlight.catch(() => undefined);
+  const pass = restoreOnce(mode);
+  passInFlight = pass;
+  try { return await pass; } finally { if (passInFlight === pass) passInFlight = null; }
+}
+
+async function restoreOnce(mode: "lazy" | "all"): Promise<{ ok: boolean; restored: number; error?: string }> {
   restoring = true;
   try {
     const r = await restorePass(mode);
@@ -1160,8 +1210,7 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
      * harmlessly — the trade this whole file already makes, in the direction
      * it already chose.
      */
-    settledOn = (await liveSessions()).engine;
-    settled = true;
+    settledOn.set(deskKey(), (await liveSessions()).engine);
     return r;
   } catch (e: any) {
     /* And it comes back as an answer rather than an unhandled rejection: the
