@@ -617,6 +617,20 @@ describe.skipIf(!HAVE_PY)("shaping, against a stand-in app", () => {
     expect(out[0]!.data.summary.length).toBeLessThan(20_000);
   });
 
+  test("a clipped summary and first prompt are cut further under a small ceiling, not left at 2048", () => {
+    const { out } = standIn({ "/session": detail({ summary: "s".repeat(20_000), first_prompt: "p".repeat(20_000) }) }, [
+      { name: "cockpit_session", arguments: { id: "s-orbit" } },
+    ], { AGENTGLASS_COCKPIT_MAX_BYTES: "1500" });
+    const d = out[0]!.data;
+    expect(Buffer.byteLength(out[0]!.text)).toBeLessThanOrEqual(1500);
+    for (const f of ["summary", "first_prompt"]) {
+      const t = (d.truncated as { field: string; clipped_to: number; was: number }[]).find((x) => x.field === f)!;
+      expect(t.was, f).toBe(20_000);
+      expect(t.clipped_to, f).toBeLessThan(2048);
+      expect(d[f].length, f).toBe(t.clipped_to + 1);
+    }
+  });
+
   test("half an emoji from a cut in the app's text is answered, not a crash", () => {
     const events = [{ id: 1, timestamp: T0, session_id: "s-orbit", hook_event_type: "PostToolUseFailure", tool_name: "Bash", error_text: "bad \ud83d" }];
     const { out } = standIn({ "/events/recent": events }, [

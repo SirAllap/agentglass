@@ -25,7 +25,8 @@ the answer on its own is cut further, the lists inside it as well as its text
 items are dropped from the end of the lists (the oldest for lists of things
 that happened, which are newest first; the least for ranked ones, which are
 largest first) until it fits — but never a list's first item, which is cut
-further instead, down to MIN_CLIP characters and one entry per inner list. The
+further instead, down to MIN_CLIP characters and one entry per inner list, and
+so is the long text already clipped at the top of the answer. The
 answer says so: `"truncated": [{"field": "sessions", "kept": 12, "dropped":
 38}]`, `{"field": "summary", "clipped_to": 2048, "was": 20000}` for a clipped
 field, `{"field": "changes", "items_clipped": 1, "clipped_to": 1024,
@@ -199,8 +200,10 @@ def fit(obj, fields, narrow):
     fields = list(dict.fromkeys(fields))
     clipped = []
     obj = dict(obj)
+    whole = {}  # field -> its text before any cut
     for k, v in list(obj.items()):
         if isinstance(v, str) and len(v) > CLIP:
+            whole[k] = v
             obj[k] = v[:CLIP] + "…"
             clipped.append({"field": k, "clipped_to": CLIP, "was": len(v)})
     lists = {f: list(obj.get(f) or []) for f in fields}
@@ -262,13 +265,18 @@ def fit(obj, fields, narrow):
         out = build()
         over = _size(out) - ceiling
     # One item left in each list and still over, which only a small ceiling
-    # does: those items are cut further, together, until the answer fits.
+    # does: those items are cut further, together, and so is the long text
+    # already clipped at the top of the answer, until it fits.
     for s in range(1, len(_STEPS)):
         if over <= 0:
             break
         for f in fields:
             if lists[f] and level[f][0] < s:
                 cut(f, 0, s)
+        n = _STEPS[s][0]
+        for c in clipped:
+            obj[c["field"]] = whole[c["field"]][:n] + "…"
+            c["clipped_to"] = n
         out = build()
         over = _size(out) - ceiling
     return out
