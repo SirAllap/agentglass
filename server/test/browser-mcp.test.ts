@@ -798,7 +798,12 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }),
     });
-    expect(r.status).toBe(202);
+    // 200, not 202: a request that carries a JSON-RPC request is answered
+    // with its response, whatever the framing. The reference SDK client reads
+    // a 202 as "nothing to read", drops the body and never resolves — the
+    // first version answered every SSE request with 202, and `initialize`
+    // hung in every SDK-based runtime.
+    expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toContain("text/event-stream");
     const raw = await r.text();
     expect(raw.startsWith("event: message\ndata: ")).toBe(true);
@@ -807,6 +812,54 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     for (const expectName of ["browser_open", "browser_read", "browser_markdown", "browser_links", "browser_count", "browser_search", "browser_extract"]) {
       expect(names, `tools/list over HTTP must still carry ${expectName}`).toContain(expectName);
     }
+  });
+
+  test("the reference client's flow: initialize, initialized, tools/list — with its own Accept header", async () => {
+    /* The Streamable-HTTP client in the reference SDK sends
+       `Accept: application/json, text/event-stream` on every POST, reads the
+       session id off `initialize`, sends `notifications/initialized` and
+       expects an empty 202 for it, and then treats any 202 as "no body". So
+       the flow is driven with exactly those headers and exactly that reading
+       of the status: a server that answers a request with 202 fails here the
+       way it fails in the SDK. */
+    const ACCEPT = "application/json, text/event-stream";
+    const post = (body: unknown, session?: string) => fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", accept: ACCEPT, authorization: `Bearer ${TOKEN}`,
+        "mcp-protocol-version": "2025-06-18",
+        ...(session ? { "mcp-session-id": session } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    /** What the SDK does with a response: 202 is no body; otherwise the body
+     *  is JSON or an SSE stream of JSON-RPC messages, by content-type. */
+    const readLikeSdk = async (r: Response): Promise<unknown[]> => {
+      if (r.status === 202) return [];
+      expect(r.status).toBe(200);
+      const ct = r.headers.get("content-type") ?? "";
+      const text = await r.text();
+      if (ct.includes("text/event-stream")) {
+        return text.split("\n\n").filter((f) => f.includes("data: ")).map((f) => JSON.parse(f.slice(f.indexOf("data: ") + 6)));
+      }
+      expect(ct).toContain("application/json");
+      const j = JSON.parse(text);
+      return Array.isArray(j) ? j : [j];
+    };
+    const init = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "sdk-shaped", version: "0" } } });
+    const session = init.headers.get("mcp-session-id");
+    expect(session).toMatch(/^agx-/);
+    const [initMsg] = await readLikeSdk(init) as { id: number; result: { protocolVersion: string } }[];
+    expect(initMsg, "initialize must be answered, not acknowledged").toBeDefined();
+    expect(initMsg!.id).toBe(1);
+    expect(initMsg!.result.protocolVersion).toBe("2025-06-18");
+    const ack = await post({ jsonrpc: "2.0", method: "notifications/initialized" }, session!);
+    expect(ack.status).toBe(202);
+    expect(await readLikeSdk(ack)).toEqual([]);
+    const list = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, session!);
+    const [listMsg] = await readLikeSdk(list) as { id: number; result: { tools: { name: string }[] } }[];
+    expect(listMsg!.id).toBe(2);
+    expect(listMsg!.result.tools.map((t) => t.name)).toContain("browser_open");
   });
 
   test("a tool call reaches the same relay the stdio server uses", async () => {

@@ -2181,9 +2181,13 @@ class _McpHttp(BaseHTTPRequestHandler):
             return
         payload = replies[0] if len(replies) == 1 else replies
         headers = {"Mcp-Session-Id": session} if session else None
-        if "text/event-stream" in self.headers.get("Accept", ""):
-            return self._reply(202, payload, headers, sse=True)
-        return self._reply(200, payload, headers)
+        # 200 whichever framing the client asked for. The reference client
+        # reads a 202 as "nothing to read" and drops the body, so a 202 with
+        # the response inside it is a response nobody receives: `initialize`
+        # never resolves and the runtime hangs on connect. 202 is for the
+        # notifications-only branch above and nothing else.
+        sse = "text/event-stream" in self.headers.get("Accept", "")
+        return self._reply(200, payload, headers, sse=sse)
 
 
 def _run_http(bind):
