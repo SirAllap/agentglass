@@ -249,7 +249,7 @@ describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
   });
 
   test("cockpit_errors lists recent failures with their text, and narrows to a session", async () => {
-    const { data } = await call("cockpit_errors", { session: S1 });
+    const { data } = await call("cockpit_errors", { session: S1 }, { CLAUDE_CODE_SESSION_ID: S1 });
     const errs = data.errors as { session_id: string; tool_name: string; error_text: string }[];
     expect(errs.length).toBeGreaterThanOrEqual(1);
     expect(errs[0]!.tool_name).toBe("Read");
@@ -257,6 +257,20 @@ describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
     expect(errs.every((e) => e.session_id === S1)).toBe(true);
     const other = await call("cockpit_errors", { session: S2 });
     expect(other.data.errors).toEqual([]);
+  });
+
+  test("another session's failure text is withheld as well, and the failure itself is not", async () => {
+    // The text is the failed tool's own output — a stack trace, a curl -v with
+    // its headers — and it is the neighbours' as much as their messages are.
+    const theirs = await call("cockpit_errors", {}, { CLAUDE_CODE_SESSION_ID: S2 });
+    const row = (theirs.data.errors as { session_id: string; tool_name: string; error_text?: string }[]).find((e) => e.session_id === S1)!;
+    expect(row.tool_name).toBe("Read");
+    expect(row.error_text).toBeUndefined();
+    expect(theirs.data.withheld).toEqual(["error_text"]);
+    expect(theirs.data.why_withheld).toContain("AGENTGLASS_COCKPIT_TRANSCRIPTS=all");
+    const all = await call("cockpit_errors", { session: S1 }, { CLAUDE_CODE_SESSION_ID: S2, AGENTGLASS_COCKPIT_TRANSCRIPTS: "all" });
+    expect(all.data.errors[0].error_text).toContain("ENOENT");
+    expect(all.data.withheld).toBeUndefined();
   });
 
   test("cockpit_recent_events is newest first, without payloads, filterable by type", async () => {

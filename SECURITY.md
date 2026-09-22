@@ -776,17 +776,19 @@ in the file, and a test holds it to GET), so no argument makes it write, kill
 or approve.
 
 What it reads is what the app's token reads, and that is a lot. For every
-session in scope: its title, project, model and spend, and the text of its
-recent failed tool calls. The agent board, with what each agent says it is
+session in scope: its title, project, model and spend, and which of its tool
+calls failed recently. The agent board, with what each agent says it is
 doing. Every held gate, with the tool and the call it holds. And, through
 `cockpit_session`, a session's own text: its conversation, each message up
 to 20,000 characters; its timeline, with each tool's output up to 4,000
 characters — a `printenv`, a `cat` of a config file; its file changes with
-their diffs; its first prompt and its last answer.
+their diffs; its first prompt and its last answer. And, through
+`cockpit_errors`, the text of its failed tool calls, up to 2,000 characters.
 
 That text comes for the caller's own session only: the one Claude Code names
-in `CLAUDE_CODE_SESSION_ID` when it starts the server over stdio. Another
-session's is left out, and the answer says what it withheld and why, unless
+in `CLAUDE_CODE_SESSION_ID` when it starts the server over stdio — inherited,
+so any other client started from inside that session takes it as its own too.
+Another session's is left out, and the answer says what it withheld and why, unless
 `AGENTGLASS_COCKPIT_TRANSCRIPTS=all` is set. Over HTTP no session is the
 caller's own, so there it takes that setting too, and with it on, anyone
 holding the cockpit token reads every session's text.

@@ -37,11 +37,14 @@ list is exceeded by them.
 
 ANOTHER SESSION'S TEXT IS WITHHELD UNLESS THE PERSON ALLOWS IT. A session's
 messages, its tools' output, the diffs it wrote, its first prompt and its last
-answer are the caller's to read for its own session — the one Claude Code
-names in CLAUDE_CODE_SESSION_ID when it starts this server — and for any other
-only with AGENTGLASS_COCKPIT_TRANSCRIPTS=all. Over HTTP the caller is whoever
-holds the token, so no session is its own there. This is the tool's default,
-not a boundary: the app token it carries reads /session directly.
+answer, and the text of its failed tool calls, are the caller's to read for
+its own session — the one Claude Code names in CLAUDE_CODE_SESSION_ID when it
+starts this server — and for any other only with
+AGENTGLASS_COCKPIT_TRANSCRIPTS=all. The variable is inherited, so another MCP
+client started from inside a Claude Code session takes that session as its
+own. Over HTTP the caller is whoever holds the token, so no session is its own
+there. This is the tool's default, not a boundary: the app token it carries
+reads /session directly.
 
 Transport is stdio (`claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp`)
 or Streamable HTTP (`--http [HOST:]PORT`), and the HTTP side is the browser MCP
@@ -426,6 +429,13 @@ def _text_readable(sid):
     return OWN_SESSION is not None and sid == OWN_SESSION
 
 
+def _why_withheld(what):
+    return (f"{what} is withheld; "
+            + (f"this caller is session {OWN_SESSION}. " if OWN_SESSION else
+               "this server knows no session as its caller's (CLAUDE_CODE_SESSION_ID is read over stdio only). ")
+            + "The person running this server can allow every session with AGENTGLASS_COCKPIT_TRANSCRIPTS=all.")
+
+
 def t_session(args):
     sid = _str(args, "id")
     if not sid:
@@ -445,12 +455,8 @@ def t_session(args):
         include = []
         if withheld:
             out["withheld"] = withheld
-            out["why_withheld"] = (
-                "another session's text — its messages, tool output, diffs, first prompt and last answer — "
-                + (f"is withheld; this caller is session {OWN_SESSION}. " if OWN_SESSION else
-                   "is withheld, and this server knows no session as its caller's (CLAUDE_CODE_SESSION_ID is "
-                   "read over stdio only). ")
-                + "The person running this server can allow every session with AGENTGLASS_COCKPIT_TRANSCRIPTS=all.")
+            out["why_withheld"] = _why_withheld(
+                "another session's text — its messages, tool output, diffs, first prompt and last answer —")
     for k in include:
         # The app sends these newest first already, so the ceiling drops the oldest.
         out[k] = d.get(k) or []
@@ -528,14 +534,23 @@ def t_errors(args):
     rows = _recent(EVENT_SCAN)
     scanned = len(rows)
     rows = [e for e in rows if e.get("error_text") and (not session or e.get("session_id") == session)][:limit]
-    errors = []
+    errors, hidden = [], 0
     for e in rows:
         r = _event_row(e)
         del r["error"]
-        r["error_text"] = e.get("error_text")
+        # A failure's text is its tool's own output — a stack trace, a curl -v
+        # with its headers — so another session's is withheld like the rest of
+        # its text, and the failure itself stays listed.
+        if _text_readable(e.get("session_id")):
+            r["error_text"] = e.get("error_text")
+        else:
+            hidden += 1
         errors.append(r)
-    return fit({"errors": errors, **_scanned(scanned)}, ["errors"],
-               "pass a smaller limit, or session= to keep one session's errors")
+    out = {"errors": errors, **_scanned(scanned)}
+    if hidden:
+        out["withheld"] = ["error_text"]
+        out["why_withheld"] = _why_withheld("the text of another session's failed tool calls")
+    return fit(out, ["errors"], "pass a smaller limit, or session= to keep one session's errors")
 
 
 def t_recent_events(args):
@@ -614,7 +629,8 @@ _TOOLS = [
           {"window": _WINDOW_ARG, "tool": {"type": "string", "description": "one tool, e.g. 'Bash'"}}),
     _tool("cockpit_errors", t_errors,
           f"Recent failures (failed tool calls and error events) with their text, newest first, from the "
-          f"last {EVENT_SCAN} events; older_not_scanned says there were more that it did not look at.",
+          f"last {EVENT_SCAN} events; older_not_scanned says there were more that it did not look at. "
+          "Another session's failure text comes only if the person running this server allows it.",
           {"session": _SESSION_ARG, "limit": _LIMIT(100, 20)}),
     _tool("cockpit_recent_events", t_recent_events,
           "Recent hook events, newest first, without their payloads: time, session, type, tool, whether it "
