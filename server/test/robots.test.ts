@@ -53,6 +53,22 @@ describe("reading a robots.txt", () => {
     expect(robotsAllows("# nothing here\n", "/x")).toBe(true);
     expect(robotsAllows("User-agent: *\nDisallow:\n", "/x"), "an empty Disallow allows").toBe(true);
   });
+
+  test("every group that names the best match is merged, and an empty User-agent names nobody", () => {
+    // RFC 9309: rules for the same product token may be split across groups,
+    // and all of them apply. The first version read the first `*` group only,
+    // and an empty `User-agent:` matched as the best group because every
+    // name starts with the empty string.
+    const split = "User-agent: *\nDisallow: /a\n\nUser-agent: other\nDisallow: /\n\nUser-agent: *\nDisallow: /b\n";
+    expect(robotsAllows(split, "/a")).toBe(false);
+    expect(robotsAllows(split, "/b"), "the second * group counts too").toBe(false);
+    expect(robotsAllows(split, "/c")).toBe(true);
+    const twice = "User-agent: agentglass\nDisallow: /a\n\nUser-agent: agentglass\nDisallow: /b\n";
+    expect(robotsAllows(twice, "/b")).toBe(false);
+    const empty = "User-agent:\nDisallow: /\n\nUser-agent: *\nAllow: /\n";
+    expect(robotsAllows(empty, "/x"), "an empty name is not our name").toBe(true);
+    expect(robotsAllows("User-agent:\nDisallow: /\n", "/x"), "and alone it is no group at all").toBe(true);
+  });
 });
 
 describe("the gate on open", () => {

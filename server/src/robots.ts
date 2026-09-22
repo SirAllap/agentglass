@@ -76,24 +76,25 @@ function patternMatches(pattern: string, path: string): boolean {
   return new RegExp(re).test(path);
 }
 
-/** Whether `path` (with its query) may be fetched by `agent` under this robots.txt. */
+/** Whether `path` (with its query) may be fetched by `agent` under this
+ *  robots.txt. The rules of EVERY group naming the best-matching token apply,
+ *  merged (RFC 9309 lets a site split them); an empty `User-agent:` names
+ *  nobody, since every name starts with the empty string. */
 export function robotsAllows(text: string, path: string, agent = ROBOTS_AGENT): boolean {
   const groups = parseRobots(text);
   const me = agent.toLowerCase();
-  let best: Group | null = null;
-  let bestLen = -1;
-  let star: Group | null = null;
+  let bestName: string | null = null;
   for (const g of groups) {
     for (const a of g.agents) {
-      if (a === "*") { star = star ?? g; continue; }
-      if (me.startsWith(a) && a.length > bestLen) { best = g; bestLen = a.length; }
+      if (a && a !== "*" && me.startsWith(a) && a.length > (bestName?.length ?? -1)) bestName = a;
     }
   }
-  const group = best ?? star;
-  if (!group) return true;
+  const token = bestName ?? "*";
+  const rules = groups.filter((g) => g.agents.includes(token)).flatMap((g) => g.rules);
+  if (!groups.some((g) => g.agents.includes(token))) return true;
   let verdict = true;
   let verdictLen = -1;
-  for (const r of group.rules) {
+  for (const r of rules) {
     if (!patternMatches(r.pattern, path)) continue;
     const len = r.pattern.length;
     if (len > verdictLen || (len === verdictLen && r.allow)) { verdict = r.allow; verdictLen = len; }
