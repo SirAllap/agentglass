@@ -205,6 +205,30 @@ describe("the CLI's copy of the manifest rules", () => {
       }
     });
 
+    /*
+     * A name that is not UTF-8 reached the app's walk with U+FFFD in place of
+     * the bad byte. With a file of that U+FFFD name beside it, the walk read
+     * the decoy twice and never the real one, so the real one could change
+     * under an approval. A name with a backslash is a path to the app's
+     * resolver on every platform. Both walks now refuse either name.
+     */
+    test("refuses a name that is not UTF-8, and one with a backslash, in both walks", () => {
+      for (const name of [Buffer.from([0x72, 0x75, 0x6e, 0xff]), Buffer.from("back\\slash")]) {
+        const dir = tree();
+        try {
+          writeFileSync(Buffer.concat([Buffer.from(dir + "/lib/"), name]), "echo hidden\n");
+          writeFileSync(join(dir, "lib", "run\uFFFD"), "echo decoy\n");
+          const walked = walkPluginDir(dir);
+          expect(walked.ok, String(name)).toBe(false);
+          const cli = cliHash(dir);
+          expect(cli.ok, String(name)).toBe(false);
+          expect(cli.exit).toBe(1);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    });
+
     test("moves when a link inside the folder is pointed at another file", () => {
       const dir = tree();
       try {

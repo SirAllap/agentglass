@@ -145,7 +145,12 @@ export function linkText(raw: Buffer, platform: NodeJS.Platform = process.platfo
  * the staging folder and dangles in the copy, and one that climbs out and
  * back in by the folder's own name finds another folder once the plugin is
  * installed under a different one. So a link is relative, and read from the
- * folder's root it never climbs above it.
+ * folder's root it never climbs above it. That is a reading of the text: a
+ * link through another link (`up -> .`, then `up/up/../<name>/x`) can still
+ * spell its way out and back in. What stops that one is the physical check
+ * above, run on a staging folder whose name nobody can guess; a check that
+ * walks a folder with a fixed name, as the catalogue's do, does not see it,
+ * and the app then refuses the listing at install.
  */
 export function walkPluginDir(dir: string): WalkResult {
   const root = realpathSync(dir);
@@ -153,13 +158,27 @@ export function walkPluginDir(dir: string): WalkResult {
   let totalBytes = 0;
 
   function walk(abs: string): string | null {
-    let entries;
-    try { entries = readdirSync(abs, { withFileTypes: true }); } catch (e) {
+    let entries: Buffer[];
+    // Bun hands these back as plain Uint8Arrays, so each is made a Buffer.
+    try { entries = readdirSync(abs, { encoding: "buffer" }).map((b) => Buffer.from(b)); } catch (e) {
       return e instanceof Error ? e.message : String(e);
     }
-    for (const ent of entries) {
-      if (ent.name === ".git") continue;
-      const child = join(abs, ent.name);
+    for (const raw of entries) {
+      // Names as bytes, because a name that is not UTF-8 arrives as a string
+      // with U+FFFD in place of the bad byte: with a file of that U+FFFD name
+      // beside it, the walk read the decoy twice and the real file never, and
+      // the real file could change under an approval. A backslash is a
+      // separator to this runtime's resolver on every platform. The CLI
+      // refuses both names too, so the two walks never see different trees.
+      const name = raw.toString("utf8");
+      if (!Buffer.from(name, "utf8").equals(raw)) return `${hashPath(relative(root, abs)) || "the plugin folder"} holds a name that is not UTF-8`;
+      if (name.includes("\\")) return `${hashPath(relative(root, join(abs, name)))} has a backslash in its name`;
+      if (name === ".git") continue;
+      const child = join(abs, name);
+      // The entry's own type, never its target's (Bun's Dirent carries no
+      // name when names are read as bytes).
+      let ent;
+      try { ent = lstatSync(child); } catch { return `could not read ${relative(root, child)}`; }
       let real: string;
       try { real = realpathSync(child); } catch { return `could not resolve ${relative(root, child)}`; }
       if (real !== root && !real.startsWith(root + sep)) {

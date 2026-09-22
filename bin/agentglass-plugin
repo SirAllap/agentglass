@@ -321,6 +321,13 @@ def walk_plugin_dir(folder):
         except OSError as e:
             return e.strerror or str(e)
         for ent in entries:
+            # The app refuses these two names, and must: see walkPluginDir.
+            try:
+                ent.name.encode("utf-8")
+            except UnicodeEncodeError:
+                return f"{os.path.relpath(abs_dir, root)} holds a name that is not UTF-8"
+            if "\\" in ent.name:
+                return f"{ent.name!r} has a backslash in its name"
             if ent.name == ".git":
                 continue
             child = os.path.join(abs_dir, ent.name)
