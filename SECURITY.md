@@ -688,6 +688,19 @@ nothing else: the app's own renderer, and the token in it, are not on the other
 side of that relay. This is why the app is never started with a remote
 debugging port.
 
+That is also why there is no DevTools-protocol endpoint for Puppeteer,
+Playwright or a browser-use-style framework to connect to, and none is planned
+as a default. A raw protocol session is agent-supplied code on every page the
+browser holds, and it goes under everything this section describes — the URL
+policy, the allow-lists, read-only mode, the ownership check between agents,
+the redaction and the audit line per verb all sit above the verb, and a socket
+sits below it. What an agent that speaks the protocol gets instead is
+`browser_cdp`: one command at a time, through the relay, audited, and refused
+under read-only mode. If a drop-in is ever built it will be opt-in, scoped to
+one container, bound to loopback with a token, alive only while the process
+that asked for it is — and a decision made in the open, not a port that
+happens to be on.
+
 Some of those verbs **act**. `browser_eval` runs JavaScript in the page,
 `browser_addInitScript` installs JavaScript that runs before every page does,
 `browser_expose` gives the page a function that calls back into the agent, and
