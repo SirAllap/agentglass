@@ -744,9 +744,17 @@ describe.skipIf(!HAVE_PY)("the stdio server outlives a bad call", () => {
     }
   });
 
-  test("the only way to the app is get(): the browser module's POST relay is never called", () => {
+  test("the only way to the app is get(): the browser module lends its transport and nothing else", () => {
+    // Named as what is allowed, not as what is forbidden: a POST helper added
+    // to the browser module later would get past a list of the ones known today.
     const code = SOURCE.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
-    expect(code).not.toMatch(/\bT\.(call|run|storage_state|set_storage_state|_raw|_do_at)\(/);
+    const allowed = ["PROTOCOL", "SERVER", "_run_http", "_serve_stdio", "make_reply"];
+    const used = [...new Set([...code.matchAll(/\bT\.(\w+)/g)].map((m) => m[1]!))];
+    expect(used.length).toBeGreaterThan(0);
+    for (const name of used) expect(allowed, `T.${name}`).toContain(name);
+    // Nor reached around the dot — getattr(T, ...), vars(T), an alias: the
+    // module is named once without one, where it is loaded.
+    expect(code.split("\n").filter((l) => /\bT\b(?!\.)/.test(l))).toEqual(["T = _transport()"]);
   });
 });
 
