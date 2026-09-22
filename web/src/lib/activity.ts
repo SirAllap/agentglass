@@ -49,7 +49,7 @@ export function mergeActivity(actions: ActionRecord[], gates: GateRecord[]): Act
 /**
  * What a resolved gate says, in the words of the thing that resolved it.
  *
- * The three cases are genuinely different events and rounding them together is
+ * The cases are genuinely different events and rounding them together is
  * the mistake this exists to prevent: "allowed" for a request a person read and
  * approved, and "allowed" for one that expired while they were at lunch, look
  * identical in a list and mean opposite things about whether anybody looked.
@@ -60,7 +60,18 @@ export function gateLine(g: GateRecord): { verb: string; note: string } {
   const passive = g.decision === "deny" ? "denied" : "allowed";
   if (g.resolution === "restart")
     return { verb: passive, note: "the window closed while the server was down — nobody saw this" };
+  if (g.resolution === "rule")
+    return { verb: passive, note: "a gate rule in config.json decided this on arrival — nobody was asked" };
   return { verb: passive, note: "nobody answered before the timeout" };
+}
+
+/** The second line of a "What needs you" card for a gate nobody decided: which
+ *  thing did. A rule's denial is not a hold somebody missed, and saying
+ *  "timeout" over it sends a person looking for one. */
+export function nobodyDecidedWhy(g: GateRecord): string {
+  if (g.resolution === "restart") return "Window closed while the server was down";
+  if (g.resolution === "rule") return "By a gate rule, on arrival";
+  return "No decision before the timeout";
 }
 
 /**

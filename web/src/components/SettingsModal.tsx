@@ -1056,7 +1056,7 @@ function GateLine({ g }: { g: GateRecord }) {
       <span
         className="text-[9.5px] font-semibold tabular-nums shrink-0"
         style={{ color: nobody ? "var(--warning)" : g.decision === "deny" ? "var(--error)" : "var(--text4)" }}
-        title={nobody ? "nobody decided this" : "decided by a person"}
+        title={g.resolution === "rule" ? "a gate rule decided this" : nobody ? "nobody decided this" : "decided by a person"}
       >
         {nobody ? <ClockIcon size={ICON.xs} /> : "·"}
       </span>
