@@ -506,6 +506,14 @@ def t_tool_latency(args):
                "pass tool= to keep one tool")
 
 
+def _scanned(n):
+    """How many events a filter looked through, and — when that was all it
+    asks for — that older ones went unread: a quiet session in a busy fleet
+    has its failures behind the others' 300 newest, and an empty answer
+    would otherwise read as none."""
+    return {"scanned_events": n, **({"older_not_scanned": True} if n >= EVENT_SCAN else {})}
+
+
 def t_errors(args):
     limit = _limit(args, 20, 100)
     session = _str(args, "session")
@@ -518,7 +526,7 @@ def t_errors(args):
         del r["error"]
         r["error_text"] = e.get("error_text")
         errors.append(r)
-    return fit({"errors": errors, "scanned_events": scanned}, ["errors"],
+    return fit({"errors": errors, **_scanned(scanned)}, ["errors"],
                "pass a smaller limit, or session= to keep one session's errors")
 
 
@@ -533,7 +541,7 @@ def t_recent_events(args):
             and (not kind or e.get("hook_event_type") == kind)][:limit]
     out = {"events": [_event_row(e) for e in rows]}
     if filtered:
-        out["scanned_events"] = scanned
+        out.update(_scanned(scanned))
     return fit(out, ["events"], "pass a smaller limit, or session=/type= to keep fewer events")
 
 
@@ -598,11 +606,12 @@ _TOOLS = [
           {"window": _WINDOW_ARG, "tool": {"type": "string", "description": "one tool, e.g. 'Bash'"}}),
     _tool("cockpit_errors", t_errors,
           f"Recent failures (failed tool calls and error events) with their text, newest first, from the "
-          f"last {EVENT_SCAN} events.",
+          f"last {EVENT_SCAN} events; older_not_scanned says there were more that it did not look at.",
           {"session": _SESSION_ARG, "limit": _LIMIT(100, 20)}),
     _tool("cockpit_recent_events", t_recent_events,
           "Recent hook events, newest first, without their payloads: time, session, type, tool, whether it "
-          f"failed. A session or type filter looks through the last {EVENT_SCAN} events.",
+          f"failed. A session or type filter looks through the last {EVENT_SCAN} events, and "
+          "older_not_scanned says there were more.",
           {"session": _SESSION_ARG,
            "type": {"type": "string", "description": "a hook event type, e.g. 'PostToolUse', 'Stop', 'Notification'"},
            "limit": _LIMIT(EVENT_SCAN, 30)}),

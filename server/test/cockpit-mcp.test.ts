@@ -651,6 +651,28 @@ describe.skipIf(!HAVE_PY)("shaping, against a stand-in app", () => {
     expect(out[0]!.data.scanned_events).toBe(0);
   });
 
+  test("a scan that filled its 300 says older events went unread, so 'no errors' is not read as none", () => {
+    // A quiet session in a busy fleet: its failure is older than the 300
+    // events the others wrote since.
+    const busy = Array.from({ length: 300 }, (_, i) => ({ id: 1000 - i, timestamp: T0 + i, session_id: "s-busy",
+      hook_event_type: "PostToolUse", tool_name: "Bash", source_app: "orbit", error_text: null }));
+    const few = busy.slice(0, 10);
+    const ask = [
+      { name: "cockpit_errors", arguments: { session: "s-quiet" } },
+      { name: "cockpit_recent_events", arguments: { session: "s-quiet" } },
+      { name: "cockpit_recent_events", arguments: { limit: 5 } },
+    ];
+    const full = standIn({ "/events/recent": busy }, ask).out.map((o) => o.data);
+    expect(full[0].errors).toEqual([]);
+    expect(full[0]).toMatchObject({ scanned_events: 300, older_not_scanned: true });
+    expect(full[1]).toMatchObject({ events: [], scanned_events: 300, older_not_scanned: true });
+    expect(full[2].older_not_scanned, "an unfiltered list is the newest, and says nothing else").toBeUndefined();
+    const short = standIn({ "/events/recent": few }, ask).out.map((o) => o.data);
+    expect(short[0].scanned_events).toBe(10);
+    expect(short[0].older_not_scanned).toBeUndefined();
+    expect(short[1].older_not_scanned).toBeUndefined();
+  });
+
   test("an agent waiting on a person says why, and its times are readable", () => {
     const since = Date.UTC(2026, 0, 2, 3, 4, 5);
     const board = { ok: true, agents: [
