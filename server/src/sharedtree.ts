@@ -62,20 +62,31 @@ const NOBODY = new Set(["", "unknown"]);
  * Returned for the single-author trees as well, because that is the other half
  * of the same answer: a section heading that can say which agent is writing
  * there is what makes a per-worktree list read as per-agent at all.
+ *
+ * An edit counts only while its file is still a row in that checkout's section
+ * (`onDisk`). Being live is not enough: an agent that edited here, committed,
+ * and moved on to a worktree of its own stays live for as long as its pane is
+ * open, and the checkout it left read "shared" beside whoever works there now,
+ * with none of its changes in the section. Once the file is committed there is
+ * nothing of it left to be mixed with anybody's. The ceiling: a file it edited,
+ * committed, and somebody else then edited again is a row once more, and still
+ * counts it.
  */
 export function treeAuthors(
   edits: TreeEdit[],
   trees: { path: string }[],
   isLive: (sessionId: string) => boolean,
+  onDisk: (root: string, rel: string) => boolean,
 ): TreeAuthors[] {
   const byRoot = new Map<string, { files: Map<string, Set<string>>; last: Map<string, number> }>();
   for (const e of edits) {
     if (NOBODY.has(e.session_id) || !isLive(e.session_id)) continue;
     const t = deepest(trees, e.file_path);
     if (!t) continue;
+    const rel = e.file_path.slice(t.path.length + 1);
+    if (!onDisk(t.path, rel)) continue;
     let r = byRoot.get(t.path);
     if (!r) { r = { files: new Map(), last: new Map() }; byRoot.set(t.path, r); }
-    const rel = e.file_path.slice(t.path.length + 1);
     let who = r.files.get(rel);
     if (!who) { who = new Set(); r.files.set(rel, who); }
     who.add(e.session_id);

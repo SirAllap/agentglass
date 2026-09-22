@@ -40,6 +40,7 @@ beforeAll(async () => {
   git(repo, "config", "user.email", "t@t");
   git(repo, "config", "user.name", "t");
   writeFileSync(join(repo, "src", "app.ts"), "export const a = 1;\n");
+  writeFileSync(join(repo, "src", "old.ts"), "export const old = 1;\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-qm", "init");
   linked = join(dir, "orbit-WEB-1042");
@@ -77,6 +78,9 @@ beforeAll(async () => {
   // `/clear` before the others arrive: an edit to the same file, then the end.
   await edit("sess-cleared", join(repo, "src", "app.ts"));
   await hook("sess-cleared", "SessionEnd", { reason: "clear" });
+  // Live, but everything it wrote here is committed: it has moved on, and the
+  // checkout holds none of its work for anybody's to be mixed with.
+  await edit("sess-moved", join(repo, "src", "old.ts"));
   await edit("sess-a", join(repo, "src", "app.ts"));
   await edit("sess-b", join(repo, "src", "app.ts"));
   await edit("sess-c", join(linked, "src", "app.ts"));
@@ -95,6 +99,7 @@ test("two sessions in one checkout are both its authors; the one in its own work
   const s = by.get(repo);
   expect(s).toBeDefined();
   // Not sess-cleared: it ended, and sess-a is not sharing the tree with it.
+  // Not sess-moved: live, but none of its edits here is still a row.
   expect(s!.sessions.map((x) => x.id).sort()).toEqual(["sess-a", "sess-b"]);
   expect(s!.overlap.map((o) => o.path)).toEqual(["src/app.ts"]);
   // The worktree has one author, and the heading gets to say so — though

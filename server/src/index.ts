@@ -2,7 +2,7 @@
 // here, before the imports below open the database and start their timers.
 import "./cookieentry.ts";
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { pricingProvenance, startPricingRefresh } from "./pricing.ts";
@@ -1835,7 +1835,7 @@ const PANES_HELD_TTL_MS = 10_000;
 const NAMES_TTL_MS = 60_000;
 let panesHeld: { at: number; ids: Set<string> } | null = null;
 const authorNames = new Map<string, { at: number; name: string }>();
-function authorsNow(repos: GitRepoRef[]): TreeAuthorsInfo[] {
+function authorsNow(repos: GitRepoRef[], rows: ChangeRow[]): TreeAuthorsInfo[] {
   try {
     if (!panesHeld || Date.now() - panesHeld.at > PANES_HELD_TTL_MS) {
       let ids = new Set<string>();
@@ -1843,7 +1843,12 @@ function authorsNow(repos: GitRepoRef[]): TreeAuthorsInfo[] {
       panesHeld = { at: Date.now(), ids };
     }
     const live = liveSessions(recentSessions(), panesHeld.ids);
-    const trees = treeAuthors(editsBy([...live]), repos.map((r) => ({ path: r.root })), (id) => live.has(id));
+    // The list's own rows, by the list's own key: an edit whose file has been
+    // committed since is not a row, and makes nobody an author. A list cut at
+    // ROWS_MAX can miss an author whose files fell past the cut.
+    const keys = new Set(rows.map((r) => r.key));
+    const trees = treeAuthors(editsBy([...live]), repos.map((r) => ({ path: r.root })), (id) => live.has(id),
+      (root, rel) => keys.has(`${root}\0${rel}`));
     if (!trees.length) return [];
     const now = Date.now();
     const ids = [...new Set(trees.flatMap((t) => t.sessions))];
@@ -5085,7 +5090,7 @@ const server = Bun.serve<WsData>({
         const scope = workspaceRoot();
         const result = await changeRows(repos, mode, scope, ROWS_MAX);
         // Committed rows are history; who is writing into a tree NOW is not a question about them.
-        if (mode === "working") result.authors = authorsNow(repos);
+        if (mode === "working") result.authors = authorsNow(repos, result.rows);
         const out = JSON.stringify(result);
         rowsCache.set(mode, { at: Date.now(), body: out });
         return out;

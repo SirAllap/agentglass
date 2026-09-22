@@ -17,7 +17,8 @@
  *     behind is history, not a second author at work;
  *   * with three authors, a file two of them edited names those two;
  *   * a session that ended with `/clear` is not a second author beside the one
- *     that replaced it.
+ *     that replaced it;
+ *   * nor is a live one whose edits in the tree have all been committed since.
  *
  * That the tree is where a session WROTE and not where it stands is pinned in
  * shared-tree-route.test.ts, where the sessions have a cwd to stand in.
@@ -45,7 +46,7 @@ describe("sharedTrees", () => {
       edit("a", `${REPO}/src/app.ts`, 3),
       edit("b", `${REPO}/src/app.ts`, 2),
       edit("b", `${REPO}/README.md`, 1),
-    ], TREES, all);
+    ], TREES, all, all);
     expect(out).toHaveLength(1);
     expect(out[0]!.root).toBe(REPO);
     expect(out[0]!.sessions).toEqual(["a", "b"]);
@@ -56,7 +57,7 @@ describe("sharedTrees", () => {
     const out = sharedTrees([
       edit("a", `${REPO}/src/app.ts`, 2),
       edit("b", `${REPO}/src/other.ts`, 1),
-    ], TREES, all);
+    ], TREES, all, all);
     expect(out).toHaveLength(1);
     expect(out[0]!.overlap).toEqual([]);
   });
@@ -65,28 +66,28 @@ describe("sharedTrees", () => {
     expect(sharedTrees([
       edit("a", `${REPO}/src/app.ts`, 2),
       edit("b", `${WT}/src/app.ts`, 1),
-    ], TREES, all)).toEqual([]);
+    ], TREES, all, all)).toEqual([]);
   });
 
   test("the innermost checkout holds the file, not the repo around it", () => {
     expect(sharedTrees([
       edit("a", `${REPO}/src/app.ts`, 2),
       edit("b", `${VENDOR}/index.ts`, 1),
-    ], TREES, all)).toEqual([]);
+    ], TREES, all, all)).toEqual([]);
   });
 
   test("a session that is no longer live does not make a tree shared", () => {
     expect(sharedTrees([
       edit("a", `${REPO}/src/app.ts`, 2),
       edit("gone", `${REPO}/src/app.ts`, 1),
-    ], TREES, (id) => id !== "gone")).toEqual([]);
+    ], TREES, (id) => id !== "gone", all)).toEqual([]);
   });
 
   test("a file outside every known checkout is not attributed to any", () => {
     expect(sharedTrees([
       edit("a", "/tmp/scratch.sh", 2),
       edit("b", "/tmp/scratch.sh", 1),
-    ], TREES, all)).toEqual([]);
+    ], TREES, all, all)).toEqual([]);
   });
 
   test("a hook with no session to its name is not an author", () => {
@@ -94,7 +95,7 @@ describe("sharedTrees", () => {
       edit("a", `${REPO}/src/app.ts`, 2),
       edit("", `${REPO}/src/app.ts`, 1),
       edit("unknown", `${REPO}/src/app.ts`, 1),
-    ], TREES, all)).toEqual([]);
+    ], TREES, all, all)).toEqual([]);
   });
 
   test("sessions are listed newest writer first", () => {
@@ -102,7 +103,7 @@ describe("sharedTrees", () => {
       edit("old", `${REPO}/a.ts`, 1),
       edit("new", `${REPO}/b.ts`, 9),
       edit("mid", `${REPO}/c.ts`, 5),
-    ], TREES, all);
+    ], TREES, all, all);
     expect(out[0]!.sessions).toEqual(["new", "mid", "old"]);
   });
 
@@ -111,7 +112,7 @@ describe("sharedTrees", () => {
       edit("a", `${REPO}/src/app.ts`, 3),
       edit("b", `${REPO}/src/other.ts`, 2),
       edit("c", `${REPO}/src/app.ts`, 1),
-    ], TREES, all);
+    ], TREES, all, all);
     expect(out[0]!.sessions).toEqual(["a", "b", "c"]);
     expect(out[0]!.overlap).toEqual([{ path: "src/app.ts", sessions: ["a", "c"] }]);
   });
@@ -122,11 +123,39 @@ describe("treeAuthors", () => {
     const out = treeAuthors([
       edit("a", `${WT}/src/app.ts`, 2),
       edit("b", `${REPO}/src/app.ts`, 1),
-    ], TREES, all);
+    ], TREES, all, all);
     expect(out.map((t) => [t.root, t.sessions])).toEqual([
       [WT, ["a"]],
       [REPO, ["b"]],
     ]);
+  });
+
+  // A committed file is no longer a row in its section, so the session that
+  // edited it has no work there left to be confused with anybody's.
+  const onDisk = (...rows: string[]) => (root: string, rel: string) => rows.includes(`${root}/${rel}`);
+
+  test("a live session whose edits here are all committed is not an author here", () => {
+    const out = treeAuthors([
+      edit("b", `${REPO}/src/app.ts`, 3),
+      edit("a", `${WT}/src/app.ts`, 2),
+      edit("a", `${REPO}/src/old.ts`, 1),
+    ], TREES, all, onDisk(`${REPO}/src/app.ts`, `${WT}/src/app.ts`));
+    expect(out.map((t) => [t.root, t.sessions])).toEqual([
+      [REPO, ["b"]],
+      [WT, ["a"]],
+    ]);
+  });
+
+  test("one file of its still on disk keeps it an author, and a committed file both edited is no overlap", () => {
+    const out = sharedTrees([
+      edit("a", `${REPO}/src/app.ts`, 4),
+      edit("b", `${REPO}/src/app.ts`, 3),
+      edit("b", `${REPO}/src/b.ts`, 2),
+      edit("a", `${REPO}/src/a.ts`, 1),
+    ], TREES, all, onDisk(`${REPO}/src/a.ts`, `${REPO}/src/b.ts`));
+    expect(out).toHaveLength(1);
+    expect(out[0]!.sessions).toEqual(["b", "a"]);
+    expect(out[0]!.overlap).toEqual([]);
   });
 });
 
