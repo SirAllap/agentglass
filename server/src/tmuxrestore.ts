@@ -432,32 +432,50 @@ export function agentUnder(panePid: number, proc: ProcReader = machineProc): Age
 
 /**
  * Is the hook's note about THIS agent, or about one that had the pane id
- * before it?
+ * before it, or about a pane of the same id on another tmux?
  *
- * Pane ids are reused: the server that restores a desk starts at %0 again,
- * and a note written for an agent in another checkout, in a previous life
- * of this id, would resume that agent here. The first guard against that
- * compared the note's directory with the process's, and it set aside the
- * notes of live agents by the dozen: the note's cwd is the hook payload's,
- * which follows the Bash tool's `cd` — one session reported thirteen
- * directories over its life — while the CLI process never moves for it
- * (`chdir` only at start and on entering or leaving a worktree, read off the
- * installed binary). After the first `cd server && …` the note no longer
- * "fit", and the pane came back from a reboot as a shell with the
- * conversation lost, or on the pre-`/clear` id from its argv.
+ * The note is keyed by pane id alone, and a pane id is only one server's.
+ * Hooks fire from every tmux on the machine, so a Claude in the person's own
+ * tmux on `%2` writes the note of the engine's `%2`; and ids start at %0
+ * again on the server that restores a desk, so a note from the server that
+ * died can name a pane of this one. The hook says which server it fired in
+ * (`notePaneFromHook`), and a note from another is never this pane's.
  *
- * So the question is when, not where: a note written after this process was
- * born was written by a hook this process fired — same pane, same server —
- * and a note older than the process is the previous occupant's. Equal
- * directories are still taken as a match first, because that needs no
- * clock. The slack covers the boot time being whole seconds. A machine that
- * can say neither (a Mac) takes the note at its word, as before.
+ * Within one server, the question is when, not where. The first guard
+ * compared the note's directory with the process's, and set aside the notes
+ * of live agents by the dozen: the note's cwd is the hook payload's, which
+ * follows the Bash tool's `cd` — one session reported thirteen directories
+ * over its life — while the CLI never moves for it (`chdir` only at start and
+ * on entering or leaving a worktree, read off the installed binary). A note
+ * written after this process was born, on this server, was written by a hook
+ * this process fired; one written before belongs to whatever had the pane
+ * before it — a Claude somebody quit — even in the same directory, because
+ * many agents share a checkout. The slack covers the boot time being whole
+ * seconds.
+ *
+ * A note from a hook that does not name its server (installed before it
+ * did) is taken by time only when its directory is inside the process's:
+ * that cannot be told from another tmux's pane otherwise, and a `cd` out of
+ * the checkout is the ceiling. A machine that cannot say when a process
+ * started (a Mac) keeps the directory rule, and takes a note at its word when
+ * it cannot say that either.
+ *
+ * Also a ceiling: a wall-clock step after the agent started (NTP correcting a
+ * clock that was behind at boot) moves the computed start by the step, and
+ * the agent's notes are set aside until its next hook.
  */
 export const NOTE_SLACK_MS = 2_000;
-export function noteIsThisAgents(note: { cwd: string; at: number }, under: { cwd: string; startedAt: number }): boolean {
-  if (note.cwd === under.cwd) return true;
-  if (under.startedAt) return note.at >= under.startedAt - NOTE_SLACK_MS;
-  return !under.cwd;
+const within = (dir: string, root: string): boolean =>
+  !root || dir === root || dir.startsWith(root.endsWith("/") ? root : `${root}/`);
+export function noteIsThisAgents(note: { cwd: string; at: number; server?: string }, under: { cwd: string; startedAt: number }, server = ""): boolean {
+  if (note.server && server && note.server !== server) return false;
+  const sameServer = !!note.server && !!server;
+  if (under.startedAt) {
+    if (note.at < under.startedAt - NOTE_SLACK_MS) return false;
+    return sameServer || within(note.cwd, under.cwd);
+  }
+  if (sameServer) return true;
+  return !under.cwd || note.cwd === under.cwd;
 }
 
 /** The `--resume <uuid>` on a command line, when it carries one. A pane
@@ -729,7 +747,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    */
   if (restoring) { captureWanted = true; return null; }
   if (capturingHalted()) return null;
-  const { names, engine, startedAt } = await liveSessions();
+  const { names, engine, startedAt, server } = await liveSessions();
   /*
    * An empty socket is not "no sessions" — it is far more often tmux not
    * answering yet, or the app racing its own engine at boot. Writing an empty
@@ -789,16 +807,20 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
          * lived: the last photograph of this very pane, on this same server
          * (ids are only ever one server's), which has the id and the flags;
          * or, for a pane that died before a sweep ever saw it, the hook's
-         * note — only one written since this server started, for the same
-         * reason `noteIsThisAgents` gives. A pane last photographed running
-         * something else is that something else's corpse and comes back as
-         * a shell; so does a Claude that lived less than a sweep in it, which
-         * is the ceiling.
+         * note — only for a pane BORN as the Claude CLI, and only a note from
+         * this server since it started (`noteIsThisAgents`, with the server's
+         * start for the process's). A pane born as a wrapper that Claude
+         * once ran inside is that wrapper's corpse, and so is a pane last
+         * photographed running something else: both come back as a shell;
+         * so does a Claude that lived less than a sweep in a pane born as
+         * something else, which is the ceiling.
          */
         if (p.dead) {
           const was = previous?.sessions.find((s) => s.name === name)?.windows.find((x) => x.id === w.id)?.panes.find((x) => x.id === p.id);
-          const note = was ? null : paneAgentNote(p.id);
-          const agentSession = was ? was.agentSession : note && note.at >= startedAt - NOTE_SLACK_MS ? note.session_id : undefined;
+          const bornClaude = startCommand.split(/[\s"']+/).some((t) => (t.split("/").pop() || "") === claudeName());
+          const note = was || !bornClaude ? null : paneAgentNote(p.id);
+          const noteFits = !!note && noteIsThisAgents(note, { cwd: p.path, startedAt }, server);
+          const agentSession = was ? was.agentSession : noteFits ? note!.session_id : undefined;
           panes.push({ ...p, startCommand: "", ...(agentSession ? { agentSession, ...(was?.agentArgs ? { agentArgs: was.agentArgs } : {}) } : {}) });
           continue;
         }
@@ -829,7 +851,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
            * carries before any hook has fired.
            */
           const note = paneAgentNote(p.id);
-          const noteFits = !!note && noteIsThisAgents(note, under);
+          const noteFits = !!note && noteIsThisAgents(note, under, server);
           const resumed = resumeIdIn(under.argv);
           const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
           const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, note?.session_id], under.startedAt));
@@ -861,20 +883,23 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
  * line; together they name a server for its life, and a different pair is a
  * server that died and was started again. That is what `deskIsWhole` asks.
  */
-async function liveSessions(): Promise<{ names: string[]; engine: string; startedAt: number }> {
-  const r = await tmux(["list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"]);
-  if (!r.ok) return { names: [], engine: "", startedAt: 0 }; // no server running yet is the common case, not an error
+async function liveSessions(): Promise<{ names: string[]; engine: string; startedAt: number; server: string }> {
+  const r = await tmux(["list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}\t#{socket_path}"]);
+  if (!r.ok) return { names: [], engine: "", startedAt: 0, server: "" }; // no server running yet is the common case, not an error
   const names: string[] = [];
   let engine = "";
   let startedAt = 0;
+  let server = "";
   for (const line of r.stdout.split("\n")) {
-    const [name = "", pid = "", started = ""] = line.split("\t");
+    const [name = "", pid = "", started = "", socket = ""] = line.split("\t");
     if (!name.trim()) continue;
     names.push(name.trim());
     engine ||= `${pid.trim()}.${started.trim()}`;
     startedAt ||= Number(started.trim()) * 1000 || 0;
+    /* The spelling the hook uses for the same server (`notePaneFromHook`). */
+    server ||= socket.trim() && pid.trim() ? `${socket.trim()},${pid.trim()}` : "";
   }
-  return { names, engine, startedAt };
+  return { names, engine, startedAt, server };
 }
 
 /**

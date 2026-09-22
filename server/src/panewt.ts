@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS pane_agent (
   cwd             TEXT NOT NULL,
   at              INTEGER NOT NULL
 )`);
+/* Which tmux server the pane is on, as "<socket path>,<server pid>" — see
+   `notePaneFromHook`. Empty for a hook that does not say. */
+try { db.exec("ALTER TABLE pane_agent ADD COLUMN server TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
 
 /** tmux's own spelling of a pane id. Anything else came from somewhere that
  *  should not be writing here, and is dropped rather than stored. */
@@ -71,16 +74,22 @@ export interface PaneAgentNote {
   transcript_path: string;
   cwd: string;
   at: number;
+  /** "<socket path>,<server pid>" of the tmux the hook fired in, or "". */
+  server: string;
 }
 
 const noteUpsert = db.query(`
-INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at)
-VALUES ($pane_id, $session_id, $transcript_path, $cwd, $at)
+INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at, server)
+VALUES ($pane_id, $session_id, $transcript_path, $cwd, $at, $server)
 ON CONFLICT(pane_id) DO UPDATE SET
   session_id = excluded.session_id,
   transcript_path = excluded.transcript_path,
   cwd = excluded.cwd,
-  at = excluded.at`);
+  at = excluded.at,
+  server = excluded.server`);
+
+/** A tmux server as the hook names it: an absolute socket path and a pid. */
+const TMUX_SERVER = /^\/[^\0\n\r]{1,1024},\d{1,10}$/;
 
 const noteRead = db.query<PaneAgentNote, [string]>(
   "SELECT * FROM pane_agent WHERE pane_id = ?",
@@ -100,11 +109,12 @@ const recentPanes = db.query<{ pane_id: string; session_id: string; cwd: string;
  * until the agent happens to run another tool, which for an idle agent is
  * never.
  */
-export function notePaneAgent(n: { pane: string; sessionId: string; transcriptPath: string; cwd: string; at?: number }): boolean {
+export function notePaneAgent(n: { pane: string; sessionId: string; transcriptPath: string; cwd: string; at?: number; server?: string }): boolean {
   if (!PANE_ID.test(n.pane) || !n.transcriptPath || !n.cwd) return false;
   noteUpsert.run({
     $pane_id: n.pane, $session_id: n.sessionId || "unknown",
     $transcript_path: n.transcriptPath, $cwd: n.cwd, $at: n.at ?? Date.now(),
+    $server: n.server && TMUX_SERVER.test(n.server) ? n.server : "",
   } as never);
   return true;
 }
@@ -113,6 +123,7 @@ export function notePaneAgent(n: { pane: string; sessionId: string; transcriptPa
 export function notePaneFromHook(body: {
   session_id?: string;
   tmux_pane?: unknown;
+  tmux_server?: unknown;
   payload?: Record<string, unknown>;
 }): boolean {
   const pane = typeof body.tmux_pane === "string" ? body.tmux_pane : "";
@@ -120,7 +131,8 @@ export function notePaneFromHook(body: {
   const transcriptPath = typeof p.transcript_path === "string" ? p.transcript_path : "";
   const cwd = typeof p.cwd === "string" ? p.cwd : "";
   if (!pane || !transcriptPath || !cwd) return false;
-  return notePaneAgent({ pane, sessionId: body.session_id ?? "unknown", transcriptPath, cwd });
+  const server = typeof body.tmux_server === "string" ? body.tmux_server : "";
+  return notePaneAgent({ pane, sessionId: body.session_id ?? "unknown", transcriptPath, cwd, server });
 }
 
 /**

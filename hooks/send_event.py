@@ -122,6 +122,14 @@ def main():
     pane = os.environ.get("TMUX_PANE")
     if pane:
         body["tmux_pane"] = pane
+        # And which tmux server: a pane id is only one server's, and this hook
+        # fires from every tmux on the machine — `%2` in the person's own tmux
+        # and `%2` on the app's engine are two panes. $TMUX is
+        # "<socket path>,<server pid>,<session index>"; the first two name the
+        # server for its life.
+        tmux_server = os.environ.get("TMUX", "").rsplit(",", 1)[0]
+        if "," in tmux_server and tmux_server.rsplit(",", 1)[1].isdigit():
+            body["tmux_server"] = tmux_server
     if chat is not None:
         body["chat"] = chat
     # What this session is to the app, when it is not a person's agent: the

@@ -194,17 +194,36 @@ describe("on Linux, the measured spelling is unchanged", () => {
     const here = { cwd: "/home/someone/code/orbit", startedAt: born };
     /* The hook's cwd follows `cd`; the process's does not. Same agent. */
     expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit/server/src", at: born + 60_000 }, here)).toBe(true);
-    expect(noteIsThisAgents({ cwd: "/tmp", at: born + 60_000 }, here), "a cd out of the repo is still this agent").toBe(true);
     /* Written before this process existed: the previous occupant of the id. */
     expect(noteIsThisAgents({ cwd: "/home/someone/code/acme", at: born - 60_000 }, here)).toBe(false);
     /* The boot time is whole seconds, so a note from the first moment is not set aside. */
-    expect(noteIsThisAgents({ cwd: "/tmp", at: born - NOTE_SLACK_MS + 1 }, here)).toBe(true);
-    /* Equal directories need no clock — even for a note older than the process. */
-    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit", at: born - 60_000 }, here)).toBe(true);
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit", at: born - NOTE_SLACK_MS + 1 }, here)).toBe(true);
+    /* With the time known, the time decides: equal directories do not
+       rescue a note older than the process — many agents share a checkout. */
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit", at: born - 60_000 }, here)).toBe(false);
     /* A Mac says neither, and the note is taken at its word; a machine that
        says the directory and not the time keeps the old rule. */
     expect(noteIsThisAgents({ cwd: "/elsewhere", at: 0 }, { cwd: "", startedAt: 0 })).toBe(true);
     expect(noteIsThisAgents({ cwd: "/elsewhere", at: born + 1 }, { cwd: "/home/someone/code/orbit", startedAt: 0 })).toBe(false);
+  });
+
+  test("a note from another tmux server is never this pane's; from this one, the time decides", () => {
+    const born = 1_700_000_000_000;
+    const here = { cwd: "/home/someone/code/orbit", startedAt: born };
+    const ENGINE = "/tmp/tmux-1000/agentglass,4242";
+    /* The person's own tmux, a pane of the same id, a moment ago. */
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit", at: born + 5_000, server: "/tmp/tmux-1000/default,777" }, here, ENGINE)).toBe(false);
+    /* This server, after the process was born, anywhere the agent has cd'd. */
+    expect(noteIsThisAgents({ cwd: "/tmp", at: born + 5_000, server: ENGINE }, here, ENGINE)).toBe(true);
+    /* This server, before: the agent that had this pane before this one. */
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit", at: born - 60_000, server: ENGINE }, here, ENGINE)).toBe(false);
+    /* A note from a hook that does not say its server, with the time known:
+       only inside the process's own directory — a `cd` out of it is not
+       told from somebody else's pane. */
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit/server", at: born + 5_000 }, here, ENGINE)).toBe(true);
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit-web", at: born + 5_000 }, here, ENGINE)).toBe(false);
+    /* No time (a Mac), same server: taken. */
+    expect(noteIsThisAgents({ cwd: "/tmp", at: 0, server: ENGINE }, { cwd: "/x", startedAt: 0 }, ENGINE)).toBe(true);
   });
 
   test("the walk stops at a shell's depth, and at a ceiling of processes", () => {

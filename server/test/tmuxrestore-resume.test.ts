@@ -69,7 +69,7 @@ describe("what a restored pane is told to run", () => {
 describe("where the id comes from", () => {
   it("prefers the note the pane hook wrote, when this agent's own hooks wrote it", () => {
     expect(src).toContain("const note = paneAgentNote(p.id);");
-    expect(src).toContain("const noteFits = !!note && noteIsThisAgents(note, under);");
+    expect(src).toContain("const noteFits = !!note && noteIsThisAgents(note, under, server);");
   });
 
   it("and reads the running process when there is no note yet", () => {
@@ -100,7 +100,7 @@ describe("a note that outlived its agent", () => {
      * directory).
      */
     expect(src).toContain("if (under && under.name === claudeName()) {");
-    expect(src).toContain("const noteFits = !!note && noteIsThisAgents(note, under);");
+    expect(src).toContain("const noteFits = !!note && noteIsThisAgents(note, under, server);");
   });
 
   it("compares against the CLI's own basename, not a literal", () => {

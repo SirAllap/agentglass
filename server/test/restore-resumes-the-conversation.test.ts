@@ -129,6 +129,26 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.agentSession, "the conversation of an agent that cd'd").toBe(OTHER);
   }, 20_000);
 
+  test("a note from another tmux server's pane of the same id is somebody else's conversation, however recent", async () => {
+    /*
+     * Hooks fire from every tmux on the machine, and the note is keyed by the
+     * pane id alone: a Claude in the person's own tmux on `%2` writes the
+     * note of the engine's `%2`. Accepted by time alone, it would resume that
+     * other conversation here at the next boot.
+     */
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "foreign", "-c", CWD, ...fakeClaude("--model", "opus")]);
+    const id = await paneOf("foreign");
+    await Bun.sleep(250);
+    expect(wt.notePaneAgent({ pane: id, sessionId: OTHER, transcriptPath: "/tmp/t.jsonl", cwd: CWD, server: "/tmp/tmux-1000/default,1" })).toBe(true);
+    const got = await photographed("foreign");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.agentSession, "another server's conversation").toBeUndefined();
+    /* The same note from THIS server is this pane's, directory or not. */
+    const here = (await pane.tmux(["display-message", "-p", "-t", `=${S}:foreign`, "#{socket_path},#{pid}"])).stdout.trim();
+    expect(wt.notePaneAgent({ pane: id, sessionId: OTHER, transcriptPath: "/tmp/t.jsonl", cwd: "/tmp", server: here })).toBe(true);
+    expect((await photographed("foreign"))!.agentSession).toBe(OTHER);
+  }, 20_000);
+
   test("a note from a previous life of the pane id is somebody else's conversation, not this pane's", async () => {
     /* Pane ids are reused across a reboot; a note written before this
        agent was born — for an agent in another directory — must not resume
@@ -229,6 +249,30 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.dead).toBe(true);
     expect(got!.agentSession).toBe(EARLY);
     expect(got!.agentArgs).toBeUndefined();
+  }, 20_000);
+
+  test("a dead pane with another server's note, or one not born as the CLI, is a shell", async () => {
+    const FOREIGN = "8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a";
+    const stop = join(CWD, "stop-foreign");
+    writeFileSync(stop, "");
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "dforeign", "-c", CWD, ...fakeCrashingClaude(stop, "--model", "opus")]);
+    const id = await paneOf("dforeign");
+    wt.notePaneAgent({ pane: id, sessionId: FOREIGN, transcriptPath: "/tmp/t.jsonl", cwd: CWD, server: "/tmp/tmux-1000/default,1" });
+    const got = await photographed("dforeign");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.dead).toBe(true);
+    expect(got!.agentSession, "the person's own tmux wrote that note").toBeUndefined();
+
+    /* Born as a wrapper that exits 1; a Claude ran in it once, on this server. */
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "wrapper", "-c", CWD, "sh", "-c", "sleep 0.3; exit 1"]);
+    const wid = await paneOf("wrapper");
+    const here = (await pane.tmux(["display-message", "-p", "-t", `=${S}:wrapper`, "#{socket_path},#{pid}"])).stdout.trim();
+    wt.notePaneAgent({ pane: wid, sessionId: FOREIGN, transcriptPath: "/tmp/t.jsonl", cwd: CWD, server: here });
+    await Bun.sleep(600);
+    const wrapped = await photographed("wrapper");
+    expect(wrapped, "the pane is in the picture").not.toBeUndefined();
+    expect(wrapped!.dead).toBe(true);
+    expect(wrapped!.agentSession, "a wrapper's corpse is not a conversation").toBeUndefined();
   }, 20_000);
 
   test("a dead pane with a note from a previous life of its id is a shell", async () => {

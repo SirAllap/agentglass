@@ -123,6 +123,35 @@ describe("the pane note", () => {
     expect(paneAgentNote(PANE)?.session_id).toBe("new");
     expect(paneAgentNote(PANE)?.transcript_path).toBe("/new.jsonl");
   });
+
+  test("the note says which tmux server the pane is on, because a pane id alone is only one server's", () => {
+    /* `%2` in the person's own tmux and `%2` on the engine are two panes; the
+       hook fires from both, and the row is keyed by the id alone. */
+    expect(notePaneFromHook({ session_id: "s1", tmux_pane: PANE, tmux_server: "/tmp/tmux-1000/orbit,4242", payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
+    expect(paneAgentNote(PANE)?.server).toBe("/tmp/tmux-1000/orbit,4242");
+    /* A hook from before this field, or one that sends something else, writes
+       no server — and never keeps the previous writer's. */
+    expect(notePaneFromHook({ session_id: "s2", tmux_pane: PANE, payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
+    expect(paneAgentNote(PANE)?.server).toBe("");
+    expect(notePaneFromHook({ session_id: "s3", tmux_pane: PANE, tmux_server: "not a server\n", payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
+    expect(paneAgentNote(PANE)?.server).toBe("");
+  });
+
+  test.skipIf(!Bun.which("python3"))("the hook sends the server out of $TMUX, which it inherits from the pane", async () => {
+    let got: Record<string, unknown> = {};
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) { got = (await req.json()) as Record<string, unknown>; return new Response("ok"); } });
+    try {
+      const proc = Bun.spawn(["python3", join(import.meta.dir, "..", "..", "hooks", "send_event.py"), "--server", `http://127.0.0.1:${server.port}`, "--source-app", "orbit"], {
+        stdin: "pipe", stdout: "pipe", stderr: "pipe",
+        env: { PATH: process.env.PATH ?? "", HOME: tmpdir(), TMUX: "/tmp/tmux-1000/orbit,4242,3", TMUX_PANE: "%7" },
+      });
+      proc.stdin.write(JSON.stringify({ hook_event_name: "PostToolUse", session_id: "s", cwd: REPO, tool_name: "Bash" }));
+      proc.stdin.end();
+      expect(await proc.exited).toBe(0);
+      expect(got.tmux_pane).toBe("%7");
+      expect(got.tmux_server).toBe("/tmp/tmux-1000/orbit,4242");
+    } finally { server.stop(true); }
+  });
 });
 
 describe("paneDirs", () => {
