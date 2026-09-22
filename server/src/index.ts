@@ -7370,6 +7370,7 @@ const server = Bun.serve<WsData>({
           prompt: typeof b.prompt === "string" ? b.prompt : "",
           yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
+          keep: b.keep === true,
         });
         if (!r.ok) {
           /* `arg-refused` is answered below, with the flag in it. */

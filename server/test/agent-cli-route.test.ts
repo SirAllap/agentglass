@@ -34,6 +34,8 @@ const STUB = `#!/usr/bin/env bash
 case " $* " in *" --help "*) echo "  -n, --name <name>  session name"; exit 0;; esac
 # A CLI that fails at launch — a missing binary's wrapper, a bad flag.
 [ -e "$AGX_STUB_LOG.die" ] && exit 1
+# A one-shot — \`qwen -p\`, \`opencode run\` — that prints its answer and exits 0.
+[ -e "$AGX_STUB_LOG.oneshot" ] && { printf 'the answer is 42\\n'; exit 0; }
 printf '%s\\n' "$@" > "$AGX_STUB_LOG.argv"
 printf '\\033[2J\\033[H'
 printf 'Welcome to the stub\\n\\n❯ '
@@ -269,6 +271,40 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
       expect(rows.filter((r) => r.endsWith("\tagents\twdie")), "a dead window was left in the agents session").toEqual([]);
       expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wdie")).toBe(false);
     } finally { rmSync(`${log}.die`, { force: true }); }
+  }, SLOW);
+
+  test("--keep: a one-shot that exits 0 leaves its tab to be read, and leaves the list", async () => {
+    /*
+     * The orchestrator opened its one-shots with a bare `tmux new-window
+     * "cli …"`: nothing kept the pane, so a CLI that finished — exit 0 —
+     * took its tab and its answer with it in the same second. `--keep`
+     * runs it through the wrapper every other window this app opens uses:
+     * the answer stays on screen under a line saying the CLI exited.
+     */
+    writeFileSync(`${log}.oneshot`, "");
+    try {
+      const { out } = await cli("start", "wkeep", "--cwd", wt, "--keep", "--timeout", "5000");
+      expect(out.ok, out.error).toBe(true);
+      expect(out.result?.state, "the wait ends when the CLI does").toBe("gone");
+      const paneId = (out.result?.agent as Record<string, string>).paneId;
+      for (let i = 0; i < 30 && (await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"); i++) await Bun.sleep(100);
+      expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"), "an agent whose CLI has exited is not live").toBe(false);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twkeep")), "the tab is still there").toBe(true);
+      const screen = Bun.spawnSync(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "capture-pane", "-p", "-t", paneId], { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR } }).stdout.toString();
+      expect(screen).toContain("the answer is 42");
+      expect(screen).toContain("the CLI exited (0)");
+      /* The name is free again, as for any agent that has ended. */
+      expect((await cli("list", "--all")).out.result?.agents?.find((a) => a.name === "wkeep")?.endedAt).not.toBeNull();
+    } finally { rmSync(`${log}.oneshot`, { force: true }); }
+  }, SLOW);
+
+  test("without --keep the tab goes with the CLI, as a watched agent's always has", async () => {
+    writeFileSync(`${log}.oneshot`, "");
+    try {
+      await cli("start", "wgone", "--cwd", wt, "--timeout", "0");
+      for (let i = 0; i < 30 && (await panes()).some((r) => r.endsWith("\tagents\twgone")); i++) await Bun.sleep(100);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twgone"))).toBe(false);
+    } finally { rmSync(`${log}.oneshot`, { force: true }); }
   }, SLOW);
 
   test("an agent whose CLI exits on its own is gone from the list without anybody stopping it", async () => {

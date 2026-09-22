@@ -91,8 +91,10 @@ export async function windowTree(name: string): Promise<TmuxWindowDetail[]> {
 
 /** The command a pane starts with. Same `sh`-wrapped, exit-surviving shape the
  *  chat engine uses (newSessionArgv), so a tool that exits leaves the pane
- *  alive with a line saying so instead of vanishing mid-layout. */
-function paneCommand(argv: string[]): string {
+ *  alive with a line saying so instead of vanishing mid-layout. A named agent
+ *  started with `--keep` runs in it too (agentops.ts), and is read as ended
+ *  once the `sleep` has taken over (`KEPT_EXITED`). */
+export function paneCommand(argv: string[]): string {
   if (!argv.length) return "";
   const quoted = argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
   return `${quoted}; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' "$?"; exec sleep 86400`;

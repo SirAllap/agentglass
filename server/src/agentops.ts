@@ -28,6 +28,7 @@
  */
 import { db } from "./db.ts";
 import { tmux, engineWindowRunning } from "./tmuxpane.ts";
+import { paneCommand } from "./tmuxlayout.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
 import { agentKind } from "../../shared/agentKinds.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
@@ -100,12 +101,24 @@ export async function paneAlive(paneId: string): Promise<boolean> {
  *  A DEAD pane is not on it: the engine keeps a pane whose command failed
  *  (tmuxconf.ts), and an agent that crashed is a status line in a tab, not
  *  somebody to prompt, broadcast to or wait on. */
+/**
+ * A pane whose CLI has exited and whose tab is kept for reading: the wrapper
+ * (`paneCommand`) has `exec`'d its `sleep`. While the CLI runs, the pane's
+ * foreground is the `sh` that waits for it — a non-interactive shell keeps
+ * one process group, so tmux names its leader — and it becomes `sleep` only
+ * at the `exec` after the CLI has returned. The born-with line is checked for
+ * the wrapper's own words, so a pane somebody started as `sleep` is not
+ * taken for one.
+ */
+const KEPT_EXITED = (current: string, start: string): boolean =>
+  current === "sleep" && start.includes("the CLI exited");
+
 async function panesAlive(): Promise<Set<string>> {
-  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}"]).catch(() => null);
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_start_command}"]).catch(() => null);
   const out = new Set<string>();
   for (const line of r?.ok ? r.stdout.split("\n") : []) {
-    const [id = "", dead = ""] = line.trim().split("\t");
-    if (id.startsWith("%") && dead !== "1") out.add(id);
+    const [id = "", dead = "", current = "", ...start] = line.trim().split("\t");
+    if (id.startsWith("%") && dead !== "1" && !KEPT_EXITED(current, start.join("\t"))) out.add(id);
   }
   return out;
 }
@@ -213,6 +226,9 @@ export async function startAgent(p: {
    *  (seat.ts), and a body that could set environment would be a body that
    *  could set `AGENTGLASS_TOKEN`. */
   env?: Record<string, string>;
+  /** Keep the tab when the CLI exits, with a line saying how, for a one-shot
+   *  whose answer is read afterwards. The agent is ended all the same. */
+  keep?: boolean;
   yoloAllowed: boolean;
   now?: number;
 }): Promise<StartResult> {
@@ -251,7 +267,17 @@ export async function startAgent(p: {
      place for windows a script opened — it appears on the board and in the
      Terminal view's session list either way. Never selected, so nobody's
      screen is yanked by a tick. */
-  const opened = await engineWindowRunning(p.root, p.name, argv, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, AGENTS_SESSION, false);
+  /*
+   * `keep` runs the CLI through the wrapper every other window this app opens
+   * uses. Without it the window closes with the CLI, which is how a watched
+   * agent's end has always been seen; with it the pane outlives the CLI, and
+   * the end is read off the wrapper's `sleep` instead (`KEPT_EXITED`). The
+   * orchestrator opened its one-shots as a bare `tmux new-window "cli …"`,
+   * and a CLI that finished — exit 0, which the engine does not keep
+   * (tmuxconf.ts) — took its tab and its answer with it.
+   */
+  const run = p.keep ? ["sh", "-c", paneCommand(argv)] : argv;
+  const opened = await engineWindowRunning(p.root, p.name, run, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, AGENTS_SESSION, false);
   if (!opened) return { ok: false, error: "no-window" };
   /* A window this app opened and watches: its closing is how `reconcile`
      learns the agent ended, so it closes on any exit rather than keeping the
@@ -296,7 +322,9 @@ export function stateOfScreen(screen: string | null): AgentState {
 export async function waitFor(paneId: string, until: AgentState[], timeoutMs: number, tick = 250): Promise<{ state: AgentState; reached: boolean }> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
   for (;;) {
-    const state = stateOfScreen(await screenOf(paneId));
+    /* A kept tab is still on screen after its CLI has exited; the agent in
+       it is gone all the same. */
+    const state = (await panesAlive()).has(paneId) ? stateOfScreen(await screenOf(paneId)) : "gone";
     if (until.includes(state) || state === "gone") return { state, reached: until.includes(state) };
     if (Date.now() >= deadline) return { state, reached: false };
     await Bun.sleep(tick);
