@@ -96,7 +96,10 @@ describe("the window a period covers", () => {
     ].join("\n");
     for (const [tz, localDate] of [["Pacific/Kiritimati", 16], ["Pacific/Niue", 15]] as const) {
       const r = Bun.spawnSync(["bun", "-e", script], {
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TZ: tz },
+        // NODE_ENV=test because budget.ts imports db.ts, which opens its
+        // database at module load: without it this child opened the real
+        // history under HOME on every run of the suite.
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TZ: tz, NODE_ENV: "test" },
       });
       const out = JSON.parse(r.stdout.toString().trim() || "{}");
       // The child really is in that zone — otherwise this test proves nothing.
