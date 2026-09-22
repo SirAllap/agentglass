@@ -1,28 +1,16 @@
 # Changelog
 
-Where this is going, and every release behind it. The record of record is the
+Every release, read end to end. The record of record is the
 [releases page](https://github.com/SirAllap/agentglass/releases) — each tag
-carries its own notes, the desktop installers and the phone's `.apk`. This file
-is the same record read end to end, plus the themes that have not shipped yet.
+carries its own notes, the desktop installers and the phone's `.apk`.
 
 ## Where this is going
 
-Where this is going — themes, not dates. The living version is the issue tracker; the [`help wanted`](https://github.com/SirAllap/agentglass/labels/help%20wanted) and [`good first issue`](https://github.com/SirAllap/agentglass/labels/good%20first%20issue) labels mark the best places to start.
-
-**Now**
-- Lead with a verdict: what's running, what's stuck, what needs you now — [#42](https://github.com/SirAllap/agentglass/issues/42)
-
-**Next**
-- Per-agent changes scoped to each session's worktree/branch — [#117](https://github.com/SirAllap/agentglass/issues/117)
-- Warn when parallel agents collide on shared runtime the diff can't see — [#118](https://github.com/SirAllap/agentglass/issues/118)
-- A gate that can hold by rule (spend, allowlist), not only by hand — [#109](https://github.com/SirAllap/agentglass/issues/109)
-- Per-project gate policies and hook profiles — [#14](https://github.com/SirAllap/agentglass/issues/14)
-
-**Later / exploring**
-- An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
-- Tasks per project, and a decision log mined from transcripts — [#12](https://github.com/SirAllap/agentglass/issues/12), [#13](https://github.com/SirAllap/agentglass/issues/13)
-- Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
-
+The [Roadmap in the README](README.md#-roadmap), and the discussion behind it in
+[#172](https://github.com/SirAllap/agentglass/issues/172). It used to be copied
+here as well, and the copy fell behind: it still led with a verdict the Lantern
+had already shipped and never gained the items added to the README since. One
+list, kept in one place.
 
 ## Released
 

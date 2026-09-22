@@ -191,12 +191,12 @@ label is where to start.
 - A gate that can hold by rule — a tool allowlist beside the spend threshold that already works — [#109](https://github.com/SirAllap/agentglass/issues/109)
 - Per-project gate policies and hook profiles — [#14](https://github.com/SirAllap/agentglass/issues/14)
 - Let an agent query the cockpit over MCP: what is running, what it costs, what is held — [#296](https://github.com/SirAllap/agentglass/issues/296)
-- Verify the Windows build on real hardware — [#231](https://github.com/SirAllap/agentglass/issues/231), [#195](https://github.com/SirAllap/agentglass/issues/195)
+- Verify the Windows build on real hardware — [#231](https://github.com/SirAllap/agentglass/issues/231)
 
 **Later / exploring**
 - Review a local diff in place and send the whole review as one prompt — [#294](https://github.com/SirAllap/agentglass/issues/294)
 - An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
-- Tasks per project, and a decision log mined from transcripts — [#12](https://github.com/SirAllap/agentglass/issues/12), [#13](https://github.com/SirAllap/agentglass/issues/13)
+- A decision log mined from transcripts — [#13](https://github.com/SirAllap/agentglass/issues/13)
 
 Shipped so far, newest first: [**CHANGELOG.md**](CHANGELOG.md) and the
 [releases](https://github.com/SirAllap/agentglass/releases).
