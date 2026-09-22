@@ -3235,11 +3235,14 @@ export function sessionsWhosePromptStarts(mark: string): string[] {
  * process's arguments is the prompt and which is a flag's value — exactly,
  * with no list of flags to keep up to date. One indexed lookup per candidate.
  */
-const promptSeen = db.query<{ one: number }, [string, string]>(
-  `SELECT 1 AS one FROM events WHERE session_id = ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
-export function wasPromptOf(sessionId: string, text: string): boolean {
+const promptSeen = db.query<{ one: number }, [string, number, string]>(
+  `SELECT 1 AS one FROM events WHERE session_id = ? AND timestamp >= ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+/** `sinceMs`: see `wasPromptAnywhere` — a resumed conversation carries its
+ *  whole history, and a flag's value typed there once as an answer is not a
+ *  prompt on this process's command line. */
+export function wasPromptOf(sessionId: string, text: string, sinceMs = 0): boolean {
   if (!sessionId || !text) return false;
-  try { return promptSeen.get(sessionId, text) !== null; } catch { return false; }
+  try { return promptSeen.get(sessionId, Math.max(0, sinceMs), text) !== null; } catch { return false; }
 }
 
 /**

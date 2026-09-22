@@ -289,6 +289,21 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.agentSession).toBeUndefined();
   }, 20_000);
 
+  test("nor a value that was typed as a prompt in the very conversation it resumes, before this process existed", async () => {
+    /* A restored pane resumes a conversation with all its history. "opus",
+       typed there once as the answer to a question, is not a prompt on this
+       process's command line: that was submitted after the process started. */
+    const OLDER = "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d";
+    db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
+      ["orbit", OLDER, "UserPromptSubmit", JSON.stringify({ prompt: "sonnet" }), Date.now() - 3_600_000]);
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "ownhist", "-c", CWD, ...fakeClaude("--model", "sonnet", "--resume", OLDER)]);
+    const got = await photographed("ownhist");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.agentSession).toBe(OLDER);
+    const args = got!.agentArgs ?? [];
+    expect(args[args.indexOf("--model") + 1], "the value after --model").toBe("sonnet");
+  }, 20_000);
+
   test("a pane that was itself restored carries its id on its own line", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "second", "-c", CWD, ...fakeClaude("--dangerously-skip-permissions", "--resume", OTHER)]);
     const got = await photographed("second");
