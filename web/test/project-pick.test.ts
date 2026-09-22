@@ -9,11 +9,12 @@
  * harness, so they live in lib/projectPick.ts and are asserted here.
  */
 import { describe, expect, test } from "bun:test";
-import { allOpen, autoPick, initialTicks, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
+import { allOpen, autoPick, initialTicks, inOpenProjects, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
 
 // Comment lines out, so a sentence about the gate cannot stand in for the gate.
 const APP = (await Bun.file(new URL("../src/App.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+const CHAT = await Bun.file(new URL("../src/components/ChatPanel.tsx", import.meta.url)).text();
 
 const ORBIT = "/home/dev/code/orbit";
 const LANDER = "/home/dev/code/lander";
@@ -68,6 +69,19 @@ describe("remembering what was opened", () => {
   });
   test("the folder itself is inside itself", () => {
     expect(rootsToAdd(["/home/dev/code"], ["/home/dev/code/"])).toEqual([]);
+  });
+});
+
+describe("what belongs to the open projects", () => {
+  test("a directory in the second project is as much in scope as one in the first", () => {
+    expect(inOpenProjects(`${LANDER}/src`, [ORBIT, LANDER])).toBe(true);
+    expect(inOpenProjects(DOCS, [ORBIT, LANDER])).toBe(false);
+  });
+  test("nothing open keeps everything", () => {
+    expect(inOpenProjects(DOCS, [])).toBe(true);
+  });
+  test("the chat list filters by every open project, not the first", () => {
+    expect(CHAT).toContain("allChats.filter((c) => inOpenProjects(c.cwd, workspaces))");
   });
 });
 

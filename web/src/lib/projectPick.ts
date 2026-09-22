@@ -54,6 +54,17 @@ export function rootsToAdd(opening: readonly string[], roots: readonly string[])
   return opening.filter((p) => !roots.some((r) => within(p, r)));
 }
 
+/**
+ * Does this directory belong to one of the open projects? Nothing open is the
+ * unscoped cockpit, where everything does.
+ *
+ * Any of them, not the first: a panel filtering by `workspace` alone showed a
+ * cockpit opened on two projects and hid the second one's chats.
+ */
+export function inOpenProjects(dir: string, workspaces: readonly string[]): boolean {
+  return !workspaces.length || workspaces.some((w) => within(dir, w));
+}
+
 /** Ticked when the picker opens: the open projects that the list can show. */
 export function initialTicks(workspaces: readonly string[], listed: readonly { root: string }[]): string[] {
   return workspaces.filter((w) => listed.some((r) => r.root === w));
