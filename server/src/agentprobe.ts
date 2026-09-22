@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentProbe, KnownAgent } from "../../shared/types.ts";
-import { PROVIDERS } from "../../shared/agentKinds.ts";
+import { AGENT_PROVIDERS } from "../../shared/agentKinds.ts";
 import { db } from "./db.ts";
 import { hookStatus } from "./hooksetup.ts";
 
@@ -54,7 +54,7 @@ const agentHome = (): string => process.env.HOME || homedir();
  * in that table's order — the same four CLIs this list held on its own before
  * the table became the one place a provider is written down.
  */
-export const ROSTER: Roster[] = PROVIDERS.flatMap((p): Roster[] => {
+export const ROSTER: Roster[] = AGENT_PROVIDERS.flatMap((p): Roster[] => {
   const r = p.probe;
   if (!r) return [];
   return [{

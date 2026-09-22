@@ -121,9 +121,45 @@ export interface ChatFacet {
   canPane: boolean;
 }
 
+/**
+ * How a CLI is told, from outside, which commands it may not run — the
+ * provider-side half of a worker role's lock (shared/workerRoles.ts renders
+ * the rules). Each is a layer ABOVE the person's own config, measured or
+ * documented as such, because a lock the project's own file can loosen is not
+ * one:
+ *
+ *   flag  a command-line flag carrying the settings as JSON. Claude Code's
+ *         `--settings`; its deny rules are unioned across every scope and win
+ *         over any allow.
+ *   env   an environment variable carrying a config as JSON. OpenCode's
+ *         `OPENCODE_CONFIG_CONTENT`, merged over the global and project files.
+ *         OpenCode decides by the LAST rule that matches, and an agent's own
+ *         rules come after the top-level ones — so a project that allowed
+ *         `git push *` on its `build` agent, or made a permissive agent its
+ *         `default_agent`, undid a top-level-only lock (measured on 1.18.31,
+ *         `opencode debug agent build`). The rules therefore go on the `build`
+ *         agent too, `default_agent` is pinned to it, and `task` is denied so
+ *         no other agent is reached as a subagent; a role refuses `--agent`.
+ *   file  an environment variable naming a settings file. Qwen Code's
+ *         `QWEN_CODE_SYSTEM_SETTINGS_PATH`: the system scope, which its own
+ *         docs say users cannot shrink, and whose `permissions.deny` has the
+ *         highest priority.
+ *
+ * Absent means no way is known, and a role refuses to run on that CLI rather
+ * than run it unlocked. Codex has no per-command deny, only a sandbox; the
+ * Gemini CLI has one but it has not been run here.
+ */
+export type LockSpelling =
+  | { via: "flag"; flag: string }
+  | { via: "env"; env: string }
+  | { via: "file"; env: string };
+
 export interface Provider extends AgentKind {
   /** On the new-tab menu, and accepted wherever a route validates a kind. */
   tab: boolean;
+  /** The flag that picks a model, where a worker role may set one. */
+  modelFlag?: string;
+  lock?: LockSpelling;
   probe?: ProbeFacet;
   run?: RunSpelling;
   chat?: ChatFacet;
@@ -143,7 +179,7 @@ export interface Provider extends AgentKind {
  * Folding one into the other would quietly start honouring the phone's switch
  * for three CLIs that have never had it.
  */
-export const PROVIDERS: Provider[] = [
+export const AGENT_PROVIDERS: Provider[] = [
   {
     id: "claude",
     title: "Claude Code",
@@ -153,6 +189,8 @@ export const PROVIDERS: Provider[] = [
     yoloFlag: "--dangerously-skip-permissions",
     nameFlag: "--name",
     tab: true,
+    modelFlag: "--model",
+    lock: { via: "flag", flag: "--settings" },
     probe: {
       id: "claude-code",
       label: "Claude Code",
@@ -264,6 +302,8 @@ export const PROVIDERS: Provider[] = [
     bin: "opencode",
     mode: "flag",
     tab: true,
+    modelFlag: "--model",
+    lock: { via: "env", env: "OPENCODE_CONFIG_CONTENT" },
   },
   {
     // A fork of the Gemini CLI, and it kept that CLI's command line: a bare
@@ -276,14 +316,16 @@ export const PROVIDERS: Provider[] = [
     bin: "qwen",
     mode: "flag-interactive",
     tab: true,
+    modelFlag: "--model",
+    lock: { via: "file", env: "QWEN_CODE_SYSTEM_SETTINGS_PATH" },
   },
 ];
 
-export const provider = (id: string): Provider | undefined =>
-  PROVIDERS.find((p) => p.id === id);
+export const agentProvider = (id: string): Provider | undefined =>
+  AGENT_PROVIDERS.find((p) => p.id === id);
 
 /** The new-tab menu: the rows a phone may start, in the order it draws them. */
-export const AGENT_KINDS: AgentKind[] = PROVIDERS.filter((p) => p.tab);
+export const AGENT_KINDS: AgentKind[] = AGENT_PROVIDERS.filter((p) => p.tab);
 
 export const agentKind = (id: string): AgentKind | undefined =>
   AGENT_KINDS.find((a) => a.id === id);

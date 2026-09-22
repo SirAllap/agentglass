@@ -34,7 +34,7 @@
  * CLI a word it will refuse to start with.
  */
 import { ROSTER } from "../agentprobe.ts";
-import { PROVIDERS, type RunSpelling } from "../../../shared/agentKinds.ts";
+import { AGENT_PROVIDERS, type RunSpelling } from "../../../shared/agentKinds.ts";
 import { agentArgv } from "../agentticket.ts";
 import { supportsSessionName } from "./claudecode.ts";
 
@@ -70,7 +70,7 @@ export type CliSpelling = RunSpelling;
  * reached.
  */
 export const SPELLINGS: Record<string, CliSpelling> = Object.fromEntries(
-  PROVIDERS.flatMap((p) => (p.run && p.probe ? [[p.probe.id ?? p.id, p.run]] : [])),
+  AGENT_PROVIDERS.flatMap((p) => (p.run && p.probe ? [[p.probe.id ?? p.id, p.run]] : [])),
 );
 
 /**

@@ -290,6 +290,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `POST /agents/status` | A session saying what it is on — `{name, doing, worktree?, branch?, left?, session?}`; `{name, done: true}` clears it, from the same session only. Fields capped (512 / 4096). Tokenless on loopback: a hook carries it. |
 | `GET` · `POST /lantern/settings` · `POST /lantern/ticket` | The status reminder (`{nudge, minutes}`) and the server-side **watch** (`{watch, watchMinutes}`) that notifies when somebody is still stopped on you; a ticket opening a chat with the board as its first message. |
 | `GET /agents/named` · `POST /agents/named/{start,prompt,wait,read,keys,stop}` | **Named agents** — seat a CLI by name in a checkout (`--yolo` only if Settings allow; permission-shaped args refused with a 400 naming the flag), prompt it, wait for a state, read its screen, press a key, kill it. `agentglass-agent` is the CLI in front (`send-keys` → `keys`). |
+| `GET /agents/roles` · `POST /agents/roles` | **Worker roles** — which CLI and model a `scout`, `builder` or `verifier` runs on (`{role, provider, model}`), saved as `workerRoles` in `config.json`. Only a CLI with a lock this app can apply is accepted (Claude Code, OpenCode, Qwen Code). A named start with `role` takes its CLI, model and lock from here; naming a different `kind` beside it is a 400. |
 | `GET` · `POST /agents/schedule` · `POST /agents/schedule/cancel` | **Scheduled starts** — `{name, cwd, when, prompt?, yolo?, kind?}`, `when` as `08:00`, `2026-09-06 08:00` or `+30m`. The named-agent rules are checked when written and again when it fires. The machine must be awake. |
 | `POST /agents/handoff` · `GET /agents/working` | Hand a session's conversation to another agent as a brief (`{session, kind}`), seated on the floating bench; whether anything is working — what the desktop's `agent` power mode polls. |
 | `GET /bench/{note,live}?root=` · `POST /bench/{note,edit,end}` | The floating bench: a per-checkout note (empty text deletes it), which slots still run, open a file in the checkout's editor, end one slot's tmux session (`{root, slot}`). |
@@ -328,6 +329,13 @@ over plain `http://` to any host that is not this machine.
   arrows, `tab`, `space`, `backspace`, `ctrl-c`), `list`, `stop`; and on a clock,
   `schedule`, `schedules`, `unschedule`; plus `health`. `--yolo` is granted only if
   Settings allow it, and a permission-shaped flag after `--` is refused.
+  `start --role scout|builder|verifier` seats the CLI and model Settings ▸ Worker
+  roles picks for that role, with its lock: push, commit, merge, rebase, reset,
+  checkout, the network clients, `sudo` and `rm` are denied in the one layer of
+  that CLI a person's or a project's own config cannot loosen, and a scout or a
+  verifier may not edit files either; a `--model` or `--agent` after `--` is
+  refused, since those are the role's. It is a list of command prefixes, not a
+  sandbox — `sh -c '…'` is not a command named `git push`.
   `python3 bin/agentglass-agent --help` is the reference.
 - **`agentglass-browser`** — the built-in browser as a shell command: open, read,
   click, type, screenshot, network log, cookies, profiles, and more, through the

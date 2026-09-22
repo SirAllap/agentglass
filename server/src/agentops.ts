@@ -26,10 +26,15 @@
  * `__submitVerdict`), so the four surfaces cannot disagree about what a Claude
  * prompt looks like.
  */
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { db } from "./db.ts";
 import { tmux, engineWindowRunning } from "./tmuxpane.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
-import { agentKind } from "../../shared/agentKinds.ts";
+import { AGENT_PROVIDERS, agentKind, agentProvider } from "../../shared/agentKinds.ts";
+import { roleLaunch, workerRole } from "../../shared/workerRoles.ts";
+import { workerRoles } from "./config.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { SPELLINGS } from "./agents/launch.ts";
 import { inputBox, __submitVerdict, __needsYou, __running } from "./chatpane.ts";
@@ -190,6 +195,69 @@ export function refusedArg(args: string[]): string | null {
   return null;
 }
 
+/** What a worker role decides and a caller's args may not restate: the model,
+ *  and which OpenCode agent runs — a project-defined agent carries its own
+ *  permission rules, which come after the lock's and win. */
+const ROLE_FIXED = new Set(["--model", "-m", "--agent"]);
+
+/**
+ * Where a role's lock file is written: beside the rest of this app's state,
+ * owner-only, one file per role and CLI so two roles never share one.
+ */
+function lockDir(): string {
+  const state = process.env.AGENTGLASS_STATE_DIR
+    || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "agentglass");
+  return join(state, "worker-locks");
+}
+
+/**
+ * What starting a worker in this role means: the CLI Settings picked for it,
+ * and that CLI's lock and model as flags and environment.
+ *
+ * `no-lock` when the CLI has no lock this app can apply. Settings will not
+ * store such a choice, so this is a hand-edited config or a CLI whose row
+ * lost its lock — and the answer is to refuse, never to start it unlocked.
+ *
+ * Qwen Code's lock is a SYSTEM settings file, and naming one replaces
+ * /etc/qwen-code/settings.json for that process. A machine that keeps rules
+ * there loses them for the worker; the ones this writes are the floor.
+ */
+export function roleStart(
+  roleId: unknown,
+  roles: ReturnType<typeof workerRoles> = workerRoles(),
+  dir: string = lockDir(),
+): { ok: true; kind: string; args: string[]; env: Record<string, string> } | { ok: false; error: "no-role" | "no-lock" } {
+  const role = workerRole(roleId);
+  if (!role) return { ok: false, error: "no-role" };
+  const choice = roles[role.id];
+  const row = agentProvider(choice.provider);
+  const launch = row && agentKind(row.id) ? roleLaunch(row, role, choice.model) : null;
+  if (!row || !launch) return { ok: false, error: "no-lock" };
+  const env = { ...launch.env };
+  if (launch.file) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const path = join(dir, `${role.id}-${row.id}.json`);
+    // Written aside and renamed into place: two workers started in the same
+    // role share this file, and a truncating write in place is a moment when
+    // the one already starting reads an empty lock. The new file is created
+    // here each time, so its mode is always the one asked for.
+    const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, launch.file.content, { mode: 0o600 });
+    renameSync(tmp, path);
+    env[launch.file.env] = path;
+  }
+  return { ok: true, kind: row.id, args: launch.args, env };
+}
+
+/** The CLIs a worker role may be put on — the ones with a lock — and whether
+ *  each is installed here. The roles themselves the pane reads from
+ *  shared/workerRoles.ts. */
+export function workerRoleChoices() {
+  return {
+    providers: AGENT_PROVIDERS.filter((p) => p.lock && p.tab).map((p) => ({ id: p.id, title: p.title, installed: !!agentBinFor(p.id) })),
+  };
+}
+
 /**
  * The command line a named agent starts with: the one `agentArgv` builds, with
  * Claude's `--remote-control` and the caller's pass-through flags added.
@@ -199,11 +267,11 @@ export function refusedArg(args: string[]): string | null {
 export function namedAgentArgv(
   bin: string,
   kind: string,
-  p: { name: string; prompt?: string; yolo?: boolean; remoteControl?: string; args: string[] },
+  p: { name: string; prompt?: string; yolo?: boolean; remoteControl?: string; serverArgs?: string[]; args: string[] },
   canName: boolean,
 ): string[] {
   const remote = p.remoteControl && validName(p.remoteControl) && kind === "claude" ? ["--remote-control", p.remoteControl] : [];
-  return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind }, canName, [...remote, ...p.args]);
+  return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind }, canName, [...remote, ...(p.serverArgs ?? []), ...p.args]);
 }
 
 export async function startAgent(p: {
@@ -212,6 +280,13 @@ export async function startAgent(p: {
   args?: string[];
   /** Claude's `--remote-control <name>`: the worker asks for it by name. */
   remoteControl?: string;
+  /** Flags this server built — a worker role's lock and model, from
+   *  `roleStart`. Not gated by `refusedArg` because they are not a caller's:
+   *  NOT reachable from a request body, for the same reason as `env`. */
+  serverArgs?: string[];
+  /** Started as a worker role: its model and OpenCode agent are the role's,
+   *  so a caller's `--model`, `-m` or `--agent` is refused as well. */
+  lockedRole?: boolean;
   /** Extra environment for the window. NOT reachable from `/agents/named/start`
    *  on purpose: this is how the server hands a seat its own credential
    *  (seat.ts), and a body that could set environment would be a body that
@@ -225,7 +300,7 @@ export async function startAgent(p: {
   if (!kind) return { ok: false, error: "no-cli" };
   const args = p.args ?? [];
   if (args.some((a) => typeof a !== "string" || /[\n\r\0]/.test(a))) return { ok: false, error: "bad-args" };
-  const refused = refusedArg(args);
+  const refused = refusedArg(args) ?? (p.lockedRole ? args.find((a) => ROLE_FIXED.has(a.split("=", 1)[0]!)) ?? null : null);
   if (refused !== null) return { ok: false, error: "arg-refused", flag: refused };
   if (p.yolo && !p.yoloAllowed) return { ok: false, error: "yolo-refused" };
 

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGENT_KINDS, PROVIDERS, agentKind } from "../../shared/agentKinds.ts";
+import { AGENT_KINDS, AGENT_PROVIDERS, agentKind } from "../../shared/agentKinds.ts";
 import { ROSTER } from "../src/agentprobe.ts";
 import { SPELLINGS } from "../src/agents/launch.ts";
 import { agentArgv } from "../src/agentticket.ts";
@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe("the provider table", () => {
   test("every id is written once", () => {
-    const ids = PROVIDERS.map((p) => p.id);
+    const ids = AGENT_PROVIDERS.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
     const roster = ROSTER.map((r) => r.id);
     expect(new Set(roster).size).toBe(roster.length);

@@ -155,7 +155,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -6976,6 +6976,21 @@ const server = Bun.serve<WsData>({
      * composes it here from the project's doctrine and the board, the same
      * property `/lantern/ticket` keeps.
      */
+    /*
+     * Which CLI and model each worker role runs on. The choices offered are
+     * the CLIs with a lock (shared/agentKinds.ts), each said with whether it
+     * is installed here, so the pane never offers a role something it would
+     * refuse at start.
+     */
+    if (pathname === "/agents/roles" && req.method === "GET") {
+      return json({ ok: true, roles: workerRoles(), ...AgentOps.workerRoleChoices() });
+    }
+    if (pathname === "/agents/roles" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { role?: unknown; provider?: unknown; model?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      const r = writeWorkerRole(b.role, { provider: b.provider, model: b.model });
+      return json({ ...r, roles: workerRoles() }, r.ok ? 200 : 400);
+    }
     if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
     if (pathname === "/seat/wake" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -7341,7 +7356,19 @@ const server = Bun.serve<WsData>({
         if (!cwd || (!inScope(cwd) && !sameProject) || !fsExists(cwd)) {
           return json({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
         }
-        const wanted = typeof b.kind === "string" ? b.kind : "claude";
+        /* A worker ROLE picks the CLI itself — Settings says which one each
+           role runs on — and brings that CLI's lock and model with it. The
+           lock is built here from the role table, never taken from the body:
+           naming a kind as well is refused unless it is the same one, so a
+           caller cannot ask for a role and quietly get another CLI unlocked. */
+        const role = b.role === undefined ? null : AgentOps.roleStart(b.role);
+        if (role && !role.ok) {
+          return json({ ok: false, error: role.error === "no-role" ? "no such role" : "the CLI this role is set to has no lock this app can apply" }, 400);
+        }
+        const wanted = role?.ok ? role.kind : typeof b.kind === "string" ? b.kind : "claude";
+        if (role?.ok && typeof b.kind === "string" && b.kind !== role.kind) {
+          return json({ ok: false, error: `this role runs on ${role.kind} (Settings ▸ Worker roles), not ${b.kind}` }, 400);
+        }
         if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
         const args = Array.isArray(b.args) ? b.args.filter((a): a is string => typeof a === "string") : [];
         const r = await AgentOps.startAgent({
@@ -7349,6 +7376,7 @@ const server = Bun.serve<WsData>({
           prompt: typeof b.prompt === "string" ? b.prompt : "",
           yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
+          ...(role?.ok ? { serverArgs: role.args, env: role.env, lockedRole: true } : {}),
         });
         if (!r.ok) {
           const why: Record<string, string> = {

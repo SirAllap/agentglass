@@ -6,7 +6,7 @@
 // two — one that happens to work today only because of the order two lines
 // appear in. This is the thing both of them depend on, so it sits below both.
 
-import { provider } from "../../../shared/agentKinds.ts";
+import { agentProvider } from "../../../shared/agentKinds.ts";
 
 /**
  * Which CLI is behind a conversation.
@@ -74,7 +74,7 @@ export type AgentSpec = {
  * the three is there.
  */
 function chatSpec(id: AgentKind): AgentSpec {
-  const row = provider(id);
+  const row = agentProvider(id);
   if (!row?.chat) throw new Error(`shared/agentKinds.ts has no chat facet for ${id}`);
   return { ...row.chat, cli: row.bin };
 }

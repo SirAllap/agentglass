@@ -337,6 +337,29 @@ describe.skipIf(!have)("enlisting a pane this app did not open", () => {
     await tmuxCmd("kill-session", "-t", "=mine").exited;
   }, SLOW);
 
+  test("a worker role starts its CLI with the lock and the model Settings picked for it", async () => {
+    // Nothing is saved in this server's config, so the scout is on its
+    // default: Claude, haiku, read-only.
+    const { code, out } = await cli("start", "r1", "--cwd", wt, "--role", "scout", "--timeout", "20000");
+    expect(out.error).toBeUndefined();
+    expect(code).toBe(0);
+    const argv = readFileSync(`${log}.argv`, "utf8").split("\n");
+    const at = argv.indexOf("--settings");
+    expect(at).toBeGreaterThan(-1);
+    const deny = (JSON.parse(argv[at + 1]!) as { permissions: { deny: string[] } }).permissions.deny;
+    expect(deny).toContain("Bash(git push:*)");
+    expect(deny).toContain("Bash(git commit:*)");
+    expect(deny).toContain("Edit");
+    expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual(["--model", "haiku"]);
+    await cli("stop", "r1");
+  }, SLOW);
+
+  test("a role with a different CLI named beside it is refused, so a role cannot come unlocked", async () => {
+    const { code, out } = await cli("start", "r2", "--cwd", wt, "--role", "scout", "--kind", "codex", "--timeout", "0");
+    expect(code).toBe(1);
+    expect(out.error).toContain("this role runs on claude");
+  }, SLOW);
+
   test("a plain shell is refused, because prompting one types into somebody's command line", async () => {
     const mk = tmuxCmd("new-session", "-d", "-s", "plain", "-n", "just-a-shell", "-c", wt);
     expect(await mk.exited).toBe(0);

@@ -1290,6 +1290,12 @@ const realApi = {
       "/agents/named/broadcast", { text, names }),
   seatWake: () => get<{ ok: boolean; hours: number }>("/seat/wake"),
   seatWakeSave: (hours: number) => post<{ ok: boolean; error?: string }>("/seat/wake", { hours }),
+  /** Which CLI and model each worker role runs on (shared/workerRoles.ts). */
+  workerRoles: () => get<{ ok: boolean; error?: string; roles: Record<string, { provider: string; model: string }>;
+    providers?: { id: string; title: string; installed: boolean }[] }>("/agents/roles"),
+  workerRoleSave: (role: string, provider: string, model: string) =>
+    post<{ ok: boolean; error?: string; roles: Record<string, { provider: string; model: string }>;
+    providers?: { id: string; title: string; installed: boolean }[] }>("/agents/roles", { role, provider, model }),
   /** Whether hooked sessions get asked what they are working on, and how
    *  often — the Lantern's one setting. */
   lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
@@ -2439,6 +2445,12 @@ const demoApi: typeof realApi = {
   agentsBroadcast: (_t: string, _n?: string[]) => D({ ok: false, error: "not available in the demo" }),
   seatWake: () => D({ ok: true, hours: 4 }),
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
+  workerRoles: () => D({
+    ok: true,
+    roles: { scout: { provider: "opencode", model: "" }, builder: { provider: "claude", model: "sonnet" }, verifier: { provider: "claude", model: "haiku" } },
+    providers: [{ id: "claude", title: "Claude Code", installed: true }, { id: "opencode", title: "OpenCode", installed: true }, { id: "qwen", title: "Qwen Code", installed: false }],
+  }),
+  workerRoleSave: (_r: string, _p: string, _m: string) => D({ ok: false, error: "not available in the demo", roles: {} }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),
