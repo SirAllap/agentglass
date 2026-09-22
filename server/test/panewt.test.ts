@@ -136,7 +136,7 @@ describe("the pane note", () => {
        writer's. */
     expect(notePaneFromHook({ session_id: "s2", tmux_pane: P, payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
     expect(notePaneFromHook({ session_id: "s3", tmux_pane: P, tmux_server: "not a server\n", payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
-    expect(paneAgentNote(P, ORBIT)?.session_id, "the server's own note stands").toBe("s1");
+    expect(noteForSession("s1")?.server, "the server's own note stands").toBe(ORBIT);
     const unnamed = paneAgentNote(P, "/tmp/tmux-1000/default,1");
     expect(unnamed?.server).toBe("");
     expect(unnamed?.session_id).toBe("s3");
@@ -184,6 +184,16 @@ describe("the pane note", () => {
        server's is the caller's question, and `noteIsThisAgents` answers it. */
     notePaneAgent({ pane: P, sessionId: "unnamed", transcriptPath: "/u.jsonl", cwd: REPO });
     expect(paneAgentNote(P, "/tmp/tmux-1000/agentglass,5151")?.session_id).toBe("unnamed");
+  });
+
+  test("a newer note that names no server is not hidden behind an older one of this server's", () => {
+    /* An agent started with `env -u TMUX` keeps TMUX_PANE: its hooks name the
+       pane and no server. Ranked below this server's older row, the newer
+       note was never read, and the older one failed the time test. */
+    const P = "%9923", HERE = "/tmp/tmux-1000/agentglass,4242";
+    notePaneAgent({ pane: P, sessionId: "before", transcriptPath: "/b.jsonl", cwd: REPO, server: HERE, at: 1_000 });
+    notePaneAgent({ pane: P, sessionId: "after", transcriptPath: "/a.jsonl", cwd: REPO, at: 2_000 });
+    expect(paneAgentNote(P, HERE)?.session_id).toBe("after");
   });
 
   test("a session's own note is found by the session, not through a pane id another server may have taken", () => {

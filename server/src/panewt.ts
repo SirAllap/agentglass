@@ -149,9 +149,11 @@ const noteRead = db.query<PaneAgentNote, [string]>(
   "SELECT * FROM pane_note WHERE pane_id = ? ORDER BY at DESC LIMIT 1",
 );
 
-/* This server's row, or failing that one from a hook that named no server. */
+/* The newer of this server's row and one from a hook that named no server —
+   an agent started with `env -u TMUX` keeps TMUX_PANE and names none. Which
+   of the two is this agent's is `noteIsThisAgents`'s question. */
 const noteReadOn = db.query<PaneAgentNote, [string, string]>(
-  "SELECT * FROM pane_note WHERE pane_id = ?1 AND server IN (?2, '') ORDER BY server = '' ASC, at DESC LIMIT 1",
+  "SELECT * FROM pane_note WHERE pane_id = ?1 AND server IN (?2, '') ORDER BY at DESC LIMIT 1",
 );
 
 const noteBySession = db.query<PaneAgentNote, [string]>(
@@ -218,8 +220,8 @@ const paneBySession = db.query<{ pane_id: string }, [string]>(
 /**
  * The note for a pane.
  *
- * With `server`, that server's pane: its own row, else one from a hook that
- * did not name its server — which may be anybody's, and whether it is this
+ * With `server`, that server's pane: the newer of its own row and one from a
+ * hook that did not name its server — which may be anybody's, and whether it is this
  * agent's is the caller's question (`noteIsThisAgents`). Never another
  * server's.
  *
