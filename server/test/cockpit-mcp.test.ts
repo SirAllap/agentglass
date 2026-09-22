@@ -295,10 +295,12 @@ describe.skipIf(!HAVE_PY)("the size ceiling", () => {
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(16 * 1024);
   });
 
-  test("a ceiling too small for anything still answers well formed", async () => {
+  test("a ceiling too small for anything still answers well formed, with the newest row kept", async () => {
+    // Over the ceiling either way — the short fields alone are — so an empty
+    // list would cost the one row worth having and buy nothing.
     const { text, data } = await call("cockpit_sessions", { limit: 50 }, { AGENTGLASS_COCKPIT_MAX_BYTES: "10" });
     expect(data).not.toBeNull();
-    expect(data.sessions).toEqual([]);
+    expect((data.sessions as { session_id: string }[]).map((s) => s.session_id)).toEqual(["cockpit-test-bulk-29"]);
     expect(data.truncated[0].dropped).toBeGreaterThan(0);
     expect(text.length).toBeGreaterThan(0);
   });
@@ -476,6 +478,67 @@ describe.skipIf(!HAVE_PY)("shaping, against a stand-in app", () => {
     expect(d.truncated).toHaveLength(1);
     expect(d.truncated[0]).toMatchObject({ field: "timeline", kept: d.timeline.length });
     expect(d.timeline.at(-1).ts).toBe(100 - d.timeline.length + 1);
+  });
+
+  test("one message over the ceiling by itself is clipped in place, and the short ones after it stay", () => {
+    // 20,000 characters is the app's own cap on a message, over the 16 KiB
+    // ceiling alone. Dropping from the end took the five short ones first and
+    // then it: `conversation: []`, and "include fewer" could not fix that.
+    const conversation = [
+      { role: "assistant", text: "a".repeat(20_000), ts: T0 + 6 },
+      ...Array.from({ length: 5 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", text: `short ${i}`, ts: T0 + 5 - i })),
+    ];
+    const { out } = standIn({ "/session": detail({ conversation }) }, [
+      { name: "cockpit_session", arguments: { id: "s-orbit", include: ["conversation"] } },
+    ]);
+    const d = out[0]!.data;
+    expect(Buffer.byteLength(out[0]!.text)).toBeLessThanOrEqual(16 * 1024);
+    expect(d.conversation).toHaveLength(6);
+    expect(d.conversation[0].text.length).toBeLessThan(20_000);
+    expect(d.conversation[0].text.startsWith("aaa")).toBe(true);
+    expect(d.conversation.slice(1).map((m: { text: string }) => m.text)).toEqual(["short 0", "short 1", "short 2", "short 3", "short 4"]);
+    expect(d.truncated).toEqual([{ field: "conversation", items_clipped: 1, clipped_to: 2048 }]);
+  });
+
+  test("a ceiling below one clipped item cuts that item further instead of emptying the list", () => {
+    const conversation = [{ role: "assistant", text: "a".repeat(20_000), ts: T0 + 2 }, { role: "user", text: "short", ts: T0 + 1 }];
+    const { out } = standIn({ "/session": detail({ conversation }) }, [
+      { name: "cockpit_session", arguments: { id: "s-orbit", include: ["conversation"] } },
+    ], { AGENTGLASS_COCKPIT_MAX_BYTES: "1200" });
+    const d = out[0]!.data;
+    expect(Buffer.byteLength(out[0]!.text)).toBeLessThanOrEqual(1200);
+    expect(d.conversation.length).toBeGreaterThanOrEqual(1);
+    expect(d.conversation[0].text.startsWith("aaa")).toBe(true);
+    const cut = (d.truncated as { field: string; items_clipped?: number; clipped_to?: number }[]).find((t) => t.items_clipped);
+    expect(cut?.field).toBe("conversation");
+    expect(cut!.clipped_to!).toBeLessThan(2048);
+    expect(d.conversation[0].text.length).toBe(cut!.clipped_to! + 1);
+  });
+
+  test("a file change whose diff alone is over the ceiling is cut to fit, and the changes after it stay", () => {
+    // A rewrite of a long file is one change with every line in its diff:
+    // short lines, so no character cut shrinks it — the lists inside it are cut.
+    const change = (i: number, lines: string[]) => ({
+      id: i, timestamp: T0 + i, source_app: "orbit", session_id: "s-orbit", tool: "Write", file_path: `/tmp/acme/orbit/f${i}.ts`,
+      additions: lines.length, deletions: 0, hunks: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: lines.length, lines }],
+    });
+    const changes = [
+      change(9, Array.from({ length: 2000 }, (_, i) => `+export const orbit${i} = ${i};`)),
+      change(8, ["+one line"]),
+      change(7, ["+another"]),
+    ];
+    const { out } = standIn({ "/session": detail({ changes }) }, [
+      { name: "cockpit_session", arguments: { id: "s-orbit", include: ["changes"] } },
+    ]);
+    const d = out[0]!.data;
+    expect(Buffer.byteLength(out[0]!.text)).toBeLessThanOrEqual(16 * 1024);
+    expect(d.changes.map((c: { id: number }) => c.id)).toEqual([9, 8, 7]);
+    expect(d.changes[0].additions, "the counts still describe the whole change").toBe(2000);
+    expect(d.changes[0].hunks[0].lines[0]).toBe("+export const orbit0 = 0;");
+    const cut = (d.truncated as { field: string; items_clipped?: number; lists_cut_to?: number }[]);
+    expect(cut).toHaveLength(1);
+    expect(cut[0]).toMatchObject({ field: "changes", items_clipped: 1 });
+    expect(d.changes[0].hunks[0].lines).toHaveLength(cut[0]!.lists_cut_to!);
   });
 
   test("long scalars are clipped and named, so a session's answer stays under the ceiling", () => {

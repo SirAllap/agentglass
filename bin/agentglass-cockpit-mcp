@@ -16,16 +16,23 @@ Control is a different server with a different token, if it is ever built.
 EVERY ANSWER HAS A CEILING. A result that would be larger than
 AGENTGLASS_COCKPIT_MAX_BYTES (16 KiB) is not cut in the middle — half a JSON
 payload burns the context it was meant to save and teaches the model nothing.
-Items are dropped from the end of the answer's lists (the oldest for lists of
-things that happened, which are newest first; the least for ranked ones, which
-are largest first) until it fits, and the answer says so:
-`"truncated": [{"field": "sessions", "kept": 12, "dropped": 38}]` and a
-`"narrow"` sentence naming the arguments that would make the next call smaller.
-A long text field — a session's summary is the last assistant message, and its
-first prompt is whatever was pasted — is clipped to CLIP characters first, and
-named the same way (`{"field": "summary", "clipped_to": 2048, "was": 20000}`).
-Its ceiling: the short scalars are never touched, so a ceiling set smaller than
-them is exceeded by them.
+Text longer than CLIP characters is clipped first, wherever it is: a field of
+the answer (a session's summary is the last assistant message, its first prompt
+whatever was pasted) or a field of an item in one of its lists (one message can
+be 20,000 characters, over the ceiling by itself). An item still too large for
+the answer on its own is cut further, the lists inside it as well as its text
+(a file change is a diff of short lines that no character cut shrinks). Then
+items are dropped from the end of the lists (the oldest for lists of things
+that happened, which are newest first; the least for ranked ones, which are
+largest first) until it fits — but never a list's first item, which is cut
+further instead, down to MIN_CLIP characters and one entry per inner list. The
+answer says so: `"truncated": [{"field": "sessions", "kept": 12, "dropped":
+38}]`, `{"field": "summary", "clipped_to": 2048, "was": 20000}` for a clipped
+field, `{"field": "changes", "items_clipped": 1, "clipped_to": 1024,
+"lists_cut_to": 64}` for cut items, and a `"narrow"` sentence naming the
+arguments that would make the next call smaller. Its ceiling: the short
+scalars are never touched, so a ceiling smaller than them and one item of each
+list is exceeded by them.
 
 Transport is stdio (`claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp`)
 or Streamable HTTP (`--http [HOST:]PORT`), and the HTTP side is the browser MCP
@@ -85,6 +92,8 @@ VERSION = "1.0.0"
 DEFAULT_CEILING = 16 * 1024
 # A text field longer than this is clipped when an answer is over the ceiling.
 CLIP = 2048
+# The least a list's first item keeps of a text, when a small ceiling cuts it further.
+MIN_CLIP = 64
 # How many events a filter (a session, a type, errors only) looks through, and
 # says it did. /events/recent sends every row WITH its payload — the prompt,
 # the file contents, the command output — parsed on the loop the terminal
@@ -140,11 +149,36 @@ def _size(obj):
     return len(_dump(obj).encode("utf-8", "surrogatepass"))
 
 
+def _clip(x, n, m=None):
+    """`x` with every string in it longer than `n` characters cut to `n`, and
+    every list in it longer than `m` entries cut to `m`; and how many texts and
+    how many lists that cut."""
+    if isinstance(x, str):
+        return (x[:n] + "…", 1, 0) if len(x) > n else (x, 0, 0)
+    if isinstance(x, list):
+        short = m is not None and len(x) > m
+        parts = [_clip(v, n, m) for v in (x[:m] if short else x)]
+        return [p[0] for p in parts], sum(p[1] for p in parts), int(short) + sum(p[2] for p in parts)
+    if isinstance(x, dict):
+        parts = {key: _clip(v, n, m) for key, v in x.items()}
+        return ({key: p[0] for key, p in parts.items()}, sum(p[1] for p in parts.values()),
+                sum(p[2] for p in parts.values()))
+    return x, 0, 0
+
+
+# How far an item is cut when it must shrink, a step at a time: the characters a
+# text keeps, and the entries a list inside the item keeps. The second is for a
+# file change, whose diff is hunks of short lines that no character cut shrinks.
+_STEPS = [(CLIP, None), (1024, 64), (512, 32), (256, 16), (128, 8), (MIN_CLIP, 4), (MIN_CLIP, 2), (MIN_CLIP, 1)]
+
+
 def fit(obj, fields, narrow):
-    """`obj` under the ceiling, whole. The lists named in `fields` lose items
-    from their end — every list here is newest first — until the answer fits,
-    the list with the most bytes left giving first; what went is named in
-    `truncated`, and `narrow` says how to ask for less."""
+    """`obj` under the ceiling, whole. Long text is clipped wherever it is, an
+    item too large for the answer by itself is cut until it fits, and then the
+    lists named in `fields` lose items from their end — every list here is
+    newest first — the list with the most bytes left giving first, until the
+    answer fits; a list's first item is never dropped, only cut further. What
+    went is named in `truncated`, and `narrow` says how to ask for less."""
     ceiling = _ceiling()
     if _size(obj) <= ceiling:
         return obj
@@ -157,25 +191,70 @@ def fit(obj, fields, narrow):
             clipped.append({"field": k, "clipped_to": CLIP, "was": len(v)})
     lists = {f: list(obj.get(f) or []) for f in fields}
     total = {f: len(v) for f, v in lists.items()}
-    cost = {f: [_size(x) + 1 for x in v] for f, v in lists.items()}
+    level = {f: {} for f in fields}   # field -> {index: the deepest _STEPS entry its item was cut at}
+    shrunk = {f: {} for f in fields}  # field -> {index: (what a text was cut to, what a list was cut to)}
+
+    def cut(f, i, s):
+        level[f][i] = s
+        item, texts, short = _clip(lists[f][i], *_STEPS[s])
+        if texts or short:
+            lists[f][i] = item
+            n, m = _STEPS[s]
+            was_n, was_m = shrunk[f].get(i, (None, None))
+            shrunk[f][i] = (n if texts else was_n, m if short else was_m)
 
     def build():
         out = dict(obj)
         out.update(lists)
-        out["truncated"] = clipped + [{"field": f, "kept": len(lists[f]), "dropped": total[f] - len(lists[f])}
-                                      for f in fields if len(lists[f]) < total[f]]
+        out["truncated"] = list(clipped)
+        for f in fields:
+            kept = [v for i, v in shrunk[f].items() if i < len(lists[f])]
+            if kept:
+                n = [n for n, _ in kept if n]
+                m = [m for _, m in kept if m]
+                out["truncated"].append({"field": f, "items_clipped": len(kept),
+                                         **({"clipped_to": min(n)} if n else {}),
+                                         **({"lists_cut_to": min(m)} if m else {})})
+        out["truncated"] += [{"field": f, "kept": len(lists[f]), "dropped": total[f] - len(lists[f])}
+                             for f in fields if len(lists[f]) < total[f]]
         out["narrow"] = narrow
         return out
 
+    # Items shrink before any is dropped. Dropping alone emptied a list whose
+    # newest item was over the ceiling by itself: the end went first, then the
+    # item, and "ask for fewer" could not bring any of it back.
+    for f in fields:
+        for i in range(len(lists[f])):
+            cut(f, i, 0)
+    room = ceiling - _size({**build(), **{f: [] for f in fields}})
+    for f in fields:
+        for i in range(len(lists[f])):
+            while _size(lists[f][i]) + 1 > room and level[f][i] + 1 < len(_STEPS):
+                cut(f, i, level[f][i] + 1)
+    cost = {f: [_size(x) + 1 for x in v] for f, v in lists.items()}
+
+    def droppable():
+        return [f for f in fields if len(lists[f]) > 1]
+
     out = build()
     over = _size(out) - ceiling
-    while over > 0 and any(lists.values()):
+    while over > 0 and droppable():
         # Drop by the estimate until it says we are under, then measure; the
         # truncated entries themselves take bytes, so measuring is the check.
-        while over > 0 and any(lists.values()):
-            f = max((f for f in fields if lists[f]), key=lambda f: sum(cost[f][:len(lists[f])]))
+        while over > 0 and droppable():
+            f = max(droppable(), key=lambda f: sum(cost[f][:len(lists[f])]))
             lists[f].pop()
             over -= cost[f][len(lists[f])]
+        out = build()
+        over = _size(out) - ceiling
+    # One item left in each list and still over, which only a small ceiling
+    # does: those items are cut further, together, until the answer fits.
+    for s in range(1, len(_STEPS)):
+        if over <= 0:
+            break
+        for f in fields:
+            if lists[f] and level[f][0] < s:
+                cut(f, 0, s)
         out = build()
         over = _size(out) - ceiling
     return out
