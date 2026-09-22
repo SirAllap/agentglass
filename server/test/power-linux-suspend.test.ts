@@ -61,6 +61,7 @@ interface Status {
   why?: { chats: number; runs: number; hooked: number; named: number } | null;
   locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean };
   inhibitMissing?: boolean;
+  platform?: string;
 }
 
 async function drive(script: string, env: Record<string, string> = {}): Promise<{ calls: Call[]; mid: Call[]; status: Status }> {
@@ -180,6 +181,7 @@ describe("the Linux inhibitor", () => {
     const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 300));`);
     expect(t.status.locks).toEqual({ sleep: "block-weak", lid: true, display: true, app: false });
     expect(t.status.inhibitMissing).toBe(false);
+    expect(t.status.platform, "what a lock means depends on it").toBe("linux");
     const fell = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 500));`, { AGX_STUB_NO_WEAK: "1" });
     expect(fell.status.locks?.sleep, "the fallback is named, not assumed").toBe("block");
     const asleep = await drive(`

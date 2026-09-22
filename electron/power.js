@@ -373,6 +373,7 @@ function status() {
       app: suspensionBlockerId !== null,
     },
     inhibitMissing: platform === "linux" && inhibitUnavailable,
+    platform,
   };
 }
 

@@ -548,6 +548,8 @@ export interface PowerStatus {
   locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean };
   /** Linux without systemd-inhibit: only the screen can be held. */
   inhibitMissing?: boolean;
+  /** The shell's `process.platform`, which decides what a held lock means. */
+  platform?: string;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -581,9 +583,19 @@ export function powerReadout(s: PowerStatus): { tone: "held" | "idle" | "warn"; 
     return { tone: "warn", title: `${head}. But only the screen is held: systemd-inhibit is not installed, so the machine still sleeps on its own and when the lid closes. ${click}` };
   }
   const l = s.locks;
+  /* A Linux shell that took no lid lock — logind or polkit refused it, or no
+     logind answered — is holding the screen and not the machine: closing the
+     lid suspends it mid-run, and a green button would say otherwise. */
+  if (l && s.platform === "linux" && !l.lid) {
+    return { tone: "warn", title: `${head}. But the lid switch is not held${l.sleep ? "" : ", and neither is sleep"}: closing the lid suspends the machine. ${click}` };
+  }
+  /* What each lock is, and no more: the weak sleep lock holds logind's own
+     idle action and not a suspend its owner asks for — the menu's, or one
+     the person's idle daemon requests; a Mac holds idle sleep and not the
+     lid. */
   const held = !l ? "" : l.sleep || l.lid
-    ? `Holding ${[l.sleep ? "idle sleep" : "", l.lid ? "the lid switch" : ""].filter(Boolean).join(" and ")}${l.sleep ? "; your own suspend still goes through" : ""}.`
-    : l.app ? "Holding the screen and App Nap." : l.display ? "Holding the screen." : "";
+    ? `Holding ${[l.sleep ? "logind's idle suspend" : "", l.lid ? "the lid switch" : ""].filter(Boolean).join(" and ")}${l.sleep ? "; your own suspend still goes through" : ""}.`
+    : l.app ? "Holding the screen and idle sleep; closing the lid still sleeps." : l.display ? "Holding the screen." : "";
   return { tone: "held", title: `${head}.${held ? ` ${held}` : ""} ${click}` };
 }
 
