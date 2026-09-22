@@ -60,8 +60,8 @@ export function DbNoticeView({ notice, onClose }: { notice: DbNotice; onClose: (
             not shown.
           </span>
           <span style={{ color: "var(--text3)" }}>
-            To use that one instead, stop agentglass and run <code>mv {stray} {db}</code> — that replaces the current
-            history. To keep this one, delete or move the other file.
+            To use that one instead, stop agentglass and run <code>{notice.switchCommand}</code> — that replaces the
+            current history. To keep this one, delete or move the other file.
           </span>
         </>
       )}

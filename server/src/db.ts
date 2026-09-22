@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync, copyFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync, copyFileSync, linkSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type {
@@ -85,12 +85,15 @@ function defaultDbPath(): string {
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (local !== data && existsSync(local)) {
+      // No database here means no copy of one either: a marker left from an
+      // earlier copy must not hide the stray file if this copy fails.
+      if (!existsSync(data)) rmSync(importedMarker(data), { force: true });
       if (!existsSync(data) && copyInto(local, data)) {
         notice = { kind: "copied", stray: local, db: data };
         console.warn(`[db] copied ${local} to ${data}, which is the database from now on; the original is untouched and no longer used`);
       } else if (readImported(data) !== local) {
-        notice = { kind: "ignored", stray: local, db: data };
-        console.warn(`[db] ignoring ${local} in the working directory; the database is ${data} (to use the other file instead: stop agentglass, then mv ${local} ${data} — that replaces the current history; or set AGENTGLASS_DB)`);
+        notice = { kind: "ignored", stray: local, db: data, switchCommand: switchCommand(local, data) };
+        console.warn(`[db] ignoring ${local} in the working directory; the database is ${data} (to use the other file instead: stop agentglass, then ${switchCommand(local, data)} — that replaces the current history; or set AGENTGLASS_DB)`);
       }
     }
     return data;
@@ -103,6 +106,16 @@ let notice: DbNotice | null = null;
 /** What the app should say about a second database, or null. Decided once,
  *  at startup, with the path. */
 export const dbNotice = (): DbNotice | null => notice;
+
+/** The shell line that puts `stray` where `db` is, for a person to run with
+ *  agentglass stopped. The -wal files are part of it: a server that was
+ *  killed leaves rows in `stray-wal` that a move of the main file alone
+ *  loses, and a `db-wal` left in place would be replayed over the moved
+ *  file. Written to work in bash, zsh and fish alike. */
+export function switchCommand(stray: string, db: string): string {
+  const q = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+  return `rm -f ${q(db + "-wal")} ${q(db + "-shm")} && mv ${q(stray)} ${q(db)}; mv ${q(stray + "-wal")} ${q(db + "-wal")} 2>/dev/null`;
+}
 
 /** Next to the database: which stray file it was copied from, so the next
  *  start does not report that file as a second history. It only ever silences
@@ -119,13 +132,19 @@ function readImported(data: string): string | null {
  * if the copy opens as a database. The source is read and nothing else: no
  * connection is opened on it, because even a read-only one can leave a
  * `-shm` behind. The copy is assembled under a temporary name, checked,
- * checkpointed and renamed, so a crash half-way never leaves a data-dir
- * database for the next start to trust. A copy taken while another server is
- * writing the source can be torn; `quick_check` refuses that one, and the
- * start goes on with an empty database and the "ignored" notice.
+ * checkpointed and linked into place, so a crash half-way never leaves a
+ * data-dir database for the next start to trust. The temporary name is this
+ * process's own, and the link fails if the database appeared meanwhile: two
+ * servers starting together neither delete each other's copy nor put one
+ * over a database the other has already opened. A `-wal` or `-shm` a deleted
+ * database left behind is removed first — SQLite would replay it over the
+ * copy. A copy taken while another server is writing the source can be torn;
+ * `quick_check` refuses that one, and the start goes on with an empty
+ * database and the "ignored" notice. That start is not retried: the data dir
+ * has a database from then on.
  */
 function copyInto(src: string, dst: string): boolean {
-  const tmp = `${dst}.copying`;
+  const tmp = `${dst}.copying-${process.pid}`;
   const clear = () => { for (const s of ["", "-wal", "-shm"]) rmSync(tmp + s, { force: true }); };
   try {
     clear();
@@ -139,7 +158,8 @@ function copyInto(src: string, dst: string): boolean {
     } finally { c.close(); }
     if (!ok) { clear(); return false; }
     chmodSync(tmp, 0o600);
-    renameSync(tmp, dst);
+    if (!existsSync(dst)) for (const s of ["-wal", "-shm"]) rmSync(dst + s, { force: true });
+    linkSync(tmp, dst);
     clear();
     try { writeFileSync(importedMarker(dst), src + "\n", { mode: 0o600 }); } catch { /* the copy stands; the next start just says "ignored" */ }
     return true;

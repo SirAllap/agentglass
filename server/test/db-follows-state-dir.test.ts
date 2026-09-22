@@ -101,7 +101,24 @@ describe("where a second server puts its database", () => {
     expect(err).toContain(stray);
     expect(err).toContain(current);
     expect(err.split("[db] ignoring").length - 1, "the warning is said once, not per open").toBe(1);
-    expect(notice, "two databases and nothing for the app to show").toEqual({ kind: "ignored", stray, db: current });
+    expect(notice, "two databases and nothing for the app to show").toMatchObject({ kind: "ignored", stray, db: current });
+    expect(notice?.switchCommand, "the move leaves the stray -wal behind").toContain(`mv '${stray}-wal' '${current}-wal'`);
+    expect(notice?.switchCommand, "an old -wal would be replayed over the moved file").toContain(`rm -f '${current}-wal'`);
+  });
+
+  test("the switch command in that notice moves the history over, rows in the -wal included", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "agx-cwd-"));
+    const stray = join(cwd, "agentglass.db");
+    historyAt(stray, "stale");
+    const data = mkdtempSync(join(tmpdir(), "agx-data-"));
+    const current = join(data, "agentglass", "agentglass.db");
+    mkdirSync(join(data, "agentglass"));
+    historyAt(current, "current");
+    const { notice } = await dbPathAndWarning({ XDG_DATA_HOME: data, AGENTGLASS_DB: "", AGENTGLASS_STATE_DIR: "" }, cwd);
+    // Run as a person would, with agentglass stopped: nothing holds either file.
+    const r = Bun.spawnSync(["bash", "-c", notice!.switchCommand!]);
+    expect(r.exitCode).toBe(0);
+    expect(rowsOf(current), "the moved history lost its -wal rows, or the old -wal was replayed").toEqual(["stale"]);
   });
 
   /*
@@ -140,6 +157,41 @@ describe("where a second server puts its database", () => {
     expect(second.err).not.toContain(stray);
   });
 
+  test("a -wal left behind by a deleted data-dir database is not replayed over the copy", async () => {
+    // The data dir's database was deleted but its -wal survived: SQLite would
+    // replay those old pages over the fresh copy, and quick_check still says ok.
+    const cwd = mkdtempSync(join(tmpdir(), "agx-cwd-"));
+    const stray = join(cwd, "agentglass.db");
+    historyAt(stray, "orbit-history");
+    const data = mkdtempSync(join(tmpdir(), "agx-data-"));
+    const current = join(data, "agentglass", "agentglass.db");
+    mkdirSync(join(data, "agentglass"));
+    const old = join(mkdtempSync(join(tmpdir(), "agx-old-")), "agentglass.db");
+    historyAt(old, "deleted-history");
+    writeFileSync(current + "-wal", readFileSync(old + "-wal"));
+    // And a marker from an earlier copy of the same file must not hide it.
+    writeFileSync(current + ".imported-from", stray + "\n");
+    const { path, notice } = await dbPathAndWarning(
+      { XDG_DATA_HOME: data, AGENTGLASS_DB: "", AGENTGLASS_STATE_DIR: "" }, cwd,
+    );
+    expect(path).toBe(current);
+    expect(notice?.kind).toBe("copied");
+    expect(rowsOf(current), "an old -wal was replayed over the copy").toEqual(["orbit-history"]);
+  });
+
+  test("a failed copy clears the marker of an earlier one, so the stray file is reported", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "agx-cwd-"));
+    const stray = join(cwd, "agentglass.db");
+    writeFileSync(stray, "not a database");
+    const data = mkdtempSync(join(tmpdir(), "agx-data-"));
+    const current = join(data, "agentglass", "agentglass.db");
+    mkdirSync(join(data, "agentglass"));
+    writeFileSync(current + ".imported-from", stray + "\n");
+    const env = { XDG_DATA_HOME: data, AGENTGLASS_DB: "", AGENTGLASS_STATE_DIR: "" };
+    expect((await dbPathAndWarning(env, cwd)).notice?.kind).toBe("ignored");
+    expect((await dbPathAndWarning(env, cwd)).notice?.kind, "the second start went quiet").toBe("ignored");
+  });
+
   test("a stray file that is not a database is not copied over an empty data dir", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "agx-cwd-"));
     const stray = join(cwd, "agentglass.db");
@@ -150,7 +202,7 @@ describe("where a second server puts its database", () => {
       { XDG_DATA_HOME: data, AGENTGLASS_DB: "", AGENTGLASS_STATE_DIR: "" }, cwd,
     );
     expect(path).toBe(current);
-    expect(notice).toEqual({ kind: "ignored", stray, db: current });
+    expect(notice).toMatchObject({ kind: "ignored", stray, db: current });
     expect(readFileSync(stray, "utf8")).toBe("not a database, just a file with that name");
   });
 

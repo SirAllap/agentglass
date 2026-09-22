@@ -11,15 +11,20 @@ import { DbNoticeView } from "../src/components/DbNoticeBanner.tsx";
 
 const stray = "/home/dev/orbit/server/agentglass.db";
 const db = "/home/dev/.local/share/agentglass/agentglass.db";
+const switchCommand = `rm -f '${db}-wal' '${db}-shm' && mv '${stray}' '${db}'; mv '${stray}-wal' '${db}-wal' 2>/dev/null`;
 const render = (kind: "copied" | "ignored") =>
-  renderToStaticMarkup(React.createElement(DbNoticeView, { notice: { kind, stray, db }, onClose: () => {} }));
+  renderToStaticMarkup(React.createElement(DbNoticeView, {
+    notice: kind === "ignored" ? { kind, stray, db, switchCommand } : { kind, stray, db },
+    onClose: () => {},
+  }));
 
 describe("the second-database notice", () => {
   test("two databases: names both, says which is in use, and how to switch without guessing", () => {
     const html = render("ignored");
     expect(html).toContain(stray);
     expect(html).toContain(db);
-    expect(html, "no command to move the file").toContain(`mv ${stray} ${db}`);
+    expect(html, "no command to move the file").toContain(`mv &#x27;${stray}&#x27; &#x27;${db}&#x27;`);
+    expect(html, "the -wal is left behind").toContain(`${stray}-wal`);
     expect(html, "moving it over replaces the current history, and the notice must say so").toContain("replaces");
     expect(html).toContain("role=\"alert\"");
   });

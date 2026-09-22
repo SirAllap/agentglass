@@ -2690,6 +2690,8 @@ export interface DbNotice {
   kind: "copied" | "ignored";
   stray: string;
   db: string;
+  /** For `ignored`: the shell line that swaps them, -wal files included. */
+  switchCommand?: string;
 }
 
 /** One `<<<<<<< / ======= / >>>>>>>` region of a conflicted file. */
