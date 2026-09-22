@@ -105,6 +105,16 @@ describe("start refuses before it reaches the engine", () => {
     }
   });
 
+  test("the Gemini CLI's own spellings of yolo: the shorthand, and the mode as a separate word", () => {
+    /* `gemini -y` and `gemini --approval-mode yolo` both start it with every
+       prompt answered yes, and the Qwen Code CLI kept both from it. The word
+       `yolo` as its own argument does not start with a dash, so the word
+       pattern never saw it; only the flag name can refuse it. */
+    for (const args of [["-y"], ["--approval-mode", "yolo"], ["--approval-mode", "auto_edit"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+    }
+  });
+
   test("the bypass flag of EVERY kind launch.ts knows is in the gate, so a new vendor cannot arrive without it", () => {
     for (const [kind, s] of Object.entries(SPELLINGS)) {
       expect(refusedArg([s.bypass]), `${kind}'s ${s.bypass} passed`).toBe(s.bypass);

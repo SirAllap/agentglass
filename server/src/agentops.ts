@@ -163,9 +163,11 @@ const PERMISSION_FLAGS = new Set<string>([
   /* Claude Code: the mode by name, additional settings (a permissions block
      rides in there), an MCP config file, tool allow/deny lists and extra
      writable directories. Codex: the approval policy (`-a`) and the sandbox
-     level. Gemini: the yolo shorthand. Kept with both spellings where the CLI
-     accepts both. */
+     level. Gemini, and the Qwen Code CLI forked from it: the yolo shorthand
+     and the approval mode, whose value is a separate word the pattern below
+     never sees. Kept with both spellings where the CLI accepts both. */
   "--permission-mode", "--settings", "--mcp-config", "--sandbox", "-a", "--ask-for-approval",
+  "-y", "--approval-mode",
   "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--add-dir",
 ]);
 
