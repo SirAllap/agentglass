@@ -355,7 +355,7 @@ function Dossier({ b, wide, auto }: {
         </div>
         <div className="truncate" title={a.key}>{a.session_id}</div>
         {toCompact != null
-          ? <div className="flex items-center gap-2 min-w-0">{meter}<span className="tabular-nums shrink-0" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span></div>
+          ? <div className="flex items-center gap-2 min-w-0">{meter}<span className="tabular-nums shrink-0" title="cost of the newest main-thread model request — one call, not the whole prompt when tools loop">last {fmtUsd(a.turnCost)}</span><span className="tabular-nums shrink-0" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span></div>
           : <div>ctx unknown — placed by recency</div>}
       </div>
     );
@@ -377,6 +377,7 @@ function Dossier({ b, wide, auto }: {
         <div className="flex flex-col gap-1.5">
           {meter}
           <Row k="context" v={`${fmtTokens(a.ctxTokens)} / ${fmtTokens(a.ctxLimit)}`} />
+          <Row k="last turn" v={fmtUsd(a.turnCost)} />
         </div>
       ) : (
         <div className="leading-snug">ctx unknown — placed by recency</div>

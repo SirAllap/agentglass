@@ -127,6 +127,11 @@ export interface AgentCard {
   ctxTokens: number;
   ctxTs: number;
   ctxLimit: number;
+  /** Cost of that same latest MAIN-thread turn, in USD. Lifetime `cost` only
+   *  ever rises and cannot answer "is the next turn expensive"; this is set on
+   *  the branch that sets `ctxTokens`/`ctxTs`, so the two numbers on the card
+   *  describe the same turn. 0 = no turn seen yet. */
+  turnCost: number;
   /** The linked worktree this agent is working in, short-labelled by card
    *  (`WEB-1042`), or null when it's running in the project itself. Several
    *  agents on one project are otherwise indistinguishable in the fleet — which
@@ -262,6 +267,7 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     ctxTokens: 0,
     ctxTs: 0,
     ctxLimit: 200_000,
+    turnCost: 0,
     worktree: null,
   };
 }
@@ -359,9 +365,17 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     }
     // Context estimate from the newest MAIN-session turn. Subagent turns are
     // excluded — a subagent has its own context, not the session's.
+    //
+    // `turnCost` rides the same branch: a subagent's turn is billed to its own
+    // context, so it must not be what this card reports, and an event carrying
+    // no token counts is not a turn, so it moves neither number.
     if (!e.agent_id) {
       const turnTok = e.input_tokens + e.cache_read_tokens + e.cache_creation_tokens;
-      if (turnTok > 0 && e.timestamp >= a.ctxTs) { a.ctxTokens = turnTok; a.ctxTs = e.timestamp; }
+      if (turnTok > 0 && e.timestamp >= a.ctxTs) {
+        a.ctxTokens = turnTok;
+        a.ctxTs = e.timestamp;
+        a.turnCost = e.cost_usd;
+      }
     }
     if (e.hook_event_type === "PreToolUse" && e.timestamp >= a.runningSince) {
       const done = e.tool_use_id
