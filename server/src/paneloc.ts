@@ -48,6 +48,44 @@ export interface PaneRow {
  *  kernel, so these are compared whole against what /proc actually reports. */
 const AGENT_COMMS = new Set(["claude", "codex", "gemini", "amp", "opencode", "crush", "antigravity"]);
 
+/**
+ * The CLIs that are a JavaScript file run by `node`, by the npm package the
+ * file lives in.
+ *
+ * `comm` says `node` for every one of them, so a walk that matches names
+ * never sees a qwen or a gemini at all: measured on the owner's machine,
+ * `/usr/bin/qwen` is `#!/usr/bin/env node` and its process is
+ * `node /usr/lib/node_modules/@qwen-code/qwen-code/scripts/cli-entry.js`,
+ * which is why a tab running it was read as a plain shell — no agent, no
+ * worktree, and nothing to bring back after a reboot. The package directory
+ * is on that path, and it is the one part of it that is the same on every
+ * install.
+ */
+const NODE_CLIS: [pkg: string, name: string][] = [
+  ["@qwen-code/qwen-code", "qwen"],
+  ["@google/gemini-cli", "gemini"],
+  ["@anthropic-ai/claude-code", "claude"],
+  ["@openai/codex", "codex"],
+  ["opencode-ai", "opencode"],
+];
+
+/**
+ * Which agent CLI a process is, from its argv, or null.
+ *
+ * The binary's basename when it is one of the CLIs by name; the npm package
+ * when the binary is `node` or `bun` running one of them. Pure, so the
+ * restore and the pane walk can share it and a test can state a process.
+ */
+export function agentNamed(argv: readonly string[]): string | null {
+  const head = (argv[0] || "").split("/").pop() || "";
+  if (AGENT_COMMS.has(head)) return head;
+  if (head === "node" || head === "bun") {
+    const script = argv[1] || "";
+    for (const [pkg, name] of NODE_CLIS) if (script.includes(`/node_modules/${pkg}/`)) return name;
+  }
+  return null;
+}
+
 /** How far down a pane's tree to look. A shell, a wrapper or two, the agent —
  *  deeper than that and we are walking somebody's build. */
 const MAX_DEPTH = 6;

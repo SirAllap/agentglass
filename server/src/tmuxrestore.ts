@@ -11,16 +11,16 @@
 //
 //   * the session/window/pane tree, each pane's working directory and size;
 //   * each pane's scrollback (up to 2000 lines, replayed into the new pane);
-//   * each pane's start command — which for agent panes is the exact CLI
-//     invocation the chat engine used, including `--resume` when the pane was
-//     itself a resumed session. "all" mode replays those commands, so a fleet
-//     of agents comes back with every conversation resumed; "lazy" (default)
-//     restores the tree and lets the chat reopen resume each session.
+//   * what was RUNNING in each pane, as the argv it was running with — an
+//     agent CLI, or whatever command the pane was born from. "all" mode starts
+//     it again with the same argv, and a Claude pane with nothing to replay is
+//     resumed by its conversation id; "lazy" (default) restores the tree and
+//     lets the chat reopen resume each session.
 //
 // Nothing here touches the user's tmux. Only the engine's own socket is read,
 // and the data lands in the engine's state dir. The user's ~/.tmux/resurrect
 // saves are nobody's business but theirs (see tmuxsnapshot.ts).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
+import { readFileSync, readlinkSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
@@ -28,6 +28,7 @@ import { tmux, listPanes, validSessionName, tmuxSocket, setCaptureHook } from ".
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
+import { agentNamed } from "./paneloc.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { windowTree, LAYOUT_RE, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
@@ -55,6 +56,14 @@ export interface CapturedPane extends TmuxPaneRow {
   /** The flags the agent in this pane was actually started with — everything
    *  on its command line except the binary and the id. See `agentArgsOf`. */
   agentArgs?: string[];
+  /**
+   * What was running in the pane, as its own argv, for a pane holding no
+   * Claude conversation: another agent CLI with its prompt taken off, or the
+   * command the pane was born from (`bash -c "…"`, `lazygit`). Replayed as
+   * argv, so it comes back exactly and never one shell deeper — see
+   * `startCommand` for why the string tmux reports cannot be.
+   */
+  startArgv?: string[];
 }
 
 export interface CapturedWindow extends TmuxWindowDetail {
@@ -167,18 +176,9 @@ async function startCommandOf(name: string, windowId: string, paneId: string): P
   return r.ok ? r.stdout.trim() : "";
 }
 
-/**
- * Is this pane running an agent at all?
- *
- * `pane_current_command` is the binary of the foreground process — `claude`,
- * `fish`, `nvim`. Compared against the CLI's own basename rather than a literal,
- * so a machine whose binary is named otherwise is not silently excluded.
- */
-function looksLikeAgent(command: string | undefined): boolean {
-  if (!command) return false;
-  const bin = (claudeCode.bin() || "claude").split("/").pop() || "claude";
-  return command === bin;
-}
+/** The Claude CLI's own basename rather than a literal, so a machine whose
+ *  binary is named otherwise is not silently excluded. */
+const claudeName = (): string => (claudeCode.bin() || "claude").split("/").pop() || "claude";
 
 /**
  * The conversation id from the command line of what is running in the pane.
@@ -262,6 +262,10 @@ export interface ProcReader {
   run: (argv: string[]) => string;
   /** A file's text; throws when it is not there. */
   read: (path: string) => string;
+  /** A process's working directory, or "" when the machine cannot say. Linux
+   *  reads the link in /proc; a Mac has no cheap answer and says nothing,
+   *  which only means a pane's note is taken at its word there. */
+  cwd?: (pid: number) => string;
 }
 
 const machineProc: ProcReader = {
@@ -273,6 +277,7 @@ const machineProc: ProcReader = {
     } catch { return ""; }
   },
   read: (path) => readFileSync(path, "utf8"),
+  cwd: (pid) => { try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return ""; } },
 };
 
 /** Direct children of a pid, or an empty list. */
@@ -280,7 +285,18 @@ export function childPidsOf(pid: number, proc: ProcReader = machineProc): number
   // `pgrep -P` is in BSD pgrep and procps alike, but the Linux branch keeps
   // the `ps` it was measured with rather than trading a known answer for a
   // portable one.
-  const out = proc.platform === "linux"
+  //
+  // Before the `ps`, the kernel's own list: `/proc/<pid>/task/<pid>/children`
+  // is one read where `ps` is one process, and the walk below asks this once
+  // per process on the desk every ten seconds. Absent (CONFIG_PROC_CHILDREN
+  // off, or a test that states a machine without it) it throws, and the
+  // measured `ps` answers as it always did.
+  let listed: string | null = null;
+  if (proc.platform === "linux") {
+    try { listed = proc.read(`/proc/${pid}/task/${pid}/children`); } catch { listed = null; }
+  }
+  const out = listed !== null ? listed.replace(/\s+/g, "\n")
+    : proc.platform === "linux"
     ? proc.run(["ps", "-o", "pid=", "--ppid", String(pid)])
     : proc.run(["pgrep", "-P", String(pid)]);
   const pids: number[] = [];
@@ -312,50 +328,108 @@ export function argvOf(pid: number, proc: ProcReader = machineProc): string[] {
   return proc.run(["ps", "-ww", "-o", "args=", "-p", String(pid)]).trim().split(/\s+/).filter(Boolean);
 }
 
-/** Among a shell's children, the one running the agent CLI: its argv, or []. */
-export function agentArgvAmong(children: number[], bin: string, proc: ProcReader = machineProc): string[] {
-  for (const child of children) {
-    const argv = argvOf(child, proc);
-    const head = (argv[0] || "").split("/").pop();
-    if (head === bin) return argv;
+/** How far down a pane's process tree to look for the agent: a shell, a
+ *  wrapper or two, the agent. Deeper than that is somebody's build. And a
+ *  ceiling on processes visited, because a pane running a build is a tree
+ *  with hundreds of leaves and this runs every ten seconds. */
+const WALK_DEPTH = 6;
+const WALK_MAX = 60;
+
+/** What an agent CLI under a pane is: which one, its argv, where it runs. */
+export interface AgentUnder { name: string; argv: string[]; cwd: string }
+
+/**
+ * The agent running in a pane, or null.
+ *
+ * Breadth-first from the pane's own process, so the pane's agent is found
+ * before anything it shelled out to. The pane's own pid is asked first, and
+ * that is the measured half of this: a window born from
+ * `tmux new-window "exec claude …"` has no shell left in it — `exec`
+ * replaced it — so the agent IS the pane's process and a walk that started
+ * at its children found nothing. Six windows on the owner's desk were
+ * photographed that way with no flags and no way to resume.
+ *
+ * Named by `agentNamed` (paneloc.ts): the binary's basename, or the npm
+ * package when the binary is `node` — which is how a qwen is told apart
+ * from a build.
+ */
+export function agentUnder(panePid: number, proc: ProcReader = machineProc): AgentUnder | null {
+  let level = [panePid];
+  let seen = 0;
+  for (let depth = 0; depth <= WALK_DEPTH && level.length; depth++) {
+    const next: number[] = [];
+    for (const pid of level) {
+      if (++seen > WALK_MAX) return null;
+      const argv = argvOf(pid, proc);
+      const name = agentNamed(argv);
+      if (name) return { name, argv, cwd: proc.cwd?.(pid) ?? "" };
+      next.push(...childPidsOf(pid, proc));
+    }
+    level = next;
   }
-  return [];
+  return null;
 }
 
-/** The agent under a pane: its argv, or an empty list. */
-async function agentArgvOf(name: string, windowId: string, paneId: string): Promise<string[]> {
-  const r = await tmux(["display-message", "-t", `=${name}:${windowId}.${paneId}`, "-p", "#{pane_pid}"]);
-  const pid = Number(r.stdout.trim());
-  if (!r.ok || !Number.isInteger(pid) || pid <= 1) return [];
-  try {
-    const bin = (claudeCode.bin() || "claude").split("/").pop() || "claude";
-    return agentArgvAmong(childPidsOf(pid), bin);
-  } catch { /* the process went away between asking and looking */ }
-  return [];
+/** The `--resume <uuid>` on a command line, when it carries one. A pane
+ *  that was itself restored has the id here before any hook has fired, and
+ *  that is what lets a restored desk survive a SECOND reboot. */
+export function resumeIdIn(argv: readonly string[]): string | undefined {
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i]!;
+    const v = a.startsWith("--resume=") ? a.slice(9) : a === "--resume" ? argv[i + 1] : undefined;
+    if (v && SESSION_ID_RE.test(v)) return v;
+  }
+  return undefined;
 }
 
 /**
- * The `--resume <uuid>` under a shell, when one of its children carries it.
- *
- * The pane's process is a shell; the agent is its child. On Linux `ps` walks
- * that for us in one call — `-o args= --ppid` prints every child's command
- * line — rather than us reading /proc by hand for every pane on the desk. BSD
- * `ps` has no `--ppid`, so a Mac asks for the children first and then each
- * one's argv; the regex over the result is the same one.
+ * The flags that carry a prompt on the command lines of the other CLIs this
+ * machine runs, by CLI. Replaying one re-runs a task from hours ago, which
+ * is the same mistake `NOT_REPLAYED` exists for, in another binary. Only
+ * NAMED flags: a positional prompt (codex) cannot be told from a positional
+ * value without knowing every flag, and is replayed — the stated ceiling.
  */
-export function resumeIdUnder(pid: number, proc: ProcReader = machineProc): string | undefined {
-  const lines = proc.platform === "linux"
-    ? proc.run(["ps", "-o", "args=", "--ppid", String(pid)])
-    : childPidsOf(pid, proc).map((c) => argvOf(c, proc).join(" ")).join("\n");
-  const m = /--resume[= ]\s*([0-9a-fA-F-]{36})/.exec(lines);
-  return m?.[1] && SESSION_ID_RE.test(m[1]) ? m[1] : undefined;
+const PROMPT_FLAGS: Record<string, string[]> = {
+  opencode: ["--prompt"],
+  qwen: ["-p", "--prompt", "-i", "--prompt-interactive"],
+  gemini: ["-p", "--prompt", "-i", "--prompt-interactive"],
+};
+
+export function withoutPromptFlags(name: string, argv: readonly string[]): string[] {
+  const drop = new Set(PROMPT_FLAGS[name] ?? []);
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (/[\n\r\0]/.test(a)) continue;
+    const bare = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (drop.has(bare)) {
+      if (!a.includes("=") && i + 1 < argv.length && !argv[i + 1]!.startsWith("-")) i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out.slice(0, 64);
 }
 
-async function resumeIdOf(name: string, windowId: string, paneId: string): Promise<string | undefined> {
+/** A login shell with nothing to run is the pane's default, not a command
+ *  to bring back: tmux gives a restored pane one anyway. `bash -c "…"` is a
+ *  command. */
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"]);
+export function isBareShell(argv: readonly string[]): boolean {
+  const head = (argv[0] || "").replace(/^-/, "").split("/").pop() || "";
+  return SHELLS.has(head) && !argv.slice(1).some((a) => a === "-c" || a === "--command");
+}
+
+/** A pane forked a moment ago still carries the tmux server's own argv until
+ *  it execs — measured: photographed right after `new-window`, the pane read
+ *  as the tmux binary with the server's arguments. Not a command anybody
+ *  ran, and the next sweep sees the real one. */
+const bornYet = (argv: readonly string[]): boolean => (argv[0] || "").split("/").pop() !== "tmux";
+
+async function panePidOf(name: string, windowId: string, paneId: string): Promise<number> {
   const r = await tmux(["display-message", "-t", `=${name}:${windowId}.${paneId}`, "-p", "#{pane_pid}"]);
   const pid = Number(r.stdout.trim());
-  if (!r.ok || !Number.isInteger(pid) || pid <= 1) return undefined;
-  try { return resumeIdUnder(pid); } catch { return undefined; }
+  return r.ok && Number.isInteger(pid) && pid > 1 ? pid : 0;
 }
 
 /**
@@ -533,16 +607,34 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
          * a shell in the same directory is what the person can use.
          */
         if (p.dead) { panes.push({ ...p, startCommand: "" }); continue; }
-        const agentSession = looksLikeAgent(p.command)
-          ? (paneAgentNote(p.id)?.session_id || await resumeIdOf(name, w.id, p.id))
-          : undefined;
-        /* Only for a pane that is running one, same as the id: a shell has no
-           flags to keep, and a stale note must not put flags on a plain
-           prompt. */
-        const agentArgs = looksLikeAgent(p.command)
-          ? agentArgsOf(await agentArgvOf(name, w.id, p.id))
-          : undefined;
-        panes.push({ ...p, startCommand, agentSession, agentArgs: agentArgs?.length ? agentArgs : undefined });
+        /*
+         * WHAT IS RUNNING NOW is the question, so ask what is running now.
+         *
+         * Not the pane's born-with command, which tmux reports as a string it
+         * has already quoted for a shell — a window made from one string
+         * comes back as `"exec claude --model …"`, quotes included, and
+         * `sh -c` on that looks for a program called `exec claude --model …`
+         * (measured: six windows back as shells). Not the note alone, which
+         * outlives the agent: pane ids are reused, and two plain shells were
+         * once photographed carrying conversation ids. The process tree under
+         * the pane says what is there, which CLI it is, and with what flags.
+         */
+        const pid = await panePidOf(name, w.id, p.id);
+        const under = pid ? agentUnder(pid) : null;
+        if (under && under.name === claudeName()) {
+          /* The id: the hook's note first, then the argv's own `--resume`,
+             which a restored pane carries before any hook has fired. */
+          const agentSession = paneAgentNote(p.id)?.session_id || resumeIdIn(under.argv);
+          const agentArgs = agentArgsOf(under.argv);
+          panes.push({ ...p, startCommand, agentSession, agentArgs: agentArgs.length ? agentArgs : undefined });
+          continue;
+        }
+        /* Another CLI: itself, with its prompt taken off. Nothing else: the
+           command the pane was born from, unless that is a login shell with
+           nothing to run — which tmux gives a restored pane anyway. */
+        const root = pid ? argvOf(pid).filter((a) => !/[\n\r\0]/.test(a)).slice(0, 64) : [];
+        const startArgv = under ? withoutPromptFlags(under.name, under.argv) : bornYet(root) ? root : [];
+        panes.push({ ...p, startCommand, ...(startArgv.length && !isBareShell(startArgv) ? { startArgv } : {}) });
       }
       if (panes.length) out.push({ ...w, panes });
     }
@@ -627,24 +719,27 @@ export function lastCaptureAt(): number | null {
  * "lazy" is a login shell in the pane's directory, always: the desk comes back
  * and nothing starts talking to a model until somebody asks it to.
  *
- * "all" resumes the conversation. Two ways in, and the second is the one that
- * covers a real desk: a pane the app CREATED carries its whole command line in
- * `startCommand` and is replayed verbatim; a `claude` typed into a shell leaves
- * that empty — measured — so the conversation id recorded for the pane is used
- * to build `claude --resume <id>` instead.
+ * "all" brings back what was running: the argv the pane's process was running
+ * with (`startArgv`), handed to tmux as argv — never through a shell, so it is
+ * exact and never one level deeper. A photograph from before `startArgv`
+ * existed still has the string tmux reported, and gets the old `sh -c` on it:
+ * right for a line tmux printed unquoted, a shell for one it quoted, and gone
+ * at the first sweep after boot. A Claude pane with nothing to replay — a
+ * `claude` typed into a shell leaves both empty, measured — is resumed by the
+ * conversation id recorded for it.
  *
- * The command is passed as argv, never through a shell, and the id it contains
- * came from our own hook rather than from anything a page could set.
+ * The id came from our own hook or from a running process's arguments, and
+ * is still checked against a UUID before it can reach a command line.
  */
-export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined): string[] {
+export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bin: string | null = claudeCode.bin()): string[] {
   if (mode !== "all" || !pane) return [];
   /* A photograph from before the capture learned to leave the Lantern out:
      its chat comes back as a shell, never as the chat. */
   if (pane.startCommand.includes(LANTERN_PROMPT_MARK)) return [];
+  if (pane.startArgv?.length) return [...pane.startArgv];
   if (pane.startCommand) return ["sh", "-c", pane.startCommand];
   const id = pane.agentSession;
   if (!id || !SESSION_ID_RE.test(id)) return [];
-  const bin = claudeCode.bin();
   if (!bin) return [];
   /* The flags first, then the id: the id is the one part of this line this
      file built itself, and it goes last so nothing captured can displace it. */
