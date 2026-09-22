@@ -104,6 +104,10 @@ export interface SessionRollup {
    * thought to write a title.
    */
   first_prompt?: string | null;
+  /** What this session's edits touched that a reviewer should read first, one
+   *  entry per kind and file (see `shared/riskFlags.ts`). Absent when none of
+   *  its edits raised anything. */
+  risks?: SessionRisk[];
   started_at: number;
   ended_at: number | null;
   last_seen: number;

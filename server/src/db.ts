@@ -19,6 +19,7 @@ import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
 import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
+import { changeRisks, sessionRisks } from "../../shared/riskFlags.ts";
 
 /**
  * Where the database lives.
@@ -3295,6 +3296,7 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
       if (p) d.first_prompt = p;
     }
   }
+  attachRisks(data);
   sessionsCache.set(key, { at: Date.now(), data });
   // One entry per (limit, provider, scope); the limit set is tiny and scope
   // rarely changes, so prune stale entries anyway so a long-lived server cannot
@@ -3817,7 +3819,73 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
     if (l[0] === "+") additions++;
     else if (l[0] === "-") deletions++;
   }
-  return { id: r.id, timestamp: r.timestamp, source_app: r.source_app, session_id: r.session_id, tool: r.tool_name, file_path, additions, deletions, hunks };
+  const risks = changeRisks(file_path, hunks, deletions);
+  return { id: r.id, timestamp: r.timestamp, source_app: r.source_app, session_id: r.session_id, tool: r.tool_name, file_path, additions, deletions, hunks, ...(risks.length ? { risks } : {}) };
+}
+
+/**
+ * Per session: how far into `events` its flags have been read, and the flags.
+ *
+ * The session list is polled every few seconds and re-parsing every edit of
+ * every listed session on each poll would make it the most expensive query on
+ * the dashboard, for a fact that only changes when an edit lands. So each read
+ * parses only the edits past the watermark. The watermark is a row id, not a
+ * timestamp: a backfill inserts old edits late, and those must still count.
+ */
+const riskMemo = new Map<string, { through: number; flags: import("../../shared/types.ts").SessionRisk[] }>();
+const RISK_MEMO_MAX = 2000;
+
+function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): void {
+  if (!rows.length) return;
+  try {
+    const top = db.query<{ m: number | null }, []>(`SELECT MAX(id) m FROM events`).get()?.m ?? 0;
+    const ids = rows.map((r) => r.session_id);
+    // Grouped by watermark rather than read from the lowest one: a session that
+    // just appeared starts at 0, and that must not make every other listed
+    // session re-read its whole history.
+    const byMark = new Map<number, string[]>();
+    for (const id of ids) {
+      const mark = riskMemo.get(id)?.through ?? 0;
+      if (mark >= top) continue;
+      const g = byMark.get(mark);
+      if (g) g.push(id); else byMark.set(mark, [id]);
+    }
+    if (byMark.size) {
+      const fresh = new Map<string, import("../../shared/types.ts").FileChange[]>();
+      for (const [mark, group] of byMark) {
+        const holes = group.map(() => "?").join(",");
+        for (const r of db.query<ChangeRow, any[]>(
+          `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
+           WHERE session_id IN (${holes}) AND id > ? AND id <= ?
+             AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')
+           ORDER BY id DESC`).all(...group, mark, top)) {
+          const c = parseChange(r);
+          if (!c?.risks) continue;
+          const list = fresh.get(r.session_id);
+          if (list) list.push(c); else fresh.set(r.session_id, [c]);
+        }
+      }
+      for (const group of byMark.values()) for (const id of group) {
+        const old = riskMemo.get(id)?.flags ?? [];
+        const add = fresh.get(id) ?? [];
+        // Newer first, so the reason kept for a kind and file is the latest one.
+        const flags = add.length
+          ? sessionRisks([...add, ...old.map((f) => ({ file_path: f.file, risks: [f] }))])
+          : old;
+        riskMemo.delete(id);
+        riskMemo.set(id, { through: top, flags });
+      }
+      // Insertion order is recency of reading, so the front is the stalest.
+      for (const k of riskMemo.keys()) {
+        if (riskMemo.size <= RISK_MEMO_MAX) break;
+        riskMemo.delete(k);
+      }
+    }
+    for (const r of rows) {
+      const f = riskMemo.get(r.session_id)?.flags;
+      if (f?.length) r.risks = f;
+    }
+  } catch { /* flags are advisory; a database that cannot answer must not lose the list */ }
 }
 
 /** Recent file changes (Edit/Write/MultiEdit) with their diff hunks, parsed
