@@ -48,6 +48,22 @@ const P = (deg: number, rad: number): [number, number] => [
   C + rad * Math.sin((deg * Math.PI) / 180),
 ];
 
+/** How full this session's context is, as a share of ITS OWN model's window
+ *  (0..1), or null before its first turn. The share, not the token count: 180K
+ *  is a 200K session about to compact and a 1M session with most of its room
+ *  left, and the dial answers "how close is this one to compacting". */
+export function ctxShare(a: Pick<AgentCard, "ctxTokens" | "ctxLimit">): number | null {
+  return a.ctxTokens > 0 && a.ctxLimit > 0 ? Math.min(1, a.ctxTokens / a.ctxLimit) : null;
+}
+
+/** A blip's tooltip: the share hides the absolute size, so it says both. */
+export function blipTitle(a: Pick<AgentCard, "ctxTokens" | "ctxLimit" | "title" | "source_app">): string {
+  const name = a.title || a.source_app;
+  const share = ctxShare(a);
+  if (share == null) return `${name} · no turn yet`;
+  return `${name} · ${fmtTokens(a.ctxTokens)} / ${fmtTokens(a.ctxLimit)} tokens · ${Math.round(share * 100)}% of its window`;
+}
+
 /** A session's fixed bearing on the dial — hashed from its key so a blip
  *  keeps its angle for its whole life instead of jumping every re-sort. */
 function bearingOf(key: string): number {
@@ -87,8 +103,8 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
   const now = Date.now();
 
   const blips = agents.slice(0, 24).map((a) => {
-    // Raw fraction of model max, then re-anchor so 1.0 == compaction threshold.
-    const rawFrac = a.ctxTokens > 0 && a.ctxLimit > 0 ? Math.min(1, a.ctxTokens / a.ctxLimit) : null;
+    // Share of this model's own window, then re-anchor so 1.0 == compaction threshold.
+    const rawFrac = ctxShare(a);
     const compactFrac = rawFrac == null ? null : Math.min(1, rawFrac / COMPACT_FRAC);
     // Mild ease-in: expand the outer band where compaction decisions live.
     const eased = compactFrac == null ? null : Math.pow(compactFrac, 0.7);
@@ -222,6 +238,7 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
                   onMouseEnter={() => setHover(b.a.key)}
                   onClick={() => onSelect?.(b.a)}
                 >
+                  <title>{blipTitle(b.a)}</title>
                   {/* generous invisible hit area */}
                   <circle cx={b.x} cy={b.y} r={Math.max(b.size + 5, 8)} fill="transparent" />
                   {/* halo — a soft translucent disc (no SVG filter: filters
