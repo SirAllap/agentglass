@@ -321,6 +321,14 @@ describe("getCollisions", () => {
     expect(out[0].parties.map((p) => `${p.session_id}:${p.via}`).sort()).toEqual(["oc-k:file", "oc-l:command"]);
   });
 
+  test("an OpenCode command resolves against its workdir", async () => {
+    // OpenCode's bash tool takes `workdir` in place of a `cd`.
+    db.insertEvent({ ...ev("oc-m", now - 5_000, "PreToolUse", "bash", {}, ""), source_app: "opencode", payload: { project_path: `${W}/wt-d`, tool_input: { command: "cat ../.env.wd", workdir: `${W}/shared/sub` } } } as any);
+    db.insertEvent(ev("live-n", now - 5_000, "PreToolUse", "Read", { file_path: `${W}/shared/.env.wd` }, `${W}/wt-e`) as any);
+    const out = ours(await col.getCollisions(now, () => []), ["oc-m", "live-n"]);
+    expect(out.map((c) => c.resource)).toEqual([`env ${W}/shared/.env.wd`]);
+  });
+
   test("a session outside any checkout is not a party, and a listener below it is nobody's", async () => {
     // A session sitting in the home directory has no checkout; taking the
     // directory itself as one made every dev server under it that session's,

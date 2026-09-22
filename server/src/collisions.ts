@@ -523,11 +523,12 @@ export async function getCollisions(
 ): Promise<Collision[]> {
   const since = now - COLLISION_WINDOW_MS;
   const rows = db
-    .query<{ source_app: string; session_id: string; hook_event_type: string; tool_name: string | null; ts: number; cmd: string | null; path: string | null; cwd: string | null }, [number]>(
+    .query<{ source_app: string; session_id: string; hook_event_type: string; tool_name: string | null; ts: number; cmd: string | null; path: string | null; cwd: string | null; workdir: string | null }, [number]>(
       `SELECT source_app, session_id, hook_event_type, tool_name, timestamp AS ts,
               json_extract(payload,'$.tool_input.command') AS cmd,
               COALESCE(json_extract(payload,'$.tool_input.file_path'), json_extract(payload,'$.tool_input.filePath')) AS path,
-              COALESCE(json_extract(payload,'$.cwd'), json_extract(payload,'$.project_path')) AS cwd
+              COALESCE(json_extract(payload,'$.cwd'), json_extract(payload,'$.project_path')) AS cwd,
+              json_extract(payload,'$.tool_input.workdir') AS workdir
        FROM events
        WHERE timestamp > ? AND hook_event_type IN ('PreToolUse','SessionEnd')
        ORDER BY timestamp`,
@@ -550,7 +551,7 @@ export async function getCollisions(
     if (r.hook_event_type !== "PreToolUse") continue;
     const tool = r.tool_name?.toLowerCase();
     if (tool === "bash" && r.cmd) {
-      for (const c of claimsFromCommand(String(r.cmd), r.cwd)) {
+      for (const c of claimsFromCommand(String(r.cmd), r.workdir ?? r.cwd)) {
         s.claims.push({ ...c, ts: r.ts, via: "command", evidence: maskEvidence(String(r.cmd)) });
       }
     } else if (tool && FILE_TOOLS.has(tool) && r.path) {
