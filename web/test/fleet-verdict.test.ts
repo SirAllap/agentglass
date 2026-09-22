@@ -13,7 +13,8 @@
 import { test, expect } from "bun:test";
 import { fleetVerdict } from "../src/lib/fleetVerdict.ts";
 import { attention } from "../../shared/fieldRules.ts";
-import { __setLanternRows, lanternNeed } from "../src/lib/lanternStore.ts";
+import { __setLanternRows, lanternNeed, refreshLantern, lanternRows, lanternFailed, lanternKnown } from "../src/lib/lanternStore.ts";
+import { api } from "../src/lib/api.ts";
 import type { LanternRow } from "../src/components/LanternView.tsx";
 
 const now = 1_800_000_000_000;
@@ -267,3 +268,32 @@ test("the rail's pip is the strip's need count, from the same rule", () => {
 });
 
 const storeSrc = await src("../src/lib/lanternStore.ts");
+
+test("the store: a failure before any good read is no answer, after one it is the last answer", async () => {
+  // Stubbed on the one method and put back: every test file shares this process.
+  const real = api.agentBoard;
+  const answer = (ok: boolean, agents: LanternRow[] = []) => {
+    api.agentBoard = (async () => ({ ok, agents })) as typeof api.agentBoard;
+  };
+  __setLanternRows(null);
+  try {
+    answer(false);
+    await refreshLantern();
+    expect([lanternFailed(), lanternKnown()]).toEqual([true, false]);
+    expect(fleetVerdict(lanternRows(), now, lanternFailed(), lanternKnown())).toBeNull();
+
+    answer(true, [working("orbit-api")]);
+    await refreshLantern();
+    expect([lanternFailed(), lanternKnown()]).toEqual([false, true]);
+
+    answer(false);
+    await refreshLantern();
+    expect([lanternFailed(), lanternKnown()]).toEqual([true, true]);
+    const v = fleetVerdict(lanternRows(), now, lanternFailed(), lanternKnown())!;
+    expect([v.stale, v.counts.running]).toEqual([true, 1]);
+  } finally {
+    api.agentBoard = real;
+    __setLanternRows(null);
+  }
+  expect(lanternKnown()).toBe(false);
+});

@@ -116,5 +116,8 @@ export const lanternCacheTtlMs = (): number => cacheTtlMin * 60_000;
  *  the pip and the strip are one number. */
 export const lanternNeed = (): number => rows?.filter((r) => attention(r) === "blocked").length ?? 0;
 
-/** For tests that render the view with a known board. */
-export function __setLanternRows(next: LanternRow[] | null): void { rows = next; readAt = Date.now(); emit(); }
+/** For tests that render the view with a known board — or, with null, put the
+ *  store back to never having read one. */
+export function __setLanternRows(next: LanternRow[] | null): void {
+  rows = next; known = next !== null; error = false; readAt = Date.now(); emit();
+}
