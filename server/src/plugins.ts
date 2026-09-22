@@ -623,6 +623,11 @@ async function fetchInto(staging: string, url: string, ref: string | null, sha25
 async function finishInstall(
   staging: string,
   source: InstallSource,
+  /** The name somebody chose — a catalogue entry's id — which the manifest
+   *  that arrived must carry, and which names the folder. Without it the
+   *  folder was named by the manifest alone, so a listed entry whose
+   *  repository said another plugin's name installed over that plugin. */
+  expectName?: string,
 ): Promise<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }> {
   const manifestPath = join(staging, MANIFEST_NAME);
   if (!existsSync(manifestPath)) return { ok: false, error: `No ${MANIFEST_NAME} at the root of that plugin` };
@@ -630,6 +635,9 @@ async function finishInstall(
   try { raw = JSON.parse(readFileSync(manifestPath, "utf8")); } catch { return { ok: false, error: `${MANIFEST_NAME} is not valid JSON` }; }
   const manifest = validateManifest(raw);
   if (typeof manifest === "string") return { ok: false, error: manifest };
+  if (expectName !== undefined && manifest.name !== expectName) {
+    return { ok: false, error: `the catalogue lists "${expectName}" and the plugin it fetched is named "${manifest.name}"; nothing was installed` };
+  }
   /*
    * A plugin that needs a newer app is refused here rather than installed and
    * left off. Half of what a plugin declares is where it draws, and a surface
@@ -645,7 +653,7 @@ async function finishInstall(
   const content = contentHash(staging, walked.files);
   const fingerprint = consentFingerprint(manifest, content);
 
-  const installDir = pluginInstallDir(manifest.name);
+  const installDir = pluginInstallDir(expectName ?? manifest.name);
   const hash = manifestHash(manifest);
   const store = read();
   const existing = store.plugins.find((p) => p.name === manifest.name);
@@ -754,6 +762,9 @@ export async function installFromCatalogue(
   if (!fetched.ok) return { ok: false, error: fetched.error };
   const entry = fetched.catalogue.plugins.find((p) => p.id === pluginId);
   if (!entry) return { ok: false, error: `No plugin "${pluginId}" in that catalogue` };
+  // The id names the folder, so it is held to a plugin name's rule before a
+  // byte is fetched: a catalogue id may be 120 characters of anything.
+  if (!validPluginName(entry.id)) return { ok: false, error: `"${pluginId.slice(0, 60)}" is not a name a plugin can be installed under` };
 
   const staging = mkdtempSync(join(tmpdir(), "agx-plugin-"));
   try {
@@ -765,7 +776,7 @@ export async function installFromCatalogue(
       marketplace: { url: catalogueUrl, ref: null, resolvedCommit },
       plugin: { url: entry.source.url, ref: entry.source.ref, ...(entry.sha256 ? { sha256: entry.sha256 } : {}) },
     };
-    return await finishInstall(staging, source);
+    return await finishInstall(staging, source, entry.id);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -793,7 +804,9 @@ export async function updatePlugin(name: string): Promise<{ ok: true; plugin: Pu
   try {
     const r = await fetchInto(staging, url, ref, sha256);
     if (!r.ok) return r;
-    return await finishInstall(staging, existing.source);
+    // Updated in place: whatever arrives must still be the plugin that is
+    // installed here, or it would land in another plugin's folder.
+    return await finishInstall(staging, existing.source, existing.name);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }

@@ -575,6 +575,34 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     expect(r.result.plugin!.resolvedCommit).toBe(pinned);
   }, 30_000);
 
+  /*
+   * The folder a plugin lands in was named by the manifest that arrived, not
+   * by the entry somebody chose. A listed `orbit-clock` whose repository said
+   * `name: local-review` installed over the local-review already on the
+   * machine. The entry's id names the folder, and a manifest that disagrees
+   * with it is refused before anything is copied.
+   */
+  test("installs into the folder the catalogue's id names", async () => {
+    const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()) });
+    expect(r.result.ok).toBe(true);
+    expect(r.result.plugin!.installDir.endsWith("/plugins/orbit-clock")).toBe(true);
+  }, 30_000);
+
+  test("refuses an entry whose manifest is named something else, and installs nothing", async () => {
+    const r = await install({ kind: "catalogue", id: "local-review", catalogue: catalogue(entry({ id: "local-review" })) });
+    expect(r.result.ok).toBe(false);
+    expect(r.result.error).toContain("local-review");
+    expect(r.result.error).toContain("orbit-clock");
+    expect(r.listed).toBe(0);
+  }, 30_000);
+
+  test("an id that could not be a folder is refused before anything is fetched", async () => {
+    const r = await install({ kind: "catalogue", id: "../orbit", catalogue: catalogue(entry({ id: "../orbit" })) });
+    expect(r.result.ok).toBe(false);
+    expect(r.log).toBe("");
+    expect(r.listed).toBe(0);
+  }, 30_000);
+
   test("an entry that pins nothing still installs the default branch, as a catalogue from elsewhere may", async () => {
     const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: null }, sha256: undefined })) });
     expect(r.result.ok).toBe(true);
