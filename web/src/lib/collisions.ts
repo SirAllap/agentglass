@@ -28,7 +28,9 @@ export function shortResource(c: { kind: Collision["kind"]; resource: string }):
   const key = c.resource.slice(c.kind.length + 1);
   switch (c.kind) {
     case "postgres": return `postgres ${key.slice(key.indexOf("/") + 1) || key}`;
-    case "sqlite": case "socket": case "datadir": case "env": return `${c.kind} ${tail(key)}`;
+    // A file named .env already says what it is; "env .env" says it twice.
+    case "env": return tail(key);
+    case "sqlite": case "socket": case "datadir": return `${c.kind} ${tail(key)}`;
     default: return c.resource;
   }
 }

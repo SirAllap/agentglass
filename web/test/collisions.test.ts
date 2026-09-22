@@ -41,7 +41,7 @@ test("a session sees only the collisions it is a party to, and the other side of
 test("the chip names the first resource briefly and counts the rest", () => {
   expect(collisionChip(collisionsFor(list, "orbit", "aaaa1111-0000"))).toBe("shares postgres acme_dev +1");
   expect(collisionChip(collisionsFor(list, "orbit", "cccc3333-0000"))).toBe("shares port 3000");
-  expect(shortResource({ kind: "env", resource: "env /work/.env.local" })).toBe("env .env.local");
+  expect(shortResource({ kind: "env", resource: "env /work/.env.local" })).toBe(".env.local");
   expect(shortResource({ kind: "compose", resource: "compose acme" })).toBe("compose acme");
   expect(shortResource({ kind: "redis", resource: "redis localhost:6379/0" })).toBe("redis localhost:6379/0");
 });
