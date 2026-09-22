@@ -7378,7 +7378,9 @@ const server = Bun.serve<WsData>({
             exists: "an agent by that name is still running",
             "no-cli": "that agent CLI is not installed here",
             "no-window": "tmux would not open a window for it",
-            died: "the agent CLI exited as soon as it was launched",
+            died: b.keep === true
+              ? `the agent CLI exited as soon as it was launched; its tab is kept: agentglass-agent read ${name}`
+              : "the agent CLI exited as soon as it was launched",
             "bad-name": "bad name",
             "yolo-refused": "skipping permissions is off in Settings (chatBypass)",
             "bad-args": "args must be plain strings",
@@ -7423,10 +7425,13 @@ const server = Bun.serve<WsData>({
 
       const a = AgentOps.agentNamed(name);
       /* An ended agent can still be READ while its own tab is on screen: a
-         `--keep` one-shot's answer is what it was kept for. Its own tab, by
-         the window name it was opened under — a pane id outlives nothing
-         across a reboot, and an old row's id may name somebody's pane now. */
-      const readable = verb === "read" && !!a && a.endedAt !== null && await AgentOps.keptTabOf(a);
+         `--keep` one-shot's answer is what it was kept for. And STOPPED, which
+         closes that tab: otherwise it stays for the wrapper's day — only a
+         tab this app opened, never one somebody lent it by enlisting. Its own
+         tab, by the window name it was opened under — a pane id outlives
+         nothing across a reboot, and an old row's id may name somebody's pane
+         now. */
+      const readable = !!a && (verb === "read" || (verb === "stop" && !a.adopted)) && a.endedAt !== null && await AgentOps.keptTabOf(a);
       if (!a || (a.endedAt !== null && !readable)) return json({ ok: false, error: "no agent by that name" }, 404);
 
       if (verb === "prompt") {

@@ -294,10 +294,17 @@ export async function startAgent(p: {
   const [isDead = "", current = "", ...start] = dead.ok ? dead.stdout.trim().split("\t") : [];
   /* Kept (`keep`): a CLI that has already exited at this point, with a status
      other than 0, failed at launch; its tab stays, since it was asked to, and
-     says why. One that exited 0 this fast is a one-shot that finished. */
+     says why — under its name, recorded as already ended, so `read` and
+     `stop` reach it the way they reach any kept tab. One that exited 0 this
+     fast is a one-shot that finished. */
   if (p.keep && KEPT_EXITED(current, start.join("\t"))) {
     const status = /the CLI exited \((\d+)\)/.exec((await screenOf(opened.paneId)) ?? "")?.[1];
-    if (status && status !== "0") return { ok: false, error: "died" };
+    if (status && status !== "0") {
+      const now = p.now ?? Date.now();
+      upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, now);
+      end.run(now, p.name);
+      return { ok: false, error: "died" };
+    }
   }
   if (isDead === "1") {
     await tmux(["kill-window", "-t", opened.windowId]);
@@ -412,7 +419,9 @@ export async function keptTabOf(a: NamedAgent): Promise<boolean> {
  * other.
  */
 export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopted): Promise<{ ok: boolean; killed: boolean }> {
-  const killed = kill ? (await tmux(["kill-window", "-t", a.windowId])).ok : false;
+  /* An ended agent is only stopped through its kept tab, found by its pane
+     (`keptTabOf`), so that is the window closed. */
+  const killed = kill ? (await tmux(["kill-window", "-t", a.endedAt === null ? a.windowId : a.paneId])).ok : false;
   end.run(now, a.name);
   return { ok: kill ? killed : true, killed };
 }

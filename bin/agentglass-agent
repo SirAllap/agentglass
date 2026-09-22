@@ -34,9 +34,9 @@ second longer — liveness is the pane, not a heartbeat.
 `start --keep` keeps the tab when the CLI exits — a one-shot such as
 `qwen -p` or `opencode run` whose answer is read afterwards — under a line
 saying how it exited, for a day; the agent leaves the list all the same, and
-`read <name>` still shows the tab while it is there. Never open one
-with a bare `tmux new-window "cli ..."`: a CLI that exits 0 takes that tab and
-its answer with it.
+`read <name>` still shows the tab while it is there, and `stop <name>`
+closes it. Never open one with a bare `tmux new-window "cli ..."`: a CLI that
+exits 0 takes that tab and its answer with it.
 
 `start` refuses a name that is still running (exit 1, error "an agent by that
 name is still running", the existing agent under result.agent); pick another

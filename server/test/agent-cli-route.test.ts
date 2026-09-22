@@ -305,7 +305,31 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
       expect((await cli("prompt", "wkeep", "anything")).code).toBe(1);
       const enlisted = await cli("enlist", "wkeep2", "--pane", paneId);
       expect(enlisted.out.ok, "a finished CLI's tab is not an agent to enlist").toBe(false);
+      /* And closed by name once it has been read: otherwise it stays for the
+         wrapper's day, and a seat that keeps every one-shot piles them up. */
+      const stop = await cli("stop", "wkeep");
+      expect(stop.out.ok, stop.out.error).toBe(true);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twkeep")), "the tab is closed").toBe(false);
+      expect((await cli("read", "wkeep")).code, "and nothing is left to read").toBe(1);
     } finally { rmSync(`${log}.oneshot`, { force: true }); }
+  }, SLOW);
+
+  test("--keep: a CLI that fails at launch is refused, and its kept tab is read by name", async () => {
+    /* The tab stays to say why, but the refusal came before the name was
+       recorded, so the reason could be read only through raw tmux. */
+    writeFileSync(`${log}.die`, "");
+    try {
+      const { out } = await cli("start", "wkdie", "--cwd", wt, "--keep", "--timeout", "3000");
+      expect(out.ok).toBe(false);
+      expect(out.error).toContain("exited");
+      expect(out.error, "the refusal says where the reason is").toContain("read wkdie");
+      const read = await cli("read", "wkdie");
+      expect(read.out.ok, read.out.error).toBe(true);
+      expect(String(read.out.result?.text)).toContain("the CLI exited (1)");
+      expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wkdie"), "never live").toBe(false);
+      expect((await cli("stop", "wkdie")).out.ok).toBe(true);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twkdie"))).toBe(false);
+    } finally { rmSync(`${log}.die`, { force: true }); }
   }, SLOW);
 
   test("without --keep the tab goes with the CLI, as a watched agent's always has", async () => {
