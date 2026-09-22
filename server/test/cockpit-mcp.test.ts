@@ -193,6 +193,31 @@ describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
     expect(bad.result.isError).toBe(true);
   });
 
+  test("another session's transcript is withheld unless the caller is that session or the setting allows it", async () => {
+    // A session's text — its messages, what its tools answered, the diffs it
+    // wrote, its first prompt — is up to 20,000 characters a message. An agent
+    // reading its own is the point of the tool; one reading its neighbours',
+    // on an injected instruction or not, is not.
+    const include = ["conversation", "timeline", "changes"];
+    const envs: Record<string, string>[] = [{}, { CLAUDE_CODE_SESSION_ID: S2 }, { CLAUDE_CODE_SESSION_ID: S2, AGENTGLASS_COCKPIT_TRANSCRIPTS: "1" }];
+    for (const env of envs) {
+      const { data } = await call("cockpit_session", { id: S1, include }, env);
+      const said = JSON.stringify(env);
+      expect(data.session_id, said).toBe(S1);
+      expect(data.cost_usd, "what it spent is not its transcript").toBeGreaterThan(0);
+      for (const k of [...include, "first_prompt", "summary"]) expect(data[k], `${k} ${said}`).toBeUndefined();
+      expect(data.withheld, said).toEqual([...include, "first_prompt"]);
+      expect(data.why_withheld, said).toContain("AGENTGLASS_COCKPIT_TRANSCRIPTS=all");
+    }
+    const own = await call("cockpit_session", { id: S1, include }, { CLAUDE_CODE_SESSION_ID: S1 });
+    for (const k of include) expect(Array.isArray(own.data[k]), k).toBe(true);
+    expect(own.data.first_prompt).toBe("fix ORBIT-1042");
+    expect(own.data.withheld).toBeUndefined();
+    const all = await call("cockpit_session", { id: S1, include }, { CLAUDE_CODE_SESSION_ID: S2, AGENTGLASS_COCKPIT_TRANSCRIPTS: "all" });
+    for (const k of include) expect(Array.isArray(all.data[k]), k).toBe(true);
+    expect(all.data.withheld).toBeUndefined();
+  });
+
   test("cockpit_spend: one session, one project, and the whole window", async () => {
     const s = await call("cockpit_spend", { session: S1 });
     expect(s.data.scope).toEqual({ session: S1 });
@@ -336,6 +361,8 @@ describe.skipIf(!HAVE_PY)("the cockpit over Streamable HTTP", () => {
       env: {
         PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base,
         AGENTGLASS_TOKEN: APP_TOKEN, AGENTGLASS_MCP_TOKEN: BROWSER_TOKEN, AGENTGLASS_COCKPIT_TOKEN: TOKEN,
+        // Started from inside a session, as `--http` in an agent's shell is.
+        CLAUDE_CODE_SESSION_ID: S1,
       },
       stdout: "ignore", stderr: "pipe",
     });
@@ -376,6 +403,19 @@ describe.skipIf(!HAVE_PY)("the cockpit over Streamable HTTP", () => {
     });
     expect(r.status).toBe(403);
     expect(r.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  test("over HTTP no session is the caller's own, whatever the server was started with", async () => {
+    // Whoever holds the token is asking, not the process serving it, so the
+    // session in that process's environment opens no transcript.
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "cockpit_session", arguments: { id: S1, include: ["conversation"] } } });
+    const r = await fetch(url(), { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` }, body });
+    const j = await r.json() as { result: { content: { text: string }[] } };
+    const d = JSON.parse(j.result.content[0]!.text);
+    expect(d.session_id).toBe(S1);
+    expect(d.conversation).toBeUndefined();
+    expect(d.withheld).toContain("conversation");
   });
 
   test("the cockpit token must not be the app's or the browser endpoint's", async () => {
@@ -444,7 +484,9 @@ out = [ns["run"](c["name"], c["arguments"]) for c in calls]
 print(json.dumps({"out": out, "asked": asked}))
 `;
   const p = Bun.spawnSync(["python3", "-c", src], {
-    env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: "http://127.0.0.1:4040", ...env },
+    // The stand-in's caller is the session it answers for, so the shaping
+    // tests see that session's transcript.
+    env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: "http://127.0.0.1:4040", CLAUDE_CODE_SESSION_ID: "s-orbit", ...env },
     stdin: Buffer.from(`${JSON.stringify(routes)}\n${JSON.stringify(calls)}\n`),
     stdout: "pipe", stderr: "pipe",
   });

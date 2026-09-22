@@ -136,6 +136,7 @@ are:
 | `AGENTGLASS_COCKPIT_EXPOSE` | — | `1` → the same opt-in as `--expose` for the cockpit endpoint. `AGENTGLASS_MCP_EXPOSE` does not expose it. |
 | `AGENTGLASS_COCKPIT_ALLOW_HOSTS` | — | Comma-separated extra `Host` names for the cockpit endpoint, as `AGENTGLASS_MCP_ALLOW_HOSTS` is for the browser's. |
 | `AGENTGLASS_COCKPIT_MAX_BYTES` | `16384` | The size ceiling on every cockpit MCP answer. One that would be larger clips long text to 2048 characters wherever it is (a summary, a pasted first prompt, one long message in a conversation), cuts an item still too large on its own further, drops items from the end of its lists (oldest or smallest first) but never a list's first item, and says what it clipped and dropped (`truncated`) and how to ask for less (`narrow`); the JSON is never cut in the middle. |
+| `AGENTGLASS_COCKPIT_TRANSCRIPTS` | `own` | `all` → `cockpit_session` answers with any session's text — its conversation, timeline, file changes, first prompt and last answer. Otherwise only the caller's own session's: the one Claude Code names in `CLAUDE_CODE_SESSION_ID` when it starts the server over stdio. Over HTTP no session is the caller's. Another session's text is left out and the answer says so (`withheld`). |
 | `AGENTGLASS_UNDERSTUDY` | — | `0` → force the **Clone** off whatever its settings file says. It can force off, never on: recording must not start because of a variable inherited from a shell. |
 | `AGENTGLASS_PRIVATE_TERMS` | `~/.config/agentglass/private-terms.txt` | The Clone's private-terms list — one pattern per line of names that must never leave a private repository. With the app's own file absent, `~/.config/git/private-terms.txt` is honoured. Without any list the Clone refuses to learn. |
 | `AGENTGLASS_STATE_DIR` | `~/.local/state/agentglass` | Where a server keeps its mutable state — the tmux socket and config, pane records, the judge's private room, and (unless `AGENTGLASS_DB` names a file) its database. A second server pointed here runs beside the real one without touching its history. |
@@ -372,7 +373,9 @@ over plain `http://` to any host that is not this machine.
   `cockpit_agents`, `cockpit_attention`. Every request it makes to the app is a
   GET; nothing it offers writes, kills or approves. Every answer stays under
   `AGENTGLASS_COCKPIT_MAX_BYTES`, clipping long text and dropping the oldest
-  items, and naming both, rather than cutting the payload. `--http` serves it over the same transport,
+  items, and naming both, rather than cutting the payload. Another session's
+  messages, tool output and diffs come only with
+  `AGENTGLASS_COCKPIT_TRANSCRIPTS=all`. `--http` serves it over the same transport,
   with the same fences, as the browser's, under its own token
   (`AGENTGLASS_COCKPIT_TOKEN`).
 

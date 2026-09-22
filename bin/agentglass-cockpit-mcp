@@ -34,6 +34,14 @@ arguments that would make the next call smaller. Its ceiling: the short
 scalars are never touched, so a ceiling smaller than them and one item of each
 list is exceeded by them.
 
+ANOTHER SESSION'S TEXT IS WITHHELD UNLESS THE PERSON ALLOWS IT. A session's
+messages, its tools' output, the diffs it wrote, its first prompt and its last
+answer are the caller's to read for its own session — the one Claude Code
+names in CLAUDE_CODE_SESSION_ID when it starts this server — and for any other
+only with AGENTGLASS_COCKPIT_TRANSCRIPTS=all. Over HTTP the caller is whoever
+holds the token, so no session is its own there. This is the tool's default,
+not a boundary: the app token it carries reads /session directly.
+
 Transport is stdio (`claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp`)
 or Streamable HTTP (`--http [HOST:]PORT`), and the HTTP side is the browser MCP
 server's own transport, imported rather than copied: loopback unless --expose,
@@ -48,6 +56,7 @@ Environment:
     AGENTGLASS_COCKPIT_TOKEN    that endpoint's Bearer token (32+ chars); minted and printed when unset
     AGENTGLASS_COCKPIT_EXPOSE   1 — the same opt-in as --expose
     AGENTGLASS_COCKPIT_MAX_BYTES  the answer ceiling, default 16384
+    AGENTGLASS_COCKPIT_TRANSCRIPTS  all — every session's text, not only the caller's own
 """
 import http.client
 import importlib.machinery
@@ -104,6 +113,9 @@ EVENT_SCAN = 300
 SESSION_SCAN = 1000
 # What spend is made of, on a session row and in /stats' totals alike.
 SPEND = ("cost_usd", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens")
+# The session this server's caller is running as: Claude Code puts it in the
+# environment of the MCP servers it starts. main() clears it for HTTP.
+OWN_SESSION = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip() or None
 
 
 def get(path, params=None, timeout=30):
@@ -392,6 +404,16 @@ def t_sessions(args):
 
 
 SESSION_LISTS = ("timeline", "conversation", "changes")
+# The rest of a session's own words: the prompt it began with, the last answer.
+SESSION_TEXT = ("first_prompt", "summary")
+
+
+def _text_readable(sid):
+    """Whether this caller may read `sid`'s text: its own session always,
+    another only when the person running this server has allowed it."""
+    if os.environ.get("AGENTGLASS_COCKPIT_TRANSCRIPTS", "").strip().lower() == "all":
+        return True
+    return OWN_SESSION is not None and sid == OWN_SESSION
 
 
 def t_session(args):
@@ -406,6 +428,19 @@ def t_session(args):
         out[k] = _iso(out.get(k))
     out["tool_mix"] = d.get("tool_mix") or []
     out["subagents"] = d.get("subagents") or []
+    if not _text_readable(sid):
+        # Each part is popped whether or not it had a value; only those that
+        # did, and the lists asked for, are named.
+        withheld = include + [k for k in SESSION_TEXT if out.pop(k, None) is not None]
+        include = []
+        if withheld:
+            out["withheld"] = withheld
+            out["why_withheld"] = (
+                "another session's text — its messages, tool output, diffs, first prompt and last answer — "
+                + (f"is withheld; this caller is session {OWN_SESSION}. " if OWN_SESSION else
+                   "is withheld, and this server knows no session as its caller's (CLAUDE_CODE_SESSION_ID is "
+                   "read over stdio only). ")
+                + "The person running this server can allow every session with AGENTGLASS_COCKPIT_TRANSCRIPTS=all.")
     for k in include:
         # The app sends these newest first already, so the ceiling drops the oldest.
         out[k] = d.get(k) or []
@@ -542,7 +577,9 @@ _TOOLS = [
            "provider": {"type": "string", "description": "keep one provider's sessions, e.g. 'anthropic'"}}),
     _tool("cockpit_session", t_session,
           "One session: its lifecycle, cost, the mix of tools it used and its subagents. The timeline, "
-          "conversation and file changes are heavy and come only when asked for with include.",
+          "conversation and file changes are heavy and come only when asked for with include. A session's "
+          "text — those three, its first prompt and its last answer — comes for your own session only, "
+          "unless the person running this server allows every session.",
           {"id": _SESSION_ARG,
            "include": {"type": "array", "items": {"enum": list(SESSION_LISTS)},
                        "description": "heavy lists to add, newest first"}},
@@ -610,7 +647,8 @@ def handle_message(msg):
             "instructions": (
                 "What the agentglass cockpit knows about the agents on this machine, read-only: sessions and "
                 "their spend, tool latency, recent errors, and what is waiting on a person. Nothing here "
-                "writes, kills or approves. Every answer is kept under a size ceiling; when one would be larger it comes back with "
+                "writes, kills or approves. Another session's messages and output are withheld unless the person "
+                "running this server allows them. Every answer is kept under a size ceiling; when one would be larger it comes back with "
                 "`truncated` naming what was dropped and `narrow` saying how to ask for less."
             ),
         })
@@ -635,6 +673,10 @@ def main(argv=None):
     args, _ = ap.parse_known_args(argv)
     bind = args.http or os.environ.get("AGENTGLASS_COCKPIT_HTTP")
     if bind:
+        # The caller is whoever holds the token, not the session this
+        # process happened to be started from.
+        global OWN_SESSION
+        OWN_SESSION = None
         allow = list(args.allow_host) + os.environ.get("AGENTGLASS_COCKPIT_ALLOW_HOSTS", "").split(",")
         return T._run_http(bind, expose=args.expose, allow_hosts=allow, handle=handle_message, name=NAME,
                            token_env="AGENTGLASS_COCKPIT_TOKEN",
