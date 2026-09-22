@@ -55,7 +55,15 @@ function parseCalls(text: string): Call[] {
 /** `mid` is the log as the script saw it BEFORE shutdown, when it printed
  *  MID — the only snapshot that can tell a lock released by the code from one
  *  released by `shutdown()` at the end of every run. */
-async function drive(script: string, env: Record<string, string> = {}): Promise<{ calls: Call[]; mid: Call[]; status: { awake: boolean } }> {
+/** What `power.status()` answers — the fields the header draws from. */
+interface Status {
+  awake: boolean;
+  why?: { chats: number; runs: number; hooked: number; named: number } | null;
+  locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean };
+  inhibitMissing?: boolean;
+}
+
+async function drive(script: string, env: Record<string, string> = {}): Promise<{ calls: Call[]; mid: Call[]; status: Status }> {
   const scratch = join(tmpdir(), `agx-power-linux-${process.pid}-${dirs.length}`);
   dirs.push(scratch);
   mkdirSync(join(scratch, "cfg"), { recursive: true });
@@ -85,7 +93,7 @@ while :; do sleep 0.05; done
   writeFileSync(join(scratch, "drive.cjs"), `
     const power = require("./power.js");
     const electron = require("electron");
-    power.init({ configDir: process.env.AGX_TEST_CFG, apiOrigin: () => "http://127.0.0.1:1", token: () => "t", platform: "linux" });
+    power.init({ configDir: process.env.AGX_TEST_CFG, apiOrigin: () => process.env.AGX_API || "http://127.0.0.1:1", token: () => "t", platform: "linux" });
     (async () => {
       ${script}
       const status = power.status();
@@ -108,7 +116,7 @@ while :; do sleep 0.05; done
   if (!m) throw new Error(`power.js gave no trace (exit ${code})\n${out}${err}`);
   let text = "";
   try { text = readFileSync(log, "utf8"); } catch { /* never called */ }
-  const trace = JSON.parse(m[1]!) as { status: { awake: boolean }; mid: string };
+  const trace = JSON.parse(m[1]!) as { status: Status; mid: string };
   return { calls: parseCalls(text), mid: parseCalls(trace.mid), status: trace.status };
 }
 
@@ -164,6 +172,48 @@ describe("the Linux inhibitor", () => {
     `, { AGX_STUB_NO_WEAK: "1" });
     const sleepModes = t.calls.filter((c) => whatOf(c) === "sleep").map((c) => modeOf(c));
     expect(sleepModes).toEqual(["block-weak", "block", "block"]);
+  });
+
+  test("the status says which locks are held, in which mode, and not the ones let go", async () => {
+    /* What the header draws. "Awake" alone could not say that the person's
+       own suspend still goes through, nor that the lid is what is held. */
+    const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 300));`);
+    expect(t.status.locks).toEqual({ sleep: "block-weak", lid: true, display: true, app: false });
+    expect(t.status.inhibitMissing).toBe(false);
+    const fell = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 500));`, { AGX_STUB_NO_WEAK: "1" });
+    expect(fell.status.locks?.sleep, "the fallback is named, not assumed").toBe("block");
+    const asleep = await drive(`
+      power.setMode("on"); await new Promise((r) => setTimeout(r, 300));
+      electron.__emit("suspend"); await new Promise((r) => setTimeout(r, 300));
+    `);
+    expect(asleep.status.locks?.sleep, "a lock let go on the way down is not reported as held").toBeNull();
+    expect(asleep.status.locks?.lid).toBe(true);
+  });
+
+  test("a machine without systemd-inhibit says so, instead of claiming the sleep it cannot hold", async () => {
+    /* Nothing on PATH answers to the name: spawn fails ENOENT. The display
+       half is still held, so `awake` alone would read as the whole promise. */
+    const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 300));`, { PATH: "/nonexistent" });
+    expect(t.status.awake).toBe(true);
+    expect(t.status.inhibitMissing).toBe(true);
+    expect(t.status.locks).toEqual({ sleep: null, lid: false, display: true, app: false });
+  });
+
+  test("in agent mode the status carries why the server says something is working", async () => {
+    const why = { chats: 0, runs: 1, hooked: 2, named: 0 };
+    const api = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ working: true, why }) });
+    try {
+      const t = await drive(`power.setMode("agent"); await new Promise((r) => setTimeout(r, 500));`, { AGX_API: `http://127.0.0.1:${api.port}` });
+      expect(t.status.awake).toBe(true);
+      expect(t.status.why).toEqual(why);
+    } finally { api.stop(true); }
+    /* A server from before the reasons were sent: working, with no why. */
+    const old = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ working: true }) });
+    try {
+      const t = await drive(`power.setMode("agent"); await new Promise((r) => setTimeout(r, 500));`, { AGX_API: `http://127.0.0.1:${old.port}` });
+      expect(t.status.awake).toBe(true);
+      expect(t.status.why).toBeNull();
+    } finally { old.stop(true); }
   });
 
   test("`off` holds nothing", async () => {

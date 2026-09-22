@@ -41,28 +41,48 @@ export interface AgentWorkingDeps {
 const LIVE_DEPS: AgentWorkingDeps = {
   activeTurns,
   runningRuns: Work.runningRuns,
-  hookedWorking: (now) => recentPaneAgents({ sinceMs: FRESH_MS, now }).length,
+  /* Sessions, not rows: one conversation has a row for every pane (and every
+     tmux server) it has fired from. */
+  hookedWorking: (now) => new Set(recentPaneAgents({ sinceMs: FRESH_MS, now }).map((r) => r.sessionId)).size,
   namedAlive: () => namedAlive().then((a) => a.length).catch(() => 0),
 };
 let namedCount = 0;
 let namedAskedAt = 0;
 
+/** What is keeping the machine awake, counted by source. The desktop draws
+ *  it beside the power button: "awake" alone does not say whether that is a
+ *  chat mid-turn, a clone's run, or an agent in somebody's own terminal — and
+ *  which one it is decides whether closing the lid is safe. */
+export interface WorkingWhy { chats: number; runs: number; hooked: number; named: number }
+
 /** `deps` defaults to the real, process-wide trackers; a test passes its own
  *  so this reads as a pure function instead of a query against whatever every
  *  other test file happens to have left in the shared table. */
-export function agentIsWorking(now = Date.now(), deps: AgentWorkingDeps = LIVE_DEPS): boolean {
-  if (deps.activeTurns().length > 0) return true;
+export function workingWhy(now = Date.now(), deps: AgentWorkingDeps = LIVE_DEPS): WorkingWhy {
   const staleAt = now - STALE_MS;
-  if (deps.runningRuns().some((r) => r.startedAt >= staleAt)) return true;
-  if ((deps.hookedWorking?.(now) ?? 0) > 0) return true;
-  /* The named agents are a tmux question, asked at most every ten seconds:
-     this is polled by the shell every few seconds and must stay synchronous
-     for its callers; the count from the last ask is the answer until then. */
+  return {
+    chats: deps.activeTurns().length,
+    runs: deps.runningRuns().filter((r) => r.startedAt >= staleAt).length,
+    hooked: deps.hookedWorking?.(now) ?? 0,
+    named: namedNow(now, deps),
+  };
+}
+
+/* The named agents are a tmux question, asked at most every ten seconds:
+   this is polled by the shell every few seconds and must stay synchronous
+   for its callers; the count from the last ask is the answer until then. */
+function namedNow(now: number, deps: AgentWorkingDeps): number {
   const named = deps.namedAlive?.();
-  if (typeof named === "number") return named > 0;
+  if (typeof named === "number") return named;
   if (named && now - namedAskedAt > 10_000) {
     namedAskedAt = now;
     void named.then((n) => { namedCount = n; });
   }
-  return namedCount > 0;
+  return namedCount;
+}
+
+export const anyWorking = (w: WorkingWhy): boolean => w.chats + w.runs + w.hooked + w.named > 0;
+
+export function agentIsWorking(now = Date.now(), deps: AgentWorkingDeps = LIVE_DEPS): boolean {
+  return anyWorking(workingWhy(now, deps));
 }

@@ -540,6 +540,51 @@ export interface PowerStatus {
   awake: boolean;
   /** The last poll's answer to "is an agent working" — only meaningful in `agent` mode. */
   working: boolean;
+  /** The server's reasons for `working`, by source. Null from a server that
+   *  does not send them; absent on a shell from before. */
+  why?: { chats: number; runs: number; hooked: number; named: number } | null;
+  /** What is held now: the logind sleep lock's mode (null when none is
+   *  held), the lid switch, the screen, and on a Mac App Nap. */
+  locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean };
+  /** Linux without systemd-inhibit: only the screen can be held. */
+  inhibitMissing?: boolean;
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The power button's colour and tooltip, from the shell's status.
+ *
+ * "Awake" alone could not answer what a person asks before closing a lid or
+ * picking suspend from the menu: what is held, and why. The sleep lock is
+ * weak in both of the modes the shell takes it in (`block-weak`, and plain
+ * `block` on a logind before 257, where block was weak), so a held lock
+ * always means the person's own suspend goes through — said here, because
+ * the first version blocked it and the menu entry did nothing. A machine
+ * without systemd-inhibit holds only the screen; that is a warning, not
+ * "awake".
+ */
+export function powerReadout(s: PowerStatus): { tone: "held" | "idle" | "warn"; title: string } {
+  const next = s.mode === "on" ? "Agent mode" : s.mode === "agent" ? "Off" : "always awake";
+  const click = `Click for ${next}.`;
+  if (s.mode === "off") return { tone: "idle", title: `Normal sleep. ${click}` };
+  if (!s.awake) return { tone: "idle", title: `${s.mode === "agent" ? "Agent mode — idle, nothing is working" : "Always awake, not held yet"}. ${click}` };
+  const w = s.why;
+  const reasons = w ? [
+    w.chats ? plural(w.chats, "chat") + " mid-turn" : "",
+    w.runs ? plural(w.runs, "run") + " in progress" : "",
+    w.hooked ? plural(w.hooked, "agent") + " active in the last 10 minutes" : "",
+    w.named ? plural(w.named, "named agent") + " running" : "",
+  ].filter(Boolean) : [];
+  const head = s.mode === "on" ? "Always awake" : `Agent mode — awake: ${reasons.length ? reasons.join(", ") : "an agent is working"}`;
+  if (s.inhibitMissing) {
+    return { tone: "warn", title: `${head}. But only the screen is held: systemd-inhibit is not installed, so the machine still sleeps on its own and when the lid closes. ${click}` };
+  }
+  const l = s.locks;
+  const held = !l ? "" : l.sleep || l.lid
+    ? `Holding ${[l.sleep ? "idle sleep" : "", l.lid ? "the lid switch" : ""].filter(Boolean).join(" and ")}${l.sleep ? "; your own suspend still goes through" : ""}.`
+    : l.app ? "Holding the screen and App Nap." : l.display ? "Holding the screen." : "";
+  return { tone: "held", title: `${head}.${held ? ` ${held}` : ""} ${click}` };
 }
 
 /** Null in a browser tab, or on a shell built before this existed. */

@@ -83,6 +83,9 @@ let getToken = () => "";
  * @type {{ sleep: import("child_process").ChildProcess | null, lid: import("child_process").ChildProcess | null }}
  */
 const inhibitChild = { sleep: null, lid: null };
+/** The mode each running child was spawned with, for `status`: the sleep
+ *  lock's is `block-weak` or, on a logind too old for it, `block`. */
+const modeOfChild = new WeakMap();
 /** Children this process ended itself, so their exit is not read as logind
  *  refusing the mode. */
 const releasedByUs = new WeakSet();
@@ -104,6 +107,9 @@ let platform = process.platform;
 let pollTimer = null;
 /** Last poll's answer — `agent` mode's only input besides the mode itself. */
 let lastKnownWorking = false;
+/** And the server's reasons for it, by source (`workingWhy` on the server),
+ *  or null from a server that does not send them. Shown, never decided on. */
+let lastKnownWhy = null;
 /** Whether the assertion is currently held, independent of *why*. */
 let held = false;
 
@@ -145,6 +151,7 @@ function spawnInhibit(which, mode = which === "sleep" && !weakRefused ? "block-w
     { stdio: "ignore" },
   );
   inhibitChild[which] = child;
+  modeOfChild.set(child, mode);
   /*
    * ENOENT means the tool is not on this machine — not every Linux ships
    * systemd, and a laptop without it must not busy-loop trying to spawn a
@@ -274,6 +281,7 @@ async function pollWorking() {
     if (!res.ok) return; // a hiccup — hold last known state rather than flap on it
     const body = await res.json();
     lastKnownWorking = body.working === true;
+    lastKnownWhy = body.why && typeof body.why === "object" ? body.why : null;
     sync();
   } catch { /* server not up yet, or the request timed out — try again next tick */ } finally {
     clearTimeout(timer);
@@ -294,7 +302,7 @@ function stopPolling() {
 
 function applyMode() {
   if (mode === "agent") startPolling(); else stopPolling();
-  if (mode !== "agent") lastKnownWorking = false;
+  if (mode !== "agent") { lastKnownWorking = false; lastKnownWhy = null; }
   sync();
 }
 
@@ -341,8 +349,31 @@ function setMode(m) {
   return status();
 }
 
+/**
+ * What is held and why, for the header.
+ *
+ * `awake` alone was all it said, and it could not tell a person the two
+ * things they need before closing a lid or picking suspend from the menu:
+ * WHICH locks are held — the lid switch, and the sleep lock whose weak mode
+ * lets their own suspend through — and WHY, which is the server's count of
+ * what is working. It also said "awake" on a machine with no systemd-inhibit,
+ * where only the display is held and the machine sleeps on the lid as ever.
+ *
+ * `locks` is read off the children that are running now, not off `held`: a
+ * sleep lock let go on the way into a suspend, or never taken, is null.
+ */
 function status() {
-  return { mode, awake: held, working: lastKnownWorking };
+  const sleepChild = inhibitChild.sleep;
+  return {
+    mode, awake: held, working: lastKnownWorking, why: lastKnownWhy,
+    locks: {
+      sleep: sleepChild ? modeOfChild.get(sleepChild) ?? null : null,
+      lid: !!inhibitChild.lid,
+      display: displayBlockerId !== null,
+      app: suspensionBlockerId !== null,
+    },
+    inhibitMissing: platform === "linux" && inhibitUnavailable,
+  };
 }
 
 function shutdown() {

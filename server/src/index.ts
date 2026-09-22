@@ -1360,7 +1360,7 @@ import { ask, compiledRules } from "./understudy-ask.ts";
 import * as Shift from "./understudy-shift.ts";
 import { judge, JUDGE_AVAILABLE } from "./understudy-judge.ts";
 import * as Work from "./understudy-work.ts";
-import { agentIsWorking } from "./agentworking.ts";
+import { anyWorking, workingWhy } from "./agentworking.ts";
 import * as Loop from "./understudy-loop.ts";
 // Registers the readers. Imported for the side effect, which is the whole
 // point of a source: it announces itself rather than being wired in by hand.
@@ -7853,7 +7853,10 @@ const server = Bun.serve<WsData>({
     if (pathname === "/chat/active") return json({ ids: activeTurns() });
     // Whether an agent is working right now, anywhere — what the desktop
     // shell's "keep the machine awake while an agent works" mode polls.
-    if (pathname === "/agents/working") return json({ working: agentIsWorking() });
+    if (pathname === "/agents/working") {
+      const why = workingWhy();
+      return json({ working: anyWorking(why), why });
+    }
     if (pathname === "/session") {
       const id = url.searchParams.get("id") || "";
       if (!id) return json({ error: "not found" }, 404);
