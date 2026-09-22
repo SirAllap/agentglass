@@ -53,6 +53,11 @@ export interface Finding {
   worktree?: string;
   /** Sort key: the oldest wait first, then the longest silence. */
   since: number;
+  /** A "waiting" that is a turn nobody came back to for an hour, not a
+   *  permission or a gate. Still a wait, and still wakes a seat as one; only
+   *  the title counts it apart, because "needs you" everywhere else in the
+   *  app — the strip, the rail's pip, the dashboard's tile — means blocked. */
+  left?: true;
 }
 
 /* Who needs a person is decided in shared/fieldRules.ts (`attention`), so the
@@ -97,6 +102,7 @@ export function findings(p: {
     if (a === "blocked" || a === "left") {
       out.push({
         kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou!.since,
+        ...(a === "left" ? { left: true as const } : null),
         line: `${r.name} ${waitWord(r.needsYou!)} — ${howLong(r.needsYou!.since, now)}${r.needsYou!.why ? `: ${r.needsYou!.why}` : ""}`.slice(0, 200),
       });
     } else if (a === "forgotten") {
@@ -122,8 +128,11 @@ export function findings(p: {
 export function notice(f: Finding[]): { title: string; body: string; pane?: string } | null {
   if (!f.length) return null;
   const n = (k: Finding["kind"]) => f.filter((x) => x.kind === k).length;
+  const left = f.filter((x) => x.left).length;
+  const need = n("waiting") - left;
   const parts = [
-    n("waiting") ? `${n("waiting")} need${n("waiting") === 1 ? "s" : ""} you` : "",
+    need ? `${need} need${need === 1 ? "s" : ""} you` : "",
+    left ? `${left} waiting for a prompt` : "",
     n("gone") ? `${n("gone")} gone` : "",
     n("forgotten") ? `${n("forgotten")} look${n("forgotten") === 1 ? "s" : ""} forgotten` : "",
   ].filter(Boolean);

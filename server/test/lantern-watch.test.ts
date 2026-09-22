@@ -210,6 +210,16 @@ describe("the watch flags what the shared rule flags", () => {
     expect(f.find((x) => x.name === "f-stale")!.line).toContain("waiting for your next prompt — 3h");
   });
 
+  test("the push's \"need you\" is the strip's: a turn left for an hour is counted apart", () => {
+    // The strip, the rail's pip and the "Needs you" tile count only what is
+    // blocked; the push counted every wait under the same words.
+    const left = rows.filter((r) => r.name === "f-stale");
+    expect(notice(findings({ rows: left, namedNow: [], namedBefore: null, now: NOW }))!.title).toBe("🔦 Lantern: 1 waiting for a prompt");
+    const n = notice(findings({ rows, namedNow: [], namedBefore: null, now: NOW }))!;
+    const blocked = rows.filter((r) => attention(r, NOW) === "blocked").length;
+    expect(n.title).toBe(`🔦 Lantern: ${blocked} need you · 1 waiting for a prompt · 1 looks forgotten`);
+  });
+
   test("the watch keeps no copy of the rule", () => {
     const src = watchSrc.slice(watchSrc.indexOf("export function findings("));
     const body = src.slice(0, src.indexOf("\n}\n") + 2)
