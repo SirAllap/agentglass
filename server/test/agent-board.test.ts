@@ -478,7 +478,7 @@ describe("an agent nobody asked to announce itself", () => {
 describe("which panes the hooks have been heard from", () => {
   const MIN = 60_000;
   const now = 1_700_000_000_000;
-  beforeEach(() => { db.query("DELETE FROM pane_agent").run(); });
+  beforeEach(() => { db.query("DELETE FROM pane_note").run(); });
 
   const note = (pane: string, ago: number, cwd = "/home/somebody/code/orbit") =>
     Pane.notePaneAgent({ pane, sessionId: `s${pane}`, transcriptPath: `/t/${pane}.jsonl`, cwd, at: now - ago });

@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  dirsFromTranscript, ensurePaneAgentTable, noteForSession, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, readTail, resetTailCache,
+  dirsFromTranscript, ensurePaneNoteTable, noteForSession, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, readTail, resetTailCache,
 } from "../src/panewt.ts";
 import { Database } from "bun:sqlite";
 
@@ -194,29 +194,51 @@ describe("the pane note", () => {
     expect(noteForSession("never-seen")).toBeNull();
   });
 
-  test("a table keyed by the pane id alone is rebuilt with the server in the key, and keeps its rows", () => {
+  test("the notes move to a table keyed by server and pane, and the old table is left as older builds need it", () => {
+    /* Every build before this one prepares `ON CONFLICT(pane_id)` against
+       `pane_agent` when it loads. Rebuilt with a two-column key, SQLite
+       refused that statement: an older build could not start on the same
+       database, and one already running failed every hook. */
     const d = new Database(":memory:");
     d.exec(`CREATE TABLE pane_agent (pane_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, transcript_path TEXT NOT NULL, cwd TEXT NOT NULL, at INTEGER NOT NULL)`);
     d.exec(`ALTER TABLE pane_agent ADD COLUMN server TEXT NOT NULL DEFAULT ''`);
     d.run(`INSERT INTO pane_agent VALUES ('%1', 'kept', '/k.jsonl', '/home/dev/code/orbit', 5, '/tmp/tmux-1000/agentglass,1')`);
     d.run(`INSERT INTO pane_agent VALUES ('%2', 'unnamed', '/u.jsonl', '/home/dev/code/orbit', 6, '')`);
-    ensurePaneAgentTable(d);
-    const key = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all().filter((c) => c.pk > 0).map((c) => c.name).sort();
+    const oldUpsert = `INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at, server) VALUES ('%1', 'old-build', '/o.jsonl', '/x', 9, '')
+      ON CONFLICT(pane_id) DO UPDATE SET session_id = excluded.session_id`;
+    ensurePaneNoteTable(d);
+    const key = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_note)").all().filter((c) => c.pk > 0).map((c) => c.name).sort();
     expect(key).toEqual(["pane_id", "server"]);
-    expect(d.query("SELECT session_id FROM pane_agent ORDER BY at").all()).toEqual([{ session_id: "kept" }, { session_id: "unnamed" }]);
-    /* And now a second server's %1 is a row of its own. */
-    d.run(`INSERT INTO pane_agent VALUES ('%1', 'other', '/o.jsonl', '/home/dev/code/orbit', 7, '/tmp/tmux-1000/default,2')`);
-    expect(d.query("SELECT COUNT(*) AS n FROM pane_agent WHERE pane_id = '%1'").get()).toEqual({ n: 2 });
-    /* Run again on a table already rebuilt: nothing changes. */
-    ensurePaneAgentTable(d);
-    expect(d.query("SELECT COUNT(*) AS n FROM pane_agent").get()).toEqual({ n: 3 });
+    expect(d.query("SELECT session_id, server FROM pane_note ORDER BY at").all()).toEqual([
+      { session_id: "kept", server: "/tmp/tmux-1000/agentglass,1" }, { session_id: "unnamed", server: "" },
+    ]);
+    /* An older build's statement still prepares and runs against its table. */
+    expect(() => d.run(oldUpsert)).not.toThrow();
+    const oldKey = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all().filter((c) => c.pk > 0).map((c) => c.name);
+    expect(oldKey).toEqual(["pane_id"]);
+    /* A second server's %1 is a row of its own in the new table. */
+    d.run(`INSERT INTO pane_note VALUES ('%1', 'other', '/o.jsonl', '/home/dev/code/orbit', 7, '/tmp/tmux-1000/default,2')`);
+    expect(d.query("SELECT COUNT(*) AS n FROM pane_note WHERE pane_id = '%1'").get()).toEqual({ n: 2 });
+    /* Copied once: a second run does not bring the old table's rows back. */
+    d.run("DELETE FROM pane_note WHERE session_id = 'kept'");
+    ensurePaneNoteTable(d);
+    expect(d.query("SELECT COUNT(*) AS n FROM pane_note").get()).toEqual({ n: 2 });
     d.close();
   });
 
-  test("a database that never had the table gets it keyed by server and pane", () => {
+  test("a table from before the server was recorded is copied with no server", () => {
     const d = new Database(":memory:");
-    ensurePaneAgentTable(d);
-    const key = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all().filter((c) => c.pk > 0).map((c) => c.name).sort();
+    d.exec(`CREATE TABLE pane_agent (pane_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, transcript_path TEXT NOT NULL, cwd TEXT NOT NULL, at INTEGER NOT NULL)`);
+    d.run(`INSERT INTO pane_agent VALUES ('%3', 'ancient', '/a.jsonl', '/home/dev/code/orbit', 5)`);
+    ensurePaneNoteTable(d);
+    expect(d.query("SELECT session_id, server FROM pane_note").all()).toEqual([{ session_id: "ancient", server: "" }]);
+    d.close();
+  });
+
+  test("a database that never had either table gets the new one keyed by server and pane", () => {
+    const d = new Database(":memory:");
+    ensurePaneNoteTable(d);
+    const key = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_note)").all().filter((c) => c.pk > 0).map((c) => c.name).sort();
     expect(key).toEqual(["pane_id", "server"]);
     d.close();
   });

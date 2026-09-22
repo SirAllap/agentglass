@@ -69,17 +69,26 @@ import { agentCwdsUnder } from "./paneloc.ts";
  * rather than space: the new server hands the dead one's ids out again, under
  * a new pid.
  *
+ * A NEW TABLE, NOT THE OLD ONE REBUILT. `pane_agent` is keyed by the id
+ * alone, and every build before this one prepares `ON CONFLICT(pane_id)`
+ * against it when it loads: rebuilt with a two-column key, SQLite refuses
+ * that statement, so an older build installed afterwards could not start,
+ * and one still running would fail every hook it was sent (both measured on
+ * a copy of the table). So `pane_note` is created beside it, filled from it
+ * once, and `pane_agent` is left for whichever older build still writes it.
+ *
  * Ceiling: the pid is a server's name for its life, not forever — a server
  * after a reboot can draw the pid of the one before it. Its row then carries
  * the dead server's note until its own hook fires, and the restore tells the
  * two apart by time (`noteIsThisAgents`), as it did before the server was in
- * the key. Rows of dead servers are kept for `KEEP_MS` and then dropped.
+ * the key.
  *
  * Exported so the migration can be run against a database built by hand.
  */
-export function ensurePaneAgentTable(d: Database): void {
+export function ensurePaneNoteTable(d: Database): void {
+  const existed = !!d.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pane_note'").get();
   d.exec(`
-CREATE TABLE IF NOT EXISTS pane_agent (
+CREATE TABLE IF NOT EXISTS pane_note (
   pane_id         TEXT NOT NULL,
   session_id      TEXT NOT NULL,
   transcript_path TEXT NOT NULL,
@@ -88,41 +97,27 @@ CREATE TABLE IF NOT EXISTS pane_agent (
   server          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pane_id, server)
 )`);
-  const cols = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all();
-  /* A table from before the server was recorded at all. */
-  if (!cols.some((c) => c.name === "server")) {
-    d.exec("ALTER TABLE pane_agent ADD COLUMN server TEXT NOT NULL DEFAULT ''");
-  }
-  /* A table keyed by the pane id alone: SQLite cannot change a primary key in
-     place, so it is rebuilt, rows and all, in one transaction. */
-  if (!cols.some((c) => c.name === "server" && c.pk > 0)) {
-    d.transaction(() => {
-      d.exec(`CREATE TABLE pane_agent_by_server (
-  pane_id         TEXT NOT NULL,
-  session_id      TEXT NOT NULL,
-  transcript_path TEXT NOT NULL,
-  cwd             TEXT NOT NULL,
-  at              INTEGER NOT NULL,
-  server          TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY (pane_id, server)
-)`);
-      d.exec(`INSERT INTO pane_agent_by_server (pane_id, session_id, transcript_path, cwd, at, server)
-SELECT pane_id, session_id, transcript_path, cwd, at, server FROM pane_agent`);
-      d.exec("DROP TABLE pane_agent");
-      d.exec("ALTER TABLE pane_agent_by_server RENAME TO pane_agent");
-    })();
-  }
-  d.exec("CREATE INDEX IF NOT EXISTS idx_pane_agent_session ON pane_agent (session_id, at)");
+  d.exec("CREATE INDEX IF NOT EXISTS idx_pane_note_session ON pane_note (session_id, at)");
+  if (existed) return;
+  /* Once, when the table is new: the notes an older build wrote. A table from
+     before the server was recorded has no such column, and its rows name none. */
+  const cols = d.query<{ name: string }, []>("PRAGMA table_info(pane_agent)").all().map((c) => c.name);
+  if (!cols.length) return;
+  const server = cols.includes("server") ? "server" : "''";
+  d.exec(`INSERT OR IGNORE INTO pane_note (pane_id, session_id, transcript_path, cwd, at, server)
+SELECT pane_id, session_id, transcript_path, cwd, at, ${server} FROM pane_agent`);
 }
 
 /** How long a row outlives its last hook. A pane id is only reused within a
- *  server, and a server that has been gone a month is not coming back; while
- *  the key was the id alone the next server overwrote these rows, and now
- *  nothing would. */
-const KEEP_MS = 30 * 24 * 60 * 60_000;
+ *  server, and nothing overwrites a dead server's rows now, so they would
+ *  otherwise be kept for ever. Long, because a live agent's row is dropped by
+ *  the same rule: one that has fired no hook in this long, on a server that
+ *  has been up this long, comes back from the next boot as a shell unless its
+ *  own command line carries its `--resume`. */
+const KEEP_MS = 90 * 24 * 60 * 60_000;
 
-ensurePaneAgentTable(db);
-try { db.run("DELETE FROM pane_agent WHERE at < ?", [Date.now() - KEEP_MS]); } catch { /* a read-only database keeps its rows */ }
+ensurePaneNoteTable(db);
+try { db.run("DELETE FROM pane_note WHERE at < ?", [Date.now() - KEEP_MS]); } catch { /* a read-only database keeps its rows */ }
 
 /** tmux's own spelling of a pane id. Anything else came from somewhere that
  *  should not be writing here, and is dropped rather than stored. */
@@ -139,7 +134,7 @@ export interface PaneAgentNote {
 }
 
 const noteUpsert = db.query(`
-INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at, server)
+INSERT INTO pane_note (pane_id, session_id, transcript_path, cwd, at, server)
 VALUES ($pane_id, $session_id, $transcript_path, $cwd, $at, $server)
 ON CONFLICT(pane_id, server) DO UPDATE SET
   session_id = excluded.session_id,
@@ -151,20 +146,20 @@ ON CONFLICT(pane_id, server) DO UPDATE SET
 const TMUX_SERVER = /^\/[^\0\n\r]{1,1024},\d{1,10}$/;
 
 const noteRead = db.query<PaneAgentNote, [string]>(
-  "SELECT * FROM pane_agent WHERE pane_id = ? ORDER BY at DESC LIMIT 1",
+  "SELECT * FROM pane_note WHERE pane_id = ? ORDER BY at DESC LIMIT 1",
 );
 
 /* This server's row, or failing that one from a hook that named no server. */
 const noteReadOn = db.query<PaneAgentNote, [string, string]>(
-  "SELECT * FROM pane_agent WHERE pane_id = ?1 AND server IN (?2, '') ORDER BY server = '' ASC, at DESC LIMIT 1",
+  "SELECT * FROM pane_note WHERE pane_id = ?1 AND server IN (?2, '') ORDER BY server = '' ASC, at DESC LIMIT 1",
 );
 
 const noteBySession = db.query<PaneAgentNote, [string]>(
-  "SELECT * FROM pane_agent WHERE session_id = ? ORDER BY at DESC LIMIT 1",
+  "SELECT * FROM pane_note WHERE session_id = ? ORDER BY at DESC LIMIT 1",
 );
 
 const recentPanes = db.query<{ pane_id: string; session_id: string; cwd: string; at: number }, [number, number]>(
-  "SELECT pane_id, session_id, cwd, at FROM pane_agent WHERE at >= ? ORDER BY at DESC LIMIT ?",
+  "SELECT pane_id, session_id, cwd, at FROM pane_note WHERE at >= ? ORDER BY at DESC LIMIT ?",
 );
 
 /**
@@ -217,7 +212,7 @@ export function paneForSession(sessionId: string): string | null {
 }
 
 const paneBySession = db.query<{ pane_id: string }, [string]>(
-  "SELECT pane_id FROM pane_agent WHERE session_id = ? ORDER BY at DESC LIMIT 1",
+  "SELECT pane_id FROM pane_note WHERE session_id = ? ORDER BY at DESC LIMIT 1",
 );
 
 /**
