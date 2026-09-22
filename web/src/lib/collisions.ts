@@ -20,7 +20,8 @@ export function collisionsFor(list: Collision[], app: string, sessionId: string)
   return out;
 }
 
-const tail = (path: string) => path.replace(/\/+$/, "").split("/").pop() || path;
+// Either separator: the server may be on Windows.
+const tail = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 
 /** The resource in the few words a chip has room for: a path by its file name,
  *  a database by its name. */

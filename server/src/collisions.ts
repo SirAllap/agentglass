@@ -31,11 +31,13 @@
 //   its latest cwd is in: one that cds into another tree takes its window of
 //   claims along. A listener is matched to a checkout by its process's cwd,
 //   not by which session started it.
+// - Listeners come from `ss` and /proc, so the "listening" half is Linux only;
+//   on macOS and Windows a collision is read from commands and files alone.
 // - Postgres and redis are recognised by URL and by data directory; a bare
 //   `psql -d acme_dev` names no host and is not read.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Collision, CollisionKind, CollisionParty } from "../../shared/types.ts";
 import { db } from "./db.ts";
 import { listPortsAsync } from "./machine.ts";
@@ -293,7 +295,11 @@ export interface SessionClaims {
   claims: (Claim & { ts: number; via: CollisionParty["via"]; evidence: string })[];
 }
 
-const within = (path: string, root: string) => path === root || path.startsWith(root.endsWith("/") ? root : root + "/");
+/** Is `path` the checkout `root` or below it — by the platform's own separator. */
+const within = (path: string, root: string) => {
+  const r = relative(root, path);
+  return r === "" || (r !== ".." && !r.startsWith(".." + sep) && !isAbsolute(r));
+};
 
 /**
  * The resources two or more checkouts share.

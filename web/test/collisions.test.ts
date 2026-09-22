@@ -44,6 +44,9 @@ test("the chip names the first resource briefly and counts the rest", () => {
   expect(shortResource({ kind: "env", resource: "env /work/.env.local" })).toBe(".env.local");
   expect(shortResource({ kind: "compose", resource: "compose acme" })).toBe("compose acme");
   expect(shortResource({ kind: "redis", resource: "redis localhost:6379/0" })).toBe("redis localhost:6379/0");
+  // A Windows server sends backslashed paths; the chip still names the file.
+  expect(shortResource({ kind: "env", resource: "env C:\\work\\.env" })).toBe(".env");
+  expect(shortResource({ kind: "sqlite", resource: "sqlite C:\\work\\data\\app.db" })).toBe("sqlite app.db");
 });
 
 test("the tooltip says it is a possibility, names the other checkout and what it ran", () => {

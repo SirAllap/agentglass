@@ -192,6 +192,14 @@ describe("findCollisions", () => {
     ]);
     expect(above.map((c) => c.resource)).toEqual(["env /work/.env"]);
   });
+
+  test("a sibling whose name starts with the checkout's is not inside it", () => {
+    const out = col.findCollisions([
+      who("orbit", "aaaa1111", "/work/wt-a", col.claimsFromCommand("cat /work/wt-a-shared/.env", "/work/wt-a")),
+      who("orbit", "bbbb2222", "/work/wt-b", col.claimsFromCommand("cat /work/wt-a-shared/.env", "/work/wt-b")),
+    ]);
+    expect(out.map((c) => c.resource)).toEqual(["env /work/wt-a-shared/.env"]);
+  });
 });
 
 describe("getCollisions", () => {
