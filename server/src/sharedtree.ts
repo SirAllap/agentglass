@@ -143,16 +143,25 @@ export function liveSessions(seen: SessionSeen[], paneHeld: Set<string>, now = D
   return out;
 }
 
-/** The sessions heard from inside the window, with whether they have ended.
- *  One indexed range on `sessions`, and a newest-event lookup per row. */
+/**
+ * The sessions heard from inside the window, with whether they have ended.
+ *
+ * "Its newest event is a SessionEnd" is asked as "it has a SessionEnd no older
+ * than `last_seen`", because `last_seen` is the timestamp of the last event the
+ * session sent: a SessionEnd at or after it is its last word, and one before
+ * it was followed by more. That is one seek per session in
+ * idx_events_first_prompt. Asked the literal way, as the newest of its events,
+ * it sorted each session's whole history, and measured on twenty sessions of
+ * six thousand events it was 110 ms on every rebuild of the Diff list.
+ */
 export function recentSessions(now = Date.now()): SessionSeen[] {
   try {
-    return db.query<{ session_id: string; last_seen: number; last_type: string | null }, [number]>(`
+    return db.query<{ session_id: string; last_seen: number; gone: number }, [number]>(`
       SELECT s.session_id, s.last_seen,
-        (SELECT e.hook_event_type FROM events e WHERE e.session_id = s.session_id
-          ORDER BY e.timestamp DESC, e.id DESC LIMIT 1) AS last_type
+        EXISTS (SELECT 1 FROM events e WHERE e.hook_event_type = 'SessionEnd' AND e.session_id = s.session_id
+          AND e.timestamp >= s.last_seen) AS gone
       FROM sessions s WHERE s.last_seen >= ?`).all(now - LIVE_MS)
-      .map((r) => ({ session_id: r.session_id, last_seen: r.last_seen, gone: r.last_type === "SessionEnd" }));
+      .map((r) => ({ session_id: r.session_id, last_seen: r.last_seen, gone: r.gone === 1 }));
   } catch { return []; }
 }
 
