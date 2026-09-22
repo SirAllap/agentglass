@@ -26,7 +26,8 @@
 //   ones that turn up in commands are somebody else's ssh or https.
 // - The compose project for a bare `docker compose` is the cwd's basename. The
 //   real rule looks upwards for the compose file first; from a subdirectory of
-//   the project this names the subdirectory.
+//   the project this names the subdirectory. A `name:` in the compose file and
+//   COMPOSE_PROJECT_NAME in an .env are not read: nothing here opens a file.
 // - A session counts only inside a git checkout, and its checkout is the one
 //   its latest cwd is in: one that cds into another tree takes its window of
 //   claims along. A listener is matched to a checkout by its process's cwd,
@@ -159,6 +160,22 @@ const composeName = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]/g, "");
 /** Flags compose takes before its subcommand that carry a value. */
 const COMPOSE_VALUED = new Set(["-p", "--project-name", "-f", "--file", "--project-directory", "--env-file", "--profile", "--ansi", "--progress", "--parallel"]);
 
+/** docker's own flags that take a value, which may come before `compose`. */
+const DOCKER_VALUED = new Set(["-c", "--context", "--config", "-H", "--host", "-l", "--log-level", "--tlscacert", "--tlscert", "--tlskey"]);
+
+/** Where `docker-compose` or `docker [flags] compose` is, or -1. */
+function composeIndex(toks: string[]): number {
+  for (let i = 0; i < toks.length; i++) {
+    const b = basename(toks[i]);
+    if (b === "docker-compose") return i;
+    if (b !== "docker") continue;
+    let j = i + 1;
+    while (j < toks.length && toks[j].startsWith("-")) j += !toks[j].includes("=") && DOCKER_VALUED.has(toks[j]) ? 2 : 1;
+    if (toks[j] === "compose") return j;
+  }
+  return -1;
+}
+
 function composeClaim(toks: string[], at: number, here: string | null): Claim | null {
   let name: string | null = null;
   let dir: string | null = null;
@@ -223,7 +240,7 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
     if (!text && !CLIENTS.has(prog)) {
       for (const m of seg.matchAll(HOST_PORT)) if (portOk(+m[1])) add({ kind: "port", key: m[1] });
     }
-    const composeAt = toks.findIndex((t, i) => t === "docker-compose" || (t === "compose" && basename(toks[i - 1] ?? "") === "docker"));
+    const composeAt = composeIndex(toks);
     for (let i = 0; i < toks.length; i++) {
       const t = toks[i];
       const eq = t.indexOf("=");

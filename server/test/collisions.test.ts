@@ -125,6 +125,9 @@ describe("claimsFromCommand", () => {
     expect(keys("cd infra && docker compose up", "/work/orbit")).toEqual(["compose infra"]);
     // -p after the subcommand publishes a port, it does not name the project.
     expect(keys("docker compose run -p 3001:3000 web", "/work/orbit")).toEqual(["compose orbit", "port 3001"]);
+    // docker's own flags may come before the subcommand.
+    expect(keys("docker --context dev compose up -d", "/work/orbit")).toEqual(["compose orbit"]);
+    expect(keys("docker --log-level=warn -c dev compose -p acme up")).toEqual(["compose acme"]);
   });
 
   test("a relative path with no cwd, a variable or a glob is not guessed", () => {
