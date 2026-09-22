@@ -202,4 +202,13 @@ describe("what a second review found", () => {
     expect(changeRisks("/w/orbit/package.json", added(`  "license": "0BSD",`), 0)).toEqual([]);
     expect(kinds(changeRisks("/w/orbit/package.json", added(`    "orbit-core": "2.1.0",`), 0))).toEqual(["deps"]);
   });
+
+
+  test("a long kebab-case class name is not an API key; an sk- key still is", () => {
+    expect(changeRisks("/w/orbit/src/app.css", added(`.sk-loading-spinner-container-wrapper-x { }`), 0)).toEqual([]);
+    const SK = "sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
+    expect(kinds(changeRisks("/w/orbit/src/client.ts", added(`const k = "${SK}";`), 0))).toEqual(["secret"]);
+    const SK_PROJ = "sk-proj-" + "a1B2c3D4e5F6-g7H8i9J0k1L2m3N4o5P6q7R8";
+    expect(kinds(changeRisks("/w/orbit/src/client.ts", added(`const k = "${SK_PROJ}";`), 0))).toEqual(["secret"]);
+  });
 });

@@ -31,7 +31,9 @@ const SECRET_SHAPES: [RegExp, string][] = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key"],
   [/\b[sr]k_live_[A-Za-z0-9]{16,}/, "a Stripe live key"],
   [/\bAIza[0-9A-Za-z_-]{35}\b/, "a Google API key"],
-  [/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}/, "an API key"],
+  // A hyphen only after a known prefix: unprefixed, `sk-` plus a long
+  // kebab-case run is a CSS class (`.sk-loading-spinner-…`), not a key.
+  [/\bsk-(?:(?:ant|proj)-[A-Za-z0-9_-]{32,}|[A-Za-z0-9_]{32,})/, "an API key"],
 ];
 
 /**
