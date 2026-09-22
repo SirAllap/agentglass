@@ -67,9 +67,9 @@ describe("what a restored pane is told to run", () => {
 });
 
 describe("where the id comes from", () => {
-  it("prefers the note the pane hook wrote, when it names the directory the agent is in", () => {
+  it("prefers the note the pane hook wrote, when this agent's own hooks wrote it", () => {
     expect(src).toContain("const note = paneAgentNote(p.id);");
-    expect(src).toContain("note.cwd === under.cwd");
+    expect(src).toContain("const noteFits = !!note && noteIsThisAgents(note, under);");
   });
 
   it("and reads the running process when there is no note yet", () => {
@@ -95,10 +95,12 @@ describe("a note that outlived its agent", () => {
      * agents where their owner had left a shell.
      *
      * What is running NOW is the actual question: the note is only read for a
-     * pane with the CLI under it, and only when it names that CLI's directory.
+     * pane with the CLI under it, and only when that CLI's own hooks wrote it
+     * (`noteIsThisAgents`: written after the process was born, or in its
+     * directory).
      */
     expect(src).toContain("if (under && under.name === claudeName()) {");
-    expect(src).toContain("const noteFits = !!note && (!under.cwd || note.cwd === under.cwd);");
+    expect(src).toContain("const noteFits = !!note && noteIsThisAgents(note, under);");
   });
 
   it("compares against the CLI's own basename, not a literal", () => {

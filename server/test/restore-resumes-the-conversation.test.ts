@@ -102,12 +102,29 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.startArgv, "a conversation is not a command line to replay").toBeUndefined();
   }, 20_000);
 
-  test("a note from another checkout is somebody else's conversation, not this pane's", async () => {
-    /* Pane ids are reused across a reboot; a note written for an agent in
-       another directory must not resume that agent here. */
+  test("an agent that has cd'd keeps its conversation: the note is this pane's because it was written while this agent lived", async () => {
+    /*
+     * The hook's cwd follows the Bash tool's `cd` — one session reported
+     * thirteen directories over its life — while the process never moves.
+     * Requiring the two to be equal set the note aside after the first
+     * `cd server && …`, and the pane came back from a reboot as a shell.
+     */
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "moved", "-c", CWD, ...fakeClaude("--model", "opus")]);
+    const id = await paneOf("moved");
+    await Bun.sleep(250);
+    expect(wt.notePaneAgent({ pane: id, sessionId: OTHER, transcriptPath: "/tmp/t.jsonl", cwd: join(CWD, "server", "src") })).toBe(true);
+    const got = await photographed("moved");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.agentSession, "the conversation of an agent that cd'd").toBe(OTHER);
+  }, 20_000);
+
+  test("a note from a previous life of the pane id is somebody else's conversation, not this pane's", async () => {
+    /* Pane ids are reused across a reboot; a note written before this
+       agent was born — for an agent in another directory — must not resume
+       that agent here. */
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "stale", "-c", CWD, ...fakeClaude("--model", "opus")]);
     const id = await paneOf("stale");
-    wt.notePaneAgent({ pane: id, sessionId: OTHER, transcriptPath: "/tmp/t.jsonl", cwd: "/somewhere/else" });
+    wt.notePaneAgent({ pane: id, sessionId: OTHER, transcriptPath: "/tmp/t.jsonl", cwd: "/somewhere/else", at: Date.now() - 60_000 });
     const got = await photographed("stale");
     /* The pane has to be in the picture for the next line to mean anything:
        a `?.` on a pane that was not captured is undefined too. */

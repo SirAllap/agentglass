@@ -289,6 +289,10 @@ export interface ProcReader {
    *  reads the link in /proc; a Mac has no cheap answer and says nothing,
    *  which only means a pane's note is taken at its word there. */
   cwd?: (pid: number) => string;
+  /** When a process started, as epoch milliseconds, or 0 when the machine
+   *  cannot say. Linux: field 22 of /proc/<pid>/stat over the boot time in
+   *  /proc/stat. A Mac says nothing, with the same consequence as `cwd`. */
+  startedAt?: (pid: number) => number;
 }
 
 const machineProc: ProcReader = {
@@ -301,7 +305,33 @@ const machineProc: ProcReader = {
   },
   read: (path) => readFileSync(path, "utf8"),
   cwd: (pid) => { try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return ""; } },
+  startedAt: (pid) => startedAtOf(pid, machineProc),
 };
+
+/**
+ * When a process started, from /proc.
+ *
+ * `/proc/<pid>/stat` field 22 is the start time in clock ticks since boot;
+ * `/proc/stat`'s `btime` is the boot, in whole seconds. USER_HZ is 100 on
+ * every Linux userspace ABI, so a tick is 10 ms and nothing is asked of
+ * `getconf`. The comm in field 2 is in parentheses and may itself contain
+ * spaces or a `)` — a process named `node (main)` is real — so the fields
+ * are counted from the LAST `)`, never split on whitespace from the front.
+ * Whole seconds on the boot time make the answer good to about a second;
+ * callers that compare it with a millisecond clock leave that much slack.
+ */
+export function startedAtOf(pid: number, proc: ProcReader = machineProc): number {
+  if (proc.platform !== "linux") return 0;
+  try {
+    const stat = proc.read(`/proc/${pid}/stat`);
+    const rest = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
+    /* `rest[0]` is field 3 (state); field 22 is therefore rest[19]. */
+    const ticks = Number(rest[19]);
+    const btime = Number((/^btime (\d+)/m.exec(proc.read("/proc/stat")) ?? [])[1]);
+    if (!Number.isFinite(ticks) || !Number.isFinite(btime) || !btime) return 0;
+    return btime * 1000 + ticks * 10;
+  } catch { return 0; }
+}
 
 /** Direct children of a pid, or an empty list. */
 export function childPidsOf(pid: number, proc: ProcReader = machineProc): number[] {
@@ -361,7 +391,7 @@ const WALK_DEPTH = 6;
 const WALK_MAX = process.platform === "darwin" ? 12 : 60;
 
 /** What an agent CLI under a pane is: which one, its argv, where it runs. */
-export interface AgentUnder { name: string; argv: string[]; cwd: string }
+export interface AgentUnder { name: string; argv: string[]; cwd: string; startedAt: number }
 
 /**
  * The agent running in a pane, or null.
@@ -387,12 +417,42 @@ export function agentUnder(panePid: number, proc: ProcReader = machineProc): Age
       if (++seen > WALK_MAX) return null;
       const argv = argvOf(pid, proc);
       const name = agentNamed(argv);
-      if (name) return { name, argv, cwd: proc.cwd?.(pid) ?? "" };
+      if (name) return { name, argv, cwd: proc.cwd?.(pid) ?? "", startedAt: proc.startedAt?.(pid) ?? 0 };
       next.push(...childPidsOf(pid, proc));
     }
     level = next;
   }
   return null;
+}
+
+/**
+ * Is the hook's note about THIS agent, or about one that had the pane id
+ * before it?
+ *
+ * Pane ids are reused: the server that restores a desk starts at %0 again,
+ * and a note written for an agent in another checkout, in a previous life
+ * of this id, would resume that agent here. The first guard against that
+ * compared the note's directory with the process's, and it set aside the
+ * notes of live agents by the dozen: the note's cwd is the hook payload's,
+ * which follows the Bash tool's `cd` — one session reported thirteen
+ * directories over its life — while the CLI process never moves for it
+ * (`chdir` only at start and on entering or leaving a worktree, read off the
+ * installed binary). After the first `cd server && …` the note no longer
+ * "fit", and the pane came back from a reboot as a shell with the
+ * conversation lost, or on the pre-`/clear` id from its argv.
+ *
+ * So the question is when, not where: a note written after this process was
+ * born was written by a hook this process fired — same pane, same server —
+ * and a note older than the process is the previous occupant's. Equal
+ * directories are still taken as a match first, because that needs no
+ * clock. The slack covers the boot time being whole seconds. A machine that
+ * can say neither (a Mac) takes the note at its word, as before.
+ */
+export const NOTE_SLACK_MS = 2_000;
+export function noteIsThisAgents(note: { cwd: string; at: number }, under: { cwd: string; startedAt: number }): boolean {
+  if (note.cwd === under.cwd) return true;
+  if (under.startedAt) return note.at >= under.startedAt - NOTE_SLACK_MS;
+  return !under.cwd;
 }
 
 /** The `--resume <uuid>` on a command line, when it carries one. A pane
@@ -471,7 +531,7 @@ export function isBareShell(argv: readonly string[]): boolean {
  * tmux's name for the foreground process, and it has to be the agent's own
  * binary: `claude` under a shell, `opencode`, the `node` a launcher is.
  */
-export function isForeground(found: AgentUnder, paneCommand: string): boolean {
+export function isForeground(found: Omit<AgentUnder, "startedAt"> & { startedAt?: number }, paneCommand: string): boolean {
   const head = (found.argv[0] || "").split("/").pop() || "";
   return !!paneCommand && head === paneCommand;
 }
@@ -709,14 +769,13 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
           /*
            * The id: the hook's note first, because it is the newer fact — a
            * `/clear` gives the pane a new conversation the argv knows nothing
-           * about — but only a note that names the directory the agent is
-           * actually in. A note from a previous life of this pane id, written
-           * for an agent in another checkout, is not this agent's. Then the
-           * argv's own `--resume`, which a restored pane carries before any
-           * hook has fired.
+           * about — but only a note this agent's own hooks wrote
+           * (`noteIsThisAgents`): one from a previous life of the pane id is
+           * not its. Then the argv's own `--resume`, which a restored pane
+           * carries before any hook has fired.
            */
           const note = paneAgentNote(p.id);
-          const noteFits = !!note && (!under.cwd || note.cwd === under.cwd);
+          const noteFits = !!note && noteIsThisAgents(note, under);
           const resumed = resumeIdIn(under.argv);
           const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
           const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, note?.session_id]));

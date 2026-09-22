@@ -14,7 +14,7 @@
  * left in it and the agent IS that process.
  */
 import { describe, expect, test } from "bun:test";
-import { childPidsOf, argvOf, agentUnder, resumeIdIn, withoutPromptFlags, isBareShell, isForeground, type ProcReader } from "../src/tmuxrestore.ts";
+import { childPidsOf, argvOf, agentUnder, resumeIdIn, withoutPromptFlags, isBareShell, isForeground, startedAtOf, noteIsThisAgents, NOTE_SLACK_MS, type ProcReader } from "../src/tmuxrestore.ts";
 
 const RESUME = "0f6b6a1c-2d3e-4f50-8a9b-0c1d2e3f4a5b";
 
@@ -174,6 +174,37 @@ describe("on Linux, the measured spelling is unchanged", () => {
     /* A launcher is the `node` tmux names, and so is its script. */
     expect(isForeground({ name: "qwen", argv: ["node", "/usr/bin/qwen"], cwd: "" }, "node")).toBe(true);
     expect(isForeground({ name: "opencode", argv: ["/opt/opencode/bin/opencode", "-s", "x"], cwd: "" }, "opencode")).toBe(true);
+  });
+
+  test("a process's start time is read off /proc, counted from the last `)` of a comm that may hold one itself", () => {
+    /* btime 1 700 000 000 s; the process started 123 456 ticks (1 234.56 s)
+       after boot. The comm `node (main)` has a space and a `)` in it. */
+    const { proc } = machine("linux", {}, {
+      "/proc/stat": "cpu  1 2 3 4\nbtime 1700000000\nprocesses 9\n",
+      "/proc/77/stat": "77 (node (main)) S 1 77 77 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 123456 1000 200 18446744073709551615\n",
+    });
+    expect(startedAtOf(77, proc)).toBe(1_700_000_000_000 + 1_234_560);
+    expect(startedAtOf(78, proc), "a process that is gone").toBe(0);
+    const { proc: mac } = machine("darwin", {});
+    expect(startedAtOf(77, mac), "a Mac cannot say").toBe(0);
+  });
+
+  test("a note is this agent's when it was written after the agent was born; the directory only has to match when the machine cannot say", () => {
+    const born = 1_700_000_000_000;
+    const here = { cwd: "/home/someone/code/orbit", startedAt: born };
+    /* The hook's cwd follows `cd`; the process's does not. Same agent. */
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit/server/src", at: born + 60_000 }, here)).toBe(true);
+    expect(noteIsThisAgents({ cwd: "/tmp", at: born + 60_000 }, here), "a cd out of the repo is still this agent").toBe(true);
+    /* Written before this process existed: the previous occupant of the id. */
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/acme", at: born - 60_000 }, here)).toBe(false);
+    /* The boot time is whole seconds, so a note from the first moment is not set aside. */
+    expect(noteIsThisAgents({ cwd: "/tmp", at: born - NOTE_SLACK_MS + 1 }, here)).toBe(true);
+    /* Equal directories need no clock — even for a note older than the process. */
+    expect(noteIsThisAgents({ cwd: "/home/someone/code/orbit", at: born - 60_000 }, here)).toBe(true);
+    /* A Mac says neither, and the note is taken at its word; a machine that
+       says the directory and not the time keeps the old rule. */
+    expect(noteIsThisAgents({ cwd: "/elsewhere", at: 0 }, { cwd: "", startedAt: 0 })).toBe(true);
+    expect(noteIsThisAgents({ cwd: "/elsewhere", at: born + 1 }, { cwd: "/home/someone/code/orbit", startedAt: 0 })).toBe(false);
   });
 
   test("the walk stops at a shell's depth, and at a ceiling of processes", () => {
