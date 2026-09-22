@@ -200,6 +200,55 @@ describe("what a second review found", () => {
     db.pruneOldRows();
     expect(bySession().get("risk-prune-keep")!.risks?.map((r) => r.kind)).toEqual(["secret"]);
   });
+
+  test("the chip and the diff it opens count only edits inside the open project", () => {
+    // The change list is scoped to the open project and the roll-up was not:
+    // a session that also wrote in another checkout carried that checkout's
+    // flag on its card, and the diff fetched a change the list itself hides.
+    const OTHER = join(dir, "harbor");
+    db.insertEvent(event({ session_id: "risk-scope", tool_name: "Write", timestamp: T0 + 1_000,
+      payload: { project_path: OTHER, cwd: OTHER, tool_input: { file_path: join(OTHER, "config/app.yml"), content: `access_key: ${AWS}\n` } } }) as any);
+    db.insertEvent(edit("risk-scope", "src/format.ts", "a", "b", T0 + 2_000) as any);
+    const row = bySession().get("risk-scope");
+    expect(row).toBeDefined();
+    expect(row!.risks).toBeUndefined();
+    process.env.AGENTGLASS_ROOT = ROOT;
+    const d = db.getSession("risk-scope")!;
+    expect(d.changes.map((c) => c.file_path)).toEqual([join(ROOT, "src/format.ts")]);
+  });
+
+  test("a flagged edit in a worktree added a moment ago reaches the card once git lists it", async () => {
+    // The project's checkouts come from `git worktree list`, cached for five
+    // seconds. When the roll-up filtered by scope as it READ, an edit in a
+    // brand-new worktree was passed over while the list was stale and never
+    // read again, because the read marker had moved past it. Scope is now
+    // applied when the flags are handed out, so it catches up.
+    const repo = join(dir, "fam");
+    mkdirSync(repo, { recursive: true });
+    const git = (...a: string[]) => {
+      const r = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", ...a], { cwd: repo, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+      if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+    };
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "init");
+    const at = (session_id: string, root: string, file: string, content: string, timestamp: number) =>
+      event({ session_id, tool_name: "Write", timestamp,
+              payload: { project_path: root, cwd: root, tool_input: { file_path: join(root, file), content } } });
+    process.env.AGENTGLASS_ROOT = repo;
+    db.insertEvent(at("risk-fam", repo, "src/a.ts", "x\n", T0 + 1_000) as any);
+    db.getSessions(limit++);
+    const wt = join(dir, "fam-wt");
+    git("worktree", "add", "-q", wt);
+    db.insertEvent(at("risk-fam", wt, "config/app.yml", `access_key: ${AWS}\n`, T0 + 2_000) as any);
+    db.insertEvent(at("risk-fam", repo, "src/b.ts", "y\n", T0 + 3_000) as any);
+    db.getSession("risk-fam");
+    await Bun.sleep(5_500);
+    process.env.AGENTGLASS_ROOT = repo;
+    const row = db.getSessions(limit++).find((s) => s.session_id === "risk-fam");
+    process.env.AGENTGLASS_ROOT = ROOT;
+    expect(row).toBeDefined();
+    expect(row!.risks?.map((r) => r.kind)).toEqual(["secret"]);
+  }, 15_000);
 });
 
 const src = await Bun.file(new URL("../src/db.ts", import.meta.url)).text();

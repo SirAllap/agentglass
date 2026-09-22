@@ -18,7 +18,7 @@ import type {
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
-import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
+import { workspaceRoot, scopeRoots, isWithin, sessionInScope } from "./config.ts";
 import { changeRisks, sessionRisks } from "../../shared/riskFlags.ts";
 
 /**
@@ -3846,11 +3846,21 @@ function parseChange(r: ChangeRow, withRisks = true): import("../../shared/types
  * parses only the edits past the watermark. The watermark is a row id, not a
  * timestamp: a backfill inserts old edits late, and those must still count.
  *
- * Its ceiling: the first poll after the server starts still reads every listed
- * session from 0 in one go. Spreading that cold read over several polls is the
- * next step and is not here.
+ * The card counts only edits inside the open project, like the change list its
+ * diff shows, and that is applied when the flags are handed out, not when they
+ * are read: the project's checkouts come from `git worktree list`, cached for
+ * seconds, and an edit in a worktree added a moment ago was passed over while
+ * the list was stale and then never read again, because the watermark had moved
+ * past it. So the memo keeps every flag with where its edit ran.
+ *
+ * Its ceilings: the first poll after the server starts still reads every listed
+ * session from 0 in one go, and spreading that over several polls is the next
+ * step and is not here. The per-session cap applies before the scope, so a
+ * session with more than SESSION_RISK_CAP flagged files outside the project can
+ * crowd out one inside it.
  */
-const riskMemo = new Map<string, { through: number; flags: import("../../shared/types.ts").SessionRisk[] }>();
+type RiskWhere = { project_path: string | null; cwd_path: string | null };
+const riskMemo = new Map<string, { through: number; flags: import("../../shared/types.ts").SessionRisk[]; where: Map<number, RiskWhere> }>();
 const RISK_MEMO_MAX = 2000;
 
 function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): void {
@@ -3870,31 +3880,39 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
     }
     if (byMark.size) {
       const fresh = new Map<string, import("../../shared/types.ts").FileChange[]>();
+      const freshWhere = new Map<number, RiskWhere>();
       for (const [mark, group] of byMark) {
         const holes = group.map(() => "?").join(",");
         // INDEXED BY: left to itself SQLite picks idx_events_type, and a new
         // session's first read (mark 0) then walks every PostToolUse row in the
         // table — measured 21 ms on 28k rows, against 1 ms by session.
         for (const r of db.query<ChangeRow, any[]>(
-          `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events INDEXED BY idx_events_session
+          `SELECT id, timestamp, source_app, session_id, tool_name, payload, project_path, cwd_path FROM events INDEXED BY idx_events_session
            WHERE session_id IN (${holes}) AND id > ? AND id <= ?
              AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')
-           ORDER BY id DESC`).all(...group, mark, top)) {
+           ORDER BY id DESC`).all(...group, mark, top) as (ChangeRow & RiskWhere)[]) {
           const c = parseChange(r);
           if (!c?.risks) continue;
+          freshWhere.set(r.id, { project_path: r.project_path, cwd_path: r.cwd_path });
           const list = fresh.get(r.session_id);
           if (list) list.push(c); else fresh.set(r.session_id, [c]);
         }
       }
       for (const group of byMark.values()) for (const id of group) {
-        const old = riskMemo.get(id)?.flags ?? [];
+        const prev = riskMemo.get(id);
+        const old = prev?.flags ?? [];
         const add = fresh.get(id) ?? [];
         // Newer first, so the reason kept for a kind and file is the latest one.
         const flags = add.length
           ? sessionRisks([...add, ...old.map((f) => ({ id: f.change, file_path: f.file, risks: [f] }))])
           : old;
+        const where = new Map<number, RiskWhere>();
+        for (const f of flags) {
+          const w = f.change != null ? freshWhere.get(f.change) ?? prev?.where.get(f.change) : undefined;
+          if (w) where.set(f.change!, w);
+        }
         riskMemo.delete(id);
-        riskMemo.set(id, { through: top, flags });
+        riskMemo.set(id, { through: top, flags, where });
       }
       // Insertion order is recency of reading, so the front is the stalest.
       for (const k of riskMemo.keys()) {
@@ -3902,9 +3920,19 @@ function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): voi
         riskMemo.delete(k);
       }
     }
+    const scope = workspaceRoot();
+    const inside = new Map<RiskWhere, boolean>();
     for (const r of rows) {
-      const f = riskMemo.get(r.session_id)?.flags;
-      if (f?.length) r.risks = f;
+      const m = riskMemo.get(r.session_id);
+      if (!m?.flags.length) continue;
+      const f = !scope ? m.flags : m.flags.filter((x) => {
+        const w = x.change != null ? m.where.get(x.change) : undefined;
+        if (!w) return true;
+        let ok = inside.get(w);
+        if (ok === undefined) inside.set(w, ok = sessionInScope(w, scope));
+        return ok;
+      });
+      if (f.length) r.risks = f;
     }
   } catch { /* flags are advisory; a database that cannot answer must not lose the list */ }
 }
@@ -3923,10 +3951,11 @@ function changesWithFlagged(sessionId: string, limit: number): import("../../sha
   const have = new Set(changes.map((c) => c.id));
   const missing = [...new Set((stub.risks ?? []).map((r) => r.change).filter((id): id is number => id != null && !have.has(id)))];
   if (!missing.length) return changes;
+  const chg = scopeClause();
   const older = db.query<ChangeRow, any[]>(
     `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
-     WHERE id IN (${missing.map(() => "?").join(",")}) AND session_id = ?
-     ORDER BY timestamp DESC, id DESC`).all(...missing, sessionId);
+     WHERE id IN (${missing.map(() => "?").join(",")}) AND session_id = ?${chg.clause}
+     ORDER BY timestamp DESC, id DESC`).all(...missing, sessionId, ...chg.args);
   return [...changes, ...older.map((r) => parseChange(r)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null)];
 }
 
