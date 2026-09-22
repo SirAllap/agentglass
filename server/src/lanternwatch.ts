@@ -84,8 +84,9 @@ export function findings(p: {
      * NEITHER READER OF THIS BOARD IS WORK ON IT.
      *
      * The Lantern's chat and the project's seat are marked with a `role` by
-     * `boardNow`, and every other reader sets them aside — the field readout
-     * does, the view does. This one did not, so the seat was reported as
+     * `boardNow`, and the other readers set them aside as work — the field
+     * readout does; the view and the strip count only a seat's waits, which a
+     * person answers. This one did not, so the seat was reported as
      * FORGOTTEN WORK about itself: "orchestrator said it was on … and has been
      * quiet for 1d — done, or stuck?", which is a description of a chair
      * waiting for its owner, delivered by waking the chair.

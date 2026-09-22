@@ -98,6 +98,12 @@ export function Kpis({
    * The board keeps that promise by itself: "working" there is a session that
    * said something in the last ten minutes, so a hung one leaves the count, and
    * one that claimed work comes back as stuck after the hour.
+   *
+   * The ceiling, chosen: a tool call that is merely slow leaves the count too —
+   * a fifteen-minute build reads "Working 0" from minute ten, and one with no
+   * claimed task is never stuck either. The board has no open-tool signal to
+   * tell slow from hung; the Fleet panel below, from the hook cards, still
+   * shows that session as working.
    */
   const working = fleet?.counts.running ?? null;
   const need = fleet?.counts.need ?? null;

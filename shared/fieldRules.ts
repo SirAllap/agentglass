@@ -81,9 +81,10 @@ export const isForgotten = <R extends FieldRow>(r: R, now = Date.now()): r is R 
  * in the calm colour. Both call this now.
  *
  * The Lantern's own chat is never anybody's attention. A seat (`role`
- * "orchestrator") is sorted like any agent here; the watch alone sets seats
- * aside, because its findings wake the seat and a seat must not be woken about
- * itself. So a seat stopped on a permission is on the strip and not in the
+ * "orchestrator") can be blocked or left like any agent, but never forgotten —
+ * `isForgotten` sets every role aside, because a seat's `doing` is a chair
+ * waiting for its owner. The watch alone sets seats aside entirely, because
+ * its findings wake the seat and a seat must not be woken about itself. So a seat stopped on a permission is on the strip and not in the
  * notification — the one difference, and it is the reader's, not the rule's.
  */
 export type Attention = "blocked" | "left" | "forgotten";
