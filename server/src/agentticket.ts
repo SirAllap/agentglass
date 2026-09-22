@@ -59,11 +59,11 @@ export interface AgentRequest {
 /**
  * The executable for a kind, or null when it is not on this machine.
  *
- * Claude goes through `claudeCode.bin()` at the call site, which knows about
- * more than PATH — a version pinned in the config, a shim, an install the
- * user pointed at. The rest are looked up plainly, and a null here is the
- * whole reason the menu asks the machine what it HAS rather than offering
- * four names and finding out afterwards.
+ * Every kind, Claude included. Call sites used to send Claude to
+ * `claudeCode.bin()` on the belief that it knew about more than PATH; it is
+ * `Bun.which("claude")`, the same lookup as here, so the branch chose between
+ * two identical answers. A null here is the whole reason the menu asks the
+ * machine what it HAS rather than offering names and finding out afterwards.
  */
 export function agentBinFor(kind: string): string | null {
   const spec = agentKind(kind);
@@ -158,8 +158,13 @@ export function agentArgv(
    * review hand-off, the issue start, the desktop's own new window — and all
    * of them mean Claude, which is what they got when this function only knew
    * how to build one command line.
+   *
+   * A kind the table does not have is refused by every route before a ticket
+   * exists. Should one get here anyway it opens a plain shell: Claude's flags
+   * on some other binary are an unknown option and an immediate exit.
    */
-  const kind = agentKind(req.kind ?? "claude") ?? agentKind("claude")!;
+  const kind = agentKind(req.kind ?? "claude");
+  if (!kind) return [];
 
   // `--name` is what `/rename` writes, set before the first turn rather than
   // typed into a program that may not have finished starting. The value is data

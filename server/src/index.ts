@@ -140,7 +140,6 @@ import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { transcribe, transcriberOn } from "./dictate.ts";
 import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
-import { claudeCode } from "./agents/claudecode.ts";
 /* Both sides' imports: main added five, this branch still uses `panesWithPids`
    and `reapMirrorSessions`. Neither list is a superset of the other. */
 import { listPanes, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
@@ -7460,9 +7459,7 @@ const server = Bun.serve<WsData>({
           id: a.id,
           title: a.title,
           what: a.what,
-          /* Claude answers through its own resolver, which knows about a
-             pinned version and a shim as well as PATH. */
-          installed: a.id === "claude" ? !!claudeCode.bin() : !!agentBinFor(a.id),
+          installed: !!agentBinFor(a.id),
           /* Whether "permissions off" is a thing this one HAS. A phone must
              not draw a switch that buys no flag. */
           canBypass: !!a.yoloFlag,

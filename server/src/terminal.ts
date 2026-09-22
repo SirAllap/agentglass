@@ -814,14 +814,10 @@ export function ptyOpen(ws: PtyWs) {
    * the right tree is still most of what was asked for.
    */
   const ticket = typeof d.agent === "string" && d.agent ? claimAgentTicket(d.agent) : null;
-  /* Claude keeps its own resolver, which knows about a pinned version and a
-     shim as well as PATH. Anything else is looked up by name — see
-     agentBinFor. A kind that is not installed resolves to null, and the
-     callers below already read that as "open a plain shell in the worktree",
-     which is the right answer rather than an empty pane. */
-  const agentBin = ticket
-    ? (!ticket.kind || ticket.kind === "claude" ? claudeCode.bin() : agentBinFor(ticket.kind))
-    : null;
+  /* A kind that is not installed resolves to null, and the callers below
+     already read that as "open a plain shell in the worktree", which is the
+     right answer rather than an empty pane. */
+  const agentBin = ticket ? agentBinFor(ticket.kind ?? "claude") : null;
   const agentRun = ticket ? agentArgv(agentBin, ticket, supportsSessionName(agentBin)) : [];
 
   /*
@@ -1851,7 +1847,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         ctl(ws, { t: "openfail", error: "no such agent" });
         return;
       }
-      const bin = kind === "claude" ? claudeCode.bin() : agentBinFor(kind);
+      const bin = agentBinFor(kind);
       // The window is named after the checkout, which is what tells six of them
       // apart in a strip — `agentglass`, `width-toast`, `phone-new-tab`.
       const name = basename(root) || "agent";

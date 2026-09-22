@@ -14,7 +14,8 @@
  * differently on my machine".
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { mintAgentTicket, claimAgentTicket, agentArgv, __clearAgentTickets } from "../src/agentticket.ts";
+import { mintAgentTicket, claimAgentTicket, agentArgv, agentBinFor, __clearAgentTickets } from "../src/agentticket.ts";
+import { claudeCode } from "../src/agents/claudecode.ts";
 
 afterEach(() => { __clearAgentTickets(); });
 
@@ -112,5 +113,25 @@ describe("the command line an agent request becomes", () => {
     // worktree is still most of what was asked for.
     expect(agentArgv(null, { prompt: "go", yolo: false, title: "" }, true)).toEqual([]);
     expect(agentArgv("", { prompt: "go", yolo: false, title: "" }, true)).toEqual([]);
+  });
+});
+
+describe("a kind no route accepted", () => {
+  it("opens a plain shell rather than Claude's flags on some other binary", () => {
+    /* Every route checks the kind against shared/agentKinds.ts before a ticket
+       is minted, so this is not reachable from the wire. It used to fall back
+       to Claude's row, which on anything but `claude` is an unknown option and
+       an immediate exit — the wrong answer for the day a caller forgets. */
+    expect(agentArgv("/usr/bin/vim", { prompt: "go", yolo: true, title: "ORBIT-1042", kind: "vim" }, true))
+      .toEqual([]);
+  });
+});
+
+describe("the executable for a kind", () => {
+  it("is Claude's own resolver's answer for Claude, so no caller needs to ask it separately", () => {
+    // Three call sites branched to claudeCode.bin() for Claude and to this
+    // function for the rest. Both are Bun.which("claude"); the branch bought
+    // nothing, and it is gone.
+    expect(agentBinFor("claude")).toBe(claudeCode.bin());
   });
 });
