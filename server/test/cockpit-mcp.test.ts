@@ -16,11 +16,10 @@
  *   back smaller, well formed, with a field naming what was dropped.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
-import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 
 const MCP = new URL("../../bin/agentglass-cockpit-mcp", import.meta.url).pathname;
@@ -47,12 +46,16 @@ async function ingest(ev: Record<string, unknown>) {
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-cockpit-mcp-"));
+  // A tmux of its own. The board lists every pane of the server's engine, and
+  // on the shared test directory that engine holds other test files' panes:
+  // then an agent with no pane of its own reads as nowhere to go, not waiting.
+  mkdirSync(join(dir, "tmux"));
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
     env: {
       PATH: process.env.PATH ?? "",
-      TMUX_TMPDIR: TMUX_TEST_TMPDIR,
+      TMUX_TMPDIR: join(dir, "tmux"),
       HOME: process.env.HOME ?? "",
       XDG_CONFIG_HOME: dir,
       XDG_DATA_HOME: `${dir}/data`,
