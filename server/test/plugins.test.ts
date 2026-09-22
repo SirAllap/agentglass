@@ -659,6 +659,18 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     expect(r.runSh).toBe("echo listed\n");
   }, 30_000);
 
+  // A folder in use can hold a socket or a pipe; `cp -R` copied them and the
+  // walk ignores them, so they do not stop an install.
+  test("a folder holding a pipe still installs from its path", async () => {
+    const folder = mkdtempSync(join(root, "fifo-"));
+    writeFileSync(join(folder, MANIFEST_NAME), JSON.stringify({ ...okManifest, name: "orbit-clock", entrypoint: "sh run.sh" }));
+    writeFileSync(join(folder, "run.sh"), "echo local\n");
+    expect(Bun.spawnSync(["mkfifo", join(folder, "dev.pipe")]).exitCode).toBe(0);
+    const local = await install({ kind: "local", path: folder });
+    expect(local.result.error ?? "").toBe("");
+    expect(local.runSh).toBe("echo local\n");
+  }, 30_000);
+
   // `cp` is not a program Windows has. The copy into place is the app's own,
   // and a link inside the plugin arrives as the same link.
   test("installs where git is the only program there is, and keeps a link a link", async () => {

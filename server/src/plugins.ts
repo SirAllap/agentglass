@@ -633,6 +633,18 @@ async function fetchInto(staging: string, url: string, ref: string | null, sha25
   return { ok: true };
 }
 
+/** What the copy into place carries: files, folders and links, the entries
+ *  the walk reads. A socket or a pipe in a folder in use is left behind, as
+ *  the walk leaves it, rather than failing the copy the way `cpSync` does. */
+function copied(src: string): boolean {
+  try {
+    const st = lstatSync(src);
+    return st.isFile() || st.isDirectory() || st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Everything after "a populated staging directory exists" — manifest read,
  * containment, content identity, and the copy into place. Shared by a
@@ -693,7 +705,7 @@ async function finishInstall(
   mkdirSync(dirname(installDir), { recursive: true });
   // The app's own copy, not `cp`, which Windows does not have; a link is
   // copied as the link it is, not rewritten to where it pointed in staging.
-  try { cpSync(staging, installDir, { recursive: true, verbatimSymlinks: true }); } catch (e) {
+  try { cpSync(staging, installDir, { recursive: true, verbatimSymlinks: true, filter: copied }); } catch (e) {
     rmSync(installDir, { recursive: true, force: true });
     return { ok: false, error: `could not copy the plugin into place: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -758,7 +770,7 @@ export async function installPlugin(input: InstallInput): Promise<{ ok: true; pl
       if (!st.isDirectory()) return { ok: false, error: "That path is not a folder" };
       // The folder's contents, through a link if the path is one, as
       // `cp -R path/.` did before the copy stopped needing `cp`.
-      try { cpSync(realpathSync(source.path), staging, { recursive: true, verbatimSymlinks: true }); } catch (e) {
+      try { cpSync(realpathSync(source.path), staging, { recursive: true, verbatimSymlinks: true, filter: copied }); } catch (e) {
         return { ok: false, error: `could not copy that folder: ${e instanceof Error ? e.message : String(e)}` };
       }
     } else {
