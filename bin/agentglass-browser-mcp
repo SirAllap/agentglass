@@ -2070,16 +2070,15 @@ def _loopback(host):
         return False
 
 
-def _origin_ok(origin):
-    """The cross-site half of the fence. A programmatic MCP client sends no
-    Origin at all — that is the normal case and it is allowed; only a present
-    Origin is judged, because a present one almost always means a browser."""
-    if not origin:
-        return True
-    if origin == SERVER or origin.startswith("https://"):
-        return True
-    u = urlsplit(origin)
-    return _loopback(u.hostname) and not os.environ.get("AGENTGLASS_TOKEN")
+# NO BROWSER IS A CALLER HERE. An MCP client is a program, and a program
+# sends no Origin header; a browser always does. So any Origin at all is
+# refused, and nothing is echoed back in Access-Control-Allow-Origin — there
+# is no allow-list to get wrong. The first version admitted any https Origin
+# and the app's own, and echoed it: a page on any https site could POST a
+# text/plain body (no preflight for that shape) and read the reply, cookies
+# included. The Content-Type is held to application/json for the same reason
+# — the only body a JSON-RPC client sends, and never one a browser sends
+# without a preflight, which is then refused too.
 
 
 class _McpHttp(BaseHTTPRequestHandler):
@@ -2094,10 +2093,6 @@ class _McpHttp(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream" if sse else "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        origin = self.headers.get("Origin", "")
-        if origin and _origin_ok(origin):
-            self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Vary", "Origin")
         if headers:
             for k, v in headers.items():
                 self.send_header(k, v)
@@ -2124,15 +2119,12 @@ class _McpHttp(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_OPTIONS(self):
-        origin = self.headers.get("Origin", "")
-        if origin and not _origin_ok(origin):
-            return self._reject(403, "origin refused")
+        # A preflight is a browser asking; the answer is no, with nothing in
+        # it a browser could take as a yes.
+        if self.headers.get("Origin"):
+            return self._reject(403, "a web page is not a caller of this endpoint")
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Mcp-Session-Id")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        if origin:
-            self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Vary", "Origin")
+        self.send_header("Allow", "POST, OPTIONS")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -2153,6 +2145,11 @@ class _McpHttp(BaseHTTPRequestHandler):
             return self._reject(401, "missing bearer token")
         if not hmac.compare_digest(have, self.server.mcp_token):
             return self._reject(401, "wrong bearer token")
+        if self.headers.get("Origin"):
+            return self._reject(403, "a web page is not a caller of this endpoint")
+        ctype = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            return self._reject(415, "the body must be application/json")
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -2163,9 +2160,6 @@ class _McpHttp(BaseHTTPRequestHandler):
         host = self.headers.get("Host", "")
         if host and bind_host not in ("0.0.0.0", "::") and urlsplit("http://" + host).hostname != bind_host:
             return self._reject(421, "host header does not name the bound address")
-        origin = self.headers.get("Origin", "")
-        if origin and not _origin_ok(origin):
-            return self._reject(403, "origin refused")
         body = self.rfile.read(length) if length else b""
         try:
             msg = json.loads(body or b"{}")

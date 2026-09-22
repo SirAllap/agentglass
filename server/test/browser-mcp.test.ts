@@ -937,10 +937,58 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     expect(j.result.content[0]!.text).toContain("hello from the stand-in");
   });
 
+  test("a request with a web page's Origin is refused — https, loopback, the app's own server, null — token or no token", async () => {
+    /* The first version admitted any https Origin and the app's own, and
+       echoed it back in Access-Control-Allow-Origin; with a text/plain body
+       (no preflight) a page on any https site could call browser_storage_state
+       and read every cookie back. No MCP client is a web page, so the rule is
+       the strict one: an Origin header, whatever it says, is a browser, and a
+       browser is not a caller here. Nothing is echoed, and OPTIONS gets no
+       allowance to hand out. */
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/list" });
+    for (const origin of ["https://evil.example", "http://evil.example", "http://localhost:5173", "http://127.0.0.1:4000", base, "null"]) {
+      for (const contentType of ["application/json", "text/plain"]) {
+        const r = await fetch(mcpUrl() + "/", {
+          method: "POST",
+          headers: { authorization: `Bearer ${TOKEN}`, origin, "content-type": contentType },
+          body,
+        });
+        expect(r.status, `${origin} with ${contentType}`).toBe(403);
+        expect(r.headers.get("access-control-allow-origin"), `${origin} must not be echoed`).toBeNull();
+      }
+    }
+    const preflight = await fetch(mcpUrl() + "/", {
+      method: "OPTIONS",
+      headers: { origin: "https://evil.example", "access-control-request-method": "POST", "access-control-request-headers": "authorization,content-type" },
+    });
+    expect(preflight.status).toBe(403);
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    expect(preflight.headers.get("access-control-allow-headers")).toBeNull();
+  });
+
+  test("a body that is not application/json is refused before it is parsed", async () => {
+    // A text/plain POST is one a browser sends without a preflight; JSON is
+    // the only content type a JSON-RPC client has a reason to send.
+    for (const contentType of ["text/plain", "application/x-www-form-urlencoded", ""]) {
+      const r = await fetch(mcpUrl() + "/", {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, ...(contentType ? { "content-type": contentType } : {}) },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" }),
+      });
+      expect(r.status, contentType || "(none)").toBe(415);
+    }
+    const charset = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 8, method: "ping" }),
+    });
+    expect(charset.status, "a charset parameter is still JSON").toBe(200);
+  });
+
   test("the caps hold: oversized body, oversized batch, wrong host, foreign origin", async () => {
     const big = await fetch(mcpUrl() + "/", {
       method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}` },
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
       body: "x".repeat(1024 * 1024 + 1),
     });
     expect(big.status).toBe(431);
@@ -962,7 +1010,7 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
           port: httpPort,
           path: "/",
           method: "POST",
-          headers: { host: "attacker.example", authorization: `Bearer ${TOKEN}` },
+          headers: { host: "attacker.example", authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
         }, (res) => {
           res.resume();
           res.on("end", () => resolve(res.statusCode ?? 0));
@@ -974,7 +1022,7 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     // A foreign browser origin → 403 even with the right token in hand (CSWSH).
     const foreign = await fetch(mcpUrl() + "/", {
       method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}`, origin: "http://evil.example" },
+      headers: { authorization: `Bearer ${TOKEN}`, origin: "http://evil.example", "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 6, method: "ping" }),
     });
     expect(foreign.status).toBe(403);
