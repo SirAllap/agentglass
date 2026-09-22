@@ -966,6 +966,68 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     expect(preflight.headers.get("access-control-allow-headers")).toBeNull();
   });
 
+  test("bound to loopback, the endpoint answers to every loopback name — localhost, ::1 — and 421 only to a foreign one", async () => {
+    /* The bind is 127.0.0.1, which is what getsockname says even when the
+       operator typed `localhost`; the first version compared the Host header
+       to that literally, so `http://localhost:PORT` — the first URL anybody
+       types — got 421 Misdirected Request. A rebinding page cannot make a
+       browser send a loopback name for a hostname of its own, so any loopback
+       name is the bound address. A request with no Host at all is not HTTP/1.1
+       and is a 400. */
+    const { request } = await import("node:http");
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 9, method: "ping" });
+    const withHost = (host: string) => new Promise<number>((resolve, reject) => {
+      const headers: Record<string, string> = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", host };
+      const req = request({ hostname: "127.0.0.1", port: httpPort, path: "/", method: "POST", headers }, (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode ?? 0));
+      }).on("error", reject);
+      req.end(body);
+    });
+    expect(await withHost(`localhost:${httpPort}`)).toBe(200);
+    expect(await withHost(`127.0.0.1:${httpPort}`)).toBe(200);
+    expect(await withHost(`[::1]:${httpPort}`)).toBe(200);
+    expect(await withHost(`127.1.2.3:${httpPort}`)).toBe(200);
+    expect(await withHost(`attacker.example:${httpPort}`)).toBe(421);
+    expect(await withHost("localhost.attacker.example")).toBe(421);
+    // No Host at all: node's http client adds one whatever it is told, so
+    // this one goes over a bare socket.
+    const { connect } = await import("node:net");
+    const bare = await new Promise<string>((resolve, reject) => {
+      const sock = connect({ host: "127.0.0.1", port: httpPort });
+      let got = "";
+      sock.on("connect", () => sock.write(`POST / HTTP/1.1\r\nAuthorization: Bearer ${TOKEN}\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`));
+      sock.on("data", (d) => { got += d.toString(); });
+      sock.on("close", () => resolve(got));
+      sock.on("error", reject);
+    });
+    expect(bare.split("\r\n")[0], "no Host at all").toContain("400");
+  });
+
+  test("the bind is parsed as [HOST:]PORT, bracketed IPv6 included", async () => {
+    const probe = Bun.spawn(["python3", "-c", `
+import importlib.machinery, importlib.util, json, sys
+spec = importlib.util.spec_from_loader("agx_mcp", importlib.machinery.SourceFileLoader("agx_mcp", ${JSON.stringify(MCP)}))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(json.dumps({b: m._parse_bind(b) for b in ["8765", "127.0.0.1:8765", "[::1]:8765", "::1:8765", "localhost:8765", "0.0.0.0:0", "8765:", ":8765", "nope", "127.0.0.1:99999", ""]}))
+`], { env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base }, stdout: "pipe", stderr: "pipe" });
+    const [out, err] = await Promise.all([new Response(probe.stdout).text(), new Response(probe.stderr).text()]);
+    expect(await probe.exited, err).toBe(0);
+    expect(JSON.parse(out)).toEqual({
+      "8765": ["127.0.0.1", 8765],
+      "127.0.0.1:8765": ["127.0.0.1", 8765],
+      "[::1]:8765": ["::1", 8765],
+      "::1:8765": ["::1", 8765],
+      "localhost:8765": ["localhost", 8765],
+      "0.0.0.0:0": null,
+      "8765:": null,
+      ":8765": null,
+      "nope": null,
+      "127.0.0.1:99999": null,
+      "": null,
+    });
+  });
+
   test("a body that is not application/json is refused before it is parsed", async () => {
     // A text/plain POST is one a browser sends without a preflight; JSON is
     // the only content type a JSON-RPC client has a reason to send.

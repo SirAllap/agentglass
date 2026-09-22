@@ -2102,6 +2102,29 @@ class _McpHttp(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _host_ok(self):
+        """The Host header names this endpoint, or the request is misdirected
+        — the DNS-rebinding shape, where a page's own hostname is pointed at
+        this port. Bound to loopback, every loopback name is this endpoint:
+        `localhost`, `127.0.0.1`, `::1` and the rest of 127/8, since a browser
+        sends a loopback name only for a loopback URL, which no foreign page
+        can wear. Bound to one address, that address or the name the operator
+        typed. Bound to every interface, any name — the token and the Origin
+        rule are what hold there. A missing Host is not HTTP/1.1."""
+        host = self.headers.get("Host", "")
+        if not host:
+            return False
+        try:
+            name = (urlsplit("http://" + host).hostname or "").lower()
+        except ValueError:
+            return False
+        bound = self.server.bound_host
+        if bound in ("0.0.0.0", "::"):
+            return True
+        if _loopback(bound):
+            return _loopback(name)
+        return name in (bound.lower(), self.server.typed_host.lower())
+
     def _reject(self, code, text):
         # A check that fails before the body is read leaves unread bytes that
         # the next keep-alive request would parse as its request line. Closing
@@ -2156,9 +2179,9 @@ class _McpHttp(BaseHTTPRequestHandler):
             return self._reject(400, "bad content-length")
         if length > _HTTP_BODY_MAX:
             return self._reject(431, f"body over {_HTTP_BODY_MAX} bytes")
-        bind_host = self.server.server_address[0] if self.server.server_address else ""
-        host = self.headers.get("Host", "")
-        if host and bind_host not in ("0.0.0.0", "::") and urlsplit("http://" + host).hostname != bind_host:
+        if not self.headers.get("Host"):
+            return self._reject(400, "no Host header")
+        if not self._host_ok():
             return self._reject(421, "host header does not name the bound address")
         body = self.rfile.read(length) if length else b""
         try:
@@ -2243,6 +2266,10 @@ def _run_http(bind, expose=False):
         token = secrets.token_urlsafe(32)
     httpd = ThreadingHTTPServer((host, port), _McpHttp)
     httpd.mcp_token = token
+    # getsockname's spelling of the bind, and the operator's: `localhost`
+    # binds 127.0.0.1, and clients will say either.
+    httpd.bound_host = str(httpd.server_address[0])
+    httpd.typed_host = host
     print(f"agentglass-browser MCP over Streamable HTTP on http://{host}:{port}/ (token required)", file=sys.stderr)
     if minted:
         print(f"AGENTGLASS_MCP_TOKEN was not set; this process answers to this one, and to nothing after it exits:\n"
