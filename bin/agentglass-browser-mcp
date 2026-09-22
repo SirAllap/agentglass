@@ -1610,7 +1610,12 @@ def storage_state(args):
 
 def set_storage_state(args):
     """The reverse: cookies back through CDP, storage written by the page —
-    which is why the tab must already be on the origin the state came from."""
+    which is why the tab must already be on the origin the state came from.
+    The page checks that itself: each origin's keys are written only when
+    `location.origin` is that origin, and the reply names the ones that were
+    not. The first version wrote every origin's keys into whatever page was
+    open, so one site's tokens landed in another site's storage, where that
+    site's scripts could read them."""
     where = _where(args)
     state = args.get("state")
     if not isinstance(state, dict):
@@ -1635,25 +1640,41 @@ def set_storage_state(args):
         if not r.get("ok"):
             failed.append(f"{c.get('name')}: {r.get('error')}")
     ls_count = ss_count = 0
+    elsewhere = []
     for o in origins:
         if not isinstance(o, dict):
             continue
+        origin = str(o.get("origin") or "")
         ls = {e["name"]: e["value"] for e in (o.get("localStorage") or []) if isinstance(e, dict) and "name" in e}
         ss = {e["name"]: e["value"] for e in (o.get("sessionStorage") or []) if isinstance(e, dict) and "name" in e}
         if not ls and not ss:
             continue
-        ls_count += len(ls)
-        ss_count += len(ss)
+        if not origin:
+            elsewhere.append("(an entry with no origin)")
+            continue
         js = (
-            f"(() => {{ const ls = {json.dumps(ls)}; for (const k in ls) localStorage.setItem(k, ls[k]); "
-            f"const ss = {json.dumps(ss)}; for (const k in ss) sessionStorage.setItem(k, ss[k]); return true; }})()"
+            f"(() => {{ const origin = {json.dumps(origin)}; "
+            f"if (location.origin !== origin) return {{ written: false, at: location.origin }}; "
+            f"const ls = {json.dumps(ls)}; for (const k in ls) localStorage.setItem(k, ls[k]); "
+            f"const ss = {json.dumps(ss)}; for (const k in ss) sessionStorage.setItem(k, ss[k]); "
+            f"return {{ written: true, at: location.origin }}; }})()"
         )
         r = _raw("browser_eval", {**where, "js": js, "await": False})
         if not r.get("ok"):
             return _err(r.get("error") or "could not write storage")
+        got = (r.get("value") or {}).get("value") if isinstance(r.get("value"), dict) else None
+        got = got if isinstance(got, dict) else {}
+        if got.get("written"):
+            ls_count += len(ls)
+            ss_count += len(ss)
+        else:
+            elsewhere.append(f"{origin} (the page is on {got.get('at') or 'another origin'})")
     text = f"restored {len(cookies) - len(failed)} of {len(cookies)} cookies, {ls_count} localStorage keys, {ss_count} sessionStorage keys"
     if failed:
         text += "; cookies refused: " + "; ".join(failed)
+    if elsewhere:
+        text += ("; storage not written for " + ", ".join(elsewhere)
+                 + " — storage lands only in its own origin: open that origin in this tab and set the state again")
     return {"content": [{"type": "text", "text": text}], "isError": bool(cookies) and len(failed) == len(cookies)}
 
 

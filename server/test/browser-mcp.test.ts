@@ -472,7 +472,7 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
     expect((sent[0]!.body as { method: string }).method).toBe("Network.getCookies");
 
     sent = [];
-    says = { cdp: { ok: true, value: { result: {} } }, eval: { ok: true, value: { value: true } } };
+    says = { cdp: { ok: true, value: { result: {} } }, eval: { ok: true, value: { value: { written: true, at: "https://orbit.example" } } } };
     const [put] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state } }]);
     expect(put!.isError, JSON.stringify(put)).toBeFalsy();
     expect(put!.content[0]!.text).toContain("1 of 1 cookies");
@@ -486,6 +486,33 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
     expect(write.js).toContain('"token": "t1"');
     expect(write.js).toContain("sessionStorage.setItem");
     expect(write.page).toBe("t-s");
+
+    // Storage is written only into the origin it came from: the page checks
+    // its own location.origin against the state's, and says no otherwise.
+    // The first version ran every origin's writes in whatever page was open,
+    // so one site's tokens landed in another site's storage, where that
+    // site's scripts read them.
+    expect(write.js).toContain('"https://orbit.example"');
+    expect(write.js).toMatch(/location\.origin/);
+    sent = [];
+    says = {
+      cdp: { ok: true, value: { result: {} } },
+      eval: { ok: true, value: { value: { written: false, at: "https://other.example" } } },
+    };
+    const two = {
+      cookies: [],
+      origins: [
+        { origin: "https://orbit.example", localStorage: [{ name: "token", value: "t1" }], sessionStorage: [] },
+        { origin: "https://acme.example", localStorage: [{ name: "token", value: "t2" }], sessionStorage: [] },
+      ],
+    };
+    const [elsewhere] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state: two } }]);
+    expect(elsewhere!.isError, JSON.stringify(elsewhere)).toBeFalsy();
+    expect(elsewhere!.content[0]!.text).toContain("0 localStorage");
+    expect(elsewhere!.content[0]!.text).toContain("https://orbit.example");
+    expect(elsewhere!.content[0]!.text).toContain("https://acme.example");
+    expect(elsewhere!.content[0]!.text).toContain("https://other.example");
+    expect(sent.filter((s) => s.op === "eval").length, "each origin was asked, none was written").toBe(2);
 
     // A state that is not one is refused before anything goes out.
     sent = [];
