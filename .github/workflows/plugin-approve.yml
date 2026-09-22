@@ -16,6 +16,19 @@
 # have write access when the run reaches the API, and the issue has to still
 # be open and still carry the submission label. A label applied and removed
 # while the queue was busy must not list anything.
+#
+# WHAT IS APPROVED IS A COMMIT, NOT A REPOSITORY. An entry used to say
+# `"ref": null`, and the app cloned the default branch at install: what the
+# label approved was whatever the repository held that minute, and what a
+# person installed a month later was whatever its author had pushed since.
+# The entry now carries the commit this run cloned and the content hash of
+# that tree, computed by the same walk the app does, and the app refuses an
+# install that hashes to anything else. A new version is a new submission.
+#
+# And nothing here reports a check. The branch is pushed with a token that
+# triggers CI, CI answers `build` and `catalogue` from the pull request's own
+# content, and those are what auto-merge waits on — not a status this job
+# could write about itself.
 name: Plugin approval
 
 on:
@@ -33,11 +46,11 @@ jobs:
     if: github.event.label.name == 'approved for listing'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      # Read, not write: the branch is pushed with the catalogue token below,
+      # never with this job's, and a job that has just cloned a stranger's
+      # repository holds as little as it can.
+      contents: read
       pull-requests: write
-      # Reporting the `build` check on the catalogue commit, which CI never
-      # runs on because a workflow does not trigger itself.
-      statuses: write
       # The fallback below comments on the issue when the pull request cannot
       # be opened, and without this it failed too — "Resource not accessible
       # by integration" — so a listing stopped at a branch nobody was told
@@ -71,7 +84,12 @@ jobs:
             *) echo "::error::the label was removed again before this run reached it"; exit 1 ;;
           esac
 
+      # Without its credentials: nothing from the clone runs today, and a step
+      # that one day does (an install, a linter) must find no token in
+      # .git/config to take with it.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Read the submission, and check it again from scratch
         id: entry
@@ -92,21 +110,57 @@ jobs:
           # check and the label. This clones again and validates again.
           git clone --depth 1 "https://github.com/$repo.git" /tmp/plugin
           python3 bin/agentglass-plugin validate /tmp/plugin > /tmp/validate.json
+          # The commit and the bytes this run looked at, which is what the
+          # entry pins. The hash is the app's own walk (see `hash` in the
+          # CLI), so the app can refuse an install that is anything else.
+          sha=$(git -C /tmp/plugin rev-parse HEAD)
+          python3 bin/agentglass-plugin hash /tmp/plugin > /tmp/hash.json
+          # The scan the maintainer weighed ran on an earlier clone. This one
+          # is what gets listed, so it is scanned again and the outcome goes
+          # into the pull request next to the commit it describes.
+          python3 scripts/plugin-baseline.py /tmp/plugin > /tmp/baseline.json || true
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "name=$(python3 -c 'import json;print(json.load(open("/tmp/validate.json"))["name"])')" >> "$GITHUB_OUTPUT"
 
       - name: Write the entry
+        id: write
         env:
           BODY: ${{ github.event.issue.body }}
           SOURCE: ${{ steps.entry.outputs.repo }}
           REPO_URL: https://github.com/${{ steps.entry.outputs.repo }}
+          SHA: ${{ steps.entry.outputs.sha }}
+          PLUGIN: /tmp/plugin
+          VALIDATE: /tmp/validate.json
+          HASH: /tmp/hash.json
+          BASELINE: /tmp/baseline.json
+          CATALOGUE: landing/plugins.json
+          REFUSED: /tmp/refused
+          PR_BODY: /tmp/pr-body.md
         run: |
           python3 - <<'PY'
-          import json, os, re, datetime, glob
-          shot = next((os.path.basename(f) for f in sorted(glob.glob("/tmp/plugin/preview.*"))
+          import json, os, re, sys, datetime, glob
+          env = os.environ
+          def refuse(why):
+              # Said on the issue by the last step, and the run goes red: a
+              # listing that was not written must not look like one that was.
+              # A publisher is the submitter's text, on its way into a public
+              # comment: defused the way the submission check defuses it.
+              for a, b in (("`", "'"), ("<!--", "< !--"), ("-->", "-- >"), ("\r", " "), ("\n", " "), ("@", "@\u200b")):
+                  why = why.replace(a, b)
+              open(env["REFUSED"], "w").write(why)
+              print(f"::error::{why}")
+              sys.exit(1)
+          sha = env.get("SHA", "")
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              refuse("the clone did not resolve to a commit")
+          h = json.load(open(env["HASH"]))
+          if not h.get("ok") or not re.fullmatch(r"[0-9a-f]{64}", h.get("sha256") or ""):
+              refuse(f"the plugin folder could not be hashed: {h.get('error', 'no hash')}")
+          shot = next((os.path.basename(f) for f in sorted(glob.glob(os.path.join(env["PLUGIN"], "preview.*")))
                        if f.rsplit(".", 1)[-1].lower() in ("png", "jpg", "jpeg", "webp")), None)
-          body = os.environ.get("BODY", "")
-          v = json.load(open("/tmp/validate.json"))
+          body = env.get("BODY", "")
+          v = json.load(open(env["VALIDATE"]))
           def field(label):
               m = re.search(rf"###\s+{label}\s*\n+(.+?)(?:\n###|\Z)", body, re.S)
               return (m.group(1).strip() if m else "")
@@ -114,7 +168,23 @@ jobs:
           # use. Without this an entry says "prActions" on a card whose
           # legend only knows "a button in pull requests".
           WORD = {"panels": "panel", "settings": "settings", "prNotes": "pr-notes", "prActions": "pr-button"}
-          cat = json.load(open("landing/plugins.json"))
+          cat = json.load(open(env["CATALOGUE"]))
+          source_owner = env["SOURCE"].split("/")[0]
+          # A publisher is any 200 characters the manifest likes, and the card
+          # prints it as the byline. The project's own name, and its owner's,
+          # belong to repositories under that owner — spaces, case and
+          # punctuation do not make "Agent Glass" somebody else.
+          said = re.sub(r"[^a-z0-9]", "", v["publisher"].casefold())
+          reserved = ("agentglass", re.sub(r"[^a-z0-9]", "", cat["owner"].casefold()))
+          if any(r and r in said for r in reserved) and source_owner.casefold() != cat["owner"].casefold():
+              refuse(f"publisher {v['publisher'][:80]!r} is a name this catalogue reserves for {cat['owner']}'s own repositories")
+          # An id is a handle the app installs by, and the folder it installs
+          # into. A submission that names one already listed from somewhere
+          # else would swap that entry's source for its own — a hijack in the
+          # shape of an update. The same repository may list a new version.
+          listed = next((p for p in cat["plugins"] if p["id"] == v["name"]), None)
+          if listed and listed["source"]["url"].rstrip("/").removesuffix(".git").casefold() != env["REPO_URL"].casefold():
+              refuse(f"{v['name']!r} is already listed from {listed['source']['url']}; a different repository cannot take its place")
           entry = {
               "id": v["name"],
               "title": v["name"].replace("-", " ").title(),
@@ -122,7 +192,8 @@ jobs:
               "verified": False,
               "scope": v["scope"],
               "draws": [WORD.get(d, d) for d in (v.get("draws") or [])],
-              "source": {"kind": "git", "url": os.environ["REPO_URL"], "ref": None},
+              "source": {"kind": "git", "url": env["REPO_URL"], "ref": sha},
+              "sha256": h["sha256"],
               "description": (field("What it does, in two or three sentences") or "")[:500],
               "categories": list(dict.fromkeys(
                   [c for c in [field("Category").lower()] if c and c != "_no response_"]
@@ -130,9 +201,9 @@ jobs:
               "added": datetime.date.today().isoformat(),
               **({"minApp": v["minApp"]} if v.get("minApp") else {}),
               # A picture if the repository ships one at its root, the way
-              # a README's own screenshot is found: the card shows it, and
-              # a submission without one simply has no picture.
-              **({"preview": f"https://raw.githubusercontent.com/{os.environ['SOURCE']}/HEAD/{shot}"} if shot else {}),
+              # a README's own screenshot is found — at the listed commit, so
+              # the card cannot change picture after the label either.
+              **({"preview": f"https://raw.githubusercontent.com/{env['SOURCE']}/{sha}/{shot}"} if shot else {}),
           }
           # `verified` is the catalogue's own word for "this project wrote it",
           # never something a submission can ask for.
@@ -140,8 +211,24 @@ jobs:
           cat["plugins"] = sorted(others + [entry], key=lambda p: p["id"])
           # `ensure_ascii=False`: the file is read by people in a diff, and an
           # em dash written as \u2014 is a description nobody can review.
-          json.dump(cat, open("landing/plugins.json", "w"), indent=2, ensure_ascii=False)
-          open("landing/plugins.json", "a").write("\n")
+          with open(env["CATALOGUE"], "w") as f:
+              json.dump(cat, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+          # What the pull request says: the commit, the hash, and what the
+          # scan found at THAT commit. Finding ids are this repository's own
+          # words; nothing of the submission's text is quoted here.
+          try:
+              b = json.load(open(env["BASELINE"]))
+          except (OSError, json.JSONDecodeError):
+              b = {"outcome": "unreadable", "findings": []}
+          kinds = sorted({f["id"] for f in b.get("findings") or [] if re.fullmatch(r"[a-z-]{1,60}", str(f.get("id", "")))})
+          scan = {"passed": "the scan found none of the patterns it knows",
+                  "findings": f"the scan found {len(b.get('findings') or [])} line(s) worth an eye: {', '.join(kinds)}"
+                  }.get(b.get("outcome"), "the scan did not complete, so nothing is known about the source at this commit")
+          open(env["PR_BODY"], "w").write(
+              f"Pinned to `{sha}`, content hash `{h['sha256']}` over {h['files']} file(s).\n\n"
+              f"At that commit {scan}. The app installs this commit and refuses any tree that hashes to "
+              "something else, so what is merged here is what installs.\n")
           PY
           python3 -c "import json;json.load(open('landing/plugins.json'))"
 
@@ -153,6 +240,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           NAME: ${{ steps.entry.outputs.name }}
           SOURCE: ${{ steps.entry.outputs.repo }}
+          SHA: ${{ steps.entry.outputs.sha }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -162,10 +250,9 @@ jobs:
           git add landing/plugins.json
           git commit -m "catalogue: list $NAME
 
-          From #$ISSUE. The submission check ran on the repository and the
-          manifest was validated again here, from a fresh clone, so this entry
-          describes what $SOURCE holds now rather than what it held when the
-          issue was opened.
+          From #$ISSUE. The manifest was validated again here from a fresh
+          clone, and the entry pins $SOURCE at $SHA with the content hash of
+          that tree: the app installs that commit and nothing else.
 
           Listing is not auditing: this says the repository is public, the
           manifest is one the app accepts, and somebody with write access said
@@ -177,16 +264,11 @@ jobs:
           # check sat "Expected" for ever. Pushing as a real identity is what
           # makes CI run, and CI is what auto-merge is waiting for.
           git push "https://x-access-token:${CATALOGUE_PR_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
-          # `protect-main` requires a check named `build`, and CI does not run
-          # on this ref: a workflow does not trigger itself, and the branch is
-          # written by one. So the required check sat "Expected" for ever and
-          # auto-merge waited behind it. There is nothing to build — the diff
-          # is one generated entry in a JSON file that was parsed above, from
-          # a manifest validated twice — so the check is reported here, once,
-          # for this commit only.
-          gh api "repos/${GITHUB_REPOSITORY}/statuses/$(git rev-parse HEAD)" \
-            -f state=success -f context=build \
-            -f description="catalogue entry only — nothing to build" >/dev/null
+          # No status is written here. This job used to post `build=success`
+          # on its own commit, with `statuses: write`, and that one grant let
+          # the only guard on main be satisfied by the workflow it guards.
+          # The push above triggers CI, and CI's `build` and `catalogue` jobs
+          # judge the pull request from its own content.
           # A repository can forbid Actions from opening pull requests, and
           # this one does: the switch that would allow it is the same one that
           # lets a bot approve reviews, and a catalogue whose only reviewer is
@@ -196,7 +278,9 @@ jobs:
 
           Adds \`$NAME\` to \`landing/plugins.json\` from https://github.com/$SOURCE.
 
-          The manifest was validated again from a fresh clone in this run. Read the submission check on the issue before merging — it says what installing this costs and which lines are worth an eye."
+          $(cat /tmp/pr-body.md)
+
+          Read the submission check on the issue before merging — it says what installing this costs and which lines are worth an eye."
           # Opened with a token of its own, not this job's. GitHub forbids
           # Actions from opening pull requests here, and the switch that would
           # allow it is the same one that lets a bot approve reviews — a
@@ -216,3 +300,15 @@ jobs:
           gh issue comment "$ISSUE" --body "The entry is written and pushed to \`$branch\`, and this run could not open the pull request itself: $(tail -1 /tmp/pr.err)
 
           Open it here: https://github.com/${GITHUB_REPOSITORY}/compare/main...$branch?expand=1"
+
+      - name: Say why nothing was listed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          # Only a refusal this run wrote itself, in its own words. Anything
+          # else that failed is in the run's log, and the issue is not told a
+          # guess about it.
+          [ -s /tmp/refused ] || exit 0
+          gh issue comment "$ISSUE" --body "Not listed: $(head -c 400 /tmp/refused)"

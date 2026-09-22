@@ -392,8 +392,8 @@ The machinery, because the shape of it is the security argument:
 | The issue | The form asks for the repository, a category, what it costs, and a checklist | — |
 | `read` | Clones it shallow, validates the manifest, scans the source for a short list of patterns, writes a report | `contents: read` and nothing else, a checkout that keeps no credentials, and no write anywhere |
 | `say` | Re-reads the live issue, then posts the report and sets `ready for listing` or `changes needed` | `issues: write`, never looks at the submitted code |
-| `approved for listing` | A maintainer's label. Re-checks that the actor still has write access and the issue still qualifies, clones and validates **again**, and opens a pull request adding the entry | `contents: write` |
-| The merge | A person reads the diff and merges. The site and the app read the file | — |
+| `approved for listing` | A maintainer's label. Re-checks that the actor still has write access and the issue still qualifies, clones, validates and scans **again**, and opens a pull request adding the entry pinned to the commit it cloned and the content hash of that tree. Refuses an id already listed from another repository, and the project's own name as a stranger's publisher | `contents: read`; the branch is pushed with the catalogue's own token, and no check is reported by this job |
+| The merge | CI's `catalogue` job re-derives the entry from the pull request itself — one entry, the id is the manifest's name at that commit, a fresh clone hashes to the pinned hash — and the pull request merges on that and `build`. The site and the app read the file | — |
 
 The split between the first two is the point: the job that touches a
 stranger's repository has nothing in its environment worth stealing and no
