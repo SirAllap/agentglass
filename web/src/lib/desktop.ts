@@ -82,7 +82,7 @@ type DesktopBridge = {
   zoom?: (factor?: number, guestId?: number) => Promise<{ ok: boolean; factor?: number; percent?: number; error?: string }>;
   cdpEvents?: () => Promise<{ ok: boolean; events?: Array<{ at: number; method: string; params: unknown }>; error?: string }>;
   /** All absent on shells built before session-level settings existed. */
-  sessionSettings?: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string }>;
+  sessionSettings?: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }>;
   /** All absent on shells built before cookie import existed. */
   cookieSources?: () => Promise<CookieSourcesReply>;
   importCookies?: (req: { source: string; sites: string[] }) => Promise<CookieImportReply>;
@@ -499,7 +499,7 @@ export async function browserCdpEvents(): Promise<Array<{ at: number; method: st
 /** Apply session-level settings: proxy, extensions, cookies, DNS.
  *  Session-level settings are applied through the Electron main process,
  *  not through the page's DevTools protocol. */
-export async function applySessionSettings(req: Record<string, unknown>): Promise<{ ok: boolean; applied?: string[]; error?: string }> {
+export async function applySessionSettings(req: Record<string, unknown>): Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }> {
   const b = bridge();
   if (!b?.sessionSettings) return { ok: false, error: "this shell does not support session settings" };
   try {

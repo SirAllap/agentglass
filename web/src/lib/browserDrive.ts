@@ -968,6 +968,29 @@ function settled(el: DrivableWebview, timeoutMs = 40_000): Promise<string | null
   });
 }
 
+/**
+ * A navigation the shell's egress guard refused arrives as a bare Chromium
+ * code — ERR_TUNNEL_CONNECTION_FAILED for https, ERR_BLOCKED_BY_CLIENT for a
+ * link-local literal — which names nothing an agent can act on, and an agent
+ * that cannot act retries. The guard kept the reason (a name that resolves
+ * to the metadata address, a name that flipped private mid-session); this
+ * asks the shell for it and puts it in the sentence. Any other failure, or a
+ * shell without a guard, passes through untouched.
+ */
+async function withEgressReason(
+  err: string,
+  url: string,
+  ask: (req: Record<string, unknown>) => Promise<{ ok: boolean; value?: unknown }>,
+): Promise<string> {
+  if (!/ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_BLOCKED_BY_CLIENT/.test(err)) return err;
+  let host = "";
+  try { host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase(); } catch { return err; }
+  const r = await ask({ egress: { host } }).catch(() => null);
+  const rows = (r?.ok && r.value && typeof r.value === "object" ? (r.value as { refusals?: { reason?: string }[] }).refusals : undefined) ?? [];
+  const last = rows[rows.length - 1]?.reason;
+  return last ? `${err} — the browser's egress guard refused ${host}: ${last}` : err;
+}
+
 /** §8's `freezeAnimations`: a stylesheet the page cannot out-rank, plus
  *  pausing whatever the Web Animations API already has running. Idempotent —
  *  a second call finds the tag already there and pauses nothing twice. */
@@ -1118,7 +1141,7 @@ async function runVerb(
   cdpEvents: () => Promise<Array<{ at: number; method: string; params: unknown }>> = async () => [],
   /** §13: apply session-level settings (proxy, extensions, cookies, DNS) through
    *  the Electron main process. */
-  applySessionSettings: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string }> =
+  applySessionSettings: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }> =
     async () => ({ ok: false, error: "this shell does not support session settings" }),
   /** The inspector panel, which is a view of the SHELL and not part of the page
    *  — so none of the tools above can reach it and none of them should try.
@@ -1160,7 +1183,7 @@ async function runVerb(
           if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
         }
         const err = await nav;
-        if (err) return { ok: false, error: err };
+        if (err) return { ok: false, error: await withEgressReason(err, url, applySessionSettings) };
         /*
          * DID IT ACTUALLY GO THERE.
          *

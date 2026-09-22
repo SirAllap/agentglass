@@ -89,6 +89,32 @@ function fakeGuestWithCookies(host = "example.com") {
 }
 
 describe("driving a page", () => {
+  test("a navigation the egress guard refused says why, not just ERR_TUNNEL_CONNECTION_FAILED", async () => {
+    /* The guest reports the bare Chromium code; the shell kept the reason. */
+    const el = fakeGuest();
+    el.addEventListener = (type: string, fn: (e: Event) => void) => {
+      if (type === "did-fail-load") queueMicrotask(() => fn(Object.assign(new Event(type), { errorDescription: "ERR_TUNNEL_CONNECTION_FAILED", isMainFrame: true, errorCode: -111 })));
+    };
+    const asked: Record<string, unknown>[] = [];
+    const shell = async (req: Record<string, unknown>) => {
+      asked.push(req);
+      return { ok: true, value: { armed: true, refusals: [{ at: 1, host: "meta.example", reason: "meta.example resolves to 169.254.169.254, which is link-local (where cloud metadata lives)" }] } };
+    };
+    const r = await runBrowserAsk(el, ask("open", { url: "https://meta.example/latest/" }), undefined, undefined, undefined, undefined, undefined, shell);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("ERR_TUNNEL_CONNECTION_FAILED");
+    expect(r.error).toContain("169.254.169.254");
+    expect(asked).toEqual([{ egress: { host: "meta.example" } }]);
+    // Any other failure is left alone, and the shell is not asked.
+    asked.length = 0;
+    el.addEventListener = (type: string, fn: (e: Event) => void) => {
+      if (type === "did-fail-load") queueMicrotask(() => fn(Object.assign(new Event(type), { errorDescription: "ERR_NAME_NOT_RESOLVED", isMainFrame: true, errorCode: -105 })));
+    };
+    const plain = await runBrowserAsk(el, ask("open", { url: "https://nx.example/" }), undefined, undefined, undefined, undefined, undefined, shell);
+    expect(plain.error).toBe("ERR_NAME_NOT_RESOLVED");
+    expect(asked).toEqual([]);
+  });
+
   test("open answers with where it ended up", async () => {
     const r = await runBrowserAsk(fakeGuest(), ask("open", { url: "https://example.com/app" }));
     expect(r).toEqual({ ok: true, value: { url: "https://example.com/app", title: "The app" } });

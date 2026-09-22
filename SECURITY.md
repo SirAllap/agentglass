@@ -709,6 +709,22 @@ offer `ignoreCertErrors` at all. Both CLIs refuse to send the token over plain
 only to this machine — before a single request is built. Cookies, storage
 state, HAR files and page snapshots the CLI writes land as `0600` files.
 
+Where the browser may be sent is held twice. The relay judges the literal host
+of every `open` before the browser sees it — `http(s)` only, and never
+link-local (169.254/16, where a cloud's metadata endpoint lives) or the
+unspecified address; loopback and LAN addresses are allowed on purpose, since a
+dev server on this machine is ordinary use. A hostname cannot be judged there,
+because the browser resolves it again when it connects and a name may answer
+differently the second time. So the desktop app also runs an **egress guard**:
+a proxy on a loopback port that every browsing session is pointed at, which
+resolves each name once per connection, refuses any answer in those ranges,
+opens the socket to the address it judged, and refuses a name that answered a
+public address when first met and a private or loopback one later — the DNS
+rebinding shape. A name that was private from its first answer (a hosts-file
+entry, a LAN box) stays allowed, so nothing about local development changes.
+`AGENTGLASS_BROWSER_EGRESS=off` turns the guard off; a proxy set through the
+`session` verb replaces it while set, and the verb says so.
+
 ## What leaves through the webhook
 
 `AGENTGLASS_WEBHOOK` is off unless set. With it set, the server POSTs
