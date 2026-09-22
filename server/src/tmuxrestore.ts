@@ -983,10 +983,15 @@ export function captureLayoutSync(now = Date.now()): void {
     if (restoring || capturingHalted()) return;
     const bin = resolveTmuxBin();
     if (!bin) return;
-    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "-f", confPath(), "list-sessions", "-F", "#{session_name}"],
+    /* The server too, as `liveSessions` spells it: a photograph that does not
+       say which server it was taken on leaves the next sweep without a
+       previous one to read a dead pane from. */
+    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "-f", confPath(), "list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"],
       { stdout: "pipe", stderr: "pipe", env: process.env });
-    const names = new TextDecoder().decode(r.stdout).split("\n").map((n) => n.trim())
-      .filter((n) => n && validSessionName(n));
+    const rows = new TextDecoder().decode(r.stdout).split("\n").map((l) => l.split("\t"));
+    const names = rows.map(([n = ""]) => n.trim()).filter((n) => n && validSessionName(n));
+    const [, pid = "", started = ""] = rows[0] ?? [];
+    const engine = pid.trim() && started.trim() ? `${pid.trim()}.${started.trim()}` : "";
     if (!names.length) return;
     const before = readRestoreState();
     const known = new Map((before?.sessions ?? []).map((s) => [s.name, s]));
@@ -996,7 +1001,7 @@ export function captureLayoutSync(now = Date.now()): void {
     }
     mkdirSync(restoreDir(), { recursive: true });
     const tmp = `${layoutPath()}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()] }), { mode: 0o600 });
+    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()], ...(engine ? { engine } : {}) }), { mode: 0o600 });
     swapInLayout(tmp);
   } catch { /* never block an exit on bookkeeping */ }
 }

@@ -121,3 +121,14 @@ test("a session tmux still lists is kept, whatever a sweep could photograph of i
   await restore.captureLayout();
   expect(names()).not.toContain(T);
 }, 20_000);
+
+test("the photograph taken on the way out says which server it was taken on, like every other", async () => {
+  /* Without it, the first capture after an app restart — tmux survives one —
+     had no previous photograph to go on, and a Claude that had crashed came
+     back without its flags, and stayed that way. */
+  await restore.captureLayout();
+  const engine = (layout() as { engine?: string } | null)?.engine;
+  expect(engine, "the sweep records its server").toBeTruthy();
+  restore.captureLayoutSync();
+  expect((layout() as { engine?: string } | null)?.engine, "the exit photograph dropped it").toBe(engine);
+}, 20_000);
