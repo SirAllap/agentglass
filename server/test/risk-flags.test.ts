@@ -231,4 +231,17 @@ describe("what a second review found", () => {
     expect(kinds(changeRisks(".github/workflows/ci.yml", added("x"), 0))).toEqual(["ci"]);
     expect(kinds(changeRisks("db/migrations/0042_widen.py", added("x"), 0))).toEqual(["migration"]);
   });
+
+
+  test("the secret itself is never in a flag, a reason or the session roll-up", () => {
+    // Every reason is a constant sentence today; this is what would catch the
+    // first one that interpolates the match.
+    const lines = [`access_key: ${AWS}`, `const t = "${GH}";`, `DB_PASSWORD = "${ALNUM}"`, `secret_key = "${SLASHED}"`];
+    for (const l of lines) {
+      const f = changeRisks("/w/orbit/config/app.yml", added(l), 0);
+      expect(f.length).toBeGreaterThan(0);
+      const out = JSON.stringify([f, sessionRisks([{ id: 1, file_path: "/w/orbit/config/app.yml", risks: f }])]);
+      for (const v of [AWS, GH, ALNUM, SLASHED]) expect(out).not.toContain(v);
+    }
+  });
 });
