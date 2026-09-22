@@ -95,8 +95,16 @@ describe("the window a period covers", () => {
       `  day: periodWindow("day", now), month: periodWindow("month", now) }));`,
     ].join("\n");
     for (const [tz, localDate] of [["Pacific/Kiritimati", 16], ["Pacific/Niue", 15]] as const) {
+      // Jailed: budget.ts imports db.ts, and a child with the real HOME opened
+      // the developer's own database — running every migration on it, and
+      // failing this test whenever the live app held a write lock on it.
+      const jail = mkdtempSync(join(tmpdir(), "agx-budget-tz-"));
       const r = Bun.spawnSync(["bun", "-e", script], {
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TZ: tz },
+        env: {
+          PATH: process.env.PATH ?? "", HOME: jail, TZ: tz,
+          XDG_CONFIG_HOME: jail, XDG_DATA_HOME: jail, XDG_STATE_HOME: jail, XDG_CACHE_HOME: jail,
+          AGENTGLASS_DB: join(jail, "budget.db"), AGENTGLASS_STATE_DIR: join(jail, "state"),
+        },
       });
       const out = JSON.parse(r.stdout.toString().trim() || "{}");
       // The child really is in that zone — otherwise this test proves nothing.
