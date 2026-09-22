@@ -125,17 +125,25 @@ test("the chat that last spoke in the tree gets the review", () => {
   const got = chatForTree([
     chat("other", "/code/orbit-api", 900),
     chat("old", "/code/orbit", 100),
-    chat("new", "/code/orbit/web", 500),
+    chat("new", "/code/orbit/", 500),
     chat("fresh", "/code/orbit", null, 999),
   ], "/code/orbit");
   expect(got?.id).toBe("new");
 });
 
-test("a chat in a checkout nested under this one belongs to that checkout, not this one", () => {
-  const roots = ["/code/orbit", "/code/orbit/.worktrees/feat"];
-  const chats = [chat("main", "/code/orbit/web", 100), chat("nested", "/code/orbit/.worktrees/feat/src", 900)];
-  expect(chatForTree(chats, "/code/orbit", roots)?.id).toBe("main");
-  expect(chatForTree(chats, "/code/orbit/.worktrees/feat", roots)?.id).toBe("nested");
+test("a clean worktree nested under the checkout never receives its review", () => {
+  // The worktree has nothing uncommitted, so no list of changed files knows it
+  // is a checkout; its agent spoke last. The review is still the outer tree's.
+  const chats = [chat("main", "/code/orbit", 1), chat("nested", "/code/orbit/.worktrees/feat", 9)];
+  expect(chatForTree(chats, "/code/orbit")?.id).toBe("main");
+  expect(chatForTree(chats, "/code/orbit/.worktrees/feat")?.id).toBe("nested");
+  expect(chatForTree([chat("nested", "/code/orbit/.worktrees/feat", 9)], "/code/orbit")).toBeUndefined();
+});
+
+test("a chat in a folder below the root is not taken for the tree's agent", () => {
+  // It could be a nested checkout nobody has listed; a new chat at the root is
+  // the safe answer, a review in the wrong tree is not.
+  expect(chatForTree([chat("sub", "/code/orbit/web", 9)], "/code/orbit")).toBeUndefined();
 });
 
 test("a sibling checkout whose name starts the same is not in the tree", () => {

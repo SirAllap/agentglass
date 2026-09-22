@@ -178,15 +178,12 @@ export function DiffPage({ active, onClose, onOpenChat }: {
       .map((c) => c.id));
   }, [review, body, selected, mode]);
 
-  /* Every checkout the list knows, so a chat in a worktree nested under this one
-     is not taken for this one's agent — see chatForTree. */
-  const knownRoots = useMemo(() => [...new Set(rows.map((r) => r.repoRoot))], [rows]);
   /* The target's TITLE, not the chat list: the chat store emits on every frame
      a streaming agent writes, and a snapshot that is the whole list re-rendered
      this view — every row of an open diff, hidden or not — per token. A string
      only changes when the answer does. */
   const reviewTarget = useSyncExternalStore(subscribeChats,
-    () => (root ? chatForTree(listChats(), root, knownRoots)?.title ?? null : null));
+    () => (root ? chatForTree(listChats(), root)?.title ?? null : null));
 
   /*
    * A jump from the tray: select the file, in the half it was written in, and
@@ -222,7 +219,7 @@ export function DiffPage({ active, onClose, onOpenChat }: {
        was half-typed there; a new chat pointed at the tree when there is none.
        Never sent from here — seedChat's rule, and the reason is the same: a run
        costs real tokens, and the chat is where you see who it is going to. */
-    const chat = chatForTree(listChats(), root, knownRoots);
+    const chat = chatForTree(listChats(), root);
     if (chat) {
       updateChat(chat.id, (c) => { c.draft = withDraft(c.draft, prompt); });
       setActiveChatId(chat.id);
@@ -232,7 +229,7 @@ export function DiffPage({ active, onClose, onOpenChat }: {
     }
     clearReview(root);
     onOpenChat?.();
-  }, [root, review, staleIds, knownRoots, selected?.branch, onOpenChat]);
+  }, [root, review, staleIds, selected?.branch, onOpenChat]);
 
   const toggleReviewed = useCallback((r: ChangeRow) => {
     setReviewed((prev) => {
