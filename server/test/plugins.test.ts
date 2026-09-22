@@ -498,7 +498,7 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
 
     mkdirSync(join(root, "bin"));
     writeFileSync(join(root, "bin", "git"),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${root}/git.log"\nexec "${realGit}" -c "url.file://${root}/fixtures/.insteadOf=https://github.com/" "$@"\n`);
+      `#!/bin/sh\nprintf 'prompt=%s lfs=%s %s\\n' "$GIT_TERMINAL_PROMPT" "$GIT_LFS_SKIP_SMUDGE" "$*" >> "${root}/git.log"\nexec "${realGit}" -c "url.file://${root}/fixtures/.insteadOf=https://github.com/" "$@"\n`);
     chmodSync(join(root, "bin", "git"), 0o755);
   });
 
@@ -630,6 +630,20 @@ describe("a pinned catalogue entry installs its commit or nothing", () => {
     expect(r.result.ok).toBe(false);
     expect(r.log).toBe("");
     expect(r.listed).toBe(0);
+  }, 30_000);
+
+  /*
+   * An install is a server process, and the git it runs must not stop to ask
+   * anybody anything: a repository that answers 401 made git prompt on the
+   * terminal the server was started from, and a plugin's own .lfsconfig
+   * made git-lfs, where the user has it, fetch from whatever host it named.
+   */
+  test("every git an install runs asks for no password and fetches nothing through LFS", async () => {
+    const r = await install({ kind: "catalogue", id: "orbit-clock", catalogue: catalogue(entry()), update: true });
+    expect(r.result.ok).toBe(true);
+    const lines = r.log.trim().split("\n");
+    expect(lines.length).toBeGreaterThan(3);
+    for (const line of lines) expect(line).toStartWith("prompt=0 lfs=1 ");
   }, 30_000);
 
   /*

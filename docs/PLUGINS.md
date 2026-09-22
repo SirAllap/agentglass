@@ -75,7 +75,9 @@ symlink in it resolves outside the folder — an install is a copy, and a copy
 that follows a link out is a copy of something else. A link is also refused
 when it is absolute, or climbs above the folder on its way back in: the folder
 is checked where it was fetched and installed somewhere else. A link that stays
-inside is kept as a link. A local install takes an
+inside is kept as a link. Files a plugin keeps in Git LFS install as their
+pointers: an install never fetches through LFS, whose host the repository's
+own `.lfsconfig` names, and never stops to ask for a password. A local install takes an
 absolute path; a relative one is refused rather than resolved against whatever
 directory the server happens to be in.
 

@@ -456,6 +456,18 @@ async function startProcess(rec: PluginRecord): Promise<void> {
 }
 
 /**
+ * The environment of every git a plugin install runs. It asks nobody for a
+ * password: the server is not somebody at a terminal, and a repository that
+ * answered 401 left an install waiting on a prompt in whatever terminal the
+ * server was started from. And it fetches nothing through Git LFS, where the
+ * user has it: a plugin's own .lfsconfig names the LFS host, so installing a
+ * plugin made this machine talk to a server the plugin chose. A plugin that
+ * keeps files in LFS installs with the pointers, which is also what the
+ * catalogue's runner hashes.
+ */
+const pluginGitEnv = (): Record<string, string | undefined> => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" });
+
+/**
  * Every git a plugin install runs. The line endings are pinned because a
  * catalogue's hash is taken over the bytes a checkout writes: Git for Windows
  * installs with core.autocrlf on, and a checkout that turned every text file
@@ -464,7 +476,7 @@ async function startProcess(rec: PluginRecord): Promise<void> {
  */
 async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok: boolean; err: string }> {
   try {
-    const p = Bun.spawn(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const p = Bun.spawn(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, env: pluginGitEnv(), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
     const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
     clearTimeout(timer);
@@ -573,7 +585,7 @@ export type InstallInput =
 
 async function resolveHead(dir: string): Promise<string | null> {
   try {
-    const p = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: dir, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const p = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: dir, env: pluginGitEnv(), stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text()]);
     return code === 0 ? out.trim() : null;
   } catch {

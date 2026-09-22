@@ -45,6 +45,13 @@ jobs:
   list:
     if: github.event.label.name == 'approved for listing'
     runs-on: ubuntu-latest
+    # Every git here reads a stranger's repository: it asks nobody for a
+    # password, and it fetches nothing through LFS, whose host a plugin's own
+    # .lfsconfig picks. The app installs the same way, so the pointers are
+    # what both hash.
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      GIT_LFS_SKIP_SMUDGE: "1"
     permissions:
       # Read, not write: the branch is pushed with the catalogue token below,
       # never with this job's, and a job that has just cloned a stranger's

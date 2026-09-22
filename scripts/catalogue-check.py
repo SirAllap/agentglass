@@ -68,7 +68,7 @@ def clone_at(url, sha, into):
     tag and not a commit; GitHub serves a fetch by commit id, which is what
     lets an entry pin one. Checked out with the line endings the app uses,
     so the bytes hashed here are the bytes an install hashes."""
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
     for args in (["init", "-q", into],
                  ["-C", into, "fetch", "-q", "--depth", "1", "--", url, sha],
                  ["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-C", into, "checkout", "-q", "FETCH_HEAD"]):

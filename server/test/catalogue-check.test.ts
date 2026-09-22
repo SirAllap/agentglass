@@ -182,6 +182,23 @@ describe("a listing that does not", () => {
   test("the catalogue's own owner changed", () => refused({ ...shelf([existing, entry()]), owner: "acme" }, "name or owner changed"));
 });
 
+describe("the git the check and the listing jobs run", () => {
+  // A runner that smudged LFS would pin a hash over files an install, which
+  // does not, never has; and a plugin's .lfsconfig would pick the host.
+  test("asks nobody for a password and fetches nothing through LFS", async () => {
+    const script = await Bun.file(CHECK).text();
+    const cloneAt = script.slice(script.indexOf("def clone_at("), script.indexOf("\ndef ", script.indexOf("def clone_at(") + 1));
+    expect(cloneAt).toContain('"GIT_TERMINAL_PROMPT": "0"');
+    expect(cloneAt).toContain('"GIT_LFS_SKIP_SMUDGE": "1"');
+    for (const [file, job] of [["plugin-submission.yml", "  read:"], ["plugin-approve.yml", "  list:"]] as const) {
+      const text = await Bun.file(new URL(`../../.github/workflows/${file}`, import.meta.url)).text();
+      const head = text.slice(text.indexOf(`\n${job}\n`), text.indexOf("    steps:", text.indexOf(`\n${job}\n`)));
+      expect(head, file).toContain('GIT_TERMINAL_PROMPT: "0"');
+      expect(head, file).toContain('GIT_LFS_SKIP_SMUDGE: "1"');
+    }
+  });
+});
+
 describe("the words a card uses", () => {
   // The approval turns a manifest's keys into the catalogue's words, and the
   // check turns them again to compare: two copies of one map.
