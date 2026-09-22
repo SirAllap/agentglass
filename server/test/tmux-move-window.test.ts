@@ -20,6 +20,7 @@ import { describe, expect, it, beforeEach, afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { startSession } from "./tmuxIsolated.ts";
 
 const DIR = mkdtempSync(join(tmpdir(), "agx-move-"));
 const SOCKET = `agx-move-${process.pid}`;
@@ -43,7 +44,8 @@ const move = (name: string, to: number, after = false): void => {
 
 beforeEach(() => {
   tmux("kill-session", "-t", "=desk");
-  tmux("new-session", "-d", "-s", "desk", "-n", "w1");
+  // The only session, so the kill took the server with it — see `startSession`.
+  startSession([BIN, "-L", SOCKET, "-f", "/dev/null", "new-session", "-d", "-s", "desk", "-n", "w1"], { ...process.env, TMUX_TMPDIR: DIR });
   tmux("set", "-g", "base-index", "1");
   tmux("move-window", "-r", "-t", "desk");
   for (const n of [2, 3, 4, 5]) tmux("new-window", "-d", "-t", "desk:", "-n", `w${n}`);

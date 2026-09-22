@@ -37,6 +37,7 @@ import {
   deskAttachArgv, attachArgvFor, tmuxWriteCommands, suppressedTmuxWrites,
   forgetSuppressedTmuxWrites, FRAME_ARGV, type TmuxTarget,
 } from "../src/tmuxctl.ts";
+import { startSession } from "./tmuxIsolated.ts";
 
 const SOCK = `/tmp/agx-observe-${process.pid}.sock`;
 const SOCKET = ["-S", SOCK];
@@ -115,8 +116,9 @@ const realWarn = console.warn;
 beforeEach(() => {
   cli("kill-server");
   // A session with two windows, made by the CLI and never by this app: the
-  // thing a user already had open when they started agentglass.
-  cli("new-session", "-d", "-s", "stranger", "-x", "200", "-y", "50", "sleep 300");
+  // thing a user already had open when they started agentglass. Through
+  // `startSession`, because the server killed a line above may still be going.
+  startSession([...T, "new-session", "-d", "-s", "stranger", "-x", "200", "-y", "50", "sleep 300"], process.env);
   cli("new-window", "-t", "stranger", "-n", "notes", "sleep 300");
   forgetSuppressedTmuxWrites();
   warned = [];
