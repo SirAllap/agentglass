@@ -136,6 +136,15 @@ describe("starting a role", () => {
     expect(argv.slice(3)).toEqual(["--model", "haiku", "--verbose", "map it"]);
   });
 
+  test("a role refuses yolo, even when Settings allow it", async () => {
+    /* A locked worker gains nothing from skipping its prompts, and whether
+       Claude still applies a --settings deny list under
+       --dangerously-skip-permissions is not something this app has measured.
+       Refused, so the lock never depends on it. */
+    const r = await ops.startAgent({ root: tmpdir(), cwd: tmpdir(), kind: "claude", name: "w", lockedRole: true, yolo: true, yoloAllowed: true });
+    expect(r).toEqual({ ok: false, error: "yolo-role" });
+  });
+
   test("a role refuses caller flags that would pick another model or another OpenCode agent", async () => {
     const base = { root: tmpdir(), cwd: tmpdir(), yoloAllowed: false, kind: "opencode", lockedRole: true } as const;
     for (const args of [["--agent", "loose"], ["--model", "opus"], ["-m", "opus"], ["--model=opus"]]) {

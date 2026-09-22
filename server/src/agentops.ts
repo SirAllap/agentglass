@@ -133,7 +133,7 @@ export type StartResult =
   /** A pass-through arg that would change what the agent is ALLOWED to do,
    *  named, so the caller is told which one rather than left to bisect. */
   | { ok: false; error: "arg-refused"; flag: string }
-  | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "bad-args" };
+  | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "yolo-role" | "bad-args" };
 
 /**
  * The yolo flag is a PERMISSION, not a parameter, exactly as on `/terminal/agent`:
@@ -318,6 +318,10 @@ export async function startAgent(p: {
   if (args.some((a) => typeof a !== "string" || /[\n\r\0]/.test(a))) return { ok: false, error: "bad-args" };
   const refused = refusedArg(args) ?? (p.lockedRole ? args.find((a) => ROLE_FIXED.has(a.split("=", 1)[0]!)) ?? null : null);
   if (refused !== null) return { ok: false, error: "arg-refused", flag: refused };
+  /* A role's lock is a deny list handed to the CLI, and whether each CLI still
+     applies it with its prompts skipped is not measured here. A locked worker
+     gains nothing from yolo, so the two are never combined. */
+  if (p.yolo && p.lockedRole) return { ok: false, error: "yolo-role" };
   if (p.yolo && !p.yoloAllowed) return { ok: false, error: "yolo-refused" };
 
   /* A live name is somebody's session; starting another under it would leave

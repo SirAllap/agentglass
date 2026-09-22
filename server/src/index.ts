@@ -7385,6 +7385,7 @@ const server = Bun.serve<WsData>({
             "no-window": "tmux would not open a window for it",
             "bad-name": "bad name",
             "yolo-refused": "skipping permissions is off in Settings (chatBypass)",
+            "yolo-role": "a worker role runs under its lock, and skipping permissions is never combined with one",
             "bad-args": "args must be plain strings",
           };
           /* Named, so the caller learns which arg and why in one answer: what

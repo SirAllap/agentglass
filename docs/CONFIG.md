@@ -334,7 +334,7 @@ over plain `http://` to any host that is not this machine.
   checkout, the network clients, `sudo` and `rm` are denied in the one layer of
   that CLI a person's or a project's own config cannot loosen, and a scout or a
   verifier may not edit files either; a `--model` or `--agent` after `--` is
-  refused, since those are the role's. It is a list of command prefixes, not a
+  refused, since those are the role's, and so is `--yolo`. It is a list of command prefixes, not a
   sandbox — `sh -c '…'` is not a command named `git push`.
   `python3 bin/agentglass-agent --help` is the reference.
 - **`agentglass-browser`** — the built-in browser as a shell command: open, read,
