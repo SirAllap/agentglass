@@ -135,6 +135,28 @@ describe("claimsFromCommand", () => {
   });
 });
 
+describe("maskEvidence", () => {
+  test("credentials in a command never reach the evidence shown", () => {
+    const cases = [
+      "curl -u admin:s3cr3t http://localhost:3000/ -H 'Authorization: Bearer abc.def'",
+      "curl --user=admin:s3cr3t localhost:3000 -H \"authorization: token abc.def\"",
+      "mysql -uroot -ps3cr3t -P 3306 acme",
+      "pg_dump --password=s3cr3t acme",
+      "DATABASE_URL=postgres://app:s3cr3t@localhost/acme bun dev",
+      "API_TOKEN=abc.def bun dev",
+    ];
+    for (const c of cases) {
+      const out = col.maskEvidence(c);
+      expect(out).not.toContain("s3cr3t");
+      expect(out).not.toContain("abc.def");
+    }
+    // What is not a secret stays readable.
+    expect(col.maskEvidence("curl -u admin:s3cr3t http://localhost:3000/")).toContain("localhost:3000");
+    expect(col.maskEvidence("docker run -p 8080:80 nginx")).toBe("docker run -p 8080:80 nginx");
+    expect(col.maskEvidence("mkdir -p dist")).toBe("mkdir -p dist");
+  });
+});
+
 describe("claimsFromPath", () => {
   test("only the resources a file tool can touch", () => {
     expect(col.claimsFromPath("/work/.env").map((c) => c.kind)).toEqual(["env"]);
@@ -203,7 +225,7 @@ describe("getCollisions", () => {
   });
 
   test("live sessions in two checkouts on one database are flagged; ended and stale ones are not", async () => {
-    const url = "DATABASE_URL=postgres://localhost:5432/acme_dev bunx prisma migrate dev";
+    const url = "DATABASE_URL=postgres://app:hunter2@localhost:5432/acme_dev bunx prisma migrate dev";
     db.insertEvent(ev("live-a", now - 60_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-a`) as any);
     // A Stop ends a turn, not a session: the one sitting at its prompt still counts.
     db.insertEvent(ev("live-a", now - 50_000, "Stop", null, {}, `${W}/wt-a`) as any);
@@ -214,6 +236,7 @@ describe("getCollisions", () => {
     db.insertEvent(ev("live-e", now - 10_000, "PreToolUse", "Read", { file_path: `${W}/wt-e/README.md` }, `${W}/wt-e`) as any);
 
     const out = ours(await col.getCollisions(now, () => []), ["live-a", "live-b", "gone-c", "stale-d", "live-e"]);
+    expect(out[0].parties.find((s) => s.session_id === "live-b")?.evidence).toBe("DATABASE_URL=postgres://…@localhost:5432/acme_dev bunx prisma migrate dev");
     expect(out.map((c) => c.resource)).toEqual(["postgres localhost:5432/acme_dev"]);
     expect(out[0].parties.map((s) => s.session_id).sort()).toEqual(["live-a", "live-b"]);
     expect(out[0].parties.find((s) => s.session_id === "live-b")?.checkout).toBe(`${W}/wt-b`);

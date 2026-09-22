@@ -265,11 +265,21 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
   return [...out.values()];
 }
 
-/** Masks what a command would hand a reader: URL userinfo and secret-named values. */
+/**
+ * Masks what a command would hand a reader: URL userinfo, secret-named values,
+ * `-u user:pass`, an Authorization header or bearer token, `--password`, and
+ * mysql's glued `-p<password>`.
+ */
 export function maskEvidence(s: string): string {
+  const mysql = /\b(?:mysql|mariadb|mysqldump|mysqladmin)\b/.test(s);
   return s
     .replace(/(:\/\/)[^@\s/'"]*@/g, "$1…@")
     .replace(/\b([A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|PRIVATE_KEY)[A-Z0-9_]*=)\S+/gi, "$1…")
+    .replace(/(\s(?:-u|--user)(?:=|\s+)?)[^\s:'"]*:[^\s'"]+/g, "$1…")
+    .replace(/(authorization:\s*(?:(?:bearer|token|basic)\s+)?)[^\s'"]+/gi, "$1…")
+    .replace(/(\bbearer\s+)(?!…)[^\s'"]+/gi, "$1…")
+    .replace(/(--password(?:=|\s+))\S+/gi, "$1…")
+    .replace(/(\s-p)(?=\S)(?!…)\S+/g, (m, p1) => (mysql ? `${p1}…` : m))
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 160);
