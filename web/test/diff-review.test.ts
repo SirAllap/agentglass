@@ -11,6 +11,8 @@ import {
   isStale, removeComment, reviewFor, sanitizeReviews, setFrame, withDraft, type ReviewComment,
 } from "../src/lib/diffReview.ts";
 
+const PAGE = await Bun.file(new URL("../src/components/diff/DiffPage.tsx", import.meta.url)).text();
+
 // orbit/src/cart.ts: two lines replaced by one, with context either side.
 const hunks: DiffHunk[] = [{
   oldStart: 10, oldLines: 4, newStart: 10, newLines: 3,
@@ -227,4 +229,11 @@ test("removing the last comment takes the intro and outro with it", () => {
   setFrame(root, { intro: "hi", outro: "run the tests" });
   removeComment(root, a.id);
   expect(reviewFor(root)).toEqual({ intro: "", outro: "", comments: [] });
+});
+
+test("the tray is keyed by checkout, so an armed Discard does not carry to another", () => {
+  // Discard arms on the first press and fires on the second. Without a key the
+  // armed state survives selecting a file in another checkout, and the second
+  // press throws away that checkout's review instead.
+  expect(PAGE).toMatch(/<ReviewTray key=\{root\}/);
 });

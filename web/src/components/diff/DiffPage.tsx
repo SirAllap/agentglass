@@ -421,7 +421,7 @@ export function DiffPage({ active, onClose, onOpenChat }: {
                 comments={review.comments} staleIds={staleIds} jumpTo={jumpTo} onJumped={jumped} />
             : <Blank>Nothing selected</Blank>}
           {root && review.comments.length > 0 && (
-            <ReviewTray where={selected?.branch || root} review={review} staleIds={trayStale}
+            <ReviewTray key={root} where={selected?.branch || root} review={review} staleIds={trayStale}
               staleFiles={checked?.files ?? null} checking={checking}
               target={reviewTarget != null ? `“${reviewTarget}”` : "a new chat in this checkout"}
               onFrame={(f) => setFrame(root, f)} onJump={jump}
