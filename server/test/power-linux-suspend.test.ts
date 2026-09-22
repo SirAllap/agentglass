@@ -11,17 +11,19 @@
  * So the two halves of the assertion are held separately, each in the only
  * mode that fits it:
  *
- *   sleep              DELAY  — logind still suspends when asked, after giving
- *                               this process a moment (InhibitDelayMaxSec,
- *                               five seconds by default) to let go. Idle sleep
- *                               is what `agent` mode was ever meant to stop,
- *                               and idle sleep is not asked for by anybody.
- *   handle-lid-switch  BLOCK  — closing the lid on a running agent must not
- *                               end the run; logind offers no delay mode for
- *                               a lid switch, and a block is what was wanted.
+ *   sleep              BLOCK-WEAK — enforced against logind's own idle action
+ *                                   and not against the user who holds it, so
+ *                                   the menu's suspend goes through and the
+ *                                   machine still does not doze off. DELAY on
+ *                                   a logind too old for it (before 257), which
+ *                                   refuses the mode at once; delay stops
+ *                                   nothing, and is what is left.
+ *   handle-lid-switch  BLOCK      — closing the lid on a running agent must not
+ *                                   end the run; logind offers no weak or delay
+ *                                   mode for a lid switch.
  *
  * And the moment logind says it is going down, the sleep lock is let go at
- * once rather than making the person wait out the delay.
+ * once rather than making the person wait out a delay.
  *
  * Driven for real in a child process, with a stubbed `electron` and a
  * `systemd-inhibit` on PATH that writes down how it was called.
@@ -38,7 +40,21 @@ afterAll(() => { for (const d of dirs) { try { rmSync(d, { recursive: true, forc
 /** One line per `systemd-inhibit` call: its arguments, then what ended it. */
 interface Call { args: string[]; ended?: string }
 
-async function drive(script: string): Promise<{ calls: Call[]; status: { awake: boolean } }> {
+/** Turn the stub's log into calls, with how each ended. */
+function parseCalls(text: string): Call[] {
+  const calls: Call[] = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith("CALL ")) calls.push({ args: line.slice(5).split(" ") });
+    else if (line.startsWith("TERM ")) { const c = calls.find((x) => x.args.join(" ") === line.slice(5) && !x.ended); if (c) c.ended = "TERM"; }
+    else if (line.startsWith("REFUSED ")) { const c = calls.find((x) => x.args.join(" ") === line.slice(8) && !x.ended); if (c) c.ended = "REFUSED"; }
+  }
+  return calls;
+}
+
+/** `mid` is the log as the script saw it BEFORE shutdown, when it printed
+ *  MID — the only snapshot that can tell a lock released by the code from one
+ *  released by `shutdown()` at the end of every run. */
+async function drive(script: string, env: Record<string, string> = {}): Promise<{ calls: Call[]; mid: Call[]; status: { awake: boolean } }> {
   const scratch = join(tmpdir(), `agx-power-linux-${process.pid}-${dirs.length}`);
   dirs.push(scratch);
   mkdirSync(join(scratch, "cfg"), { recursive: true });
@@ -51,6 +67,9 @@ async function drive(script: string): Promise<{ calls: Call[]; status: { awake: 
      simply still there at shutdown. */
   writeFileSync(join(scratch, "bin", "systemd-inhibit"), `#!/bin/sh
 printf 'CALL %s\\n' "$*" >> "${log}"
+# A logind too old for block-weak refuses the mode at once, exit 1 (the real
+# wording, measured on systemd 261 with a mode it did not know).
+case "$*" in *--mode=block-weak*) if [ -n "$AGX_STUB_NO_WEAK" ]; then printf 'REFUSED %s\\n' "$*" >> "${log}"; echo "Failed to inhibit: Invalid mode specification block-weak" >&2; exit 1; fi;; esac
 trap 'printf "TERM %s\\n" "$*" >> "${log}"; exit 0' TERM
 while :; do sleep 0.05; done
 `, { mode: 0o755 });
@@ -69,40 +88,38 @@ while :; do sleep 0.05; done
     (async () => {
       ${script}
       const status = power.status();
+      let mid = "";
+      try { mid = require("node:fs").readFileSync(process.env.AGX_LOG, "utf8"); } catch {}
       power.shutdown();
       await new Promise((r) => setTimeout(r, 300));
-      console.log("TRACE " + JSON.stringify({ status }));
+      console.log("TRACE " + JSON.stringify({ status, mid }));
       process.exit(0);
     })();
   `);
   const p = Bun.spawn([process.execPath, join(scratch, "drive.cjs")], {
     cwd: scratch,
-    env: { PATH: `${join(scratch, "bin")}:/usr/bin:/bin`, HOME: scratch, AGX_TEST_CFG: join(scratch, "cfg") },
+    env: { PATH: `${join(scratch, "bin")}:/usr/bin:/bin`, HOME: scratch, AGX_TEST_CFG: join(scratch, "cfg"), AGX_LOG: log, ...env },
     stdout: "pipe", stderr: "pipe",
   });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   const code = await p.exited;
   const m = /^TRACE (.*)$/m.exec(out);
   if (!m) throw new Error(`power.js gave no trace (exit ${code})\n${out}${err}`);
-  const calls: Call[] = [];
   let text = "";
   try { text = readFileSync(log, "utf8"); } catch { /* never called */ }
-  for (const line of text.split("\n")) {
-    if (line.startsWith("CALL ")) calls.push({ args: line.slice(5).split(" ") });
-    else if (line.startsWith("TERM ")) { const c = calls.find((x) => x.args.join(" ") === line.slice(5) && !x.ended); if (c) c.ended = "TERM"; }
-  }
-  return { calls, status: JSON.parse(m[1]!).status };
+  const trace = JSON.parse(m[1]!) as { status: { awake: boolean }; mid: string };
+  return { calls: parseCalls(text), mid: parseCalls(trace.mid), status: trace.status };
 }
 
 const modeOf = (c: Call) => c.args.find((a) => a.startsWith("--mode="))?.slice(7);
 const whatOf = (c: Call) => c.args.find((a) => a.startsWith("--what="))?.slice(7);
 
 describe("the Linux inhibitor", () => {
-  test("holds sleep in delay mode and only the lid switch in block mode", async () => {
+  test("holds sleep in block-weak mode and only the lid switch in block mode", async () => {
     const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 300));`);
     expect(t.status.awake).toBe(true);
     const byWhat = new Map(t.calls.map((c) => [whatOf(c), modeOf(c)]));
-    expect(byWhat.get("sleep"), "a suspend the person asks for must go through").toBe("delay");
+    expect(byWhat.get("sleep"), "a suspend the person asks for must go through; logind's own idle action must not").toBe("block-weak");
     expect(byWhat.get("handle-lid-switch"), "closing the lid must still not end a run").toBe("block");
     /* Never the two together: `sleep:handle-lid-switch` cannot be delay
        (logind refuses delay for a lid switch) and must not be block. */
@@ -115,14 +132,21 @@ describe("the Linux inhibitor", () => {
     const t = await drive(`
       power.setMode("on"); await new Promise((r) => setTimeout(r, 300));
       electron.__emit("suspend"); await new Promise((r) => setTimeout(r, 300));
-      const held = require("node:fs").readFileSync("${"inhibit.log"}", "utf8");
-      console.log("MID " + JSON.stringify(held));
     `);
-    /* After the suspend signal the sleep lock is gone; the lid lock may stay
-       (it does not delay anything). On resume `assertAwake` runs again. */
-    const sleepLock = t.calls.find((c) => whatOf(c) === "sleep");
-    expect(sleepLock).toBeDefined();
-    expect(sleepLock!.ended).toBe("TERM");
+    /* Read BEFORE shutdown, which ends every lock: after the suspend signal
+       the sleep lock is gone and the lid lock is still held. On resume
+       `assertAwake` runs again. */
+    const sleepLock = t.mid.find((c) => whatOf(c) === "sleep");
+    const lidLock = t.mid.find((c) => whatOf(c) === "handle-lid-switch");
+    expect(sleepLock?.ended, "the sleep lock was released by the suspend handler").toBe("TERM");
+    expect(lidLock?.ended, "the lid lock was not").toBeUndefined();
+  });
+
+  test("falls back to a delay lock on a logind that refuses block-weak, and to nothing worse", async () => {
+    const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 500));`, { AGX_STUB_NO_WEAK: "1" });
+    const sleepModes = t.calls.filter((c) => whatOf(c) === "sleep").map((c) => `${modeOf(c)}:${c.ended ?? "held"}`);
+    expect(sleepModes).toEqual(["block-weak:REFUSED", "delay:TERM"]);
+    expect(t.calls.filter((c) => whatOf(c) === "handle-lid-switch")).toHaveLength(1);
   });
 
   test("`off` holds nothing", async () => {

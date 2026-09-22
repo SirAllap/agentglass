@@ -17,14 +17,23 @@
  *     is deliberate: closing the lid must not end a run.
  *   - Electron's `powerSaveBlocker` covers the display, which systemd does not.
  *
- * A PERSON'S OWN SUSPEND WINS. The sleep lock is held in DELAY mode, never in
- * block mode. Block was the first version, and it did what it says to every
- * suspend — the one asked for from the menu included: with an agent mid-turn,
- * `systemctl suspend` answered "Operation inhibited" and the machine stayed on,
- * with nothing on screen saying why. Measured on the owner's laptop. What this
- * feature was ever for is IDLE sleep, and idle sleep is not something anybody
- * asks for; a delay lock stops exactly that and gives way to a request. The
- * lid switch has no delay mode in logind, and blocking it is what was wanted.
+ * A PERSON'S OWN SUSPEND WINS. The sleep lock is held in BLOCK-WEAK mode:
+ * logind enforces it against its own idle action and against other users,
+ * and not against a request from the user who holds it — so `systemctl
+ * suspend` from the menu goes through while an agent works, and the machine
+ * still does not doze off on its own. Plain block was the first version, and
+ * it did what it says to every suspend, that one included: with an agent
+ * mid-turn the menu entry answered "Operation inhibited" and nothing happened,
+ * with nothing on screen saying why. Measured on the owner's laptop.
+ *
+ * `block-weak` arrived in systemd 257. An older logind refuses the mode at
+ * once ("Invalid mode specification", exit 1, measured on 261 with a bogus
+ * mode), and the lock is then taken in DELAY mode instead — which stops
+ * nothing: a delay lock only holds a suspend for InhibitDelayMaxSec before
+ * logind goes ahead. On such a system the sleep half is the display blocker
+ * alone, and that is said here rather than pretended otherwise. The lid
+ * switch has no weak or delay mode in logind, and blocking it is what was
+ * wanted.
  *
  * Three failure modes are the whole difference between this working and this
  * being a lie, and each gets its own paragraph below: `systemd-inhibit` not
@@ -63,12 +72,16 @@ let getApiOrigin = () => "";
 let getToken = () => "";
 
 /**
- * The two logind locks, each its own child. They cannot be one: a delay lock
- * is only offered for `sleep` and `shutdown`, so `sleep:handle-lid-switch`
- * would have to be block for both, and block on sleep is the bug above.
+ * The two logind locks, each its own child. They cannot be one: `block-weak`
+ * and `delay` are only offered for `sleep` and `shutdown`, so
+ * `sleep:handle-lid-switch` would have to be block for both, and block on
+ * sleep is the bug above.
  * @type {{ sleep: import("child_process").ChildProcess | null, lid: import("child_process").ChildProcess | null }}
  */
 const inhibitChild = { sleep: null, lid: null };
+/** Children this process ended itself, so their exit is not read as logind
+ *  refusing the mode. */
+const releasedByUs = new WeakSet();
 /** Set once `systemd-inhibit` comes back ENOENT. Checked before every spawn,
  *  and never cleared for the life of the process — a binary that is not on
  *  this machine at second 10 is not going to appear at second 40, and
@@ -112,14 +125,15 @@ function saveMode(m) {
  * Spawn one lock. Idempotent: a second call while it is already running is a
  * no-op, not a leaked second lock.
  * @param {"sleep" | "lid"} which
+ * @param {string} [mode] the logind mode; the sleep lock's default is
+ *   `block-weak`, and `delay` is what it falls back to when logind refuses it.
  */
-function spawnInhibit(which) {
+function spawnInhibit(which, mode = which === "sleep" ? "block-weak" : "block") {
   if (inhibitChild[which] || inhibitUnavailable) return;
   const what = which === "sleep" ? "--what=sleep" : "--what=handle-lid-switch";
-  const mode = which === "sleep" ? "--mode=delay" : "--mode=block";
   const child = spawn(
     "systemd-inhibit",
-    [what, "--who=agentglass", "--why=Agents are working", mode, "sleep", "infinity"],
+    [what, "--who=agentglass", "--why=Agents are working", `--mode=${mode}`, "sleep", "infinity"],
     { stdio: "ignore" },
   );
   inhibitChild[which] = child;
@@ -134,10 +148,15 @@ function spawnInhibit(which) {
     if (inhibitChild[which] === child) inhibitChild[which] = null;
     if (/** @type {NodeJS.ErrnoException} */ (e).code === "ENOENT") inhibitUnavailable = true;
   });
-  child.on("exit", () => {
+  child.on("exit", (code) => {
     // A suspend does not necessarily leave this child alive to see the
     // resume — the `resume` handler below is what re-asserts, not this.
     if (inhibitChild[which] === child) inhibitChild[which] = null;
+    // Refused at once, by a logind too old for the mode: the next best lock.
+    // Only a refusal (exit 1) that this process did not cause; a child killed
+    // by `killInhibit` exits by signal, and one killed by the suspend itself
+    // is the resume handler's to replace.
+    if (mode === "block-weak" && code === 1 && !releasedByUs.has(child) && held) spawnInhibit(which, "delay");
   });
 }
 
@@ -147,6 +166,7 @@ function killInhibit(which) {
   const child = inhibitChild[which];
   inhibitChild[which] = null;
   if (!child) return;
+  releasedByUs.add(child);
   try { child.kill(); } catch { /* already gone */ }
 }
 
@@ -287,12 +307,13 @@ function init(opts) {
   /*
    * And the moment logind announces the suspend, the sleep lock is let go.
    *
-   * A delay lock does not stop the suspend; it makes logind wait for the
-   * holder to release, up to InhibitDelayMaxSec (five seconds by default),
-   * before going ahead. That grace is for saving state, and there is none to
-   * save here — so a person who pressed suspend would sit through five
-   * seconds of nothing. Released here, they do not. `held` is left as it is:
-   * the resume handler above re-asserts everything on the way back.
+   * By then the suspend is happening whatever the lock says. What the release
+   * buys is the fallback case: a delay lock makes logind wait for its holder,
+   * up to InhibitDelayMaxSec (five seconds by default), before going ahead —
+   * a grace for saving state, and there is none to save here — so a person
+   * who pressed suspend would sit through five seconds of nothing. `held` is
+   * left as it is: the resume handler above re-asserts everything on the way
+   * back.
    */
   powerMonitor?.on("suspend", () => { killInhibit("sleep"); });
   applyMode();
