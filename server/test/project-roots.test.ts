@@ -14,7 +14,7 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { configuredRepoDirs, repoDirsUnstated, seedRepoDirs, setRepoDir, setWorkspaceRoots, workspaceRoots } from "../src/config.ts";
 import { discoverRepos, invalidateRepos, knownProjectRoots } from "../src/gitwork.ts";
@@ -84,6 +84,23 @@ describe("adding and removing a folder", () => {
     const r = setRepoDir(join(dir, "nowhere"), true);
     expect(r.ok).toBe(false);
     expect(configuredRepoDirs()).toEqual([]);
+  });
+
+  test("the whole disk or the whole home folder is refused, as a folder to walk", () => {
+    // Every added folder is walked for repositories on the thread that answers
+    // the picker, and these two are the whole machine by another name.
+    for (const p of ["/", homedir(), homedir() + "/"]) {
+      const r = setRepoDir(p, true);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("too broad");
+    }
+    expect(configuredRepoDirs()).toEqual([]);
+  });
+
+  test("one written by hand can still be taken off the list", () => {
+    mkdirSync(join(dir, "agentglass"), { recursive: true });
+    writeFileSync(cfg, JSON.stringify({ repoDirs: ["/", code] }));
+    expect(setRepoDir("/", false).roots).toEqual([code]);
   });
 
   test("an entry written by hand as ~/… is removed by its absolute path", () => {
@@ -239,6 +256,12 @@ describe("an upgrade from a config without folders", () => {
   test("folders set in the environment are stated too", () => {
     process.env.AGENTGLASS_REPO_DIRS = code;
     expect(repoDirsUnstated()).toBe(false);
+  });
+
+  test("an old scope on the whole home folder is not seeded as a folder to walk", () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    seedRepoDirs([homedir(), "/", orbit]);
+    expect(onDisk().repoDirs).toEqual([orbit]);
   });
 
   test("a seeded folder that is gone by then is skipped, not saved", () => {

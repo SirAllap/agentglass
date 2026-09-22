@@ -692,11 +692,17 @@ export function configuredRepoDirs(): string[] {
  * answer finds and removes them. Only the file is touched: forgetting a folder
  * never goes near the folder.
  */
+/** The whole disk and the whole home folder: the machine by another name.
+ *  Every added folder is walked for repositories on the thread that answers
+ *  the picker, so neither is taken as one. */
+const tooBroad = (abs: string) => abs === resolve("/") || abs === resolve(homedir());
+
 export function setRepoDir(pathIn: unknown, added: boolean): { ok: boolean; roots: string[]; persisted: boolean; error?: string; note?: string } {
   const fail = (error: string) => ({ ok: false as const, roots: configuredRepoDirs(), persisted: false, error });
   if (typeof pathIn !== "string" || !pathIn.trim() || pathIn.includes("\0")) return fail("invalid path");
   const target = resolve(expand(pathIn.trim()));
   if (added) {
+    if (tooBroad(target)) return fail(`too broad to list projects from: ${target} — add the folder your projects live in`);
     try {
       if (!statSync(target).isDirectory()) return fail(`not a folder: ${target}`);
     } catch {
@@ -746,8 +752,9 @@ export function repoDirsUnstated(): boolean {
  * the old config and the old list knew: the caller hands the open projects
  * first and then the projects the app knew (see knownProjectRoots).
  *
- * Kept as given, minus a path that is gone by now and a path inside one kept
- * before it, so ~/code and ~/code/orbit are one folder. Written even when that
+ * Kept as given, minus a path that is gone by now, the whole disk or home
+ * folder (see tooBroad), and a path inside one kept before it, so ~/code and
+ * ~/code/orbit are one folder. Written even when that
  * is nothing, so a fresh install is not seeded later from what it learns since.
  * Re-checked against the file as it is now: another server may have got there.
  */
@@ -757,6 +764,7 @@ export function seedRepoDirs(candidates: readonly string[]): { ok: boolean; root
     const kept: string[] = [];
     for (const c of candidates) {
       const abs = resolve(expand(c));
+      if (tooBroad(abs)) continue;
       try { if (!statSync(abs).isDirectory()) continue; } catch { continue; }
       if (!kept.some((k) => isWithin(abs, k))) kept.push(abs);
     }
