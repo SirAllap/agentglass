@@ -3226,6 +3226,22 @@ export function sessionsWhosePromptStarts(mark: string): string[] {
   return [...out];
 }
 
+/**
+ * Was this text ever typed at the session as a prompt?
+ *
+ * Asked by the tmux restore about the arguments of a running `claude`: a
+ * prompt given on the command line arrives through the same UserPromptSubmit
+ * hook as one typed at the box, so the events table can say which of a
+ * process's arguments is the prompt and which is a flag's value — exactly,
+ * with no list of flags to keep up to date. One indexed lookup per candidate.
+ */
+const promptSeen = db.query<{ one: number }, [string, string]>(
+  `SELECT 1 AS one FROM events WHERE session_id = ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+export function wasPromptOf(sessionId: string, text: string): boolean {
+  if (!sessionId || !text) return false;
+  try { return promptSeen.get(sessionId, text) !== null; } catch { return false; }
+}
+
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {
   /* The Lantern's own chat never waits on anybody in the board's sense: a
      person asked it something and it answered. Its notifications are dropped

@@ -12,9 +12,14 @@
  * around it. The conversation id is the missing half, and the app already
  * records it per pane.
  *
+ * And the id is not merely the fallback, it is the RULE: a pane that held a
+ * conversation is resumed by its id whatever line it was born from. The line
+ * used to win when there was one, and the line carried the prompt — a
+ * finished session's brief ran itself again after a restart (2026-09-21).
+ *
  * These read the source, because building the command for real needs a CLI on
- * the PATH, which a suite must not depend on. The capture itself is driven
- * in restore-replays-the-argv.test.ts.
+ * the PATH, which a suite must not depend on. The behaviour itself is driven
+ * in restore-resumes-the-conversation.test.ts.
  */
 import { describe, expect, it } from "bun:test";
 
@@ -28,13 +33,7 @@ describe("what a restored pane is told to run", () => {
     expect(fn).toContain('if (mode !== "all" || !pane) return [];');
   });
 
-  it("replays the argv the pane was running when there is one", () => {
-    // A pane the app or a person created with a command carries what it was
-    // running as argv. Nothing to reconstruct.
-    expect(fn).toContain("if (pane.startArgv?.length) return [...pane.startArgv];");
-  });
-
-  it("falls back to resuming the conversation the pane was holding, with its own flags", () => {
+  it("resumes the conversation first, with the pane's own flags, before any born-with line", () => {
     /*
      * The flags moved into this line on 2026-09-03 and the reason is the whole
      * of restore-keeps-the-flags.test.ts: this user starts every session with
@@ -44,13 +43,18 @@ describe("what a restored pane is told to run", () => {
      * displace it.
      */
     expect(fn).toContain('return [bin, ...(pane.agentArgs ?? []), "--resume", id];');
+    const resume = fn.indexOf('"--resume"');
+    const argv = fn.indexOf("pane.startArgv");
+    const line = fn.indexOf('["sh", "-c", pane.startCommand]');
+    expect(resume, "the conversation outranks the argv").toBeLessThan(argv);
+    expect(argv, "and the argv outranks the string tmux quoted").toBeLessThan(line);
   });
 
   it("will not put anything but a conversation id on that command line", () => {
     /* The id reaches a process argv. It comes from our own hook or from a
        running process's arguments, and it is still checked: a UUID, or the pane
        comes back as a shell. */
-    expect(fn).toContain("if (!id || !SESSION_ID_RE.test(id)) return [];");
+    expect(fn).toContain("if (id && SESSION_ID_RE.test(id)) {");
     expect(src).toMatch(/const SESSION_ID_RE = \/\^\[0-9a-fA-F\]\{8\}-/);
   });
 
@@ -63,8 +67,9 @@ describe("what a restored pane is told to run", () => {
 });
 
 describe("where the id comes from", () => {
-  it("prefers the note the pane hook wrote", () => {
-    expect(src).toContain("paneAgentNote(p.id)?.session_id");
+  it("prefers the note the pane hook wrote, when it names the directory the agent is in", () => {
+    expect(src).toContain("const note = paneAgentNote(p.id);");
+    expect(src).toContain("note.cwd === under.cwd");
   });
 
   it("and reads the running process when there is no note yet", () => {
@@ -89,9 +94,10 @@ describe("a note that outlived its agent", () => {
      * agents where their owner had left a shell.
      *
      * What is running NOW is the actual question: the note is only read for a
-     * pane with the CLI under it.
+     * pane with the CLI under it, and only when it names that CLI's directory.
      */
     expect(src).toContain("if (under && under.name === claudeName()) {");
+    expect(src).toContain("const noteFits = !!note && (!under.cwd || note.cwd === under.cwd);");
   });
 
   it("compares against the CLI's own basename, not a literal", () => {

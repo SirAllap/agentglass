@@ -12,10 +12,11 @@
 //   * the session/window/pane tree, each pane's working directory and size;
 //   * each pane's scrollback (up to 2000 lines, replayed into the new pane);
 //   * what was RUNNING in each pane, as the argv it was running with — an
-//     agent CLI, or whatever command the pane was born from. "all" mode starts
-//     it again with the same argv, and a Claude pane with nothing to replay is
-//     resumed by its conversation id; "lazy" (default) restores the tree and
-//     lets the chat reopen resume each session.
+//     agent CLI, or whatever command the pane was born from. "all" mode brings
+//     it back: a Claude conversation is resumed by its id, any other program is
+//     started again with the same argv, and a prompt that was on a command
+//     line is never sent a second time (see `runArgs`); "lazy" (default)
+//     restores the tree and lets the chat reopen resume each session.
 //
 // Nothing here touches the user's tmux. Only the engine's own socket is read,
 // and the data lands in the engine's state dir. The user's ~/.tmux/resurrect
@@ -28,6 +29,7 @@ import { tmux, listPanes, validSessionName, tmuxSocket, setCaptureHook } from ".
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
+import { wasPromptOf } from "./db.ts";
 import { agentNamed } from "./paneloc.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
@@ -54,7 +56,8 @@ export interface CapturedPane extends TmuxPaneRow {
    */
   agentSession?: string;
   /** The flags the agent in this pane was actually started with — everything
-   *  on its command line except the binary and the id. See `agentArgsOf`. */
+   *  on its command line except the binary, the id and the prompt. See
+   *  `agentArgsOf`. */
   agentArgs?: string[];
   /**
    * What was running in the pane, as its own argv, for a pane holding no
@@ -223,7 +226,26 @@ const NOT_REPLAYED = new Set(["--resume", "--session-id", "-p", "--print"]);
  * unfamiliar. Anything with a newline in it is dropped, because a command line
  * is one line.
  */
-export function agentArgsOf(argv: string[]): string[] {
+/*
+ * AND THE PROMPT IS NOT A FLAG.
+ *
+ * A prompt typed on the command line — `claude --model opus 'Read the brief
+ * and follow it'` — sits among the flags as one more positional argument,
+ * and there is no list of flags that says which positional is a value and
+ * which is a sentence somebody meant once. Kept, it is sent again on every
+ * resume: measured on 2026-09-21, a finished session's brief re-ran itself
+ * after a restart and the tokens went with it. Dropped by guess — "the last
+ * argument with a space in it" — it takes `--disallowedTools 'Bash(x) Bash(y)'`
+ * with it, which is the flattened-flags mistake this file has already made
+ * once.
+ *
+ * So the caller says which arguments were prompts, and it can say so exactly:
+ * a prompt on the command line arrives through the same UserPromptSubmit hook
+ * as one typed at the box, and the events table remembers it (`wasPromptOf`).
+ * Nothing is guessed; a session whose hooks never reported keeps its prompt
+ * and replays it, which is the stated ceiling.
+ */
+export function agentArgsOf(argv: string[], isPrompt: (text: string) => boolean = () => false): string[] {
   const out: string[] = [];
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
@@ -234,6 +256,7 @@ export function agentArgsOf(argv: string[]): string[] {
       if (!a.includes("=") && i + 1 < argv.length && !argv[i + 1]!.startsWith("-")) i++;
       continue;
     }
+    if (!a.startsWith("-") && isPrompt(a)) continue;
     out.push(a);
   }
   /* A command line this long is not a command line any more. */
@@ -622,10 +645,19 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
         const pid = await panePidOf(name, w.id, p.id);
         const under = pid ? agentUnder(pid) : null;
         if (under && under.name === claudeName()) {
-          /* The id: the hook's note first, then the argv's own `--resume`,
-             which a restored pane carries before any hook has fired. */
-          const agentSession = paneAgentNote(p.id)?.session_id || resumeIdIn(under.argv);
-          const agentArgs = agentArgsOf(under.argv);
+          /*
+           * The id: the hook's note first, because it is the newer fact — a
+           * `/clear` gives the pane a new conversation the argv knows nothing
+           * about — but only a note that names the directory the agent is
+           * actually in. A note from a previous life of this pane id, written
+           * for an agent in another checkout, is not this agent's. Then the
+           * argv's own `--resume`, which a restored pane carries before any
+           * hook has fired.
+           */
+          const note = paneAgentNote(p.id);
+          const noteFits = !!note && (!under.cwd || note.cwd === under.cwd);
+          const agentSession = (noteFits ? note!.session_id : undefined) || resumeIdIn(under.argv);
+          const agentArgs = agentArgsOf(under.argv, agentSession ? (text) => wasPromptOf(agentSession, text) : undefined);
           panes.push({ ...p, startCommand, agentSession, agentArgs: agentArgs.length ? agentArgs : undefined });
           continue;
         }
@@ -719,14 +751,25 @@ export function lastCaptureAt(): number | null {
  * "lazy" is a login shell in the pane's directory, always: the desk comes back
  * and nothing starts talking to a model until somebody asks it to.
  *
- * "all" brings back what was running: the argv the pane's process was running
- * with (`startArgv`), handed to tmux as argv — never through a shell, so it is
- * exact and never one level deeper. A photograph from before `startArgv`
- * existed still has the string tmux reported, and gets the old `sh -c` on it:
- * right for a line tmux printed unquoted, a shell for one it quoted, and gone
- * at the first sweep after boot. A Claude pane with nothing to replay — a
- * `claude` typed into a shell leaves both empty, measured — is resumed by the
- * conversation id recorded for it.
+ * "all" brings back what was running, in this order:
+ *
+ *   1. A CONVERSATION IS RESUMED, NEVER REPLAYED. A pane that held a Claude
+ *      session comes back as `claude <its flags> --resume <id>`, whatever
+ *      command line it was born from. The born-with line used to win here
+ *      whenever there was one, and it carried the prompt: a session the
+ *      orchestrator had opened with `claude … 'Read the brief and follow
+ *      it'`, finished and closed, was rebuilt at the next restart and RAN THE
+ *      BRIEF AGAIN — measured on 2026-09-21, tokens included. Worse, each
+ *      restart wrapped the line in one more `sh -c`: eight deep by the time
+ *      it was read. The id is the conversation; the flags are the desk; the
+ *      prompt was said once.
+ *   2. Any other program comes back as the argv it was running with
+ *      (`startArgv`), passed to tmux as argv — never through a shell, so it
+ *      is exact and never one level deeper.
+ *   3. A photograph from before `startArgv` existed still has the string tmux
+ *      reported, and gets the old `sh -c` on it: right for a line tmux
+ *      printed unquoted, a shell for one it quoted, and gone at the first
+ *      sweep after boot.
  *
  * The id came from our own hook or from a running process's arguments, and
  * is still checked against a UUID before it can reach a command line.
@@ -736,14 +779,18 @@ export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bi
   /* A photograph from before the capture learned to leave the Lantern out:
      its chat comes back as a shell, never as the chat. */
   if (pane.startCommand.includes(LANTERN_PROMPT_MARK)) return [];
+  const id = pane.agentSession;
+  if (id && SESSION_ID_RE.test(id)) {
+    /* A conversation with no CLI on this machine to resume it is a shell,
+       not a replay of whatever line started it. */
+    if (!bin) return [];
+    /* The flags first, then the id: the id is the one part of this line this
+       file built itself, and it goes last so nothing captured can displace it. */
+    return [bin, ...(pane.agentArgs ?? []), "--resume", id];
+  }
   if (pane.startArgv?.length) return [...pane.startArgv];
   if (pane.startCommand) return ["sh", "-c", pane.startCommand];
-  const id = pane.agentSession;
-  if (!id || !SESSION_ID_RE.test(id)) return [];
-  if (!bin) return [];
-  /* The flags first, then the id: the id is the one part of this line this
-     file built itself, and it goes last so nothing captured can displace it. */
-  return [bin, ...(pane.agentArgs ?? []), "--resume", id];
+  return [];
 }
 
 /** A conversation id as the CLI writes them: a UUID, and nothing else goes on
