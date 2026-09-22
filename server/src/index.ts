@@ -48,7 +48,7 @@ import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedRea
 import { budgetHoldFor } from "./budget.ts";
 import { parseControlCmd } from "./control.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
-import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation} from "./browserdrive.ts";
+import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
 import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -4312,6 +4312,19 @@ const server = Bun.serve<WsData>({
         /* For "start", delegate to the window via askBrowser. */
         const reply = await askBrowser(parsed.ask);
         return json(reply, reply.ok ? 200 : 409);
+      }
+      if (op === "scrape") {
+        /* Several pages, one read each, in parallel — see `runScrape` for
+           what it is and is not. Validated there rather than here, the way
+           `do` is, so the CLI and the MCP meet the same refusals. */
+        let b: any = {};
+        try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const caller: Record<string, unknown> = {};
+        for (const k of ["as", "how", "pageExplicit", "identity"]) if (b[k] !== undefined) caller[k] = b[k];
+        const spec = parseScrape(b, caller);
+        if ("error" in spec) return json({ ok: false, error: spec.error }, 400);
+        const r = await runScrape(spec, caller);
+        return json(r);
       }
       if (op === "do") {
         /* Several verbs in one request — §1. The whole point is the round trip

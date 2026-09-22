@@ -1096,6 +1096,26 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_scrape",
+        "description": (
+            "SEVERAL PAGES, one read each, in parallel: every URL is opened in a new tab in your container, "
+            "read with `read` (markdown by default; read, links, extract with fields, interactive, forms), and "
+            "the tab is closed whatever happened. At most `concurrency` tabs at once (1 to 4, default 2). "
+            "Rows come back in the order given, each ok with its value or with its own error, plus how many "
+            "failed. Up to 40 URLs. This is a person's browser: tabs open and close in their window."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "urls": {"type": "array", "items": {"type": "string"}, "description": "http(s) URLs, up to 40."},
+                "read": {"type": "string", "enum": ["markdown", "read", "links", "extract", "interactive", "forms"]},
+                "fields": {"type": "object", "description": "For read=extract: { name: selector }."},
+                "concurrency": {"type": "number", "description": "Tabs open at once, 1 to 4. Default 2."},
+            },
+            "required": ["urls"],
+        },
+    },
+    {
         # The verb the documentation used to forbid: "Nothing here runs
         # arbitrary JavaScript, by design." For an agent that is not a
         # guardrail, it is half the browser amputated — without it there is no
@@ -1411,7 +1431,7 @@ VERB = {t["name"]: t["name"][len("browser_"):] for t in TOOLS}
 # is the hole reopened by hand. Caught here by REQ-11's own MCP test, which
 # asked `browser_whoami` with no tab and got the refusal sentence where it
 # expected JSON.
-TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings"}
+TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape"}
 
 # `profile` and `shared` say WHO, not WHAT: they choose which tab this call is
 # addressed to and never travel to the relay as part of the verb's body.
@@ -1749,6 +1769,11 @@ def run(name, args, raw=False):
     mine = my_tab(who) if who else None
     sent_to = None
 
+    if verb == "scrape":
+        # Its tabs are minted in the caller's container, the way `open` mints
+        # one; the empty profile is the person's own, which is what `shared`
+        # means here too.
+        body["profile"] = who or ""
     if verb in ("open", "newtab") and who:
         # NAMING A TAB IS THE WHOLE ANSWER, and it is also the trap: an `open`
         # that carries a profile is routed by the panel to "make a tab in that
@@ -1790,7 +1815,7 @@ def run(name, args, raw=False):
         # containers and `profiles` makes and drops them; without `identity`
         # every container this surface made had no creator, so the drop guard
         # treated it as unknown and let anybody take it.
-        if verb in ("open", "newtab", "profiles"):
+        if verb in ("open", "newtab", "profiles", "scrape"):
             body.setdefault("identity", who)
     if verb == "profiles":
         if args.get("identity"):

@@ -3334,6 +3334,113 @@ export async function withObservation(
     : { ...reply, value: { ...(reply.value as object ?? {}), afterFailed: seen.error } };
 }
 
+/** What `scrape` may read from each page: the verbs that answer with the
+ *  whole page in a shape, and take no selector. `text` is not here because it
+ *  needs one, and `read` is the fallback for a caller that wants plain text. */
+export const SCRAPE_READS: ReadonlySet<string> = new Set(["read", "markdown", "links", "extract", "interactive", "forms"]);
+const SCRAPE_MAX_URLS = 40;
+const SCRAPE_MAX_CONCURRENCY = 4;
+
+export interface ScrapeSpec {
+  urls: string[];
+  read: string;
+  fields?: Record<string, string>;
+  concurrency: number;
+  profile: string;
+}
+
+/**
+ * The body of a `scrape`, validated the way a single `open` and a single read
+ * would be — every URL through `safeUrl` and the origin allow-list, the read
+ * through its own `parseAsk` — so a list of forty pages cannot reach further
+ * than one page could. The concurrency cap is small on purpose: these are
+ * tabs in a person's window, not workers in a pool.
+ */
+export function parseScrape(b: Record<string, unknown>, caller?: Record<string, unknown>): { error: string } | ScrapeSpec {
+  if (!Array.isArray(b.urls) || b.urls.length === 0) return { error: "scrape needs urls: [\"https://...\", ...]" };
+  if (b.urls.length > SCRAPE_MAX_URLS) return { error: `scrape takes at most ${SCRAPE_MAX_URLS} urls, got ${b.urls.length}` };
+  const urls: string[] = [];
+  const list = allowedOrigins();
+  for (const raw of b.urls) {
+    const url = safeUrl(raw);
+    if (!url) return { error: `${String(raw).slice(0, 200)}: url must be an http(s) address` };
+    const host = new URL(url).host;
+    if (!originAllowed(host, list)) {
+      const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")})`;
+      recordAudit("newtab", { url }, false, msg, false, undefined, caller);
+      return { error: msg };
+    }
+    urls.push(url);
+  }
+  const read = typeof b.read === "string" && b.read ? b.read : "markdown";
+  if (!SCRAPE_READS.has(read)) return { error: `read must be one of ${[...SCRAPE_READS].join(", ")}` };
+  let fields: Record<string, string> | undefined;
+  if (read === "extract") {
+    const parsed = parseAsk("extract", { fields: b.fields });
+    if ("error" in parsed) return { error: parsed.error };
+    fields = parsed.ask.args.fields as Record<string, string>;
+  }
+  let concurrency = 2;
+  if (b.concurrency !== undefined) {
+    if (typeof b.concurrency !== "number" || !Number.isInteger(b.concurrency) || b.concurrency < 1 || b.concurrency > SCRAPE_MAX_CONCURRENCY) {
+      return { error: `concurrency must be a whole number from 1 to ${SCRAPE_MAX_CONCURRENCY}` };
+    }
+    concurrency = b.concurrency;
+  }
+  const profile = typeof b.profile === "string" ? b.profile : "";
+  return { urls, read, fields, concurrency, profile };
+}
+
+export interface ScrapedPage { url: string; ok: boolean; tab?: string; value?: unknown; error?: string; ms: number }
+
+/**
+ * Several pages, read in parallel, each in a tab of its own that is closed
+ * again whatever happened in it.
+ *
+ * Not `lanes`: a lane is several verbs on a page that already exists, and
+ * this is the same read on pages that do not exist yet. Each URL is a
+ * `newtab` in the caller's container, the read addressed to that tab, and a
+ * `closetab` in a `finally` — a failed read is a row with an error, not a tab
+ * left open in somebody's window. At most `concurrency` tabs are open at once;
+ * rows come back in the order the URLs were given, whatever order they
+ * finished in. Every ask goes through `askBrowser`, so each is audited and
+ * each is held to the owner check like a hand-typed one.
+ */
+export async function runScrape(spec: ScrapeSpec, caller: Record<string, unknown> = {}): Promise<{ ok: boolean; value: { pages: ScrapedPage[]; failed: number } }> {
+  const rows: ScrapedPage[] = new Array(spec.urls.length);
+  let next = 0;
+  const one = async (url: string): Promise<ScrapedPage> => {
+    const started = Date.now();
+    const minted = parseAsk("newtab", { ...caller, url, profile: spec.profile });
+    if ("error" in minted) return { url, ok: false, error: minted.error, ms: Date.now() - started };
+    const tab = await askBrowser(minted.ask);
+    const id = tab.ok && tab.value && typeof tab.value === "object" ? (tab.value as { id?: unknown }).id : undefined;
+    if (!tab.ok || typeof id !== "string" || !id) {
+      return { url, ok: false, error: tab.error || "the window did not say which tab it opened", ms: Date.now() - started };
+    }
+    try {
+      const read = parseAsk(spec.read as BrowserOp, { ...caller, page: id, ...(spec.fields ? { fields: spec.fields } : {}) });
+      if ("error" in read) return { url, ok: false, tab: id, error: read.error, ms: Date.now() - started };
+      const reply = await askBrowser(read.ask);
+      return reply.ok
+        ? { url, ok: true, tab: id, value: reply.value, ms: Date.now() - started }
+        : { url, ok: false, tab: id, error: reply.error || "the read failed", ms: Date.now() - started };
+    } finally {
+      const close = parseAsk("closetab", { ...caller, id });
+      if (!("error" in close)) await askBrowser(close.ask).catch(() => undefined);
+    }
+  };
+  const worker = async () => {
+    while (next < spec.urls.length) {
+      const i = next++;
+      rows[i] = await one(spec.urls[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(spec.concurrency, spec.urls.length) }, worker));
+  const failed = rows.filter((r) => !r.ok).length;
+  return { ok: true, value: { pages: rows, failed } };
+}
+
 export async function runSteps(
   steps: Array<{ op: unknown; args: unknown }>,
   /** `page` is the tab the trailing observation must describe. A lane passes

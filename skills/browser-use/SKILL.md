@@ -56,6 +56,7 @@ page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 act         click · type · select · check · fill · hover · dblclick · rightclick
             focus · blur · press · scroll · drag · upload
 wait        wait · waitfor (--until network-idle | no-timers) · events
+many pages  scrape URL... (--read markdown|links|extract… --concurrency 1-4): a tab each, closed after
 navigate    open · back · forward · reload
 tabs        tabs · tab · newtab · closetab · profiles
 containers  whoami · profiles (--make/--drop) · newtab --profile · lanes

@@ -667,7 +667,7 @@ def budget_value(value, max_tokens):
     # the tail goes (nothing is more or less relevant in a link list), and
     # `extract`'s fields shrink each value instead of dropping whole fields —
     # a field a caller asked for by name is what it came to find.
-    for key in ("links", "matches", "elements"):
+    for key in ("links", "matches", "elements", "pages"):
         arr = value.get(key)
         if _size(value) <= budget_chars:
             break
@@ -750,6 +750,9 @@ def summarize(cmd, value):
         fields = value.get("fields") or {}
         found = sum(1 for v in fields.values() if v is not None)
         return f"{found}/{len(fields)} fields" + (f", no match: {', '.join(value['notFound'])}" if value.get("notFound") else "")
+    if cmd == "scrape":
+        pages = value.get("pages") or []
+        return f"{len(pages) - int(value.get('failed') or 0)}/{len(pages)} pages read" + (f", {value['failed']} failed" if value.get("failed") else "")
     if cmd == "interactive":
         els = value.get("elements") or []
         return f"{len(els)} of {value.get('total', len(els))} interactive" + (f", {value['hidden']} hidden" if value.get("hidden") else "")
@@ -1658,6 +1661,18 @@ def main():
     p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
     p.add_argument("path", nargs="?", help="path to save the trace to (required for stop)")
     p = sub.add_parser(
+        "scrape",
+        help="several pages, one read each, in parallel — each in a tab of its own, closed again after",
+        description="Every URL is opened in a new tab in your container, read with --read, and the tab is "
+                    "closed whatever happened. At most --concurrency tabs at once (1 to 4). Rows come back "
+                    "in the order the URLs were given, each ok or with its own error.",
+    )
+    p.add_argument("urls", nargs="+", metavar="URL")
+    p.add_argument("--read", default="markdown", choices=["markdown", "read", "links", "extract", "interactive", "forms"],
+                   help="what to read from each page (default markdown)")
+    p.add_argument("--field", action="append", default=[], metavar="NAME=SELECTOR", help="for --read extract: one field, repeatable")
+    p.add_argument("--concurrency", type=int, default=2, help="tabs open at once, 1 to 4 (default 2)")
+    p = sub.add_parser(
         "do",
         help="several verbs in ONE call — starting this process costs ~104ms, so six "
              "verbs is most of a second spent before touching the page",
@@ -2206,6 +2221,20 @@ def main():
         body = {"query": a.query}
     elif a.cmd in ("interactive", "forms"):
         body = {}
+    elif a.cmd == "scrape":
+        body = {"urls": a.urls, "read": a.read, "concurrency": a.concurrency}
+        if a.read == "extract":
+            fields = {}
+            for pair in a.field:
+                name, _, sel = pair.partition("=")
+                if not name.strip() or not sel.strip():
+                    print(f"--field wants NAME=SELECTOR, got {pair!r}", file=sys.stderr)
+                    return 2
+                fields[name.strip()] = sel.strip()
+            if not fields:
+                print("--read extract needs at least one --field NAME=SELECTOR", file=sys.stderr)
+                return 2
+            body["fields"] = fields
     elif a.cmd == "attr":
         body = {"selector": a.selector}
         if a.names:
@@ -2273,8 +2302,12 @@ def main():
     # Lost once, at the merge of two lanes that both rewrote this spot, and
     # caught by `whoami` answering `identity: null` — which is a pre-flight
     # that cannot answer the question it exists for.
-    if who and a.cmd in ("whoami", "profiles", "open", "newtab"):
+    if who and a.cmd in ("whoami", "profiles", "open", "newtab", "scrape"):
         body["identity"] = who
+    if a.cmd == "scrape":
+        # Its tabs are minted in the caller's container, the way `open` mints
+        # one: the empty profile is the person's own container, `--shared`.
+        body["profile"] = who or ""
     if who and a.cmd in ("whoami", "profiles"):
         held = my_tab(who)
         if held:
@@ -2360,7 +2393,7 @@ def main():
     # the screen — never about a page inside a tab. They are in here so they are
     # not auto-addressed at this identity's tab, and `page` is stripped from
     # them below so a stray global `--page` cannot address them either.
-    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings"}
+    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape"}
     # `open` under `--shared` carries neither a page nor a profile ON PURPOSE:
     # the person's own container IS the empty profile field, so "make me a tab
     # there" is a request with nothing on it. That is the one shape that looks
