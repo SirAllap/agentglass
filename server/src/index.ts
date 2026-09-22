@@ -4993,11 +4993,13 @@ const server = Bun.serve<WsData>({
       // seedRepoDirs. Once per process: a file that cannot be written must not
       // be retried on every open.
       if (ignoreScope && repoDirsUnstated()) {
+        // Never rejects: a seed that threw would otherwise answer every later
+        // read with the same error, and the picker is the way out of anything.
         await (pickerSeed ??= (async () => {
           const known = await knownProjectRoots(getChanges(300).map((c) => c.file_path), knownProjects().map((p) => p.path), hiddenProjects());
           const r = seedRepoDirs([...workspaceRoots(), ...known]);
           if (!r.ok) console.error(`[picker] could not save the folders an upgrade seeds: ${r.error}`);
-        })());
+        })().catch((e) => console.error(`[picker] could not seed the folders: ${e instanceof Error ? e.message : e}`)));
       }
       // Single-flighted: this sweep is a `git status` per repo across every
       // checkout, and several open tabs asking at the same instant would each
