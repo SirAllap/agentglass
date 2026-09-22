@@ -26,7 +26,7 @@ const guard: {
   blockedAddress: (ip: string) => string | null;
   privateAddress: (ip: string) => boolean;
   literalRefusal: (url: string) => string | null;
-  createResolver: (opts?: { lookup?: (host: string) => Promise<Answer[]>; remember?: Map<string, string> }) => (host: string) => Promise<Resolved>;
+  createResolver: (opts?: { lookup?: (host: string) => Promise<Answer[]>; remember?: Map<string, string>; maxRemembered?: number }) => (host: string) => Promise<Resolved>;
   startEgressProxy: (opts?: {
     resolve?: (host: string) => Promise<Resolved>;
     connect?: (o: { host: string; port: number }) => net.Socket;
@@ -72,7 +72,7 @@ describe("what an address is", () => {
   });
 });
 
-describe("the resolver: every answer judged, and a name pinned to the class it was first met as", () => {
+describe("the resolver: every answer judged, a mixed set refused, and a name that ever answered public pinned public", () => {
   const A = (...ips: string[]): Answer[] => ips.map((address) => ({ address, family: address.includes(":") ? 6 : 4 }));
 
   test("a name that answers the metadata address is refused, and so is a name that answers it among others", async () => {
@@ -118,6 +118,96 @@ describe("the resolver: every answer judged, and a name pinned to the class it w
     expect((await resolve("box.example")).ok).toBe(true);
     answer = A("93.184.216.34");
     expect((await resolve("box.example")).ok).toBe(true);
+  });
+
+  /* Three shapes the first version let through. Each is the same attack —
+     a page's own hostname ending up at a loopback or LAN address under an
+     origin that address trusts — wearing a different DNS answer. */
+
+  test("a name that answers a public AND a private address in one set is refused outright: multiple-A-record rebinding", async () => {
+    // The first version pinned such a name private (any private answer made
+    // the class private) and connected in order: the page loaded from the
+    // public address, then that port closed and the next connection fell
+    // through to 127.0.0.1 under the same origin.
+    const resolve = guard.createResolver({ lookup: async () => A("93.184.216.34", "127.0.0.1") });
+    const r = await resolve("both.example");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain("127.0.0.1");
+      expect(r.reason).toMatch(/public.*private|private.*public/);
+    }
+    // And not remembered as private for a later, cleaner answer to lean on.
+    const later = guard.createResolver({ lookup: async () => A("10.0.0.7", "203.0.113.9") });
+    expect((await later("both.example")).ok).toBe(false);
+  });
+
+  test("a name pinned private first, then public, then private again is refused: pre-pinning", async () => {
+    // The page loads <img src=http://rb.evil.example/> while rb answers 10.x
+    // (pinned private), then rb answers the public attack page, then
+    // 127.0.0.1. The first version kept the first pin, and every step passed.
+    // A name that has EVER answered public is public from then on.
+    let answer = A("10.0.0.5");
+    const resolve = guard.createResolver({ lookup: async () => answer });
+    expect((await resolve("rb.example")).ok).toBe(true);
+    answer = A("93.184.216.34");
+    expect((await resolve("rb.example")).ok, "a dev name that moved to a public address is fine").toBe(true);
+    answer = A("127.0.0.1");
+    const r = await resolve("rb.example");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/rebinding/);
+  });
+
+  test("a public pin is never evicted: a page cannot push its own name out of the memory with fresh names", async () => {
+    // With FIFO eviction a page requested N fresh subdomains, its own public
+    // pin fell off the front, and the next answer was pinned fresh as
+    // private. A pin now stays for the life of the process, and private
+    // names take no slot at all.
+    const remember = new Map<string, string>();
+    let answer = A("93.184.216.34");
+    const resolve = guard.createResolver({ lookup: async () => answer, remember, maxRemembered: 4 });
+    expect((await resolve("victim.example")).ok).toBe(true);
+    // Ten fresh names against four slots: the memory fills and stays full,
+    // and the victim's pin is still in it.
+    const outcomes = [];
+    for (let i = 0; i < 10; i++) outcomes.push((await resolve(`fresh${i}.example`)).ok);
+    expect(outcomes.slice(0, 3)).toEqual([true, true, true]);
+    expect(outcomes.slice(3).some(Boolean), "no new name after the memory is full").toBe(false);
+    expect(remember.size).toBeLessThanOrEqual(4);
+    expect(remember.get("victim.example")).toBe("public");
+    answer = A("127.0.0.1");
+    expect((await resolve("victim.example")).ok, "the pin survived the churn").toBe(false);
+    // A private name is not remembered: judged fresh every time, allowed
+    // every time, and never in the way of a public pin — so a full memory
+    // does not refuse the dev box.
+    const priv = new Map<string, string>();
+    let a2 = A("10.0.0.5");
+    const r2 = guard.createResolver({ lookup: async () => a2, remember: priv, maxRemembered: 2 });
+    expect((await r2("dev1.test")).ok).toBe(true);
+    expect(priv.has("dev1.test")).toBe(false);
+    a2 = A("93.184.216.34");
+    expect((await r2("pub0.example")).ok).toBe(true);
+    expect((await r2("pub1.example")).ok).toBe(true);
+    a2 = A("10.0.0.5");
+    expect((await r2("dev1.test")).ok, "full of public pins, a private name still passes").toBe(true);
+    expect((await r2("dev2.test")).ok).toBe(true);
+    a2 = A("93.184.216.34");
+    expect((await r2("dev2.test")).ok, "and a private name that goes public needs a slot").toBe(false);
+  });
+
+  test("when the memory is all public pins and full, a NEW name is refused with the reason, not let through unpinned", async () => {
+    // The ceiling, said out loud: a page grinding through hostnames can fill
+    // the memory, and what it gets for it is a loud refusal of new names,
+    // not a silent hole. Names already pinned keep working.
+    const remember = new Map<string, string>();
+    const resolve = guard.createResolver({ lookup: async () => A("93.184.216.34"), remember, maxRemembered: 3 });
+    for (let i = 0; i < 3; i++) expect((await resolve(`p${i}.example`)).ok).toBe(true);
+    const r = await resolve("one-more.example");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/memory|full/);
+      expect(r.reason).toContain(guard.EGRESS_ENV);
+    }
+    expect((await resolve("p0.example")).ok, "a pinned name still resolves").toBe(true);
   });
 
   test("a literal is judged as it is and never looked up", async () => {
@@ -287,6 +377,32 @@ describe("the proxy: one resolution per connection, and the socket goes where th
     expect(second).toMatch(/^HTTP\/1\.1 403 /);
     expect(second).toContain("rebinding");
     expect(connects, "no second socket was opened").toEqual([`203.0.113.9:${targetPort}`]);
+  });
+
+  test("the socket never falls from a public address to a private one, even if a resolver hands it that list", async () => {
+    // Belt to the resolver's braces: the resolver refuses a mixed set, and
+    // if one ever reached here the second address would not be tried.
+    connects = [];
+    const mixed = await guard.startEgressProxy({
+      resolve: async () => ({ ok: true, addresses: ["203.0.113.9", "127.0.0.1"] }),
+      connect: (o) => { connects.push(`${o.host}:${o.port}`); const s = new net.Socket(); setTimeout(() => s.destroy(new Error("closed")), 10); return s; },
+      headTimeoutMs: 2000,
+    });
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        const sock = net.connect({ host: "127.0.0.1", port: mixed.port });
+        let got = "";
+        sock.on("connect", () => sock.write(`CONNECT mixed.example:${targetPort} HTTP/1.1\r\nHost: mixed.example\r\n\r\n`));
+        sock.on("data", (d) => { got += d.toString("latin1"); });
+        sock.on("close", () => resolve(got));
+        sock.on("error", reject);
+        setTimeout(() => { sock.destroy(); resolve(got); }, 4000);
+      });
+      expect(out).toMatch(/^HTTP\/1\.1 (502|403) /);
+      expect(connects).toEqual([`203.0.113.9:${targetPort}`]);
+    } finally {
+      mixed.close();
+    }
   });
 
   test("an upstream that refuses the connection is a 502, not a hang", async () => {

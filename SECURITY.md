@@ -731,12 +731,19 @@ because the browser resolves it again when it connects and a name may answer
 differently the second time. So the desktop app also runs an **egress guard**:
 a proxy on a loopback port that every browsing session is pointed at, which
 resolves each name once per connection, refuses any answer in those ranges,
-opens the socket to the address it judged, and refuses a name that answered a
-public address when first met and a private or loopback one later — the DNS
-rebinding shape. A name that was private from its first answer (a hosts-file
-entry, a LAN box) stays allowed, so nothing about local development changes.
+opens the socket to the address it judged, refuses a name that answers a public
+and a private address in one set, and refuses a name that has ever answered a
+public address when it later answers a private or loopback one — the DNS
+rebinding shapes. A public name is remembered for the life of the app and never
+forgotten to make room; when the memory is full (100k names) a new public name
+is refused by name rather than let through unpinned. A name that has only ever
+answered private (a hosts-file entry, a LAN box) is judged fresh every time and
+stays allowed, so nothing about local development changes.
 `AGENTGLASS_BROWSER_EGRESS=off` turns the guard off; a proxy set through the
-`session` verb replaces it while set, and the verb says so.
+`session` verb replaces it while set, and the verb says so — which is also the
+ceiling: an agent with the `session` verb can replace the guard with a direct
+rule before it opens a name, and the reply says the guard is off rather than
+refusing. The verb is one that acts, so read-only mode refuses it.
 
 ## What leaves through the webhook
 

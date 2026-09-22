@@ -29,13 +29,32 @@
 //   - any answer that is link-local or unspecified refuses the whole name: a
 //     name with one public record and one link-local one is a name whose owner
 //     wants the second used.
-//   - a name is remembered by the class of its first answer, public or private
-//     (loopback, RFC1918, CGNAT, unique-local). A name first met as public that
-//     later answers private is refused: that is the rebinding shape, and
-//     nothing else looks like it. A name that was private from its first answer
-//     stays allowed — `myapp.test` in a hosts file, a LAN box, a tailnet name —
-//     which is what keeps local development working without an allow-list. The
-//     memory lasts as long as the app does.
+//   - an answer set that mixes a public address with a private one (loopback,
+//     RFC1918, CGNAT, unique-local) refuses the whole name. That is
+//     multiple-A-record rebinding: the page loads from the public address,
+//     that port closes, and the next connection falls through to 127.0.0.1
+//     under the same origin. The first version pinned such a name private and
+//     tried the addresses in order, which is exactly that.
+//   - a name is remembered by class, and "public" is sticky: a name that has
+//     EVER answered public is public from then on, and a private answer for
+//     it is refused. That is the rebinding shape. The first version pinned the
+//     FIRST answer only, so a page could pre-pin its name private with one
+//     early request, answer public for the attack page, then answer loopback,
+//     and every step passed. A name that has only ever answered private stays
+//     allowed — `myapp.test` in a hosts file, a LAN box, a tailnet name —
+//     which is what keeps local development working without an allow-list.
+//     A private name that moves to a public address is fine (a dev box that
+//     grew a public name); it is the way back that is refused.
+//   - only public names are remembered, and a pin is never evicted. A private
+//     answer needs no memory: judged fresh every time, it is allowed every
+//     time, and the moment the name answers public it is pinned. The first
+//     version remembered both classes and evicted FIFO, so a page could
+//     request N fresh subdomains, push its own public pin off the front, and
+//     be pinned fresh as private. The memory is bounded, and when it is full
+//     a NEW public name is refused with the reason: a page grinding through
+//     hostnames gets a loud refusal of new names, never a silent hole; names
+//     already pinned, and every private name, keep working. The memory lasts
+//     as long as the app does.
 //
 // What this cannot do, written down so a gap is not read as a choice:
 //   - Chromium sends localhost, 127/8, ::1 and link-local LITERALS straight to
@@ -65,6 +84,11 @@ const EGRESS_ENV = "AGENTGLASS_BROWSER_EGRESS";
 const STATUS_TEXT = { 400: "Bad Request", 403: "Forbidden", 408: "Request Timeout", 431: "Request Header Fields Too Large", 502: "Bad Gateway" };
 const HEAD_CAP = 64 * 1024;
 const REFUSALS_KEPT = 50;
+/* Public names remembered. A pin is never evicted, so this is also how many
+   distinct public names a session may meet before new ones are refused:
+   100k pins is a few megabytes, and more names than a person meets in a
+   session by orders of magnitude. */
+const MAX_REMEMBERED = 100_000;
 
 /** The eight 16-bit groups of a valid IPv6 address (isIP has already said v6),
  *  with `::` expanded and a trailing dotted-quad folded into two groups. */
@@ -162,7 +186,7 @@ function literalRefusal(url) {
 function createResolver(opts = {}) {
   const lookup = opts.lookup || ((h) => dns.promises.lookup(h, { all: true, verbatim: true }));
   const remember = opts.remember || new Map();
-  const MAX_REMEMBERED = 5000;
+  const maxRemembered = opts.maxRemembered || MAX_REMEMBERED;
   return async function resolve(hostRaw) {
     const host = strip(hostRaw);
     if (!host) return { ok: false, reason: "no host" };
@@ -179,19 +203,33 @@ function createResolver(opts = {}) {
       if (why) return { ok: false, reason: `${host} resolves to ${a.address}, which is ${why}` };
     }
     const priv = answers.find((a) => privateAddress(a.address));
-    const klass = priv ? "private" : "public";
-    const first = remember.get(host);
-    if (first === "public" && klass === "private") {
+    const pub = answers.find((a) => !privateAddress(a.address));
+    if (priv && pub) {
       return {
         ok: false,
-        reason: `${host} answered a public address when this session first met it and now answers ${priv.address}, `
+        reason: `${host} answers both a public address (${pub.address}) and a private or loopback one (${priv.address}) — `
+          + "a name whose owner wants the second reached under the first's origin, the multiple-record shape of DNS rebinding, refused.",
+      };
+    }
+    const pinnedPublic = remember.get(host) === "public";
+    if (priv && pinnedPublic) {
+      return {
+        ok: false,
+        reason: `${host} answered a public address earlier in this session and now answers ${priv.address}, `
           + "a private or loopback one — the shape of DNS rebinding, refused. If the name really moved (a VPN that came up, "
           + `a hosts file edit), restart the app, or set ${EGRESS_ENV}=off.`,
       };
     }
-    if (!first) {
-      if (remember.size >= MAX_REMEMBERED) remember.delete(remember.keys().next().value);
-      remember.set(host, klass);
+    if (!priv && !pinnedPublic) {
+      if (remember.size >= maxRemembered) {
+        return {
+          ok: false,
+          reason: `${host} is a public name this session has not met, and the egress guard's memory of names is full (${maxRemembered}) — `
+            + "the shape of a page grinding through hostnames to push its own out. Names already met still work; "
+            + `for new ones, restart the app, or set ${EGRESS_ENV}=off.`,
+        };
+      }
+      remember.set(host, "public");
     }
     /* IPv4 first, whatever order the resolver used: the proxy tries these in
        turn, and a v6 answer on a network with no v6 route is a wait for a
@@ -247,12 +285,17 @@ function startEgressProxy(opts = {}) {
     client.end(head + body);
   };
 
-  /** Open a socket to the first address that answers, in order. */
+  /** Open a socket to the first address that answers, in order — and never
+   *  to one of a different class than the first: the resolver refuses a
+   *  mixed set, and if one ever reached here the fall-through from a public
+   *  address to a private one is the attack itself, so the list ends there. */
   const connectAny = (addresses, port) => new Promise((done, fail) => {
     let i = 0;
+    const firstPrivate = addresses.length ? privateAddress(addresses[0]) : false;
     const next = (lastErr) => {
       if (i >= addresses.length) return fail(lastErr || new Error("no address to connect to"));
       const host = addresses[i++];
+      if (privateAddress(host) !== firstPrivate) return fail(lastErr || new Error(`${host} is not of the class the name was judged as`));
       let settled = false;
       const sock = connect({ host, port });
       const timer = setTimeout(() => { if (!settled) { settled = true; sock.destroy(); next(new Error(`${host}: connect timed out`)); } }, connectTimeoutMs);
