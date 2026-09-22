@@ -28,7 +28,7 @@ import { Latency } from "./Latency.tsx";
 import { Sessions } from "./Sessions.tsx";
 import { MissionTimeline } from "./MissionTimeline.tsx";
 import { UsageBox } from "./UsageBox.tsx";
-import { FleetVerdictStrip } from "./FleetVerdictStrip.tsx";
+import { FleetVerdictStrip, useFleetVerdict } from "./FleetVerdictStrip.tsx";
 import { Select } from "./Select.tsx";
 import type { AgentCard, Alert } from "../lib/derive.ts";
 import { CrossIcon } from "../lib/glyphIcons.tsx";
@@ -90,6 +90,9 @@ export function DashboardView({
     return () => clearInterval(id);
   }, [active]);
 
+  /* Read once, for the strip and the KPI tiles alike: one screen, one count. */
+  const fleet = useFleetVerdict();
+
   const hasFilter = filter.app || filter.type || filter.provider;
   const selStyle = {
     background: "color-mix(in srgb, var(--bg3) 40%, transparent)",
@@ -141,11 +144,11 @@ export function DashboardView({
       {/* The answer before the charts: what is running, what is stuck, what
           needs you. Outside the scroller, so it is the first thing on the
           screen however far down the panels have been read. */}
-      <FleetVerdictStrip onOpenLantern={onOpenLantern} />
+      <FleetVerdictStrip verdict={fleet} onOpenLantern={onOpenLantern} />
 
       <div className="flex-1 min-h-0 p-3 flex flex-col gap-3 overflow-auto tall:overflow-hidden agx-scroll">
         <div className="shrink-0">
-          <Kpis stats={stats} agents={agents} startedAt={startedAt} epm={epm} />
+          <Kpis stats={stats} agents={agents} fleet={fleet} startedAt={startedAt} epm={epm} />
         </div>
 
         <div className="shrink-0 min-h-0 tall:flex-1 grid grid-cols-1 xl:grid-cols-12 gap-3">

@@ -35,7 +35,13 @@ export interface VerdictClause {
   paneId?: string;
 }
 
-export interface FleetVerdict { tone: VerdictTone; clauses: VerdictClause[] }
+export interface FleetVerdict {
+  tone: VerdictTone;
+  clauses: VerdictClause[];
+  /** Every count, the zeros too: the KPI tiles under the strip draw these, so
+   *  the two cannot show different numbers on one screen. */
+  counts: { running: number; stuck: number; need: number };
+}
 
 const waitWord = (w: NonNullable<LanternRow["needsYou"]>) =>
   w.kind === "permission" ? "needs your permission" : "held at the gate";
@@ -75,5 +81,8 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
       text: one && w ? `${one.name}: ${w.why || waitWord(w)}` : `${need.length} need you`,
     });
   }
-  return { tone: need.length ? "critical" : stuck.length ? "warn" : "calm", clauses };
+  return {
+    tone: need.length ? "critical" : stuck.length ? "warn" : "calm", clauses,
+    counts: { running: running.length, stuck: stuck.length, need: need.length },
+  };
 }

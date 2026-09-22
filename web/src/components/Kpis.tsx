@@ -2,6 +2,7 @@ import NumberFlow from "@number-flow/react";
 import { motion } from "motion/react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import type { AgentCard } from "../lib/derive.ts";
+import type { FleetVerdict } from "../lib/fleetVerdict.ts";
 import { useTicker, fmtClock } from "../lib/motion.ts";
 import { fmtUsd, usdDigits, eqTitle } from "../lib/format.ts";
 import { HealthRing } from "./HealthRing.tsx";
@@ -27,12 +28,13 @@ function Spark({ values, color }: { values: number[]; color: string }) {
   );
 }
 
-function PulseCell({ k, v, u, accent }: { k: string; v: number; u: string; accent?: string }) {
+/** `null` is "not known" — a board not read yet — and is drawn as a dash, never as 0. */
+function PulseCell({ k, v, u, accent }: { k: string; v: number | null; u: string; accent?: string }) {
   return (
     <div className="px-4 py-3 min-w-0">
       <div className="panel-eyebrow">{k}</div>
-      <div className="text-[23px] font-semibold leading-none tabular-nums mt-1" style={{ color: accent ?? "var(--text)" }}>
-        <NumberFlow value={v} />
+      <div className="text-[23px] font-semibold leading-none tabular-nums mt-1" style={{ color: v === null ? "var(--text4)" : accent ?? "var(--text)" }}>
+        {v === null ? "–" : <NumberFlow value={v} />}
       </div>
       <div className="text-[10px] t-dim2 mt-1 truncate">{u}</div>
     </div>
@@ -42,8 +44,8 @@ function PulseCell({ k, v, u, accent }: { k: string; v: number; u: string; accen
 const CELL_BG = "color-mix(in srgb, var(--bg2) 66%, transparent)";
 
 /** A status cell that only lights up when it needs attention. */
-function StatusCell({ k, v, color }: { k: string; v: number; color: string }) {
-  const hot = v > 0;
+function StatusCell({ k, v, color }: { k: string; v: number | null; color: string }) {
+  const hot = (v ?? 0) > 0;
   return (
     <div
       className="flex items-center gap-3 px-4 py-3 min-w-0"
@@ -56,7 +58,7 @@ function StatusCell({ k, v, color }: { k: string; v: number; color: string }) {
       <div className="min-w-0">
         <div className="panel-eyebrow">{k}</div>
         <div className="text-[22px] font-semibold leading-none tabular-nums mt-0.5" style={{ color: hot ? color : "var(--text3)" }}>
-          <NumberFlow value={v} />
+          {v === null ? "–" : <NumberFlow value={v} />}
         </div>
       </div>
     </div>
@@ -66,23 +68,36 @@ function StatusCell({ k, v, color }: { k: string; v: number; color: string }) {
 export function Kpis({
   stats,
   agents,
+  fleet,
   startedAt,
   epm,
 }: {
   stats: StatsSummary | null;
   agents: AgentCard[];
+  fleet: FleetVerdict | null;
   startedAt: number;
   epm: number;
 }) {
   const elapsed = useTicker(startedAt);
   const t = stats?.totals;
-  const working = agents.filter((a) => a.status === "working").length;
-  const waiting = agents.filter((a) => a.status === "waiting").length;
-  // Counted separately rather than folded into `working`, and said out loud
-  // under that number. A stalled session is running — it holds a pane, a
-  // process and a bill — but calling it working is the claim this whole state
-  // exists to stop the cockpit making.
-  const stalled = agents.filter((a) => a.status === "stalled").length;
+  /*
+   * The agent tiles are the strip's counts, from the same verdict object.
+   *
+   * They counted the hook-derived cards while the strip above them counted the
+   * Lantern's board, and one screen said "1 running · orbit-web needs your
+   * permission" in red over "WORKING 8 · WAITING 0". So they are the fleet's
+   * numbers, like the strip: the provider filter narrows the panels, not these.
+   *
+   * No separate "stalled" figure. It was said out loud under the working count
+   * because a session hung on a tool is running — it holds a pane, a process
+   * and a bill — but calling it working is the claim the cockpit must not make.
+   * The board keeps that promise by itself: "working" there is a session that
+   * said something in the last ten minutes, so a hung one leaves the count, and
+   * one that claimed work comes back as stuck after the hour.
+   */
+  const working = fleet?.counts.running ?? null;
+  const need = fleet?.counts.need ?? null;
+  const stuck = fleet?.counts.stuck ?? 0;
   const failed = t?.errors ?? 0;
   const tools = t?.tool_calls ?? 0;
   // Health is a *tool* failure rate, so its numerator has to be tool failures.
@@ -164,7 +179,7 @@ export function Kpis({
       {/* pulse — the live tempo, grouped */}
       <motion.div {...enter} transition={{ delay: 0.05, type: "spring", stiffness: 300, damping: 26 }} className="panel">
         <div className="grid grid-cols-3 h-full" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", gap: "1px" }}>
-          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u={stalled > 0 ? `${stalled} stalled` : "Live agents"} accent="var(--success)" /></div>
+          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u={stuck > 0 ? `${stuck} stuck` : "Live agents"} accent="var(--success)" /></div>
           <div style={{ background: CELL_BG }}><PulseCell k="Events / min" v={epm} u="Throughput" accent="var(--info)" /></div>
           <div style={{ background: CELL_BG }}><PulseCell k="Tools run" v={tools} u={`${(t?.events ?? 0).toLocaleString()} events`} /></div>
         </div>
@@ -174,7 +189,7 @@ export function Kpis({
       <motion.div {...enter} transition={{ delay: 0.1, type: "spring", stiffness: 300, damping: 26 }} className="panel">
         <div className="grid grid-cols-2 flex-1" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", gap: "1px" }}>
           <StatusCell k="Failed" v={failed} color="var(--error)" />
-          <StatusCell k="Waiting" v={waiting} color="var(--warning)" />
+          <StatusCell k="Needs you" v={need} color="var(--error)" />
         </div>
         <div
           className="px-4 py-2 text-[10px] t-dim2 text-right tabular-nums"

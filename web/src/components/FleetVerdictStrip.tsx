@@ -4,21 +4,26 @@
  * the wash of the worst tone when something does, and every clause a way to
  * the thing it counted.
  *
- * It reads the Lantern's store and asks for nothing: the rail's pip already
- * subscribes to the same store for the life of the app, so the strip adds no
- * poll of its own.
+ * The verdict is read once, by `useFleetVerdict`, in the dashboard, which
+ * hands the same object to this line and to the KPI tiles under it: read
+ * twice, the two could disagree for the length of a render. It reads the
+ * Lantern's store and asks for nothing: the rail's pip already subscribes to
+ * the same store for the life of the app, so this adds no poll of its own.
  */
 import { useSyncExternalStore } from "react";
 import { subscribeLantern, lanternRows, lanternFailed } from "../lib/lanternStore.ts";
-import { fleetVerdict, type VerdictClause, type VerdictTone } from "../lib/fleetVerdict.ts";
+import { fleetVerdict, type FleetVerdict, type VerdictClause, type VerdictTone } from "../lib/fleetVerdict.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
 
 const ink: Record<VerdictTone, string> = { calm: "var(--success)", warn: "var(--warning)", critical: "var(--error)" };
 
-export function FleetVerdictStrip({ onOpenLantern }: { onOpenLantern: () => void }) {
+export function useFleetVerdict(): FleetVerdict | null {
   const rows = useSyncExternalStore(subscribeLantern, lanternRows, lanternRows);
   const failed = useSyncExternalStore(subscribeLantern, lanternFailed, lanternFailed);
-  const v = fleetVerdict(rows, Date.now(), failed);
+  return fleetVerdict(rows, Date.now(), failed);
+}
+
+export function FleetVerdictStrip({ verdict: v, onOpenLantern }: { verdict: FleetVerdict | null; onOpenLantern: () => void }) {
   if (!v) return null;
   const loud = v.tone !== "calm";
   /* One agent with a pane: go to it. Several, or none reachable: the Lantern,

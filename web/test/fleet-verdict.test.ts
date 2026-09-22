@@ -170,3 +170,40 @@ test("the strip decides nothing about a wait or a silence by itself", () => {
   expect(src).not.toContain("FORGOTTEN_AFTER_MS");
   expect(src).not.toMatch(/kind\s*[!=]==?\s*"input"/);
 });
+
+/*
+ * ONE SCREEN, ONE COUNT.
+ *
+ * The strip counted the Lantern's board and the KPI tiles right under it
+ * counted the hook-derived cards, so one screen read "1 running · 1 stuck ·
+ * orbit-web needs your permission" in red over "WORKING 8 · WAITING 0". The
+ * dashboard reads the verdict once and hands the same object to both.
+ */
+test("the verdict carries the three counts, including the ones with no clause", () => {
+  expect(fleetVerdict([working("a-api"), working("b-web"), row("c-shell")], now)!.counts).toEqual({ running: 2, stuck: 0, need: 0 });
+  expect(fleetVerdict([blocked("a-web"), quiet("b-migrate"), waitedFor("c-api", 2 * 60 * min), working("d-api")], now)!.counts)
+    .toEqual({ running: 1, stuck: 2, need: 1 });
+});
+
+const src = (p: string) => Bun.file(new URL(p, import.meta.url)).text();
+const kpisSrc = code(await src("../src/components/Kpis.tsx"));
+const dashSrc = code(await src("../src/components/DashboardView.tsx"));
+const stripSrc = code(await src("../src/components/FleetVerdictStrip.tsx"));
+
+test("the KPI tiles count agents from the verdict, not from the cards", () => {
+  expect(kpisSrc).not.toMatch(/status\s*===\s*"(working|waiting|stalled)"/);
+  expect(kpisSrc).toContain("fleet?.counts.running");
+  expect(kpisSrc).toContain("fleet?.counts.need");
+});
+
+test("the dashboard reads the verdict once and gives both the same one", () => {
+  expect(dashSrc.match(/useFleetVerdict\(/g)).toHaveLength(1);
+  const name = dashSrc.match(/const (\w+) = useFleetVerdict\(/)?.[1];
+  expect(name).toBeTruthy();
+  expect(dashSrc).toContain(`<FleetVerdictStrip verdict={${name}}`);
+  expect(dashSrc).toMatch(new RegExp(`<Kpis [^>]*fleet=\\{${name}\\}`));
+  // The strip draws what it is given; it does not read the board again.
+  const body = stripSrc.slice(stripSrc.indexOf("export function FleetVerdictStrip("));
+  expect(body).not.toContain("fleetVerdict(");
+  expect(body).not.toContain("useSyncExternalStore(");
+});
