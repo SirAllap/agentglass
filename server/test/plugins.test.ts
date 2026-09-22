@@ -378,6 +378,23 @@ describe("remove", () => {
     expect(pluginSettings("watcher")?.values.token, "the stranger's own kept settings were lost").toBe("acme-secret-7");
   });
 
+  test("installing over a plugin from another source neither hands over its settings nor loses them", async () => {
+    // Not an update: the same name from somewhere else replaces the record,
+    // and the settings used to ride along to the stranger.
+    const withToken = { ...okManifest, contributes: { settings: [{ key: "token", type: "text", label: "Token" }] } };
+    const src = fixture(withToken);
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(setPluginSettings("watcher", { token: "orbit-secret-1042" }).ok).toBe(true);
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.token, "an update from the same place lost its settings").toBe("orbit-secret-1042");
+
+    expect((await installPlugin(fixture(withToken))).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.token ?? "", "a plugin from elsewhere took over the settings").toBe("");
+    expect(await removePlugin("watcher")).toBe(true);
+    expect((await installPlugin(src)).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.token, "replacing it threw the first plugin's settings away").toBe("orbit-secret-1042");
+  });
+
   test("kept settings can still be dropped after the plugin is gone", async () => {
     const withSettings = { ...okManifest, contributes: { settings: [{ key: "prompt", type: "text", label: "Review prompt" }] } };
     expect((await installPlugin(fixture(withSettings))).ok).toBe(true);

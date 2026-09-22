@@ -627,10 +627,18 @@ async function finishInstall(
   const store = read();
   const existing = store.plugins.find((p) => p.name === manifest.name);
   // An update carries the record's settings; a reinstall after an uninstall
-  // picks up the ones the uninstall kept.
-  const kept = store.keptSettings?.[manifest.name]?.[sourceKey(source)];
-  const restored = !existing?.settings && kept !== undefined;
-  const settings = existing?.settings ?? (restored ? kept : undefined);
+  // picks up the ones the uninstall kept. Installing the same name from
+  // another source is not an update: the record's settings belong to the
+  // plugin being replaced, and they are kept for it as a remove would.
+  const from = sourceKey(source);
+  const same = existing !== undefined && sourceKey(existing.source) === from;
+  const displaced = existing && !same && existing.settings && Object.keys(existing.settings).length > 0
+    ? { ...(store.keptSettings ?? {}), [manifest.name]: { ...(store.keptSettings?.[manifest.name] ?? {}), [sourceKey(existing.source)]: existing.settings } }
+    : store.keptSettings;
+  const carried = same ? existing!.settings : undefined;
+  const kept = displaced?.[manifest.name]?.[from];
+  const restored = !carried && kept !== undefined;
+  const settings = carried ?? (restored ? kept : undefined);
   // The reviewer approved a specific declared scope over a specific tree of
   // bytes, not a name — see consentFingerprint. Unchanged keeps its
   // approval; changed loses it, and if it was running, running on the old
@@ -668,7 +676,7 @@ async function finishInstall(
     plugins: [...store.plugins.filter((p) => p.name !== manifest.name), record],
     // Consumed only by the reinstall they belong to: a plugin from elsewhere
     // under the same name neither reads them nor throws them away.
-    keptSettings: restored ? withoutKept(store.keptSettings, manifest.name, sourceKey(source)) : store.keptSettings,
+    keptSettings: restored ? withoutKept(displaced, manifest.name, from) : displaced,
   });
   return { ok: true, plugin: { ...record, running: running.has(record.name), pid: running.get(record.name)?.pid ?? null } };
 }
