@@ -164,6 +164,7 @@ and Bedrock — see [docs/INSTALL.md](docs/INSTALL.md).
 | [**EXTENDING.md**](docs/EXTENDING.md) | Driving agentglass from your own harness, and writing a plugin |
 | [**PLUGINS.md**](docs/PLUGINS.md) | What a plugin is, what it may ask for, and how to publish one |
 | [**CHANGELOG.md**](CHANGELOG.md) | What each release changed |
+| [**AGENTS.md**](AGENTS.md) | The short version for an agent: driving the built-in browser from a session, and working in this repository. `llms.txt` on the site is the same index for a model |
 
 ## 🧩 Two things worth knowing about
 
