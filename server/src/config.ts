@@ -573,8 +573,14 @@ function repoTop(dir: string): string | null {
  * seeds the *initial* scope, but an explicit pick in the UI is newer intent and
  * wins for the rest of this process's life.
  */
+/** More projects than anybody opens together. Each one is a stat and a git
+ *  call on the thread that serves the app, so a longer list is refused before
+ *  any of it is looked at. */
+const MAX_OPEN_PROJECTS = 200;
+
 export function setWorkspaceRoots(rootsIn: readonly unknown[] | null): { ok: boolean; workspaces: string[]; persisted: boolean; error?: string; note?: string } {
   const fail = (error: string) => ({ ok: false as const, workspaces: workspaceRoots(), persisted: false, error });
+  if ((rootsIn?.length ?? 0) > MAX_OPEN_PROJECTS) return fail(`at most ${MAX_OPEN_PROJECTS} projects can be open together`);
   const next: string[] = [];
   for (const rootIn of rootsIn ?? []) {
     if (typeof rootIn !== "string" || !rootIn.trim() || rootIn.includes("\0")) return fail("invalid path");

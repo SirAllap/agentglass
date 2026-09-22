@@ -131,6 +131,15 @@ describe("choosing several projects", () => {
     expect(c.workspaceRoots()).toEqual([]);
   });
 
+  test("a list longer than anybody opens together is refused before any of it is looked at", async () => {
+    // Each root is a stat and a git call on the thread that serves the app.
+    const c = await load();
+    const r = c.setWorkspaceRoots(Array.from({ length: 201 }, () => A));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("at most 200");
+    expect(c.setWorkspaceRoots(Array.from({ length: 200 }, () => A)).ok).toBe(true);
+  });
+
   test("the single-root setter still works for the callers that only have one", async () => {
     const c = await load();
     expect(c.setWorkspaceRoot(B).workspace).toBe(B);
