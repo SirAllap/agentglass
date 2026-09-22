@@ -285,7 +285,7 @@ export function houseBlock(powers: Power, wakeHours: number, root = ""): string 
   const may = powers === "speak"
     ? "You may not start, stop or prompt any agent. If one is stuck, say so — do not push it."
     : powers === "nudge"
-      ? "You may prompt an agent that is ALREADY running, to unstick it (`agentglass-agent prompt --name <n> \"…\"`). You may not start or stop one."
+      ? "You may prompt an agent that is ALREADY running, to unstick it (`agentglass-agent prompt <name> \"…\"`). You may not start or stop one."
       : [
         "You may prompt an agent that is already running, and start or stop named agents (`agentglass-agent start|prompt|stop`).",
         `When you OPEN one, its first message is this project's worker brief — the file beside your rules — and nothing else you write replaces it: \`agentglass-agent start <name> --cwd <checkout> --yolo\`, then \`agentglass-agent prompt <name> --file ${root ? briefPath(root) : "<the brief file beside your rules>"}\`. Every agent gets the same rules, which is what makes their reports comparable.`,
