@@ -93,3 +93,14 @@ export function attention(r: FieldRow, now = Date.now()): Attention | null {
   if (w) return w.kind !== "input" ? "blocked" : now - w.since >= FORGOTTEN_AFTER_MS ? "left" : null;
   return isForgotten(r, now) ? "forgotten" : null;
 }
+
+/**
+ * How long a row has been quiet or waiting, as the notification and the strip
+ * both say it: "45m", "3h", "2d". Floored, never rounded — rounded, ninety
+ * minutes read "2h", half an hour more than anybody had waited, on the one
+ * line whose job is to say how stuck something is.
+ */
+export function howLong(since: number, now = Date.now()): string {
+  const m = Math.max(0, Math.floor((now - since) / 60_000));
+  return m < 1 ? "just now" : m < 60 ? `${m}m` : m < 60 * 24 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / (60 * 24))}d`;
+}

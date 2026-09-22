@@ -72,7 +72,7 @@ test("claimed work quiet for over an hour is stuck — the watch's own rule", ()
   const v = fleetVerdict([quiet("orbit-migrate", { paneId: "%3" })], now)!;
   expect(v.tone).toBe("warn");
   expect(v.clauses.find((c) => c.kind === "stuck")).toMatchObject({
-    count: 1, paneId: "%3", tone: "warn", text: "orbit-migrate quiet for 2h on \"migrate the billing tables\"",
+    count: 1, paneId: "%3", tone: "warn", text: "orbit-migrate quiet for 1h on \"migrate the billing tables\"",
   });
 });
 
@@ -207,4 +207,15 @@ test("the dashboard reads the verdict once and gives both the same one", () => {
   const body = stripSrc.slice(stripSrc.indexOf("export function FleetVerdictStrip("));
   expect(body).not.toContain("fleetVerdict(");
   expect(body).not.toContain("useSyncExternalStore(");
+});
+
+test("how long is floored — ninety minutes quiet is 1h, not 2h", () => {
+  // Rounded, a stuck clause could say up to half an hour more than it had
+  // waited; the watch's notification says the same number from the same helper.
+  const at = (m: number) => fleetVerdict([quiet("orbit-migrate", { saidAt: now - m * min })], now)!.clauses.find((c) => c.kind === "stuck")!.text;
+  expect(at(90)).toContain("quiet for 1h on");
+  expect(at(119)).toContain("quiet for 1h on");
+  expect(at(120)).toContain("quiet for 2h on");
+  expect(fleetVerdict([waitedFor("orbit-api", 47 * 60 * min)], now)!.clauses[1].text).toBe("orbit-api waiting for your next prompt for 1d");
+  expect(code(verdictSrc)).toContain("howLong(");
 });

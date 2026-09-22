@@ -36,7 +36,7 @@
  */
 import * as AgentBoard from "./agentboard.ts";
 import { boardNow } from "./lantern.ts";
-import { FORGOTTEN_AFTER_MS, attention } from "../../shared/fieldRules.ts";
+import { FORGOTTEN_AFTER_MS, attention, howLong } from "../../shared/fieldRules.ts";
 import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
 import { pushLantern } from "./alerts.ts";
@@ -59,10 +59,6 @@ export interface Finding {
    dashboard's verdict strip counts by the same rule this watch notifies by. */
 export { FORGOTTEN_AFTER_MS };
 
-const ago = (t: number, now: number) => {
-  const m = Math.max(0, Math.round((now - t) / 60_000));
-  return m < 1 ? "just now" : m < 60 ? `${m}m` : m < 60 * 24 ? `${Math.round(m / 60)}h` : `${Math.round(m / (60 * 24))}d`;
-};
 const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
   w.kind === "permission" ? "needs your permission" : w.kind === "gate" ? "is held at the gate" : "is waiting for your next prompt";
 
@@ -101,12 +97,12 @@ export function findings(p: {
     if (a === "blocked" || a === "left") {
       out.push({
         kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou!.since,
-        line: `${r.name} ${waitWord(r.needsYou!)} — ${ago(r.needsYou!.since, now)}${r.needsYou!.why ? `: ${r.needsYou!.why}` : ""}`.slice(0, 200),
+        line: `${r.name} ${waitWord(r.needsYou!)} — ${howLong(r.needsYou!.since, now)}${r.needsYou!.why ? `: ${r.needsYou!.why}` : ""}`.slice(0, 200),
       });
     } else if (a === "forgotten") {
       out.push({
         kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt!,
-        line: `${r.name} said it was on "${r.doing}" and has been quiet for ${ago(r.saidAt!, now)} — done, or stuck?`.slice(0, 200),
+        line: `${r.name} said it was on "${r.doing}" and has been quiet for ${howLong(r.saidAt!, now)} — done, or stuck?`.slice(0, 200),
       });
     }
   }
@@ -114,7 +110,7 @@ export function findings(p: {
     const alive = new Set(p.namedNow.map((a) => a.name));
     for (const a of p.namedBefore) {
       if (!alive.has(a.name)) {
-        out.push({ kind: "gone", name: a.name, worktree: a.cwd, since: a.startedAt, line: `${a.name}'s window is gone (started ${ago(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
+        out.push({ kind: "gone", name: a.name, worktree: a.cwd, since: a.startedAt, line: `${a.name}'s window is gone (started ${howLong(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
       }
     }
   }

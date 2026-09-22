@@ -21,8 +21,7 @@
  * render.
  */
 import type { LanternRow } from "../components/LanternView.tsx";
-import { attention } from "../../../shared/fieldRules.ts";
-import { ago } from "./fileRecents.ts";
+import { attention, howLong } from "../../../shared/fieldRules.ts";
 
 export type VerdictTone = "calm" | "warn" | "critical";
 
@@ -66,8 +65,8 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
     clauses.push({
       kind: "stuck", count: stuck.length, tone: "warn", paneId: one?.paneId,
       text: !one ? `${stuck.length} stuck`
-        : one.needsYou ? `${one.name} waiting for your next prompt for ${ago(one.needsYou.since, now).replace(/ ago$/, "")}`
-        : `${one.name} quiet for ${ago(one.saidAt!, now).replace(/ ago$/, "")} on "${one.doing}"`,
+        : one.needsYou ? `${one.name} waiting for your next prompt for ${howLong(one.needsYou.since, now)}`
+        : `${one.name} quiet for ${howLong(one.saidAt!, now)} on "${one.doing}"`,
     });
   }
   if (need.length) {

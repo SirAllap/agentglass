@@ -204,6 +204,12 @@ describe("the watch flags what the shared rule flags", () => {
     expect(f.map((x) => x.name).sort()).toEqual(["c-web", "d-docs", "f-stale", "g-migrate"]);
   });
 
+  test("says how long floored, with the helper the strip uses", () => {
+    const f = findings({ rows, namedNow: [], namedBefore: null, now: NOW });
+    expect(f.find((x) => x.name === "g-migrate")!.line).toContain("quiet for 1h — done, or stuck?");
+    expect(f.find((x) => x.name === "f-stale")!.line).toContain("waiting for your next prompt — 3h");
+  });
+
   test("the watch keeps no copy of the rule", () => {
     const src = watchSrc.slice(watchSrc.indexOf("export function findings("));
     const body = src.slice(0, src.indexOf("\n}\n") + 2)
@@ -211,6 +217,7 @@ describe("the watch flags what the shared rule flags", () => {
     expect(body).toContain("attention(");
     expect(body).not.toContain("isForgotten(");
     expect(body).not.toContain("FORGOTTEN_AFTER_MS");
+    expect(body).toContain("howLong(");
   });
 });
 
