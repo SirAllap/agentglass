@@ -1750,7 +1750,8 @@ describe("the interactive inventory", () => {
       checked: "checked" in attrs, disabled: "disabled" in attrs, required: "required" in attrs, placeholder: attrs.placeholder ?? "",
       href: attrs.href ? `https://example.com${attrs.href}` : "", action: attrs.action ? `https://example.com${attrs.action}` : "", method: attrs.method ?? "get",
       form: null, labels: attrs["aria-labelledby"] ? [{ innerText: attrs["aria-labelledby"] }] : [], options: [], parentElement: null,
-      getAttribute: (k) => (k in attrs ? attrs[k]! : null), getAttributeNames: () => Object.keys(attrs),
+      // HTML attribute names are case-insensitive, and getAttribute folds them.
+      getAttribute: (k) => (k.toLowerCase() in attrs ? attrs[k.toLowerCase()]! : null), getAttributeNames: () => Object.keys(attrs),
       getBoundingClientRect: () => (attrs.hidden !== undefined ? { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0 } : { x: 10, y: 10, width: 100, height: 20, top: 10, left: 10 }),
       querySelectorAll: (sel) => query(n, sel, false),
       contains: () => false, scrollIntoView() {}, click() {},
@@ -1876,6 +1877,10 @@ describe("the interactive inventory", () => {
     // A password's value attribute is as secret as its value.
     const pw = await runBrowserAsk(page.el, ask("attr", { selector: "input[type=password]", names: ["value", "name"] }));
     expect((pw.value as { attributes: Record<string, unknown> }).attributes).toEqual({ value: "(hidden)", name: "pw" });
+    // getAttribute ignores case, so the mask does too: `VALUE` was the way
+    // round it.
+    const shout = await runBrowserAsk(page.el, ask("attr", { selector: "input[type=password]", names: ["VALUE", "Value"] }));
+    expect((shout.value as { attributes: Record<string, unknown> }).attributes).toEqual({ VALUE: "(hidden)", Value: "(hidden)" });
     // Two matches is a refusal with the count, same as click.
     const many = await runBrowserAsk(page.el, ask("attr", { selector: "button", names: ["type"] }));
     expect(many.ok).toBe(false);

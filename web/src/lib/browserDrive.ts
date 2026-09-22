@@ -1523,7 +1523,7 @@ async function runVerb(
           const attributes = {};
           for (const n of list) {
             const v = e.getAttribute(n);
-            attributes[n] = v === null ? null : (secret && n === "value") ? "(hidden)" : String(v).slice(0, 500);
+            attributes[n] = v === null ? null : (secret && n.toLowerCase() === "value") ? "(hidden)" : String(v).slice(0, 500);
           }
           return { kind: "ok", tag: e.tagName.toLowerCase(), e: e.dataset.agxE || undefined, attributes };
         `)) as { kind: string; tag?: string; e?: string; attributes?: Record<string, string | null> } | null;
