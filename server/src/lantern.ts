@@ -90,7 +90,13 @@ export interface GitFacts {
   /** When this was read; the view can say "as of". */
   at: number;
 }
-export type LanternCard = AgentBoard.BoardRow & { facts?: SessionFacts; git?: GitFacts };
+export type LanternCard = AgentBoard.BoardRow & {
+  facts?: SessionFacts;
+  git?: GitFacts;
+  /** A name that is not somebody you can talk to — see `isGone`. Marked here
+   *  so the view folds it the way the readout does: one rule, both screens. */
+  gone?: true;
+};
 
 /** What one tool call was doing, from its input, in a person's words. */
 export function toolWhat(name: string, input: unknown): string {
@@ -305,6 +311,9 @@ export async function boardNow(): Promise<LanternCard[]> {
     if (f) r.facts = f;
     const g = r.worktree ? gitBy.get(r.worktree) : undefined;
     if (g) r.git = g;
+    /* The readout collapsed these onto one line from the start; the view went
+       on drawing every one of them as an idle agent. Marked once, here. */
+    if (!r.role && isGone(r, now)) r.gone = true;
   }
   return rows;
 }

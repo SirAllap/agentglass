@@ -292,13 +292,15 @@ sync, and no upload — the hooks refuse to post anywhere but this host (see
 `AGENTGLASS_ALLOW_REMOTE` above). But it is worth saying plainly what lands on
 disk, because **nothing in the app deletes it** on its own: there is no route,
 no button and no menu item that removes recorded history, and the only sweep is
-the retention window below. Three routes remove a row *you* asked the app to
+the retention window below. Four routes remove a row *you* asked the app to
 hold for you, and nothing else: `POST /understudy/work/unask` takes one task
 back out of the Clone's queue; `POST /agents/status` with `done: true` drops a
 session's own "what it is working on" line, and only when the same session that
-wrote it asks; and `POST /bench/note` with empty text deletes that checkout's
-bench note, a file of its own under the data directory. None of the three
-touches an event, a session or a decision.
+wrote it asks; `POST /agents/forget` drops such a line by name whoever wrote it
+— the Lantern's clear button, behind the token like every other route, for a
+session that ended without saying so; and `POST /bench/note` with empty text
+deletes that checkout's bench note, a file of its own under the data directory.
+None of the four touches an event, a session or a decision.
 
 One route is named as if it did: `/browser/places/forget` throws away the
 browsing history you imported from your own browser. That history is kept in

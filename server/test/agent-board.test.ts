@@ -911,3 +911,17 @@ describe("needs you means there is somewhere to go", () => {
     expect(row?.needsYou?.kind).toBe("input");
   });
 });
+
+describe("a person clearing a line", () => {
+  test("takes it off the board whoever posted it, and says whether there was one", () => {
+    /* `forgetAgent` is keyed on the session because its route is tokenless;
+       this is the person's way, behind the token, and a session that ended
+       without saying `done` is exactly what it is for. */
+    Board.saidBy({ name: "orbit-1042-review", doing: "reading", session: "s-gone" });
+    Board.saidBy({ name: "orbit-2001", doing: "building", session: "s-live" });
+    expect(Board.dropLine("orbit-1042-review")).toBe(true);
+    expect(Board.board().map((r) => r.name)).toEqual(["orbit-2001"]);
+    expect(Board.dropLine("orbit-1042-review"), "already gone").toBe(false);
+    expect(Board.dropLine("")).toBe(false);
+  });
+});

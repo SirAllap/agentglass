@@ -1264,6 +1264,9 @@ const realApi = {
   /** Who is working on what: what each agent said, joined with the panes,
    *  worktrees and deputy runs this app already reads. */
   agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
+  /** Take a status line off the board, whoever posted it — a person's call,
+   *  which is why it is not the tokenless `done` an agent sends for itself. */
+  agentForget: (name: string) => post<{ ok: boolean; cleared?: boolean; error?: string }>("/agents/forget", { name }),
   /** The orchestrator's seat for a project: who is in it, what it last said,
    *  and the doctrine it was seated with. */
   seat: (root = "") => get<SeatAnswer>(`/seat${root ? `?root=${encodeURIComponent(root)}` : ""}`),
@@ -2428,6 +2431,7 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   agentBoard: () => D({ ok: true, agents: demoLanternField(), watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
+  agentForget: (_name: string) => D({ ok: true, cleared: true }),
   seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], needs: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),

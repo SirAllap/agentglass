@@ -3005,6 +3005,25 @@ const server = Bun.serve<WsData>({
     }
 
     /*
+     * A PERSON CLEARING A LINE, whoever posted it.
+     *
+     * `done` above is the agent's own way out and is keyed on its session,
+     * because that route is tokenless on loopback. This one is not tokenless:
+     * it is authenticated like every other route, so the caller is the person
+     * at the view (or a process they gave the token to), and a line whose
+     * session ended without saying done — the case the board filled up with —
+     * can be taken off by the one party the field belongs to.
+     */
+    if (pathname === "/agents/forget" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const name = String(b.name ?? "").slice(0, 512).trim();
+      if (!name) return json({ ok: false, error: "which agent?" }, 400);
+      const cleared = AgentBoard.dropLine(name);
+      return json(cleared ? { ok: true, cleared: true } : { ok: false, error: "no line by that name" }, cleared ? 200 : 404);
+    }
+
+    /*
      * THE LANTERN'S OWN SETTINGS — whether hooked sessions get asked what they
      * are doing, and how often. Read by the Agents pane in Settings; written
      * by it too. Nothing else here is configurable on purpose: the view is a
