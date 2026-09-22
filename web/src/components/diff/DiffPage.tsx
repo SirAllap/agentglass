@@ -25,8 +25,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ChangeRow } from "../../../../shared/types.ts";
 import {
-  filterRows, groupRows, reviewKeyOf, rowByKey, statusWord, totalsOf, useChangeRows, useFileDiff,
-  visibleRows, whenLabel, type DiffMode, type GroupBy, type RowGroup,
+  diffStateKey, filterRows, groupRows, reviewKeyOf, rowByKey, statusWord, totalsOf, useChangeRows, useFileDiff,
+  visibleRows, whenLabel, type DiffMode, type DiffState, type GroupBy, type RowGroup,
 } from "../../lib/changeRows.ts";
 import { useIncremental } from "../../lib/useIncremental.ts";
 import { openPeek } from "../../lib/openPeek.ts";
@@ -41,7 +41,13 @@ import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDi
 import { subscribeWorktreeJump, worktreeJump } from "../../lib/worktreeJump.ts";
 import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
-import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLines.tsx";
+import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS, LINEBTN_CSS, type LinePick, type LineSel } from "./DiffLines.tsx";
+import { CommentBox, CommentCard, ReviewTray } from "./DiffReview.tsx";
+import {
+  addComment, anchorLabel, captureSnippet, chatForTree, clearReview, composeReview, editComment, isStale,
+  removeComment, reviewFor, setFrame, subscribeReviews, withDraft, type ReviewComment,
+} from "../../lib/diffReview.ts";
+import { listChats, requestChatFocus, seedChat, setActiveChatId, subscribe as subscribeChats, update as updateChat } from "../../lib/chatStore.ts";
 import { FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 
 /* Storage keys are v3 on purpose: the two before them stored a group-by that no
@@ -62,7 +68,11 @@ const read = <T,>(key: string, fallback: T, parse: (raw: string) => T): T => {
 };
 const write = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* private mode */ } };
 
-export function DiffPage({ active, onClose }: { active: boolean; onClose?: () => void }) {
+export function DiffPage({ active, onClose, onOpenChat }: {
+  active: boolean; onClose?: () => void;
+  /** Go to the chat view — where a sent review lands. */
+  onOpenChat?: () => void;
+}) {
   const [mode, setMode] = useState<DiffMode>(() => read(K_MODE, "working", (r) => (r === "committed" ? "committed" : "working")));
   const [groupBy, setGroupBy] = useState<GroupBy>(() =>
     read(K_GROUP, "worktree", (r) => (r === "time" || r === "folder" ? (r as GroupBy) : "worktree")));
@@ -146,6 +156,84 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
 
   const body = useFileDiff(selected, mode);
 
+  /*
+   * The pending review, for the checkout the selected file is in.
+   *
+   * Per checkout because that is who receives it: one agent works in one tree,
+   * and a review that mixed two would go to one of them with the other's
+   * comments in it. Staleness can only be judged for the file on screen — the
+   * others are not loaded — so those are sent as written, which is the same
+   * thing that happens to a stale one.
+   */
+  const root = selected?.repoRoot ?? "";
+  const review = useSyncExternalStore(subscribeReviews, () => reviewFor(root));
+  const staleIds = useMemo(() => {
+    /* Only against THIS file's diff, in this half: for the render between
+       selecting a file and its fetch starting, `body` still holds the previous
+       one's, and every comment here would flash stale against code it was never
+       about. */
+    const hunks = selected && body.for === diffStateKey(selected, mode) ? body.diff?.hunks ?? null : null;
+    return new Set(review.comments
+      .filter((c) => c.path === selected?.path && c.mode === mode && isStale(c, hunks))
+      .map((c) => c.id));
+  }, [review, body, selected, mode]);
+
+  /* Every checkout the list knows, so a chat in a worktree nested under this one
+     is not taken for this one's agent — see chatForTree. */
+  const knownRoots = useMemo(() => [...new Set(rows.map((r) => r.repoRoot))], [rows]);
+  /* The target's TITLE, not the chat list: the chat store emits on every frame
+     a streaming agent writes, and a snapshot that is the whole list re-rendered
+     this view — every row of an open diff, hidden or not — per token. A string
+     only changes when the answer does. */
+  const reviewTarget = useSyncExternalStore(subscribeChats,
+    () => (root ? chatForTree(listChats(), root, knownRoots)?.title ?? null : null));
+
+  /*
+   * A jump from the tray: select the file, in the half it was written in, and
+   * scroll to its line once THAT file's diff is drawn — Body serves it, see there.
+   * Selected in an effect rather than here because the other half's list is not
+   * loaded yet when the half changes; the effect retries as rows arrive. A jump
+   * that cannot land (the file was committed, or reverted, since) expires rather
+   * than waiting to fire at whatever file with that path is opened next.
+   */
+  const [jumpTo, setJumpTo] = useState<{ c: ReviewComment; root: string } | null>(null);
+  const jump = useCallback((c: ReviewComment) => {
+    if (c.mode !== mode) setMode(c.mode);
+    setJumpTo({ c, root });
+  }, [root, mode]);
+  useEffect(() => {
+    if (!jumpTo || jumpTo.c.mode !== mode) return;
+    const row = rows.find((r) => r.repoRoot === jumpTo.root && r.path === jumpTo.c.path);
+    if (!row) return;
+    if (!shown.some((r) => r.key === row.key)) setQ("");
+    setSelKey(row.key);
+  }, [jumpTo, rows, shown, mode]);
+  useEffect(() => {
+    if (!jumpTo) return;
+    const t = setTimeout(() => setJumpTo(null), 5000);
+    return () => clearTimeout(t);
+  }, [jumpTo]);
+  const jumped = useCallback(() => setJumpTo(null), []);
+
+  const sendReview = useCallback(() => {
+    if (!root || !review.comments.length) return;
+    const prompt = composeReview(root, review, staleIds);
+    /* Into the composer of the chat already working in this tree, under whatever
+       was half-typed there; a new chat pointed at the tree when there is none.
+       Never sent from here — seedChat's rule, and the reason is the same: a run
+       costs real tokens, and the chat is where you see who it is going to. */
+    const chat = chatForTree(listChats(), root, knownRoots);
+    if (chat) {
+      updateChat(chat.id, (c) => { c.draft = withDraft(c.draft, prompt); });
+      setActiveChatId(chat.id);
+      requestChatFocus(chat.id);
+    } else {
+      seedChat(root, prompt, `Review: ${selected?.branch || root.split("/").pop() || root}`);
+    }
+    clearReview(root);
+    onOpenChat?.();
+  }, [root, review, staleIds, knownRoots, selected?.branch, onOpenChat]);
+
   const toggleReviewed = useCallback((r: ChangeRow) => {
     setReviewed((prev) => {
       const next = new Set(prev);
@@ -200,7 +288,7 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-      <style>{SCROLLBAR_CSS}{SPLIT_SEL_CSS}</style>
+      <style>{SCROLLBAR_CSS}{SPLIT_SEL_CSS}{LINEBTN_CSS}</style>
 
       <div className={viewHeaderClass} style={viewHeaderStyle}>
         <h2 className="sr-only">Diff</h2>
@@ -302,8 +390,16 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
 
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {selected
-            ? <Body row={selected} state={body} split={split} wrap={wrap} noWs={noWs} />
+            ? <Body row={selected} state={body} split={split} wrap={wrap} noWs={noWs} mode={mode}
+                comments={review.comments} staleIds={staleIds} jumpTo={jumpTo} onJumped={jumped} />
             : <Blank>Nothing selected</Blank>}
+          {root && review.comments.length > 0 && (
+            <ReviewTray where={selected?.branch || root} review={review} staleIds={staleIds}
+              target={reviewTarget != null ? `“${reviewTarget}”` : "a new chat in this checkout"}
+              onFrame={(f) => setFrame(root, f)} onJump={jump}
+              onRemove={(id) => removeComment(root, id)}
+              onSend={sendReview} onDiscard={() => clearReview(root)} />
+          )}
         </div>
       </div>
     </div>
@@ -562,12 +658,19 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed }: {
 
 /* ── the diff ─────────────────────────────────────────────────────────────── */
 
-function Body({ row, state, split, wrap, noWs }: {
+function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo, onJumped }: {
   row: ChangeRow;
-  state: { diff: { hunks: { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }[]; truncated: boolean; binary: boolean; error?: string } | null; loading: boolean; error: string | null };
+  state: DiffState;
   split: boolean; wrap: boolean;
   /** Fold whitespace-only changes into context — see diffNoWhitespace.ts. */
   noWs: boolean;
+  mode: DiffMode;
+  /** The pending review for this file's checkout — every file's, filtered here. */
+  comments: ReviewComment[];
+  staleIds: ReadonlySet<string>;
+  /** A comment the tray asked to be shown; scrolled to once its line is drawn. */
+  jumpTo: { c: ReviewComment; root: string } | null;
+  onJumped: () => void;
 }) {
   const { hilite } = useDiffHighlight(row.path);
   const [copied, setCopied] = useState(false);
@@ -576,6 +679,109 @@ function Body({ row, state, split, wrap, noWs }: {
      that leaves none at all, the file says so below instead of rendering as blank. */
   const hunks = useMemo(() => (noWs ? raw.map(hunkWithoutWhitespace).filter(hunkChanges) : raw), [noWs, raw]);
   const allWs = noWs && raw.length > 0 && hunks.length === 0;
+
+  /*
+   * Commenting. A "+" on a line opens the box under it; shift-click stretches it
+   * to a range, as the pull request's does. The snippet is cut from the RAW
+   * hunks, not the whitespace-folded ones on screen: folding changes a line's
+   * prefix, and a comment written with Ignore space on would otherwise read as
+   * stale the moment it was turned off. The line numbers are the same in both.
+   */
+  /* The snippet is taken when the line is PICKED, not when the comment is saved:
+     the diff re-reads every time an agent writes the file, and a box open for a
+     minute would otherwise quote whatever the agent put on that line meanwhile —
+     code you never clicked, and never shown stale because it IS the current code.
+     The text being typed lives here too, not in the box: an edit above the line
+     can remount the box, and a remount must not eat the comment.
+     Ranges are one side's: in unified view a removed line is the old side and
+     everything else the new, so shift-click from one to the other starts over. */
+  type Draft = { side: "LEFT" | "RIGHT"; start: number; end: number; snippet: string[] };
+  const [composing, setComposing] = useState<Draft | null>(null);
+  const typed = useRef("");
+  const ready = state.for === diffStateKey(row, mode) && !state.loading;
+  useEffect(() => { setComposing(null); }, [row.key, mode]);
+  const startDraft = (side: Draft["side"], start: number, end: number, fresh: boolean) => {
+    if (fresh) typed.current = "";
+    setComposing({ side, start, end, snippet: captureSnippet(raw, side, start, end) });
+  };
+  const onPick = (p: LinePick) => {
+    if (!ready) return;
+    if (p.shift && composing && composing.side === p.side) startDraft(p.side, composing.start, p.line, false);
+    else startDraft(p.side, p.line, p.line, true);
+  };
+  const sel: LineSel = composing ? { start: composing.start, end: composing.end, side: composing.side } : null;
+  const save = (body: string) => {
+    if (!composing) return;
+    const lo = Math.min(composing.start, composing.end), hi = Math.max(composing.start, composing.end);
+    addComment(row.repoRoot, { path: row.path, side: composing.side, start: lo, end: hi, body, mode, snippet: composing.snippet });
+    typed.current = "";
+    setComposing(null);
+  };
+
+  /* Under the LAST line a comment covers, keyed by side: a new-side number and
+     an old-side number are each unique within a file, so one lookup per row. */
+  const here = useMemo(() => {
+    const m = new Map<string, ReviewComment[]>();
+    for (const c of comments) {
+      if (c.path !== row.path || c.mode !== mode) continue;
+      const k = `${c.side === "RIGHT" ? "R" : "L"}${c.end}`;
+      m.set(k, [...(m.get(k) ?? []), c]);
+    }
+    return m;
+  }, [comments, row.path, mode]);
+  const rowAfter = (here.size || composing) ? (newN: number | null | undefined, oldN: number | null | undefined) => {
+    const keys = [newN != null ? `R${newN}` : null, oldN != null ? `L${oldN}` : null];
+    const cards = keys.flatMap((k) => (k ? here.get(k) ?? [] : []));
+    const box = composing && keys.includes(`${composing.side === "RIGHT" ? "R" : "L"}${Math.max(composing.start, composing.end)}`);
+    if (!cards.length && !box) return null;
+    return (
+      <>
+        {cards.map((c) => (
+          <CommentCard key={c.id} c={c} stale={staleIds.has(c.id)}
+            onEdit={(b) => editComment(row.repoRoot, c.id, b)} onRemove={() => removeComment(row.repoRoot, c.id)} />
+        ))}
+        {box && composing && (
+          <CommentBox label={anchorLabel({ path: row.path, mode, ...composing })} initial={typed.current}
+            onText={(t) => { typed.current = t; }} onSave={save} onCancel={() => setComposing(null)} />
+        )}
+      </>
+    );
+  } : undefined;
+
+  /* A remark about a whole hunk, not one line of it: the hunk's range on the new
+     side, or on the old side when it only removed. Unified view only, and that is
+     a limit, not a reason: SplitDiff takes no `hunkAction`, and with Split AND
+     Wrap on its grid draws no "+" either (the pull request's split has the same
+     gap) — there, a comment means turning one of the two off. Both are the shared
+     renderer's to grow, which the pull request panel draws too. */
+  const hunkAction = (hi: number) => {
+    const h = hunks[hi];
+    if (!h) return null;
+    const side = h.newLines > 0 ? "RIGHT" : "LEFT";
+    const start = side === "RIGHT" ? h.newStart : h.oldStart;
+    const end = start + (side === "RIGHT" ? h.newLines : h.oldLines) - 1;
+    return (
+      <button onClick={() => { if (ready) startDraft(side, start, end, true); }} className="agx-btn rounded px-1.5 text-[10.5px]"
+        title="Comment on this whole hunk" style={{ color: "var(--text3)", fontFamily: "var(--font-sans, inherit)" }}>
+        Comment
+      </button>
+    );
+  };
+
+  const scroller = useRef<HTMLDivElement>(null);
+  /* Served only once the diff on screen is the target's own — same checkout,
+     file and half, finished loading. Split view draws an invisible twin of each
+     card in the left column to keep the rows aligned; the visible one is the one
+     to scroll to. */
+  useEffect(() => {
+    if (!jumpTo || !ready || jumpTo.root !== row.repoRoot || jumpTo.c.path !== row.path || jumpTo.c.mode !== mode) return;
+    const c = jumpTo.c;
+    const visible = (sel: string) => [...(scroller.current?.querySelectorAll<HTMLElement>(sel) ?? [])]
+      .find((e) => !e.closest('[aria-hidden="true"]'));
+    (visible(`[data-review-comment="${c.id}"]`) ?? visible(`[data-ln="${c.side === "RIGHT" ? "R" : "L"}${c.start}"]`))
+      ?.scrollIntoView({ block: "center" });
+    onJumped();
+  }, [jumpTo, ready, row.repoRoot, row.path, mode, onJumped]);
 
   /**
    * Open it in the viewer, the way the pull request does.
@@ -639,7 +845,7 @@ function Body({ row, state, split, wrap, noWs }: {
       </div>
 
 
-      <div className="agx-scroll flex-1 min-h-0 overflow-auto">
+      <div ref={scroller} className="agx-scroll flex-1 min-h-0 overflow-auto">
         {state.loading && !state.diff && <Blank>Reading the diff…</Blank>}
         {/* Every one of these was a blank pane reading "0 hunks" before. A file
             the view cannot show is a thing to SAY, not an empty box. */}
@@ -659,8 +865,8 @@ function Body({ row, state, split, wrap, noWs }: {
         {hunks.length > 0 && (
           <HiliteCtx.Provider value={hilite}>
             {split
-              ? <SplitDiff hunks={hunks} wrap={wrap} />
-              : <UnifiedDiff hunks={hunks} wrap={wrap} />}
+              ? <SplitDiff hunks={hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} />
+              : <UnifiedDiff hunks={hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} hunkAction={hunkAction} />}
           </HiliteCtx.Provider>
         )}
         {state.diff?.truncated && (
