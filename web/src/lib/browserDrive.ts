@@ -1396,7 +1396,7 @@ async function runVerb(
                if (!n.dataset.agxE) { window.__agxSeq = (window.__agxSeq || 0) + 1; n.dataset.agxE = "e" + window.__agxSeq; }
                return n.dataset.agxE;
              };
-             const clean = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, 80);
+             const clean = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim().slice(0, 80);
              const name = (n, tag, type) => clean(
                n.getAttribute("aria-label") || (n.labels && n.labels[0] && n.labels[0].innerText)
                || n.getAttribute("placeholder") || n.getAttribute("title")
@@ -1465,7 +1465,7 @@ async function runVerb(
                if (!n.dataset.agxE) { window.__agxSeq = (window.__agxSeq || 0) + 1; n.dataset.agxE = "e" + window.__agxSeq; }
                return n.dataset.agxE;
              };
-             const clean = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, 80);
+             const clean = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim().slice(0, 80);
              const label = (n) => clean((n.labels && n.labels[0] && n.labels[0].innerText) || n.getAttribute("aria-label") || n.getAttribute("placeholder") || "");
              const isHidden = (n) => n.tagName === "INPUT" && String(n.type || "").toLowerCase() === "hidden";
              const field = (n) => {

@@ -1792,7 +1792,10 @@ describe("the interactive inventory", () => {
     const form = node("form", { id: "login", action: "/session", method: "post" }, [user, pw, remember, plan, token, go]);
     for (const f of [user, pw, remember, plan, token, go]) f.form = form;
     const search = node("input", { name: "q", type: "search", placeholder: "Search" });
-    const link = node("a", { href: "/pricing", "data-testid": "pricing" }, [], "Pricing");
+    /* Whitespace inside a name, and an `s` in it: the collapse is `\s+` on
+       the page, and a `\s` typed once in a template literal reaches the page
+       as a bare `s` — which would eat the letter and keep the newline. */
+    const link = node("a", { href: "/pricing", "data-testid": "pricing" }, [], "See  prices\n  now");
     const dead = node("button", { disabled: "" }, [], "Nope");
     const ghost = node("button", { hidden: "" }, [], "Ghost");
     const body = node("body", {}, [node("h1", {}, [], "Sign in"), form, search, link, dead, ghost]);
@@ -1815,7 +1818,7 @@ describe("the interactive inventory", () => {
     const v = r.value as { total: number; hidden: number; elements: Record<string, unknown>[]; seq?: number };
     expect(v.seq).toBeUndefined();
     const by = (name: string) => v.elements.find((e) => e.name === name);
-    expect(by("Pricing")).toMatchObject({ role: "link", href: "https://example.com/pricing", testid: "pricing" });
+    expect(by("See prices now")).toMatchObject({ role: "link", href: "https://example.com/pricing", testid: "pricing" });
     expect(by("Email")).toMatchObject({ role: "text", placeholder: "you@example.com" });
     expect(by("pw")?.value ?? v.elements.find((e) => e.role === "password")?.value, "a password never travels").toBe("(hidden)");
     expect(v.elements.find((e) => e.role === "checkbox")).toMatchObject({ checked: true });
@@ -1833,7 +1836,7 @@ describe("the interactive inventory", () => {
     await runBrowserAsk(other.el, ask("observe", {}));
     const page = buildPage();
     const r = await runBrowserAsk(page.el, ask("interactive", {}));
-    const link = (r.value as { elements: { name: string; e: string }[] }).elements.find((e) => e.name === "Pricing")!;
+    const link = (r.value as { elements: { name: string; e: string }[] }).elements.find((e) => e.name === "See prices now")!;
     expect(link.e).not.toBe("e1");
     const clicked = await runBrowserAsk(page.el, ask("text", { selector: link.e }));
     expect(clicked.ok, JSON.stringify(clicked)).toBe(true);
