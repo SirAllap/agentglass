@@ -15,6 +15,8 @@ import { allOpen, autoPick, initialTicks, inOpenProjects, nextScope, rootsToAdd,
 const APP = (await Bun.file(new URL("../src/App.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 const CHAT = await Bun.file(new URL("../src/components/ChatPanel.tsx", import.meta.url)).text();
+const PICKER = (await Bun.file(new URL("../src/components/ProjectPicker.tsx", import.meta.url)).text())
+  .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
 const ORBIT = "/home/dev/code/orbit";
 const LANDER = "/home/dev/code/lander";
@@ -118,5 +120,20 @@ describe("the first run waits for an answer", () => {
   });
   test("closing the picker, either way, lets the views in", () => {
     expect(APP).toMatch(/<ProjectPicker [^>]*onClose=\{\(\) => \{ setProjectOpen\(false\); setAwaitingPick\(false\); \}\}/);
+  });
+});
+
+describe("the picker's plumbing", () => {
+  test("a folder that opens its one project is not added a second time, as that project", () => {
+    // openScope checked what to add against this render's folders, which did
+    // not have the new one yet; the project inside it went in as a folder too.
+    expect(PICKER).toContain("if (only) void openScope([only], r.roots);");
+  });
+  test("only the newest read of the list draws it", () => {
+    expect(PICKER).toMatch(/const n = \+\+loadSeq\.current;/);
+    expect(PICKER).toMatch(/if \(n === loadSeq\.current\) \{ setRepos\(repos\);/);
+  });
+  test("a folder saved while the environment overrides the list says so, both ways", () => {
+    expect(PICKER.match(/if \(r\.note\) setError\(r\.note\);/g)?.length).toBe(2);
   });
 });

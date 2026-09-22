@@ -222,11 +222,19 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
    *  can take minutes, and a spinner with no sentence reads as a hang. */
   const [working, setWorking] = useState("");
 
+  /** Only the newest read may draw the list. The scan toggle, adding a folder
+   *  and opening the picker can all be in flight at once, and a slow sweep that
+   *  landed last would put its results under "Your folders". */
+  const loadSeq = useRef(0);
   const load = (scan: boolean): Promise<GitRepoRef[]> => {
+    const n = ++loadSeq.current;
     setRepos(null);
     return api.gitReposAll(scan)
-      .then(({ repos, hidden, roots }) => { setRepos(repos); setHidden(hidden ?? []); setRoots(roots ?? []); return repos; })
-      .catch(() => { setRepos([]); return []; });
+      .then(({ repos, hidden, roots }) => {
+        if (n === loadSeq.current) { setRepos(repos); setHidden(hidden ?? []); setRoots(roots ?? []); }
+        return repos;
+      })
+      .catch(() => { if (n === loadSeq.current) setRepos([]); return []; });
   };
 
   useEffect(() => {
@@ -255,7 +263,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
    * new project — becomes a folder of its own first, or it would be missing
    * from this list the next time and there would be no way back to it.
    */
-  const openScope = async (list: string[]) => {
+  const openScope = async (list: string[], known: readonly string[] = roots) => {
     if (busy) return;
     markAnswered();
     if (!nextScope(list, workspaces)) { onClose(); return; } // already there — nothing to change
@@ -263,7 +271,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
     setError("");
     setWorking(list.length > 1 ? `Opening ${list.length} projects…` : "Switching project…");
     try {
-      for (const p of rootsToAdd(list, roots)) {
+      for (const p of rootsToAdd(list, known)) {
         const r = await api.setProjectRoot(p, true);
         if (!r.ok) { failed(r.error || "Could not add that folder to the list"); return; }
       }
@@ -288,13 +296,17 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
     try {
       const r = await api.setProjectRoot(dir.trim(), true);
       if (!r.ok) { failed(r.error || "Could not add that folder"); return; }
-      if (r.note) console.warn(`[agentglass] ${r.note}`);
+      // Saved, but not what is listed while the environment overrides it.
+      if (r.note) setError(r.note);
       setPath("");
       setScanned(false);
       const listed = await load(false);
       setBusy(false); setWorking("");
       const only = autoPick(listed, workspaces);
-      if (only) void openScope([only]);
+      // The folders just saved, not this render's: the folder that was added is
+      // not in `roots` yet, and the project inside it would be added again as
+      // a folder of its own.
+      if (only) void openScope([only], r.roots);
     } catch (e) { failed(e); }
   };
 
@@ -303,7 +315,11 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
     if (busy) return;
     setError("");
     api.setProjectRoot(dir, false)
-      .then((r) => { if (!r.ok) { setError(r.error || "Could not save that"); return; } void load(scanned); })
+      .then((r) => {
+        if (!r.ok) { setError(r.error || "Could not save that"); return; }
+        if (r.note) setError(r.note);
+        void load(scanned);
+      })
       .catch((e) => setError(String(e)));
   };
 
