@@ -154,6 +154,36 @@ export function segmentsOf(command: string): string[] {
   return out;
 }
 
+/** Prefixes that run the program after them: `sudo`, `time`, `cross-env`... */
+const WRAPPERS = new Set(["sudo", "doas", "time", "nohup", "exec", "env", "nice", "command", "cross-env", "stdbuf"]);
+/** Their flags that take a value (`sudo -u postgres`, `nice -n 10`, `env -u NAME`). */
+const WRAPPER_VALUED = new Set(["-u", "-g", "-n", "-C", "-o", "-e"]);
+
+/**
+ * Where the program a segment runs is, looking through leading assignments and
+ * wrappers, and the assignments it is started with.
+ */
+function programOf(toks: string[]): { at: number; env: string[] } {
+  const env: string[] = [];
+  let i = 0;
+  while (i < toks.length) {
+    const t = toks[i];
+    const b = basename(t);
+    if (ASSIGN.test(t)) { env.push(t); i++; continue; }
+    if ((b === "npx" || b === "bunx") && /^(?:cross-env|dotenv)$/.test(basename(toks[i + 1] ?? ""))) { i++; continue; }
+    if (b === "dotenv") {
+      const dd = toks.indexOf("--", i);
+      if (dd < 0) return { at: i, env };
+      i = dd + 1;
+      continue;
+    }
+    if (!WRAPPERS.has(b)) return { at: i, env };
+    i++;
+    while (i < toks.length && toks[i].startsWith("-")) i += WRAPPER_VALUED.has(toks[i]) ? 2 : 1;
+  }
+  return { at: -1, env };
+}
+
 const tokensOf = (seg: string) => [...seg.matchAll(TOKEN)].map((m) => m[1] ?? m[2] ?? m[3]);
 const guessable = (p: string) => p.length > 0 && !/[$*?`{}]/.test(p);
 
@@ -253,25 +283,30 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
       continue;
     }
 
+    const { at, env: assigned } = programOf(toks);
+    const prog = at < 0 ? "" : basename(toks[at]);
+    const text = TEXT.has(prog);
+    // A client is one run directly or inside a container (`docker exec pg psql -p`).
+    const client = CLIENTS.has(prog) || (/^(?:docker|podman|kubectl)$/.test(prog) && toks.slice(at + 1).some((t) => CLIENTS.has(basename(t))));
+
     // Database URLs first, and cut out of the segment: the server's port inside
     // one is not a claim of its own — two databases on one server are two
     // databases, not a collision.
-    for (const m of seg.matchAll(PG_URL)) add({ kind: "postgres", key: `${host(m[1])}:${m[2] ?? "5432"}/${m[3] ?? ""}` });
-    for (const m of seg.matchAll(REDIS_URL)) add({ kind: "redis", key: `${host(m[1])}:${m[2] ?? "6379"}/${m[3] ?? "0"}` });
+    if (!text) {
+      for (const m of seg.matchAll(PG_URL)) add({ kind: "postgres", key: `${host(m[1])}:${m[2] ?? "5432"}/${m[3] ?? ""}` });
+      for (const m of seg.matchAll(REDIS_URL)) add({ kind: "redis", key: `${host(m[1])}:${m[2] ?? "6379"}/${m[3] ?? "0"}` });
+    }
     seg = seg.replace(PG_URL, " ").replace(REDIS_URL, " ");
 
-    const at = toks.findIndex((t) => !ASSIGN.test(t));
-    const prog = at < 0 ? "" : basename(toks[at]);
-    const text = TEXT.has(prog);
-
-    // PORT as the environment a process is started with: before the program,
-    // or the arguments of `export` and `env`. Anywhere else it is prose.
-    const env = at < 0 ? toks : prog === "export" || prog === "env" ? [...toks.slice(0, at), ...toks.slice(at + 1)] : toks.slice(0, at);
+    // PORT as the environment a process is started with: before the program
+    // (wrappers looked through), or the arguments of `export`. Anywhere else
+    // it is prose.
+    const env = prog === "export" ? [...assigned, ...toks.slice(at + 1)] : assigned;
     for (const t of env) {
       const m = /^PORT=(\d{2,5})$/.exec(t);
       if (m && portOk(+m[1])) add({ kind: "port", key: m[1] });
     }
-    if (!text && !CLIENTS.has(prog)) {
+    if (!text && !client) {
       for (const m of seg.matchAll(HOST_PORT)) if (portOk(+m[1])) add({ kind: "port", key: m[1] });
     }
     const composeAt = composeIndex(toks);
@@ -284,10 +319,17 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
       // A listening port by flag. `-p` is a port only as a whole number or a
       // docker publish spec. A client's port is the server it talks to — ssh's
       // is another machine, psql's the one Postgres every checkout shares.
-      if ((flag === "--port" || flag === "--publish" || flag === "-p") && next && !CLIENTS.has(prog) && !text) {
+      if ((flag === "--port" || flag === "--publish" || flag === "-p") && next && !client && !text) {
         const m = /^(?:(?:\d{1,3}\.){3}\d{1,3}:)?(\d{2,5})(?::\d+)?(?:\/\w+)?$/.exec(next);
         const composeProjectFlag = composeAt >= 0 && i > composeAt && flag === "-p" && !toks.slice(composeAt + 1, i).some((x) => !x.startsWith("-"));
         if (m && portOk(+m[1]) && !composeProjectFlag) add({ kind: "port", key: m[1] });
+      }
+
+      // An ssh local forward binds its first port here: `-L [bind:]port:host:hostport`.
+      if (prog === "ssh" && t.startsWith("-L")) {
+        const parts = (t.length > 2 ? t.slice(2) : toks[i + 1] ?? "").split(":");
+        const port = parts.length === 4 ? parts[1] : parts.length === 3 ? parts[0] : "";
+        if (/^\d{2,5}$/.test(port) && portOk(+port)) add({ kind: "port", key: port });
       }
 
       // A data directory: postgres by -D / --pgdata / PGDATA, redis by --dir.
@@ -313,7 +355,7 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
         if (abs) add(pathClaim(abs));
       }
     }
-    if (composeAt >= 0) add(composeClaim(toks, composeAt + 1, here));
+    if (composeAt >= 0 && !text) add(composeClaim(toks, composeAt + 1, here));
   }
   return [...out.values()];
 }

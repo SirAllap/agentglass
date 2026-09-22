@@ -66,6 +66,28 @@ describe("claimsFromCommand", () => {
     expect(keys("redis-server --port 6390")).toEqual(["port 6390"]);
   });
 
+  test("a wrapper in front of the program is looked through", () => {
+    // The second checkout's server fails to bind, so its command is the only
+    // evidence it is a party; a wrapper must not hide it.
+    expect(keys("npx cross-env PORT=3000 next dev")).toEqual(["port 3000"]);
+    expect(keys("sudo PORT=8080 node server.js")).toEqual(["port 8080"]);
+    expect(keys("time PORT=3001 npm start")).toEqual(["port 3001"]);
+    expect(keys("nohup env PORT=3002 node app.js &")).toEqual(["port 3002"]);
+    expect(keys("dotenv -e .env.test -- PORT=3003 bun dev")).toEqual(["env /work/orbit/.env.test", "port 3003"]);
+    // ...and so is a client, wrapped or run inside a container.
+    expect(keys("sudo psql -p 5433 -d acme")).toEqual([]);
+    expect(keys("docker exec -it pg psql -p 5433 -d acme")).toEqual([]);
+    expect(keys("sudo -u postgres git log -p")).toEqual([]);
+  });
+
+  test("text gates database URLs and compose too; an ssh forward binds a local port", () => {
+    expect(keys('git commit -m "point at postgres://localhost:5432/acme_dev"')).toEqual([]);
+    expect(keys("echo redis://localhost:6379/2")).toEqual([]);
+    expect(keys("echo docker compose up -d >> README.md")).toEqual([]);
+    expect(keys("ssh -N -L 5433:localhost:5432 bastion")).toEqual(["port 5433"]);
+    expect(keys("ssh -L127.0.0.1:6380:cache:6379 bastion")).toEqual(["port 6380"]);
+  });
+
   test("text that mentions a port or a database file is not a process using one", () => {
     // Agents grep for ports and write them into commit messages all the time;
     // each claim would last the whole window and flag both checkouts.
