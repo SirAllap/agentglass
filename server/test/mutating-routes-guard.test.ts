@@ -40,6 +40,7 @@ const MUTATING = [
   `pathname === "/workspace"`,
   `pathname === "/projects/clone"`,
   `pathname === "/projects/hidden"`,
+  `pathname === "/projects/roots"`,
   `pathname === "/projects/new"`,
   `pathname === "/agents/connect"`,
   `pathname === "/budgets/set"`,

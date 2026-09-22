@@ -522,7 +522,16 @@ export function invalidateRepos(root?: string): void {
   else untrackedResultCache.clear();
 }
 
-export async function discoverRepos(paths: string[], knownRoots: string[] = [], opts: { ignoreScope?: boolean } = {}): Promise<GitRepoRef[]> {
+export async function discoverRepos(
+  paths: string[],
+  knownRoots: string[] = [],
+  /** `ignoreScope`: the project picker asking, which has to see past the open
+   *  project. `rootsOnly`: and only under the folders the person added — the
+   *  picker's list. Without it the picker's answer is the old sweep of every
+   *  place the app has seen an agent run, which is now its explicit "look for
+   *  projects" and never its default. */
+  opts: { ignoreScope?: boolean; rootsOnly?: boolean } = {},
+): Promise<GitRepoRef[]> {
   /*
    * A project removed from the list is removed from every list but the picker's.
    *
@@ -545,7 +554,10 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // set — removing a project has to show up before the cache expires.
   // `\\1` between the two lists, so a removed project and a known root cannot
   // add up to the key of a different pair.
-  const key = [opts.ignoreScope ? "*" : scopeKey(), ...hide, "\\1", ...knownRoots].join("\\0");
+  // So are the added folders, and which list is being asked for: adding a
+  // folder in the picker has to list its projects on the very next read.
+  const only = configuredRepoDirs();
+  const key = [opts.ignoreScope ? (opts.rootsOnly ? "roots" : "*") : scopeKey(), ...hide, "\\1", ...knownRoots, "\\2", ...only].join("\\0");
   const hit = repoCache.get(key);
   // Held longer while a shell is in use or the loop is stalling: this sweep is
   // eighteen `git status` calls on a worktree-heavy repo, and none of them is
@@ -625,38 +637,51 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   //
   // A project with none of those — no history, never configured — no longer
   // appears on its own. That is the deliberate trade: the user names it once with
-  // `repoDirs` and it is back for good, and in exchange the picker reflects the
-  // fleet's activity rather than the filesystem's contents. The empty state names
-  // `repoDirs` precisely so this is discoverable.
-  const only = configuredRepoDirs();
+  // `repoDirs` and it is back for good, and in exchange the panels reflect the
+  // fleet's activity rather than the filesystem's contents.
+  //
+  // The picker went one step further (`rootsOnly`): it lists the added folders
+  // and nothing else, because "where agents have run" on a real machine is also
+  // a dotfiles checkout and an editor's config repo, which nobody chose as a
+  // project. The sweep above is its explicit "look for projects" button.
   // The one place a directory *walk* is still invited — and only because the user
   // named the directory. `~/code` in repoDirs is an explicit "my repos live
   // here", which is bounded and predictable in a way that crawling $HOME never
   // was; a configured directory is about scope, not about disabling discovery
   // within it, so the result is still filtered to `only` at the end.
   for (const base of only) for (const r of reposUnder(base)) roots.add(r);
-  // Every git rev-parse below is awaited through the spawn pool, not spawnSync:
-  // on this path they blocked the loop one subprocess at a time — the server's
-  // own repo, each env repo, and each telemetry directory — on the endpoint the
-  // terminal shares a thread with. Resolve them together, off the loop.
-  //
-  //   * agentglass's own repo, and only it — not its neighbours, which was
-  //     another speculative reposUnder(dirname(selfRoot)) sweep;
-  //   * env-configured repos that live elsewhere (AGENTGLASS_REPOS);
-  //   * telemetry directories, deduped by parent dir first so this is one
-  //     rev-parse per directory rather than one per file path.
-  const dirs = new Set<string>();
-  for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
-  const resolved = await Promise.all([
-    repoRootOfAsync(process.cwd()),
-    ...(process.env.AGENTGLASS_REPOS || "").split(delimiter).filter(Boolean).map((p) => repoRootOfAsync(p)),
-    ...[...dirs].map((d) => repoRootOfAsync(d)),
-  ]);
-  for (const r of resolved) if (r) roots.add(r);
-  // Transcript-scanned roots are already resolved project tops; add them straight
-  // in and let repoRef below drop any that is no longer a repo. The old per-root
-  // repoRoot() re-validation here was one more synchronous spawn apiece.
-  for (const r of knownRoots) { const a = safeAbs(r); if (a) roots.add(a); }
+  if (opts.rootsOnly) {
+    // The picker's list: the added folders, and the projects open right now
+    // wherever they are — a list that could not show what is open would leave
+    // no row to un-tick. Nothing the app merely saw an agent run in.
+    for (const open of workspaceRoots()) {
+      const self = await repoRootOfAsync(open);
+      for (const r of self ? [self] : reposUnder(open)) roots.add(r);
+    }
+  } else {
+    // Every git rev-parse below is awaited through the spawn pool, not spawnSync:
+    // on this path they blocked the loop one subprocess at a time — the server's
+    // own repo, each env repo, and each telemetry directory — on the endpoint the
+    // terminal shares a thread with. Resolve them together, off the loop.
+    //
+    //   * agentglass's own repo, and only it — not its neighbours, which was
+    //     another speculative reposUnder(dirname(selfRoot)) sweep;
+    //   * env-configured repos that live elsewhere (AGENTGLASS_REPOS);
+    //   * telemetry directories, deduped by parent dir first so this is one
+    //     rev-parse per directory rather than one per file path.
+    const dirs = new Set<string>();
+    for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
+    const resolved = await Promise.all([
+      repoRootOfAsync(process.cwd()),
+      ...(process.env.AGENTGLASS_REPOS || "").split(delimiter).filter(Boolean).map((p) => repoRootOfAsync(p)),
+      ...[...dirs].map((d) => repoRootOfAsync(d)),
+    ]);
+    for (const r of resolved) if (r) roots.add(r);
+    // Transcript-scanned roots are already resolved project tops; add them straight
+    // in and let repoRef below drop any that is no longer a repo. The old per-root
+    // repoRoot() re-validation here was one more synchronous spawn apiece.
+    for (const r of knownRoots) { const a = safeAbs(r); if (a) roots.add(a); }
+  }
   // Fold linked worktrees into the project they belong to — for the PICKER only.
   //
   // A user working the way worktrees are meant to be used has a dozen sibling
@@ -690,7 +715,10 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // selected repo via workingTree().
   const out = (await Promise.all([...roots].map((r) => repoRef(r)))).filter((r): r is GitRepoRef => !!r);
   for (const r of out) { const n = folded.get(r.root); if (n) r.worktrees = n; }
-  const scoped = notHidden(only.length ? within(out, only) : out, hide);
+  // The panels are held to the added folders when there are any. The picker is
+  // not: its default list is already only those folders, and its explicit
+  // "look for projects" is asking precisely for what lies outside them.
+  const scoped = notHidden(!opts.ignoreScope && only.length ? within(out, only) : out, hide);
   // Families stay together, most recently worked-in family first, the project
   // ahead of its own worktrees. Sorting the flat list alone scatters a repo's
   // checkouts through the dropdown, so `orbit` and `orbit-WEB-1042` end up

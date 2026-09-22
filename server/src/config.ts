@@ -67,7 +67,9 @@ interface Config {
    *  One is written as a plain string, so a build that predates the list still
    *  reads the commonest case. */
   root?: string | string[];
-  /** Directories to sweep for git repos, e.g. ["~/code", "/mnt/hdd/code"]. */
+  /** The folders a person's projects live in, e.g. ["~/code", "/mnt/hdd/code"]:
+   *  the project picker lists what is under them and nothing else. Added and
+   *  removed from the picker, or by hand here. See setRepoDir(). */
   repoDirs?: string[];
   /** Offer `bypassPermissions` — `claude --dangerously-skip-permissions` — as a
    *  chat mode. Off unless stated, and stated *here* rather than only in the
@@ -674,6 +676,43 @@ export function configuredRepoDirs(): string[] {
   const raw = fromEnv.length ? fromEnv : config().repoDirs ?? [];
   const dirs = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string") : [];
   return dirs.map(expand);
+}
+
+/**
+ * Add a folder the picker lists projects from, or forget one.
+ *
+ * These are the folders a person's projects live in — `~/code`, or one repo on
+ * its own — and they are the picker's whole list: nothing is added by the app,
+ * and nothing is listed from outside them. Per-folder, like hiding a project,
+ * so two windows open at once cannot overwrite each other's answer.
+ *
+ * Entries somebody wrote by hand are kept as they were written (`~/code` stays
+ * `~/code`) and compared by where they point, so the folder chooser's absolute
+ * answer finds and removes them. Only the file is touched: forgetting a folder
+ * never goes near the folder.
+ */
+export function setRepoDir(pathIn: unknown, added: boolean): { ok: boolean; roots: string[]; persisted: boolean; error?: string; note?: string } {
+  const fail = (error: string) => ({ ok: false as const, roots: configuredRepoDirs(), persisted: false, error });
+  if (typeof pathIn !== "string" || !pathIn.trim() || pathIn.includes("\0")) return fail("invalid path");
+  const target = resolve(expand(pathIn.trim()));
+  if (added) {
+    try {
+      if (!statSync(target).isDirectory()) return fail(`not a folder: ${target}`);
+    } catch {
+      return fail(`no such folder: ${target}`);
+    }
+  }
+  const raw = config().repoDirs;
+  const written = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string" && !!d.trim()) : [];
+  const next = written.filter((d) => resolve(expand(d.trim())) !== target);
+  if (added) next.push(target);
+  const res = mergeConfig({ repoDirs: next.length ? next : undefined }, "the project folders");
+  if (!res.ok) return fail(res.error ?? "could not save that");
+  // The environment wins over the file, so a folder added here is saved but not
+  // what this process lists until that variable is gone. Say so rather than
+  // look like a button that did nothing.
+  const note = process.env.AGENTGLASS_REPO_DIRS ? "AGENTGLASS_REPO_DIRS is set — it is what the picker lists, not the saved folders" : undefined;
+  return { ok: true, roots: configuredRepoDirs(), persisted: true, note };
 }
 
 // --- tmux engine settings ---------------------------------------------------

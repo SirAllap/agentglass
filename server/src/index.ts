@@ -164,7 +164,7 @@ import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
-import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
+import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, configPath } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
@@ -2934,6 +2934,15 @@ const server = Bun.serve<WsData>({
       const res = setProjectHidden(b.path, b.hidden !== false);
       return json(res, res.ok ? 200 : 400);
     }
+    // Add a folder the picker lists projects from, or forget one. Only the
+    // config file changes; the folder is never touched either way.
+    if (pathname === "/projects/roots" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = setRepoDir(b.path, b.added !== false);
+      return json(res, res.ok ? 200 : 400);
+    }
     if (pathname === "/projects/new" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
@@ -4969,21 +4978,26 @@ const server = Bun.serve<WsData>({
     // want to pay for the probes again inside the cache window.
     if (pathname === "/dependencies") return json(await dependencyReport(url.searchParams.get("force") === "1"));
     if (pathname === "/git/repos") {
-      // `all=1` is the project picker: it needs the whole machine even when the
-      // cockpit is currently scoped to one project, or there'd be no way out.
+      // `all=1` is the project picker: it needs to see past the open projects,
+      // or there'd be no way out. It lists what is under the folders the person
+      // added (`roots` in the answer); `scan=1` is its explicit "look for
+      // projects", the sweep of everywhere the app has seen an agent run, which
+      // is never what it shows by default.
       const ignoreScope = url.searchParams.get("all") === "1";
+      const rootsOnly = ignoreScope && url.searchParams.get("scan") !== "1";
       // Single-flighted: this sweep is a `git status` per repo across every
       // checkout, and several open tabs asking at the same instant would each
       // launch the whole fan-out. They share one now. (The 15s repoCache behind
       // it still handles reuse across time; this handles reuse across callers.)
-      return body(await singleFlight(`repos:${ignoreScope}`, async () => {
+      return body(await singleFlight(`repos:${ignoreScope}:${rootsOnly}`, async () => {
         const paths = getChanges(300).map((c) => c.file_path);
         // `hidden` rides along rather than being filtered out here: the picker
         // is the one surface that has to be able to show them again, and a list
         // it cannot see is a list it cannot restore from.
         return JSON.stringify({
-          repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }),
+          repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope, rootsOnly }),
           hidden: hiddenProjects(),
+          roots: configuredRepoDirs(),
         });
       }));
     }

@@ -95,3 +95,44 @@ describe("opening several projects", () => {
     expect((await get("/projects")).workspaces).toEqual([B]);
   });
 });
+
+describe("the folders the picker lists from", () => {
+  // Unscoped for these: an open project has its row whatever the folders say,
+  // and that would blur what is being asked.
+  test("with no folder added the picker lists nothing — the machine is not swept", async () => {
+    expect((await post("/workspace", { roots: [] })).ok).toBe(true);
+    const r = await get("/git/repos?all=1");
+    expect(r.repos).toEqual([]);
+    expect(r.roots).toEqual([]);
+  });
+
+  test("looking for projects is a separate, explicit ask", async () => {
+    // The server runs from inside this checkout, which the sweep has always
+    // counted as known; the default list above did not.
+    const r = await get("/git/repos?all=1&scan=1");
+    expect(r.repos.length).toBeGreaterThan(0);
+  });
+
+  test("an added folder is saved and its projects are listed", async () => {
+    const code = join(dir, "code");
+    for (const p of [A, B]) Bun.spawnSync(["git", "init", "-q", "-b", "main", p]);
+    const r = await post("/projects/roots", { path: code, added: true });
+    expect(r.ok).toBe(true);
+    expect(r.roots).toEqual([code]);
+    expect(saved().repoDirs).toEqual([code]);
+    const list = await get("/git/repos?all=1");
+    expect(list.roots).toEqual([code]);
+    expect(list.repos.map((x: { root: string }) => x.root).sort()).toEqual([B, A].sort());
+  });
+
+  test("a folder that is not there is refused", async () => {
+    const r = await post("/projects/roots", { path: join(dir, "nowhere"), added: true });
+    expect(r.ok).toBe(false);
+  });
+
+  test("forgetting the folder empties the list again", async () => {
+    const r = await post("/projects/roots", { path: join(dir, "code"), added: false });
+    expect(r.ok).toBe(true);
+    expect((await get("/git/repos?all=1")).repos).toEqual([]);
+  });
+});
