@@ -124,6 +124,18 @@ describe("start refuses before it reaches the engine", () => {
     }
   });
 
+  test("a refused short flag grouped with others, or with its value glued on", () => {
+    /* The gate compared the whole arg with its set, so `-y` was caught and
+       `-cy` — continue and yolo, to a CLI whose parser groups short options —
+       was not. Codex's `-a` takes its value glued the same way. */
+    for (const args of [["-cy"], ["-yc"], ["-anever"], ["-ca", "never"], ["-cy=true"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+    }
+    for (const args of [["-c"], ["-p"], ["-m", "opus"], ["-cp"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBeNull();
+    }
+  });
+
   test("OpenCode's --auto, whose help text says dangerous but whose name does not", async () => {
     /* `opencode --auto` approves every permission that is not explicitly
        denied. The word pattern reads the flag, not its help, so it passed with

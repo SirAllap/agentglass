@@ -181,6 +181,16 @@ const PERMISSION_FLAGS = new Set<string>([
   "--include-directories",
 ]);
 
+/**
+ * The refused flags that are one letter. yargs (Gemini, Qwen Code, OpenCode)
+ * groups short options, so `-cy` is `-c -y`, and clap (Codex) takes a short
+ * flag's value glued on, so `-anever` is `-a never`. Either way a refused
+ * letter anywhere in a single-dash arg is that flag. Over-refuses a glued
+ * value that happens to contain one (`-mclaude`); the refusal names the arg,
+ * and `-m claude` passes.
+ */
+const SHORT_REFUSED = new Set([...PERMISSION_FLAGS].filter((f) => /^-[A-Za-z]$/.test(f)).map((f) => f[1]!));
+
 /** The words a permission flag is made of, whatever the flag is called. */
 const PERMISSION_WORDS = /bypass|skip-permission|dangerous|yolo|full-auto/;
 
@@ -194,6 +204,7 @@ export function refusedArg(args: string[]): string | null {
     if (!a.startsWith("-")) continue;
     const name = a.split("=", 1)[0]!;
     if (PERMISSION_FLAGS.has(name)) return a;
+    if (!name.startsWith("--") && [...name.slice(1)].some((c) => SHORT_REFUSED.has(c))) return a;
     if (a.startsWith("--dangerously-")) return a;
     if (PERMISSION_WORDS.test(a.toLowerCase())) return a;
   }
