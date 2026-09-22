@@ -86,8 +86,9 @@ describe("the photograph", () => {
   test("a plain shell is nothing to bring back: tmux gives a restored pane one anyway", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "shell"]);
     const got = await photographed("shell");
-    expect(got?.startArgv).toBeUndefined();
-    expect(got?.startCommand).toBe("");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.startArgv).toBeUndefined();
+    expect(got!.startCommand).toBe("");
   }, 20_000);
 });
 

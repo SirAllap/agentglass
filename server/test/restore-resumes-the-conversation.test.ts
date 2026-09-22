@@ -109,13 +109,17 @@ describe("what the photograph says about a pane holding a conversation", () => {
     const id = await paneOf("stale");
     wt.notePaneAgent({ pane: id, sessionId: OTHER, transcriptPath: "/tmp/t.jsonl", cwd: "/somewhere/else" });
     const got = await photographed("stale");
-    expect(got?.agentSession).toBeUndefined();
+    /* The pane has to be in the picture for the next line to mean anything:
+       a `?.` on a pane that was not captured is undefined too. */
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.agentSession).toBeUndefined();
   }, 20_000);
 
   test("a pane that was itself restored carries its id on its own line", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "second", "-c", CWD, ...fakeClaude("--dangerously-skip-permissions", "--resume", OTHER)]);
     const got = await photographed("second");
-    expect(got?.agentSession).toBe(OTHER);
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.agentSession).toBe(OTHER);
     expect(got?.agentArgs).toContain("--dangerously-skip-permissions");
     expect(got?.agentArgs, "the id is re-supplied, never carried in the flags").not.toContain(OTHER);
     expect(got?.agentArgs).not.toContain("--resume");
