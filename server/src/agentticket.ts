@@ -148,6 +148,10 @@ export function agentArgv(
   bin: string | null | undefined,
   req: { prompt: string; yolo: boolean; title: string; kind?: string },
   canName: boolean,
+  /** Flags the SERVER adds, placed after this function's own and before the
+   *  prompt — which for a `flag` kind is two elements, not one, so a caller
+   *  splicing before the last element would split the flag from its value. */
+  extra: string[] = [],
 ): string[] {
   if (!bin) return [];
   /*
@@ -172,7 +176,7 @@ export function agentArgv(
   // flag below. Only where the CLI HAS such a flag: passing Claude's to Codex
   // is an unknown option and an immediate exit.
   const named = req.title && canName && kind.nameFlag ? [kind.nameFlag, req.title] : [];
-  const skip = req.yolo && kind.yoloFlag ? [kind.yoloFlag] : [];
+  const skip = [...(req.yolo && kind.yoloFlag ? [kind.yoloFlag] : []), ...extra];
 
   // The prompt is LAST and is one element. Never split, never through a shell:
   // a review brief contains quotes, newlines and backticks, and every one of

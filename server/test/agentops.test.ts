@@ -5,7 +5,7 @@
  * flag has bought what Settings refused.
  */
 import { describe, expect, test } from "bun:test";
-import { keyNamed, stateOfScreen, startAgent, validName, refusedArg, NAME_RE } from "../src/agentops.ts";
+import { keyNamed, stateOfScreen, startAgent, validName, refusedArg, namedAgentArgv, NAME_RE } from "../src/agentops.ts";
 import { SPELLINGS } from "../src/agents/launch.ts";
 
 const READY = [
@@ -126,5 +126,25 @@ describe("start refuses before it reaches the engine", () => {
        is on flags, not on prose. A refusal that fired on the word inside a
        positional would make "review the dangerous-goods form" unstartable. */
     expect(refusedArg(["--model", "opus", "--verbose", "review the dangerous-goods form", "yolo-mode.md"])).toBeNull();
+  });
+});
+
+describe("the command line a named agent starts with", () => {
+  test("pass-through flags go before the prompt, not between a prompt flag and its value", () => {
+    /* OpenCode, Gemini and Qwen Code take the prompt on a flag. The flags were
+       spliced in before the last element, which for them is the prompt's
+       VALUE: `opencode --prompt --model x "go"` hands `--model` to `--prompt`
+       and the prompt to nobody. */
+    expect(namedAgentArgv("/usr/bin/opencode", "opencode", { name: "w", prompt: "go", args: ["--model", "x"] }, false))
+      .toEqual(["/usr/bin/opencode", "--model", "x", "--prompt", "go"]);
+    expect(namedAgentArgv("/usr/bin/qwen", "qwen", { name: "w", prompt: "go", args: ["--model", "x"] }, false))
+      .toEqual(["/usr/bin/qwen", "--model", "x", "--prompt-interactive", "go"]);
+  });
+
+  test("and Claude's stays as it was: flags after the name, the prompt last", () => {
+    expect(namedAgentArgv("/usr/bin/claude", "claude", { name: "w", prompt: "go", remoteControl: "w", args: ["--model", "opus"] }, true))
+      .toEqual(["/usr/bin/claude", "--name", "w", "--remote-control", "w", "--model", "opus", "go"]);
+    expect(namedAgentArgv("/usr/bin/claude", "claude", { name: "w", args: ["--model", "opus"] }, false))
+      .toEqual(["/usr/bin/claude", "--model", "opus"]);
   });
 });

@@ -190,6 +190,22 @@ export function refusedArg(args: string[]): string | null {
   return null;
 }
 
+/**
+ * The command line a named agent starts with: the one `agentArgv` builds, with
+ * Claude's `--remote-control` and the caller's pass-through flags added.
+ *
+ * Out of `startAgent` so it can be asked without a tmux server.
+ */
+export function namedAgentArgv(
+  bin: string,
+  kind: string,
+  p: { name: string; prompt?: string; yolo?: boolean; remoteControl?: string; args: string[] },
+  canName: boolean,
+): string[] {
+  const remote = p.remoteControl && validName(p.remoteControl) && kind === "claude" ? ["--remote-control", p.remoteControl] : [];
+  return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind }, canName, [...remote, ...p.args]);
+}
+
 export async function startAgent(p: {
   root: string; name: string; cwd: string; kind?: string; prompt?: string; yolo?: boolean;
   /** Extra CLI flags after the ones this app builds, each one argv element. */
@@ -226,13 +242,8 @@ export async function startAgent(p: {
 
   const bin = agentBinFor(kind.id);
   if (!bin) return { ok: false, error: "no-cli" };
-  const base = agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind: kind.id }, supportsSessionName(bin));
-  if (!base.length) return { ok: false, error: "no-cli" };
-  /* The prompt is the LAST element of `base`; the flags go before it. */
-  const head = p.prompt ? base.slice(0, -1) : base;
-  const tail = p.prompt ? base.slice(-1) : [];
-  const remote = p.remoteControl && validName(p.remoteControl) && kind.id === "claude" ? ["--remote-control", p.remoteControl] : [];
-  const argv = [...head, ...remote, ...args, ...tail];
+  const argv = namedAgentArgv(bin, kind.id, { ...p, args }, supportsSessionName(bin));
+  if (!argv.length) return { ok: false, error: "no-cli" };
 
   /* One tmux session for every named agent, apart from the project's own:
      Herdr gave each worker its own workspace, and a person's strip is not the
