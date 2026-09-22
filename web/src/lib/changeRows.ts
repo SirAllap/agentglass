@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.ts";
 import { subscribeGitChanged } from "./gitBus.ts";
-import type { ChangeRow, ChangeRowsResult, FileDiff } from "../../../shared/types.ts";
+import type { ChangeRow, ChangeRowsResult, FileDiff, TreeAuthorsInfo } from "../../../shared/types.ts";
 
 export type DiffMode = "working" | "committed";
 
@@ -63,6 +63,8 @@ export type RowsState = {
   rows: ChangeRow[];
   truncated: number;
   failed: string[];
+  /** Who is writing into each checkout — see treeAuthors.ts. */
+  authors: TreeAuthorsInfo[];
   /** Only before the first answer. A refresh keeps showing what is there —
    *  blanking a list you are reading to say "loading" is worse than a second of
    *  staleness. */
@@ -71,7 +73,7 @@ export type RowsState = {
 };
 
 export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { refresh: () => void } {
-  const [state, setState] = useState<RowsState>({ rows: [], truncated: 0, failed: [], loading: true, error: null });
+  const [state, setState] = useState<RowsState>({ rows: [], truncated: 0, failed: [], authors: [], loading: true, error: null });
   const inFlight = useRef(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
@@ -86,6 +88,7 @@ export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { re
         rows: rowsDiffer(prev.rows, r.rows) ? r.rows : prev.rows,
         truncated: r.truncated,
         failed: r.failed ?? [],
+        authors: r.authors ?? [],
         loading: false,
         error: null,
       }));

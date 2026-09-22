@@ -43,6 +43,7 @@ import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.t
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLines.tsx";
 import { FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
+import { authorsIndex, headingAuthors, rowAuthorsTitle, sectionAuthors } from "../../lib/treeAuthors.ts";
 
 /* Storage keys are v3 on purpose: the two before them stored a group-by that no
    longer exists and ticks keyed by an id that no longer exists either. */
@@ -124,7 +125,8 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
   useEffect(() => write(K_IGNORED, showIgnored ? "1" : "0"), [showIgnored]);
   useEffect(() => write(K_OUTSIDE, showOutside ? "1" : "0"), [showOutside]);
 
-  const { rows, truncated, failed, loading, error } = useChangeRows(mode, active);
+  const { rows, truncated, failed, authors, loading, error } = useChangeRows(mode, active);
+  const who = useMemo(() => authorsIndex(authors), [authors]);
 
   /* The counts the chips offer back. Each counts only what IT is hiding, or
      "+2 ignored" shows nothing when the same rows are also outside the project
@@ -261,7 +263,7 @@ export function DiffPage({ active, onClose }: { active: boolean; onClose?: () =>
             groups={groups} collapsed={collapsed} onToggleSection={toggleSection}
             selKey={selected?.key ?? null} onSelect={setSelKey}
             reviewed={reviewed} onToggleReviewed={toggleReviewed}
-            groupBy={groupBy}
+            groupBy={groupBy} who={who}
             empty={loading && !rows.length ? "Reading git…"
               : error ? error
               /*
@@ -416,7 +418,7 @@ function Tick({ on }: { on: boolean }) {
 /* ── the list ─────────────────────────────────────────────────────────────── */
 
 function List({
-  ref, groups, collapsed, onToggleSection, selKey, onSelect, reviewed, onToggleReviewed, groupBy, empty, notice,
+  ref, groups, collapsed, onToggleSection, selKey, onSelect, reviewed, onToggleReviewed, groupBy, who, empty, notice,
 }: {
   ref: React.Ref<HTMLDivElement>;
   groups: RowGroup[];
@@ -427,6 +429,8 @@ function List({
   reviewed: ReadonlySet<string>;
   onToggleReviewed: (r: ChangeRow) => void;
   groupBy: GroupBy;
+  /** Who is writing into each checkout, and the rows more than one of them edited. */
+  who: ReturnType<typeof authorsIndex>;
   /** A node, not a string: when a filter comes from a jump the empty case has
    *  something to OFFER — the other mode, with the filter kept. See `emptyLine`. */
   empty: React.ReactNode;
@@ -440,40 +444,53 @@ function List({
   return (
     <div ref={ref} onScroll={inc.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-3">
       {!groups.length && <p className="text-center py-10 text-[12px]" style={{ color: "var(--text4)" }}>{empty}</p>}
-      {inc.rows.map((g) => (
-        <section key={g.key} className="mb-1">
-          <button
-            onClick={() => onToggleSection(g.key)}
-            aria-expanded={!collapsed.has(g.key)}
-            className="w-full flex items-center gap-1.5 px-1.5 py-1.5 rounded-md hover:bg-white/5 text-left"
-          >
-            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
-              style={{ color: "var(--text4)", transform: collapsed.has(g.key) ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
-              <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{g.label}</span>
-            {g.sub && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{g.sub}</span>}
-            <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
-              {g.rows.length}
-              {"  "}<span style={{ color: "var(--success)" }}>+{g.add}</span>
-              {" "}<span style={{ color: "var(--error)" }}>−{g.del}</span>
-            </span>
-          </button>
-          {!collapsed.has(g.key) && (
-            <div className="pl-3">
-              {g.rows.map((r) => (
-                <Row
-                  key={r.key} r={r}
-                  selected={r.key === selKey}
-                  reviewed={reviewed.has(reviewKeyOf(r))}
-                  onSelect={() => onSelect(r.key)}
-                  onToggleReviewed={() => onToggleReviewed(r)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      ))}
+      {inc.rows.map((g) => {
+        const by = sectionAuthors(who, groupBy, g.key);
+        const h = by ? headingAuthors(by) : null;
+        return (
+          <section key={g.key} className="mb-1">
+            <button
+              onClick={() => onToggleSection(g.key)}
+              aria-expanded={!collapsed.has(g.key)}
+              className="w-full flex items-center gap-1.5 px-1.5 py-1.5 rounded-md hover:bg-white/5 text-left"
+            >
+              <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
+                style={{ color: "var(--text4)", transform: collapsed.has(g.key) ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
+                <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{g.label}</span>
+              {g.sub && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{g.sub}</span>}
+              {h && (
+                <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate shrink"} title={h.title}
+                  style={h.shared
+                    ? { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
+                    : { color: "var(--text3)" }}>
+                  {h.text}
+                </span>
+              )}
+              <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
+                {g.rows.length}
+                {"  "}<span style={{ color: "var(--success)" }}>+{g.add}</span>
+                {" "}<span style={{ color: "var(--error)" }}>−{g.del}</span>
+              </span>
+            </button>
+            {!collapsed.has(g.key) && (
+              <div className="pl-3">
+                {g.rows.map((r) => (
+                  <Row
+                    key={r.key} r={r}
+                    selected={r.key === selKey}
+                    reviewed={reviewed.has(reviewKeyOf(r))}
+                    onSelect={() => onSelect(r.key)}
+                    onToggleReviewed={() => onToggleReviewed(r)}
+                    authors={who.byRow.get(r.key)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
       {inc.more && (
         <button onClick={inc.showAll} className="w-full py-2 text-[11px] rounded-md hover:bg-white/5" style={{ color: "var(--text3)" }}>
           Show the rest
@@ -497,8 +514,10 @@ const STATUS_STYLE: Record<ChangeRow["status"], { c: string; ch: string }> = {
   typechange: { c: "var(--warning)", ch: "T" },
 };
 
-function Row({ r, selected, reviewed, onSelect, onToggleReviewed }: {
+function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
   r: ChangeRow; selected: boolean; reviewed: boolean; onSelect: () => void; onToggleReviewed: () => void;
+  /** Set when more than one live session edited this file. */
+  authors?: string[];
 }) {
   const name = r.path.slice(r.path.lastIndexOf("/") + 1);
   const dir = r.path.slice(0, r.path.length - name.length).replace(/\/$/, "");
@@ -527,6 +546,12 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed }: {
           <span className="text-[9.5px] px-1 rounded shrink-0" title={r.staged === "partial" ? "Partly staged" : "Staged"}
             style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
             {r.staged === "partial" ? "part staged" : "staged"}
+          </span>
+        )}
+        {authors && (
+          <span className="text-[9.5px] px-1 rounded shrink-0" title={rowAuthorsTitle(authors)}
+            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
+            {authors.length} authors
           </span>
         )}
       </span>
