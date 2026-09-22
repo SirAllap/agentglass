@@ -6,7 +6,7 @@
  * ended or gone quiet stops counting.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -172,6 +172,9 @@ describe("findCollisions", () => {
 });
 
 describe("getCollisions", () => {
+  // Real checkouts: a session counts only inside one.
+  const W = join(dir, "work");
+  for (const wt of ["wt-a", "wt-b", "wt-c", "wt-d", "wt-e", "wt-f", "wt-g"]) mkdirSync(join(W, wt, ".git"), { recursive: true });
   // db.ts is one module for the whole `bun test` process, so the events table
   // holds whatever any other file inserted near `now`. Only this file's
   // sessions are read back.
@@ -200,27 +203,42 @@ describe("getCollisions", () => {
 
   test("live sessions in two checkouts on one database are flagged; ended and stale ones are not", () => {
     const url = "DATABASE_URL=postgres://localhost:5432/acme_dev bunx prisma migrate dev";
-    db.insertEvent(ev("live-a", now - 60_000, "PreToolUse", "Bash", { command: url }, "/work/wt-a") as any);
+    db.insertEvent(ev("live-a", now - 60_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-a`) as any);
     // A Stop ends a turn, not a session: the one sitting at its prompt still counts.
-    db.insertEvent(ev("live-a", now - 50_000, "Stop", null, {}, "/work/wt-a") as any);
-    db.insertEvent(ev("live-b", now - 30_000, "PreToolUse", "Bash", { command: url }, "/work/wt-b") as any);
-    db.insertEvent(ev("gone-c", now - 40_000, "PreToolUse", "Bash", { command: url }, "/work/wt-c") as any);
-    db.insertEvent(ev("gone-c", now - 20_000, "SessionEnd", null, {}, "/work/wt-c") as any);
-    db.insertEvent(ev("stale-d", now - 3 * 60 * 60_000, "PreToolUse", "Bash", { command: url }, "/work/wt-d") as any);
-    db.insertEvent(ev("live-e", now - 10_000, "PreToolUse", "Read", { file_path: "/work/wt-e/README.md" }, "/work/wt-e") as any);
+    db.insertEvent(ev("live-a", now - 50_000, "Stop", null, {}, `${W}/wt-a`) as any);
+    db.insertEvent(ev("live-b", now - 30_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-b`) as any);
+    db.insertEvent(ev("gone-c", now - 40_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-c`) as any);
+    db.insertEvent(ev("gone-c", now - 20_000, "SessionEnd", null, {}, `${W}/wt-c`) as any);
+    db.insertEvent(ev("stale-d", now - 3 * 60 * 60_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-d`) as any);
+    db.insertEvent(ev("live-e", now - 10_000, "PreToolUse", "Read", { file_path: `${W}/wt-e/README.md` }, `${W}/wt-e`) as any);
 
     const out = ours(col.getCollisions(now, () => []), ["live-a", "live-b", "gone-c", "stale-d", "live-e"]);
     expect(out.map((c) => c.resource)).toEqual(["postgres localhost:5432/acme_dev"]);
     expect(out[0].parties.map((s) => s.session_id).sort()).toEqual(["live-a", "live-b"]);
-    expect(out[0].parties.find((s) => s.session_id === "live-b")?.checkout).toBe("/work/wt-b");
+    expect(out[0].parties.find((s) => s.session_id === "live-b")?.checkout).toBe(`${W}/wt-b`);
   });
 
   test("a port a process is listening on counts for the checkout it runs in", () => {
-    db.insertEvent(ev("live-f", now - 10_000, "PreToolUse", "Bash", { command: "bun test" }, "/work/wt-f") as any);
-    db.insertEvent(ev("live-g", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5555/api" }, "/work/wt-g") as any);
-    const out = ours(col.getCollisions(now, () => [{ port: 5555, addr: "127.0.0.1", pid: 4242, proc: "bun", cwd: "/work/wt-f/web" }]), ["live-f", "live-g"]);
+    db.insertEvent(ev("live-f", now - 10_000, "PreToolUse", "Bash", { command: "bun test" }, `${W}/wt-f`) as any);
+    db.insertEvent(ev("live-g", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5555/api" }, `${W}/wt-g`) as any);
+    const out = ours(col.getCollisions(now, () => [{ port: 5555, addr: "127.0.0.1", pid: 4242, proc: "bun", cwd: `${W}/wt-f/web` }]), ["live-f", "live-g"]);
     const hit = out.find((c) => c.resource === "port 5555");
     expect(hit).toBeDefined();
     expect(hit!.parties.map((s) => `${s.session_id}:${s.via}`).sort()).toEqual(["live-f:listening", "live-g:command"]);
+  });
+
+  test("a session outside any checkout is not a party, and a listener below it is nobody's", () => {
+    // A session sitting in the home directory has no checkout; taking the
+    // directory itself as one made every dev server under it that session's,
+    // and paired it with whichever agent curled the port.
+    const home = join(dir, "home");
+    mkdirSync(join(home, "code", "other"), { recursive: true });
+    db.insertEvent(ev("home-h", now - 10_000, "PreToolUse", "Bash", { command: "ls" }, home) as any);
+    db.insertEvent(ev("home-i", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5556/" }, home) as any);
+    db.insertEvent(ev("live-j", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5556/" }, `${W}/wt-a`) as any);
+    const out = ours(col.getCollisions(now, () => [{ port: 5556, addr: "127.0.0.1", pid: 4343, proc: "node", cwd: join(home, "code", "other") }]), ["home-h", "home-i", "live-j"]);
+    expect(out).toEqual([]);
+    expect(col.checkoutOf(join(home, "code"))).toBeNull();
+    expect(col.checkoutOf(`${W}/wt-a/src/deep`)).toBe(`${W}/wt-a`);
   });
 });

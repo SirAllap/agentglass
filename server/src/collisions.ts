@@ -27,6 +27,10 @@
 // - The compose project for a bare `docker compose` is the cwd's basename. The
 //   real rule looks upwards for the compose file first; from a subdirectory of
 //   the project this names the subdirectory.
+// - A session counts only inside a git checkout, and its checkout is the one
+//   its latest cwd is in: one that cds into another tree takes its window of
+//   claims along. A listener is matched to a checkout by its process's cwd,
+//   not by which session started it.
 // - Postgres and redis are recognised by URL and by data directory; a bare
 //   `psql -d acme_dev` names no host and is not read.
 import { existsSync } from "node:fs";
@@ -316,11 +320,17 @@ export function findCollisions(sessions: SessionClaims[]): Collision[] {
   return out.sort((a, b) => b.parties[0].ts - a.parties[0].ts);
 }
 
-/** The checkout a directory belongs to: the nearest ancestor holding a `.git`,
- *  or the directory itself when there is none. */
-export function checkoutOf(dir: string, cache = new Map<string, string>()): string {
+/**
+ * The checkout a directory belongs to: the nearest ancestor holding a `.git`,
+ * or null when there is none.
+ *
+ * Not the directory itself as a fallback. A session in the home directory
+ * would then own every dev server running anywhere below it, and pair up with
+ * whichever agent in a real checkout curled that port.
+ */
+export function checkoutOf(dir: string, cache = new Map<string, string | null>()): string | null {
   const hit = cache.get(dir);
-  if (hit) return hit;
+  if (hit !== undefined) return hit;
   let at = resolve(dir);
   let found: string | null = null;
   for (;;) {
@@ -329,9 +339,8 @@ export function checkoutOf(dir: string, cache = new Map<string, string>()): stri
     if (up === at) break;
     at = up;
   }
-  const root = found ?? resolve(dir);
-  cache.set(dir, root);
-  return root;
+  cache.set(dir, found);
+  return found;
 }
 
 export interface Listener {
@@ -368,7 +377,7 @@ export function getCollisions(
     )
     .all(since);
 
-  const roots = new Map<string, string>();
+  const roots = new Map<string, string | null>();
   const bySession = new Map<string, SessionClaims & { cwd: string | null; ended: boolean }>();
   for (const r of rows) {
     const k = `${r.source_app}\0${r.session_id}`;
@@ -393,8 +402,12 @@ export function getCollisions(
     }
   }
 
-  const live = [...bySession.values()].filter((s) => !s.ended && s.cwd);
-  for (const s of live) s.root = checkoutOf(s.cwd!, roots);
+  // A session outside any checkout has no tree for a resource to be outside of.
+  const live = [...bySession.values()].filter((s) => {
+    if (s.ended || !s.cwd) return false;
+    s.root = checkoutOf(s.cwd, roots) ?? "";
+    return s.root !== "";
+  });
   if (live.length < 2) return [];
 
   // A listening socket belongs to every live session in the checkout its
