@@ -304,6 +304,17 @@ describe.skipIf(!HAVE_PY)("the size ceiling", () => {
   });
 });
 
+describe("the installer", () => {
+  // The cockpit imports the browser server's transport from the file beside
+  // it; a link to one without the other is a command that dies on import.
+  const INSTALL = readFileSync(new URL("../../electron/install-local.sh", import.meta.url), "utf8");
+  test("links agentglass-cockpit-mcp only when agentglass-browser-mcp shipped beside it", () => {
+    const guard = /if \[ -f "\$APP\/resources\/bin\/agentglass-cockpit-mcp" \] && \[ -f "\$APP\/resources\/bin\/agentglass-browser-mcp" \]; then\n([\s\S]*?)\nfi/.exec(INSTALL);
+    expect(guard).not.toBeNull();
+    expect(guard![1]).toContain('ln -sf "$APP/resources/bin/agentglass-cockpit-mcp" "$BIN/agentglass-cockpit-mcp"');
+  });
+});
+
 describe.skipIf(!HAVE_PY)("the cockpit over Streamable HTTP", () => {
   /* The browser's transport, fences and all: a token of its own, loopback by
      default, no Origin, application/json only. The token is the cockpit's —

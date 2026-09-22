@@ -231,6 +231,12 @@ if [ -f "$APP/resources/bin/agentglass-browser" ]; then
     ln -sf "$APP/resources/bin/agentglass-browser-mcp" "$BIN/agentglass-browser-mcp"
   fi
 fi
+# The cockpit as a read-only MCP server. It imports the browser MCP server's
+# transport from the file beside it, so it is linked only when both shipped.
+if [ -f "$APP/resources/bin/agentglass-cockpit-mcp" ] && [ -f "$APP/resources/bin/agentglass-browser-mcp" ]; then
+  chmod +x "$APP/resources/bin/agentglass-cockpit-mcp" 2>/dev/null || true
+  ln -sf "$APP/resources/bin/agentglass-cockpit-mcp" "$BIN/agentglass-cockpit-mcp"
+fi
 # The named-agent CLI: a script's launcher and liveness for unattended agents
 # on the engine. Same home as the browser CLI, for the same reason.
 if [ -f "$APP/resources/bin/agentglass-agent" ]; then
@@ -318,6 +324,7 @@ echo "  stamp    $STAMP"
 echo "  command  agentglass"
 [ -L "$BIN/agentglass-browser" ] && echo "  agent cli agentglass-browser (drives the built-in browser)"
 [ -L "$BIN/agentglass-browser-mcp" ] && echo "  mcp      claude mcp add agentglass-browser -- agentglass-browser-mcp"
+[ -L "$BIN/agentglass-cockpit-mcp" ] && echo "  mcp      claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp"
 [ -f "$HOME/.claude/skills/browser-use/SKILL.md" ] && echo "  skill    ~/.claude/skills/browser-use (so agents know it is there)"
 echo "  launcher $DESKTOP/agentglass.desktop"
 

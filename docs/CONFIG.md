@@ -131,6 +131,11 @@ are:
 | `AGENTGLASS_MCP_TOKEN` | minted | The Bearer token the Streamable-HTTP MCP endpoint requires on every request, 32+ chars. It is the endpoint's own, never `AGENTGLASS_TOKEN` (refused if equal): whoever holds it can drive the browser, not the app. Unset, one is minted for the process and printed on stderr at start. |
 | `AGENTGLASS_MCP_EXPOSE` | — | `1` → the same opt-in as `--expose`: allow `AGENTGLASS_MCP_HTTP` to bind an address that is not loopback. |
 | `AGENTGLASS_MCP_ALLOW_HOSTS` | — | Comma-separated `Host` names the Streamable-HTTP MCP endpoint answers besides the bound address; the same as repeating `--allow-host NAME`. For a TLS tunnel or reverse proxy in front of a loopback bind, which forwards its own public name as `Host`. |
+| `AGENTGLASS_COCKPIT_HTTP` | — | `[HOST:]PORT` → serve the read-only cockpit MCP server (`agentglass-cockpit-mcp`) over Streamable HTTP instead of stdio; the same as `--http`. Its own variable, so `AGENTGLASS_MCP_HTTP` never starts it on the browser endpoint's port. |
+| `AGENTGLASS_COCKPIT_TOKEN` | minted | The Bearer token the cockpit endpoint requires on every request, 32+ chars. Refused if it equals `AGENTGLASS_TOKEN` or `AGENTGLASS_MCP_TOKEN`: none of the three opens what another does. Minted and printed at start when unset. |
+| `AGENTGLASS_COCKPIT_EXPOSE` | — | `1` → the same opt-in as `--expose` for the cockpit endpoint. `AGENTGLASS_MCP_EXPOSE` does not expose it. |
+| `AGENTGLASS_COCKPIT_ALLOW_HOSTS` | — | Comma-separated extra `Host` names for the cockpit endpoint, as `AGENTGLASS_MCP_ALLOW_HOSTS` is for the browser's. |
+| `AGENTGLASS_COCKPIT_MAX_BYTES` | `16384` | The size ceiling on every cockpit MCP answer. One that would be larger clips long text fields (a summary, a pasted first prompt) to 2048 characters, drops items from the end of its lists (oldest or smallest first), and says what it clipped and dropped (`truncated`) and how to ask for less (`narrow`); the JSON is never cut in the middle. |
 | `AGENTGLASS_UNDERSTUDY` | — | `0` → force the **Clone** off whatever its settings file says. It can force off, never on: recording must not start because of a variable inherited from a shell. |
 | `AGENTGLASS_PRIVATE_TERMS` | `~/.config/agentglass/private-terms.txt` | The Clone's private-terms list — one pattern per line of names that must never leave a private repository. With the app's own file absent, `~/.config/git/private-terms.txt` is honoured. Without any list the Clone refuses to learn. |
 | `AGENTGLASS_STATE_DIR` | `~/.local/state/agentglass` | Where a server keeps its mutable state — the tmux socket and config, pane records, the judge's private room, and (unless `AGENTGLASS_DB` names a file) its database. A second server pointed here runs beside the real one without touching its history. |
@@ -358,6 +363,18 @@ over plain `http://` to any host that is not this machine.
   `--http 0.0.0.0:8765 --expose`, which says on stderr that the token travels
   in the clear until TLS terminates in front of it. A tunnel in front of a
   loopback bind forwards its own name as `Host`; name it with `--allow-host`.
+
+- **`agentglass-cockpit-mcp`** — the cockpit, read-only, as an MCP server
+  (`claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp`), so an agent
+  can ask what it has spent, which tools are slow, what failed and what is
+  waiting on a person: `cockpit_sessions`, `cockpit_session`, `cockpit_spend`,
+  `cockpit_tool_latency`, `cockpit_errors`, `cockpit_recent_events`,
+  `cockpit_agents`, `cockpit_attention`. Every request it makes to the app is a
+  GET; nothing it offers writes, kills or approves. Every answer stays under
+  `AGENTGLASS_COCKPIT_MAX_BYTES`, dropping the oldest items and naming them
+  rather than cutting the payload. `--http` serves it over the same transport,
+  with the same fences, as the browser's, under its own token
+  (`AGENTGLASS_COCKPIT_TOKEN`).
 
 ---
 

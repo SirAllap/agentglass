@@ -748,6 +748,24 @@ ceiling: an agent with the `session` verb can replace the guard with a direct
 rule before it opens a name, and the reply says the guard is off rather than
 refusing. The verb is one that acts, so read-only mode refuses it.
 
+### The cockpit over MCP
+
+`bin/agentglass-cockpit-mcp` answers questions about the cockpit's own data —
+sessions, spend, tool latency, errors, the agent board, pending gates — and
+nothing else. It reaches the app only with GET requests (one request is built
+in the file, and a test holds it to GET), so no argument makes it write, kill
+or approve. What it reads is what the app's token already reads: run it with
+`AGENTGLASS_TOKEN` and it can see every session in scope, prompts' titles and
+error text included.
+
+Over HTTP it runs behind the browser MCP server's transport, imported rather
+than copied: a loopback bind unless `--expose`, any `Origin` refused, only
+`application/json` bodies, and a bearer of its own, `AGENTGLASS_COCKPIT_TOKEN`,
+refused at start if it equals the app's token or the browser endpoint's. A
+cockpit token that leaks reads the cockpit; it does not drive the browser or
+open the app. Its bind and expose variables are its own as well, so setting
+the browser endpoint's never starts or exposes this one.
+
 ## What leaves through the webhook
 
 `AGENTGLASS_WEBHOOK` is off unless set. With it set, the server POSTs
