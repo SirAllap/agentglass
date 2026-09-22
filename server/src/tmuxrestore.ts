@@ -439,7 +439,7 @@ export function agentUnder(panePid: number, proc: ProcReader = machineProc): Age
  * `%2` too; and ids start at %0 again on the server that restores a desk, so
  * a note from the server that died can name a pane of this one. The hook
  * says which server it fired in (`notePaneFromHook`), the note is kept per
- * server and pane (`ensurePaneAgentTable`), it is read for this server, and
+ * server and pane (`ensurePaneNoteTable`), it is read for this server, and
  * a note from another is never this pane's.
  *
  * Within one server, the question is when, not where. The first guard
