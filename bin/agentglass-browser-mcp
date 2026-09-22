@@ -1146,6 +1146,33 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_storage_state",
+        "description": (
+            "The session as one portable object, in Playwright's storageState shape: every cookie the tab's "
+            "session holds (through the DevTools protocol, so httpOnly ones are included) and the page's "
+            "localStorage and sessionStorage under its origin. Stash it between runs and hand it to "
+            "browser_set_storage_state — or to Playwright — instead of logging in again. It is a credential: "
+            "keep it where you would keep a password."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_set_storage_state",
+        "description": (
+            "Restore a session from a browser_storage_state object (or a Playwright storageState file). "
+            "Cookies go back through the DevTools protocol, keeping httpOnly and Secure; storage is written by "
+            "the page itself, so the tab must already be open on the origin the state came from — one origin "
+            "cannot write another's storage, and neither can this."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {"type": "object", "description": "{ cookies: [...], origins: [{ origin, localStorage: [{ name, value }], sessionStorage?: [...] }] }"},
+            },
+            "required": ["state"],
+        },
+    },
+    {
         "name": "browser_frames",
         "description": "The iframes, service workers and shadow roots on this page, and which frames are same-origin enough to read.",
         "inputSchema": {"type": "object", "properties": {}},
@@ -1480,11 +1507,122 @@ def _no_tab(name, who):
     )}], "isError": True}
 
 
-def run(name, args):
-    """A tool call, as MCP content."""
+STORAGE_READ_JS = (
+    "(() => { const ls = {}; for (const k of Object.keys(localStorage)) ls[k] = localStorage.getItem(k); "
+    "const ss = {}; for (const k of Object.keys(sessionStorage)) ss[k] = sessionStorage.getItem(k); "
+    "return { origin: location.origin, localStorage: ls, sessionStorage: ss }; })()"
+)
+
+COOKIE_KEYS = ("name", "value", "url", "domain", "path", "secure", "httpOnly", "sameSite", "expires")
+
+# What a composed tool passes down to its parts: where to act, and nothing
+# else of the caller's arguments.
+WHERE = ("page", "profile", "shared")
+
+
+def _where(args):
+    return {k: v for k, v in args.items() if k in WHERE and v is not None}
+
+
+def _raw(name, args):
+    """A sub-call on behalf of a composed tool: the relay's own reply, with
+    `run`'s addressing, identity and retries applied exactly as they would be
+    for the tool the agent called — so a composed tool cannot land on a tab
+    its parts would each have refused. A refusal `run` renders before any
+    call is made comes back as an error reply rather than as content."""
+    out = run(name, args, raw=True)
+    if isinstance(out, dict) and "content" in out:
+        return {"ok": False, "error": (out["content"][0] or {}).get("text") or "refused"}
+    return out
+
+
+def _err(text):
+    return {"content": [{"type": "text", "text": text}], "isError": True}
+
+
+def storage_state(args):
+    """`session save`, as an object rather than a file: the same two reads
+    (cookies through CDP so httpOnly ones are seen, storage by the page),
+    the same Playwright shape, handed back for the agent to keep."""
+    where = _where(args)
+    cookies_res = _raw("browser_cdp", dict(where, method="Network.getCookies", params={}))
+    if not cookies_res.get("ok"):
+        return _err(cookies_res.get("error") or "could not read cookies")
+    cookies = ((cookies_res.get("value") or {}).get("result") or {}).get("cookies", [])
+    storage_res = _raw("browser_eval", {**where, "js": STORAGE_READ_JS, "await": False})
+    if not storage_res.get("ok"):
+        return _err(storage_res.get("error") or "could not read storage")
+    storage = (storage_res.get("value") or {}).get("value") or {}
+    state = {
+        "cookies": cookies,
+        "origins": [{
+            "origin": storage.get("origin", ""),
+            "localStorage": [{"name": k, "value": v} for k, v in (storage.get("localStorage") or {}).items()],
+            "sessionStorage": [{"name": k, "value": v} for k, v in (storage.get("sessionStorage") or {}).items()],
+        }],
+    }
+    return {"content": [{"type": "text", "text": json.dumps(state)}]}
+
+
+def set_storage_state(args):
+    """The reverse: cookies back through CDP, storage written by the page —
+    which is why the tab must already be on the origin the state came from."""
+    where = _where(args)
+    state = args.get("state")
+    if not isinstance(state, dict):
+        return _err("state must be an object: { cookies, origins }")
+    cookies = state.get("cookies") or []
+    origins = state.get("origins") or []
+    if not isinstance(cookies, list) or not isinstance(origins, list):
+        return _err("state.cookies and state.origins must be lists")
+    failed = []
+    for c in cookies:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        params = {k: v for k, v in c.items() if k in COOKIE_KEYS}
+        if "domain" in params and "url" not in params:
+            # `Network.setCookie` wants a url when there is no domain+path pair
+            # it would take unambiguously; getCookies' own answer carries a
+            # domain and never a url, so one is built rather than every cookie
+            # this reads back being refused.
+            scheme = "https" if params.get("secure") else "http"
+            params["url"] = f"{scheme}://{str(params['domain']).lstrip('.')}{params.get('path', '/')}"
+        r = _raw("browser_cdp", dict(where, method="Network.setCookie", params=params))
+        if not r.get("ok"):
+            failed.append(f"{c.get('name')}: {r.get('error')}")
+    ls_count = ss_count = 0
+    for o in origins:
+        if not isinstance(o, dict):
+            continue
+        ls = {e["name"]: e["value"] for e in (o.get("localStorage") or []) if isinstance(e, dict) and "name" in e}
+        ss = {e["name"]: e["value"] for e in (o.get("sessionStorage") or []) if isinstance(e, dict) and "name" in e}
+        if not ls and not ss:
+            continue
+        ls_count += len(ls)
+        ss_count += len(ss)
+        js = (
+            f"(() => {{ const ls = {json.dumps(ls)}; for (const k in ls) localStorage.setItem(k, ls[k]); "
+            f"const ss = {json.dumps(ss)}; for (const k in ss) sessionStorage.setItem(k, ss[k]); return true; }})()"
+        )
+        r = _raw("browser_eval", {**where, "js": js, "await": False})
+        if not r.get("ok"):
+            return _err(r.get("error") or "could not write storage")
+    text = f"restored {len(cookies) - len(failed)} of {len(cookies)} cookies, {ls_count} localStorage keys, {ss_count} sessionStorage keys"
+    if failed:
+        text += "; cookies refused: " + "; ".join(failed)
+    return {"content": [{"type": "text", "text": text}], "isError": bool(cookies) and len(failed) == len(cookies)}
+
+
+def run(name, args, raw=False):
+    """A tool call, as MCP content — or, with `raw`, the relay's reply itself,
+    for a composed tool built out of this one's parts."""
     verb = VERB.get(name)
     if not verb:
         return {"content": [{"type": "text", "text": f"no such tool: {name}"}], "isError": True}
+    if verb == "storage_state":
+        return storage_state(args)
+    if verb == "set_storage_state":
+        return set_storage_state(args)
 
     body = {}
     if verb == "do":
@@ -1729,6 +1867,8 @@ def run(name, args):
             if isinstance(row, dict) and row.get("id"):
                 remember_tab(who, row["id"])
 
+    if raw:
+        return res
     if verb == "do":
         # A batch answers per step, and a failure is not the whole batch
         # failing: the steps before it DID happen, and hiding them would send

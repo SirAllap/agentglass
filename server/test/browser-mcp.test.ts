@@ -373,6 +373,10 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
 
     sent = [];
     says = {};
+    /* The composed tools never put their own name on the wire: they are made
+       of other verbs, and the page has to reach THOSE. Each is checked on the
+       first verb it sends. */
+    const COMPOSED: Record<string, string> = { browser_storage_state: "cdp", browser_set_storage_state: "cdp" };
     await client("orbit-wire", freshState(), targetable.map((t) => ({
       name: t.name,
       /* `do` is the one that cannot take a bare page: the server's `do` route
@@ -380,12 +384,14 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
          ride each step. Give it a step to ride. */
       arguments: t.name === "browser_do"
         ? { page: "t-lock", steps: [{ op: "click", args: { selector: "#x" } }] }
-        : { page: "t-lock" },
+        : t.name === "browser_set_storage_state"
+          ? { page: "t-lock", state: { cookies: [{ name: "sid", value: "1", domain: "orbit.example", path: "/" }], origins: [] } }
+          : { page: "t-lock" },
     })));
 
     const missed: string[] = [];
     for (const t of targetable) {
-      const verb = t.name.slice("browser_".length);
+      const verb = COMPOSED[t.name] ?? t.name.slice("browser_".length);
       const req = sent.find((s) => s.op === verb);
       if (!req) { missed.push(`${t.name}: no request left the process`); continue; }
       if (verb === "do") {
@@ -439,6 +445,52 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
     expect(res!.isError).toBe(true);
     expect(res!.content[0]!.text).toContain("orbit-c");
     expect(res!.content[0]!.text).toContain("no tab open");
+    expect(sent).toEqual([]);
+  });
+
+  /*
+   * The session as one object: `browser_storage_state` is `session save`
+   * without the file — cookies through CDP so httpOnly ones are in it, the
+   * page's storage under its origin, in Playwright's shape — and
+   * `browser_set_storage_state` puts one back. Both are made of `cdp` and
+   * `eval`, and both parts carry the caller's page, so a state can never be
+   * read from, or written onto, a tab the caller did not name.
+   */
+  test("storage_state reads cookies and storage into Playwright's shape, and set_storage_state writes them back", async () => {
+    sent = [];
+    says = {
+      cdp: { ok: true, value: { result: { cookies: [{ name: "sid", value: "s3cret", domain: ".orbit.example", path: "/", httpOnly: true, secure: true }] } } },
+      eval: { ok: true, value: { value: { origin: "https://orbit.example", localStorage: { token: "t1" }, sessionStorage: { step: "2" } } } },
+    };
+    const [got] = await client("orbit-s", freshState(), [{ name: "browser_storage_state", arguments: { page: "t-s" } }]);
+    expect(got!.isError, JSON.stringify(got)).toBeFalsy();
+    const state = JSON.parse(got!.content[0]!.text!) as { cookies: unknown[]; origins: unknown[] };
+    expect(state.cookies).toEqual([{ name: "sid", value: "s3cret", domain: ".orbit.example", path: "/", httpOnly: true, secure: true }]);
+    expect(state.origins).toEqual([{ origin: "https://orbit.example", localStorage: [{ name: "token", value: "t1" }], sessionStorage: [{ name: "step", value: "2" }] }]);
+    expect(sent.map((s) => s.op)).toEqual(["cdp", "eval"]);
+    expect(sent.every((s) => s.body.page === "t-s"), "both parts went to the named tab").toBe(true);
+    expect((sent[0]!.body as { method: string }).method).toBe("Network.getCookies");
+
+    sent = [];
+    says = { cdp: { ok: true, value: { result: {} } }, eval: { ok: true, value: { value: true } } };
+    const [put] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state } }]);
+    expect(put!.isError, JSON.stringify(put)).toBeFalsy();
+    expect(put!.content[0]!.text).toContain("1 of 1 cookies");
+    expect(put!.content[0]!.text).toContain("1 localStorage");
+    const setCookie = sent.find((s) => s.op === "cdp")!.body as { method: string; params: { url?: string; httpOnly?: boolean } };
+    expect(setCookie.method).toBe("Network.setCookie");
+    // getCookies answers with a domain and never a url; setCookie wants one.
+    expect(setCookie.params.url).toBe("https://orbit.example/");
+    expect(setCookie.params.httpOnly).toBe(true);
+    const write = sent.find((s) => s.op === "eval")!.body as { js: string; page: string };
+    expect(write.js).toContain('"token": "t1"');
+    expect(write.js).toContain("sessionStorage.setItem");
+    expect(write.page).toBe("t-s");
+
+    // A state that is not one is refused before anything goes out.
+    sent = [];
+    const [bad] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state: "nope" } }]);
+    expect(bad!.isError).toBe(true);
     expect(sent).toEqual([]);
   });
 
