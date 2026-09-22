@@ -85,10 +85,12 @@ function timeoutOutcome(failClosed = FAIL_CLOSED): GateOutcome {
   // one is emphatically NOT a judgement about the call — nobody looked at it —
   // and an agent that treats it as one will start avoiding a perfectly fine
   // approach for the rest of the session.
-  if (FAIL_CLOSED) {
+  // The argument, not FAIL_CLOSED: an outward action arrives here closed on a
+  // machine that is not, and reading the global let it through on timeout.
+  if (failClosed) {
     return {
       decision: "deny",
-      reason: "Nobody answered this request in time and agentglass is configured fail-closed, so it was blocked without a human seeing it. This is not a judgement about the call. Say that you were blocked waiting for approval rather than assuming the approach was wrong.",
+      reason: `Nobody answered this request in time and ${FAIL_CLOSED ? "agentglass is configured fail-closed" : "agentglass holds a call that leaves the machine closed"}, so it was blocked without a human seeing it. This is not a judgement about the call. Say that you were blocked waiting for approval rather than assuming the approach was wrong.`,
     };
   }
   // Empty reason so the hook falls through to Claude Code's own permission
