@@ -491,7 +491,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
       {confirmRemove && hasSettings && (
         <label className="mt-auto pt-1.5 flex items-center gap-2 self-end text-[11px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
           <input type="checkbox" checked={dropSettings} onChange={(e) => setDropSettings(e.target.checked)} disabled={busy} />
-          <span>Also remove its settings</span>
+          <span>Also remove its settings <span className="t-dim">— otherwise they are kept on this machine for a reinstall</span></span>
         </label>
       )}
       <div className={`${confirmRemove && hasSettings ? "" : "mt-auto "}pt-1.5 flex items-center justify-between`}>

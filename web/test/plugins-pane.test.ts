@@ -112,4 +112,12 @@ describe("removing a plugin keeps what was typed into its settings", () => {
     expect(pane).toMatch(/\{confirmRemove && hasSettings && \(/);
     expect(pane).toContain("Also remove its settings");
   });
+
+  test("the confirmation says the settings stay behind when the box is left clear", () => {
+    // After a Remove there is no card left, so nothing on screen shows that
+    // plugins.json still holds what was typed — possibly a token. The default
+    // is only not a surprise if the dialog says so before the click.
+    const label = pane.slice(pane.indexOf("{confirmRemove && hasSettings && ("));
+    expect(label.slice(0, label.indexOf("</label>"))).toContain("kept on this machine for a reinstall");
+  });
 });
