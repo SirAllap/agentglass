@@ -2240,7 +2240,7 @@ class _McpHttp(BaseHTTPRequestHandler):
                     while len(_SESSIONS) >= _HTTP_SESSIONS_MAX:
                         del _SESSIONS[next(iter(_SESSIONS))]
                     _SESSIONS[session] = time.time()
-            r = handle_message(m)
+            r = self.server.handle(m)
             if r is not None:
                 replies.append(r)
         if not replies:
@@ -2296,29 +2296,39 @@ class _McpHttpServer6(_McpHttpServer):
     address_family = socket.AF_INET6
 
 
-def _run_http(bind, expose=False, allow_hosts=()):
+def _run_http(bind, expose=False, allow_hosts=(), handle=None, name=NAME,
+              token_env="AGENTGLASS_MCP_TOKEN", distinct_from=("AGENTGLASS_TOKEN",), opens="the signed-in browser",
+              expose_env="AGENTGLASS_MCP_EXPOSE"):
+    """Serve `handle` (this server's dispatch unless another is given) over
+    Streamable HTTP. The parameters are what a second MCP server built on this
+    transport changes — its name, the variables its token and its opt-in live
+    in, the tokens that token must not equal, and what the token opens — and
+    nothing else:
+    the fences below are the transport's, whoever's tools sit behind them."""
+    handle = handle or handle_message
     parsed = _parse_bind(bind)
     if not parsed:
         print(f"--http wants [HOST:]PORT, got {bind!r}", file=sys.stderr)
         return 2
     host, port = parsed
-    token = os.environ.get("AGENTGLASS_MCP_TOKEN", "").strip()
+    token = os.environ.get(token_env, "").strip()
     if token and len(token) < 32:
-        print("AGENTGLASS_MCP_TOKEN must be at least 32 chars to serve MCP over HTTP", file=sys.stderr)
+        print(f"{token_env} must be at least 32 chars to serve MCP over HTTP", file=sys.stderr)
         return 2
-    if token and token == os.environ.get("AGENTGLASS_TOKEN", "").strip():
-        print("AGENTGLASS_MCP_TOKEN must not be AGENTGLASS_TOKEN: the endpoint's token opens the "
-              "browser, and only the browser — the app's token stays with the app", file=sys.stderr)
-        return 2
-    expose = expose or os.environ.get("AGENTGLASS_MCP_EXPOSE", "").strip() == "1"
+    for other in distinct_from:
+        if token and token == os.environ.get(other, "").strip():
+            print(f"{token_env} must not be {other}: the endpoint's token opens "
+                  f"{opens}, and only that — the other token stays with what it opens", file=sys.stderr)
+            return 2
+    expose = expose or os.environ.get(expose_env, "").strip() == "1"
     if not _loopback(host):
         if not token:
             print(f"refusing to bind {host}: serving MCP over HTTP off loopback needs "
-                  "AGENTGLASS_MCP_TOKEN (32+ chars) set by you, not minted", file=sys.stderr)
+                  f"{token_env} (32+ chars) set by you, not minted", file=sys.stderr)
             return 2
         if not expose:
             print(f"refusing to bind {host}: a bind off loopback is an opt-in — pass --expose "
-                  "(or AGENTGLASS_MCP_EXPOSE=1) once you have read what it means", file=sys.stderr)
+                  f"(or {expose_env}=1) once you have read what it means", file=sys.stderr)
             return 2
     minted = not token
     if minted:
@@ -2326,21 +2336,22 @@ def _run_http(bind, expose=False, allow_hosts=()):
     six = ":" in host
     httpd = (_McpHttpServer6 if six else _McpHttpServer)((host, port), _McpHttp)
     httpd.mcp_token = token
+    httpd.handle = handle
     httpd.allowed_hosts = {h.strip().lower() for h in allow_hosts if h.strip()}
     # getsockname's spelling of the bind, and the operator's: `localhost`
     # binds 127.0.0.1, and clients will say either.
     httpd.bound_host = str(httpd.server_address[0])
     httpd.typed_host = host
     shown = f"[{host}]" if six else host
-    print(f"agentglass-browser MCP over Streamable HTTP on http://{shown}:{port}/ (token required)", file=sys.stderr)
+    print(f"{name} MCP over Streamable HTTP on http://{shown}:{port}/ (token required)", file=sys.stderr)
     if minted:
-        print(f"AGENTGLASS_MCP_TOKEN was not set; this process answers to this one, and to nothing after it exits:\n"
-              f"  AGENTGLASS_MCP_TOKEN={token}", file=sys.stderr)
+        print(f"{token_env} was not set; this process answers to this one, and to nothing after it exits:\n"
+              f"  {token_env}={token}", file=sys.stderr)
     if not _loopback(host):
-        print(f"WARNING: {host} is not loopback and this is plain HTTP. The token, and every page the browser "
-              "reads, cross the network in the clear until TLS terminates in front of this port — a tunnel "
-              "that does (tailscale serve) or a reverse proxy, with --allow-host naming what it forwards. "
-              "Anyone who reads the wire can drive the signed-in browser.", file=sys.stderr)
+        print(f"WARNING: {host} is not loopback and this is plain HTTP. The token, and every answer "
+              "this endpoint gives, cross the network in the clear until TLS terminates in front of this port — "
+              "a tunnel that does (tailscale serve) or a reverse proxy, with --allow-host naming what it forwards. "
+              f"Anyone who reads the wire can reach {opens}.", file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -2362,6 +2373,11 @@ def main(argv=None):
     if http_bind:
         allow = list(args.allow_host) + os.environ.get("AGENTGLASS_MCP_ALLOW_HOSTS", "").split(",")
         return _run_http(http_bind, expose=args.expose, allow_hosts=allow)
+    return _serve_stdio(handle_message)
+
+
+def _serve_stdio(handle):
+    """MCP's stdio transport: one JSON-RPC message per line in, one per line out."""
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -2370,7 +2386,7 @@ def main(argv=None):
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
-        r = handle_message(msg)
+        r = handle(msg)
         if r is None:
             continue
         sys.stdout.write(json.dumps(r) + "\n")
