@@ -300,8 +300,9 @@ def cmd_validate(args):
 # Python. The walk decides what "the plugin" is — `.git` is not part of it, a
 # link that leaves the folder refuses the whole thing, a link that stays is an
 # entry of its own rather than followed — and the hash is one framed line per
-# entry: path, NUL, `f` or `l`, the sha256 of the bytes or of the link's text,
-# newline, in UTF-8 byte order. Every one of those details is a way for the
+# entry: path, NUL, `f`, `x` or `l`, the sha256 of the bytes or of the link's
+# text, newline, in UTF-8 byte order. `x` is a file that may be run, read from
+# git's index when the folder is a checkout, as the app reads it. Every one of those details is a way for the
 # two to disagree, and the test runs both over one tree.
 
 MAX_FILES = 2000
@@ -377,9 +378,38 @@ def walk_plugin_dir(folder):
     return (None, why) if why else (files, None)
 
 
+def index_executables(root):
+    """The files git's index records as 100755, when `root` is itself a
+    checkout; see `indexExecutables` in the app. Windows keeps no bit on disk
+    and Git for Windows keeps it in the index, so this is how a pinned install
+    there hashes what the catalogue hashed on Linux."""
+    import subprocess
+    found = set()
+    if not os.path.lexists(os.path.join(root, ".git")):
+        return found
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_LFS_SKIP_SMUDGE="1")
+    try:
+        r = subprocess.run(
+            ["git", "-c", "core.fsmonitor=false", "--git-dir", os.path.join(root, ".git"), "--work-tree", root,
+             "ls-files", "--stage", "-z"],
+            cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return found
+    if r.returncode != 0:
+        return found
+    for entry in r.stdout.split(b"\0"):
+        meta, tab, path = entry.partition(b"\t")
+        if tab and meta.startswith(b"100755 "):
+            found.add(path.decode("utf-8", "surrogateescape"))
+    return found
+
+
 def content_hash(folder, files):
     import hashlib
+    import stat
     root = os.path.realpath(folder)
+    indexed = index_executables(root)
     h = hashlib.sha256()
     # By UTF-8 bytes, which is what the app sorts by. `surrogateescape` hands
     # back the bytes of a name that is not UTF-8 instead of stopping here; the
@@ -393,7 +423,11 @@ def content_hash(folder, files):
                 payload = payload.replace(b"\\", b"/")
         else:
             with open(path, "rb") as f:
-                kind, payload = b"f", f.read()
+                payload = f.read()
+            # The disk too, except on Windows, which has no bit to read (and
+            # where Python makes one up from the extension).
+            runs = rel in indexed or (os.name != "nt" and os.lstat(path).st_mode & stat.S_IXUSR)
+            kind = b"x" if runs else b"f"
         h.update(rel.encode("utf-8", "surrogateescape"))
         h.update(b"\0" + kind + hashlib.sha256(payload).hexdigest().encode("ascii") + b"\n")
     return h.hexdigest()

@@ -8,7 +8,7 @@
  * enough to read.
  */
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
 
 /**
@@ -220,8 +220,9 @@ export function walkPluginDir(dir: string): WalkResult {
  * touching the manifest at all — the entrypoint script, whatever it loads,
  * and the links that decide which of them runs.
  *
- * Each entry is its path, a NUL, `f` for a file or `l` for a link, the
- * sha256 of the file's bytes or of the link's text, and a newline. A path
+ * Each entry is its path, a NUL, `f` for a file, `x` for a file that may be
+ * run or `l` for a link, the sha256 of the file's bytes or of the link's
+ * text, and a newline. A path
  * holds no NUL and the digest is fixed-length, so no entry can be read as
  * the end of one and the start of the next. The layout before this ran raw
  * bytes together with NULs between them, and a file carrying a NUL and the
@@ -232,17 +233,54 @@ export function walkPluginDir(dir: string): WalkResult {
  * order at all, and sorting by UTF-16 unit disagreed with the CLI about
  * names past the BMP.
  */
-export function contentHash(dir: string, files: string[]): string {
+export function contentHash(dir: string, files: string[], platform: NodeJS.Platform = process.platform): string {
   const h = createHash("sha256");
+  const indexed = indexExecutables(dir);
   for (const f of [...files].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
     const p = join(dir, f);
-    const link = lstatSync(p).isSymbolicLink();
+    const st = lstatSync(p);
+    const link = st.isSymbolicLink();
     const bytes = link ? linkText(readlinkSync(p, { encoding: "buffer" })) : readFileSync(p);
     h.update(f);
     h.update("\0");
-    h.update(link ? "l" : "f");
+    h.update(link ? "l" : indexed.has(f) || (platform !== "win32" && (st.mode & 0o100) !== 0) ? "x" : "f");
     h.update(createHash("sha256").update(bytes).digest("hex"));
     h.update("\n");
   }
   return h.digest("hex");
+}
+
+/**
+ * The files git's index records as executable (mode 100755), when `dir` is
+ * itself a checkout; empty otherwise.
+ *
+ * Windows keeps no executable bit on disk, and Git for Windows keeps the
+ * committed one in its index, so a pinned install there reaches the hash
+ * the catalogue took on Linux only by reading it here. Elsewhere a checkout's
+ * disk says the same as its index; the disk is read as well, so a local
+ * folder with a bit set and not yet staged hashes as what runs.
+ *
+ * Only a `.git` at the folder's own root, named explicitly: a plugin in a
+ * subfolder of a checkout is judged by its own folder, as the copy the app
+ * installs from carries no `.git`, and no `GIT_*` variable from this
+ * process's environment picks another index. A `.git` git cannot read is
+ * the same as none, and the disk decides.
+ */
+function indexExecutables(dir: string): Set<string> {
+  const found = new Set<string>();
+  if (!existsSync(join(dir, ".git"))) return found;
+  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" };
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_") && v !== undefined) env[k] = v;
+  try {
+    const p = Bun.spawnSync(
+      ["git", "-c", "core.fsmonitor=false", "--git-dir", join(dir, ".git"), "--work-tree", dir, "ls-files", "--stage", "-z"],
+      { cwd: dir, env, stdout: "pipe", stderr: "ignore", stdin: "ignore" },
+    );
+    if (p.exitCode !== 0) return found;
+    for (const entry of p.stdout.toString("utf8").split("\0")) {
+      const tab = entry.indexOf("\t");
+      if (tab > 0 && entry.startsWith("100755 ")) found.add(entry.slice(tab + 1));
+    }
+  } catch { /* no git: the disk decides */ }
+  return found;
 }

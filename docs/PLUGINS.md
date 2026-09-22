@@ -126,8 +126,9 @@ whether to enable the plugin at all; a plugin cannot obtain `full` by writing
    entrypoint command, the scope asked for. What was reviewed is recorded as a
    fingerprint over the scope, the presence of an executable entrypoint and a
    content hash of **every file and every link** in the folder (`.git`
-   excluded; a link by where it points) — not the name, and not the manifest
-   alone.
+   excluded; a link by where it points, a file by its bytes and whether it
+   may be run, read from git's index in a checkout so Windows hashes it the
+   same) — not the name, and not the manifest alone.
 3. **Enable** is a per-plugin switch under a master switch. Enabling mints the
    token and starts the process; disabling stops it and revokes the token.
    Turning the master switch off stops every plugin.

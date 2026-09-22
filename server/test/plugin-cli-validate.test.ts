@@ -11,7 +11,7 @@
  * test, whichever one is right.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { validateManifest } from "../src/plugins.ts";
@@ -170,6 +170,8 @@ describe("the CLI's copy of the manifest rules", () => {
       mkdirSync(join(dir, ".git", "objects"), { recursive: true });
       writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
       symlinkSync("lib/a.py", join(dir, "alias.py"));
+      writeFileSync(join(dir, "lib", "run.sh"), "#!/bin/sh\n");
+      chmodSync(join(dir, "lib", "run.sh"), 0o755);
       return dir;
     }
 
@@ -239,6 +241,49 @@ describe("the CLI's copy of the manifest rules", () => {
         expect(after.ok).toBe(true);
         expect(after.sha256).not.toBe(before);
         expect(after.sha256).toBe(contentHash(dir, walkPluginDir(dir).files));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test("moves when only a file's executable bit moves", () => {
+      const dir = tree();
+      try {
+        const before = cliHash(dir).sha256;
+        chmodSync(join(dir, "lib", "run.sh"), 0o644);
+        const after = cliHash(dir);
+        expect(after.sha256).not.toBe(before);
+        expect(after.sha256).toBe(contentHash(dir, walkPluginDir(dir).files));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    /*
+     * A checkout whose index says 100755 and whose disk has no bit is what
+     * Git for Windows leaves. Both read the bit from the index, and so reach
+     * the hash of the same commit checked out on Linux.
+     */
+    test("reads the bit from git's index, as the app does", () => {
+      const dir = mkdtempSync(join(tmpdir(), "agx-plugin-hash-"));
+      try {
+        writeFileSync(join(dir, "plugin.json"), JSON.stringify(OK));
+        writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n");
+        const git = (...args: string[]) => expect(Bun.spawnSync(["git", "-c", "user.name=Orbit", "-c", "user.email=orbit@example.invalid", ...args], {
+          cwd: dir, env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+        }).exitCode).toBe(0);
+        git("init", "-q");
+        git("add", "plugin.json", "run.sh");
+        git("update-index", "--chmod=+x", "run.sh");
+        git("commit", "-q", "-m", "one");
+        chmodSync(join(dir, "run.sh"), 0o644);
+        const walked = walkPluginDir(dir);
+        const cli = cliHash(dir);
+        expect(cli.sha256).toBe(contentHash(dir, walked.files, "win32"));
+        expect(cli.sha256).toBe(contentHash(dir, walked.files));
+        chmodSync(join(dir, "run.sh"), 0o755);
+        rmSync(join(dir, ".git"), { recursive: true, force: true });
+        expect(cliHash(dir).sha256).toBe(cli.sha256);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

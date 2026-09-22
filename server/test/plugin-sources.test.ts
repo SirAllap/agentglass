@@ -3,7 +3,7 @@
  * to before trusting any of it.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -202,6 +202,95 @@ describe("contentHash", () => {
     writeFileSync(join(two, "a.txt"), "x");
     writeFileSync(join(two, "run.sh"), "echo pwned\n");
     expect(contentHash(one, ["a.txt"])).not.toBe(contentHash(two, ["a.txt", "run.sh"]));
+  });
+});
+
+/*
+ * Whether a file may be run is as much the plugin as its bytes: an update
+ * that only set +x on a file a PATH lookup prefers changed what runs, hashed
+ * the same and kept its approval. The bit is read from git's index where the
+ * folder is a checkout, because Windows keeps no such bit on disk and Git for
+ * Windows keeps it there; a Windows install of a pinned commit has to reach
+ * the hash the catalogue took on Linux.
+ */
+describe("contentHash and the executable bit", () => {
+  const git = (cwd: string, ...args: string[]) => {
+    const r = Bun.spawnSync(["git", "-c", "user.name=Orbit", "-c", "user.email=orbit@example.invalid", "-c", "core.fileMode=true", ...args], {
+      cwd, env: { PATH: process.env.PATH, HOME: cwd, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+    });
+    expect(r.exitCode, r.stderr.toString()).toBe(0);
+  };
+  /** A checkout of one commit holding `run.sh` as 100755, with the file on disk made `mode`. */
+  function checkout(mode: number): string {
+    const d = mkdtempSync(join(tmpdir(), "agx-hash-x-"));
+    writeFileSync(join(d, "run.sh"), "echo hi\n");
+    writeFileSync(join(d, "notes.txt"), "plain\n");
+    chmodSync(join(d, "run.sh"), 0o755);
+    git(d, "init", "-q");
+    git(d, "add", "run.sh", "notes.txt");
+    git(d, "commit", "-q", "-m", "one");
+    chmodSync(join(d, "run.sh"), mode);
+    return d;
+  }
+  const hashOf = (d: string, platform?: NodeJS.Platform) => contentHash(d, walkPluginDir(d).files, platform);
+
+  test("changes when only a file's executable bit changes", () => {
+    const d = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(d, "run.sh"), "echo hi\n");
+    chmodSync(join(d, "run.sh"), 0o644);
+    const before = hashOf(d);
+    chmodSync(join(d, "run.sh"), 0o755);
+    expect(hashOf(d)).not.toBe(before);
+  });
+
+  test("a Windows checkout, with no bit on disk, hashes like the Linux one from git's index", () => {
+    const linux = checkout(0o755);
+    const windows = checkout(0o644);
+    expect(hashOf(windows, "win32")).toBe(hashOf(linux, "linux"));
+    // …and that is the bit and not the history: the same bytes with no bit hash otherwise.
+    const plain = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(plain, "run.sh"), "echo hi\n");
+    writeFileSync(join(plain, "notes.txt"), "plain\n");
+    chmodSync(join(plain, "run.sh"), 0o644);
+    expect(hashOf(plain, "linux")).not.toBe(hashOf(linux, "linux"));
+  });
+
+  test("on Windows the disk says nothing about the bit, and elsewhere a folder that is no checkout says it", () => {
+    const d = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(d, "run.sh"), "echo hi\n");
+    chmodSync(join(d, "run.sh"), 0o755);
+    const onWindows = hashOf(d, "win32");
+    expect(hashOf(d, "linux")).not.toBe(onWindows);
+    chmodSync(join(d, "run.sh"), 0o644);
+    expect(hashOf(d, "linux")).toBe(onWindows);
+  });
+
+  test("a .git that is not a repository is not read, and neither is a repository above the folder", () => {
+    const broken = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(broken, "run.sh"), "echo hi\n");
+    mkdirSync(join(broken, ".git"));
+    writeFileSync(join(broken, ".git", "HEAD"), "ref: refs/heads/main\n");
+    expect(() => hashOf(broken, "win32")).not.toThrow();
+    // A plugin in a subfolder of a checkout is judged by its own folder: the
+    // copy the app installs from carries no .git, and both must agree.
+    const repo = checkout(0o644);
+    mkdirSync(join(repo, "sub"));
+    writeFileSync(join(repo, "sub", "run.sh"), "echo hi\n");
+    git(repo, "add", "sub/run.sh");
+    git(repo, "update-index", "--chmod=+x", "sub/run.sh");
+    const alone = mkdtempSync(join(tmpdir(), "agx-hash-"));
+    writeFileSync(join(alone, "run.sh"), "echo hi\n");
+    expect(hashOf(join(repo, "sub"), "win32")).toBe(hashOf(alone, "win32"));
+  });
+
+  test("a link is still a link, whatever mode the entry reports", () => {
+    const linux = checkout(0o755);
+    symlinkSync("run.sh", join(linux, "go"));
+    const withLink = hashOf(linux, "linux");
+    rmSync(join(linux, "go"));
+    writeFileSync(join(linux, "go"), "run.sh");
+    chmodSync(join(linux, "go"), 0o755);
+    expect(hashOf(linux, "linux")).not.toBe(withLink);
   });
 });
 
