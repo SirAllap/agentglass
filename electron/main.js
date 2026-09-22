@@ -629,6 +629,24 @@ function currentToken() {
 }
 
 /**
+ * The desk's key: what lets a held call go, and the one secret here that no
+ * agent this app runs can read.
+ *
+ * The token above is a file of this user's and a variable in every environment
+ * the sidecar starts, so the process whose call is held has it too. This is
+ * minted per launch, never written anywhere, and reaches the sidecar down a
+ * pipe (ensureServer) and the renderer through the preload — see
+ * server/src/desk.ts for what it closes and what it does not.
+ */
+const DESK_KEY = require("crypto").randomBytes(32).toString("base64url");
+/* POSIX only. Windows hands a child a descriptor past stderr through the C
+   runtime's handle table, which nothing here has measured the compiled sidecar
+   reading — and a sidecar told to expect a key it cannot read refuses its own
+   window's answer. So a Windows sidecar is not told, and keeps the Origin rule
+   a server started by hand has (SECURITY.md). */
+const DESK_PIPE = process.platform !== "win32";
+
+/**
  * Throw away the shared secret and mint another.
  *
  * The toggle alone cannot do this. Turning remote access off shuts the port,
@@ -697,6 +715,10 @@ function sidecarEnv(port) {
      */
     AGENTGLASS_TOKEN: currentToken(),
   };
+  // Not the desk's key: the descriptor it comes down, and this process as the
+  // parent holding the other end, so a server started by hand from a terminal
+  // that inherited this variable reads nothing (server/src/desk.ts).
+  if (DESK_PIPE) env.AGENTGLASS_DESK_FD = `3:${process.pid}`;
   if (remoteEnabled()) {
     // An explicit env var wins: someone who set the bind by hand meant it.
     env.AGENTGLASS_BIND = process.env.AGENTGLASS_BIND || "0.0.0.0";
@@ -1045,9 +1067,15 @@ async function ensureServer(adopt) {
   const [cmd, argv] = PACKAGED
     ? [/** @type {string} */ (SIDECAR_BIN), []]
     : ["bun", ["run", path.join(REPO, "server", "src", "index.ts")]];
-  const child = spawn(cmd, argv, { stdio: ["ignore", "ignore", "pipe"], env });
+  const child = spawn(cmd, argv, { stdio: DESK_PIPE ? ["ignore", "ignore", "pipe", "pipe"] : ["ignore", "ignore", "pipe"], env });
   sidecar = child;
   const err = tailStderr(child);
+  /* The key goes down fd 3 at once and the pipe is closed, so the sidecar's
+     read at boot ends here. A sidecar that exits unread answers the write with
+     ECONNRESET, and an `error` with no listener takes this process down. */
+  const desk = /** @type {import("stream").Writable | null} */ (child.stdio[3]);
+  desk?.on("error", () => { /* it went away before reading; `exit` below says why */ });
+  desk?.end(DESK_KEY + "\n");
 
   /*
    * The `error` event, which is what a missing binary actually is.
@@ -4002,6 +4030,10 @@ app.whenReady().then(async () => {
   // caller, the local renderer included — without this the app would lock
   // itself out of its own sidecar the moment the toggle was flipped.
   ipcMain.on("ag:apiToken", (e) => { e.returnValue = currentToken(); });
+  // The desk's key, to a window's own page and to nothing a window hosts: the
+  // agent browser's guests are webviews, and a page an agent opened must not
+  // be the one thing on this machine that can let its hold go.
+  ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? DESK_KEY : null; });
   // Whether there is a server at all, for a window that opened AFTER the give-up
   // — a reload, or a second window. The push in `reportSidecar` only reaches
   // windows that already exist, and a page that reloads five minutes into a

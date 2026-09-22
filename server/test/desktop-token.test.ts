@@ -51,7 +51,7 @@ function lift(name: string, deps: string[]): (...args: unknown[]) => any {
 
 /** A stub `process` whose env is ours alone — the real one carries whatever the
  *  developer running the suite happens to export. */
-const proc = (env: Record<string, string> = {}) => ({ env });
+const proc = (env: Record<string, string> = {}) => ({ env, pid: 4242 });
 
 describe("currentToken", () => {
   const build = (env: Record<string, string>, minted = "minted-from-file") =>
@@ -73,8 +73,8 @@ describe("currentToken", () => {
 });
 
 describe("sidecarEnv", () => {
-  const build = (opts: { remote: boolean; env?: Record<string, string> }) =>
-    lift("sidecarEnv", ["process", "remoteEnabled", "currentToken", "DIST", "withBundledBin", "PACKAGED"])(
+  const build = (opts: { remote: boolean; env?: Record<string, string>; deskPipe?: boolean }) =>
+    lift("sidecarEnv", ["process", "remoteEnabled", "currentToken", "DIST", "withBundledBin", "PACKAGED", "DESK_PIPE"])(
       proc(opts.env ?? {}),
       () => opts.remote,
       () => "the-shared-secret",
@@ -83,7 +83,15 @@ describe("sidecarEnv", () => {
       // passes through untouched.
       (current: string | undefined) => current,
       false,
+      opts.deskPipe ?? true,
     )(4000);
+
+  it("names the pipe the desk's key comes down, and this process at its other end — never the key", () => {
+    // The environment is readable by every process of this user in /proc; the
+    // key goes down the pipe (ensureServer), see gate-release.test.ts.
+    expect(build({ remote: false }).AGENTGLASS_DESK_FD).toBe("3:4242");
+    expect(build({ remote: false, deskPipe: false }).AGENTGLASS_DESK_FD).toBeUndefined();
+  });
 
   it("spawns the sidecar with a token when remote access is OFF", () => {
     // The case that was open: the ordinary install, nobody's phone involved.

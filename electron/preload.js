@@ -54,6 +54,11 @@ contextBridge.exposeInMainWorld("agentglass", {
   apiToken: (() => {
     try { return ipcRenderer.sendSync("ag:apiToken") || null; } catch { return null; }
   })(),
+  // The desk's key, which lets a held call go (electron/main.js DESK_KEY). Sync
+  // for the same reason as the two above.
+  deskKey: (() => {
+    try { return ipcRenderer.sendSync("ag:deskKey") || null; } catch { return null; }
+  })(),
   remoteEnabled: () => ipcRenderer.invoke("ag:remoteEnabled"),
   /** @param {boolean} on */
   setRemote: (on) => ipcRenderer.invoke("ag:setRemote", on),
