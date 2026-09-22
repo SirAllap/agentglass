@@ -63,6 +63,27 @@ describe("claimsFromCommand", () => {
     expect(keys("redis-server --port 6390")).toEqual(["port 6390"]);
   });
 
+  test("text that mentions a port or a database file is not a process using one", () => {
+    // Agents grep for ports and write them into commit messages all the time;
+    // each claim would last the whole window and flag both checkouts.
+    expect(keys('git commit -m "serve on PORT=3000 and localhost:8080"')).toEqual([]);
+    expect(keys("grep -rn localhost:3000 README.md")).toEqual([]);
+    expect(keys('gh pr create --title "Dev server" --body "open localhost:3000"')).toEqual([]);
+    expect(keys('echo "PORT=3000" | tee notes.txt')).toEqual([]);
+    expect(keys("git diff HEAD~1 -- prisma/dev.db")).toEqual([]);
+    expect(keys("echo x > out.db")).toEqual([]);
+    // A heredoc body is text too, whatever its lines start with — the usual
+    // shape of a commit message written by an agent.
+    expect(keys("git commit -F - <<'EOF'\nfix: serve on localhost:3000\nPORT=3001 is the other one\nEOF")).toEqual([]);
+    expect(keys('git commit -m "$(cat <<EOF\nuse localhost:3000\nEOF\n)" && PORT=3002 bun dev')).toEqual(["port 3002"]);
+    // Reading an .env above the tree is still reading it.
+    expect(keys("grep API_URL ../.env")).toEqual(["env /work/.env"]);
+    // A port a process is started with still counts, as does one it is asked to reach.
+    expect(keys("export PORT=3003")).toEqual(["port 3003"]);
+    expect(keys("env PORT=3004 bun dev")).toEqual(["port 3004"]);
+    expect(keys("bun run dev -- --port 3005")).toEqual(["port 3005"]);
+  });
+
   test("postgres and redis URLs name the database, never the credentials", () => {
     const pg = col.claimsFromCommand("DATABASE_URL=postgres://app:hunter2@127.0.0.1:5432/acme_dev bunx prisma migrate dev", "/work/orbit");
     expect(pg.map((c) => `${c.kind} ${c.key}`)).toEqual(["postgres localhost:5432/acme_dev"]);

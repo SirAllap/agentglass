@@ -18,6 +18,10 @@
 // - A command is parsed one `&&`/`;`/`|` segment at a time, with `cd` followed,
 //   and quotes honoured inside a segment only. A `;` inside quotes splits early.
 // - A path built from a variable or a glob is not guessed at.
+// - Ports and database files come from what a process is started with or asked
+//   to reach, never from text: the arguments of grep, echo, git and the like,
+//   and heredoc bodies, are not read for them. `bash -c "PORT=3000 …"` is text
+//   too, and is missed.
 // - Ports below 1024 are not claimed: a dev server does not bind one, and the
 //   ones that turn up in commands are somebody else's ssh or https.
 // - The compose project for a bare `docker compose` is the cwd's basename. The
@@ -60,7 +64,7 @@ const host = (h: string) => (LOCAL.has(h.toLowerCase()) ? "localhost" : h.toLowe
 const PG_URL = /\bpostgres(?:ql)?(?:\+\w+)?:\/\/(?:[^@\s/'"]*@)?([^/\s?'":]*)(?::(\d+))?(?:\/([\w.-]+))?/gi;
 const REDIS_URL = /\brediss?:\/\/(?:[^@\s/'"]*@)?([^/\s?'":]*)(?::(\d+))?(?:\/(\d+))?/gi;
 const HOST_PORT = /(?:^|[^\w.])(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})\b/g;
-const PORT_ENV = /(?:^|\s)PORT=(\d{2,5})\b/g;
+const ASSIGN = /^[A-Z_][A-Z0-9_]*=/;
 
 /**
  * Programs whose port flag names the server they connect to, not one they bind.
@@ -74,6 +78,40 @@ const CLIENTS = new Set([
   "psql", "pg_dump", "pg_dumpall", "pg_restore", "pg_isready", "pgcli", "createdb", "dropdb",
   "redis-cli", "redis-benchmark", "mysql", "mysqldump", "mysqladmin", "mariadb", "mongosh", "mongo",
 ]);
+
+/**
+ * Programs whose arguments are text about things, not things in use.
+ *
+ * `grep localhost:3000`, a commit message that names a port, `git diff -- dev.db`:
+ * each would claim the resource for the whole window and flag both checkouts
+ * that grep the same README. Their ports and database files are not read. An
+ * .env still is — `grep KEY ../.env` reads the file.
+ */
+const TEXT = new Set([
+  "git", "gh", "grep", "egrep", "fgrep", "rg", "ag", "ack", "echo", "printf", "sed", "awk", "gawk",
+  "cat", "less", "more", "head", "tail", "wc", "diff", "jq", "tee", "sort", "find", "ls",
+]);
+
+/**
+ * The command without its heredoc bodies.
+ *
+ * A body is text fed to a program, one line per line: split on newlines, each
+ * line of a commit message would be read as a command of its own.
+ */
+function stripHeredocs(command: string): string {
+  const out: string[] = [];
+  let until: string | null = null;
+  for (const line of command.split("\n")) {
+    if (until !== null) {
+      if (line.trim() === until) until = null;
+      continue;
+    }
+    out.push(line);
+    const m = /<<-?\s*(['"]?)(\w+)\1/.exec(line.replace(/<<</g, ""));
+    if (m) until = m[2];
+  }
+  return out.join("\n");
+}
 
 const tokensOf = (seg: string) => [...seg.matchAll(TOKEN)].map((m) => m[1] ?? m[2] ?? m[3]);
 const guessable = (p: string) => p.length > 0 && !/[$*?`{}]/.test(p);
@@ -149,7 +187,7 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
   const out = new Map<string, Claim>();
   const add = (c: Claim | null) => { if (c) out.set(`${c.kind} ${c.key}`, c); };
   let here = cwd;
-  for (const raw of command.split(SEGMENT)) {
+  for (const raw of stripHeredocs(command).split(SEGMENT)) {
     let seg = raw;
     const toks = tokensOf(seg);
     if (!toks.length) continue;
@@ -165,10 +203,20 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
     for (const m of seg.matchAll(REDIS_URL)) add({ kind: "redis", key: `${host(m[1])}:${m[2] ?? "6379"}/${m[3] ?? "0"}` });
     seg = seg.replace(PG_URL, " ").replace(REDIS_URL, " ");
 
-    for (const m of seg.matchAll(PORT_ENV)) if (portOk(+m[1])) add({ kind: "port", key: m[1] });
-    for (const m of seg.matchAll(HOST_PORT)) if (portOk(+m[1])) add({ kind: "port", key: m[1] });
+    const at = toks.findIndex((t) => !ASSIGN.test(t));
+    const prog = at < 0 ? "" : basename(toks[at]);
+    const text = TEXT.has(prog);
 
-    const prog = basename(toks.find((t) => !/^[A-Z_][A-Z0-9_]*=/.test(t)) ?? "");
+    // PORT as the environment a process is started with: before the program,
+    // or the arguments of `export` and `env`. Anywhere else it is prose.
+    const env = at < 0 ? toks : prog === "export" || prog === "env" ? [...toks.slice(0, at), ...toks.slice(at + 1)] : toks.slice(0, at);
+    for (const t of env) {
+      const m = /^PORT=(\d{2,5})$/.exec(t);
+      if (m && portOk(+m[1])) add({ kind: "port", key: m[1] });
+    }
+    if (!text && !CLIENTS.has(prog)) {
+      for (const m of seg.matchAll(HOST_PORT)) if (portOk(+m[1])) add({ kind: "port", key: m[1] });
+    }
     const composeAt = toks.findIndex((t, i) => t === "docker-compose" || (t === "compose" && basename(toks[i - 1] ?? "") === "docker"));
     for (let i = 0; i < toks.length; i++) {
       const t = toks[i];
@@ -179,7 +227,7 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
       // A listening port by flag. `-p` is a port only as a whole number or a
       // docker publish spec. A client's port is the server it talks to — ssh's
       // is another machine, psql's the one Postgres every checkout shares.
-      if ((flag === "--port" || flag === "--publish" || flag === "-p") && next && !CLIENTS.has(prog)) {
+      if ((flag === "--port" || flag === "--publish" || flag === "-p") && next && !CLIENTS.has(prog) && !text) {
         const m = /^(?:(?:\d{1,3}\.){3}\d{1,3}:)?(\d{2,5})(?::\d+)?(?:\/\w+)?$/.exec(next);
         const composeProjectFlag = composeAt >= 0 && i > composeAt && flag === "-p" && !toks.slice(composeAt + 1, i).some((x) => !x.startsWith("-"));
         if (m && portOk(+m[1]) && !composeProjectFlag) add({ kind: "port", key: m[1] });
@@ -203,7 +251,7 @@ export function claimsFromCommand(command: string, cwd: string | null): Claim[] 
       for (const p of eq > 0 ? [t.slice(eq + 1)] : [t]) {
         if (p.startsWith("-") || (p.includes("://") && !p.startsWith("unix://"))) continue;
         const cand = p.replace(/^unix:\/\//, "").replace(/[),]+$/, "");
-        if (!isEnvFile(cand) && !isSqlite(cand) && !isSocket(cand)) continue;
+        if (!isEnvFile(cand) && (text || (!isSqlite(cand) && !isSocket(cand)))) continue;
         const abs = resolvePath(cand, here);
         if (abs) add(pathClaim(abs));
       }
