@@ -55,7 +55,7 @@ import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, projectRootOf, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
-  workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
+  workingTree, lastCommitChanges, discoverRepos, knownProjectRoots, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
   protectedBranches, setProtectedBranches,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
@@ -164,7 +164,7 @@ import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
-import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, configPath } from "./config.ts";
+import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, configPath, repoDirsUnstated, seedRepoDirs } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
@@ -1429,6 +1429,9 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // already documents TRUST_LAN as something used on top of a token.
 /** So a misconfigured exporter explains itself once rather than every batch. */
 let warnedNoMetrics = false;
+/** The upgrade's one seeding of the picker's folders, shared by every read that
+ *  asks at once. See the /git/repos route. */
+let pickerSeed: Promise<void> | null = null;
 
 const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
@@ -4985,6 +4988,17 @@ const server = Bun.serve<WsData>({
       // is never what it shows by default.
       const ignoreScope = url.searchParams.get("all") === "1";
       const rootsOnly = ignoreScope && url.searchParams.get("scan") !== "1";
+      // A config from before there were folders gets them on the picker's first
+      // read, from the open projects and the ones the old list showed — see
+      // seedRepoDirs. Once per process: a file that cannot be written must not
+      // be retried on every open.
+      if (ignoreScope && repoDirsUnstated()) {
+        await (pickerSeed ??= (async () => {
+          const known = await knownProjectRoots(getChanges(300).map((c) => c.file_path), knownProjects().map((p) => p.path), hiddenProjects());
+          const r = seedRepoDirs([...workspaceRoots(), ...known]);
+          if (!r.ok) console.error(`[picker] could not save the folders an upgrade seeds: ${r.error}`);
+        })());
+      }
       // Single-flighted: this sweep is a `git status` per repo across every
       // checkout, and several open tabs asking at the same instant would each
       // launch the whole fan-out. They share one now. (The 15s repoCache behind

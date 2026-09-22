@@ -42,8 +42,11 @@ one adds it to your list.
 
 The choice is applied live and **persisted** (`root` in
 `~/.config/agentglass/config.json` — one path, or a list of them), so the next
-launch opens straight into it. The folders are `repoDirs` in the same file. It
-can also be set from outside:
+launch opens straight into it. The folders are `repoDirs` in the same file.
+A config from before there were folders gets them the first time the picker
+opens: the folder or projects it had open, and every project the old list
+showed. Nothing is dropped on the way; take off the list what you do not want.
+The scope can also be set from outside:
 
 ```bash
 AGENTGLASS_ROOT=~/code/my-project bun run dev

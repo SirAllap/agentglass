@@ -16,8 +16,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configuredRepoDirs, setRepoDir, setWorkspaceRoots } from "../src/config.ts";
-import { discoverRepos, invalidateRepos } from "../src/gitwork.ts";
+import { configuredRepoDirs, repoDirsUnstated, seedRepoDirs, setRepoDir, setWorkspaceRoots, workspaceRoots } from "../src/config.ts";
+import { discoverRepos, invalidateRepos, knownProjectRoots } from "../src/gitwork.ts";
 
 const saved0 = {
   XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
@@ -73,7 +73,10 @@ describe("adding and removing a folder", () => {
     const repo = makeRepo(join(code, "orbit"));
     setRepoDir(code, true);
     expect(setRepoDir(code, false).roots).toEqual([]);
-    expect(JSON.parse(readFileSync(cfg, "utf8")).repoDirs).toBeUndefined();
+    // Kept as an empty list rather than dropped: no key at all is what a
+    // config from before the picker had folders looks like, and the next start
+    // would seed the list all over again. See seedRepoDirs.
+    expect(JSON.parse(readFileSync(cfg, "utf8")).repoDirs).toEqual([]);
     expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("# x\n");
   });
 
@@ -170,5 +173,94 @@ describe("what the picker lists", () => {
     expect(await picker()).toEqual([]);
     setRepoDir(code, true);
     expect(await picker()).toEqual([join(code, "orbit")]);
+  });
+});
+
+/*
+ * An upgrade loses nothing.
+ *
+ * Before the picker had folders, a config carried at most a `root` — one
+ * project, several, or a folder like ~/code that "everything in it" was opened
+ * from — and the picker listed every project the app had seen. A config with
+ * no `repoDirs` key is that shape. Read with the new rules and nothing else, a
+ * folder scope listed its projects with none of them open, the first click
+ * narrowed it to one of them for good, and everybody else got the first-run
+ * screen over the project they had open. So the first read seeds the folders
+ * from what the old config and the old list knew, once.
+ */
+describe("an upgrade from a config without folders", () => {
+  const write = (c: object) => {
+    mkdirSync(join(dir, "agentglass"), { recursive: true });
+    writeFileSync(cfg, JSON.stringify(c));
+  };
+  const onDisk = () => JSON.parse(readFileSync(cfg, "utf8"));
+
+  test("a folder scope becomes a folder, and every project in it is listed again", async () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    const lander = makeRepo(join(code, "lander"));
+    write({ root: code });
+    expect(repoDirsUnstated()).toBe(true);
+    const r = seedRepoDirs(workspaceRoots());
+    expect(r.ok).toBe(true);
+    expect(onDisk()).toEqual({ root: code, repoDirs: [code] });
+    expect((await picker()).sort()).toEqual([lander, orbit].sort());
+  });
+
+  test("one open project and the projects the app knew are all seeded, the open one first", () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    const known = makeRepo(join(dir, "elsewhere", "handbook"));
+    write({ root: orbit });
+    seedRepoDirs([...workspaceRoots(), known]);
+    expect(onDisk().repoDirs).toEqual([orbit, known]);
+  });
+
+  test("a project inside a seeded folder is not seeded again beside it", () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    write({ root: [code] });
+    seedRepoDirs([...workspaceRoots(), orbit]);
+    expect(onDisk().repoDirs).toEqual([code]);
+  });
+
+  test("nothing to seed still says so, so a later start does not seed what the app learns since", () => {
+    expect(repoDirsUnstated()).toBe(true); // no file at all: a fresh install
+    seedRepoDirs([]);
+    expect(onDisk().repoDirs).toEqual([]);
+    expect(repoDirsUnstated()).toBe(false);
+  });
+
+  test("folders already stated are left exactly as they are", () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    write({ root: orbit, repoDirs: [] });
+    expect(repoDirsUnstated()).toBe(false);
+    seedRepoDirs([orbit]);
+    expect(onDisk().repoDirs).toEqual([]);
+  });
+
+  test("folders set in the environment are stated too", () => {
+    process.env.AGENTGLASS_REPO_DIRS = code;
+    expect(repoDirsUnstated()).toBe(false);
+  });
+
+  test("a seeded folder that is gone by then is skipped, not saved", () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    seedRepoDirs([join(dir, "gone"), orbit]);
+    expect(onDisk().repoDirs).toEqual([orbit]);
+  });
+});
+
+describe("the projects the app knew", () => {
+  test("each is its project's top, worktrees fold into their project, and removed ones stay removed", async () => {
+    const orbit = makeRepo(join(code, "orbit"));
+    const lander = makeRepo(join(code, "lander"));
+    const handbook = makeRepo(join(code, "handbook"));
+    const wt = join(code, "orbit-ORBIT-1042");
+    git(orbit, "worktree", "add", "-q", "-b", "orbit-1042", wt);
+    mkdirSync(join(lander, "src"));
+    const found = await knownProjectRoots(
+      [join(lander, "src", "main.ts")],
+      [wt, handbook, join(dir, "gone")],
+      [handbook],
+    );
+    expect(found.sort()).toEqual([lander, orbit].sort());
   });
 });

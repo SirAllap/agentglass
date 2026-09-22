@@ -522,6 +522,32 @@ export function invalidateRepos(root?: string): void {
   else untrackedResultCache.clear();
 }
 
+/**
+ * The projects the app knew before the picker listed folders: every place the
+ * recent changes were made in and every project the scanner has seen, each as
+ * the project it belongs to — a worktree folds into its main checkout — and
+ * without the ones removed from the list. What an upgrade seeds the folders
+ * with; see seedRepoDirs.
+ *
+ * The same sources as the explicit "look for projects" sweep below, minus the
+ * server's own checkout and AGENTGLASS_REPOS: those were listed because of how
+ * this process was started, not because anybody worked there, and a fresh
+ * install run from a checkout would otherwise never see its first run.
+ */
+export async function knownProjectRoots(paths: string[], knownRoots: string[], hidden: readonly string[] = []): Promise<string[]> {
+  const dirs = new Set<string>();
+  for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
+  for (const r of knownRoots) { const a = safeAbs(r); if (a) dirs.add(a); }
+  const tops = await Promise.all([...dirs].map((d) => repoRootOfAsync(d)));
+  const out = new Set<string>();
+  for (const t of tops) {
+    if (!t) continue;
+    const root = worktreeParent(t) ?? t;
+    if (!hidden.includes(root)) out.add(root);
+  }
+  return [...out];
+}
+
 export async function discoverRepos(
   paths: string[],
   knownRoots: string[] = [],

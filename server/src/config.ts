@@ -69,7 +69,8 @@ interface Config {
   root?: string | string[];
   /** The folders a person's projects live in, e.g. ["~/code", "/mnt/hdd/code"]:
    *  the project picker lists what is under them and nothing else. Added and
-   *  removed from the picker, or by hand here. See setRepoDir(). */
+   *  removed from the picker, or by hand here. See setRepoDir(). No key at
+   *  all is a config from before there were folders: see seedRepoDirs(). */
   repoDirs?: string[];
   /** Offer `bypassPermissions` — `claude --dangerously-skip-permissions` — as a
    *  chat mode. Off unless stated, and stated *here* rather than only in the
@@ -709,7 +710,9 @@ export function setRepoDir(pathIn: unknown, added: boolean): { ok: boolean; root
     const written = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string" && !!d.trim()) : [];
     const next = written.filter((d) => resolve(expand(d.trim())) !== target);
     if (added) next.push(target);
-    return { repoDirs: next.length ? next : undefined };
+    // An empty list stays in the file: no key at all is a config from before
+    // the picker had folders, and reads as one to seed. See seedRepoDirs.
+    return { repoDirs: next };
   }, "the project folders");
   if (!res.ok) return fail(res.error ?? "could not save that");
   // The environment wins over the file, so a folder added here is saved but not
@@ -717,6 +720,49 @@ export function setRepoDir(pathIn: unknown, added: boolean): { ok: boolean; root
   // look like a button that did nothing.
   const note = process.env.AGENTGLASS_REPO_DIRS ? "AGENTGLASS_REPO_DIRS is set — it is what the picker lists, not the saved folders" : undefined;
   return { ok: true, roots: configuredRepoDirs(), persisted: true, note };
+}
+
+/**
+ * Has nobody ever said which folders the picker lists from?
+ *
+ * True only for a config file with no `repoDirs` key at all — the shape every
+ * config had before the picker listed folders — and nothing in the
+ * environment. Once the key is there it stays, empty or not: removing the last
+ * folder leaves `[]`, so this is an upgrade's question and asked once.
+ */
+export function repoDirsUnstated(): boolean {
+  if (process.env.AGENTGLASS_REPO_DIRS) return false;
+  return !Object.prototype.hasOwnProperty.call(config(), "repoDirs");
+}
+
+/**
+ * Give an upgrading config the folders it would have had.
+ *
+ * The picker used to list every project the app had seen, and a scope could
+ * be a folder ("~/code for everything in it"). Read with the new rules alone,
+ * that folder listed its projects with none of them open and the first click
+ * narrowed the scope to one of them for good, and everybody else found the
+ * list cut down to what was open. So the first read writes down, once, what
+ * the old config and the old list knew: the caller hands the open projects
+ * first and then the projects the app knew (see knownProjectRoots).
+ *
+ * Kept as given, minus a path that is gone by now and a path inside one kept
+ * before it, so ~/code and ~/code/orbit are one folder. Written even when that
+ * is nothing, so a fresh install is not seeded later from what it learns since.
+ * Re-checked against the file as it is now: another server may have got there.
+ */
+export function seedRepoDirs(candidates: readonly string[]): { ok: boolean; roots: string[]; persisted: boolean; error?: string } {
+  const res = mergeConfig((existing) => {
+    if (Object.prototype.hasOwnProperty.call(existing, "repoDirs")) return {};
+    const kept: string[] = [];
+    for (const c of candidates) {
+      const abs = resolve(expand(c));
+      try { if (!statSync(abs).isDirectory()) continue; } catch { continue; }
+      if (!kept.some((k) => isWithin(abs, k))) kept.push(abs);
+    }
+    return { repoDirs: kept };
+  }, "the project folders");
+  return { ...res, roots: configuredRepoDirs() };
 }
 
 // --- tmux engine settings ---------------------------------------------------
