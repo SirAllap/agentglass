@@ -191,7 +191,6 @@ label is where to start.
 - A gate that can hold by rule — a tool allowlist beside the spend threshold that already works — [#109](https://github.com/SirAllap/agentglass/issues/109)
 - Per-project gate policies and hook profiles — [#14](https://github.com/SirAllap/agentglass/issues/14)
 - Let an agent query the cockpit over MCP: what is running, what it costs, what is held — [#296](https://github.com/SirAllap/agentglass/issues/296)
-- Keep model prices fresh without hand-editing the table — [#9](https://github.com/SirAllap/agentglass/issues/9)
 - Verify the Windows build on real hardware — [#231](https://github.com/SirAllap/agentglass/issues/231), [#195](https://github.com/SirAllap/agentglass/issues/195)
 
 **Later / exploring**
