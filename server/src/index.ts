@@ -2,7 +2,7 @@
 // here, before the imports below open the database and start their timers.
 import "./cookieentry.ts";
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { pricingProvenance, startPricingRefresh } from "./pricing.ts";
@@ -21,6 +21,7 @@ import {
   RETENTION_DAYS,
   dbPath,
   getChanges,
+  sessionNames,
   getSession,
   searchEvents,
   ftsText,
@@ -146,7 +147,8 @@ import { claudeCode } from "./agents/claudecode.ts";
 import { listPanes, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
-import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
+import { notePaneFromHook, paneDirs, paneAgentNote, paneHeldSessions } from "./panewt.ts";
+import { treeAuthors, liveSessions, lastSeenOf } from "./sharedtree.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { tmuxBinStatus, tmuxSocket } from "./tmuxbin.ts";
@@ -1809,6 +1811,33 @@ const ROWS_TTL_MS = 2_000;
 // silence.
 const ROWS_MAX = 2_000;
 setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); rowsCache.clear(); broadcast({ type: "git" }); });
+
+/*
+ * Who is writing into each of the listed checkouts, and where that is more
+ * than one live session.
+ *
+ * Rides on the working list rather than being a route of its own because the
+ * list is the thing it qualifies: a section heading that names one branch and
+ * may be two authors' work. The panes are read at most every ten seconds — the
+ * list itself is re-read every two, and `listPanes` is a tmux call per socket
+ * plus a walk of /proc, which is not worth a late keystroke in the terminal
+ * that shares this thread. An agent that appears or leaves a pane is a
+ * ten-second question; the edits themselves are read fresh every time.
+ */
+const PANES_HELD_TTL_MS = 10_000;
+let panesHeld: { at: number; ids: Set<string> } | null = null;
+function authorsNow(edits: { session_id: string; file_path: string; timestamp: number }[], repos: GitRepoRef[]): TreeAuthorsInfo[] {
+  if (!panesHeld || Date.now() - panesHeld.at > PANES_HELD_TTL_MS) {
+    let ids = new Set<string>();
+    try { ids = paneHeldSessions(listPanes(lastTmuxTarget()?.socket)); } catch { /* no tmux: last-seen alone decides */ }
+    panesHeld = { at: Date.now(), ids };
+  }
+  const live = liveSessions(lastSeenOf([...new Set(edits.map((e) => e.session_id))]), panesHeld.ids);
+  const trees = treeAuthors(edits, repos.map((r) => ({ path: r.root, branch: r.branch })), (id) => live.has(id));
+  if (!trees.length) return [];
+  const names = sessionNames([...new Set(trees.flatMap((t) => t.sessions))]);
+  return trees.map((t) => ({ ...t, sessions: t.sessions.map((id) => ({ id, name: names.get(id) ?? id.slice(0, 8) })) }));
+}
 
 /**
  * The one thing the merged-branch sweep cannot do for itself.
@@ -5023,7 +5052,8 @@ const server = Bun.serve<WsData>({
       return body(await singleFlight(`rows:${mode}`, async () => {
         const cached = rowsCache.get(mode);
         if (cached && Date.now() - cached.at < ROWS_TTL_MS) return cached.body;
-        const paths = getChanges(300).map((c) => c.file_path);
+        const edits = getChanges(300);
+        const paths = edits.map((c) => c.file_path);
         /* Every in-scope checkout, INCLUDING one on main or master. The old
            endpoint dropped those on the grounds that trunk is the base you cut
            from — true of a branch-vs-base diff, false of "what have I changed
@@ -5031,7 +5061,10 @@ const server = Bun.serve<WsData>({
            trunk checkout looking at a permanently empty view. */
         const repos = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
         const scope = workspaceRoot();
-        const out = JSON.stringify(await changeRows(repos, mode, scope, ROWS_MAX));
+        const result = await changeRows(repos, mode, scope, ROWS_MAX);
+        // Committed rows are history; who is writing into a tree NOW is not a question about them.
+        if (mode === "working") result.authors = authorsNow(edits, repos);
+        const out = JSON.stringify(result);
         rowsCache.set(mode, { at: Date.now(), body: out });
         return out;
       }));

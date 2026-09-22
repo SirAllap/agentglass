@@ -890,6 +890,22 @@ export interface ChangeRowsResult {
   /** Repos that failed to read, by root — one broken checkout must not empty
    *  the list for the other eighteen. */
   failed?: string[];
+  /** Who is writing into each listed checkout: the live sessions whose edits
+   *  landed there. More than one is a section that is several authors' work
+   *  and cannot say which hunk is whose. Working mode only; absent from an
+   *  older server, which is not the same as nobody. */
+  authors?: TreeAuthorsInfo[];
+}
+
+/** One working tree and its live authors. See server/src/sharedtree.ts. */
+export interface TreeAuthorsInfo {
+  root: string;
+  branch: string;
+  /** Newest writer first, each with the name the rest of the app gives it. */
+  sessions: { id: string; name: string }[];
+  /** Paths relative to `root` that more than one of them edited: the files
+   *  whose diff is genuinely approximate as attribution. */
+  overlap: string[];
 }
 
 /** One thing that happened in a session, in order — a message or a tool run.

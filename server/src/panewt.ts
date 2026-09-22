@@ -145,6 +145,26 @@ export function paneAgentNote(pane: string): PaneAgentNote | null {
   return noteRead.get(pane) ?? null;
 }
 
+/**
+ * The sessions an agent is running for, right now, in one of these panes.
+ *
+ * The same rule `paneDirs` applies to one pane: a note is believed only while
+ * the pane still has an agent running in the directory the note recorded,
+ * because tmux reuses pane ids and a note outlives the agent it was written for.
+ *
+ * This is the liveness that last-seen cannot give. An agent that finished its
+ * turn and is waiting on a person fires no hooks — for an hour, if the person
+ * is at lunch — and it is still there, with its edits still on disk.
+ */
+export function paneHeldSessions(panes: { paneId: string; agentCwds?: string[] }[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of panes) {
+    const n = paneAgentNote(p.paneId);
+    if (n && n.session_id !== "unknown" && (p.agentCwds ?? []).includes(n.cwd)) out.add(n.session_id);
+  }
+  return out;
+}
+
 /** Fields of a tool's input that name a place. `command` is the whole shell
  *  line — `git -C <worktree> status` is the commonest way an agent touches a
  *  worktree it is not standing in, and it is the field that carried the answer
