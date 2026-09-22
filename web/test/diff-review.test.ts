@@ -45,6 +45,22 @@ test("a line the diff does not show quotes nothing", () => {
   expect(captureSnippet(hunks, "RIGHT", 40, 41)).toEqual([]);
 });
 
+test("a range across two hunks marks the lines it skips", () => {
+  // Shift-click from one hunk into the next: the label says :11-41, and two
+  // hunks run together would quote code 30 lines apart as if it were adjacent.
+  const two: DiffHunk[] = [hunks[0]!, { oldStart: 40, oldLines: 2, newStart: 39, newLines: 3, lines: [" }", "+export { total };", " "] }];
+  expect(captureSnippet(two, "RIGHT", 11, 40)).toEqual([
+    "+const total = sum(items.map((i) => i.price));", " return total;", "@@ … @@", " }", "+export { total };",
+  ]);
+});
+
+test("context either side of a skipped gap is still context", () => {
+  const two: DiffHunk[] = [hunks[0]!, { oldStart: 40, oldLines: 2, newStart: 39, newLines: 3, lines: [" }", "+export { total };", " "] }];
+  const c = comment({ start: 12, end: 39, snippet: captureSnippet(two, "RIGHT", 12, 39) });
+  expect(c.snippet).toEqual([" return total;", "@@ … @@", " }"]);
+  expect(isStale(c, [])).toBe(false);
+});
+
 // --- staleness ---------------------------------------------------------------
 
 test("a comment is current while its code is still at its anchor", () => {

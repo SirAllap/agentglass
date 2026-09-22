@@ -47,6 +47,9 @@ export type Review = { intro: string; outro: string; comments: ReviewComment[] }
 
 export const EMPTY_REVIEW: Review = { intro: "", outro: "", comments: [] };
 
+/** Where a quoted range skips the unchanged code between two hunks. */
+const GAP = "@@ … @@";
+
 /**
  * The diff lines between `start` and `end` on one side, prefixed as a diff is.
  *
@@ -54,16 +57,23 @@ export const EMPTY_REVIEW: Review = { intro: "", outro: "", comments: [] };
  * lines of the OTHER side interleaved with them: a comment on two added lines
  * that replaced three removed ones is about the replacement, and a snippet with
  * the removal cut out of the middle would misquote it.
+ *
+ * A range that runs from one hunk into the next gets a `@@ … @@` line where the
+ * unchanged code between them was left out, so lines far apart are not quoted
+ * as if they were adjacent.
  */
 export function captureSnippet(hunks: readonly DiffHunk[], side: ReviewSide, start: number, end: number): string[] {
   const lo = Math.min(start, end), hi = Math.max(start, end);
-  const rows = hunks.flatMap((h) => unifiedRows(h));
+  const rows = hunks.flatMap((h, hunk) => unifiedRows(h).map((r) => ({ ...r, hunk })));
   const num = (r: (typeof rows)[number]) => (side === "RIGHT" ? r.newN : r.oldN);
   const first = rows.findIndex((r) => { const n = num(r); return n != null && n >= lo && n <= hi; });
   if (first < 0) return [];
   let last = first;
   rows.forEach((r, i) => { const n = num(r); if (n != null && n >= lo && n <= hi) last = i; });
-  return rows.slice(first, last + 1).map((r) => (r.kind === "add" ? "+" : r.kind === "del" ? "-" : " ") + r.text);
+  return rows.slice(first, last + 1).flatMap((r, i, all) => [
+    ...(i > 0 && all[i - 1]!.hunk !== r.hunk ? [GAP] : []),
+    (r.kind === "add" ? "+" : r.kind === "del" ? "-" : " ") + r.text,
+  ]);
 }
 
 /**
@@ -79,7 +89,7 @@ export function isStale(c: ReviewComment, hunks: readonly DiffHunk[] | null): bo
   /* Gone from the diff, and it was only ever context: the change beside it was
      undone, which moves nothing the comment is about. A changed line leaving the
      diff is the opposite — somebody reverted exactly what was commented on. */
-  if (!now.length && c.snippet.every((l) => l.startsWith(" "))) return false;
+  if (!now.length && c.snippet.every((l) => l.startsWith(" ") || l === GAP)) return false;
   return now.length !== c.snippet.length || now.some((l, i) => l !== c.snippet[i]);
 }
 
