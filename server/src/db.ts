@@ -3259,14 +3259,33 @@ export function wasPromptOf(sessionId: string, text: string, sinceMs = 0): boole
  * was submitted after this process started, so nothing older can be it. Zero
  * asks of everything, for a machine that cannot say when a process started.
  *
- * A range on the timestamp index rather than a scan, so the caller can ask
- * every sweep until the answer is yes.
+ * Not cheap: with no statistics the planner walks every UserPromptSubmit row
+ * (idx_events_type) and extracts each payload's prompt, tens of milliseconds
+ * on a large table. The caller asks again only when a prompt has arrived
+ * since it last asked (`newestPromptId`).
  */
 const promptSeenSince = db.query<{ one: number }, [number, string]>(
   `SELECT 1 AS one FROM events WHERE timestamp >= ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
 export function wasPromptAnywhere(text: string, sinceMs = 0): boolean {
   if (!text) return false;
   try { return promptSeenSince.get(Math.max(0, sinceMs), text) !== null; } catch { return false; }
+}
+
+/** The row id of the newest prompt recorded, or 0: an answer about prompts
+ *  can only change when this does. One step down idx_events_type. */
+const newestPrompt = db.query<{ id: number | null }, []>(
+  `SELECT MAX(id) AS id FROM events WHERE hook_event_type = 'UserPromptSubmit'`);
+export function newestPromptId(): number {
+  try { return newestPrompt.get()?.id ?? 0; } catch { return 0; }
+}
+
+/** Has this conversation been sent any prompt since a moment? A covering
+ *  lookup on idx_events_first_prompt. */
+const promptedSinceQ = db.query<{ one: number }, [string, number]>(
+  `SELECT 1 AS one FROM events WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ? AND timestamp >= ? LIMIT 1`);
+export function promptedSince(sessionId: string, sinceMs = 0): boolean {
+  if (!sessionId) return false;
+  try { return promptedSinceQ.get(sessionId, Math.max(0, sinceMs)) !== null; } catch { return false; }
 }
 
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {

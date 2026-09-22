@@ -29,7 +29,7 @@ import { tmux, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.t
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
-import { wasPromptOf, wasPromptAnywhere } from "./db.ts";
+import { wasPromptOf, wasPromptAnywhere, newestPromptId, promptedSince } from "./db.ts";
 import { agentNamed } from "./paneloc.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
@@ -579,34 +579,52 @@ const bornYet = (argv: readonly string[]): boolean =>
  * every session — after `/clear` the pane holds a new conversation and the
  * argument on its command line was submitted to the old one, which the note
  * no longer names. The argv of a process never changes, so a YES is kept for
- * the process's life rather than asked every ten seconds.
+ * the process's life.
  *
- * ONLY A YES. The first photograph of a new pane can run before the CLI has
- * submitted its command-line prompt: the sweep is every ten seconds and on
- * every app window, and in interactive mode the prompt goes in after the TUI
- * is up — on a fresh worktree, after the person has accepted the trust
- * dialog, which can take minutes. A "no" cached at that moment was permanent,
- * every later sweep photographed the brief as a flag, and the restore ran it
- * again: the very replay the previous commit was written to stop. A no is a
- * question not yet answered, and it is asked again on the next sweep.
+ * A NO IS ONLY AS GOOD AS THE PROMPTS SEEN SO FAR. The first photograph of a
+ * new pane can run before the CLI has submitted its command-line prompt: the
+ * sweep is every ten seconds and on every app window, and in interactive
+ * mode the prompt goes in after the TUI is up — on a fresh worktree, after
+ * the person has accepted the trust dialog, which can take minutes. A no
+ * cached for good at that moment photographed the brief as a flag at every
+ * later sweep, and the restore ran it again. Asked again at every sweep
+ * instead, the no of every flag value of every pane was a scan of every
+ * prompt ever recorded, every ten seconds, forever. So a no is kept against
+ * the newest prompt row it was asked against (`newestPromptId`), and asked
+ * again only when a newer one exists; and it is FINAL once one of the pane's
+ * conversations has been sent any prompt since the process started — the
+ * command-line prompt is always the first, so by then it has been seen.
  *
- * The map dies with this server, which is the stated ceiling: a prompt older
+ * The maps die with this server, which is the stated ceiling: a prompt older
  * than the retention window reappears after an app restart.
  */
 const promptVerdicts = new Set<string>();
-function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[], bornAt: number): boolean {
+/** A no, with the newest prompt row it was asked against, or `FINAL_NO`. */
+const promptNos = new Map<string, number>();
+const FINAL_NO = -1;
+/** How many times the database was asked, for the test that holds the cache
+ *  to its promise. */
+const promptLookups = new Map<number, number>();
+export function __promptLookups(pid: number): number { return promptLookups.get(pid) ?? 0; }
+function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[], bornAt: number, newest: number): boolean {
   const key = `${pid}\0${text}`;
   if (promptVerdicts.has(key)) return true;
+  const no = promptNos.get(key);
+  if (no !== undefined && (no === FINAL_NO || no >= newest)) return false;
   /* Only since this process was born, of its own conversations as of every
      other: a prompt on its command line was submitted after that, and a
      flag's value typed as a prompt last month — in another session, or in
      the very conversation a restored pane resumes — is not it. */
   const since = bornAt ? bornAt - NOTE_SLACK_MS : 0;
+  if (promptLookups.size > 2000) promptLookups.clear();
+  promptLookups.set(pid, (promptLookups.get(pid) ?? 0) + 1);
   const yes = sessions.some((id) => !!id && wasPromptOf(id, text, since)) || wasPromptAnywhere(text, since);
-  if (!yes) return false;
   if (promptVerdicts.size > 2000) promptVerdicts.clear();
-  promptVerdicts.add(key);
-  return true;
+  if (promptNos.size > 2000) promptNos.clear();
+  if (yes) { promptVerdicts.add(key); promptNos.delete(key); return true; }
+  const final = sessions.some((id) => !!id && promptedSince(id, since));
+  promptNos.set(key, final ? FINAL_NO : newest);
+  return false;
 }
 
 /**
@@ -796,6 +814,8 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
   /* The last photograph, when its pane ids are this server's: a pane that
      has died since is still in it as it was alive. */
   const lastShot = readRestoreState();
+  /* Read once per sweep: a prompt verdict can only change when this does. */
+  const newestPrompt = newestPromptId();
   const previous = lastShot?.engine === engine ? lastShot : null;
   const sessions: CapturedSession[] = [];
   for (const name of names) {
@@ -893,7 +913,7 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
           const resumed = resumeIdIn(under.argv);
           const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
           /* The note's conversation only when the note is this agent's. */
-          const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, noteFits ? note!.session_id : undefined], under.startedAt));
+          const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, noteFits ? note!.session_id : undefined], under.startedAt, newestPrompt));
           /* A conversation, or nothing: the born-with line is blanked so a
              pane whose id could not be found comes back as a shell rather
              than as its command line, prompt and all. */

@@ -304,6 +304,41 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(args[args.indexOf("--model") + 1], "the value after --model").toBe("sonnet");
   }, 20_000);
 
+  test("a no is asked again only when a prompt has arrived since, and never after the pane's own conversation has had one", async () => {
+    /*
+     * A flag's value is never a prompt, and with only a yes cached its no was
+     * asked again every ten seconds, forever, for every value of every Claude
+     * pane — a scan of every prompt ever recorded, on the event loop. The
+     * answer can only change when a prompt arrives; and once the pane's
+     * conversation has had one since the process started, the command-line
+     * prompt — always the first — has been seen, and a no is final.
+     */
+    const QUIET = "1b2c3d4e-5f6a-4b7c-9d8e-9f0a1b2c3d4e";
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "quiet", "-c", CWD, ...fakeClaude("--model", "haiku", "--resume", QUIET)]);
+    await photographed("quiet");
+    const pid = Number((await pane.tmux(["display-message", "-p", "-t", `=${S}:quiet`, "#{pane_pid}"])).stdout.trim());
+    expect(restore.__promptLookups(pid), "the value was asked about at all").toBeGreaterThan(0);
+    const asked = restore.__promptLookups(pid);
+    await photographed("quiet");
+    expect(restore.__promptLookups(pid) - asked, "asked again with nothing new").toBe(0);
+    db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
+      ["orbit", OTHER, "UserPromptSubmit", JSON.stringify({ prompt: "an unrelated prompt" }), Date.now()]);
+    const before = restore.__promptLookups(pid);
+    await photographed("quiet");
+    expect(restore.__promptLookups(pid) - before, "a prompt arrived: asked again").toBeGreaterThan(0);
+    /* The pane's own conversation is prompted: from here the no is final. */
+    db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
+      ["orbit", QUIET, "UserPromptSubmit", JSON.stringify({ prompt: "carry on" }), Date.now()]);
+    await photographed("quiet");
+    db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
+      ["orbit", OTHER, "UserPromptSubmit", JSON.stringify({ prompt: "another unrelated prompt" }), Date.now()]);
+    const settled = restore.__promptLookups(pid);
+    const got = await photographed("quiet");
+    expect(restore.__promptLookups(pid) - settled, "a final no was asked again").toBe(0);
+    const args = got!.agentArgs ?? [];
+    expect(args[args.indexOf("--model") + 1]).toBe("haiku");
+  }, 20_000);
+
   test("a pane that was itself restored carries its id on its own line", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "second", "-c", CWD, ...fakeClaude("--dangerously-skip-permissions", "--resume", OTHER)]);
     const got = await photographed("second");
