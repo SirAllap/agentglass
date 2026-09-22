@@ -443,6 +443,10 @@ export async function openSeat(p: {
       "yolo-refused": "the seat runs unattended, and skipping permissions is off in Settings",
       "bad-args": "the model must be a plain string",
       "arg-refused": "that model flag changes what the agent may do",
+      /* A seat is not started under a worker role's lock, so these two are
+         not reached today; named so a seat that ever is gets a sentence. */
+      "lock-loosened": "this directory's OpenCode config loosens the role's lock",
+      "yolo-role": "a worker role runs under its lock, and the seat skips permissions",
     };
     return { ok: false, error: why[r.error] ?? r.error };
   }
