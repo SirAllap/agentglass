@@ -38,7 +38,7 @@ import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import type { Collision, CollisionKind, CollisionParty } from "../../shared/types.ts";
 import { db } from "./db.ts";
-import { listPorts } from "./machine.ts";
+import { listPortsAsync } from "./machine.ts";
 
 /**
  * How long a session counts as live without saying anything.
@@ -351,6 +351,38 @@ export interface Listener {
   cwd: string | null;
 }
 
+/**
+ * A listener source that loads at most once per `ttlMs`.
+ *
+ * Every open dashboard polls collisions, and each load is an `ss` plus a few
+ * procfs reads per owned socket. One load serves every caller in the window,
+ * concurrent ones included; a failed one is dropped rather than kept, and
+ * reads as no listeners — the command half of the warning still stands.
+ */
+export function cachedListeners(
+  load: () => Promise<Listener[]>,
+  ttlMs: number,
+  clock: () => number = Date.now,
+): () => Promise<Listener[]> {
+  let at = -Infinity;
+  let value: Promise<Listener[]> | null = null;
+  return () => {
+    const t = clock();
+    if (!value || t - at >= ttlMs) {
+      at = t;
+      const p: Promise<Listener[]> = load().catch(() => {
+        if (value === p) value = null;
+        return [];
+      });
+      value = p;
+    }
+    return value;
+  };
+}
+
+/** Thirty seconds: a dev server that just bound shows up on the next poll or two. */
+const listening = cachedListeners(async () => (await listPortsAsync()).ports, 30_000);
+
 const FILE_TOOLS = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 /**
@@ -360,10 +392,10 @@ const FILE_TOOLS = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"];
  * collision is, more often than not, in a different project's checkout, and a
  * scope that hid it would hide the half you need.
  */
-export function getCollisions(
+export async function getCollisions(
   now = Date.now(),
-  listeners: () => Listener[] = () => listPorts().ports,
-): Collision[] {
+  listeners: () => Listener[] | Promise<Listener[]> = listening,
+): Promise<Collision[]> {
   const since = now - COLLISION_WINDOW_MS;
   const rows = db
     .query<{ source_app: string; session_id: string; hook_event_type: string; tool_name: string | null; ts: number; cmd: string | null; path: string | null; cwd: string | null }, [number]>(
@@ -412,7 +444,7 @@ export function getCollisions(
 
   // A listening socket belongs to every live session in the checkout its
   // process runs in — the deepest one, when checkouts nest.
-  for (const l of listeners()) {
+  for (const l of await listeners()) {
     if (!l.cwd || !portOk(l.port)) continue;
     let best = "";
     for (const s of live) if (within(l.cwd, s.root) && s.root.length > best.length) best = s.root;

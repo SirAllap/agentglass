@@ -19,6 +19,7 @@ process.env.XDG_CONFIG_HOME = dir;
 let db: typeof import("../src/db.ts");
 let col: typeof import("../src/collisions.ts");
 const now = Date.now();
+const machineSrc = await Bun.file(join(import.meta.dir, "../src/machine.ts")).text();
 
 beforeAll(async () => {
   db = await import("../src/db.ts");
@@ -178,7 +179,7 @@ describe("getCollisions", () => {
   // db.ts is one module for the whole `bun test` process, so the events table
   // holds whatever any other file inserted near `now`. Only this file's
   // sessions are read back.
-  const ours = (out: ReturnType<typeof col.getCollisions>, ids: string[]) =>
+  const ours = (out: Awaited<ReturnType<typeof col.getCollisions>>, ids: string[]) =>
     out
       .map((c) => ({ ...c, parties: c.parties.filter((p) => ids.includes(p.session_id)) }))
       .filter((c) => c.parties.length > 0);
@@ -201,7 +202,7 @@ describe("getCollisions", () => {
     chat: null,
   });
 
-  test("live sessions in two checkouts on one database are flagged; ended and stale ones are not", () => {
+  test("live sessions in two checkouts on one database are flagged; ended and stale ones are not", async () => {
     const url = "DATABASE_URL=postgres://localhost:5432/acme_dev bunx prisma migrate dev";
     db.insertEvent(ev("live-a", now - 60_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-a`) as any);
     // A Stop ends a turn, not a session: the one sitting at its prompt still counts.
@@ -212,22 +213,22 @@ describe("getCollisions", () => {
     db.insertEvent(ev("stale-d", now - 3 * 60 * 60_000, "PreToolUse", "Bash", { command: url }, `${W}/wt-d`) as any);
     db.insertEvent(ev("live-e", now - 10_000, "PreToolUse", "Read", { file_path: `${W}/wt-e/README.md` }, `${W}/wt-e`) as any);
 
-    const out = ours(col.getCollisions(now, () => []), ["live-a", "live-b", "gone-c", "stale-d", "live-e"]);
+    const out = ours(await col.getCollisions(now, () => []), ["live-a", "live-b", "gone-c", "stale-d", "live-e"]);
     expect(out.map((c) => c.resource)).toEqual(["postgres localhost:5432/acme_dev"]);
     expect(out[0].parties.map((s) => s.session_id).sort()).toEqual(["live-a", "live-b"]);
     expect(out[0].parties.find((s) => s.session_id === "live-b")?.checkout).toBe(`${W}/wt-b`);
   });
 
-  test("a port a process is listening on counts for the checkout it runs in", () => {
+  test("a port a process is listening on counts for the checkout it runs in", async () => {
     db.insertEvent(ev("live-f", now - 10_000, "PreToolUse", "Bash", { command: "bun test" }, `${W}/wt-f`) as any);
     db.insertEvent(ev("live-g", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5555/api" }, `${W}/wt-g`) as any);
-    const out = ours(col.getCollisions(now, () => [{ port: 5555, addr: "127.0.0.1", pid: 4242, proc: "bun", cwd: `${W}/wt-f/web` }]), ["live-f", "live-g"]);
+    const out = ours(await col.getCollisions(now, () => [{ port: 5555, addr: "127.0.0.1", pid: 4242, proc: "bun", cwd: `${W}/wt-f/web` }]), ["live-f", "live-g"]);
     const hit = out.find((c) => c.resource === "port 5555");
     expect(hit).toBeDefined();
     expect(hit!.parties.map((s) => `${s.session_id}:${s.via}`).sort()).toEqual(["live-f:listening", "live-g:command"]);
   });
 
-  test("a session outside any checkout is not a party, and a listener below it is nobody's", () => {
+  test("a session outside any checkout is not a party, and a listener below it is nobody's", async () => {
     // A session sitting in the home directory has no checkout; taking the
     // directory itself as one made every dev server under it that session's,
     // and paired it with whichever agent curled the port.
@@ -236,9 +237,45 @@ describe("getCollisions", () => {
     db.insertEvent(ev("home-h", now - 10_000, "PreToolUse", "Bash", { command: "ls" }, home) as any);
     db.insertEvent(ev("home-i", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5556/" }, home) as any);
     db.insertEvent(ev("live-j", now - 10_000, "PreToolUse", "Bash", { command: "curl -s localhost:5556/" }, `${W}/wt-a`) as any);
-    const out = ours(col.getCollisions(now, () => [{ port: 5556, addr: "127.0.0.1", pid: 4343, proc: "node", cwd: join(home, "code", "other") }]), ["home-h", "home-i", "live-j"]);
+    const out = ours(await col.getCollisions(now, () => [{ port: 5556, addr: "127.0.0.1", pid: 4343, proc: "node", cwd: join(home, "code", "other") }]), ["home-h", "home-i", "live-j"]);
     expect(out).toEqual([]);
     expect(col.checkoutOf(join(home, "code"))).toBeNull();
     expect(col.checkoutOf(`${W}/wt-a/src/deep`)).toBe(`${W}/wt-a`);
+  });
+});
+
+describe("listeners on the dashboard poll", () => {
+  // Fleet asks for collisions every 15 s from every open dashboard. The ss
+  // behind it used to be a spawnSync that stopped the whole server for as long
+  // as ss took, on every one of those polls.
+  test("one load serves every caller for the window, concurrent ones included", async () => {
+    let loads = 0;
+    let t = 1_000_000;
+    const get = col.cachedListeners(async () => { loads++; return []; }, 30_000, () => t);
+    await Promise.all([get(), get(), get()]);
+    expect(loads).toBe(1);
+    t += 29_000;
+    await get();
+    expect(loads).toBe(1);
+    t += 2_000;
+    await get();
+    expect(loads).toBe(2);
+  });
+
+  test("a failed load is not kept for the window", async () => {
+    let loads = 0;
+    const get = col.cachedListeners(async () => { loads++; throw new Error("ss hung"); }, 30_000, () => 0);
+    expect(await get()).toEqual([]);
+    expect(await get()).toEqual([]);
+    expect(loads).toBe(2);
+  });
+
+  test("ss is spawned without blocking the event loop", () => {
+    const start = machineSrc.indexOf("export async function listPortsAsync(");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const body = machineSrc.slice(start, machineSrc.indexOf("\n}\n", start));
+    const code = body.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).toContain("Bun.spawn(");
+    expect(code).not.toContain("spawnSync");
   });
 });

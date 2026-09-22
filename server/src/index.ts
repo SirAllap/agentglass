@@ -3147,7 +3147,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/insights") return json({ insights: getInsights() });
     // Live sessions in different checkouts on one port, database, .env or
     // compose project — see collisions.ts. A warning; nothing here blocks.
-    if (pathname === "/collisions") return json({ collisions: getCollisions() });
+    if (pathname === "/collisions") return json({ collisions: await getCollisions() });
     if (pathname === "/usage") return json(await getUsage()); // Anthropic plan-limit windows (only meaningful for Claude)
     // Every provider's plan quota in one shape — the dashboard box, the Stats
     // section and the notch all read this one answer. No desktop-only gate:
