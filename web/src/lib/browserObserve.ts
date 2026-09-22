@@ -252,9 +252,36 @@ export const diagnosisScript = (): string => `(() => {
   };
 })()`;
 
-/** Everything at once. `since` filters the two logs; 0 means "from the top". */
-export const observeScript = (since: number, treeMax: number): string => `(() => {
+/**
+ * Where an id came from, asked of the page that is being told to act on it.
+ *
+ * Three answers, and a verb that gets one of the first two must refuse: this
+ * document has never been observed (`unobserved`), so every id the caller
+ * holds describes some other document — the page before a navigation, or a
+ * different tab; or it has, and this id is not in any range an observe of it
+ * minted (`foreign`), which is the same fact told apart from the first only by
+ * the sentence it earns. `minted` is the one that lets the verb go on to look
+ * for the node, and a node not found THEN is one the page dropped since.
+ *
+ * Function source rather than a script, so a caller embeds it beside its own
+ * lookup in one round trip: `(${ID_ORIGIN})("e17")`. Comparisons are written
+ * with `>=` only — see `actionable` in browserDrive.ts for why a less-than in
+ * generated code is refused by the tests.
+ */
+export const ID_ORIGIN = `(id) => {
+  const n = Number(id.slice(1));
+  if (window.__agxSeq === undefined) return "unobserved";
+  const ranges = window.__agxRanges || [];
+  return ranges.some((r) => n >= r[0] && r[1] >= n) ? "minted" : "foreign";
+}`;
+
+/** Everything at once. `since` filters the two logs; 0 means "from the top".
+ *  `base` is where this document's counter starts if it has not started yet —
+ *  see the note beside `stamp` below for why it comes from outside the page. */
+export const observeScript = (since: number, treeMax: number, base = 0): string => `(() => {
   const log = window.__agxLog || { console: [], network: [] };
+  window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+  const firstId = window.__agxSeq + 1;
   const seen = (arr) => arr.filter((r) => !${since} || r.at > ${since});
   const name = (el) => (
     el.getAttribute("aria-label") ||
@@ -272,9 +299,16 @@ export const observeScript = (since: number, treeMax: number): string => `(() =>
      stable ids can be given". The id is stamped ON the node as a data
      attribute the first time it is seen, so it survives a re-render that keeps
      the element, survives a class name changing, and is the same string on the
-     next observation. A counter on the page keeps them unique; a navigation
-     starts a fresh page and a fresh counter, which is correct — the ids
-     described a document that is gone.
+     next observation. A counter on the page keeps them unique within it.
+
+     The counter STARTS where the driver says, not at one. It used to restart
+     on every navigation, which was called correct — "the ids described a
+     document that is gone" — and it is exactly wrong for the caller: the new
+     page mints its own e17, and an agent still holding the old one clicks
+     whatever that now is. So every document in a window counts on from the
+     last, no two documents share an id, and the ranges this document minted
+     are kept on it (window.__agxRanges) for ID_ORIGIN to tell "gone since the
+     observe" from "never yours to begin with".
   */
   const stamp = (el) => {
     if (!el.dataset.agxE) {
@@ -341,9 +375,13 @@ export const observeScript = (since: number, treeMax: number): string => `(() =>
       options: el.tagName === "SELECT" ? [...el.options].map((o) => o.value).slice(0, 40) : undefined,
     });
   }
+  if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
   return {
     url: location.href,
     title: document.title,
+    /* The counter after stamping, for the driver that hands out the next
+       base. Stripped before the observation reaches a caller. */
+    seq: window.__agxSeq,
     /* The one that turns a capture into a false negative when nobody checks
        it: a page in a panel that is off screen behaves like a background tab
        — no polling, no timers, no autoplay. */

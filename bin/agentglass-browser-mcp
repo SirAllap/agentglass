@@ -367,7 +367,9 @@ TOOLS = [
             "`since`, with status and timing, so a 4xx can be diagnosed without touching the server; a "
             "tree of the interactive page addressed by role, accessible name and data-testid rather than "
             "as flat text; and the current values of every input and select. Pass shot=true for the "
-            "picture in the same answer. Poll this instead of looping over read/text/shot."
+            "picture in the same answer. Poll this instead of looping over read/text/shot. The tree's "
+            "ids (e17) belong to THIS page: after a navigation, on another tab, or once the node is "
+            "gone they are refused by name, and the answer is to observe again."
         ),
         "inputSchema": {
             "type": "object",

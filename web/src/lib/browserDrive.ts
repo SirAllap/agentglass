@@ -1,5 +1,5 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
-import { COLLECTOR, observeScript } from "./browserObserve.ts";
+import { COLLECTOR, ID_ORIGIN, observeScript } from "./browserObserve.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 
 /**
@@ -567,9 +567,27 @@ function resolveOne(selLit: string, body: string): string {
        special path — just the selector it stands for.
     */
     const __raw = ${selLit};
-    const __sel = /^e[0-9]+$/.test(__raw) ? '[data-agx-e="' + __raw + '"]' : __raw;
+    const __id = /^e[0-9]+$/.test(__raw);
+    const __sel = __id ? '[data-agx-e="' + __raw + '"]' : __raw;
     try { __all = document.querySelectorAll(__sel); }
     catch (__e) { return { kind: "invalid", message: String((__e && __e.message) || __e) }; }
+    /*
+       An id is asked WHERE IT CAME FROM before it is acted on. Ids used to be
+       looked up like any selector, and "nothing matches e17" was the best a
+       stale one could hope for — the worst was a page that had navigated and
+       minted its own e17, which then got the click. Now ids never repeat
+       across documents (see the stamp in browserObserve.ts), so an id not
+       minted by an observe of THIS document is refused whether or not some
+       node carries it — a page wearing an id it was not given is not a page
+       to act on — and an id minted here but not found is one the page has
+       dropped since. Each is its own sentence, and all of them end in
+       "observe again", which is the only move that fixes any of them.
+    */
+    if (__id) {
+      const __from = (${ID_ORIGIN})(__raw);
+      if (__from !== "minted") return { kind: __from, url: location.href };
+      if (__all.length === 0) return { kind: "gone", url: location.href };
+    }
     if (__all.length === 0) return { kind: "none" };
     if (__all.length > 1) {
       /* Something that TELLS THEM APART. It described a node by tag, id and
@@ -597,13 +615,103 @@ function resolveOne(selLit: string, body: string): string {
   })()`;
 }
 
-/** The sentence for whichever way `resolveOne` failed. */
-function selectorError(sel: string, r: { kind?: string; message?: string; count?: number; samples?: string[] } | null | undefined): string {
+/** The sentence for whichever way `resolveOne` failed. The three id
+ *  sentences each say what happened AND what to do, because an agent that is
+ *  only told "nothing matches" invents a CSS selector next, and §17 lists that
+ *  as the anti-feature the ids exist to prevent. */
+function selectorError(sel: string, r: { kind?: string; message?: string; count?: number; samples?: string[]; url?: string } | null | undefined): string {
   if (r?.kind === "invalid") return `invalid selector "${sel}": ${r.message}`;
   if (r?.kind === "many") {
     return `selector matched ${r.count} elements${r.samples?.length ? " — " + r.samples.join(", ") : ""}: narrow ${sel} to one`;
   }
+  if (r?.kind === "unobserved") {
+    return `${sel} names nothing here: this page (${r.url ?? "the current page"}) has not been observed since it loaded, `
+      + "so the ids you hold came from an earlier page or another tab — observe again and use the ids it hands back";
+  }
+  if (r?.kind === "foreign") {
+    return `${sel} was not handed out by an observe of this page — it came from another tab, or from a page this tab has left. `
+      + "Observe this tab again and use its ids";
+  }
+  if (r?.kind === "gone") {
+    return `${sel} is no longer in the page — the node the observe saw was removed or re-rendered since. Observe again for the current ids`;
+  }
   return `nothing on the page matches ${sel}`;
+}
+
+/** The stable ids an observation hands back — `e17` — and the CSS that reaches one. */
+const STABLE_ID = /^e[0-9]+$/;
+function cssFor(raw: string): string {
+  return STABLE_ID.test(raw) ? `[data-agx-e="${raw}"]` : raw;
+}
+
+/**
+ * The sentence for a selector that matched nothing at a verb that reads the
+ * page directly — `html`, `text`, `scroll`, the CDP-backed ones — rather
+ * than through `resolveOne`. For CSS that is all there is to say. For an id
+ * it is one more round trip to ask the page where the id came from, so the
+ * miss says "observe again" the way `click` does instead of "nothing
+ * matches": a verb that reads is the one an agent reaches for right after
+ * the page changed under it, which is precisely when its ids are stale.
+ */
+async function missing(el: DrivableWebview, raw: string): Promise<string> {
+  if (!STABLE_ID.test(raw)) return `nothing on the page matches ${raw}`;
+  const from = await el.executeJavaScript(
+    `(() => { const __from = (${ID_ORIGIN})(${jsLit(raw)});
+       return { kind: __from === "minted" ? "gone" : __from, url: location.href }; })()`,
+  ).catch(() => null) as { kind: string; url?: string } | null;
+  return selectorError(raw, from);
+}
+
+/**
+ * Where the next observation's ids start.
+ *
+ * One counter for the whole window, so no two documents — two tabs, or one
+ * tab before and after a navigation — ever hand out the same id; that is
+ * what lets a page refuse an id it did not mint instead of acting on whatever
+ * node happens to wear it. Kept in localStorage so an app restart does not
+ * start over at e1 while an agent still holds last session's e1, and in
+ * memory when there is no storage (the tests), where uniqueness within the
+ * session is the part that matters.
+ *
+ * RESERVED, not read-then-written: two observations in flight at once — two
+ * agents on two tabs, or `do` lanes — would otherwise both start from the
+ * same base and mint the same ids on different pages. Each takes the most a
+ * tree can stamp (`TREE_MAX`) up front, and gives back what it did not use
+ * when nobody reserved after it, so the ordinary one-agent case stays dense
+ * (e1, e2, e3) and only the concurrent one skips ahead.
+ *
+ * The ceiling: two WINDOWS each keep a counter of their own, and can mint the
+ * same id at the same moment; a base handed out by the server is the next
+ * step after this and is not here.
+ */
+const TREE_MAX = 200;
+const REGION_MAX = 120;
+const ID_SEQ_KEY = "agentglass.browser.stableIds";
+let idSeq = -1;
+function readIdSeq(): number {
+  if (idSeq >= 0) return idSeq;
+  try { idSeq = Math.max(0, Number(localStorage.getItem(ID_SEQ_KEY)) || 0); } catch { idSeq = 0; }
+  return idSeq;
+}
+function persistIdSeq(): void {
+  try { localStorage.setItem(ID_SEQ_KEY, String(idSeq)); } catch { /* no storage here: unique for this session, which is the part that matters */ }
+}
+function reserveIds(n: number): number {
+  const base = readIdSeq();
+  idSeq = base + n;
+  persistIdSeq();
+  return base;
+}
+function releaseIds(base: number, n: number, used: number): void {
+  if (!Number.isFinite(used)) return;
+  if (used > idSeq) idSeq = used; // the page was ahead of this counter (another window, a reset): catch up
+  else if (idSeq === base + n && used >= base) idSeq = used; // nobody reserved after us: hand the rest back
+  persistIdSeq();
+}
+/** For tests — the counter a fresh window starts with. */
+export function resetStableIds(): void {
+  idSeq = 0;
+  persistIdSeq();
 }
 
 /**
@@ -1020,7 +1128,14 @@ async function runVerb(
     Promise<{ ok: boolean; png?: string; panel?: string; level?: number; via?: string; error?: string }> =
     async () => ({ ok: false, error: "this shell has no inspector" }),
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
-  const sel = jsLit(String(ask.args.selector ?? ""));
+  /* Two spellings of one argument. `resolveOne` takes the RAW one, because an
+     id is classified by name before it is looked up; every verb that hands a
+     selector straight to `document.querySelector` takes `sel`, which is the
+     CSS an id stands for, so an id works at all of them. It did not: `html
+     e17`, `text e17` and `wait e17` looked for an element called <e17>. */
+  const rawSel = String(ask.args.selector ?? "");
+  const selRaw = jsLit(rawSel);
+  const sel = jsLit(cssFor(rawSel));
   try {
     switch (ask.op) {
       case "open": {
@@ -1269,7 +1384,7 @@ async function runVerb(
         // click itself: §3's gate — visible, enabled, stable, unobstructed —
         // so a click against a covered or still-animating element fails with
         // WHAT is wrong rather than landing on the wrong thing in silence.
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const hit = await el.executeJavaScript(resolveOne(selRaw,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              e.click();
@@ -1313,7 +1428,7 @@ async function runVerb(
                  if (set && set.set) set.set.call(e, wantOn); else e.checked = wantOn;
                  e.dispatchEvent(new Event("input", { bubbles: true }));
                  e.dispatchEvent(new Event("change", { bubbles: true }));`;
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const hit = await el.executeJavaScript(resolveOne(selRaw,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              ${dispatch}
@@ -1328,7 +1443,7 @@ async function runVerb(
 
       case "focus":
       case "blur": {
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const hit = await el.executeJavaScript(resolveOne(selRaw,
           `e.${ask.op}(); return { kind: "ok" };`,
         )) as { kind: string } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
@@ -1376,7 +1491,7 @@ async function runVerb(
       case "type": {
         const text = jsLit(String(ask.args.text ?? ""));
         const submit = ask.args.submit === true;
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const hit = await el.executeJavaScript(resolveOne(selRaw,
           `e.focus();
              // The native setter, then an input event: React and every other
              // framework listens for the event and ignores a value assigned
@@ -1418,6 +1533,16 @@ async function runVerb(
       }
 
       case "wait": {
+        /* An id cannot APPEAR. It names the node an observe saw, and a node
+           that is not in the document now is gone, or from another page:
+           polling for it spends the whole 30 s to say "never appeared", which
+           is true and no help. Resolved once instead, and the refusal says
+           which of the two it was. */
+        if (STABLE_ID.test(rawSel)) {
+          const hit = await el.executeJavaScript(resolveOne(selRaw, `return { kind: "ok" };`)) as { kind?: string } | null;
+          if (hit?.kind === "ok" || hit?.kind === "many") return { ok: true, value: { appeared: ask.args.selector } };
+          return { ok: false, error: selectorError(rawSel, hit as never) };
+        }
         // Polled inside the page rather than from here: one round trip instead
         // of one every 100ms, and it sees the DOM as it changes.
         const found = await el.executeJavaScript(
@@ -1461,7 +1586,7 @@ async function runVerb(
         );
         return value
           ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+          : { ok: false, error: await missing(el, rawSel) };
       }
       case "waitfor": {
         /* A CONDITION rather than an element appearing. "Until this text
@@ -1938,7 +2063,7 @@ async function runVerb(
             { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
           const objectId = ev.result?.result?.objectId;
           if (!objectId || ev.result?.result?.subtype === "null") {
-            return { ok: false, error: `nothing on the page matches ${String(a.selector ?? "")}` };
+            return { ok: false, error: await missing(el, String(a.selector ?? "")) };
           }
           await cdp("DOM.enable", {});
           /* The same protocol rule `upload` was caught by: DOM.requestNode
@@ -2148,7 +2273,7 @@ async function runVerb(
         }) as { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
         const objectId = node.result?.result?.objectId;
         if (!objectId || node.result?.result?.subtype === "null") {
-          return { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
+          return { ok: false, error: await missing(el, rawSel) };
         }
         await cdp("DOM.enable", {});
         /*
@@ -2346,12 +2471,16 @@ async function runVerb(
          * §2's last flag: the tree of ONE subtree instead of the page. A
          * modal on a busy page is fifteen nodes inside three hundred, and the
          * other two hundred and eighty-five are paid for on every turn after
-         * (§14). Same shape as `observe`, scoped.
+         * (§14). Same shape as `observe`, scoped — and minted the same way,
+         * from the window's counter and into this document's ranges, or the
+         * ids it hands back would be refused as foreign by the next click.
          */
+        const base = reserveIds(REGION_MAX + 1);
         const r = await el.executeJavaScript(`(() => {
-          const pick = (q) => document.querySelector(/^e[0-9]+$/.test(q) ? '[data-agx-e="' + q + '"]' : q);
-          const root = pick(${sel});
+          const root = document.querySelector(${sel});
           if (!root) return { kind: "none" };
+          window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+          const firstId = window.__agxSeq + 1;
           const name = (el2) => (
             el2.getAttribute("aria-label") ||
             el2.getAttribute("placeholder") ||
@@ -2367,7 +2496,7 @@ async function runVerb(
           };
           const tree = [];
           for (const el2 of root.querySelectorAll("a,button,input,select,textarea,[role],[data-testid],summary,h1,h2,h3")) {
-            if (tree.length >= 120) break;
+            if (tree.length >= ${REGION_MAX}) break;
             const rect = el2.getBoundingClientRect();
             tree.push({
               e: stamp(el2),
@@ -2378,11 +2507,14 @@ async function runVerb(
               at: [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)],
             });
           }
-          return { kind: "ok", e: stamp(root), text: (root.innerText || "").trim().slice(0, 4000), tree };
-        })()`) as { kind: string; e?: string; text?: string; tree?: unknown[] };
-        return r.kind === "ok"
+          const e = stamp(root);
+          if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+          return { kind: "ok", e, text: (root.innerText || "").trim().slice(0, 4000), tree, seq: window.__agxSeq };
+        })()`) as { kind: string; e?: string; text?: string; tree?: unknown[]; seq?: number };
+        releaseIds(base, REGION_MAX + 1, Number(r?.seq));
+        return r?.kind === "ok"
           ? { ok: true, value: { region: ask.args.selector, e: r.e, text: r.text, tree: r.tree } }
-          : { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
+          : { ok: false, error: await missing(el, rawSel) };
       }
 
       case "throttle": {
@@ -2584,7 +2716,7 @@ async function runVerb(
         const objectId = ev.result?.result?.objectId;
         if (!ev.ok) return { ok: false, error: ev.error || "the DevTools protocol refused that" };
         if (!objectId || ev.result?.result?.subtype === "null") {
-          return { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
+          return { ok: false, error: await missing(el, rawSel) };
         }
         const got = await cdp("DOMDebugger.getEventListeners", { objectId, depth: 1 }) as
           { ok: boolean; result?: { listeners?: unknown[] }; error?: string };
@@ -2782,7 +2914,10 @@ async function runVerb(
            — it returns immediately when it is already there. */
         const since = Number(ask.args.since ?? 0);
         await el.executeJavaScript(COLLECTOR).catch(() => 0);
-        const value = await el.executeJavaScript(observeScript(since, 200)) as Record<string, unknown>;
+        const base = reserveIds(TREE_MAX);
+        const value = await el.executeJavaScript(observeScript(since, TREE_MAX, base)) as Record<string, unknown>;
+        releaseIds(base, TREE_MAX, Number(value?.seq));
+        if (value && typeof value === "object") delete value.seq;
         if (ask.args.shot === true) {
           /* In the SAME answer. Asking for the picture separately is the
              second call this verb exists to remove. The shell's capture
@@ -2910,7 +3045,7 @@ async function runVerb(
         );
         return value
           ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+          : { ok: false, error: await missing(el, rawSel) };
       }
 
       case "scroll": {
@@ -2931,7 +3066,7 @@ async function runVerb(
         );
         return value
           ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+          : { ok: false, error: await missing(el, rawSel) };
       }
 
       case "press": {
@@ -3084,7 +3219,7 @@ async function runVerb(
            have needed spelled out by hand. */
         let clip: ShotClip | undefined = ask.args.clip as ShotClip | undefined;
         if (typeof ask.args.selector === "string") {
-          const r = await el.executeJavaScript(elementRectScript(sel)) as
+          const r = await el.executeJavaScript(elementRectScript(selRaw)) as
             { kind: string; rect?: ShotClip; count?: number; samples?: string[]; message?: string };
           if (r.kind !== "ok") return { ok: false, error: selectorError(String(ask.args.selector), r) };
           if (!r.rect || r.rect.width < 1 || r.rect.height < 1) {

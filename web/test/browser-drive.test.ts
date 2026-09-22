@@ -7,7 +7,7 @@
  * nothing, and a typed value that a framework throws away on its next render.
  */
 import { describe, expect, test } from "bun:test";
-import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, resetStableIds, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
 
 /** Records the code it is asked to run and answers with whatever was queued. */
 /*
@@ -1467,5 +1467,197 @@ describe("structured readers", () => {
     const v = (r as { value: { count: number; matches: { text: string; href: string }[] } }).value;
     expect(v.count).toBeGreaterThanOrEqual(2);
     expect(v.matches.some((m) => m.href === "/pricing")).toBe(true);
+  });
+});
+
+/*
+ * The snapshot → element-ref loop, under the three things that go wrong with
+ * it: the page navigated and the id names a document that is gone; the id was
+ * handed out by an observe of another tab; the node was removed or re-rendered
+ * since the observe. Each used to answer "nothing on the page matches e17" —
+ * or worse, act on whatever the new page happened to stamp as e17 — and none
+ * of them told the agent the one thing it needed to hear, which is "observe
+ * again". Run for real through `new Function` against a page-shaped stand-in,
+ * because the fate of an id is decided inside the page.
+ */
+describe("stale ids say why, and say to observe again", () => {
+  type Node = {
+    tagName: string; dataset: Record<string, string>; innerText: string; id: string; className: string;
+    disabled: boolean; parentElement: null; outerHTML: string; textContent: string;
+    getAttribute(n: string): string | null; getBoundingClientRect(): { x: number; y: number; width: number; height: number; top: number; left: number };
+    contains(o: unknown): boolean; scrollIntoView(): void; click(): void; querySelectorAll(sel: string): Node[];
+  };
+
+  /** A document with one button per label, a window of its own (so `__agxSeq`
+   *  lives where a real page keeps it), and the guest that runs scripts
+   *  against them. */
+  function fakePage(buttons: string[], href = "https://example.com/a") {
+    const clicked: string[] = [];
+    const nodes: Node[] = buttons.map((label, i) => ({
+      tagName: "BUTTON", dataset: {}, innerText: label, id: "", className: "", disabled: false, parentElement: null,
+      outerHTML: `<button>${label}</button>`, textContent: label,
+      getAttribute: () => null,
+      getBoundingClientRect: () => ({ x: 10, y: 10 + 40 * i, width: 80, height: 20, top: 10 + 40 * i, left: 10 }),
+      contains: () => false,
+      scrollIntoView() {},
+      click() { clicked.push(label); },
+      querySelectorAll: () => [],
+    }));
+    /* The form the buttons sit in — what `region` is pointed at. */
+    const form: Node = {
+      ...nodes[0]!, tagName: "FORM", innerText: buttons.join(" "), textContent: buttons.join(" "), dataset: {},
+      outerHTML: "<form>…</form>", click() {},
+      querySelectorAll: (sel: string) => (sel.startsWith("a,button") ? nodes : []),
+    };
+    const win: Record<string, unknown> = {};
+    const document = {
+      title: "A page", visibilityState: "visible", readyState: "complete", cookie: "",
+      hasFocus: () => true,
+      elementFromPoint: (_x: number, y: number) => nodes.find((n) => { const r = n.getBoundingClientRect(); return y >= r.top && y <= r.top + r.height; }) ?? null,
+      querySelectorAll(sel: string): Node[] {
+        const m = /^\[data-agx-e="(e\d+)"\]$/.exec(sel);
+        if (m) return [form, ...nodes].filter((n) => n.dataset.agxE === m[1]);
+        if (sel.startsWith("a,button")) return nodes;
+        if (sel === "form") return [form];
+        return [];
+      },
+      querySelector(sel: string): Node | null { return document.querySelectorAll(sel)[0] ?? null; },
+    };
+    const run = (code: string) => new Function(
+      "window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", "localStorage", "sessionStorage",
+      `return ${code}`,
+    )(win, document, { href }, () => ({ display: "block", visibility: "visible", opacity: "1" }), 1200, 800, {}, {});
+    /* The collector patches fetch and friends on a real window; here it has
+       nothing to patch and nothing this checks depends on it. */
+    const el = fakeGuest((code) => (code.includes("__agxLog = log") ? 1 : run(code)));
+    return { el, win, nodes, clicked };
+  }
+
+  const ids = (r: { value?: unknown }) => ((r.value as { tree: { e: string }[] }).tree.map((t) => t.e));
+
+  test("an id used on a page that has not been observed since it loaded is refused", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    const r = await runBrowserAsk(page.el, ask("click", { selector: "e17" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("e17");
+    expect(r.error, "the fix is to observe again, and it must say so").toMatch(/observe/i);
+    expect(r.error, "and where the tab is now, since the id came from somewhere else").toContain("https://example.com/a");
+    expect(page.clicked).toEqual([]);
+  });
+
+  test("two documents never share an id, so an id from the other tab is refused rather than acted on", async () => {
+    resetStableIds();
+    const a = fakePage(["Delete account", "Cancel"], "https://example.com/a");
+    const b = fakePage(["Confirm purchase", "Back"], "https://example.com/b");
+    const seenA = ids(await runBrowserAsk(a.el, ask("observe", {})));
+    const seenB = ids(await runBrowserAsk(b.el, ask("observe", {})));
+    expect(seenA).toEqual(["e1", "e2"]);
+    // The second page carries on where the first stopped: e1 means one thing.
+    expect(seenB.some((e) => seenA.includes(e))).toBe(false);
+    // The id of "Delete account", sent to the tab holding "Confirm purchase".
+    const r = await runBrowserAsk(b.el, ask("click", { selector: "e1" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("e1 ");
+    expect(r.error).toMatch(/another tab|a page this tab has left/);
+    expect(r.error).toMatch(/observe/i);
+    expect(b.clicked, "nothing on the other page was touched").toEqual([]);
+    // And on its own page it still works.
+    const ok = await runBrowserAsk(a.el, ask("click", { selector: "e1" }));
+    expect(ok.ok).toBe(true);
+    expect(a.clicked).toEqual(["Delete account"]);
+  });
+
+  test("an id whose node was removed since the observe says so, not \"nothing matches\"", async () => {
+    resetStableIds();
+    const page = fakePage(["Save", "Discard"]);
+    const seen = ids(await runBrowserAsk(page.el, ask("observe", {})));
+    expect(seen).toEqual(["e1", "e2"]);
+    page.nodes.splice(1, 1); // a re-render drops "Discard"
+    const r = await runBrowserAsk(page.el, ask("click", { selector: "e2" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/removed or re-rendered/);
+    expect(r.error).toMatch(/observe again/i);
+    expect(r.error).not.toContain("nothing on the page matches");
+  });
+
+  test("the same page observed twice keeps its ids and numbers new nodes after them", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    expect(ids(await runBrowserAsk(page.el, ask("observe", {})))).toEqual(["e1"]);
+    page.nodes.push({ ...page.nodes[0]!, dataset: {}, innerText: "Undo" });
+    // Dense: a second observe does not skip ahead when nobody else took ids in between.
+    expect(ids(await runBrowserAsk(page.el, ask("observe", {})))).toEqual(["e1", "e2"]);
+  });
+
+  test("two observations in flight at once take disjoint ids", async () => {
+    resetStableIds();
+    const a = fakePage(["One", "Two"]);
+    const b = fakePage(["Three"]);
+    /* Both scripts are built before either answers — the shape of two agents
+       on two tabs, and of `do` lanes. The reservation is what keeps the
+       second from starting where the first started. */
+    let releaseA: () => void = () => {};
+    const gate = new Promise<void>((r) => { releaseA = r; });
+    const runA = a.el.executeJavaScript;
+    a.el.executeJavaScript = async (code: string) => { await gate; return runA(code); };
+    const pa = runBrowserAsk(a.el, ask("observe", {}));
+    const pb = runBrowserAsk(b.el, ask("observe", {}));
+    releaseA();
+    const [ra, rb] = await Promise.all([pa, pb]);
+    const seenA = ids(ra), seenB = ids(rb);
+    expect(seenA.length).toBe(2);
+    expect(seenB.length).toBe(1);
+    expect(seenA.some((e) => seenB.includes(e))).toBe(false);
+  });
+
+  test("wait on an id the page never handed out fails at once instead of polling for 30 s", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    const started = Date.now();
+    const r = await runBrowserAsk(page.el, ask("wait", { selector: "e9" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/observe/i);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(page.el.ran.some((c) => c.includes("setTimeout(tick, 120)")), "no polling loop was started for an id").toBe(false);
+  });
+
+  test("every verb that takes a selector takes an id — html and text included", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    await runBrowserAsk(page.el, ask("observe", {}));
+    const h = await runBrowserAsk(page.el, ask("html", { selector: "e1" }));
+    expect(h.ok, JSON.stringify(h)).toBe(true);
+    expect((h.value as { html: string }).html).toContain("Save");
+    const t = await runBrowserAsk(page.el, ask("text", { selector: "e1" }));
+    expect(t.ok, JSON.stringify(t)).toBe(true);
+    // And a miss on one of these explains itself the same way click does.
+    const miss = await runBrowserAsk(page.el, ask("html", { selector: "e40" }));
+    expect(miss.ok).toBe(false);
+    expect(miss.error).toMatch(/observe/i);
+  });
+
+  test("region mints its ids from the same counter, so the next click accepts them", async () => {
+    resetStableIds();
+    const other = fakePage(["Elsewhere"]);
+    await runBrowserAsk(other.el, ask("observe", {}));
+    const page = fakePage(["Save", "Discard"]);
+    const r = await runBrowserAsk(page.el, ask("region", { selector: "form" }));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    const v = r.value as { e: string; tree: { e: string }[]; seq?: number };
+    expect(v.seq, "the counter stays off the wire here too").toBeUndefined();
+    // Counted on from the other page, never from one.
+    expect(v.tree.map((t) => t.e)).not.toContain("e1");
+    const click = await runBrowserAsk(page.el, ask("click", { selector: v.tree[1]!.e }));
+    expect(click.ok, JSON.stringify(click)).toBe(true);
+    expect(page.clicked).toEqual(["Discard"]);
+  });
+
+  test("an observation does not leak its counter into the answer", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    const r = await runBrowserAsk(page.el, ask("observe", {}));
+    expect(r.ok).toBe(true);
+    expect((r.value as Record<string, unknown>).seq).toBeUndefined();
   });
 });

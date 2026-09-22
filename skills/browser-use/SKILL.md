@@ -92,6 +92,10 @@ a value for a field that was not there.
 **Stable ids beat invented selectors.** Every node in an `observe` comes with an
 id like `e17`, stamped on the element so it survives a re-render. Every verb
 that takes a selector takes one of those instead. Do not go inventing CSS.
+An id is good for the page that handed it out: no two pages in a window ever
+share one, so an id used after a navigation, on another tab, or after the node
+was removed is refused with a sentence that says which — and the fix is always
+the same, `observe` again and use the new ids.
 
 **A failure explains itself.** It comes back with the console errors and failed
 requests from just before it, and a screenshot. `selector matched 3 elements`
