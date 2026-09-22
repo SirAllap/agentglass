@@ -160,3 +160,82 @@ describe("the commit the check validated is written down whole", () => {
     expect(marker.commit).toBe("");
   });
 });
+
+/*
+ * Each commit the check validates gets a comment of its own.
+ *
+ * One comment rewritten in place was a report that could change under a
+ * maintainer's eyes: the submitter pushes, the check validates the new commit
+ * into the same comment and puts `ready for listing` back, and nothing on the
+ * issue says anything moved. A run about the same commit still rewrites its
+ * own report, because every submission is answered twice and every edit of
+ * the issue answers again.
+ */
+describe("a new commit is a new report", () => {
+  /** The heredoc of the step that says it on the issue, dedented. */
+  function sayer(source: string): string {
+    const from = source.indexOf("      - name: Say it on the issue\n");
+    expect(from, "the workflow still says it on the issue").toBeGreaterThan(-1);
+    const m = source.slice(from).match(/python3 - <<'PY'\n([\s\S]*?)\n\s*PY\n/);
+    expect(m, "and decides which comment in a PY heredoc").not.toBeNull();
+    const lines = m![1]!.split("\n");
+    const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.length - l.trimStart().length));
+    return lines.map((l) => l.slice(indent)).join("\n");
+  }
+
+  const report = (over: Record<string, unknown> = {}) =>
+    `<!-- agentglass-plugin-submission -->\n## What the catalogue check found\n\n<!-- agentglass-plugin-submission-result ${JSON.stringify({ repository: "acme/orbit-clock", commit: REPORT.sha, manifest: true, ready: true, ...over })} -->`;
+  const COULD_NOT = "<!-- agentglass-plugin-submission -->\n## The catalogue check could not run\n";
+  const bot = (id: number, body: string) => ({ id, login: "github-actions[bot]", type: "Bot", body });
+
+  /** The id of the comment to rewrite, or "" for a new one. */
+  function which(comments: unknown[], next: string): string {
+    const at = mkdtempSync(join(dir, "say-"));
+    writeFileSync(join(at, "comments.jsonl"), comments.map((c) => JSON.stringify(c)).join("\n") + "\n");
+    writeFileSync(join(at, "comment.md"), next);
+    writeFileSync(join(at, "say.py"), sayer(yaml));
+    const r = spawnSync("python3", ["say.py"], {
+      cwd: at, encoding: "utf8",
+      env: { PATH: process.env.PATH, COMMENTS: join(at, "comments.jsonl"), NEXT: join(at, "comment.md") },
+    });
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    return r.stdout.trim();
+  }
+
+  test("the first report is a new comment", () => {
+    expect(which([], report())).toBe("");
+  });
+
+  test("the same repository at the same commit rewrites the last report", () => {
+    expect(which([bot(7, report()), bot(9, report())], report())).toBe("9");
+  });
+
+  test("another commit is a new comment, and the report about the old one stays", () => {
+    expect(which([bot(9, report({ commit: "f".repeat(40) }))], report())).toBe("");
+  });
+
+  test("another repository is a new comment too", () => {
+    expect(which([bot(9, report({ repository: "acme/orbit-other" }))], report())).toBe("");
+  });
+
+  test("a check that could not run rewrites one that could not either, and not a report that could", () => {
+    expect(which([bot(9, COULD_NOT)], COULD_NOT)).toBe("9");
+    expect(which([bot(9, report())], COULD_NOT)).toBe("");
+  });
+
+  test("only the check's own comments are its reports", () => {
+    const typed = { id: 11, login: "someone", type: "User", body: report() };
+    expect(which([bot(9, report({ commit: "f".repeat(40) })), typed], report())).toBe("");
+    const otherBot = { id: 12, login: "another-app[bot]", type: "Bot", body: report() };
+    expect(which([otherBot], report())).toBe("");
+  });
+
+  test("the marker says whether the check passed, which is what the approval lists on", () => {
+    const passed = JSON.parse(comment(REPORT).match(/<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->/)![1]!);
+    expect(passed.ready).toBe(true);
+    const failed = JSON.parse(comment({ ...REPORT, "validate.json": { ok: false, error: "no manifest" } })
+      .match(/<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->/)![1]!);
+    expect(failed.ready).toBe(false);
+  });
+});

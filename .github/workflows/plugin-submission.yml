@@ -196,10 +196,13 @@ jobs:
               "on their own machine.",
           ]
           print("\n".join(out))
-          marker = {"repository": repo, "commit": sha, "manifest": bool(v.get("ok")),
+          # `ready` is the verdict the labels below are set from, carried in
+          # the marker so the approval lists only from a report that passed.
+          ready = bool(v.get("ok") and reachable)
+          marker = {"repository": repo, "commit": sha, "manifest": bool(v.get("ok")), "ready": ready,
                     "baseline": b.get("outcome"), "findings": len(b.get("findings") or [])}
           print(f"\n<!-- agentglass-plugin-submission-result {json.dumps(marker, separators=(',', ':'))} -->")
-          open("report/verdict", "w").write("READY" if (v.get("ok") and reachable) else "NOT-READY")
+          open("report/verdict", "w").write("READY" if ready else "NOT-READY")
           PY
 
       - uses: actions/upload-artifact@v7
@@ -262,15 +265,43 @@ jobs:
               > report/comment.md
             echo "NOT-READY" > report/verdict
           fi
-          # ONE comment per submission, rewritten — not a thread of them.
+          # ONE comment per commit the check validates.
           #
           # Two runs answer every submission (the template's label fires a
           # second `issues` event) and every edit of the issue answers again,
-          # so a new comment each time buries the repository it is about under
-          # its own history. The marker at the top of the body is what finds
-          # the one already there.
-          mine=$(gh api "repos/$REPO/issues/$ISSUE/comments" --paginate \
-            --jq '[.[] | select(.user.type == "Bot") | select(.body | startswith("<!-- agentglass-plugin-submission -->"))] | last | .id // empty')
+          # so a run about the commit the last report is about rewrites that
+          # report rather than burying the repository under its own history.
+          # A run about ANOTHER commit is a new comment. Rewritten in place, a
+          # report changed under a maintainer's eyes: the submitter pushed,
+          # the check validated the new commit into the same comment and put
+          # `ready for listing` back, and nothing on the issue said anything
+          # had moved. Now the new commit arrives as a comment of its own, and
+          # the one above it still says what the old commit was.
+          gh api "repos/$REPO/issues/$ISSUE/comments" --paginate \
+            --jq '.[] | {id, login: .user.login, type: .user.type, body} | @json' > /tmp/comments.jsonl
+          mine=$(COMMENTS=/tmp/comments.jsonl NEXT=report/comment.md python3 - <<'PY'
+          import json, os, re
+          MARK = re.compile(r"<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->")
+          def about(body):
+              """The repository and commit a report is about, or None for one that read nothing."""
+              found = MARK.findall(body or "")
+              if len(found) != 1:
+                  return None
+              try:
+                  r = json.loads(found[0])
+              except json.JSONDecodeError:
+                  return None
+              return (str(r.get("repository", "")).casefold(), str(r.get("commit", "")))
+          rows = [json.loads(l) for l in open(os.environ["COMMENTS"]) if l.strip()]
+          # This workflow's own comments only: another bot's comment is not
+          # one this token may rewrite, and a person's is not a report at all.
+          reports = [c for c in rows
+                     if c.get("login") == "github-actions[bot]" and c.get("type") == "Bot"
+                     and str(c.get("body", "")).startswith("<!-- agentglass-plugin-submission -->")]
+          if reports and about(reports[-1].get("body")) == about(open(os.environ["NEXT"]).read()):
+              print(reports[-1]["id"])
+          PY
+          )
           if [ -n "$mine" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$mine" -F body=@report/comment.md >/dev/null
           else

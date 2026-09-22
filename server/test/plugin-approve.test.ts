@@ -229,7 +229,7 @@ describe("the listed commit is the one the check validated", () => {
   const VALIDATED = "89abcdef0123456789abcdef0123456789abcdef";
   const MOVED = "fedcba9876543210fedcba9876543210fedcba98";
   const marker = (over: Record<string, unknown> = {}) =>
-    `<!-- agentglass-plugin-submission -->\n## What the catalogue check found\n\n<!-- agentglass-plugin-submission-result ${JSON.stringify({ repository: "acme/orbit-clock", commit: VALIDATED, manifest: true, baseline: "passed", findings: 0, ...over })} -->`;
+    `<!-- agentglass-plugin-submission -->\n## What the catalogue check found\n\n<!-- agentglass-plugin-submission-result ${JSON.stringify({ repository: "acme/orbit-clock", commit: VALIDATED, manifest: true, ready: true, baseline: "passed", findings: 0, ...over })} -->`;
   const bot = (body: string, updated_at = "2026-09-22T10:00:00Z") => ({ login: "github-actions[bot]", type: "Bot", body, updated_at });
   const LABELLED = [{ label: "approved for listing", created_at: "2026-09-22T11:00:00Z" }];
 
@@ -287,6 +287,33 @@ describe("the listed commit is the one the check validated", () => {
     expect(decide({ comments: [bot(marker({ manifest: false }))] }).code).toBe(1);
     expect(decide({ comments: [bot(marker({ commit: "abc1234" }))] }).code).toBe(1);
     expect(decide({ repo: "someone-else/orbit-clock" }).code).toBe(1);
+  });
+
+  /*
+   * The commit listed is exactly the one the latest green check validated.
+   * Green is the check's own verdict, carried in its marker, so the approval
+   * cannot disagree with the label the check put on the issue; a report from
+   * before the check said so is not one it can list from.
+   */
+  test("a report the check did not pass lists nothing, and neither does one that does not say", () => {
+    expect(decide({ comments: [bot(marker({ ready: false }))] }).code).toBe(1);
+    expect(decide({ comments: [bot(marker({ ready: undefined }))] }).code).toBe(1);
+  });
+
+  test("the latest report decides: a newer one about the listed commit replaces an older one", () => {
+    const older = bot(marker({ commit: MOVED }), "2026-09-22T09:00:00Z");
+    expect(decide({ comments: [older, bot(marker())] }).output).toContain(`sha=${VALIDATED}`);
+    // …and a newer report that did not pass is not undone by an older one that did.
+    const red = bot(marker({ commit: MOVED, ready: false }), "2026-09-22T10:30:00Z");
+    expect(decide({ comments: [bot(marker()), red] }).code).toBe(1);
+  });
+
+  // Both times come in whole seconds, so a report rewritten in the second
+  // the label landed compared as older than it, and passed.
+  test("a report written in the same second as the label is not the one the label was given on", () => {
+    const r = decide({ comments: [bot(marker(), "2026-09-22T11:00:00Z")] });
+    expect(r.code).toBe(1);
+    expect(r.refused).toContain("after");
   });
 
   test("the entry fetches that commit by id and checks it landed there", () => {

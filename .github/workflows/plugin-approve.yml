@@ -148,15 +148,22 @@ jobs:
               refuse("the submission check did not record a full commit; edit the issue to run it again")
           if not mark.get("manifest"):
               refuse("the submission check did not validate the manifest at that commit")
+          # The latest report, and it passed: the commit listed is exactly the
+          # one the latest green check validated. `ready` is the check's own
+          # verdict, the one its labels are set from.
+          if mark.get("ready") is not True:
+              refuse("the latest submission check did not pass; edit the issue to run it again")
           if str(mark.get("repository", "")).casefold() != env["REPO_NAMED"].casefold():
               refuse("the submission check report is about a different repository than the issue names")
-          # The report the label was given on: rewritten after the label, it
-          # is a report nobody had read when they clicked.
+          # The report the label was given on: written after the label, it
+          # is a report nobody had read when they clicked. Both times are in
+          # whole seconds, so one written in the label's own second counts as
+          # after it.
           labelled = [e["created_at"] for e in rows(env["EVENTS"]) if e.get("label") == "approved for listing"]
           if not labelled:
               refuse("no approved-for-listing label event on this issue")
-          if report.get("updated_at", "") > labelled[-1]:
-              refuse("the submission check report changed after the label was applied; read it again and label again")
+          if report.get("updated_at", "") >= labelled[-1]:
+              refuse("the submission check wrote its latest report after the label was applied, or in the same second; read it again and label again")
           head = open(env["HEAD_FILE"]).read().strip()
           if head != commit:
               refuse(f"the repository has moved since the check read it: the report is about {commit[:12]} "
