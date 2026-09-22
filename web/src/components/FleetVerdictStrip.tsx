@@ -25,8 +25,7 @@ export function FleetVerdictStrip({ onOpenLantern }: { onOpenLantern: () => void
      which lists them in the order this line counted them. */
   const go = (c: VerdictClause) => { if (!c.paneId || !jumpToPane(c.paneId)) onOpenLantern(); };
   return (
-    <div
-      role="status"
+    <section
       aria-label="State of the fleet"
       className="shrink-0 px-3 py-1.5 flex items-center gap-2 min-w-0 text-[11.5px] border-b"
       style={{
@@ -51,6 +50,6 @@ export function FleetVerdictStrip({ onOpenLantern }: { onOpenLantern: () => void
           </span>
         ))}
       </span>
-    </div>
+    </section>
   );
 }

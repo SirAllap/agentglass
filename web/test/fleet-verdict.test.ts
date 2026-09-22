@@ -18,7 +18,7 @@ const min = 60_000;
 const row = (name: string, over: Partial<LanternRow> = {}): LanternRow => ({ name, from: "seen", state: "idle", paneId: `%${name.length}`, ...over });
 const working = (name: string, over: Partial<LanternRow> = {}) => row(name, { state: "working", ...over });
 const blocked = (name: string, kind: "permission" | "gate" = "permission", over: Partial<LanternRow> = {}) =>
-  row(name, { state: "waiting", needsYou: { kind, why: "Bash", since: now - 4 * min }, ...over });
+  row(name, { state: "waiting", needsYou: { kind, why: kind === "gate" ? "held at the gate: Bash — rm -rf dist" : "Claude needs your permission to use Bash", since: now - 4 * min }, ...over });
 const quiet = (name: string, over: Partial<LanternRow> = {}) =>
   row(name, { from: "said", doing: "migrate the billing tables", saidAt: now - 90 * min, ...over });
 
@@ -56,7 +56,7 @@ test("a permission or a held gate needs you, and is the loud tone", () => {
 test("one blocked agent is named, with why, and links to its pane", () => {
   const v = fleetVerdict([blocked("orbit-web", "permission", { paneId: "%7" })], now)!;
   expect(v.clauses.find((c) => c.kind === "need")).toMatchObject({
-    count: 1, paneId: "%7", text: "orbit-web needs your permission (Bash)",
+    count: 1, paneId: "%7", text: "orbit-web: Claude needs your permission to use Bash",
   });
 });
 
@@ -88,13 +88,23 @@ test("a dead session with an old claim is gone, not stuck", () => {
 test("the three answers come in the issue's order: running, stuck, needs you", () => {
   const v = fleetVerdict([blocked("a-web"), quiet("b-migrate"), quiet("c-docs"), working("d-api")], now)!;
   expect(v.clauses.map((c) => c.kind)).toEqual(["running", "stuck", "need"]);
-  expect(v.clauses.map((c) => c.text)).toEqual(["1 running", "2 stuck", "a-web needs your permission (Bash)"]);
+  expect(v.clauses.map((c) => c.text)).toEqual(["1 running", "2 stuck", "a-web: Claude needs your permission to use Bash"]);
   expect(v.tone).toBe("critical");
 });
 
-test("a held gate says so in its own words", () => {
+test("the wait's own sentence stands alone — never 'needs your permission (… needs your permission …)'", () => {
+  const v = fleetVerdict([blocked("orbit-web", "gate")], now)!;
+  expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web: held at the gate: Bash — rm -rf dist");
+});
+
+test("a wait that came without a sentence is named by its kind", () => {
   const v = fleetVerdict([blocked("orbit-web", "gate", { needsYou: { kind: "gate", why: "", since: now } })], now)!;
-  expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web held at the gate");
+  expect(v.clauses.find((c) => c.kind === "need")!.text).toBe("orbit-web: held at the gate");
+});
+
+test("a working seat counts as running, as the Lantern view counts it", () => {
+  const v = fleetVerdict([working("orbit-seat", { role: "seat" as LanternRow["role"] })], now)!;
+  expect(v.clauses[0].text).toBe("1 running · all nominal");
 });
 
 test("a board that could not be read is unknown, not 'nothing running'", () => {

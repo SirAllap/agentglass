@@ -43,7 +43,7 @@ const waitWord = (w: NonNullable<LanternRow["needsYou"]>) =>
  *  first read fails, so the rows alone cannot tell the two apart. */
 export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed = false): FleetVerdict | null {
   if (!all || failed) return null;
-  const rows = all.filter((r) => !r.role);
+  const rows = all.filter((r) => r.role !== "lantern");
   const need = rows.filter((r) => r.needsYou && r.needsYou.kind !== "input");
   const stuck = rows.filter((r) => isForgotten(r, now));
   const running = rows.filter((r) => !r.needsYou && r.state === "working");
@@ -65,7 +65,10 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
     const w = one?.needsYou;
     clauses.push({
       kind: "need", count: need.length, tone: "critical", paneId: one?.paneId,
-      text: one && w ? `${one.name} ${waitWord(w)}${w.why ? ` (${w.why})` : ""}` : `${need.length} need you`,
+      /* `why` is the agent's own sentence ("Claude needs your permission to
+         use Bash", "held at the gate: Bash — …"), so it stands alone; the
+         kind's words are only for a wait that came without one. */
+      text: one && w ? `${one.name}: ${w.why || waitWord(w)}` : `${need.length} need you`,
     });
   }
   return { tone: need.length ? "critical" : stuck.length ? "warn" : "calm", clauses };
