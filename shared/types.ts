@@ -4571,6 +4571,7 @@ export interface PluginsStatus {
 export interface CataloguePlugin {
   id: string;
   source: { kind: "git"; url: string; ref: string | null };
+  sha256?: string;
   description: string;
   categories: string[];
   title?: string;

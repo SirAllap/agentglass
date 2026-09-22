@@ -166,7 +166,8 @@ exactly that, never as an empty list.
 | `name` | A heading: 1-60 printable characters, no control characters. Not a plugin name — this one never becomes a path |
 | `owner` | 1–200 characters; shown, not verified |
 | `plugins[].id` | 1–120 characters; the handle an install-from-catalogue names |
-| `plugins[].source` | `{ "kind": "git", "url": "https://…", "ref": null \| "<branch, tag or commit>" }`; a missing `ref` installs the default branch |
+| `plugins[].source` | `{ "kind": "git", "url": "https://…", "ref": null \| "<branch, tag or commit>" }`; a missing `ref` installs the default branch, and a full 40-character commit is fetched by id and checked to be that commit |
+| `plugins[].sha256` | optional, 64 lowercase hex: the content hash of the tree at `ref` (`agentglass-plugin hash <folder>` prints it). Present, the install refuses a tree that hashes to anything else; malformed, the entry is dropped. This project's catalogue carries one on every listing |
 | `plugins[].description` | 1–500 characters |
 | `plugins[].categories` | optional list of short strings, at most 20 |
 | `plugins[].title` | optional, ≤80; the card's heading when there is one, otherwise the id |

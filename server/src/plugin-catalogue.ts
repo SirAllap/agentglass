@@ -12,6 +12,11 @@ import { guardedFetch, type GuardedFetchOptions } from "./net.ts";
 export interface CataloguePlugin {
   id: string;
   source: { kind: "git"; url: string; ref: string | null };
+  /** The content hash of the tree at `source.ref`, by the walk the install
+   *  does. Present, the install refuses anything that hashes otherwise: the
+   *  entry then names bytes, not a repository its author can keep pushing
+   *  to. This project's catalogue writes one with every listing. */
+  sha256?: string;
   description: string;
   categories: string[];
   /** What the card says when there is one. A catalogue that carries none of
@@ -64,6 +69,10 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
   const ref = (src as Record<string, unknown>).ref ?? null;
   if (pluginRefError(ref) !== null) return null;
   if (typeof p.description !== "string" || !p.description.trim() || p.description.length > MAX_TEXT) return null;
+  // Malformed is dropped, not ignored: ignoring it would install the entry
+  // with no hash to hold it to, which is the unpinned install it asked not
+  // to be.
+  if (p.sha256 !== undefined && (typeof p.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(p.sha256))) return null;
   const categories = Array.isArray(p.categories)
     ? p.categories.filter((c) => typeof c === "string" && c.trim()).slice(0, MAX_CATEGORIES).map((c) => String(c).trim())
     : [];
@@ -75,6 +84,7 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
   return {
     id: p.id.trim(),
     source: { kind: "git", url: (url as string).trim(), ref: ref === null ? null : (ref as string).trim() },
+    ...(typeof p.sha256 === "string" ? { sha256: p.sha256 } : {}),
     description: p.description.trim().slice(0, MAX_TEXT),
     categories,
     ...(short(p.title, 80) ? { title: short(p.title, 80) } : {}),

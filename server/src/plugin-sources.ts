@@ -27,7 +27,9 @@ export type InstallSource =
   | {
       kind: "marketplace";
       marketplace: { url: string; ref: string | null; resolvedCommit: string | null };
-      plugin: { url: string; ref: string | null };
+      /** `sha256` is the content hash the catalogue listed, kept so an
+       *  update of a pinned install is held to it as the install was. */
+      plugin: { url: string; ref: string | null; sha256?: string };
     };
 
 /** `https://…` with no `user:pass@` — a URL that carries a credential is a
@@ -67,6 +69,12 @@ export function catalogueUrlError(url: unknown): string | null {
   if (!HTTPS_NO_AUTH.test(u)) return "That does not look like a catalogue URL (https://… with no credentials)";
   return null;
 }
+
+/** A full commit id — the only ref that names bytes rather than a pointer
+ *  somebody can move. A catalogue pins one, and it is fetched by id rather
+ *  than cloned by name, because `git clone --branch` takes a branch or a tag
+ *  and refuses a commit. */
+export const FULL_COMMIT = /^[0-9a-f]{40}$/;
 
 /** A ref name: a branch, tag or commit — never a flag. `git` reads an
  *  argument starting with `-` as an option the same way `projectadd.ts`
