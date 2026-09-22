@@ -84,6 +84,9 @@ export interface CapturedSession {
 export interface RestoreState {
   capturedAt: number;
   sessions: CapturedSession[];
+  /** The tmux server this was photographed on (`liveSessions().engine`).
+   *  The window and pane ids in the file are only that server's. */
+  engine?: string;
 }
 
 /*
@@ -647,9 +650,8 @@ function mergeWindows(old: CapturedWindow[], freshWins: CapturedWindow[], whole:
  * dying and the engine remaking one session is the morning this file was
  * written for, and a photograph of that is not evidence of anything.
  */
-function writeMerged(fresh: CapturedSession[], now: number, whole: boolean): RestoreState {
+function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engine: string, before = readRestoreState()): RestoreState {
   const seenNow = new Map(fresh.map((s) => [s.name, s]));
-  const before = readRestoreState();
   const kept: CapturedSession[] = [];
   const carried = new Map<string, CapturedWindow[]>();
   for (const old of before?.sessions ?? []) {
@@ -673,7 +675,7 @@ function writeMerged(fresh: CapturedSession[], now: number, whole: boolean): Res
     kept.push({ ...old, lastSeen });
   }
   const sessions = [...fresh.map((s) => ({ ...s, windows: carried.get(s.name) ?? s.windows, lastSeen: now })), ...kept];
-  const state: RestoreState = { capturedAt: now, sessions };
+  const state: RestoreState = { capturedAt: now, sessions, ...(engine ? { engine } : {}) };
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
   /* The person's own, and now with the arguments of what they were running
@@ -727,7 +729,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    */
   if (restoring) { captureWanted = true; return null; }
   if (capturingHalted()) return null;
-  const { names, engine } = await liveSessions();
+  const { names, engine, startedAt } = await liveSessions();
   /*
    * An empty socket is not "no sessions" — it is far more often tmux not
    * answering yet, or the app racing its own engine at boot. Writing an empty
@@ -735,6 +737,10 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    * concluding nothing is the habit that caused this, so it stops here too.
    */
   if (!names.length) return null;
+  const before = readRestoreState();
+  /* The last photograph, when its pane ids are this server's: a pane that
+     has died since is still in it as it was alive. */
+  const previous = before?.engine === engine ? before : null;
   const sessions: CapturedSession[] = [];
   for (const name of names) {
     if (!validSessionName(name)) continue;
@@ -772,14 +778,30 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
          * now is the question, so ask what is running now.
          */
         /*
-         * A CORPSE IS PHOTOGRAPHED AS A SHELL.
+         * A CORPSE IS PHOTOGRAPHED AS THE CONVERSATION IT HELD, OR AS A SHELL.
          *
          * The engine keeps a pane whose command failed (tmuxconf.ts), and tmux
          * still reports the command it was born with. Replaying that at the
-         * next boot would run the failure again and hand back another corpse;
-         * a shell in the same directory is what the person can use.
+         * next boot would run the failure again and hand back another corpse.
+         * But a Claude that crashed mid-conversation had a conversation, and
+         * a shell in its place after a reboot loses it. There is no process to
+         * ask any more, so the answer comes from what was known while it
+         * lived: the last photograph of this very pane, on this same server
+         * (ids are only ever one server's), which has the id and the flags;
+         * or, for a pane that died before a sweep ever saw it, the hook's
+         * note — only one written since this server started, for the same
+         * reason `noteIsThisAgents` gives. A pane last photographed running
+         * something else is that something else's corpse and comes back as
+         * a shell; so does a Claude that lived less than a sweep in it, which
+         * is the ceiling.
          */
-        if (p.dead) { panes.push({ ...p, startCommand: "" }); continue; }
+        if (p.dead) {
+          const was = previous?.sessions.find((s) => s.name === name)?.windows.find((x) => x.id === w.id)?.panes.find((x) => x.id === p.id);
+          const note = was ? null : paneAgentNote(p.id);
+          const agentSession = was ? was.agentSession : note && note.at >= startedAt - NOTE_SLACK_MS ? note.session_id : undefined;
+          panes.push({ ...p, startCommand: "", ...(agentSession ? { agentSession, ...(was?.agentArgs ? { agentArgs: was.agentArgs } : {}) } : {}) });
+          continue;
+        }
         /*
          * WHAT IS RUNNING NOW is the question, so ask what is running now.
          *
@@ -829,7 +851,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
     }
     if (out.length) sessions.push({ name, windows: out });
   }
-  return writeMerged(sessions, now, deskIsWhole(engine));
+  return writeMerged(sessions, now, deskIsWhole(engine), engine, before);
 }
 
 /**
@@ -839,18 +861,20 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
  * line; together they name a server for its life, and a different pair is a
  * server that died and was started again. That is what `deskIsWhole` asks.
  */
-async function liveSessions(): Promise<{ names: string[]; engine: string }> {
+async function liveSessions(): Promise<{ names: string[]; engine: string; startedAt: number }> {
   const r = await tmux(["list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"]);
-  if (!r.ok) return { names: [], engine: "" }; // no server running yet is the common case, not an error
+  if (!r.ok) return { names: [], engine: "", startedAt: 0 }; // no server running yet is the common case, not an error
   const names: string[] = [];
   let engine = "";
+  let startedAt = 0;
   for (const line of r.stdout.split("\n")) {
     const [name = "", pid = "", started = ""] = line.split("\t");
     if (!name.trim()) continue;
     names.push(name.trim());
     engine ||= `${pid.trim()}.${started.trim()}`;
+    startedAt ||= Number(started.trim()) * 1000 || 0;
   }
-  return { names, engine };
+  return { names, engine, startedAt };
 }
 
 /**

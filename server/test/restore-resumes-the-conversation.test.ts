@@ -23,9 +23,9 @@
  * the process walk sees. The `runArgs` half is pure.
  */
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const SOCKET = `agx-resume-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -50,15 +50,26 @@ const CWD = join(tmpdir(), `agx-resume-cwd-${process.pid}`);
  *  process alive; everything after `--` is what a real CLI would have. */
 const fakeClaude = (...args: string[]) =>
   ["bash", "-c", `exec -a claude /bin/sh -c 'while :; do sleep 1; done' -- "$@"`, "x", ...args];
+/** The same, but it dies with status 1 the moment `stop` exists — a CLI
+ *  that crashed mid-conversation. */
+const fakeCrashingClaude = (stop: string, ...args: string[]) =>
+  ["bash", "-c", `exec -a claude /bin/sh -c 'while [ ! -e ${stop} ]; do sleep 0.2; done; exit 1' -- "$@"`, "x", ...args];
 
 beforeAll(async () => {
   mkdirSync(TMPDIR, { recursive: true });
   mkdirSync(CWD, { recursive: true });
   process.env.TMUX_TMPDIR = TMPDIR;
+  const conf = await import("../src/tmuxconf.ts");
   restore = await import("../src/tmuxrestore.ts");
   pane = await import("../src/tmuxpane.ts");
   wt = await import("../src/panewt.ts");
   db = await import("../src/db.ts");
+  /* The engine's config, so a pane whose command failed is kept as the real
+     engine keeps it (`remain-on-exit failed`). Written by hand: `ensureConf`
+     remembers the content it last wrote, and every test file shares one
+     process. */
+  mkdirSync(dirname(conf.confPath()), { recursive: true });
+  writeFileSync(conf.confPath(), conf.confContent());
 });
 
 afterAll(async () => {
@@ -173,6 +184,65 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got, "the pane is in the picture").not.toBeUndefined();
     const args = got!.agentArgs ?? [];
     expect(args[args.indexOf("--model") + 1], "the value after --model").toBe("opus");
+  }, 20_000);
+
+  test("a Claude that crashed comes back on its conversation, flags and all", async () => {
+    /*
+     * The engine keeps a pane whose command failed, with its status on it;
+     * the photograph of that pane used to be a shell, so after a reboot a
+     * crashed agent's conversation was gone with it. The pane was photographed
+     * alive, on this same engine, moments before: that photograph has the id
+     * and the flags, and is what the dead pane comes back as.
+     */
+    const CRASH = "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d";
+    const stop = join(CWD, "stop-crash");
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "crash", "-c", CWD, ...fakeCrashingClaude(stop, "--model", "opus", "--dangerously-skip-permissions")]);
+    const id = await paneOf("crash");
+    await Bun.sleep(250);
+    expect(wt.notePaneAgent({ pane: id, sessionId: CRASH, transcriptPath: "/tmp/t.jsonl", cwd: CWD })).toBe(true);
+    const alive = await photographed("crash");
+    expect(alive?.agentSession, "photographed alive first").toBe(CRASH);
+    writeFileSync(stop, "");
+    for (let i = 0; i < 40; i++) {
+      const d = await pane.tmux(["display-message", "-p", "-t", `=${S}:crash`, "#{pane_dead}"]);
+      if (d.stdout.trim() === "1") break;
+      await Bun.sleep(100);
+    }
+    const dead = await photographed("crash");
+    expect(dead, "the pane is in the picture").not.toBeUndefined();
+    expect(dead!.dead).toBe(true);
+    expect(dead!.agentSession, "the conversation of the agent that died here").toBe(CRASH);
+    expect(dead!.agentArgs).toContain("--dangerously-skip-permissions");
+    expect(dead!.startCommand, "never the born-with line: that is the failure again").toBe("");
+    expect(restore.runArgs("all", dead, "/opt/agentglass/bin/claude")).toEqual(["/opt/agentglass/bin/claude", ...dead!.agentArgs!, "--resume", CRASH]);
+  }, 20_000);
+
+  test("and one that died before it was ever photographed comes back by its note, without flags", async () => {
+    const EARLY = "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e";
+    const stop = join(CWD, "stop-early");
+    writeFileSync(stop, "");
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "early", "-c", CWD, ...fakeCrashingClaude(stop, "--model", "opus")]);
+    const id = await paneOf("early");
+    expect(wt.notePaneAgent({ pane: id, sessionId: EARLY, transcriptPath: "/tmp/t.jsonl", cwd: CWD })).toBe(true);
+    const got = await photographed("early");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.dead).toBe(true);
+    expect(got!.agentSession).toBe(EARLY);
+    expect(got!.agentArgs).toBeUndefined();
+  }, 20_000);
+
+  test("a dead pane with a note from a previous life of its id is a shell", async () => {
+    const OLD = "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
+    const stop = join(CWD, "stop-old");
+    writeFileSync(stop, "");
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "old", "-c", CWD, ...fakeCrashingClaude(stop, "--model", "opus")]);
+    const id = await paneOf("old");
+    /* Written before this engine existed. */
+    expect(wt.notePaneAgent({ pane: id, sessionId: OLD, transcriptPath: "/tmp/t.jsonl", cwd: CWD, at: Date.now() - 3_600_000 })).toBe(true);
+    const got = await photographed("old");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.dead).toBe(true);
+    expect(got!.agentSession).toBeUndefined();
   }, 20_000);
 
   test("a pane that was itself restored carries its id on its own line", async () => {
