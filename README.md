@@ -183,6 +183,7 @@ Themes, not dates. The living version is the issue tracker; the
 label is where to start.
 
 **Now**
+- Lead with a verdict: a one-line strip of what's running, what's stuck and what needs you; the Lantern already covers the rest — [#42](https://github.com/SirAllap/agentglass/issues/42)
 - Signing and notarization for the macOS build, so Gatekeeper stops calling it damaged
 - Warn when parallel agents collide on shared runtime the diff cannot see — [#118](https://github.com/SirAllap/agentglass/issues/118)
 - Say when two live sessions share one working tree, instead of attributing the changes to whichever asked last — [#117](https://github.com/SirAllap/agentglass/issues/117)
@@ -197,6 +198,7 @@ label is where to start.
 - Review a local diff in place and send the whole review as one prompt — [#294](https://github.com/SirAllap/agentglass/issues/294)
 - An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
 - A decision log mined from transcripts — [#13](https://github.com/SirAllap/agentglass/issues/13)
+- Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
 
 Shipped so far, newest first: [**CHANGELOG.md**](CHANGELOG.md) and the
 [releases](https://github.com/SirAllap/agentglass/releases).

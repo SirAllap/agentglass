@@ -8,9 +8,9 @@ carries its own notes, the desktop installers and the phone's `.apk`.
 
 The [Roadmap in the README](README.md#-roadmap), and the discussion behind it in
 [#172](https://github.com/SirAllap/agentglass/issues/172). It used to be copied
-here as well, and the copy fell behind: it still led with a verdict the Lantern
-had already shipped and never gained the items added to the README since. One
-list, kept in one place.
+here as well, and the two fell apart: the copy never gained the items added to
+the README, and the README never carried two open ones from the copy. One list,
+kept in one place.
 
 ## Released
 
