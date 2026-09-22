@@ -98,6 +98,11 @@ const keepIfSame = <T,>(set: (v: T) => void) => {
   };
 };
 
+/** How long a first run's views wait for the server to say whether a project
+ *  is open before they come in anyway. Answered in well under a second when
+ *  the server is up; a desktop window can open before its server is. */
+const PICK_WAIT_MS = 3000;
+
 export default function App() {
   const [windowMs, setWindowMs] = useState(3_600_000);
   const [filter, setFilter] = useState({ app: "", type: "", provider: "" });
@@ -366,6 +371,15 @@ export default function App() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let wait = 300;
     /*
+     * The views wait for this answer on a first run (see awaitingPick), and
+     * only a rejected request used to release them: one that hung left the
+     * app blank, a scoped instance included, whose answer would have been "go
+     * ahead". After PICK_WAIT_MS they come in anyway, and a late "nothing is
+     * open" still opens the picker without taking them away again.
+     */
+    let gaveUp = false;
+    const release = setTimeout(() => { if (!live) return; gaveUp = true; setAwaitingPick(false); }, PICK_WAIT_MS);
+    /*
      * Keep asking until the server answers.
      *
      * One attempt was not enough and the failure was silent: the desktop shell
@@ -384,6 +398,7 @@ export default function App() {
     const ask = () => {
       api.projects().then((p) => {
         if (!live) return;
+        clearTimeout(release);
         setWorkspace(p.workspace);
         setWorkspaces(p.workspaces ?? (p.workspace ? [p.workspace] : []));
         // The app filter is hidden while a project is open (the scope already
@@ -393,17 +408,18 @@ export default function App() {
         if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
         let answered = false;
         try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
-        if (!p.workspace && !answered) { setProjectOpen(true); setAwaitingPick(true); }
+        if (!p.workspace && !answered) { setProjectOpen(true); if (!gaveUp) setAwaitingPick(true); }
         else setAwaitingPick(false);
       }).catch(() => {
         if (!live) return;
+        gaveUp = true;
         setAwaitingPick(false);
         timer = setTimeout(ask, wait);
         wait = Math.min(wait * 2, 5000);
       });
     };
     ask();
-    return () => { live = false; if (timer) clearTimeout(timer); };
+    return () => { live = false; clearTimeout(release); if (timer) clearTimeout(timer); };
   }, []);
 
   // Poll on an interval — NOT on every event. Passing lastEvent.id as `bump`

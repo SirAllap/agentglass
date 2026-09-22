@@ -149,10 +149,18 @@ describe("the first run waits for an answer", () => {
     expect(APP).toMatch(/useState\(\(\) => \{\s*try \{ return localStorage\.getItem\(PICKER_ANSWERED_KEY\) !== "1"; \}/);
   });
   test("only an unscoped, never-answered instance keeps waiting", () => {
-    expect(APP).toMatch(/if \(!p\.workspace && !answered\) \{ setProjectOpen\(true\); setAwaitingPick\(true\); \}\s*else setAwaitingPick\(false\);/);
+    expect(APP).toMatch(/if \(!p\.workspace && !answered\) \{ setProjectOpen\(true\); if \(!gaveUp\) setAwaitingPick\(true\); \}\s*else setAwaitingPick\(false\);/);
+  });
+  test("a server that answers slowly lets the views in, and a late answer does not take them away", () => {
+    // Only a rejected request released the views, so one that hung left the
+    // app blank — a scoped desktop instance included, whose answer would have
+    // been "a project is open, go ahead".
+    expect(APP).toMatch(/const release = setTimeout\(\(\) => \{ if \(!live\) return; gaveUp = true; setAwaitingPick\(false\); \}, PICK_WAIT_MS\);/);
+    expect(APP).toMatch(/api\.projects\(\)\.then\(\(p\) => \{\s*if \(!live\) return;\s*clearTimeout\(release\);/);
+    expect(APP).toContain("return () => { live = false; clearTimeout(release); if (timer) clearTimeout(timer); };");
   });
   test("a server that does not answer lets the views in rather than leave them out", () => {
-    expect(APP).toMatch(/\.catch\(\(\) => \{\s*if \(!live\) return;\s*setAwaitingPick\(false\);/);
+    expect(APP).toMatch(/\.catch\(\(\) => \{\s*if \(!live\) return;\s*gaveUp = true;\s*setAwaitingPick\(false\);/);
   });
   test("closing the picker, either way, lets the views in", () => {
     expect(APP).toMatch(/<ProjectPicker [^>]*onClose=\{\(\) => \{ setProjectOpen\(false\); setAwaitingPick\(false\); \}\}/);
