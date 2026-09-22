@@ -201,7 +201,7 @@ export function submitGate(
   const { source_app, session_id, tool_name, summary } = req;
   // Persist before holding the connection: if the process dies a millisecond
   // later, the request still exists somewhere a restart can find it.
-  recordGate({ id, source_app, session_id, tool_name, summary, created, expires });
+  recordGate({ id, source_app, session_id, tool_name, summary, created, expires, fail_closed: failClosed, note: budget });
   // Resolved once, here, so the dashboard and the phone say the same thing
   // about the same request rather than each composing its own name — and so the
   // pane lookup behind them is one query rather than one per surface.
@@ -402,8 +402,11 @@ export function restoreGates(): { restored: number; expired: number } {
   const now = Date.now();
   let restored = 0, expired = 0;
   for (const row of undecidedGates()) {
+    // Held closed when it was taken, held closed now: the row carries it,
+    // because the timer that did is gone with the process.
+    const failClosed = row.fail_closed ? true : undefined;
     if (row.expires <= now) {
-      const out = timeoutOutcome();
+      const out = timeoutOutcome(failClosed);
       // out.reason verbatim — never backfilled. timeoutOutcome() leaves the
       // reason EMPTY on a fail-open allow on purpose, so the re-attaching hook
       // falls through to Claude Code's own permission prompt; a non-empty reason
@@ -422,7 +425,8 @@ export function restoreGates(): { restored: number; expired: number } {
       summary: row.summary,
       created: row.created,
       expires: row.expires,
-      timer: arm(row.id, row.expires),
+      budget: row.note ?? undefined,
+      timer: arm(row.id, row.expires, failClosed),
     });
     restored++;
   }

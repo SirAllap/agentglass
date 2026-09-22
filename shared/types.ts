@@ -759,6 +759,11 @@ export interface GateRecord extends PendingGate {
    *  a restart. Also NULL on rows written before the column existed, which is
    *  why an absent value is never read as "this machine". */
   decided_by: string | null;
+  /** 1 when it was denied on timeout whatever the machine's policy — an
+   *  outward action. Absent on rows from before the column existed. */
+  fail_closed?: number;
+  /** The hold's own line, when it had one. */
+  note?: string | null;
 }
 
 /**
