@@ -70,7 +70,25 @@ const MODES = [
 ] as const;
 type Mode = (typeof MODES)[number]["key"];
 
-export function SearchModal({ open, onClose, onSelectApp }: { open: boolean; onClose: () => void; onSelectApp?: (app: string) => void }) {
+/**
+ * The fleet search's empty state, computed rather than written down.
+ *
+ * It used to promise "every event ever captured — 12k+ prompts, commands and
+ * outputs": a count that was a literal, a lifetime the retention sweep takes
+ * away (the full-text rows are pruned with the events), and tool outputs that
+ * were never indexed — ftsText() in server/src/db.ts holds the command, path,
+ * prompt, message, the agent's closing reply and the error. `retentionDays`
+ * is the server's AGENTGLASS_RETENTION_DAYS; undefined means /stats has not
+ * answered yet, and then no window is claimed at all.
+ */
+export function fleetSearchIntro(retentionDays: number | undefined): string {
+  if (retentionDays === undefined) return "Search prompts, commands, replies and errors.";
+  if (retentionDays <= 0) return "Search every prompt, command, reply and error on record.";
+  const span = retentionDays === 1 ? "day" : `${retentionDays} days`;
+  return `Search prompts, commands, replies and errors from the last ${span} — older events are pruned.`;
+}
+
+export function SearchModal({ open, onClose, onSelectApp, retentionDays }: { open: boolean; onClose: () => void; onSelectApp?: (app: string) => void; retentionDays?: number }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<Mode>("fleet");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -146,7 +164,7 @@ export function SearchModal({ open, onClose, onSelectApp }: { open: boolean; onC
                   <span className="t-dim2 flex"><SearchIcon size={ICON.sm} /></span>
                   <input
                     autoFocus value={q} onChange={(e) => setQ(e.target.value)}
-                    placeholder={mode === "fleet" ? "Search everything — prompts, commands, outputs, errors…" : mode === "commits" ? "Commit messages… (or a sha prefix)" : mode === "working tree" ? "Grep the working tree…" : "Which commits introduced or removed this string…"}
+                    placeholder={mode === "fleet" ? "Search prompts, commands, replies, errors…" : mode === "commits" ? "Commit messages… (or a sha prefix)" : mode === "working tree" ? "Grep the working tree…" : "Which commits introduced or removed this string…"}
                     className="flex-1 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }}
                   />
                   {mode !== "fleet" && (
@@ -173,7 +191,7 @@ export function SearchModal({ open, onClose, onSelectApp }: { open: boolean; onC
                   {gErr && <div className="t-dim2 text-center py-10 text-[12px]" style={{ color: "var(--error)" }}>{gErr}</div>}
                   {mode === "fleet" && (
                     <>
-                      {hits === null && <div className="t-dim2 text-center py-14 text-[12px]">Search every event ever captured — 12k+ prompts, commands and outputs.</div>}
+                      {hits === null && <div className="t-dim2 text-center py-14 text-[12px]">{fleetSearchIntro(retentionDays)}</div>}
                       {hits && hits.length === 0 && !loading && <div className="t-dim2 text-center py-14 text-[12px]">Nothing matches “{q}”</div>}
                       {hits && hits.map((h) => {
                         const f = friendly({ hook_event_type: h.hook_event_type } as any);
