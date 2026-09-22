@@ -297,3 +297,12 @@ test("the store: a failure before any good read is no answer, after one it is th
   }
   expect(lanternKnown()).toBe(false);
 });
+
+test("the Lantern view's \"needs you\" group is the same rule the strip counts by", () => {
+  // A clause that opens the view has to find there the rows it counted.
+  const view = code(viewSrc);
+  const line = view.slice(view.indexOf("const need = rows"));
+  expect(line.slice(0, line.indexOf("\n"))).toContain('attention(r) === "blocked"');
+});
+
+const viewSrc = await src("../src/components/LanternView.tsx");

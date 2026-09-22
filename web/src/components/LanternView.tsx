@@ -12,6 +12,7 @@ import { handOff } from "../lib/lanternAsk.ts";
 import { api } from "../lib/api.ts";
 import { ClockIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { attention } from "../../../shared/fieldRules.ts";
 
 /**
  * THE LANTERN. Who needs you, what every agent is working on, and the way there.
@@ -404,7 +405,7 @@ export function LanternView({ active }: { active: boolean }) {
      for whatever you say next — amber, its own group, not a number on the
      rail: every session that ever answers you would otherwise be red until
      you typed again. */
-  const need = rows?.filter((r) => r.needsYou && r.needsYou.kind !== "input") ?? [];
+  const need = rows?.filter((r) => attention(r) === "blocked") ?? [];
   const finished = rows?.filter((r) => r.needsYou?.kind === "input") ?? [];
   const working = rows?.filter((r) => !r.needsYou && r.state === "working") ?? [];
   const idle = rows?.filter((r) => !r.needsYou && r.state === "idle") ?? [];
