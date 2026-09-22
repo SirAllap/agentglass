@@ -11,7 +11,7 @@
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startBrowserStub, runCli } from "./fixtures/browser-stub.ts";
@@ -102,6 +102,54 @@ test.skipIf(!HAVE_PY)("a domain with no cookies says so and fails, without touch
   expect(r.code).toBe(1);
   expect(r.stderr).toContain("no live cookies for nothing.example");
   expect(stub.calls.filter((c) => c.op === "cookies")).toHaveLength(0);
+});
+
+/** A profile with NextGen localStorage for one origin: a plain key, a UTF-16
+ *  key, and a snappy-compressed one (compression_type 1) that must be skipped
+ *  rather than written as garbage. */
+function withLocalStorage(dir: string, originDir: string): void {
+  const lsDir = join(dir, "storage", "default", originDir, "ls");
+  mkdirSync(lsDir, { recursive: true });
+  const db = new Database(join(lsDir, "data.sqlite"));
+  db.run(`CREATE TABLE data (key TEXT PRIMARY KEY, utf16_length INTEGER, conversion_type INTEGER,
+    compression_type INTEGER, last_access_time INTEGER, value BLOB)`);
+  db.run("INSERT INTO data (key, conversion_type, compression_type, value) VALUES (?, 1, 0, ?)", ["orbit_device_key", "dev-not-printed"]);
+  db.run("INSERT INTO data (key, conversion_type, compression_type, value) VALUES (?, 0, 0, ?)",
+    ["greeting", Buffer.from("hola", "utf-16le")]);
+  db.run("INSERT INTO data (key, conversion_type, compression_type, value) VALUES (?, 1, 1, ?)", ["big", Buffer.from([0x01, 0x02, 0x03])]);
+  db.close();
+}
+
+test.skipIf(!HAVE_PY)("localStorage for the origin the tab is on is written; a compressed value is skipped, another origin is deferred", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agx-ffls-"));
+  fakeProfile(dir);
+  withLocalStorage(dir, "https+++www.orbit.example");
+  withLocalStorage(dir, "https+++app.orbit.example");
+  const writes: string[] = [];
+  const s = startBrowserStub((op, body) => {
+    if (op === "eval") {
+      const js = String(body.js ?? "");
+      if (js === "location.origin") return { ok: true, value: { value: "https://www.orbit.example" } };
+      writes.push(js);
+      return { ok: true, value: { value: true } };
+    }
+    return { ok: true, value: {} };
+  });
+  try {
+    const r = await runCli(s.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", dir, "--domain", "orbit.example"]);
+    expect(r.code, r.stderr).toBe(0);
+    // The origin the tab is on: its keys written, the compressed one left out.
+    const wrote = writes.join("\n");
+    expect(wrote).toContain("orbit_device_key");
+    expect(wrote).toContain("hola");
+    expect(wrote).not.toContain("big");
+    expect(r.stdout).toContain("localStorage keys");
+    expect(r.stdout).toContain("compressed localStorage skipped");
+    // The other origin cannot be written from this tab, and is named for a second pass.
+    expect(r.stderr).toContain("https://app.orbit.example");
+    // A value never printed.
+    expect(r.stdout + r.stderr).not.toContain("dev-not-printed");
+  } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test.skipIf(!HAVE_PY)("an unknown source is refused by name", async () => {
