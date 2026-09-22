@@ -750,6 +750,10 @@ def summarize(cmd, value):
         fields = value.get("fields") or {}
         found = sum(1 for v in fields.values() if v is not None)
         return f"{found}/{len(fields)} fields" + (f", no match: {', '.join(value['notFound'])}" if value.get("notFound") else "")
+    if cmd == "screencast":
+        if "frames" in value:
+            return f"{value.get('count', 0)} frames" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
+        return value.get("screencast", "")
     if cmd == "scrape":
         pages = value.get("pages") or []
         return f"{len(pages) - int(value.get('failed') or 0)}/{len(pages)} pages read" + (f", {value['failed']} failed" if value.get("failed") else "")
@@ -1110,6 +1114,55 @@ STORAGE_READ_JS = (
     "const ss = {}; for (const k of Object.keys(sessionStorage)) ss[k] = sessionStorage.getItem(k); "
     "return { origin: location.origin, localStorage: ls, sessionStorage: ss }; })()"
 )
+
+
+def _write_frames(out_dir, frames, start_index):
+    """Frames to files, numbered on from `start_index`, and the paths back."""
+    import base64
+    os.makedirs(out_dir, exist_ok=True)
+    paths = []
+    for i, fr in enumerate(frames):
+        data = str(fr.get("jpeg") or "")
+        raw = base64.b64decode(data.split(",", 1)[1]) if "," in data else b""
+        path = os.path.join(out_dir, f"frame-{start_index + i:04d}.jpg")
+        with open(path, "wb") as f:
+            f.write(raw)
+        paths.append(path)
+    return paths
+
+
+def screencast_watch(a, page=""):
+    """start, poll, stop: `--seconds` of the page as it moves, to `--out` as
+    jpeg files (or a count to stdout without --out — the frames themselves are
+    pictures, and pictures on stdout are not something a caller can use).
+    `page` is the caller's resolved tab, from `addressed`."""
+    started = call("screencast", stamped(a, _at(page, {"action": "start", "quality": a.quality, "maxWidth": a.maxWidth,
+                                                        "maxHeight": a.maxHeight, "everyNth": a.everyNth})))
+    if not started.get("ok"):
+        print(started.get("error") or "could not start the screencast", file=sys.stderr)
+        return 1
+    deadline = time.time() + max(0.2, float(a.seconds))
+    total = dropped = 0
+    paths = []
+    try:
+        while True:
+            time.sleep(0.25)
+            r = call("screencast", stamped(a, _at(page, {"action": "frames"})))
+            v = r.get("value") or {}
+            frames = v.get("frames") or []
+            dropped += int(v.get("dropped") or 0)
+            if a.out and frames:
+                paths.extend(_write_frames(a.out, frames, total))
+            total += len(frames)
+            if time.time() >= deadline:
+                break
+    finally:
+        call("screencast", stamped(a, _at(page, {"action": "stop"})))
+    if a.out:
+        print(json.dumps({"frames": total, "dropped": dropped, "dir": a.out, "paths": paths}))
+    else:
+        print(json.dumps({"frames": total, "dropped": dropped, "note": "pass --out DIR to keep them"}))
+    return 0
 
 
 def session_save(path, page="", a=None):
@@ -1661,6 +1714,19 @@ def main():
     p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
     p.add_argument("path", nargs="?", help="path to save the trace to (required for stop)")
     p = sub.add_parser(
+        "screencast",
+        help="the page as it MOVES, from Chromium's compositor — frames whenever it repaints, not on a timer",
+        description="start, then poll `frames` (the shell keeps the newest 30, acked as they land), then stop. "
+                    "Or `watch --seconds N --out DIR` for all three in one go, frames written as jpeg files.",
+    )
+    p.add_argument("action", nargs="?", choices=["start", "frames", "stop", "watch"], default="start")
+    p.add_argument("--quality", type=int, default=60, help="jpeg quality 1-100 (default 60)")
+    p.add_argument("--max-width", dest="maxWidth", type=int, default=1024)
+    p.add_argument("--max-height", dest="maxHeight", type=int, default=768)
+    p.add_argument("--every-nth", dest="everyNth", type=int, default=1, help="keep one frame in N (default 1)")
+    p.add_argument("--seconds", type=float, default=5.0, help="for watch: how long (default 5)")
+    p.add_argument("--out", help="a directory: frames are written there as frame-NNNN.jpg instead of printed")
+    p = sub.add_parser(
         "scrape",
         help="several pages, one read each, in parallel — each in a tab of its own, closed again after",
         description="Every URL is opened in a new tab in your container, read with --read, and the tab is "
@@ -1933,6 +1999,18 @@ def main():
         body = {"selector": a.selector}
     elif a.cmd == "coverage":
         body = {"action": a.action}
+    elif a.cmd == "screencast":
+        if a.action == "watch":
+            # Addressed like everything else, before a byte goes out: a watch
+            # is three verbs on one tab, and that tab is the caller's.
+            page, refusal = addressed(a, "screencast")
+            if refusal:
+                print(refusal, file=sys.stderr)
+                return 1
+            return screencast_watch(a, page)
+        body = {"action": a.action}
+        if a.action == "start":
+            body.update({"quality": a.quality, "maxWidth": a.maxWidth, "maxHeight": a.maxHeight, "everyNth": a.everyNth})
     elif a.cmd == "inspect":
         body = {"action": a.action}
         if a.action == "panel":

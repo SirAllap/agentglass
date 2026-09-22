@@ -914,6 +914,44 @@ describe("the DevTools verbs built on the protocol", () => {
     expect(v.css).toEqual({ rules: 2, used: 1 });
   });
 
+  /*
+   * The live screencast: Chromium's compositor pushes frames through
+   * `Page.screencastFrame` at its own rate, the shell acks each one and keeps
+   * a bounded ring, and the verb drains it. Three actions, and the drain is a
+   * pseudo-method the shell answers from the ring rather than a CDP call —
+   * the same shape `Fetch.agxSetRules` already uses.
+   */
+  test("screencast starts with bounded frames, drains the shell's ring, and stops", async () => {
+    const f = fakeCdp({
+      "Page.agxScreencastFrames": { frames: [
+        { at: 1, sessionId: 7, data: "/9j/AAA=", metadata: { deviceWidth: 800, deviceHeight: 600, timestamp: 1.5 } },
+        { at: 2, sessionId: 7, data: "/9j/BBB=", metadata: { deviceWidth: 800, deviceHeight: 600, timestamp: 1.6 } },
+      ], dropped: 3 },
+    });
+    const start = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "start", quality: 40, maxWidth: 640, maxHeight: 480, everyNth: 2 }),
+      undefined, undefined, undefined, f.cdp);
+    expect(start.ok, JSON.stringify(start)).toBe(true);
+    const began = f.sent.find((s) => s.method === "Page.startScreencast")!;
+    expect(began.params).toEqual({ format: "jpeg", quality: 40, maxWidth: 640, maxHeight: 480, everyNthFrame: 2 });
+
+    const frames = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "frames" }), undefined, undefined, undefined, f.cdp);
+    expect(frames.ok).toBe(true);
+    const v = frames.value as { frames: { at: number; jpeg: string; width: number; height: number; timestamp: number }[]; dropped: number; count: number };
+    expect(v.count).toBe(2);
+    expect(v.dropped).toBe(3);
+    expect(v.frames[1]).toEqual({ at: 2, jpeg: "data:image/jpeg;base64,/9j/BBB=", width: 800, height: 600, timestamp: 1.6 });
+
+    const stop = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "stop" }), undefined, undefined, undefined, f.cdp);
+    expect(stop.ok).toBe(true);
+    expect(f.sent.map((s) => s.method)).toContain("Page.stopScreencast");
+  });
+
+  test("a screencast with no shell behind it says so instead of answering frames", async () => {
+    const r = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "frames" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("DevTools protocol");
+  });
+
   test("starting coverage records both languages, or it answers half the question", async () => {
     const f = fakeCdp();
     await runBrowserAsk(fakeGuest(), ask("coverage", { action: "start" }),

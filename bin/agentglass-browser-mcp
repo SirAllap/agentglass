@@ -1096,6 +1096,27 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_screencast",
+        "description": (
+            "The page as it MOVES, from Chromium's compositor: frames arrive whenever the page repaints, "
+            "not on a timer, so the frame between two screenshots is here. action=start (jpeg, size and "
+            "every-Nth caps), then action=frames to drain what arrived since — the shell keeps the newest 30, "
+            "acked as they land — then action=stop. `frames` answers with the LAST frame as an image and the "
+            "count, because thirty pictures in your context is thirty pictures you pay for every turn; the "
+            "CLI's `screencast watch --out DIR` is the way to keep them all."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["start", "frames", "stop"]},
+                "quality": {"type": "number", "description": "jpeg quality 1-100 (default 60)."},
+                "maxWidth": {"type": "number", "description": "100-4096 (default 1024)."},
+                "maxHeight": {"type": "number", "description": "100-4096 (default 768)."},
+                "everyNth": {"type": "number", "description": "Keep one frame in N, 1-60 (default 1)."},
+            },
+        },
+    },
+    {
         "name": "browser_scrape",
         "description": (
             "SEVERAL PAGES, one read each, in parallel: every URL is opened in a new tab in your container, "
@@ -1926,6 +1947,18 @@ def run(name, args, raw=False):
         return {"content": [
             {"type": "image", "data": data, "mimeType": "image/png"},
             {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"},
+        ]}
+    if verb == "screencast" and isinstance(value.get("frames"), list):
+        frames = value["frames"]
+        last = frames[-1] if frames else None
+        text = f"{value.get('count', 0)} frames since the last drain" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
+        if not last:
+            return {"content": [{"type": "text", "text": text}]}
+        jpeg = str(last.get("jpeg") or "")
+        data = jpeg.split(",", 1)[1] if "," in jpeg else ""
+        return {"content": [
+            {"type": "image", "data": data, "mimeType": "image/jpeg"},
+            {"type": "text", "text": f"{text}; this is the last one ({last.get('width')}x{last.get('height')})"},
         ]}
     if verb in ("read", "text"):
         # Plain text, because the caller is a language model reading a page:

@@ -66,7 +66,7 @@ import { diskAllows, diskEnabled } from "./disk.ts";
  */
 export type BrowserOp =
   | "open" | "read" | "markdown" | "extract" | "links" | "count" | "search"
-  | "interactive" | "forms" | "attr"
+  | "interactive" | "forms" | "attr" | "screencast"
   | "click" | "type" | "wait" | "shot"
   | "back" | "forward" | "scroll" | "press" | "text"
   | "tabs" | "tab" | "newtab" | "closetab"
@@ -85,7 +85,7 @@ export type BrowserOp =
  *  `browser-cli.test.ts`. Seven §3 verbs once shipped reachable by neither. */
 export const BROWSER_OPS: readonly BrowserOp[] = [
   "open", "read", "markdown", "extract", "links", "count", "search",
-  "interactive", "forms", "attr",
+  "interactive", "forms", "attr", "screencast",
   "click", "type", "wait", "shot",
   "back", "forward", "scroll", "press", "text",
   "tabs", "tab", "newtab", "closetab",
@@ -188,7 +188,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   /* A CDP command is usually instant, but `HeapProfiler.takeHeapSnapshot` and
      a profiler stop on a real page are not — this is the one verb whose upper
      bound is set by the slowest thing in the protocol, not the typical one. */
-  cdp: 60_000, listeners: 15_000, coverage: 30_000,
+  cdp: 60_000, listeners: 15_000, coverage: 30_000, screencast: 20_000,
   /* A question the panel answers from memory. `whoami` is the same question
      with the caller's own identity folded in, and one extra `tabs` behind it. */
   profiles: 5_000, whoami: 5_000,
@@ -643,7 +643,7 @@ function readonlyMode(): boolean {
  *  quietly falling on the safe-to-run side because nobody classified it. */
 const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
   "read", "markdown", "extract", "links", "count", "search",
-  "interactive", "forms", "attr",
+  "interactive", "forms", "attr", "screencast",
   "shot", "text", "html", "console", "network", "observe",
   "tabs", "frames", "health", "waitfor", "wait",
   /* `listeners` and a coverage READ only look. `cdp` is deliberately NOT
@@ -2128,6 +2128,28 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         return { error: 'coverage takes action: "start" or "stop"' };
       }
       args.action = action;
+      break;
+    }
+    case "screencast": {
+      const action = b.action === undefined ? "start" : b.action;
+      if (action !== "start" && action !== "frames" && action !== "stop") {
+        return { error: 'screencast takes action: "start", "frames" or "stop"' };
+      }
+      args.action = action;
+      /* The caps are the point: a screencast is the one verb that can fill
+         the shell with pictures on its own, and each frame is a picture an
+         agent pays for. Small by default, bounded always. */
+      const num = (key: string, lo: number, hi: number, dflt: number): number | { error: string } => {
+        if (b[key] === undefined) return dflt;
+        const n = Number(b[key]);
+        if (!Number.isInteger(n) || n < lo || n > hi) return { error: `${key} must be a whole number from ${lo} to ${hi}` };
+        return n;
+      };
+      for (const [key, lo, hi, dflt] of [["quality", 1, 100, 60], ["maxWidth", 100, 4096, 1024], ["maxHeight", 100, 4096, 768], ["everyNth", 1, 60, 1]] as const) {
+        const v = num(key, lo, hi, dflt);
+        if (typeof v !== "number") return v;
+        args[key] = v;
+      }
       break;
     }
     case "inspect": {

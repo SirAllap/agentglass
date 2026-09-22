@@ -525,6 +525,23 @@ describe("§16 — origins, read-only, audit, redaction", () => {
       }
     });
 
+    test("screencast takes three actions and keeps its pictures bounded", () => {
+      expect("error" in parseAsk("screencast", { action: "pause" })).toBe(true);
+      expect("error" in parseAsk("screencast", { action: "start", quality: 0 })).toBe(true);
+      expect("error" in parseAsk("screencast", { action: "start", maxWidth: 5000 })).toBe(true);
+      expect("error" in parseAsk("screencast", { action: "start", everyNth: 1.5 })).toBe(true);
+      const start = parseAsk("screencast", {});
+      if (!("ask" in start)) throw new Error("unreachable");
+      expect(start.ask.args).toMatchObject({ action: "start", quality: 60, maxWidth: 1024, maxHeight: 768, everyNth: 1 });
+      const frames = parseAsk("screencast", { action: "frames" });
+      if (!("ask" in frames)) throw new Error("unreachable");
+      expect(frames.ask.args.action).toBe("frames");
+      // Observing: it changes nothing on the page, so read-only mode admits it.
+      process.env.AGENTGLASS_BROWSER_READONLY = "1";
+      try { expect("ask" in parseAsk("screencast", { action: "stop" })).toBe(true); }
+      finally { delete process.env.AGENTGLASS_BROWSER_READONLY; }
+    });
+
     test("attr takes a selector and up to twenty attribute names, and refuses what is not a name", () => {
       expect("error" in parseAsk("attr", {})).toBe(true);
       expect("error" in parseAsk("attr", { selector: "a", names: "href" })).toBe(true);

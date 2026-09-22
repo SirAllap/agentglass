@@ -1089,7 +1089,7 @@ export interface BrowserAskFrame {
    *  compiler notices when it drifts: the server assigns one to the other. */
   op:
     | "open" | "read" | "markdown" | "extract" | "links" | "count" | "search"
-    | "interactive" | "forms" | "attr"
+    | "interactive" | "forms" | "attr" | "screencast"
     | "click" | "type" | "wait" | "shot"
     | "back" | "forward" | "scroll" | "press" | "text"
     /* The tab verbs. The panel has had tabs since it had a panel; these are

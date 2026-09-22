@@ -62,7 +62,7 @@ tabs        tabs · tab · newtab · closetab · profiles
 containers  whoami · profiles (--make/--drop) · newtab --profile · lanes
 identity    cookies · storage · session save/load (MCP: storage_state) · permission · permissions · clipboard
 run code    eval · eval --file · addInitScript · expose · exposed
-inspect     cdp · debug · listeners · coverage · trace
+inspect     cdp · debug · listeners · coverage · trace · screencast (start · frames · stop · watch --out DIR)
 devtools    inspect open|close · inspect panel <id> · inspect zoom <n> · inspect shot
 network     fake · intercept · throttle · headers · har
 pretend     emulate · resize · clock · settings

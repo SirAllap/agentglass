@@ -1834,6 +1834,16 @@ function registerIpc(win) {
   /** @type {Map<Electron.WebContents, Array<{at: number, method: string, params: unknown}>>} */
   const guestCdpEvents = new Map();
   const CDP_EVENT_CAP = 500;
+  /**
+   * Screencast frames, kept apart from the events above and for two reasons:
+   * a frame is a picture — thirty of them would push every debugger pause
+   * out of a 500-slot buffer — and a frame has to be ACKED the moment it
+   * lands, or Chromium sends no more. So the listener answers each one with
+   * `Page.screencastFrameAck` itself and keeps the newest thirty here, and
+   * `Page.agxScreencastFrames` hands the ring over and empties it.
+   * @type {Map<Electron.WebContents, { frames: Array<{at: number, sessionId: number, data: string, metadata: unknown}>, dropped: number }>} */
+  const guestScreencast = new Map();
+  const SCREENCAST_CAP = 30;
 
   /*
    * WHERE A DOWNLOAD IS MEANT TO LAND, per guest.
@@ -2035,6 +2045,11 @@ function registerIpc(win) {
      * turns the domain on when there is something to match and off when there
      * is not.
      */
+    if (method === "Page.agxScreencastFrames") {
+      const ring = guestScreencast.get(guest) || { frames: [], dropped: 0 };
+      guestScreencast.set(guest, { frames: [], dropped: 0 });
+      return { ok: true, result: { frames: ring.frames, dropped: ring.dropped } };
+    }
     if (method === "Fetch.agxSetRules") {
       const rules = Array.isArray(req?.params?.rules) ? req.params.rules : [];
       if (!rules.length) {
@@ -2121,6 +2136,15 @@ function registerIpc(win) {
              before the buffer, because a rule that matches nothing still has
              to let the request through. */
           if (m === "Fetch.requestPaused") answerPaused(guest, params);
+          if (m === "Page.screencastFrame") {
+            const p = /** @type {{ sessionId?: number, data?: string, metadata?: unknown }} */ (params || {});
+            guest.debugger.sendCommand("Page.screencastFrameAck", { sessionId: p.sessionId }).catch(() => { /* the cast just stopped */ });
+            const ring = guestScreencast.get(guest) || { frames: [], dropped: 0 };
+            ring.frames.push({ at: Date.now(), sessionId: Number(p.sessionId), data: String(p.data || ""), metadata: p.metadata });
+            if (ring.frames.length > SCREENCAST_CAP) { ring.dropped += ring.frames.length - SCREENCAST_CAP; ring.frames.splice(0, ring.frames.length - SCREENCAST_CAP); }
+            guestScreencast.set(guest, ring);
+            return;
+          }
           const buf = guestCdpEvents.get(guest);
           if (!buf) return;
           buf.push({ at: Date.now(), method: m, params });
@@ -2131,6 +2155,7 @@ function registerIpc(win) {
         guest.debugger.on("detach", () => {
           guestOwnsDebugger.delete(guest);
           guestCdpEvents.delete(guest);
+          guestScreencast.delete(guest);
         });
       }
       /*

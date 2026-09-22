@@ -2908,6 +2908,51 @@ async function runVerb(
           : { ok: false, error: got.error || "could not read the listeners" };
       }
 
+      case "screencast": {
+        /*
+         * The page as it moves, from Chromium's own compositor: `record` is
+         * N screenshots at an interval, and the thing it cannot see is the
+         * frame between two of them. `Page.startScreencast` pushes a frame
+         * whenever the page repaints; the shell acks each one the moment it
+         * lands (a frame nobody acks is the last frame Chromium sends) and
+         * keeps the newest thirty in a ring, and `frames` drains the ring —
+         * so the caller polls at its own pace and never holds a connection.
+         * Bounded on purpose: jpeg, a size cap, every Nth frame, so a busy
+         * page cannot fill the shell with pictures.
+         */
+        const which = String(ask.args.action ?? "start");
+        if (which === "start") {
+          const a = await cdp("Page.startScreencast", {
+            format: "jpeg",
+            quality: Number(ask.args.quality ?? 60),
+            maxWidth: Number(ask.args.maxWidth ?? 1024),
+            maxHeight: Number(ask.args.maxHeight ?? 768),
+            everyNthFrame: Number(ask.args.everyNth ?? 1),
+          });
+          if (!a.ok) return { ok: false, error: a.error || "could not start the screencast" };
+          return { ok: true, value: { screencast: "recording", url: el.getURL() } };
+        }
+        if (which === "stop") {
+          const drained = await cdp("Page.agxScreencastFrames", {}) as { ok: boolean; result?: { frames?: unknown[]; dropped?: number } };
+          const a = await cdp("Page.stopScreencast", {});
+          if (!a.ok) return { ok: false, error: a.error || "could not stop the screencast" };
+          return { ok: true, value: { screencast: "stopped", left: drained.ok ? (drained.result?.frames?.length ?? 0) : 0 } };
+        }
+        const r = await cdp("Page.agxScreencastFrames", {}) as {
+          ok: boolean; error?: string;
+          result?: { frames?: Array<{ at: number; data: string; metadata?: { deviceWidth?: number; deviceHeight?: number; timestamp?: number } }>; dropped?: number };
+        };
+        if (!r.ok) return { ok: false, error: r.error || "could not read the screencast" };
+        const frames = (r.result?.frames ?? []).map((f) => ({
+          at: f.at,
+          jpeg: `data:image/jpeg;base64,${f.data}`,
+          width: f.metadata?.deviceWidth ?? 0,
+          height: f.metadata?.deviceHeight ?? 0,
+          timestamp: f.metadata?.timestamp ?? 0,
+        }));
+        return { ok: true, value: { count: frames.length, dropped: r.result?.dropped ?? 0, frames } };
+      }
+
       case "coverage": {
         /*
          * "Did my change even load" — §5, and the row in §18 that says this
