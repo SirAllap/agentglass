@@ -28,6 +28,7 @@ import { Latency } from "./Latency.tsx";
 import { Sessions } from "./Sessions.tsx";
 import { MissionTimeline } from "./MissionTimeline.tsx";
 import { UsageBox } from "./UsageBox.tsx";
+import { FleetVerdictStrip } from "./FleetVerdictStrip.tsx";
 import { Select } from "./Select.tsx";
 import type { AgentCard, Alert } from "../lib/derive.ts";
 import { CrossIcon } from "../lib/glyphIcons.tsx";
@@ -52,7 +53,7 @@ export type DashFilter = { app: string; type: string; provider: string };
 export function DashboardView({
   active, events, visibleEvents, agents, alerts, stats, sessionProvider, providers,
   windowMs, onWindow, filter, onFilter, onClearFilter, retentionDays,
-  startedAt, epm, onSelectEvent, onSelectSession,
+  startedAt, epm, onSelectEvent, onSelectSession, onOpenLantern,
 }: {
   active: boolean;
   events: WatchEvent[];
@@ -72,6 +73,7 @@ export function DashboardView({
   epm: number;
   onSelectEvent: (e: WatchEvent | null) => void;
   onSelectSession: (s: { id: string; app: string }) => void;
+  onOpenLantern: () => void;
 }) {
   /**
    * The facet lists, fetched HERE and only while this view is open.
@@ -135,6 +137,11 @@ export function DashboardView({
             style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}><span className="inline-flex items-center gap-1">Clear<CrossIcon size={ICON.xs} /></span></button>
         )}
       </div>
+
+      {/* The answer before the charts: what is running, what is stuck, what
+          needs you. Outside the scroller, so it is the first thing on the
+          screen however far down the panels have been read. */}
+      <FleetVerdictStrip onOpenLantern={onOpenLantern} />
 
       <div className="flex-1 min-h-0 p-3 flex flex-col gap-3 overflow-auto tall:overflow-hidden agx-scroll">
         <div className="shrink-0">
