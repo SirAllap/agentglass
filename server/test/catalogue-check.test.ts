@@ -121,6 +121,13 @@ describe("a listing that does not", () => {
   test("another entry edited on the way", () => refused(shelf([{ ...existing, description: "Rewritten." }, entry()]), "changes 2 entries"));
   test("a repository taking an id listed from another", () =>
     refused(shelf([{ ...entry(), id: "local-review" }]), "a different repository cannot take its place"));
+  // Python's `$` matches before a trailing newline; each of these passed its
+  // pattern and failed later, if at all, for some other reason.
+  test("a commit, a hash or a repository with a newline on the end", () => {
+    refused(shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: `${sha}\n` } })]), "not pinned to a full commit");
+    refused(shelf([existing, entry({ sha256: `${hash}\n` })]), "no content hash");
+    refused(shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock\n", ref: sha } })]), "not a public GitHub repository");
+  });
   test("a branch instead of a commit", () => refused(shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: "main" } })]), "not pinned to a full commit"));
   test("no hash", () => refused(shelf([existing, entry({ sha256: undefined })]), "no content hash"));
   test("a hash that is not the tree's", () => refused(shelf([existing, entry({ sha256: "0".repeat(64) })]), "not the pinned"));

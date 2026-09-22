@@ -65,6 +65,14 @@ const CASES: { what: string; manifest: unknown }[] = [
   { what: "an icon that is a script", manifest: { ...OK, icon: "icon.js" } },
   { what: "a colour that is a word", manifest: { ...OK, color: "purple" } },
   { what: "a colour in three digits", manifest: { ...OK, color: "#abc" } },
+  // Python's `$` also matches before one newline at the end of the text, so
+  // each of these passed the CLI's copy of a rule the app holds exactly.
+  { what: "a name with a newline on the end", manifest: { ...OK, name: "orbit-reviewer\n" } },
+  { what: "a panel id with a newline on the end", manifest: { ...OK, contributes: { panels: [{ id: "main\n", title: "Reviews" }] } } },
+  { what: "a settings key with a newline on the end", manifest: { ...OK, contributes: { settings: [{ key: "repos\n", type: "string", label: "Repositories" }] } } },
+  { what: "an icon with a newline on the end", manifest: { ...OK, icon: "icon.svg\n" } },
+  { what: "a colour with a newline on the end", manifest: { ...OK, color: "#8B5CF6\n" } },
+  { what: "a minApp with a newline on the end", manifest: { ...OK, minApp: "0.18.0\n" } },
 ];
 
 function cliSays(manifest: unknown): { ok: boolean; error?: string } {

@@ -131,6 +131,9 @@ def emit(res):
 # Kept in step with the originals by a test that runs both over the same cases.
 
 MAX_TEXT = 500
+# Every one of these is used with `fullmatch`: in Python `$` also matches
+# before a newline at the very end, so `match` let "name\n" through a rule the
+# app holds exactly, and a listing compares ids exactly as they are written.
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,60}$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 ICON_RE = re.compile(r"^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,99}\.(svg|png|webp)$")
@@ -159,7 +162,7 @@ def check_fields(fields):
         key = f.get("key")
         if not isinstance(key, str) or len(key) > 60 or not key.strip():
             return "field.key must be 1-60 characters"
-        if not KEY_RE.match(key):
+        if not KEY_RE.fullmatch(key):
             return f'field key "{key}" must start with a letter and hold only letters, digits, . _ -'
         if f.get("type") not in FIELD_TYPES:
             return f'field "{key}" has an unknown type'
@@ -193,7 +196,7 @@ def check_contributes(c):
             if not isinstance(p, dict):
                 return "a panel must be an object"
             pid = p.get("id")
-            if not isinstance(pid, str) or not ID_RE.match(pid):
+            if not isinstance(pid, str) or not ID_RE.fullmatch(pid):
                 return "panel id must be 1-40 of a-z, 0-9, - and start with a letter"
             if pid in seen:
                 return f'panel id "{pid}" appears twice'
@@ -216,7 +219,7 @@ def check_contributes(c):
             if not isinstance(a, dict):
                 return "a pull request action must be an object"
             aid = a.get("id")
-            if not isinstance(aid, str) or not ID_RE.match(aid):
+            if not isinstance(aid, str) or not ID_RE.fullmatch(aid):
                 return "action id must be 1-40 of a-z, 0-9, - and start with a letter"
             if aid in seen:
                 return f'action id "{aid}" appears twice'
@@ -233,7 +236,7 @@ def check_manifest(m):
     if not isinstance(m, dict):
         return "manifest must be a JSON object"
     name = m.get("name")
-    if not isinstance(name, str) or not NAME_RE.match(name) or name in (".", "..") or name.startswith("."):
+    if not isinstance(name, str) or not NAME_RE.fullmatch(name) or name in (".", "..") or name.startswith("."):
         return ("name must be 1-60 characters: letters, numbers, dots, dashes or underscores, "
                 "and may not start with a dot")
     if not _text(m.get("publisher"), 200):
@@ -249,13 +252,13 @@ def check_manifest(m):
     if why:
         return why
     icon = m.get("icon")
-    if icon is not None and (not isinstance(icon, str) or not ICON_RE.match(icon) or ".." in icon.split("/")):
+    if icon is not None and (not isinstance(icon, str) or not ICON_RE.fullmatch(icon) or ".." in icon.split("/")):
         return "icon must be a relative path to an .svg, .png or .webp file in the plugin folder"
     color = m.get("color")
-    if color is not None and (not isinstance(color, str) or not COLOR_RE.match(color)):
+    if color is not None and (not isinstance(color, str) or not COLOR_RE.fullmatch(color)):
         return "color must be a hex colour like #7c5cf5"
     min_app = m.get("minApp")
-    if min_app is not None and (not isinstance(min_app, str) or not VERSION_RE.match(min_app)):
+    if min_app is not None and (not isinstance(min_app, str) or not VERSION_RE.fullmatch(min_app)):
         return "minApp must be a version like 0.18.0"
     return None
 

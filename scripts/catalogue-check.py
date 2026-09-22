@@ -31,6 +31,8 @@ import sys
 import tempfile
 
 CLI = os.environ.get("AGENTGLASS_PLUGIN_CLI") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bin", "agentglass-plugin")
+# Used with `fullmatch`, never `match`: Python's `$` matches before a newline
+# at the end, and every one of these guards a value compared or fetched as is.
 GITHUB_REPO = re.compile(r"^https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$")
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -42,7 +44,7 @@ def squash(s):
 
 
 def same_repo(a, b):
-    ma, mb = GITHUB_REPO.match(a or ""), GITHUB_REPO.match(b or "")
+    ma, mb = GITHUB_REPO.fullmatch(a or ""), GITHUB_REPO.fullmatch(b or "")
     if ma and mb:
         return (ma.group(1).casefold(), ma.group(2).casefold()) == (mb.group(1).casefold(), mb.group(2).casefold())
     return (a or "").rstrip("/").removesuffix(".git") == (b or "").rstrip("/").removesuffix(".git")
@@ -99,12 +101,12 @@ def check(base, head):
     url, ref = src.get("url", ""), src.get("ref")
     if eid in before and not same_repo(before[eid]["source"].get("url"), url):
         problems.append(f"{eid!r} is listed from {before[eid]['source'].get('url')}; a different repository cannot take its place")
-    m = GITHUB_REPO.match(url or "")
+    m = GITHUB_REPO.fullmatch(url or "")
     if src.get("kind") != "git" or not m:
         problems.append("the source is not a public GitHub repository")
-    if not isinstance(ref, str) or not SHA1.match(ref):
+    if not isinstance(ref, str) or not SHA1.fullmatch(ref):
         problems.append("the source is not pinned to a full commit")
-    if not isinstance(e.get("sha256"), str) or not SHA256.match(e["sha256"]):
+    if not isinstance(e.get("sha256"), str) or not SHA256.fullmatch(e["sha256"]):
         problems.append("the entry carries no content hash")
     if e.get("verified") is not False:
         problems.append("`verified` is the catalogue's word, and a listing sets it false")

@@ -108,4 +108,19 @@ describe("validateCatalogue", () => {
       expect(c.plugins, String(sha256)).toHaveLength(0);
     }
   });
+
+  /*
+   * An id is compared with the ids already listed exactly as written, so
+   * "local-review" with a newline on the end passed as a new one, and the
+   * trim here then showed a second local-review card under somebody else's
+   * byline. An id that is not already what it would be trimmed to is not
+   * trimmed into one.
+   */
+  test("an id with space or a newline around it drops the entry instead of passing for another", () => {
+    for (const id of ["local-review\n", " local-review", "local-review\t"]) {
+      const c = validateCatalogue({ ...okCatalogue, plugins: [{ ...okPlugin, id }, { ...okPlugin, id: "local-review" }] });
+      if (typeof c === "string") throw new Error(c);
+      expect(c.plugins.map((p) => p.id), JSON.stringify(id)).toEqual(["local-review"]);
+    }
+  });
 });

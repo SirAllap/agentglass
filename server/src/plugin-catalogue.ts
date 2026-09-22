@@ -61,7 +61,10 @@ const MAX_CATEGORIES = 20;
 function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const p = raw as Record<string, unknown>;
-  if (typeof p.id !== "string" || !p.id.trim() || p.id.length > 120) return null;
+  // Exactly as written, not trimmed into shape: ids are compared as they
+  // stand everywhere else, so "local-review\n" trimmed here was a second
+  // local-review card under whoever listed it.
+  if (typeof p.id !== "string" || !p.id.trim() || p.id !== p.id.trim() || p.id.length > 120) return null;
   const src = p.source;
   if (!src || typeof src !== "object" || (src as Record<string, unknown>).kind !== "git") return null;
   const url = (src as Record<string, unknown>).url;
@@ -82,7 +85,7 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
     ? p.draws.filter((d) => typeof d === "string" && d.trim()).slice(0, 8).map((d) => String(d).trim().slice(0, 40))
     : undefined;
   return {
-    id: p.id.trim(),
+    id: p.id,
     source: { kind: "git", url: (url as string).trim(), ref: ref === null ? null : (ref as string).trim() },
     ...(typeof p.sha256 === "string" ? { sha256: p.sha256 } : {}),
     description: p.description.trim().slice(0, MAX_TEXT),
