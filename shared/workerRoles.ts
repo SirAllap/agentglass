@@ -12,9 +12,10 @@
  * A role changes which CLI runs, so it cannot rely on that CLI's own config
  * to keep a worker from pushing: the person's opencode.json may allow
  * everything, and a project can ship its own. Every role therefore starts
- * with a deny list rendered into the one layer of that CLI the person's and
- * the project's files cannot loosen (see `LockSpelling`), and a CLI with no
- * such layer is refused rather than run unlocked.
+ * with a deny list rendered into the layer of that CLI the person's and the
+ * project's files cannot loosen (see `LockSpelling`), and a CLI with no such
+ * layer is refused rather than run unlocked. OpenCode has no such layer, only
+ * a merge, so its lock is checked against the merged rules at every start.
  *
  * What it cannot do: it is a list of command PREFIXES, and a CLI decides what
  * a prefix matches. An OpenCode agent switched to by hand in the TUI runs

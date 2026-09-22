@@ -133,6 +133,8 @@ export type StartResult =
   /** A pass-through arg that would change what the agent is ALLOWED to do,
    *  named, so the caller is told which one rather than left to bisect. */
   | { ok: false; error: "arg-refused"; flag: string }
+  /** A worker role's lock that the configs in that directory loosen, and how. */
+  | { ok: false; error: "lock-loosened"; detail: string }
   | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "yolo-role" | "bad-args" };
 
 /**
@@ -250,6 +252,7 @@ export function roleStart(
   const launch = row && agentKind(row.id) ? roleLaunch(row, role, choice.model) : null;
   if (!row || !launch) return { ok: false, error: "no-lock" };
   const env = { ...launch.env };
+  if (launch.env.OPENCODE_CONFIG_CONTENT) for (const k of OPENCODE_ENV_LAYERS) env[k] = process.env[k] ?? "";
   if (launch.file) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const path = join(dir, `${role.id}-${row.id}.json`);
@@ -263,6 +266,116 @@ export function roleStart(
     env[launch.file.env] = path;
   }
   return { ok: true, kind: row.id, args: launch.args, env };
+}
+
+/**
+ * OpenCode's config layers that come from the environment. A tmux window
+ * inherits the tmux SERVER's environment, not this process's, so the check
+ * below and the window could otherwise read two different sets. Each is handed
+ * to the window as this process has it, empty when unset, which OpenCode reads
+ * as absent (measured: the same 101 rules either way). HOME and the XDG dirs,
+ * where the person's global config lives, are not pinned: they are the same
+ * user's on both sides.
+ */
+const OPENCODE_ENV_LAYERS = ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG"];
+
+type OpenCodeRule = { permission: string; pattern: string; action: string };
+
+const globs = new Map<string, RegExp>();
+/** OpenCode's own wildcard, as its 1.18 bundle has it: `*` any run, `?` one
+ *  character, and a trailing ` *` optional, so `git push *` is also bare
+ *  `git push`. */
+function openCodeMatch(subject: string, pattern: string): boolean {
+  let re = globs.get(pattern);
+  if (!re) {
+    let src = pattern.replaceAll("\\", "/").replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+    if (src.endsWith(" .*")) src = src.slice(0, -3) + "( .*)?";
+    re = new RegExp("^" + src + "$", "s");
+    globs.set(pattern, re);
+  }
+  return re.test(subject.replaceAll("\\", "/"));
+}
+
+/**
+ * The first command the lock denies that OpenCode, with these rules, would
+ * not deny — or null when the lock holds.
+ *
+ * `rules` is an agent's merged ruleset in OpenCode's order, and OpenCode
+ * applies the LAST rule whose permission and pattern both match. The lock is
+ * deep-merged over the project's config, and a merge keeps a key where the
+ * project had it: a project with `"git push *"` and then `"git *": "allow"`
+ * leaves the lock's deny before the allow, and a push goes through. So what is
+ * checked is the rule that wins, not whether the lock's rule is present.
+ *
+ * Asked of concrete command lines: each denied pattern with its wildcards
+ * filled, and every later non-deny rule's pattern filled the same way (a `?`
+ * takes the denied pattern's own character at that place) — whichever of those
+ * falls inside a denied pattern must be denied by the rule that wins. What it
+ * cannot see: a glob that only reaches a denied command through a fill none
+ * of these produce. Anything short of deny counts as loosened, `ask` included:
+ * a worker runs with nobody there to answer.
+ */
+export function lockLoosened(rules: OpenCodeRule[], lock: string): { subject: string; rule: OpenCodeRule | null } | null {
+  const perms = (JSON.parse(lock) as { permission: Record<string, string | Record<string, string>> }).permission;
+  const denied: [string, string][] = [];
+  for (const [perm, v] of Object.entries(perms)) {
+    if (v === "deny") denied.push([perm, "*"]);
+    else if (v && typeof v === "object") for (const [pat, a] of Object.entries(v)) if (a === "deny") denied.push([perm, pat]);
+  }
+  const fill = (pat: string, star: string, against = "") =>
+    [...pat].map((c, i) => c === "*" ? star : c === "?" ? (against[i] && !"*?".includes(against[i]!) ? against[i]! : "x") : c).join("");
+  for (const [perm, pat] of denied) {
+    const subjects = new Set([pat, fill(pat, ""), fill(pat, "x"), fill(pat, "x y")]);
+    for (const r of rules) {
+      if (r.action === "deny" || !openCodeMatch(perm, r.permission)) continue;
+      for (const star of ["", "x", "x y"]) subjects.add(fill(r.pattern, star, pat));
+    }
+    for (const subject of subjects) {
+      if (!openCodeMatch(subject, pat)) continue;
+      const rule = rules.findLast((r) => openCodeMatch(perm, r.permission) && openCodeMatch(subject, r.pattern)) ?? null;
+      if (rule?.action !== "deny") return { subject: perm === "bash" ? subject : `${perm} ${subject}`, rule };
+    }
+  }
+  return null;
+}
+
+/**
+ * Ask OpenCode itself what the role's agent will run under — every layer it
+ * merges: the person's global config, the project's opencode.json and
+ * `.opencode/`, the environment's, and the lock — and name what the lock no
+ * longer denies. Null when it holds.
+ *
+ * Fails closed: an OpenCode that will not say, or says something this cannot
+ * read, is a lock nobody checked. About two seconds per start, measured.
+ */
+export async function openCodeLockLoosened(bin: string, cwd: string, env: Record<string, string>): Promise<string | null> {
+  const lock = env.OPENCODE_CONFIG_CONTENT;
+  if (!lock) return "the role carries no OpenCode lock";
+  const agent = (JSON.parse(lock) as { default_agent?: string }).default_agent ?? "build";
+  let out = "";
+  try {
+    const proc = Bun.spawn([bin, "debug", "agent", agent], {
+      cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: "pipe", stderr: "ignore",
+    });
+    const timer = setTimeout(() => proc.kill(), 20_000);
+    [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    clearTimeout(timer);
+    if (proc.exitCode !== 0) return `OpenCode would not show its ${agent} agent's rules`;
+  } catch {
+    return `OpenCode would not show its ${agent} agent's rules`;
+  }
+  let rules: OpenCodeRule[];
+  try {
+    rules = (JSON.parse(out) as { permission: OpenCodeRule[] }).permission;
+    if (!Array.isArray(rules)) throw new Error("no rules");
+  } catch {
+    return `OpenCode's ${agent} agent's rules could not be read`;
+  }
+  const hit = lockLoosened(rules, lock);
+  if (!hit) return null;
+  return hit.rule
+    ? `\`${hit.subject}\` is allowed by the ${hit.rule.permission} rule \`${hit.rule.pattern}\`: ${hit.rule.action}`
+    : `\`${hit.subject}\` is not denied by any rule`;
 }
 
 /** The CLIs a worker role may be put on — the ones with a lock — and whether
@@ -323,6 +436,14 @@ export async function startAgent(p: {
      gains nothing from yolo, so the two are never combined. */
   if (p.yolo && p.lockedRole) return { ok: false, error: "yolo-role" };
   if (p.yolo && !p.yoloAllowed) return { ok: false, error: "yolo-refused" };
+  /* OpenCode's lock is merged into the configs around it rather than laid over
+     them, so whether it holds depends on the directory: asked of OpenCode, in
+     that directory, before anything opens. */
+  if (p.lockedRole && kind.id === "opencode") {
+    const bin = agentBinFor(kind.id);
+    const why = bin ? await openCodeLockLoosened(bin, p.cwd, p.env ?? {}) : null;
+    if (why) return { ok: false, error: "lock-loosened", detail: why };
+  }
 
   /* A live name is somebody's session; starting another under it would leave
      one of them unreachable by name. The caller decides (`proj1234-2` is the

@@ -11,7 +11,7 @@
  * a test.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentProvider } from "../../shared/agentKinds.ts";
@@ -190,4 +190,106 @@ describe("the setting", () => {
     expect(cfg.workerRoles().builder).toEqual({ provider: "qwen", model: "" });
     expect(cfg.workerRoles().scout).toEqual(scout.default);
   });
+});
+
+describe("the OpenCode lock, as OpenCode merged it", () => {
+  /*
+   * The lock is deep-merged over the project's opencode.json, and a merge keeps
+   * a key where the project had it. With the project's `"git push *": "allow"`
+   * and `"git *": "allow"`, the lock's `git push *` deny sits BEFORE `git *`
+   * allow, and OpenCode applies the last rule that matches: `git push origin
+   * main` went through. Measured with `opencode debug agent build`.
+   */
+  type Rule = { permission: string; pattern: string; action: string };
+  const lock = () => roleLaunch(row("opencode"), builder, "")!.env.OPENCODE_CONFIG_CONTENT!;
+  const lockRules = (bash: Record<string, string>): Rule[] => [
+    ...Object.entries(bash).map(([pattern, action]) => ({ permission: "bash", pattern, action })),
+    { permission: "task", pattern: "*", action: "deny" },
+  ];
+  const own = () => (JSON.parse(lock()) as { permission: { bash: Record<string, string> } }).permission.bash;
+  const DEFAULT: Rule = { permission: "*", pattern: "*", action: "allow" };
+  const clean = (): Rule[] => [DEFAULT, ...lockRules(own())];
+
+  test("the lock's rules last, as written, hold", () => {
+    expect(ops.lockLoosened(clean(), lock())).toBeNull();
+  });
+
+  test("a project key the lock reuses leaves a broader allow after it, and that is caught", () => {
+    const merged = lockRules({ "git push *": "deny", "git *": "allow", ...own() });
+    const r = ops.lockLoosened([DEFAULT, ...merged], lock());
+    expect(r).not.toBeNull();
+    expect(r!.subject.startsWith("git push")).toBe(true);
+    expect(r!.rule).toEqual({ permission: "bash", pattern: "git *", action: "allow" });
+  });
+
+  test("any later rule that reaches a denied command: a wildcard permission, a narrower pattern, a glob, an ask", () => {
+    for (const late of [
+      { permission: "*", pattern: "*", action: "allow" },
+      { permission: "bash", pattern: "git push --force *", action: "allow" },
+      { permission: "bash", pattern: "git pu?h *", action: "allow" },
+      { permission: "bash", pattern: "*push*", action: "allow" },
+      { permission: "bash", pattern: "rm -rf build", action: "ask" },
+      { permission: "task", pattern: "general", action: "allow" },
+    ]) {
+      expect(ops.lockLoosened([...clean(), late], lock()), JSON.stringify(late)).not.toBeNull();
+    }
+  });
+
+  test("a later allow for what the lock never denied is left alone", () => {
+    const late = ["git status *", "git diff", "npm *", "bun test *", "gitk"].map((pattern) => ({ permission: "bash", pattern, action: "allow" }));
+    expect(ops.lockLoosened([...clean(), ...late, { permission: "read", pattern: "*", action: "allow" }], lock())).toBeNull();
+  });
+});
+
+/*
+ * Against the real CLI, under scratch XDG dirs and HOME: the project config
+ * that undid the lock, and the start that must now refuse it.
+ */
+const OPENCODE = Bun.which("opencode");
+describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a worker starts", () => {
+  const ROOT = join(tmpdir(), `agx-oc-lock-${process.pid}`);
+  const scratch = {
+    HOME: join(ROOT, "home"), XDG_CONFIG_HOME: join(ROOT, "cfg"), XDG_DATA_HOME: join(ROOT, "data"),
+    XDG_CACHE_HOME: join(ROOT, "cache"), XDG_STATE_HOME: join(ROOT, "state"),
+  };
+  const project = (name: string, config?: unknown) => {
+    const dir = join(ROOT, name);
+    mkdirSync(dir, { recursive: true });
+    if (config) writeFileSync(join(dir, "opencode.json"), JSON.stringify(config));
+    return dir;
+  };
+  const allowPush = { bash: { "git push *": "allow", "git *": "allow" } };
+  const env = () => ({ ...roleLaunch(row("opencode"), builder, "")!.env, ...scratch });
+  afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+
+  test("a project opencode.json that allows git push is found out", async () => {
+    const cwd = project("hostile", { permission: allowPush, agent: { build: { permission: allowPush } } });
+    const why = await ops.openCodeLockLoosened(OPENCODE!, cwd, env());
+    expect(why).not.toBeNull();
+    expect(why!).toContain("git push");
+  }, 30_000);
+
+  test("a project that allows push only at the top level does not loosen it: the lock's own build-agent rules come after", async () => {
+    expect(await ops.openCodeLockLoosened(OPENCODE!, project("top-only", { permission: allowPush }), env())).toBeNull();
+  }, 30_000);
+
+  test("a config file named in the environment is one of the layers checked", async () => {
+    const file = join(project("env-layer-file"), "elsewhere.json");
+    writeFileSync(file, JSON.stringify({ permission: allowPush, agent: { build: { permission: allowPush } } }));
+    const why = await ops.openCodeLockLoosened(OPENCODE!, project("env-layer"), { ...env(), OPENCODE_CONFIG: file });
+    expect(why).not.toBeNull();
+    expect(why!).toContain("git push");
+  }, 30_000);
+
+  test("a project with no config of its own starts", async () => {
+    expect(await ops.openCodeLockLoosened(OPENCODE!, project("plain"), env())).toBeNull();
+  }, 30_000);
+
+  test("the role start refuses it before any window opens", async () => {
+    const cwd = project("hostile-start", { permission: allowPush, agent: { build: { permission: allowPush } } });
+    const r = await ops.startAgent({ root: cwd, cwd, kind: "opencode", name: "w", lockedRole: true, yoloAllowed: false, env: env() });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toBe("lock-loosened");
+  }, 30_000);
 });

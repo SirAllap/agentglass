@@ -2121,7 +2121,7 @@ function WorkerRolesSection({ open }: { open: boolean }) {
   const field = { color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" };
   return (
     <Section title="Worker roles"
-      desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen; a CLI with no such lock is not offered.">
+      desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen (OpenCode's is checked against the project's config at each start, and refused if loosened); a CLI with no such lock is not offered.">
       {WORKER_ROLES.map((r) => {
         const c = roles[r.id];
         if (!c) return null;

@@ -140,6 +140,11 @@ export interface ChatFacet {
  *         `opencode debug agent build`). The rules therefore go on the `build`
  *         agent too, `default_agent` is pinned to it, and `task` is denied so
  *         no other agent is reached as a subagent; a role refuses `--agent`.
+ *         That is still a merge, not a layer on top: a project key the lock
+ *         reuses keeps the project's place, so a broader allow the project
+ *         wrote after it wins. A role start therefore asks OpenCode for the
+ *         merged rules in that directory and refuses when the lock no longer
+ *         wins (`openCodeLockLoosened` in server/src/agentops.ts).
  *   file  an environment variable naming a settings file. Qwen Code's
  *         `QWEN_CODE_SYSTEM_SETTINGS_PATH`: the system scope, which its own
  *         docs say users cannot shrink, and whose `permissions.deny` has the

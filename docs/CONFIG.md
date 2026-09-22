@@ -331,9 +331,11 @@ over plain `http://` to any host that is not this machine.
   Settings allow it, and a permission-shaped flag after `--` is refused.
   `start --role scout|builder|verifier` seats the CLI and model Settings ▸ Worker
   roles picks for that role, with its lock: push, commit, merge, rebase, reset,
-  checkout, the network clients, `sudo` and `rm` are denied in the one layer of
-  that CLI a person's or a project's own config cannot loosen, and a scout or a
-  verifier may not edit files either; a `--model` or `--agent` after `--` is
+  checkout, the network clients, `sudo` and `rm` are denied in the layer of that
+  CLI a person's or a project's own config cannot loosen — for OpenCode, which
+  merges its lock with the project's config instead, the start asks OpenCode for
+  the merged rules and refuses when a project rule wins over the lock — and a
+  scout or a verifier may not edit files either; a `--model` or `--agent` after `--` is
   refused, since those are the role's, and so is `--yolo`. It is a list of command prefixes, not a
   sandbox — `sh -c '…'` is not a command named `git push`.
   `python3 bin/agentglass-agent --help` is the reference.

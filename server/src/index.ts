@@ -7391,6 +7391,9 @@ const server = Bun.serve<WsData>({
           /* Named, so the caller learns which arg and why in one answer: what
              an agent is allowed to do is decided in Settings (yolo) or by this
              server, never by a flag riding in `args` — see refusedArg. */
+          if (r.error === "lock-loosened") {
+            return json({ ok: false, error: `this directory's OpenCode config loosens the role's lock, so it was not started: ${r.detail}` }, 400);
+          }
           if (r.error === "arg-refused") {
             return json({ ok: false, error: `${r.flag} is not an arg a start may carry: it changes what the agent is allowed to do, and that is decided in Settings, not in args` }, 400);
           }
