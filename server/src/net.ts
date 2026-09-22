@@ -287,9 +287,10 @@ export function hostsOnly(domains: string[]): (u: URL) => string | null {
  *  page, so without this the relay is an SSRF probe with a credentialed response
  *  channel. Loopback and RFC1918 are deliberately NOT blocked: pointing the
  *  browser at a local dev server or a box on your own LAN is ordinary use here.
- *  A bare hostname passes — re-resolving to pin the IP is a TOCTOU we don't win,
- *  and a redirect can still land somewhere internal; the guest's own network
- *  stack is the backstop for those. */
+ *  On a literal only: for `safeUrl` a bare hostname passes, because the browser
+ *  resolves it again when it connects, and the desktop app's egress guard
+ *  (electron/egress-guard.js) is where a name is judged at connect time. The
+ *  robots.txt fetch judges names too, through `browserUnfetchableHost`. */
 function blockedV4(h: string): boolean {
   return h.startsWith("169.254.") || h === "0.0.0.0";
 }

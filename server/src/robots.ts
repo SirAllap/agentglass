@@ -26,6 +26,11 @@
  * turned the check off, and this fetch runs in the SERVER — the browser's
  * egress guard never sees it — so a robots.txt that answered 302 to the
  * metadata address had the server read it and leak allow/refuse as one bit.
+ * The ceiling: the check resolves a name and the fetch resolves it again, so
+ * a name with a zero TTL that flips between the two still reaches the address
+ * the check did not see. Closing that means connecting to the checked
+ * address, which `fetch` has no way to be told; the switch being off by
+ * default is what bounds it.
  */
 import { browserUnfetchableHost, dnsResolver, guardedFetch, type Resolver } from "./net.ts";
 
