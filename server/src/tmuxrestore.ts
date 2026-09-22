@@ -668,8 +668,12 @@ function mergeWindows(old: CapturedWindow[], freshWins: CapturedWindow[], whole:
  * dying and the engine remaking one session is the morning this file was
  * written for, and a photograph of that is not evidence of anything.
  */
-function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engine: string, before = readRestoreState()): RestoreState {
+function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engine: string, live: ReadonlySet<string>): RestoreState {
   const seenNow = new Map(fresh.map((s) => [s.name, s]));
+  /* Read at write time, not when the capture began: what another writer put
+     in the file meanwhile (`forgetSession`, a restore) is what this merges
+     with. */
+  const before = readRestoreState();
   const kept: CapturedSession[] = [];
   const carried = new Map<string, CapturedWindow[]>();
   for (const old of before?.sessions ?? []) {
@@ -681,7 +685,11 @@ function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engi
       continue;
     }
     if (forgotten.has(old.name)) continue;    // explicitly closed
-    if (whole) continue;                      // closed: the desk was whole and it left
+    /* Closed: the desk was whole and tmux no longer lists it. A session tmux
+       still lists but this sweep could not photograph — its windows did not
+       answer in time, or all it holds is left out of the picture — is kept
+       as it was: only tmux saying it is gone is a close. */
+    if (whole && !live.has(old.name)) continue;
     /* Nor carried forward: every file written before this rule still names the
        nine mirrors, and keeping them for fourteen days would mean fourteen days
        of a file that heals only if somebody edits it by hand. */
@@ -729,8 +737,21 @@ export function forgetSession(name: string): void {
 }
 
 /** Capture every session on the engine's socket into the state dir. Safe to
- *  call on a timer and safe to call twice — both are the same overwrite. */
-export async function captureLayout(now = Date.now()): Promise<RestoreState | null> {
+ *  call on a timer and safe to call twice — both are the same overwrite.
+ *
+ *  ONE AT A TIME. The ten second sweep, a new app window and the Settings
+ *  button each start one, and now that a whole desk forgets what tmux no
+ *  longer lists, a slow capture that listed the sessions before one was made
+ *  would, finishing last, write its list over the capture that had it. The
+ *  one that starts second photographs after the first has written. */
+let captureInFlight: Promise<unknown> = Promise.resolve();
+export function captureLayout(now?: number): Promise<RestoreState | null> {
+  const run = captureInFlight.then(() => captureOnce(now ?? Date.now()), () => captureOnce(now ?? Date.now()));
+  captureInFlight = run.catch(() => undefined);
+  return run;
+}
+
+async function captureOnce(now: number): Promise<RestoreState | null> {
   /*
    * NOT WHILE A RESTORE IS RUNNING. This is the race that did the damage.
    *
@@ -770,10 +791,10 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    * concluding nothing is the habit that caused this, so it stops here too.
    */
   if (!names.length) return null;
-  const before = readRestoreState();
   /* The last photograph, when its pane ids are this server's: a pane that
      has died since is still in it as it was alive. */
-  const previous = before?.engine === engine ? before : null;
+  const lastShot = readRestoreState();
+  const previous = lastShot?.engine === engine ? lastShot : null;
   const sessions: CapturedSession[] = [];
   for (const name of names) {
     if (!validSessionName(name)) continue;
@@ -888,7 +909,7 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
     }
     if (out.length) sessions.push({ name, windows: out });
   }
-  const state = writeMerged(sessions, now, deskIsWhole(engine), engine, before);
+  const state = writeMerged(sessions, now, deskIsWhole(engine), engine, new Set(names));
   /* The pass photographs again when it is done (`captureWanted`). */
   if (putBack) { void restoreLayout(); captureWanted = true; }
   return state;

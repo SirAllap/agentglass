@@ -14,6 +14,7 @@
  */
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync, readFileSync } from "node:fs";
+import { LANTERN_PROMPT_MARK } from "../src/lanternmark.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,6 +31,7 @@ let pane: typeof import("../src/tmuxpane.ts");
 const P = `agxsettleP${process.pid}`;
 const Q = `agxsettleQ${process.pid}`;
 const R = `agxsettleR${process.pid}`;
+const T = `agxsettleT${process.pid}`;
 
 type Layout = { sessions: { name: string; windows: { name?: string }[] }[] };
 const layout = (): Layout | null => {
@@ -97,4 +99,25 @@ test("a server started since is put back once, and then it is the desk's", async
   await pane.tmux(["kill-session", "-t", `=${R}`]);
   await restore.captureLayout();
   expect(names()).not.toContain(R);
+}, 20_000);
+
+test("a session tmux still lists is kept, whatever a sweep could photograph of it", async () => {
+  /*
+   * Forgetting keys off the photograph, and a photograph can come back
+   * without a live session in it: its windows could not be read in that
+   * sweep (a tmux call that timed out answers nothing), or all it holds is
+   * something the camera leaves out. Only tmux saying the session is gone
+   * is a close. Here the session holds only the Lantern's chat, which is
+   * never photographed.
+   */
+  expect((await pane.tmux(["new-session", "-d", "-s", T, "-n", "work", "-c", "/tmp", "sleep", "300"])).ok).toBe(true);
+  await restore.captureLayout();
+  expect(names()).toContain(T);
+  expect((await pane.tmux(["new-window", "-d", "-t", `=${T}:`, "-n", "chat", "-c", "/tmp", "sh", "-c", `sleep 300; echo '${LANTERN_PROMPT_MARK}'`])).ok).toBe(true);
+  await pane.tmux(["kill-window", "-t", `=${T}:work`]);
+  await restore.captureLayout();
+  expect(names(), "a live session was forgotten because nothing in it was photographed").toContain(T);
+  await pane.tmux(["kill-session", "-t", `=${T}`]);
+  await restore.captureLayout();
+  expect(names()).not.toContain(T);
 }, 20_000);
