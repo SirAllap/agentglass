@@ -9,7 +9,7 @@
  * harness, so they live in lib/projectPick.ts and are asserted here.
  */
 import { describe, expect, test } from "bun:test";
-import { allOpen, autoPick, clickScope, firstRun, initialTicks, inOpenProjects, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
+import { allOpen, autoPick, clickScope, firstRun, initialTicks, openFolders, inOpenProjects, nextScope, rootsToAdd, scopeLabel, scopeTitle } from "../src/lib/projectPick.ts";
 
 // Comment lines out, so a sentence about the gate cannot stand in for the gate.
 const APP = (await Bun.file(new URL("../src/App.tsx", import.meta.url)).text())
@@ -62,6 +62,21 @@ describe("what a click on one row opens", () => {
   });
   test("the row asks the rule", () => {
     expect(PICKER).toContain("const choose = (root: string) => { const next = clickScope(root, workspaces); if (next) void openScope(next); else close(); };");
+  });
+});
+
+describe("an open folder that is not one project", () => {
+  // A scope of ~/code from before there were folders: its projects are listed,
+  // none of them is what is open, and with other folders beside it "All
+  // projects" is not what is open either — so nothing on the list said what was.
+  const CODE = "/home/dev/code";
+  test("is every open path the list has no project row for", () => {
+    expect(openFolders([CODE, DOCS], [{ root: ORBIT }, { root: DOCS }])).toEqual([CODE]);
+    expect(openFolders([ORBIT], [{ root: ORBIT }])).toEqual([]);
+    expect(openFolders([], [{ root: ORBIT }])).toEqual([]);
+  });
+  test("gets a row of its own, marked open, unless 'All projects' already says it", () => {
+    expect(PICKER).toMatch(/!allOpen\(workspaces, roots\) && openFolders\(workspaces, repos\)\.map\(\(w\) => \(\s*<Row key=\{w\} current icon=\{<FolderIcon/);
   });
 });
 

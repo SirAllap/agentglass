@@ -31,7 +31,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { FolderIcon, MonitorIcon, PlusIcon } from "../lib/glyphIcons.tsx";
 import { GitIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { allOpen, autoPick, clickScope, firstRun, initialTicks, nextScope, rootsToAdd } from "../lib/projectPick.ts";
+import { allOpen, autoPick, clickScope, firstRun, initialTicks, nextScope, openFolders, rootsToAdd, scopeLabel } from "../lib/projectPick.ts";
 
 /** Set once the user has answered the startup question (either way), so an
  *  unscoped instance doesn't re-ask on every reload. */
@@ -496,6 +496,13 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                           sub={roots.length === 1 ? `Everything in ${roots[0]}` : `Everything in your ${roots.length} folders`}
                           onClick={() => void openScope(roots)} disabled={busy} />
                       )}
+                      {/* A folder opened as a whole — ~/code, from before there
+                          were folders — beside other folders: none of the rows
+                          below is what is open, and neither is "All projects". */}
+                      {!scanned && repos !== null && !allOpen(workspaces, roots) && openFolders(workspaces, repos).map((w) => (
+                        <Row key={w} current icon={<FolderIcon size={ICON.sm} />} title={scopeLabel([w]) ?? w}
+                          sub={`Everything in ${w}`} onClick={() => choose(w)} disabled={busy} />
+                      ))}
 
                       {/* Two different empty states. A filter that matches nothing
                           is about the filter; an empty list with folders added is
