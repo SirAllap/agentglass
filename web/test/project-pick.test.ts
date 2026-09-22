@@ -186,6 +186,11 @@ describe("the whole machine", () => {
 });
 
 describe("the picker's plumbing", () => {
+  test("a long list of folders scrolls on its own instead of pushing the projects out", () => {
+    // An upgrade seeds one folder per project the app knew, which on a busy
+    // machine is dozens, and the list sits in the picker's fixed footer.
+    expect(PICKER).toMatch(/<div className="agx-scroll flex flex-col mb-2 overflow-y-auto" style=\{\{ maxHeight: FOLDERS_MAX_PX \}\}>\s*\{roots\.map/);
+  });
   test("a folder that opens its one project is not added a second time, as that project", () => {
     // openScope checked what to add against this render's folders, which did
     // not have the new one yet; the project inside it went in as a folder too.

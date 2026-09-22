@@ -36,6 +36,10 @@ import { allOpen, autoPick, clickScope, firstRun, initialTicks, nextScope, roots
 /** Set once the user has answered the startup question (either way), so an
  *  unscoped instance doesn't re-ask on every reload. */
 export const PICKER_ANSWERED_KEY = "agentglass.projectChosen";
+/** About five folders, then the list scrolls. It sits in the fixed footer, and
+ *  an upgrade seeds one folder per project the app knew — dozens, on a busy
+ *  machine — which would push the projects themselves out of the picker. */
+const FOLDERS_MAX_PX = 120;
 const markAnswered = () => { try { localStorage.setItem(PICKER_ANSWERED_KEY, "1"); } catch { /* ignore */ } };
 
 // Mirrors isAbsoluteLike() in server/src/fsbrowse.ts: POSIX absolute (`/...`)
@@ -586,7 +590,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                       {roots.length > 0 && (
                         <>
                           <div className="text-[9.5px] uppercase tracking-wider mb-1" style={{ color: "var(--text4)" }}>Your folders</div>
-                          <div className="flex flex-col mb-2">
+                          <div className="agx-scroll flex flex-col mb-2 overflow-y-auto" style={{ maxHeight: FOLDERS_MAX_PX }}>
                             {roots.map((r) => (
                               <div key={r} className="flex items-center gap-2 pl-1 py-0.5 min-w-0">
                                 <span className="shrink-0 flex" style={{ color: "var(--text4)" }}><FolderIcon size={ICON.xs} /></span>
