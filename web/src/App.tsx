@@ -252,8 +252,15 @@ export default function App() {
    * themselves from a scope nobody chose — the whole machine, which is the very
    * sweep the picker's first run exists not to do. Answering either way (opening
    * projects reloads; closing it keeps the machine-wide view) lets them in.
+   *
+   * From the first render, because waiting for /projects to say so let the
+   * views mount, fetch, and unmount again. A browser that has answered before
+   * never waits; one whose server does not answer stops waiting (see the
+   * effect), since views with an error in them beat no views at all.
    */
-  const [awaitingPick, setAwaitingPick] = useState(false);
+  const [awaitingPick, setAwaitingPick] = useState(() => {
+    try { return localStorage.getItem(PICKER_ANSWERED_KEY) !== "1"; } catch { return false; }
+  });
   const mountedAt = useRef(Date.now());
 
   // A live snapshot of "is any panel/overlay open", read by the global key
@@ -387,8 +394,10 @@ export default function App() {
         let answered = false;
         try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
         if (!p.workspace && !answered) { setProjectOpen(true); setAwaitingPick(true); }
+        else setAwaitingPick(false);
       }).catch(() => {
         if (!live) return;
+        setAwaitingPick(false);
         timer = setTimeout(ask, wait);
         wait = Math.min(wait * 2, 5000);
       });

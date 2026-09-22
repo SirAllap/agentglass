@@ -105,8 +105,16 @@ describe("the first run waits for an answer", () => {
   test("the workspace is not mounted while the first question is open", () => {
     expect(APP).toContain("{!awaitingPick && <Workspace");
   });
-  test("only an unscoped, never-answered instance waits", () => {
-    expect(APP).toMatch(/if \(!p\.workspace && !answered\) \{ setProjectOpen\(true\); setAwaitingPick\(true\); \}/);
+  test("it waits from the very first render, not from when the server answers", () => {
+    // Starting at false let the views mount, fetch the whole machine, and
+    // unmount again once /projects came back unscoped.
+    expect(APP).toMatch(/useState\(\(\) => \{\s*try \{ return localStorage\.getItem\(PICKER_ANSWERED_KEY\) !== "1"; \}/);
+  });
+  test("only an unscoped, never-answered instance keeps waiting", () => {
+    expect(APP).toMatch(/if \(!p\.workspace && !answered\) \{ setProjectOpen\(true\); setAwaitingPick\(true\); \}\s*else setAwaitingPick\(false\);/);
+  });
+  test("a server that does not answer lets the views in rather than leave them out", () => {
+    expect(APP).toMatch(/\.catch\(\(\) => \{\s*if \(!live\) return;\s*setAwaitingPick\(false\);/);
   });
   test("closing the picker, either way, lets the views in", () => {
     expect(APP).toMatch(/<ProjectPicker [^>]*onClose=\{\(\) => \{ setProjectOpen\(false\); setAwaitingPick\(false\); \}\}/);
