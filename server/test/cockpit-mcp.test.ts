@@ -16,7 +16,7 @@
  *   back smaller, well formed, with a field naming what was dropped.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
@@ -595,6 +595,27 @@ describe.skipIf(!HAVE_PY)("the stdio server outlives a bad call", () => {
     expect(code).toBe(2);
     expect(err.trim().split("\n")).toHaveLength(1);
     expect(err).toContain("agentglass-browser-mcp");
+  });
+
+  test("loading the browser module leaves no bytecode beside it", async () => {
+    // The loader caches what it compiles in a __pycache__ next to the source,
+    // and the source is the app's own resources/bin: a stray directory in an
+    // installed package, or a write refused on a read-only one.
+    const bin = mkdtempSync(join(tmpdir(), "agx-cockpit-bin-"));
+    try {
+      for (const f of ["agentglass-cockpit-mcp", "agentglass-browser-mcp"]) {
+        await Bun.write(join(bin, f), Bun.file(new URL(`../../bin/${f}`, import.meta.url).pathname));
+      }
+      const p = Bun.spawn(["python3", join(bin, "agentglass-cockpit-mcp")], {
+        env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base },
+        stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      });
+      (p.stdin as { end: () => void }).end();
+      expect(await p.exited).toBe(0);
+      expect(existsSync(join(bin, "__pycache__"))).toBe(false);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 
   test("the only way to the app is get(): the browser module's POST relay is never called", () => {

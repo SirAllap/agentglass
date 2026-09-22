@@ -64,6 +64,9 @@ def _transport():
     loader = importlib.machinery.SourceFileLoader("agentglass_browser_mcp", path)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
+    # No bytecode cache: the loader would write a __pycache__ into the app's
+    # own resources/bin, a stray directory in an installed package.
+    sys.dont_write_bytecode = True
     try:
         loader.exec_module(mod)
     except Exception as e:  # noqa: BLE001 — SystemExit (a refused AGENTGLASS_SERVER) passes through
