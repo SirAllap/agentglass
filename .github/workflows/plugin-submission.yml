@@ -76,7 +76,9 @@ jobs:
             exit 0
           fi
           echo "true" > report/reachable
-          git -C /tmp/plugin rev-parse --short HEAD > report/sha
+          # The whole commit, because it is what the approval pins: a short
+          # one names a prefix nothing can fetch by.
+          git -C /tmp/plugin rev-parse HEAD > report/sha
           # Neither of these runs a line of what was cloned: one reads a JSON
           # manifest, the other reads text files and matches patterns.
           python3 bin/agentglass-plugin validate /tmp/plugin > report/validate.json || true
@@ -89,7 +91,7 @@ jobs:
       - name: Write what was found, without saying it anywhere yet
         run: |
           python3 - <<'PY' > report/comment.md
-          import json, os
+          import json, os, re
           def read(name, default=""):
               try:
                   return open(f"report/{name}").read().strip()
@@ -121,7 +123,9 @@ jobs:
               for a, b in (("`", "'"), ("<!--", "< !--"), ("-->", "-- >"), ("\r", " "), ("\n", " ")):
                   t = t.replace(a, b)
               return t
-          repo, sha = q(read("repo"), 120), q(read("sha"), 40)
+          repo = q(read("repo"), 120)
+          # A commit or nothing: this goes into the marker the approval reads.
+          sha = read("sha") if re.fullmatch(r"[0-9a-f]{40}", read("sha")) else ""
           reachable = read("reachable") == "true"
           v = load("validate.json", {"ok": False, "error": "the check did not run"})
           b = load("baseline.json", {"outcome": "unreadable", "findings": [], "capabilities": []})
@@ -131,7 +135,7 @@ jobs:
           elif not reachable:
               out.append(f"❌ `{repo}` could not be cloned — is it public?")
           else:
-              out.append(f"✅ Public and cloned: [{repo}](https://github.com/{repo}) at `{sha}`")
+              out.append(f"✅ Public and cloned: [{repo}](https://github.com/{repo}) at `{sha[:12]}`")
               if v.get("ok"):
                   draws = ", ".join(q(d, 40) for d in (v.get("draws") or [])) or "nothing"
                   out.append(f"✅ `plugin.json` is one agentglass accepts — **{q(v['name'], 60)}** by {q(v['publisher'])}, "

@@ -206,3 +206,94 @@ describe("the job holds nothing it does not use", () => {
     expect(perms).toContain("issues: write");
   });
 });
+
+/*
+ * What is listed is the commit the submission check validated — the one the
+ * maintainer read the report about — and not whatever the default branch held
+ * when the label landed. A push between the report and the label used to be
+ * listed without anybody having seen it.
+ */
+describe("the listed commit is the one the check validated", () => {
+  /** The decision heredoc of the step that finds the validated commit. */
+  function decider(source: string): string {
+    const from = source.indexOf("      - name: Which commit the check validated\n");
+    expect(from, "the workflow has a step that finds the validated commit").toBeGreaterThan(-1);
+    const step = source.slice(from, source.indexOf("\n      - name:", from + 1));
+    const m = step.match(/python3 - <<'PY'\n([\s\S]*?)\n\s*PY\n/);
+    expect(m, "and it decides in one PY heredoc").not.toBeNull();
+    const lines = m![1]!.split("\n");
+    const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.length - l.trimStart().length));
+    return lines.map((l) => l.slice(indent)).join("\n");
+  }
+
+  const VALIDATED = "89abcdef0123456789abcdef0123456789abcdef";
+  const MOVED = "fedcba9876543210fedcba9876543210fedcba98";
+  const marker = (over: Record<string, unknown> = {}) =>
+    `<!-- agentglass-plugin-submission -->\n## What the catalogue check found\n\n<!-- agentglass-plugin-submission-result ${JSON.stringify({ repository: "acme/orbit-clock", commit: VALIDATED, manifest: true, baseline: "passed", findings: 0, ...over })} -->`;
+  const bot = (body: string, updated_at = "2026-09-22T10:00:00Z") => ({ login: "github-actions[bot]", type: "Bot", body, updated_at });
+  const LABELLED = [{ label: "approved for listing", created_at: "2026-09-22T11:00:00Z" }];
+
+  function decide(opts: { comments?: unknown[]; events?: unknown[]; head?: string; repo?: string }) {
+    const at = mkdtempSync(join(dir, "decide-"));
+    writeFileSync(join(at, "comments.jsonl"), (opts.comments ?? [bot(marker())]).map((x) => JSON.stringify(x)).join("\n") + "\n");
+    writeFileSync(join(at, "events.jsonl"), (opts.events ?? LABELLED).map((x) => JSON.stringify(x)).join("\n") + "\n");
+    writeFileSync(join(at, "head"), (opts.head ?? VALIDATED) + "\n");
+    writeFileSync(join(at, "decide.py"), decider(yaml));
+    const out = join(at, "out");
+    writeFileSync(out, "");
+    const r = spawnSync("python3", ["decide.py"], {
+      cwd: at, encoding: "utf8",
+      env: {
+        PATH: process.env.PATH, REPO_NAMED: opts.repo ?? "acme/orbit-clock",
+        COMMENTS: join(at, "comments.jsonl"), EVENTS: join(at, "events.jsonl"), HEAD_FILE: join(at, "head"),
+        REFUSED: join(at, "refused"), GITHUB_OUTPUT: out,
+      },
+    });
+    const read = (p: string) => (existsSync(p) ? readFileSync(p, "utf8") : "");
+    return { code: r.status, stderr: r.stderr, output: read(out), refused: read(join(at, "refused")) };
+  }
+
+  test("an unmoved repository lists the commit the report named", () => {
+    const r = decide({});
+    expect(r.stderr).toBe("");
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(`sha=${VALIDATED}`);
+  });
+
+  test("a push after the report is refused, and says which commit was read", () => {
+    const r = decide({ head: MOVED });
+    expect(r.code).toBe(1);
+    expect(r.refused).toContain("moved");
+    expect(r.refused).toContain(VALIDATED.slice(0, 12));
+    expect(r.output).not.toContain("sha=");
+  });
+
+  test("a report rewritten after the label is not the report the label was given on", () => {
+    const r = decide({ comments: [bot(marker(), "2026-09-22T11:05:00Z")] });
+    expect(r.code).toBe(1);
+    expect(r.refused).toContain("after");
+  });
+
+  test("a marker typed into somebody else's comment is not the check's", () => {
+    const forged = { login: "someone", type: "User", body: marker({ commit: MOVED }), updated_at: "2026-09-22T09:00:00Z" };
+    expect(decide({ comments: [forged], head: MOVED }).code).toBe(1);
+    // …and next to the real one it changes nothing.
+    const r = decide({ comments: [bot(marker()), forged] });
+    expect(r.output).toContain(`sha=${VALIDATED}`);
+  });
+
+  test("no report, a report that failed validation, or one about another repository lists nothing", () => {
+    expect(decide({ comments: [] }).code).toBe(1);
+    expect(decide({ comments: [bot(marker({ manifest: false }))] }).code).toBe(1);
+    expect(decide({ comments: [bot(marker({ commit: "abc1234" }))] }).code).toBe(1);
+    expect(decide({ repo: "someone-else/orbit-clock" }).code).toBe(1);
+  });
+
+  test("the entry fetches that commit by id and checks it landed there", () => {
+    const code = yaml.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    expect(code).toContain('git ls-remote "https://github.com/$repo.git" HEAD');
+    expect(code).toContain('git -C /tmp/plugin fetch -q --depth 1 "https://github.com/$REPO_NAME.git" "$VALIDATED"');
+    expect(code).toContain('[ "$sha" = "$VALIDATED" ]');
+    expect(code).not.toContain("git clone --depth 1");
+  });
+});

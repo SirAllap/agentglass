@@ -56,7 +56,7 @@ function comment(report: Record<string, unknown>, script = builder(yaml)): strin
 
 const REPORT = {
   repo: "acme/orbit-clock",
-  sha: "abc1234",
+  sha: "0123456789abcdef0123456789abcdef01234567",
   reachable: "true",
   "validate.json": { ok: true, name: "orbit-clock", publisher: HOSTILE_PUBLISHER, scope: "read", draws: ["panel"], warnings: [] },
   "baseline.json": { outcome: "read", findings: [{ id: "hardcoded-endpoint", where: "a`-->.py", says: "reads something", line: "x" }], capabilities: [] },
@@ -130,5 +130,33 @@ describe("a submission cannot forge the check's own verdict", () => {
     const naked = builder(yaml).replace(/\bq\((.*?), \d+\)/g, "$1").replace(/\bq\(([^),]*)\)/g, "$1");
     const out = comment(REPORT, naked);
     expect(out.split("<!-- agentglass-plugin-submission-result").length - 1).toBe(2);
+  });
+});
+
+/*
+ * The marker is what the approval pins. A short commit in it named a prefix
+ * the approval could not fetch by, so it cloned the default branch instead —
+ * and whatever had been pushed between the check and the label is what got
+ * listed. The whole commit goes in the marker; the comment shows it short.
+ */
+describe("the commit the check validated is written down whole", () => {
+  test("the marker carries all forty characters and the comment shows twelve", () => {
+    const out = comment(REPORT);
+    const marker = out.match(/<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->/);
+    expect(marker).not.toBeNull();
+    expect(JSON.parse(marker![1]!).commit).toBe("0123456789abcdef0123456789abcdef01234567");
+    expect(out).toContain("at `0123456789ab`");
+  });
+
+  test("and the check records the whole commit, not git's short form", () => {
+    const code = yaml.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+    expect(code).toContain("git -C /tmp/plugin rev-parse HEAD > report/sha");
+    expect(code).not.toContain("rev-parse --short HEAD");
+  });
+
+  test("a sha file that is not a commit puts no commit in the marker", () => {
+    const out = comment({ ...REPORT, sha: "abc1234; rm -rf" });
+    const marker = JSON.parse(out.match(/<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->/)![1]!);
+    expect(marker.commit).toBe("");
   });
 });

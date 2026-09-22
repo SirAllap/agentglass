@@ -90,29 +90,101 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHICH COMMIT. The one the submission check validated and reported on
+      # — the report is what the maintainer read before labelling — and not
+      # whatever the default branch holds now. This used to clone HEAD at
+      # label time, so a push between the report and the label was listed
+      # with nobody having seen it. The commit comes from the marker at the
+      # end of the check's own comment, posted by this repository's workflow
+      # token; a marker typed by anybody else is somebody else's comment.
+      # And if the repository has moved on since, nothing is listed: the
+      # submitter edits the issue, the check runs on the new commit, and a
+      # maintainer labels what they read.
+      - name: Which commit the check validated
+        id: validated
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          BODY: ${{ github.event.issue.body }}
+          COMMENTS: /tmp/comments.jsonl
+          EVENTS: /tmp/events.jsonl
+          HEAD_FILE: /tmp/head
+          REFUSED: /tmp/refused
+        run: |
+          set -euo pipefail
+          repo=$(python3 -c 'import os,re;m=re.search(r"https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)",os.environ.get("BODY",""));print(f"{m.group(1)}/{m.group(2).removesuffix(".git")}" if m else "")')
+          [ -n "$repo" ] || { echo "::error::no repository URL in the issue"; exit 1; }
+          gh api --paginate "repos/$REPO/issues/$ISSUE/comments" \
+            --jq '.[] | {login: .user.login, type: .user.type, body, updated_at} | @json' > "$COMMENTS"
+          gh api --paginate "repos/$REPO/issues/$ISSUE/events" \
+            --jq '.[] | select(.event == "labeled") | {label: .label.name, created_at} | @json' > "$EVENTS"
+          git ls-remote "https://github.com/$repo.git" HEAD | cut -f1 > "$HEAD_FILE"
+          REPO_NAMED="$repo" python3 - <<'PY'
+          import json, os, re, sys
+          env = os.environ
+          def refuse(why):
+              open(env["REFUSED"], "w").write(why)
+              print(f"::error::{why}")
+              sys.exit(1)
+          def rows(path):
+              return [json.loads(l) for l in open(path) if l.strip()]
+          MARK = re.compile(r"<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->")
+          reports = [c for c in rows(env["COMMENTS"])
+                     if c.get("login") == "github-actions[bot]" and c.get("type") == "Bot"
+                     and str(c.get("body", "")).startswith("<!-- agentglass-plugin-submission -->")]
+          if not reports:
+              refuse("there is no submission check report on this issue to list from")
+          report = reports[-1]
+          marks = MARK.findall(report["body"])
+          if len(marks) != 1:
+              refuse("the submission check report does not carry exactly one result")
+          try:
+              mark = json.loads(marks[0])
+          except json.JSONDecodeError:
+              refuse("the submission check result could not be read")
+          commit = str(mark.get("commit", ""))
+          if not re.fullmatch(r"[0-9a-f]{40}", commit):
+              refuse("the submission check did not record a full commit; edit the issue to run it again")
+          if not mark.get("manifest"):
+              refuse("the submission check did not validate the manifest at that commit")
+          if str(mark.get("repository", "")).casefold() != env["REPO_NAMED"].casefold():
+              refuse("the submission check report is about a different repository than the issue names")
+          # The report the label was given on: rewritten after the label, it
+          # is a report nobody had read when they clicked.
+          labelled = [e["created_at"] for e in rows(env["EVENTS"]) if e.get("label") == "approved for listing"]
+          if not labelled:
+              refuse("no approved-for-listing label event on this issue")
+          if report.get("updated_at", "") > labelled[-1]:
+              refuse("the submission check report changed after the label was applied; read it again and label again")
+          head = open(env["HEAD_FILE"]).read().strip()
+          if head != commit:
+              refuse(f"the repository has moved since the check read it: the report is about {commit[:12]} "
+                     f"and its default branch is now at {head[:12] or 'nothing'}. Edit the issue to check the new commit.")
+          with open(env["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"sha={commit}\nrepo={env['REPO_NAMED']}\n")
+          PY
+
       - name: Read the submission, and check it again from scratch
         id: entry
         env:
-          BODY: ${{ github.event.issue.body }}
-          ISSUE: ${{ github.event.issue.number }}
+          REPO_NAME: ${{ steps.validated.outputs.repo }}
+          VALIDATED: ${{ steps.validated.outputs.sha }}
         run: |
           set -euo pipefail
-          repo=$(python3 - <<'PY'
-          import os, re
-          m = re.search(r"https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)", os.environ.get("BODY", ""))
-          print(f"{m.group(1)}/{m.group(2).removesuffix('.git')}" if m else "")
-          PY
-          )
-          [ -n "$repo" ] || { echo "::error::no repository URL in the issue"; exit 1; }
-          # Never the validation job's word for it: that ran against whatever
-          # the repository held then, and a submission can change between the
-          # check and the label. This clones again and validates again.
-          git clone --depth 1 "https://github.com/$repo.git" /tmp/plugin
+          repo="$REPO_NAME"
+          # Never the validation job's word for it: the check ran in another
+          # job, on another machine. This fetches the very commit it named, by
+          # id, and validates it again.
+          git init -q /tmp/plugin
+          git -C /tmp/plugin fetch -q --depth 1 "https://github.com/$REPO_NAME.git" "$VALIDATED"
+          git -C /tmp/plugin checkout -q --detach FETCH_HEAD
           python3 bin/agentglass-plugin validate /tmp/plugin > /tmp/validate.json
           # The commit and the bytes this run looked at, which is what the
           # entry pins. The hash is the app's own walk (see `hash` in the
           # CLI), so the app can refuse an install that is anything else.
           sha=$(git -C /tmp/plugin rev-parse HEAD)
+          [ "$sha" = "$VALIDATED" ] || { echo "::error::fetched $sha, not $VALIDATED"; exit 1; }
           python3 bin/agentglass-plugin hash /tmp/plugin > /tmp/hash.json
           # The scan the maintainer weighed ran on an earlier clone. This one
           # is what gets listed, so it is scanned again and the outcome goes
