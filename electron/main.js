@@ -634,11 +634,14 @@ function currentToken() {
  *
  * The token above is a file of this user's and a variable in every environment
  * the sidecar starts, so the process whose call is held has it too. This is
- * minted per launch, never written anywhere, and reaches the sidecar down a
- * pipe (ensureServer) and the renderer through the preload — see
- * server/src/desk.ts for what it closes and what it does not.
+ * minted for each sidecar this app spawns (ensureServer), never written
+ * anywhere, and reaches that sidecar down a pipe and the renderer through the
+ * preload — see server/src/desk.ts for what it closes and what it does not.
+ * Null while the app runs on a server it adopted: that one was never given a
+ * key, and must not be handed this one by the first answer the window sends.
+ * @type {string | null}
  */
-const DESK_KEY = require("crypto").randomBytes(32).toString("base64url");
+let deskKey = null;
 /* POSIX only. Windows hands a child a descriptor past stderr through the C
    runtime's handle table, which nothing here has measured the compiled sidecar
    reading — and a sidecar told to expect a key it cannot read refuses its own
@@ -717,8 +720,10 @@ function sidecarEnv(port) {
   };
   // Not the desk's key: the descriptor it comes down, and this process as the
   // parent holding the other end, so a server started by hand from a terminal
-  // that inherited this variable reads nothing (server/src/desk.ts).
+  // that inherited this variable reads nothing (server/src/desk.ts). Without a
+  // pipe, one a relaunch carried in is dropped rather than passed on.
   if (DESK_PIPE) env.AGENTGLASS_DESK_FD = `3:${process.pid}`;
+  else delete env.AGENTGLASS_DESK_FD;
   if (remoteEnabled()) {
     // An explicit env var wins: someone who set the bind by hand meant it.
     env.AGENTGLASS_BIND = process.env.AGENTGLASS_BIND || "0.0.0.0";
@@ -1054,7 +1059,7 @@ function tailStderr(child) {
 /** @param {boolean} adopt @returns {Promise<boolean>} */
 async function ensureServer(adopt) {
   const port = SERVER_PORT;
-  if (adopt) { reportSidecar(null); return true; } // a dev server or another instance is already up
+  if (adopt) { deskKey = null; reportSidecar(null); return true; } // a dev server or another instance is already up
   // AGENTGLASS_DIE_WITH_PARENT arms the server's own parent-death watchdog:
   // stopSidecar below cannot fire if this main process is SIGKILLed or crashes,
   // so the sidecar backs it up by exiting on its own once we are gone. Only
@@ -1070,12 +1075,17 @@ async function ensureServer(adopt) {
   const child = spawn(cmd, argv, { stdio: DESK_PIPE ? ["ignore", "ignore", "pipe", "pipe"] : ["ignore", "ignore", "pipe"], env });
   sidecar = child;
   const err = tailStderr(child);
-  /* The key goes down fd 3 at once and the pipe is closed, so the sidecar's
-     read at boot ends here. A sidecar that exits unread answers the write with
-     ECONNRESET, and an `error` with no listener takes this process down. */
+  /* A key per spawn, so one read out of a sidecar that is gone — a core dump —
+     opens nothing the next one holds. Minted before this function's first
+     await: createWindow() has just run, and its preload asks for the key once
+     this task yields. It goes down fd 3 with `end`, not `write`: the sidecar's
+     read at boot waits for the pipe to close. A sidecar that exits unread
+     answers with ECONNRESET, and an `error` with no listener takes this
+     process down. */
+  deskKey = DESK_PIPE ? require("crypto").randomBytes(32).toString("base64url") : null;
   const desk = /** @type {import("stream").Writable | null} */ (child.stdio[3]);
   desk?.on("error", () => { /* it went away before reading; `exit` below says why */ });
-  desk?.end(DESK_KEY + "\n");
+  if (deskKey) desk?.end(deskKey + "\n");
 
   /*
    * The `error` event, which is what a missing binary actually is.
@@ -1255,7 +1265,7 @@ async function restartSidecar() {
   // live bindings (web/src/lib/api.ts), so handing it the new pair is enough —
   // the next fetch and the next socket connect use them.
   for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: currentToken() }); } catch { /* window went away mid-toggle */ }
+    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: currentToken(), deskKey }); } catch { /* window went away mid-toggle */ }
   }
 }
 
@@ -4033,7 +4043,7 @@ app.whenReady().then(async () => {
   // The desk's key, to a window's own page and to nothing a window hosts: the
   // agent browser's guests are webviews, and a page an agent opened must not
   // be the one thing on this machine that can let its hold go.
-  ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? DESK_KEY : null; });
+  ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? deskKey : null; });
   // Whether there is a server at all, for a window that opened AFTER the give-up
   // — a reload, or a second window. The push in `reportSidecar` only reaches
   // windows that already exist, and a page that reloads five minutes into a

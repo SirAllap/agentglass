@@ -303,7 +303,7 @@ let TOKEN: string = (() => {
 /** The desktop app's own key, carried on the two requests only a person may
  *  make — letting a held call go, and accepting a device — where the app started
  *  the server. Empty anywhere but the desktop app. See server/src/desk.ts. */
-const DESK_KEY: string = (() => {
+let DESK_KEY: string = (() => {
   try {
     return (window as unknown as { agentglass?: { deskKey?: string | null } }).agentglass?.deskKey || "";
   } catch {
@@ -469,8 +469,10 @@ export let WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
  * every consumer reads them at call time, so the next fetch and the next socket
  * connect go to the right place with the right credential.
  */
-export function adoptServer(next: { origin?: string | null; token?: string | null }): void {
+export function adoptServer(next: { origin?: string | null; token?: string | null; deskKey?: string | null }): void {
   if (next.origin) SERVER = next.origin.replace(/\/$/, "");
+  // A new sidecar has a new desk key, and one the app adopted has none.
+  if (next.deskKey !== undefined) DESK_KEY = next.deskKey ?? "";
   if (next.token !== undefined) {
     TOKEN = next.token ?? "";
     // Keep storage in step, so a genuine reload later does not fall back to a

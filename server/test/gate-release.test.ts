@@ -426,38 +426,51 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
   const PRELOAD = readFileSync(new URL("../../electron/preload.js", import.meta.url), "utf8");
   const API = readFileSync(new URL("../../web/src/lib/api.ts", import.meta.url), "utf8");
   const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
-  /** From `head` to that function's own closing brace. */
-  const body = (src: string, head: string): string => {
+  /** From `head` to that function's own closing brace. `open` is what ends the
+   *  signature, for one whose parameters carry a type literal of their own. */
+  const body = (src: string, head: string, open = "{"): string => {
     const at = src.indexOf(head);
     expect(at, head).toBeGreaterThanOrEqual(0);
     let depth = 0;
-    for (let i = src.indexOf("{", at); i < src.length; i++) {
+    for (let i = src.indexOf(open, at) + open.length - 1; i < src.length; i++) {
       if (src[i] === "{") depth++;
       else if (src[i] === "}" && --depth === 0) return src.slice(at, i + 1);
     }
     throw new Error(`no end to ${head}`);
   };
 
-  test("minted per launch and sent down fd 3, never into the sidecar's environment", () => {
-    expect(MAIN).toMatch(/^const DESK_KEY = require\("crypto"\)\.randomBytes\(32\)/m);
+  test("minted for each sidecar and sent down fd 3, never into its environment, never to a server the app adopted", () => {
+    expect(MAIN).toMatch(/^let deskKey = null;/m);
     const env = code(body(MAIN, "function sidecarEnv("));
-    expect(env).not.toContain("DESK_KEY");
+    expect(env).not.toContain("deskKey");
     expect(env).toContain("if (DESK_PIPE) env.AGENTGLASS_DESK_FD = `3:${process.pid}`;");
     const boot = code(body(MAIN, "async function ensureServer("));
+    // An adopted server was never given a key, so the window is not handed one
+    // to send it.
+    expect(boot).toContain("if (adopt) { deskKey = null;");
+    const mint = boot.indexOf('deskKey = DESK_PIPE ? require("crypto").randomBytes(32)');
+    expect(mint).toBeGreaterThan(-1);
+    // Before the first await: createWindow() has just run, and its preload asks
+    // for the key once this task yields.
+    const firstAwait = boot.indexOf("await ");
+    expect(firstAwait === -1 || mint < firstAwait).toBe(true);
     expect(boot).toContain('stdio: DESK_PIPE ? ["ignore", "ignore", "pipe", "pipe"] : ["ignore", "ignore", "pipe"]');
     // The listener first: a sidecar that exits unread answers with ECONNRESET.
     const listen = boot.indexOf('desk?.on("error"');
     expect(listen).toBeGreaterThan(-1);
-    expect(listen).toBeLessThan(boot.indexOf("desk?.end(DESK_KEY"));
-    // Minted, piped, answered over IPC: three uses, so a fourth — a file, a
-    // variable, a log line — is a change somebody has to look at.
-    expect([...code(MAIN).matchAll(/\bDESK_KEY\b/g)]).toHaveLength(3);
+    expect(listen).toBeLessThan(boot.indexOf('if (deskKey) desk?.end(deskKey + "\\n");'));
+    // Declared, cleared on adopt, minted, piped (twice on one line), pushed on
+    // restart, and the IPC line (the channel's name and the answer): a use past
+    // these — a file, a variable, a log line — is a change somebody has to look at.
+    expect([...code(MAIN).matchAll(/\bdeskKey\b/g)]).toHaveLength(8);
   });
 
-  test("the renderer asks for it from a window's own page, and carries it on the two requests that need it", () => {
-    expect(MAIN).toContain('ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? DESK_KEY : null; });');
+  test("the renderer asks for it from a window's own page, is handed the next one on a restart, and carries it on the two requests that need it", () => {
+    expect(MAIN).toContain('ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? deskKey : null; });');
+    expect(code(body(MAIN, "async function restartSidecar("))).toContain("{ origin: apiOrigin, token: currentToken(), deskKey }");
     expect(PRELOAD).toContain('ipcRenderer.sendSync("ag:deskKey")');
     expect(API).toContain(`"${DESK_HEADER}": DESK_KEY`);
+    expect(code(body(API, "export function adoptServer(", "): void {"))).toContain('if (next.deskKey !== undefined) DESK_KEY = next.deskKey ?? "";');
     const sent = code(API);
     expect(sent).toContain('fetch(SERVER + "/gate/decide", {\n      method: "POST",\n      headers: authHeaders({ "content-type": "application/json", ...deskHeader() }),');
     expect(sent).toContain('"/pair/accept", { ticket, scope }, deskHeader())');

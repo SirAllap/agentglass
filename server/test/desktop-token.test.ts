@@ -91,6 +91,9 @@ describe("sidecarEnv", () => {
     // key goes down the pipe (ensureServer), see gate-release.test.ts.
     expect(build({ remote: false }).AGENTGLASS_DESK_FD).toBe("3:4242");
     expect(build({ remote: false, deskPipe: false }).AGENTGLASS_DESK_FD).toBeUndefined();
+    // And where there is no pipe, one a relaunch carried in is dropped: a
+    // sidecar whose parent reused that pid would wait on a descriptor it lacks.
+    expect(build({ remote: false, deskPipe: false, env: { AGENTGLASS_DESK_FD: "3:4242" } }).AGENTGLASS_DESK_FD).toBeUndefined();
   });
 
   it("spawns the sidecar with a token when remote access is OFF", () => {

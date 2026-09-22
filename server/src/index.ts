@@ -1659,12 +1659,14 @@ function asActor(c: Caller | null | undefined): ActorSource | null {
  *     the desk, lives on that phone, is stored here only as a hash and is never
  *     in any environment an agent inherits (auth.ts, devices.ts).
  *   * or, where the desktop app started this server, **the app's key**
- *     (desk.ts): minted per launch, handed down a pipe to this process and
- *     through the preload to the renderer, in no file, environment or argv an
- *     agent can read. There an Origin opens nothing. It used to, and a header
+ *     (desk.ts): minted for each sidecar, handed down a pipe to this process
+ *     and through the preload to the renderer, in no file, environment or argv
+ *     an agent can read. There an Origin opens nothing. It used to, and a header
  *     is a string: `curl -H "Origin: agentglass://app"` with the machine token
  *     released the agent's own call, for the helpful agent that reads "approve
  *     it" as the next step and for the one an injected instruction sends alike.
+ *     What the key does not close is the device store above it: devices.json
+ *     is a file this user can write, and a device added there answers too.
  *   * or, on a server started by hand, an **Origin** this server vouches for.
  *     No desk started it, so there is no key, and the client a person uses
  *     there without pairing first is a browser, which attaches `Origin` to
