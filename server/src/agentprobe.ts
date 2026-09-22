@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentProbe, KnownAgent } from "../../shared/types.ts";
+import { PROVIDERS } from "../../shared/agentKinds.ts";
 import { db } from "./db.ts";
 import { hookStatus } from "./hooksetup.ts";
 
@@ -48,56 +49,29 @@ type Roster = Omit<KnownAgent, "configPath"> & { configPath: () => string };
  */
 const agentHome = (): string => process.env.HOME || homedir();
 
-export const ROSTER: Roster[] = [
-  {
-    id: "claude-code",
-    label: "Claude Code",
-    bin: "claude",
-    via: "hooks",
-    // The hook installer decides this one — it honours CLAUDE_CONFIG_DIR.
-    configPath: () => hookStatus().settingsPath,
+/**
+ * The roster is the rows of shared/agentKinds.ts that carry a `probe` facet,
+ * in that table's order — the same four CLIs this list held on its own before
+ * the table became the one place a provider is written down.
+ */
+export const ROSTER: Roster[] = PROVIDERS.flatMap((p): Roster[] => {
+  const r = p.probe;
+  if (!r) return [];
+  return [{
+    id: r.id ?? p.id,
+    label: r.label,
+    bin: p.bin,
+    via: r.via,
+    // The hook installer decides the `hooks` one — it honours CLAUDE_CONFIG_DIR.
+    configPath: r.via === "hooks"
+      ? () => hookStatus().settingsPath
+      : () => (r.configPath ? join(agentHome(), r.configPath) : ""),
     /** Every event this agent produces arrives under this name. */
-    match: "claude",
-    install: "npm i -g @anthropic-ai/claude-code",
-    connects: "hooks that post each event to this server",
-  },
-  {
-    id: "gemini",
-    label: "Gemini CLI",
-    bin: "gemini",
-    via: "otel",
-    configPath: () => join(agentHome(), ".gemini", "settings.json"),
-    match: "gemini",
-    install: "npm i -g @google/gemini-cli",
-    connects: "OpenTelemetry traces → /v1/traces",
-  },
-  {
-    id: "codex",
-    label: "OpenAI Codex CLI",
-    bin: "codex",
-    via: "otel",
-    configPath: () => join(agentHome(), ".codex", "config.toml"),
-    match: "codex",
-    install: "npm i -g @openai/codex",
-    connects: "OpenTelemetry logs → /v1/logs",
-  },
-  {
-    // Google's agentic CLI, and a separate product from the Gemini CLI above —
-    // separate binary, separate state, and a model list that spans Anthropic
-    // and open-weight models as well as Google's. Wiring one does nothing for
-    // the other.
-    id: "antigravity",
-    label: "Google Antigravity",
-    bin: "agy",
-    via: "chat",
-    // It keeps state under ~/.gemini/antigravity-cli, but nothing there is a
-    // connection this app writes or reads, so there is no path worth showing.
-    configPath: () => "",
-    match: "antigravity",
-    install: "https://antigravity.google/docs/cli",
-    connects: "the chat panel, which turns its own turns into events",
-  },
-];
+    match: r.match,
+    install: r.install,
+    connects: r.connects,
+  }];
+});
 
 /**
  * Whether this agent's config currently points at us.

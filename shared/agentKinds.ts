@@ -11,6 +11,18 @@
  * argv, the phone reads the same rows to draw the list, and the two cannot
  * disagree because there is one table.
  *
+ * ── one table for every place that says "which agent" ────────────────────
+ * It used to be four: this menu, the chat panel's roster in
+ * web/src/lib/agents.ts, the requirements panel's ROSTER in
+ * server/src/agentprobe.ts, and a run leg's SPELLINGS in
+ * server/src/agents/launch.ts. They disagreed — the menu had OpenCode and not
+ * Antigravity, the roster the other way round, the chat panel neither Gemini
+ * nor OpenCode — and adding a CLI meant finding all four. Now a provider is one
+ * row, and each of those places is a facet of it: `tab` for this menu,
+ * `probe` for the roster, `run` for a run's legs, `chat` for the chat panel.
+ * A row without a facet is simply not offered there, which is the same
+ * membership each list had before.
+ *
  * ── where the flags come from ────────────────────────────────────────────
  * Read off Orca's own launcher (stablyai/orca, MIT — src/shared/
  * tui-agent-config.ts and tui-agent-startup.ts), which drives the same four
@@ -52,15 +64,86 @@ export interface AgentKind {
   nameFlag?: string;
 }
 
+/** How a run leg spells a CLI's words when a window opens running it —
+ *  see server/src/agents/launch.ts. */
+export interface RunSpelling {
+  /**
+   * The single flag that turns permission prompts off.
+   *
+   * One flag, and it is the server's word rather than the client's — the same
+   * rule agentticket.ts states: a socket reachable from the UI sends a boolean
+   * and never an argument.
+   */
+  bypass: string;
+  /**
+   * The flag that carries the prompt when a bare positional argument would run
+   * the CLI headlessly instead of opening it.
+   *
+   * Empty means positional, which is Claude Code's form, Codex's, and what
+   * every path in this server did before this file existed. It is also the
+   * FALLBACK when the flag below cannot be confirmed on this machine, and that
+   * is deliberate: a flag we can prove is an improvement on the shipped
+   * behaviour, and a flag we cannot prove must degrade back to it rather than
+   * to some third thing nobody has run.
+   */
+  promptFlag: string;
+}
+
+/** How the requirements panel finds and connects a CLI — see
+ *  server/src/agentprobe.ts. `KnownAgent` in shared/types.ts is what it
+ *  becomes on the wire. */
+export interface ProbeFacet {
+  /** The roster's own id, where it predates this table and differs from the
+   *  row's: runs and the connect route carry it, so it cannot be renamed. */
+  id?: string;
+  label: string;
+  via: "hooks" | "otel" | "chat";
+  /** The file connecting it writes, relative to the agent's home. Empty for a
+   *  CLI with nothing to connect; unused for `hooks`, which the hook installer
+   *  resolves because it honours CLAUDE_CONFIG_DIR. */
+  configPath: string;
+  /** A fragment of the `source_app` its events arrive under. */
+  match: string;
+  install: string;
+  connects: string;
+}
+
+/** Everything that differs between the CLIs the chat panel drives — the
+ *  comments on each field are on `AgentSpec` in web/src/lib/agents.ts. */
+export interface ChatFacet {
+  label: string;
+  defaultModel: string;
+  defaultMode: string;
+  bypassMode: string;
+  canAttach: boolean;
+  hasTranscript: boolean;
+  hasEffort: boolean;
+  canPane: boolean;
+}
+
+export interface Provider extends AgentKind {
+  /** On the new-tab menu, and accepted wherever a route validates a kind. */
+  tab: boolean;
+  probe?: ProbeFacet;
+  run?: RunSpelling;
+  chat?: ChatFacet;
+}
+
 /**
- * In the order the menu draws them.
+ * Every CLI this app knows, in the order the menu draws them.
  *
  * Claude is first because it is the one this app is built around — the review
  * prompts, the gates and the hook wiring are all its. The rest are alphabetical
  * rather than ranked: preferring one of somebody else's CLIs over another is
  * not this app's opinion to have.
+ *
+ * `yoloFlag` and `run.bypass` are not the same fact and are deliberately not
+ * merged. `yoloFlag` is what the phone may offer, and only Claude's has been
+ * offered; `run.bypass` is what a run leg passes after `--help` confirms it.
+ * Folding one into the other would quietly start honouring the phone's switch
+ * for three CLIs that have never had it.
  */
-export const AGENT_KINDS: AgentKind[] = [
+export const PROVIDERS: Provider[] = [
   {
     id: "claude",
     title: "Claude Code",
@@ -69,6 +152,59 @@ export const AGENT_KINDS: AgentKind[] = [
     mode: "argv",
     yoloFlag: "--dangerously-skip-permissions",
     nameFlag: "--name",
+    tab: true,
+    probe: {
+      id: "claude-code",
+      label: "Claude Code",
+      via: "hooks",
+      configPath: "",
+      match: "claude",
+      install: "npm i -g @anthropic-ai/claude-code",
+      connects: "hooks that post each event to this server",
+    },
+    run: { bypass: "--dangerously-skip-permissions", promptFlag: "" },
+    chat: {
+      label: "Claude",
+      defaultModel: "claude-opus-5", defaultMode: "default",
+      bypassMode: "bypassPermissions", canAttach: true, hasTranscript: true,
+      hasEffort: true, canPane: true,
+    },
+  },
+  {
+    // Google's agentic CLI, and a separate product from the Gemini CLI below —
+    // separate binary, separate state, and a model list that spans Anthropic
+    // and open-weight models as well as Google's. Wiring one does nothing for
+    // the other. Not on the tab menu: nothing has launched it in a pane yet.
+    id: "antigravity",
+    title: "Antigravity",
+    what: "Google's agentic CLI, driven by the chat panel.",
+    bin: "agy",
+    mode: "argv",
+    tab: false,
+    probe: {
+      label: "Google Antigravity",
+      via: "chat",
+      // It keeps state under ~/.gemini/antigravity-cli, but nothing there is a
+      // connection this app writes or reads, so there is no path worth showing.
+      configPath: "",
+      match: "antigravity",
+      install: "https://antigravity.google/docs/cli",
+      connects: "the chat panel, which turns its own turns into events",
+    },
+    // antigravity.ts:antigravityArgs, same spelling as Claude's by that CLI's
+    // own choice. Its `-p` is the print-and-exit form the chat panel drives and
+    // is deliberately NOT the prompt flag: a run's leg through it would answer
+    // once and close the window.
+    run: { bypass: "--dangerously-skip-permissions", promptFlag: "" },
+    chat: {
+      // Its four modes happen to line up with Claude's, which is a property of
+      // the CLI rather than a mapping imposed here. Keep in step with
+      // DEFAULT_MODE in server/src/antigravity.ts.
+      label: "Antigravity",
+      defaultModel: "gemini-3.6-flash-medium", defaultMode: "request-review",
+      bypassMode: "always-proceed", canAttach: false, hasTranscript: false,
+      hasEffort: false, canPane: false,
+    },
   },
   {
     id: "codex",
@@ -76,6 +212,29 @@ export const AGENT_KINDS: AgentKind[] = [
     what: "OpenAI's CLI, in a pane of its own.",
     bin: "codex",
     mode: "argv",
+    tab: true,
+    probe: {
+      label: "OpenAI Codex CLI",
+      via: "otel",
+      configPath: ".codex/config.toml",
+      match: "codex",
+      install: "npm i -g @openai/codex",
+      connects: "OpenTelemetry logs → /v1/logs",
+    },
+    // codex.ts:codexArgs, where the same flag drives the `full-access` sandbox.
+    // The interactive form takes the prompt as a positional; `codex exec --json`
+    // is the streaming form the chat panel drives and would fill a tmux pane
+    // with JSON instead of a TUI.
+    run: { bypass: "--dangerously-bypass-approvals-and-sandbox", promptFlag: "" },
+    chat: {
+      // The mode is its sandbox rather than a permission policy, so the two
+      // vocabularies stay apart. Keep in step with DEFAULT_SANDBOX in
+      // server/src/codex.ts.
+      label: "Codex",
+      defaultModel: "gpt-5.6-sol", defaultMode: "read-only",
+      bypassMode: "full-access", canAttach: false, hasTranscript: true,
+      hasEffort: false, canPane: false,
+    },
   },
   {
     id: "gemini",
@@ -83,6 +242,20 @@ export const AGENT_KINDS: AgentKind[] = [
     what: "Google's CLI. Opens with the prompt seeded rather than answered.",
     bin: "gemini",
     mode: "flag-interactive",
+    tab: true,
+    probe: {
+      label: "Gemini CLI",
+      via: "otel",
+      configPath: ".gemini/settings.json",
+      match: "gemini",
+      install: "npm i -g @google/gemini-cli",
+      connects: "OpenTelemetry traces → /v1/traces",
+    },
+    // A bare positional is answered non-interactively and the CLI exits, so the
+    // prompt goes through the flag that keeps the TUI up. Both words are probed
+    // before they are used — this is the entry with the least evidence behind
+    // it, and the probe is what makes that safe rather than hopeful.
+    run: { bypass: "--yolo", promptFlag: "-i" },
   },
   {
     id: "opencode",
@@ -90,8 +263,27 @@ export const AGENT_KINDS: AgentKind[] = [
     what: "Takes the prompt on a flag and picks its own model.",
     bin: "opencode",
     mode: "flag",
+    tab: true,
+  },
+  {
+    // A fork of the Gemini CLI, and it kept that CLI's command line: a bare
+    // positional answers once and exits, `--prompt-interactive` opens the TUI
+    // with the prompt seeded. Tab menu only — it has no connection this app
+    // has measured, so it is not on the requirements roster or a run's legs.
+    id: "qwen",
+    title: "Qwen Code",
+    what: "Qwen's CLI. Opens with the prompt seeded rather than answered.",
+    bin: "qwen",
+    mode: "flag-interactive",
+    tab: true,
   },
 ];
+
+export const provider = (id: string): Provider | undefined =>
+  PROVIDERS.find((p) => p.id === id);
+
+/** The new-tab menu: the rows a phone may start, in the order it draws them. */
+export const AGENT_KINDS: AgentKind[] = PROVIDERS.filter((p) => p.tab);
 
 export const agentKind = (id: string): AgentKind | undefined =>
   AGENT_KINDS.find((a) => a.id === id);
