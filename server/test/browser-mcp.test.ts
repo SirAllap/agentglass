@@ -720,6 +720,10 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
      driven from another device gets the token/host/origin triad, or it gets
      nobody's browser to drive. */
   const TOKEN = "agx-http-test-token-0123456789abcdef-0123456789abcdef"; // ≥ 32 chars
+  /* The app's own token, which the MCP server carries OUT to the app and
+     which must not open the MCP endpoint: whoever sniffs the endpoint's
+     bearer off a LAN gets the browser, not the whole app. */
+  const APP_TOKEN = "agx-app-token-that-is-not-the-mcp-one-0123456789";
   const mcpUrl = () => `http://127.0.0.1:${httpPort}`;
   let httpPort = 0;
   let mcp: ReturnType<typeof Bun.spawn> | null = null;
@@ -730,7 +734,8 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
       env: {
         PATH: process.env.PATH ?? "",
         AGENTGLASS_SERVER: base,
-        AGENTGLASS_TOKEN: TOKEN,
+        AGENTGLASS_TOKEN: APP_TOKEN,
+        AGENTGLASS_MCP_TOKEN: TOKEN,
         AGENTGLASS_MCP_HTTP: `127.0.0.1:${httpPort}`,
       },
       stdout: "ignore", stderr: "pipe",
@@ -769,14 +774,55 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     expect(j.result.capabilities.tools).toBeDefined();
   });
 
-  test("a missing or wrong bearer token is refused", async () => {
+  test("a missing or wrong bearer token is refused, and the app's own token is a wrong one", async () => {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" });
-    const none = await fetch(mcpUrl() + "/", { method: "POST", body });
+    const none = await fetch(mcpUrl() + "/", { method: "POST", headers: { "content-type": "application/json" }, body });
     expect(none.status).toBe(401);
     const wrong = await fetch(mcpUrl() + "/", {
-      method: "POST", headers: { authorization: "Bearer nope" }, body,
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer nope" }, body,
     });
     expect(wrong.status).toBe(401);
+    const app = await fetch(mcpUrl() + "/", {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${APP_TOKEN}` }, body,
+    });
+    expect(app.status, "the app token opens the app, not this endpoint").toBe(401);
+  });
+
+  test("with no AGENTGLASS_MCP_TOKEN the endpoint mints one, says it on stderr, and answers to nothing else", async () => {
+    /* Loopback used to be auth-free "the way the server is". It is not any
+       more: a page on any site can reach 127.0.0.1 with a request the browser
+       will send, and the token is the one thing it cannot forge. So there is
+       always a token — the operator's, or one minted for this process. */
+    const port = await freePort();
+    const minted = Bun.spawn(["python3", MCP], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, AGENTGLASS_MCP_HTTP: `127.0.0.1:${port}` },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    try {
+      const reader = minted.stderr.getReader();
+      let err = "";
+      for (let i = 0; i < 50 && !/AGENTGLASS_MCP_TOKEN=\S+/.test(err); i++) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        err += new TextDecoder().decode(value);
+      }
+      const token = /AGENTGLASS_MCP_TOKEN=(\S+)/.exec(err)?.[1];
+      expect(token, `stderr must carry the minted token: ${err}`).toBeDefined();
+      expect(token!.length).toBeGreaterThanOrEqual(32);
+      const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" });
+      let ok = 0, bare = 0;
+      for (let i = 0; i < 50; i++) {
+        try {
+          ok = (await fetch(`http://127.0.0.1:${port}/`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body })).status;
+          bare = (await fetch(`http://127.0.0.1:${port}/`, { method: "POST", headers: { "content-type": "application/json" }, body })).status;
+          break;
+        } catch { await Bun.sleep(100); }
+      }
+      expect(ok).toBe(200);
+      expect(bare).toBe(401);
+    } finally {
+      minted.kill();
+    }
   });
 
   test("a notification is answered with the empty 202 the spec wants", async () => {
@@ -937,18 +983,33 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     expect(get.status).toBe(405);
   });
 
-  test("a non-loopback bind refuses to start without AGENTGLASS_TOKEN", async () => {
-    const refused = Bun.spawn(["python3", MCP], {
-      env: {
-        PATH: process.env.PATH ?? "",
-        AGENTGLASS_SERVER: base,
-        AGENTGLASS_MCP_HTTP: `0.0.0.0:${await freePort()}`,
-      },
+  /** Start the binary with these extra env vars and return its exit code and stderr. */
+  const startsWith = async (env: Record<string, string>) => {
+    const p = Bun.spawn(["python3", MCP], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, ...env },
       stdin: "ignore", stdout: "ignore", stderr: "pipe",
     });
-    const code = await refused.exited;
-    const err = await new Response(refused.stderr).text();
-    expect(code).toBe(2);
-    expect(err).toContain("refusing to bind");
+    return { code: await p.exited, err: await new Response(p.stderr).text() };
+  };
+
+  test("a non-loopback bind is an opt-in: it needs --expose (or AGENTGLASS_MCP_EXPOSE=1) as well as a token", async () => {
+    const off = `0.0.0.0:${await freePort()}`;
+    const noToken = await startsWith({ AGENTGLASS_MCP_HTTP: off, AGENTGLASS_MCP_EXPOSE: "1" });
+    expect(noToken.code).toBe(2);
+    expect(noToken.err).toContain("refusing to bind");
+    expect(noToken.err).toContain("AGENTGLASS_MCP_TOKEN");
+    const noOptIn = await startsWith({ AGENTGLASS_MCP_HTTP: off, AGENTGLASS_MCP_TOKEN: TOKEN });
+    expect(noOptIn.code).toBe(2);
+    expect(noOptIn.err).toContain("refusing to bind");
+    expect(noOptIn.err).toContain("--expose");
+  });
+
+  test("a token shorter than 32 chars, or equal to the app's, refuses to start", async () => {
+    const short = await startsWith({ AGENTGLASS_MCP_HTTP: `127.0.0.1:${await freePort()}`, AGENTGLASS_MCP_TOKEN: "short" });
+    expect(short.code).toBe(2);
+    expect(short.err).toContain("32");
+    const same = await startsWith({ AGENTGLASS_MCP_HTTP: `127.0.0.1:${await freePort()}`, AGENTGLASS_MCP_TOKEN: APP_TOKEN, AGENTGLASS_TOKEN: APP_TOKEN });
+    expect(same.code).toBe(2);
+    expect(same.err).toContain("AGENTGLASS_TOKEN");
   });
 });

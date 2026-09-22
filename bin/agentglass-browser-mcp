@@ -30,18 +30,21 @@ is installed, not one where a package tree was.
 
     claude mcp add agentglass-browser -- agentglass-browser-mcp
 
-The same server also speaks MCP's Streamable-HTTP transport over a plain, local
-socket — `agentglass-browser-mcp --http 127.0.0.1:8765` (or
-AGENTGLASS_MCP_HTTP=127.0.0.1:8765) — which is the one an agent runtime on
-another device can reach. Its fences are the app's own: the Bearer token is
-AGENTGLASS_TOKEN, non-loopback binds refuse to start without one, and every
-request is checked against the same caps obscura runs. See the "Streamable-HTTP
-transport" section below.
+The same server also speaks MCP's Streamable-HTTP transport —
+`agentglass-browser-mcp --http 8765` (or AGENTGLASS_MCP_HTTP=8765) — which is
+the one an agent runtime on another device can reach. It binds loopback unless
+told otherwise, it has a Bearer token of its own (AGENTGLASS_MCP_TOKEN, never
+the app's), and a bind off loopback is an opt-in (`--expose`) that says on
+stderr that the token travels in the clear until TLS terminates in front of
+it. See the "Streamable-HTTP transport" section below.
 
 Environment:
-    AGENTGLASS_SERVER   default http://localhost:4000
-    AGENTGLASS_TOKEN    only needed if the server was started with one
-    AGENTGLASS_MCP_HTTP HOST:PORT — serve MCP over Streamable HTTP instead of stdio
+    AGENTGLASS_SERVER     default http://localhost:4000
+    AGENTGLASS_TOKEN      only needed if the server was started with one
+    AGENTGLASS_MCP_HTTP   [HOST:]PORT — serve MCP over Streamable HTTP instead of stdio
+    AGENTGLASS_MCP_TOKEN  the Bearer token that endpoint requires (32+ chars);
+                          minted for the process, and printed, when unset
+    AGENTGLASS_MCP_EXPOSE 1 — the same opt-in as --expose
 """
 import hmac
 import ipaddress
@@ -2025,15 +2028,27 @@ def handle_message(msg):
 # how the bytes arrive changes. This is what lets an agent runtime on another
 # device drive the signed-in browser, instead of needing a pipe on this box.
 #
-# The fences are the app's own, not a new set. The Bearer token is
-# AGENTGLASS_TOKEN, and binding anywhere but loopback refuses to start without
-# one (32+ chars — the same floor the app's own docs set). The Host header must
-# name the bound authority, so a DNS-rebinding page cannot point a hostname at
-# this port and have the token let it in. A browser Origin is refused unless it
-# means this app's own server or talks https — the cross-site shape obscura
-# blocks with its origin allowlist. Three caps follow its model: a 1 MiB body
-# (a forged Content-Length is how a parser OOMs), an 8-message batch, and a
-# bounded number of concurrent handlers.
+# THE TOKEN IS THIS ENDPOINT'S OWN. The first version reused AGENTGLASS_TOKEN,
+# the token that authorises the whole app server, and this transport is plain
+# HTTP: off loopback, on a LAN or a café network, anyone reading the wire got
+# the app, not a browser. Now the bearer is AGENTGLASS_MCP_TOKEN (32+ chars),
+# refused if it equals the app's, and minted for the process — and printed on
+# stderr once, so it can be pasted into a client — when it is not set. It is
+# required on EVERY request, loopback included: the first version let loopback
+# go auth-free "the way the server does", and a page on any website can send
+# a request to 127.0.0.1 that carries no token; the token is the one thing
+# such a page cannot forge.
+#
+# THE BIND IS LOOPBACK UNLESS SAID OTHERWISE. `--http 8765` is 127.0.0.1:8765.
+# Any other address needs `--expose` (or AGENTGLASS_MCP_EXPOSE=1) as well as a
+# token, and the start-up line says the token crosses the network in the clear
+# until something terminates TLS in front of this port (a tunnel, a reverse
+# proxy). The warning cannot know whether one is there; it is printed every
+# time, and the opt-in is what says the operator read it.
+#
+# Three caps then bound what a request can cost: a 1 MiB body (a forged
+# Content-Length is how a parser OOMs), an 8-message batch, and a bounded
+# number of concurrent handlers.
 
 _HTTP_BODY_MAX = 1024 * 1024
 _HTTP_BATCH_MAX = 8
@@ -2132,14 +2147,12 @@ class _McpHttp(BaseHTTPRequestHandler):
     def _post(self):
         if self.path != "/":
             return self._reject(404, "only POST / speaks MCP")
-        token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
-        if token:
-            want = self.headers.get("Authorization", "")
-            have = want[7:] if want[:7].lower() == "bearer " else ""
-            if have and not hmac.compare_digest(have, token):
-                return self._reject(401, "wrong bearer token")
-            if not have:
-                return self._reject(401, "missing bearer token")
+        want = self.headers.get("Authorization", "")
+        have = want[7:] if want[:7].lower() == "bearer " else ""
+        if not have:
+            return self._reject(401, "missing bearer token")
+        if not hmac.compare_digest(have, self.server.mcp_token):
+            return self._reject(401, "wrong bearer token")
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -2190,22 +2203,61 @@ class _McpHttp(BaseHTTPRequestHandler):
         return self._reply(200, payload, headers, sse=sse)
 
 
-def _run_http(bind):
-    host, _, port = bind.partition(":")
-    if not host or not port.isdigit():
-        print(f"--http wants HOST:PORT, got {bind!r}", file=sys.stderr)
+def _parse_bind(bind):
+    """`PORT`, `HOST:PORT` or `[v6]:PORT` as (host, port), or None. A bare
+    port is loopback: the default is the bind that exposes nothing."""
+    bind = (bind or "").strip()
+    if bind.isdigit():
+        host, port = "127.0.0.1", bind
+    elif bind.startswith("["):
+        host, sep, port = bind[1:].partition("]:")
+        if not sep:
+            return None
+    else:
+        host, _, port = bind.rpartition(":")
+    if not host or not port.isdigit() or not 0 < int(port) < 65536:
+        return None
+    return host, int(port)
+
+
+def _run_http(bind, expose=False):
+    parsed = _parse_bind(bind)
+    if not parsed:
+        print(f"--http wants [HOST:]PORT, got {bind!r}", file=sys.stderr)
         return 2
-    token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    host, port = parsed
+    token = os.environ.get("AGENTGLASS_MCP_TOKEN", "").strip()
     if token and len(token) < 32:
-        print("AGENTGLASS_TOKEN must be at least 32 chars to serve MCP over HTTP", file=sys.stderr)
+        print("AGENTGLASS_MCP_TOKEN must be at least 32 chars to serve MCP over HTTP", file=sys.stderr)
         return 2
-    if not _loopback(host) and not token:
-        print(f"refusing to bind {host}: serving MCP over HTTP off loopback needs "
-              "AGENTGLASS_TOKEN (32+ chars)", file=sys.stderr)
+    if token and hmac.compare_digest(token, os.environ.get("AGENTGLASS_TOKEN", "").strip()):
+        print("AGENTGLASS_MCP_TOKEN must not be AGENTGLASS_TOKEN: the endpoint's token opens the "
+              "browser, and only the browser — the app's token stays with the app", file=sys.stderr)
         return 2
-    httpd = ThreadingHTTPServer((host, int(port)), _McpHttp)
-    print(f"agentglass-browser MCP over Streamable HTTP on http://{host}:{port}/" +
-          (" (token required)" if token else " (loopback, no token)"), file=sys.stderr)
+    expose = expose or os.environ.get("AGENTGLASS_MCP_EXPOSE", "").strip() == "1"
+    if not _loopback(host):
+        if not token:
+            print(f"refusing to bind {host}: serving MCP over HTTP off loopback needs "
+                  "AGENTGLASS_MCP_TOKEN (32+ chars) set by you, not minted", file=sys.stderr)
+            return 2
+        if not expose:
+            print(f"refusing to bind {host}: a bind off loopback is an opt-in — pass --expose "
+                  "(or AGENTGLASS_MCP_EXPOSE=1) once you have read what it means", file=sys.stderr)
+            return 2
+    minted = not token
+    if minted:
+        token = secrets.token_urlsafe(32)
+    httpd = ThreadingHTTPServer((host, port), _McpHttp)
+    httpd.mcp_token = token
+    print(f"agentglass-browser MCP over Streamable HTTP on http://{host}:{port}/ (token required)", file=sys.stderr)
+    if minted:
+        print(f"AGENTGLASS_MCP_TOKEN was not set; this process answers to this one, and to nothing after it exits:\n"
+              f"  AGENTGLASS_MCP_TOKEN={token}", file=sys.stderr)
+    if not _loopback(host):
+        print(f"WARNING: {host} is not loopback and this is plain HTTP. The token, and every page the browser "
+              "reads, cross the network in the clear until TLS terminates in front of this port — a tunnel "
+              "that does (tailscale serve) or a reverse proxy. Anyone who reads the wire can drive the "
+              "signed-in browser.", file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -2216,12 +2268,14 @@ def _run_http(bind):
 def main(argv=None):
     import argparse
     _ap = argparse.ArgumentParser(prog="agentglass-browser-mcp", add_help=False)
-    _ap.add_argument("--http", metavar="HOST:PORT",
-                     help="serve MCP over Streamable HTTP instead of stdio")
+    _ap.add_argument("--http", metavar="[HOST:]PORT",
+                     help="serve MCP over Streamable HTTP instead of stdio (loopback unless HOST says otherwise)")
+    _ap.add_argument("--expose", action="store_true",
+                     help="allow a --http bind off loopback; the token then crosses the network in the clear")
     args, _ = _ap.parse_known_args(argv)
     http_bind = args.http or os.environ.get("AGENTGLASS_MCP_HTTP")
     if http_bind:
-        return _run_http(http_bind)
+        return _run_http(http_bind, expose=args.expose)
     for line in sys.stdin:
         line = line.strip()
         if not line:
