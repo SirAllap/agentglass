@@ -68,7 +68,8 @@ describe("what a restored pane is told to run", () => {
 
 describe("where the id comes from", () => {
   it("prefers the note the pane hook wrote, when this agent's own hooks wrote it", () => {
-    expect(src).toContain("const note = paneAgentNote(p.id);");
+    /* This server's note: a pane id is only one server's. */
+    expect(src).toContain("const note = paneAgentNote(p.id, server);");
     expect(src).toContain("const noteFits = !!note && noteIsThisAgents(note, under, server);");
   });
 

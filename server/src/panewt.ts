@@ -48,21 +48,81 @@
  * and on a session that has been resumed it names a transcript that does not
  * exist — measured on the one session this was written against.
  */
+import type { Database } from "bun:sqlite";
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { db } from "./db.ts";
 import { agentCwdsUnder } from "./paneloc.ts";
 
-db.exec(`
+/**
+ * One row per pane OF ONE TMUX SERVER: the key is the pane id and the server
+ * together ("<socket path>,<server pid>", as the hook reads it out of $TMUX,
+ * or "" from a hook that does not say).
+ *
+ * The pane id alone is not a pane. Every tmux server hands out `%0, %1…`,
+ * the engine and the person's own tmux both run Claude, and hooks fire from
+ * both — so keyed by the id alone, whichever server's `%2` fired last owned
+ * the row. The restore sets another server's note aside, which left the
+ * engine's agent photographed with only what its argv carried: nothing for a
+ * Claude started fresh (a shell at the next boot, its conversation orphaned),
+ * and the old id for a restored one that had `/clear`ed since (the conversation
+ * it had left resumed at the next boot). A reboot is the same thing in time
+ * rather than space: the new server hands the dead one's ids out again, under
+ * a new pid.
+ *
+ * Ceiling: the pid is a server's name for its life, not forever — a server
+ * after a reboot can draw the pid of the one before it. Its row then carries
+ * the dead server's note until its own hook fires, and the restore tells the
+ * two apart by time (`noteIsThisAgents`), as it did before the server was in
+ * the key. Rows of dead servers are kept for `KEEP_MS` and then dropped.
+ *
+ * Exported so the migration can be run against a database built by hand.
+ */
+export function ensurePaneAgentTable(d: Database): void {
+  d.exec(`
 CREATE TABLE IF NOT EXISTS pane_agent (
-  pane_id         TEXT PRIMARY KEY,
+  pane_id         TEXT NOT NULL,
   session_id      TEXT NOT NULL,
   transcript_path TEXT NOT NULL,
   cwd             TEXT NOT NULL,
-  at              INTEGER NOT NULL
+  at              INTEGER NOT NULL,
+  server          TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (pane_id, server)
 )`);
-/* Which tmux server the pane is on, as "<socket path>,<server pid>" — see
-   `notePaneFromHook`. Empty for a hook that does not say. */
-try { db.exec("ALTER TABLE pane_agent ADD COLUMN server TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
+  const cols = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all();
+  /* A table from before the server was recorded at all. */
+  if (!cols.some((c) => c.name === "server")) {
+    d.exec("ALTER TABLE pane_agent ADD COLUMN server TEXT NOT NULL DEFAULT ''");
+  }
+  /* A table keyed by the pane id alone: SQLite cannot change a primary key in
+     place, so it is rebuilt, rows and all, in one transaction. */
+  if (!cols.some((c) => c.name === "server" && c.pk > 0)) {
+    d.transaction(() => {
+      d.exec(`CREATE TABLE pane_agent_by_server (
+  pane_id         TEXT NOT NULL,
+  session_id      TEXT NOT NULL,
+  transcript_path TEXT NOT NULL,
+  cwd             TEXT NOT NULL,
+  at              INTEGER NOT NULL,
+  server          TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (pane_id, server)
+)`);
+      d.exec(`INSERT INTO pane_agent_by_server (pane_id, session_id, transcript_path, cwd, at, server)
+SELECT pane_id, session_id, transcript_path, cwd, at, server FROM pane_agent`);
+      d.exec("DROP TABLE pane_agent");
+      d.exec("ALTER TABLE pane_agent_by_server RENAME TO pane_agent");
+    })();
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_pane_agent_session ON pane_agent (session_id, at)");
+}
+
+/** How long a row outlives its last hook. A pane id is only reused within a
+ *  server, and a server that has been gone a month is not coming back; while
+ *  the key was the id alone the next server overwrote these rows, and now
+ *  nothing would. */
+const KEEP_MS = 30 * 24 * 60 * 60_000;
+
+ensurePaneAgentTable(db);
+try { db.run("DELETE FROM pane_agent WHERE at < ?", [Date.now() - KEEP_MS]); } catch { /* a read-only database keeps its rows */ }
 
 /** tmux's own spelling of a pane id. Anything else came from somewhere that
  *  should not be writing here, and is dropped rather than stored. */
@@ -81,18 +141,26 @@ export interface PaneAgentNote {
 const noteUpsert = db.query(`
 INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at, server)
 VALUES ($pane_id, $session_id, $transcript_path, $cwd, $at, $server)
-ON CONFLICT(pane_id) DO UPDATE SET
+ON CONFLICT(pane_id, server) DO UPDATE SET
   session_id = excluded.session_id,
   transcript_path = excluded.transcript_path,
   cwd = excluded.cwd,
-  at = excluded.at,
-  server = excluded.server`);
+  at = excluded.at`);
 
 /** A tmux server as the hook names it: an absolute socket path and a pid. */
 const TMUX_SERVER = /^\/[^\0\n\r]{1,1024},\d{1,10}$/;
 
 const noteRead = db.query<PaneAgentNote, [string]>(
-  "SELECT * FROM pane_agent WHERE pane_id = ?",
+  "SELECT * FROM pane_agent WHERE pane_id = ? ORDER BY at DESC LIMIT 1",
+);
+
+/* This server's row, or failing that one from a hook that named no server. */
+const noteReadOn = db.query<PaneAgentNote, [string, string]>(
+  "SELECT * FROM pane_agent WHERE pane_id = ?1 AND server IN (?2, '') ORDER BY server = '' ASC, at DESC LIMIT 1",
+);
+
+const noteBySession = db.query<PaneAgentNote, [string]>(
+  "SELECT * FROM pane_agent WHERE session_id = ? ORDER BY at DESC LIMIT 1",
 );
 
 const recentPanes = db.query<{ pane_id: string; session_id: string; cwd: string; at: number }, [number, number]>(
@@ -102,8 +170,8 @@ const recentPanes = db.query<{ pane_id: string; session_id: string; cwd: string;
 /**
  * Remember which agent is in which pane.
  *
- * One row per pane, overwritten: a pane holds one agent at a time, and the
- * interesting question is always about the one in it now. Persisted rather than
+ * One row per pane of a server, overwritten: a pane holds one agent at a
+ * time, and the interesting question is always about the one in it now. Persisted rather than
  * kept in memory because the pane an agent has gone quiet in is exactly the
  * pane somebody asks about later — an in-memory map is empty after a restart
  * until the agent happens to run another tool, which for an idle agent is
@@ -152,9 +220,34 @@ const paneBySession = db.query<{ pane_id: string }, [string]>(
   "SELECT pane_id FROM pane_agent WHERE session_id = ? ORDER BY at DESC LIMIT 1",
 );
 
-export function paneAgentNote(pane: string): PaneAgentNote | null {
+/**
+ * The note for a pane.
+ *
+ * With `server`, that server's pane: its own row, else one from a hook that
+ * did not name its server — which may be anybody's, and whether it is this
+ * agent's is the caller's question (`noteIsThisAgents`). Never another
+ * server's.
+ *
+ * Without (or with "", a server that could not be read), the newest row for
+ * the id on any server: what a row keyed by the
+ * id alone answered, kept for the readers that cannot say which server they
+ * mean. Those readers also check the note against the pane's own agent.
+ */
+export function paneAgentNote(pane: string, server?: string): PaneAgentNote | null {
   if (!PANE_ID.test(pane)) return null;
-  return noteRead.get(pane) ?? null;
+  return (server ? noteReadOn.get(pane, server) : noteRead.get(pane)) ?? null;
+}
+
+/**
+ * A session's own newest note, found by the session.
+ *
+ * `paneAgentNote(paneForSession(s))` asks the same question through the pane
+ * id, and the pane id is the half another server can have taken since: its
+ * newest row may be a different conversation's.
+ */
+export function noteForSession(sessionId: string): PaneAgentNote | null {
+  if (!sessionId) return null;
+  return noteBySession.get(sessionId) ?? null;
 }
 
 /** Fields of a tool's input that name a place. `command` is the whole shell

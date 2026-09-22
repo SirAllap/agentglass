@@ -20,8 +20,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  dirsFromTranscript, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, readTail, resetTailCache,
+  dirsFromTranscript, ensurePaneAgentTable, noteForSession, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, readTail, resetTailCache,
 } from "../src/panewt.ts";
+import { Database } from "bun:sqlite";
 
 const WT = "/home/dev/code/orbit-WEB-1042";
 const REPO = "/home/dev/code/orbit";
@@ -125,16 +126,20 @@ describe("the pane note", () => {
   });
 
   test("the note says which tmux server the pane is on, because a pane id alone is only one server's", () => {
-    /* `%2` in the person's own tmux and `%2` on the engine are two panes; the
-       hook fires from both, and the row is keyed by the id alone. */
-    expect(notePaneFromHook({ session_id: "s1", tmux_pane: PANE, tmux_server: "/tmp/tmux-1000/orbit,4242", payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
-    expect(paneAgentNote(PANE)?.server).toBe("/tmp/tmux-1000/orbit,4242");
+    /* `%2` in the person's own tmux and `%2` on the engine are two panes, and
+       the hook fires from both. */
+    const P = "%9919", ORBIT = "/tmp/tmux-1000/orbit,4242";
+    expect(notePaneFromHook({ session_id: "s1", tmux_pane: P, tmux_server: ORBIT, payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
+    expect(paneAgentNote(P, ORBIT)?.server).toBe(ORBIT);
     /* A hook from before this field, or one that sends something else, writes
-       no server — and never keeps the previous writer's. */
-    expect(notePaneFromHook({ session_id: "s2", tmux_pane: PANE, payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
-    expect(paneAgentNote(PANE)?.server).toBe("");
-    expect(notePaneFromHook({ session_id: "s3", tmux_pane: PANE, tmux_server: "not a server\n", payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
-    expect(paneAgentNote(PANE)?.server).toBe("");
+       a note that names no server — and never files it under the previous
+       writer's. */
+    expect(notePaneFromHook({ session_id: "s2", tmux_pane: P, payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
+    expect(notePaneFromHook({ session_id: "s3", tmux_pane: P, tmux_server: "not a server\n", payload: { transcript_path: "/t.jsonl", cwd: REPO } })).toBe(true);
+    expect(paneAgentNote(P, ORBIT)?.session_id, "the server's own note stands").toBe("s1");
+    const unnamed = paneAgentNote(P, "/tmp/tmux-1000/default,1");
+    expect(unnamed?.server).toBe("");
+    expect(unnamed?.session_id).toBe("s3");
   });
 
   test.skipIf(!Bun.which("python3"))("the hook sends the server out of $TMUX, which it inherits from the pane", async () => {
@@ -151,6 +156,69 @@ describe("the pane note", () => {
       expect(got.tmux_pane).toBe("%7");
       expect(got.tmux_server).toBe("/tmp/tmux-1000/orbit,4242");
     } finally { server.stop(true); }
+  });
+
+  test("the same pane id on two tmux servers is two notes, and neither overwrites the other", () => {
+    /* The engine's `%2` and the person's own `%2` both fire hooks. Keyed by
+       the id alone, whichever fired last took the row, and the engine's agent
+       was photographed with no conversation: a shell after the next boot. */
+    const P = "%9920", ENGINE = "/tmp/tmux-1000/agentglass,4242", MINE = "/tmp/tmux-1000/default,777";
+    notePaneAgent({ pane: P, sessionId: "engine-agent", transcriptPath: "/e.jsonl", cwd: REPO, server: ENGINE, at: 1_000 });
+    notePaneAgent({ pane: P, sessionId: "my-agent", transcriptPath: "/m.jsonl", cwd: REPO, server: MINE, at: 2_000 });
+    expect(paneAgentNote(P, ENGINE)?.session_id).toBe("engine-agent");
+    expect(paneAgentNote(P, MINE)?.session_id).toBe("my-agent");
+    /* Asked without a server, the newest — what a row keyed by the id alone
+       answered, for the readers that cannot say which server they mean. */
+    expect(paneAgentNote(P)?.session_id).toBe("my-agent");
+    /* Within one server the agent in the pane now still replaces the one before. */
+    notePaneAgent({ pane: P, sessionId: "engine-after-clear", transcriptPath: "/e2.jsonl", cwd: REPO, server: ENGINE, at: 3_000 });
+    expect(paneAgentNote(P, ENGINE)?.session_id).toBe("engine-after-clear");
+    expect(paneAgentNote(P, MINE)?.session_id).toBe("my-agent");
+  });
+
+  test("a server with no note of its own gets one that names no server, never another server's", () => {
+    const P = "%9921";
+    notePaneAgent({ pane: P, sessionId: "elsewhere", transcriptPath: "/x.jsonl", cwd: REPO, server: "/tmp/tmux-1000/default,777" });
+    expect(paneAgentNote(P, "/tmp/tmux-1000/agentglass,5151")).toBeNull();
+    /* A hook installed before it named its server: whether that is this
+       server's is the caller's question, and `noteIsThisAgents` answers it. */
+    notePaneAgent({ pane: P, sessionId: "unnamed", transcriptPath: "/u.jsonl", cwd: REPO });
+    expect(paneAgentNote(P, "/tmp/tmux-1000/agentglass,5151")?.session_id).toBe("unnamed");
+  });
+
+  test("a session's own note is found by the session, not through a pane id another server may have taken", () => {
+    const P = "%9922";
+    notePaneAgent({ pane: P, sessionId: "budgeted", transcriptPath: "/b.jsonl", cwd: WT, server: "/tmp/tmux-1000/agentglass,4242", at: 1_000 });
+    notePaneAgent({ pane: P, sessionId: "someone-else", transcriptPath: "/s.jsonl", cwd: REPO, server: "/tmp/tmux-1000/default,777", at: 2_000 });
+    expect(noteForSession("budgeted")?.cwd).toBe(WT);
+    expect(noteForSession("never-seen")).toBeNull();
+  });
+
+  test("a table keyed by the pane id alone is rebuilt with the server in the key, and keeps its rows", () => {
+    const d = new Database(":memory:");
+    d.exec(`CREATE TABLE pane_agent (pane_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, transcript_path TEXT NOT NULL, cwd TEXT NOT NULL, at INTEGER NOT NULL)`);
+    d.exec(`ALTER TABLE pane_agent ADD COLUMN server TEXT NOT NULL DEFAULT ''`);
+    d.run(`INSERT INTO pane_agent VALUES ('%1', 'kept', '/k.jsonl', '/home/dev/code/orbit', 5, '/tmp/tmux-1000/agentglass,1')`);
+    d.run(`INSERT INTO pane_agent VALUES ('%2', 'unnamed', '/u.jsonl', '/home/dev/code/orbit', 6, '')`);
+    ensurePaneAgentTable(d);
+    const key = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all().filter((c) => c.pk > 0).map((c) => c.name).sort();
+    expect(key).toEqual(["pane_id", "server"]);
+    expect(d.query("SELECT session_id FROM pane_agent ORDER BY at").all()).toEqual([{ session_id: "kept" }, { session_id: "unnamed" }]);
+    /* And now a second server's %1 is a row of its own. */
+    d.run(`INSERT INTO pane_agent VALUES ('%1', 'other', '/o.jsonl', '/home/dev/code/orbit', 7, '/tmp/tmux-1000/default,2')`);
+    expect(d.query("SELECT COUNT(*) AS n FROM pane_agent WHERE pane_id = '%1'").get()).toEqual({ n: 2 });
+    /* Run again on a table already rebuilt: nothing changes. */
+    ensurePaneAgentTable(d);
+    expect(d.query("SELECT COUNT(*) AS n FROM pane_agent").get()).toEqual({ n: 3 });
+    d.close();
+  });
+
+  test("a database that never had the table gets it keyed by server and pane", () => {
+    const d = new Database(":memory:");
+    ensurePaneAgentTable(d);
+    const key = d.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all().filter((c) => c.pk > 0).map((c) => c.name).sort();
+    expect(key).toEqual(["pane_id", "server"]);
+    d.close();
   });
 });
 

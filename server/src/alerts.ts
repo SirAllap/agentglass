@@ -17,7 +17,7 @@
 // desktop setting can suppress. Treat everything below as best-effort reach
 // for when nobody is looking at agentglass at all.
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
-import { paneForSession, paneAgentNote } from "./panewt.ts";
+import { paneForSession, noteForSession } from "./panewt.ts";
 import { listPanes } from "./tmuxctl.ts";
 import { webhookDestination } from "./egress.ts";
 
@@ -386,7 +386,7 @@ export function describeAgent(e: WatchEvent): string {
  */
 export function describeSession(sourceApp: string, sessionId: string, cwdIn = ""): string {
   const pane = paneForSession(sessionId);
-  const cwd = cwdIn || (pane ? paneAgentNote(pane)?.cwd ?? "" : "");
+  const cwd = cwdIn || (noteForSession(sessionId)?.cwd ?? "");
   // Trailing slashes come from a shell that had one; `filter(Boolean)` so the
   // basename of "/home/u/repo/" is "repo" rather than "".
   const checkout = cwd.split("/").filter(Boolean).pop() ?? "";

@@ -434,12 +434,13 @@ export function agentUnder(panePid: number, proc: ProcReader = machineProc): Age
  * Is the hook's note about THIS agent, or about one that had the pane id
  * before it, or about a pane of the same id on another tmux?
  *
- * The note is keyed by pane id alone, and a pane id is only one server's.
- * Hooks fire from every tmux on the machine, so a Claude in the person's own
- * tmux on `%2` writes the note of the engine's `%2`; and ids start at %0
- * again on the server that restores a desk, so a note from the server that
- * died can name a pane of this one. The hook says which server it fired in
- * (`notePaneFromHook`), and a note from another is never this pane's.
+ * A pane id is only one server's. Hooks fire from every tmux on the
+ * machine, so a Claude in the person's own tmux on `%2` writes a note for
+ * `%2` too; and ids start at %0 again on the server that restores a desk, so
+ * a note from the server that died can name a pane of this one. The hook
+ * says which server it fired in (`notePaneFromHook`), the note is kept per
+ * server and pane (`ensurePaneAgentTable`), it is read for this server, and
+ * a note from another is never this pane's.
  *
  * Within one server, the question is when, not where. The first guard
  * compared the note's directory with the process's, and set aside the notes
@@ -884,7 +885,7 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
             .find((x) => x.id === w.id && (x.name ?? "") === (w.name ?? ""))?.panes
             .find((x) => x.id === p.id && (!p.path || x.path === p.path));
           const bornClaude = startCommand.split(/[\s"']+/).some((t) => (t.split("/").pop() || "") === claudeName());
-          const note = was || !bornClaude ? null : paneAgentNote(p.id);
+          const note = was || !bornClaude ? null : paneAgentNote(p.id, server);
           const noteFits = !!note && noteIsThisAgents(note, { cwd: p.path, startedAt }, server);
           const agentSession = was ? was.agentSession : noteFits ? note!.session_id : undefined;
           /* The flags of the last live photograph — which may have been
@@ -925,7 +926,7 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
            * not its. Then the argv's own `--resume`, which a restored pane
            * carries before any hook has fired.
            */
-          const note = paneAgentNote(p.id);
+          const note = paneAgentNote(p.id, server);
           const noteFits = !!note && noteIsThisAgents(note, under, server);
           const resumed = resumeIdIn(under.argv);
           const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
