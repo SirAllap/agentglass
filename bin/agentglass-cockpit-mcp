@@ -1,0 +1,568 @@
+#!/usr/bin/env python3
+"""agentglass's cockpit, as a read-only MCP server.
+
+The cockpit knows what a session has spent, how long its tools take, what has
+failed and what is waiting on a person. The agent producing all of that knows
+none of it, so it cannot answer "how much has this task cost" or "is anything
+of mine blocked on a human", and cannot moderate itself. The REST routes that
+hold the answers exist, but an agent has no way to discover them and no schema
+to call them with. This puts them behind tools.
+
+READ-ONLY, AND THAT IS THE TRANSPORT, NOT THE TOOL NAMES. Every request this
+process makes to the app is a GET (there is one Request in this file), so no
+tool here can write, kill or approve anything whatever arguments it is given.
+Control is a different server with a different token, if it is ever built.
+
+EVERY ANSWER HAS A CEILING. A result that would be larger than
+AGENTGLASS_COCKPIT_MAX_BYTES (16 KiB) is not cut in the middle — half a JSON
+payload burns the context it was meant to save and teaches the model nothing.
+Items are dropped from the end of the answer's lists (the oldest for lists of
+things that happened, which are newest first; the least for ranked ones, which
+are largest first) until it fits, and the answer says so:
+`"truncated": [{"field": "sessions", "kept": 12, "dropped": 38}]` and a
+`"narrow"` sentence naming the arguments that would make the next call smaller.
+A long text field — a session's summary is the last assistant message, and its
+first prompt is whatever was pasted — is clipped to CLIP characters first, and
+named the same way (`{"field": "summary", "clipped_to": 2048, "was": 20000}`).
+Its ceiling: the short scalars are never touched, so a ceiling set smaller than
+them is exceeded by them.
+
+Transport is stdio (`claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp`)
+or Streamable HTTP (`--http [HOST:]PORT`), and the HTTP side is the browser MCP
+server's own transport, imported rather than copied: loopback unless --expose,
+no Origin (a web page is not a caller), application/json only, and a bearer of
+its own — AGENTGLASS_COCKPIT_TOKEN, refused if it equals the app's token or the
+browser endpoint's, so none of the three opens either of the others.
+
+Environment:
+    AGENTGLASS_SERVER           default http://localhost:4000
+    AGENTGLASS_TOKEN            only needed if the server was started with one
+    AGENTGLASS_COCKPIT_HTTP     [HOST:]PORT — serve over Streamable HTTP instead of stdio
+    AGENTGLASS_COCKPIT_TOKEN    that endpoint's Bearer token (32+ chars); minted and printed when unset
+    AGENTGLASS_COCKPIT_EXPOSE   1 — the same opt-in as --expose
+    AGENTGLASS_COCKPIT_MAX_BYTES  the answer ceiling, default 16384
+"""
+import http.client
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def _transport():
+    # The browser server's file, loaded as a module: its HTTP transport, its
+    # stdio loop and its AGENTGLASS_SERVER check are the ones this server
+    # runs. realpath, because the installer symlinks both into ~/.local/bin
+    # and the file lives next to this one in the app's bin/.
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "agentglass-browser-mcp")
+    loader = importlib.machinery.SourceFileLoader("agentglass_browser_mcp", path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        loader.exec_module(mod)
+    except Exception as e:  # noqa: BLE001 — SystemExit (a refused AGENTGLASS_SERVER) passes through
+        # Its module level reads its own settings too (AGENTGLASS_BROWSER_WAIT);
+        # a malformed one is a line naming where, not a traceback about the browser.
+        print(f"agentglass-cockpit-mcp: cannot load the transport from {path}: "
+              f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}", file=sys.stderr)
+        sys.exit(2)
+    return mod
+
+
+T = _transport()
+SERVER = T.SERVER
+NAME = "agentglass-cockpit"
+VERSION = "1.0.0"
+DEFAULT_CEILING = 16 * 1024
+# A text field longer than this is clipped when an answer is over the ceiling.
+CLIP = 2048
+# How many events a filter (a session, a type, errors only) looks through, and
+# says it did. /events/recent sends every row WITH its payload — the prompt,
+# the file contents, the command output — parsed on the loop the terminal
+# rides, so this is the app's own default, the number it already sends each
+# window that connects, and not its 2000 maximum.
+EVENT_SCAN = 300
+# /sessions answers at most this many. A project's spend is summed over them.
+SESSION_SCAN = 1000
+# What spend is made of, on a session row and in /stats' totals alike.
+SPEND = ("cost_usd", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens")
+
+
+def get(path, params=None, timeout=30):
+    """One GET to the app. (status, value): 200 and the parsed JSON, or the
+    HTTP status (0 when there was no answer) and a sentence saying what went
+    wrong — the caller is a model, and an exception would break the transport
+    instead of telling it anything."""
+    q = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v is not None})
+    req = urllib.request.Request(f"{SERVER}{path}{'?' + q if q else ''}", method="GET",
+                                 headers={"Origin": SERVER, "Accept": "application/json"})
+    token = os.environ.get("AGENTGLASS_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return 200, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        e.close()
+        return e.code, f"agentglass answered {e.code} for {path}"
+    except urllib.error.URLError as e:
+        return 0, f"no agentglass at {SERVER} ({e.reason})"
+    except (ValueError, OSError, http.client.HTTPException) as e:
+        return 0, f"agentglass at {SERVER} gave no usable answer for {path} ({type(e).__name__})"
+
+
+# ── the ceiling ─────────────────────────────────────────────────────────────
+
+
+def _ceiling():
+    try:
+        return max(1, int(os.environ.get("AGENTGLASS_COCKPIT_MAX_BYTES") or DEFAULT_CEILING))
+    except ValueError:
+        return DEFAULT_CEILING
+
+
+def _dump(obj):
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _size(obj):
+    # surrogatepass: the app cuts text by UTF-16 unit, so half an emoji can
+    # arrive as a lone surrogate, which a plain encode refuses to count.
+    return len(_dump(obj).encode("utf-8", "surrogatepass"))
+
+
+def fit(obj, fields, narrow):
+    """`obj` under the ceiling, whole. The lists named in `fields` lose items
+    from their end — every list here is newest first — until the answer fits,
+    the list with the most bytes left giving first; what went is named in
+    `truncated`, and `narrow` says how to ask for less."""
+    ceiling = _ceiling()
+    if _size(obj) <= ceiling:
+        return obj
+    fields = list(dict.fromkeys(fields))
+    clipped = []
+    obj = dict(obj)
+    for k, v in list(obj.items()):
+        if isinstance(v, str) and len(v) > CLIP:
+            obj[k] = v[:CLIP] + "…"
+            clipped.append({"field": k, "clipped_to": CLIP, "was": len(v)})
+    lists = {f: list(obj.get(f) or []) for f in fields}
+    total = {f: len(v) for f, v in lists.items()}
+    cost = {f: [_size(x) + 1 for x in v] for f, v in lists.items()}
+
+    def build():
+        out = dict(obj)
+        out.update(lists)
+        out["truncated"] = clipped + [{"field": f, "kept": len(lists[f]), "dropped": total[f] - len(lists[f])}
+                                      for f in fields if len(lists[f]) < total[f]]
+        out["narrow"] = narrow
+        return out
+
+    out = build()
+    over = _size(out) - ceiling
+    while over > 0 and any(lists.values()):
+        # Drop by the estimate until it says we are under, then measure; the
+        # truncated entries themselves take bytes, so measuring is the check.
+        while over > 0 and any(lists.values()):
+            f = max((f for f in fields if lists[f]), key=lambda f: sum(cost[f][:len(lists[f])]))
+            lists[f].pop()
+            over -= cost[f][len(lists[f])]
+        out = build()
+        over = _size(out) - ceiling
+    return out
+
+
+# ── shaping ─────────────────────────────────────────────────────────────────
+
+
+def _iso(ms):
+    if not isinstance(ms, (int, float)) or ms <= 0:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ms / 1000))
+
+
+def _scalars(row):
+    return {k: v for k, v in row.items() if isinstance(v, (str, int, float, bool)) or v is None}
+
+
+def _session_row(s):
+    return {
+        "session_id": s.get("session_id"),
+        "title": s.get("custom_title") or s.get("ai_title"),
+        "project_path": s.get("project_path"),
+        "model_name": s.get("model_name"),
+        "source_app": s.get("source_app"),
+        "started_at": _iso(s.get("started_at")),
+        "last_seen": _iso(s.get("last_seen")),
+        "events": s.get("event_count"),
+        "tool_calls": s.get("tool_count"),
+        "errors": s.get("error_count"),
+        **{k: s.get(k) for k in SPEND},
+    }
+
+
+def _event_row(e):
+    return {
+        "id": e.get("id"),
+        "time": _iso(e.get("timestamp")),
+        "session_id": e.get("session_id"),
+        "hook_event_type": e.get("hook_event_type"),
+        "tool_name": e.get("tool_name"),
+        "source_app": e.get("source_app"),
+        "error": bool(e.get("error_text")),
+    }
+
+
+_WINDOW = re.compile(r"^(\d+)([mhd])$")
+
+
+def _window_ms(raw):
+    """'90m', '24h', '7d' or 'all' as the ms the app's /stats takes; None
+    when it is none of those."""
+    raw = (raw or "24h").strip().lower()
+    if raw == "all":
+        return "all"
+    m = _WINDOW.match(raw)
+    if not m or int(m.group(1)) == 0:
+        return None
+    return int(m.group(1)) * {"m": 60_000, "h": 3_600_000, "d": 86_400_000}[m.group(2)]
+
+
+def _limit(args, default, most):
+    try:
+        n = int(args.get("limit") or default)
+    except (TypeError, ValueError):
+        n = default
+    return max(1, min(most, n))
+
+
+def _str(args, key):
+    """A string argument, stripped; anything else a model sends is no filter."""
+    v = args.get(key)
+    return v.strip() if isinstance(v, str) else ""
+
+
+class Refused(Exception):
+    """A call that cannot be answered, said as a sentence to the model."""
+
+
+def _need(status_value):
+    status, value = status_value
+    if status != 200:
+        raise Refused(value)
+    return value
+
+
+def _session(sid):
+    status, d = get("/session", {"id": sid})
+    if status == 404:
+        raise Refused(f"no session {sid}")
+    if status != 200 or not isinstance(d, dict):
+        raise Refused(d if status != 200 else "agentglass answered /session with something that is not a session")
+    return d
+
+
+def _recent(limit):
+    rows = _need(get("/events/recent", {"limit": limit}))
+    if not isinstance(rows, list):
+        raise Refused("agentglass answered /events/recent with something that is not a list")
+    return list(reversed(rows))  # the app sends oldest first
+
+
+def _board():
+    b = _need(get("/agents/board"))
+    return [r for r in (b.get("agents") or []) if isinstance(r, dict)]
+
+
+def _agent_row(r):
+    out = _scalars(r)
+    if isinstance(r.get("wasCalled"), list):
+        out["wasCalled"] = r["wasCalled"]
+    # Why it is waiting — a permission prompt, a question, a gate — is the
+    # half of "waiting" a person can act on.
+    if isinstance(r.get("needsYou"), dict):
+        out["needsYou"] = {k: (_iso(v) if k == "since" else v) for k, v in _scalars(r["needsYou"]).items()}
+    for k in ("saidAt", "startedAt"):
+        if isinstance(out.get(k), (int, float)):
+            out[k] = _iso(out[k])
+    return out
+
+
+# ── tools ───────────────────────────────────────────────────────────────────
+
+
+def t_sessions(args):
+    limit = _limit(args, 20, 200)
+    project = _str(args, "project")
+    rows = _need(get("/sessions", {"limit": SESSION_SCAN if project else limit,
+                                    "provider": _str(args, "provider") or None}))
+    if project:
+        rows = [s for s in rows if project in (s.get("project_path") or "")]
+    rows = sorted(rows, key=lambda s: s.get("last_seen") or 0, reverse=True)[:limit]
+    return fit({"sessions": [_session_row(s) for s in rows]}, ["sessions"],
+               "pass a smaller limit, or project= to keep one project's sessions")
+
+
+SESSION_LISTS = ("timeline", "conversation", "changes")
+
+
+def t_session(args):
+    sid = _str(args, "id")
+    if not sid:
+        raise Refused("id is required: a session_id from cockpit_sessions")
+    d = _session(sid)
+    raw = args.get("include")
+    include = list(dict.fromkeys(x for x in (raw if isinstance(raw, list) else []) if x in SESSION_LISTS))
+    out = _scalars(d)
+    for k in ("started_at", "ended_at", "last_seen"):
+        out[k] = _iso(out.get(k))
+    out["tool_mix"] = d.get("tool_mix") or []
+    out["subagents"] = d.get("subagents") or []
+    for k in include:
+        # The app sends these newest first already, so the ceiling drops the oldest.
+        out[k] = d.get(k) or []
+    return fit(out, include + ["subagents", "tool_mix"],
+               "include fewer of timeline/conversation/changes")
+
+
+def t_spend(args):
+    session = _str(args, "session")
+    project = _str(args, "project")
+    if session and project:
+        raise Refused("pass session or project, not both")
+    if (session or project) and _str(args, "window"):
+        raise Refused("window applies to the whole-cockpit totals; a session or project is summed over all it has")
+    keys = SPEND
+    if session:
+        d = _session(session)
+        out = {"scope": {"session": session}, **{k: d.get(k) for k in keys}}
+        if any(out[k] is None for k in keys):
+            # The detail route carries cost and in/out tokens; the cache
+            # tokens live only on the rollup.
+            row = next((s for s in _need(get("/sessions", {"limit": SESSION_SCAN}))
+                        if s.get("session_id") == session), {})
+            out.update({k: row.get(k) for k in keys if out.get(k) is None})
+        return out
+    if project:
+        rows = [s for s in _need(get("/sessions", {"limit": SESSION_SCAN}))
+                if project in (s.get("project_path") or "")]
+        out = {"scope": {"project": project}, "sessions": len(rows)}
+        for k in keys:
+            out[k] = sum(s.get(k) or 0 for s in rows)
+        out["projects"] = sorted({s.get("project_path") for s in rows if s.get("project_path")})
+        out["counted"] = f"sessions whose project_path contains {project!r}, among the newest {SESSION_SCAN}"
+        return fit(out, ["projects"], "pass a longer project substring")
+    w = _window_ms(_str(args, "window"))
+    if w is None:
+        raise Refused("window is 'all' or a number with m, h or d: '90m', '24h', '7d'")
+    st = _need(get("/stats", {"window": w}))
+    totals = st.get("totals") or {}
+    out = {"scope": {"window": _str(args, "window") or "24h"}}
+    for k in keys + ("sessions", "events", "tool_calls", "tool_errors", "errors"):
+        out[k] = totals.get(k)
+    out["by_model"] = sorted((_scalars(m) for m in st.get("by_model") or []),
+                             key=lambda m: m.get("cost_usd") or 0, reverse=True)
+    out["by_app"] = sorted((_scalars(a) for a in st.get("by_app") or []),
+                           key=lambda a: a.get("cost_usd") or 0, reverse=True)
+    return fit(out, ["by_app", "by_model"], "pass a shorter window")
+
+
+def t_tool_latency(args):
+    w = _window_ms(_str(args, "window"))
+    if w is None:
+        raise Refused("window is 'all' or a number with m, h or d: '90m', '24h', '7d'")
+    tool = _str(args, "tool").lower()
+    st = _need(get("/stats", {"window": w}))
+    rows = [_scalars(t) for t in st.get("tool_latency") or []]
+    if tool:
+        rows = [t for t in rows if (t.get("tool_name") or "").lower() == tool]
+    rows.sort(key=lambda t: t.get("total_ms") or 0, reverse=True)
+    return fit({"window": _str(args, "window") or "24h", "tools": rows}, ["tools"],
+               "pass tool= to keep one tool")
+
+
+def t_errors(args):
+    limit = _limit(args, 20, 100)
+    session = _str(args, "session")
+    rows = _recent(EVENT_SCAN)
+    scanned = len(rows)
+    rows = [e for e in rows if e.get("error_text") and (not session or e.get("session_id") == session)][:limit]
+    errors = []
+    for e in rows:
+        r = _event_row(e)
+        del r["error"]
+        r["error_text"] = e.get("error_text")
+        errors.append(r)
+    return fit({"errors": errors, "scanned_events": scanned}, ["errors"],
+               "pass a smaller limit, or session= to keep one session's errors")
+
+
+def t_recent_events(args):
+    limit = _limit(args, 30, EVENT_SCAN)
+    session = _str(args, "session")
+    kind = _str(args, "type")
+    filtered = bool(session or kind)
+    rows = _recent(EVENT_SCAN if filtered else limit)
+    scanned = len(rows)
+    rows = [e for e in rows if (not session or e.get("session_id") == session)
+            and (not kind or e.get("hook_event_type") == kind)][:limit]
+    out = {"events": [_event_row(e) for e in rows]}
+    if filtered:
+        out["scanned_events"] = scanned
+    return fit(out, ["events"], "pass a smaller limit, or session=/type= to keep fewer events")
+
+
+def t_agents(args):
+    state = _str(args, "state")
+    rows = [_agent_row(r) for r in _board() if not state or r.get("state") == state]
+    return fit({"agents": rows}, ["agents"], "pass state= to keep one state")
+
+
+def t_attention(args):
+    # Stopped on a person: the board's `waiting` rows, less the Lantern's chat
+    # and the orchestrator's seat, which read this board and never count as
+    # somebody's work (see BoardRow.role). And every gate held for a decision.
+    waiting = [_agent_row(r) for r in _board() if r.get("state") == "waiting" and not r.get("role")]
+    gates = _need(get("/gate/pending")).get("gates") or []
+    return fit({"waiting": waiting, "gates": [_scalars(g) for g in gates if isinstance(g, dict)]},
+               ["waiting", "gates"], "ask cockpit_agents with state=waiting, or read the gates one at a time")
+
+
+def _tool(name, fn, description, properties=None, required=()):
+    return {
+        "name": name,
+        "description": description,
+        "inputSchema": {"type": "object", "properties": properties or {}, "required": list(required),
+                        "additionalProperties": False},
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
+                        "openWorldHint": False},
+        "_fn": fn,
+    }
+
+
+_LIMIT = lambda most, default: {"type": "integer", "minimum": 1, "maximum": most,  # noqa: E731
+                                "description": f"how many, newest first (default {default})"}
+_WINDOW_ARG = {"type": "string", "description": "how far back: '90m', '24h', '7d' or 'all' (default '24h')"}
+_SESSION_ARG = {"type": "string", "description": "a session_id, as cockpit_sessions lists it"}
+
+_TOOLS = [
+    _tool("cockpit_sessions", t_sessions,
+          "Sessions the cockpit has seen, newest first: project, model, when, events, tool calls, errors, "
+          "cost in USD and tokens.",
+          {"limit": _LIMIT(200, 20),
+           "project": {"type": "string", "description": "keep sessions whose project_path contains this"},
+           "provider": {"type": "string", "description": "keep one provider's sessions, e.g. 'anthropic'"}}),
+    _tool("cockpit_session", t_session,
+          "One session: its lifecycle, cost, the mix of tools it used and its subagents. The timeline, "
+          "conversation and file changes are heavy and come only when asked for with include.",
+          {"id": _SESSION_ARG,
+           "include": {"type": "array", "items": {"enum": list(SESSION_LISTS)},
+                       "description": "heavy lists to add, newest first"}},
+          ("id",)),
+    _tool("cockpit_spend", t_spend,
+          "What has been spent, in USD and tokens: for one session, for a project (summed over its "
+          "sessions), or for the whole cockpit over a window with a breakdown by model and by app. "
+          "Pass session, or project, or neither (then window applies).",
+          {"session": _SESSION_ARG,
+           "project": {"type": "string", "description": "a substring of the project path"},
+           "window": _WINDOW_ARG}),
+    _tool("cockpit_tool_latency", t_tool_latency,
+          "How long tools take: per tool, calls, errors, p50/p95/max/avg milliseconds, slowest total first.",
+          {"window": _WINDOW_ARG, "tool": {"type": "string", "description": "one tool, e.g. 'Bash'"}}),
+    _tool("cockpit_errors", t_errors,
+          f"Recent failures (failed tool calls and error events) with their text, newest first, from the "
+          f"last {EVENT_SCAN} events.",
+          {"session": _SESSION_ARG, "limit": _LIMIT(100, 20)}),
+    _tool("cockpit_recent_events", t_recent_events,
+          "Recent hook events, newest first, without their payloads: time, session, type, tool, whether it "
+          f"failed. A session or type filter looks through the last {EVENT_SCAN} events.",
+          {"session": _SESSION_ARG,
+           "type": {"type": "string", "description": "a hook event type, e.g. 'PostToolUse', 'Stop', 'Notification'"},
+           "limit": _LIMIT(EVENT_SCAN, 30)}),
+    _tool("cockpit_agents", t_agents,
+          "The agents on this machine, one row each: name, what it says it is doing, where, and its state "
+          "(working, waiting on a person, idle).",
+          {"state": {"type": "string", "enum": ["working", "waiting", "idle"]}}),
+    _tool("cockpit_attention", t_attention,
+          "What is waiting on a person right now: agents stopped on a question or a permission prompt, "
+          "and gates held for a decision. Read-only: nothing here answers or approves them."),
+]
+TOOLS = [{k: v for k, v in t.items() if k != "_fn"} for t in _TOOLS]
+_BY_NAME = {t["name"]: t["_fn"] for t in _TOOLS}
+
+
+def run(name, args):
+    fn = _BY_NAME.get(name) if isinstance(name, str) else None
+    if not fn:
+        return {"content": [{"type": "text", "text": f"no tool {name!r}; this server has "
+                             + ", ".join(sorted(_BY_NAME))}], "isError": True}
+    if not isinstance(args, dict):
+        args = {}
+    try:
+        value = fn(args)
+    except Refused as e:
+        return {"content": [{"type": "text", "text": str(e)}], "isError": True}
+    except Exception as e:  # noqa: BLE001
+        # Whatever else goes wrong is this call's answer, not the process's
+        # end: on stdio one traceback loses the server for the whole session.
+        return {"content": [{"type": "text", "text": f"{name} failed: {type(e).__name__}: {e}"}], "isError": True}
+    return {"content": [{"type": "text", "text": _dump(value)}]}
+
+
+def handle_message(msg):
+    method = msg.get("method")
+    msg_id = msg.get("id")
+    if msg_id is None:
+        return None
+    if method == "initialize":
+        return T.make_reply(msg_id, {
+            "protocolVersion": T.PROTOCOL,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": NAME, "version": VERSION},
+            "instructions": (
+                "What the agentglass cockpit knows about the agents on this machine, read-only: sessions and "
+                "their spend, tool latency, recent errors, and what is waiting on a person. Nothing here "
+                "writes, kills or approves. Every answer is kept under a size ceiling; when one would be larger it comes back with "
+                "`truncated` naming what was dropped and `narrow` saying how to ask for less."
+            ),
+        })
+    if method == "tools/list":
+        return T.make_reply(msg_id, {"tools": TOOLS})
+    if method == "tools/call":
+        params = msg.get("params")
+        if not isinstance(params, dict):
+            return T.make_reply(msg_id, error={"code": -32602, "message": "params is an object with a name"})
+        return T.make_reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
+    if method == "ping":
+        return T.make_reply(msg_id, {})
+    return T.make_reply(msg_id, error={"code": -32601, "message": f"method not found: {method}"})
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(prog="agentglass-cockpit-mcp", add_help=False)
+    ap.add_argument("--http", metavar="[HOST:]PORT")
+    ap.add_argument("--expose", action="store_true")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME")
+    args, _ = ap.parse_known_args(argv)
+    bind = args.http or os.environ.get("AGENTGLASS_COCKPIT_HTTP")
+    if bind:
+        allow = list(args.allow_host) + os.environ.get("AGENTGLASS_COCKPIT_ALLOW_HOSTS", "").split(",")
+        return T._run_http(bind, expose=args.expose, allow_hosts=allow, handle=handle_message, name=NAME,
+                           token_env="AGENTGLASS_COCKPIT_TOKEN",
+                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN"),
+                           opens="the cockpit's read-only tools", expose_env="AGENTGLASS_COCKPIT_EXPOSE")
+    return T._serve_stdio(handle_message)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (BrokenPipeError, KeyboardInterrupt):
+        sys.exit(0)

@@ -2297,7 +2297,7 @@ class _McpHttpServer6(_McpHttpServer):
 
 
 def _run_http(bind, expose=False, allow_hosts=(), handle=None, name=NAME,
-              token_env="AGENTGLASS_MCP_TOKEN", distinct_from=("AGENTGLASS_TOKEN",), opens="the signed-in browser",
+              token_env="AGENTGLASS_MCP_TOKEN", distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_COCKPIT_TOKEN"), opens="the signed-in browser",
               expose_env="AGENTGLASS_MCP_EXPOSE"):
     """Serve `handle` (this server's dispatch unless another is given) over
     Streamable HTTP. The parameters are what a second MCP server built on this

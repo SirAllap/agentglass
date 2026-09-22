@@ -1,5 +1,5 @@
 /*
- * The three Python CLIs and what they do with a token and a file.
+ * The Python CLIs and what they do with a token and a file.
  *
  *   - a Bearer token went to whatever AGENTGLASS_SERVER named, plain http to a
  *     remote host included — every hop read it. Now: https anywhere, http only
@@ -22,14 +22,14 @@ import { join } from "node:path";
 
 const HAVE_PY = !!Bun.which("python3");
 const BIN = (name: string) => new URL(`../../bin/${name}`, import.meta.url).pathname;
-const CLIS = ["agentglass-agent", "agentglass-browser", "agentglass-browser-mcp"];
+const CLIS = ["agentglass-agent", "agentglass-browser", "agentglass-browser-mcp", "agentglass-cockpit-mcp"];
 
 /** Load a CLI as a module without running its main: the same trick the MCP
  *  suite uses, `__name__` set to something other than `__main__`. */
 function probe(file: string, body: string, env: Record<string, string> = {}): { code: number; out: string; err: string } {
   const src = `
 import json, os, sys
-ns = {"__name__": "probe"}
+ns = {"__name__": "probe", "__file__": ${JSON.stringify(file)}}
 exec(compile(open(${JSON.stringify(file)}).read(), ${JSON.stringify(file)}, "exec"), ns)
 ${body}
 `;
@@ -41,7 +41,7 @@ ${body}
 }
 
 describe.skipIf(!HAVE_PY)("where the token may go", () => {
-  test("plain http to a remote host is refused by all three, in one line, before any request", () => {
+  test("plain http to a remote host is refused by every one of them, in one line, before any request", () => {
     for (const cli of CLIS) {
       for (const url of ["http://10.0.0.5:4000", "http://agentglass.example.invalid", "http://192.168.1.20:4000"]) {
         const r = probe(BIN(cli), "print('loaded')", { AGENTGLASS_SERVER: url });
