@@ -23,4 +23,14 @@ describe("the Radar card shows the last turn's cost next to the context meter", 
     expect(line).toBeDefined();
     expect(line!).toContain("fmtUsd(a.turnCost)");
   });
+
+  test("its tooltip does not promise one model request", () => {
+    // Without usage in the payload an event's cost is the transcript's total
+    // since the previous recorded event, so when no hook fired between two
+    // requests it covers both. The tooltip said "one call".
+    const line = dossier.split("\n").find((l) => l.includes("{meter}<span"))!;
+    const title = line.slice(line.indexOf('title="') + 7, line.indexOf('">last '));
+    expect(title).not.toContain("one call");
+    expect(title).toContain("more than one");
+  });
 });

@@ -355,7 +355,7 @@ function Dossier({ b, wide, auto }: {
         </div>
         <div className="truncate" title={a.key}>{a.session_id}</div>
         {toCompact != null
-          ? <div className="flex items-center gap-2 min-w-0">{meter}<span className="tabular-nums shrink-0" title="cost of the newest main-thread model request — one call, not the whole prompt when tools loop">last {fmtUsd(a.turnCost)}</span><span className="tabular-nums shrink-0" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span></div>
+          ? <div className="flex items-center gap-2 min-w-0">{meter}<span className="tabular-nums shrink-0" title="cost of the newest main-thread event with token counts — usually one model request, more than one when no hook fired between them; not the whole prompt when tools loop">last {fmtUsd(a.turnCost)}</span><span className="tabular-nums shrink-0" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span></div>
           : <div>ctx unknown — placed by recency</div>}
       </div>
     );
