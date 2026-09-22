@@ -42,7 +42,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Collision, CollisionKind, CollisionParty } from "../../shared/types.ts";
 import { db } from "./db.ts";
-import { listPortsAsync } from "./machine.ts";
+import { listPortsAsync, type PortsReport } from "./machine.ts";
 
 /**
  * How long a session counts as live without saying anything.
@@ -476,7 +476,8 @@ export interface Listener {
 export function cachedListeners(
   load: () => Promise<Listener[]>,
   ttlMs: number,
-  clock: () => number = Date.now,
+  // Monotonic: a wall clock stepped back would freeze the cache for the step.
+  clock: () => number = () => performance.now(),
 ): () => Promise<Listener[]> {
   let at = -Infinity;
   let value: Promise<Listener[]> | null = null;
@@ -484,7 +485,7 @@ export function cachedListeners(
     const t = clock();
     if (!value || t - at >= ttlMs) {
       at = t;
-      const p: Promise<Listener[]> = load().catch(() => {
+      const p: Promise<Listener[]> = Promise.resolve().then(load).catch(() => {
         if (value === p) value = null;
         return [];
       });
@@ -494,8 +495,17 @@ export function cachedListeners(
   };
 }
 
+/** A report's listeners, or a throw when `ss` failed — so it is not cached as "none". */
+export function listenersFrom(report: () => Promise<PortsReport>): () => Promise<Listener[]> {
+  return async () => {
+    const r = await report();
+    if (r.error) throw new Error(r.error);
+    return r.ports;
+  };
+}
+
 /** Thirty seconds: a dev server that just bound shows up on the next poll or two. */
-const listening = cachedListeners(async () => (await listPortsAsync()).ports, 30_000);
+const listening = cachedListeners(listenersFrom(listPortsAsync), 30_000);
 
 // Lowercase: OpenCode names its tools `bash` and `read`, Claude `Bash` and `Read`.
 const FILE_TOOLS = new Set(["read", "edit", "write", "multiedit", "notebookedit"]);

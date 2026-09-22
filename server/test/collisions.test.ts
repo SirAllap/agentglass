@@ -20,6 +20,7 @@ let db: typeof import("../src/db.ts");
 let col: typeof import("../src/collisions.ts");
 const now = Date.now();
 const machineSrc = await Bun.file(join(import.meta.dir, "../src/machine.ts")).text();
+const colSrc = await Bun.file(join(import.meta.dir, "../src/collisions.ts")).text();
 
 beforeAll(async () => {
   db = await import("../src/db.ts");
@@ -360,6 +361,20 @@ describe("listeners on the dashboard poll", () => {
     expect(await get()).toEqual([]);
     expect(await get()).toEqual([]);
     expect(loads).toBe(2);
+  });
+
+  test("an ss that fails is a failed load, not thirty seconds of no listeners", async () => {
+    let calls = 0;
+    const load = col.listenersFrom(async () => { calls++; return { ports: [], mine: 0, external: 0, error: "ss timed out" }; });
+    const get = col.cachedListeners(load, 30_000, () => 0);
+    expect(await get()).toEqual([]);
+    await get();
+    expect(calls).toBe(2);
+  });
+
+  test("the window runs on a monotonic clock", () => {
+    const src = colSrc.slice(colSrc.indexOf("export function cachedListeners("));
+    expect(src.slice(0, src.indexOf("\n}\n"))).toContain("performance.now");
   });
 
   test("ss is spawned without blocking the event loop", () => {
