@@ -337,18 +337,19 @@ function offLimits(p: string): boolean {
 interface Store {
   master: boolean;
   plugins: PluginRecord[];
-  /** Settings of plugins that were uninstalled, by name, waiting for a
-   *  reinstall to pick them up. What a person typed into a settings page is
+  /** Settings of plugins that were uninstalled, by name and then by where
+   *  the plugin came from, waiting for a reinstall to pick them up. What a person typed into a settings page is
    *  theirs, not the plugin's: removing a plugin to reinstall a fresh copy
    *  must not reset a prompt they spent an afternoon on. Dropped only when
    *  the removal asks for it.
    *
-   *  `from` is where that plugin came from. A name is not an identity — a
-   *  different plugin from another repository can be installed under the same
-   *  one, and it would read back whatever was typed for the first (a token
-   *  field is a plausible key in both). Only a reinstall from the same place
-   *  inherits them. */
-  keptSettings?: Record<string, { from: string; values: Record<string, unknown> }>;
+   *  The inner key is `sourceKey`. A name is not an identity — a different
+   *  plugin from another repository can be installed under the same one, and
+   *  it would read back whatever was typed for the first (a token field is a
+   *  plausible key in both). Only a reinstall from the same place inherits
+   *  them, and each source keeps its own: one entry per name let the second
+   *  plugin's uninstall write its settings over the first's. */
+  keptSettings?: Record<string, Record<string, Record<string, unknown>>>;
 }
 const DEFAULT_STORE: Store = { master: true, plugins: [] };
 
@@ -627,9 +628,9 @@ async function finishInstall(
   const existing = store.plugins.find((p) => p.name === manifest.name);
   // An update carries the record's settings; a reinstall after an uninstall
   // picks up the ones the uninstall kept.
-  const kept = store.keptSettings?.[manifest.name];
-  const restored = !existing?.settings && kept?.from === sourceKey(source);
-  const settings = existing?.settings ?? (restored ? kept!.values : undefined);
+  const kept = store.keptSettings?.[manifest.name]?.[sourceKey(source)];
+  const restored = !existing?.settings && kept !== undefined;
+  const settings = existing?.settings ?? (restored ? kept : undefined);
   // The reviewer approved a specific declared scope over a specific tree of
   // bytes, not a name — see consentFingerprint. Unchanged keeps its
   // approval; changed loses it, and if it was running, running on the old
@@ -667,7 +668,7 @@ async function finishInstall(
     plugins: [...store.plugins.filter((p) => p.name !== manifest.name), record],
     // Consumed only by the reinstall they belong to: a plugin from elsewhere
     // under the same name neither reads them nor throws them away.
-    keptSettings: restored ? withoutKey(store.keptSettings, manifest.name) : store.keptSettings,
+    keptSettings: restored ? withoutKept(store.keptSettings, manifest.name, sourceKey(source)) : store.keptSettings,
   });
   return { ok: true, plugin: { ...record, running: running.has(record.name), pid: running.get(record.name)?.pid ?? null } };
 }
@@ -862,7 +863,9 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
   const rec = store.plugins.find((p) => p.name === name);
   if (!rec) {
     // Already uninstalled, its settings kept: this is the only way left to
-    // clear them, since there is no card to press Remove on.
+    // clear them, since there is no card to press Remove on. Every source's
+    // under that name goes — the command names a plugin, not where it came
+    // from.
     if (!opts.dropSettings || !store.keptSettings?.[name]) return false;
     write({ ...store, keptSettings: withoutKey(store.keptSettings, name) });
     return true;
@@ -874,12 +877,16 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
   // a stale entry is a nuisance, a deleted config directory is not.
   if (insidePluginsRoot(rec.installDir)) rmSync(rec.installDir, { recursive: true, force: true });
   const keep = !opts.dropSettings && rec.settings && Object.keys(rec.settings).length > 0;
+  const from = sourceKey(rec.source);
   write({
     ...store,
     plugins: store.plugins.filter((p) => p.name !== name),
+    // Only this plugin's own entry: settings another source left under the
+    // same name belong to that plugin, and neither a keep nor a drop here
+    // touches them.
     keptSettings: keep
-      ? { ...(store.keptSettings ?? {}), [name]: { from: sourceKey(rec.source), values: rec.settings! } }
-      : opts.dropSettings ? withoutKey(store.keptSettings, name) : store.keptSettings,
+      ? { ...(store.keptSettings ?? {}), [name]: { ...(store.keptSettings?.[name] ?? {}), [from]: rec.settings! } }
+      : opts.dropSettings ? withoutKept(store.keptSettings, name, from) : store.keptSettings,
   });
   dropNotesOf(name);
   // Also when it was not running: a plugin installed later under the same
@@ -900,6 +907,11 @@ function withoutKey<T>(m: Record<string, T> | undefined, key: string): Record<st
   if (!m || !(key in m)) return m;
   const { [key]: _gone, ...rest } = m;
   return Object.keys(rest).length ? rest : undefined;
+}
+
+function withoutKept(m: Store["keptSettings"], name: string, from: string): Store["keptSettings"] {
+  const bySource = withoutKey(m?.[name], from);
+  return bySource ? { ...m, [name]: bySource } : withoutKey(m, name);
 }
 
 /** Test seam: wipe the store, the on-disk folder, and any running process. */

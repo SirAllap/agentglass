@@ -360,14 +360,22 @@ describe("remove", () => {
     expect(setPluginSettings("watcher", { token: "orbit-secret-1042" }).ok).toBe(true);
     expect(await removePlugin("watcher")).toBe(true);
 
-    expect((await installPlugin(fixture(withToken))).ok).toBe(true);
+    const stranger = fixture(withToken);
+    expect((await installPlugin(stranger)).ok).toBe(true);
     expect(pluginSettings("watcher")?.values.token ?? "", "another source inherited the kept settings").toBe("");
 
-    // Nor does the stranger throw them away: back to the original source, and
-    // they are still there.
+    // Nor does the stranger throw them away — not even when it has settings of
+    // its own to keep on its way out, which is when a store keyed by name
+    // alone wrote the stranger's over the first plugin's.
+    expect(setPluginSettings("watcher", { token: "acme-secret-7" }).ok).toBe(true);
     expect(await removePlugin("watcher")).toBe(true);
     expect((await installPlugin(src)).ok).toBe(true);
     expect(pluginSettings("watcher")?.values.token, "a plugin from elsewhere wiped the kept settings").toBe("orbit-secret-1042");
+
+    // And each gets its own back, whichever came first.
+    expect(await removePlugin("watcher")).toBe(true);
+    expect((await installPlugin(stranger)).ok).toBe(true);
+    expect(pluginSettings("watcher")?.values.token, "the stranger's own kept settings were lost").toBe("acme-secret-7");
   });
 
   test("kept settings can still be dropped after the plugin is gone", async () => {
