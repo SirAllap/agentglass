@@ -249,15 +249,18 @@ That much made self-release deliberate rather than incidental, and no more: a
 header is a string, and a local process that set `Origin: agentglass://app` on
 purpose, with the token it already had, released its own call. Closing that
 takes a credential the agent cannot read, one the desk holds and the token file
-does not, and where the desktop app runs the server that is what it now takes.
-The app mints a key at every launch and keeps it in memory. It hands it to the
-sidecar it spawns down a pipe on a descriptor of its own — not the environment
-and not the command line, which any process of this user reads in `/proc` — and
-to its own window through the preload, and to nothing the agent browser opens.
-The server reads it before anything it starts could inherit the pipe, and from
-then on a release carries that key or a paired device's credential, and an
-`Origin` counts for nothing (`server/src/desk.ts`). Accepting a pairing asks for
-the same, because a device accepted is a device that releases holds.
+does not, and where the desktop app runs the server that is what now stands in
+for the `Origin`. The app mints a key for each sidecar it starts and keeps it in
+memory. It hands it to that sidecar down a pipe on a descriptor of its own — not
+the environment and not the command line, which any process of this user reads
+in `/proc` — and to its own window through the preload, and to nothing the agent
+browser opens, nor to a server the app adopted instead of starting. The server
+reads it before anything it starts could inherit the pipe, and from then on a
+release carries that key or a paired device's credential, and an `Origin` counts
+for nothing (`server/src/desk.ts`). Accepting a pairing asks for the same,
+because a device accepted is a device that releases holds. That closes the
+`Origin` forgery. It does not close every forgery, and the device store below is
+the one that is left.
 
 What is left, at no more than its real value:
 
@@ -269,11 +272,18 @@ What is left, at no more than its real value:
   yourself, and a desktop window that adopted a server it did not start — and,
   for now, the desktop app on Windows, which does not hand its sidecar the pipe.
 - **Memory is not a wall against yourself either.** A process that can read
-  another's memory reads the key: `kernel.yama.ptrace_scope=0`, root, or the
-  renderer's debugging port when you set `AGENTGLASS_DEBUG_PORT`.
+  another's memory reads the key: `kernel.yama.ptrace_scope=0`, root, a core
+  dump the system keeps where you can read it (systemd-coredump does), or the
+  renderer's debugging port when you set `AGENTGLASS_DEBUG_PORT`. So does a
+  script running in the app's own window, as it reads the token. A key is only
+  good for the sidecar it was minted for, so one read out of a crashed sidecar
+  opens nothing the next one holds.
 - **Nor is the device store.** `devices.json` is `0600` on this same machine,
-  which is the same *already you* the bullet above ends on: a process that
-  writes it can add a device of its own.
+  which is the same *already you* the bullet above ends on, and the server reads
+  it on every request: a process that writes a device of its own into it has a
+  credential that answers gates, the desktop app's server included. Closing that
+  needs the store signed with a key the desk keeps across launches; it is the
+  next thing after this and is not here.
 
 The record can only say what the caller proved, and it is worth reading it that
 way. A paired device signs its own line with the name that was accepted when it
@@ -793,8 +803,9 @@ Another session's is left out, and the answer says what it withheld and why, unl
 caller's own, so there it takes that setting too, and with it on, anyone
 holding the cockpit token reads every session's text.
 
-The gate ids it lists release nothing: letting a hold go takes the desktop
-app's key or a paired device (see
+The gate ids it lists do not release anything by themselves: on a server the
+desktop app started, letting a hold go takes the app's key or a paired device,
+and elsewhere the `Origin` rule and its limit apply (see
 [The one on that list that was a bug](#the-one-on-that-list-that-was-a-bug)).
 
 This is the tool's default, not a boundary. The app token the cockpit carries
