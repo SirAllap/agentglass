@@ -3698,28 +3698,43 @@ export async function setDraft(rootIn: unknown, number: unknown, draft: unknown)
   return runPr(rootIn, Number(number), args);
 }
 
+/**
+ * The refusals from `gh pr update-branch` that deserve a better sentence than
+ * gh's, or null for the ones that do not.
+ *
+ * The merge runs on GitHub's side, so there is never a half-merged local tree
+ * to clean up — but when base and head conflict the API refuses, and gh's raw
+ * error ("failed to update branch: …") is a dead end. A conflict is the one
+ * refusal with somewhere to go: the panel can make the merge in a worktree of
+ * its own and open it. So it comes back marked with `conflict`, and the panel
+ * keys its resolve actions on the mark rather than on this wording — which is
+ * also why the wording names no button: API callers read it too.
+ *
+ * A locked or protected branch, or no write access: gh returns "not
+ * authorized"/"locked"/403, and the raw text is another dead end. The button is
+ * gated on BEHIND + viewerCanUpdate so this should rarely surface, but the two
+ * can race — the branch locks between the read and the click — and a bare
+ * "failed to update branch" is exactly the confusing error to avoid.
+ */
+export function updateBranchRefusal(raw: string): PrActionResult | null {
+  const conflicts = "can't update automatically — this branch conflicts with its base. merge the base into it locally, resolve the conflict, then push.";
+  // Only the word "conflict" earns the mark: the mark takes the update and
+  // merge buttons away, and "not mergeable" is not sure enough of the reason
+  // to do that — it keeps the better sentence and nothing else.
+  if (/conflict/i.test(raw)) return { ok: false, conflict: true, error: conflicts };
+  if (/mergeable/i.test(raw)) return { ok: false, error: conflicts };
+  if (/lock|protect|not authoriz|forbidden|permission|\b403\b/i.test(raw)) {
+    return { ok: false, error: "can't update this branch — it is locked or protected, or you do not have write access. update it on GitHub, or ask someone who can." };
+  }
+  return null;
+}
+
 /** Merge the base into the PR branch — the button whose absence is why half a
  *  branch list carries hand-made "Merge origin/master into …" commits. */
 export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?: unknown): Promise<PrActionResult> {
   const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
-  // The merge runs on GitHub's side, so there is never a half-merged local tree
-  // to clean up — but when base and head conflict the API refuses, and gh's raw
-  // error ("failed to update branch: …") is a dead end. Turn it into an
-  // actionable one. (A future "resolve in terminal" flow can drop the user into
-  // the merge in a worktree; for now, tell them what to do.)
-  if (!r.ok && /conflict|mergeable/i.test(r.error || "")) {
-    return { ok: false, error: "can't update automatically — this branch conflicts with its base. pull the base branch and resolve the merge locally, then push." };
-  }
-  // A locked or protected branch, or no write access: gh returns "not
-  // authorized"/"locked"/403, and the raw text is another dead end. The button
-  // is gated on BEHIND + viewerCanUpdate so this should rarely surface, but the
-  // two can race — the branch locks between the read and the click — and a bare
-  // "failed to update branch" is exactly the confusing error we are trying to
-  // avoid here.
-  if (!r.ok && /lock|protect|not authoriz|forbidden|permission|\b403\b/i.test(r.error || "")) {
-    return { ok: false, error: "can't update this branch — it is locked or protected, or you do not have write access. update it on GitHub, or ask someone who can." };
-  }
-  if (!r.ok || !(syncLocal === true || syncLocal === "true")) return r;
+  if (!r.ok) return updateBranchRefusal(r.error || "") ?? r;
+  if (!(syncLocal === true || syncLocal === "true")) return r;
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   if (!root) return r;
