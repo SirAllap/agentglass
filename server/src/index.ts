@@ -7422,7 +7422,12 @@ const server = Bun.serve<WsData>({
       }
 
       const a = AgentOps.agentNamed(name);
-      if (!a || a.endedAt !== null) return json({ ok: false, error: "no agent by that name" }, 404);
+      /* An ended agent can still be READ while its own tab is on screen: a
+         `--keep` one-shot's answer is what it was kept for. Its own tab, by
+         the window name it was opened under — a pane id outlives nothing
+         across a reboot, and an old row's id may name somebody's pane now. */
+      const readable = verb === "read" && !!a && a.endedAt !== null && await AgentOps.keptTabOf(a);
+      if (!a || (a.endedAt !== null && !readable)) return json({ ok: false, error: "no agent by that name" }, 404);
 
       if (verb === "prompt") {
         const text = typeof b.text === "string" ? b.text : "";
@@ -7444,7 +7449,7 @@ const server = Bun.serve<WsData>({
         /* The bottom of a pane is blank rows, not content: trimmed before the
            tail is cut, or "the last 3 lines" of a 50-row pane are three blanks. */
         const text = lines > 0 ? screen.trimEnd().split("\n").slice(-lines).join("\n") : screen;
-        return json({ ok: true, result: { name, state: AgentOps.stateOfScreen(screen), text } });
+        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen), text } });
       }
       if (verb === "keys") {
         const key = AgentOps.keyNamed(b.key);

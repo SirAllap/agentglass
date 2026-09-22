@@ -33,7 +33,8 @@ second longer — liveness is the pane, not a heartbeat.
 
 `start --keep` keeps the tab when the CLI exits — a one-shot such as
 `qwen -p` or `opencode run` whose answer is read afterwards — under a line
-saying how it exited; the agent leaves the list all the same. Never open one
+saying how it exited, for a day; the agent leaves the list all the same, and
+`read <name>` still shows the tab while it is there. Never open one
 with a bare `tmux new-window "cli ..."`: a CLI that exits 0 takes that tab and
 its answer with it.
 
@@ -168,7 +169,7 @@ def main():
     p.add_argument("--prompt", default="", help="a first message on the command line (prefer `prompt` after `start`)")
     p.add_argument("--timeout", type=int, default=180000, help="ms to wait for the CLI to be up (0: return at once)")
     p.add_argument("--keep", action="store_true",
-                   help="keep the tab when the CLI exits, to read its answer; the agent still ends")
+                   help="keep the tab for a day after the CLI exits, to `read` its answer; the agent still ends")
     p.add_argument("args", nargs="*", help="extra CLI flags, after --")
 
     p = sub.add_parser("prompt", help="hand the agent a message and press Enter until it is taken")

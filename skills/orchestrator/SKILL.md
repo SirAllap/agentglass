@@ -91,6 +91,7 @@ exits 0 closes that tab and takes its output with it.
 agentglass-agent start <name> --cwd <checkout> --yolo        # an agent you will prompt
 agentglass-agent start <name> --cwd <checkout> --kind <cli> --keep -- <flags>
                                                               # a one-shot whose answer you read after it exits
+agentglass-agent read <name>                                  # its answer, while the kept tab is there (a day)
 ```
 
 ## The queue

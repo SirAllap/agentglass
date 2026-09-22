@@ -290,8 +290,16 @@ export async function startAgent(p: {
      checks the same way): a CLI that fails at launch is exactly the fast
      failure that beats the second tmux call. So it is closed here, and the
      caller is told, rather than handed an agent whose pane is a dead one. */
-  const dead = await tmux(["display-message", "-p", "-t", opened.windowId, "#{pane_dead}"]);
-  if (dead.ok && dead.stdout.trim() === "1") {
+  const dead = await tmux(["display-message", "-p", "-t", opened.windowId, "#{pane_dead}\t#{pane_current_command}\t#{pane_start_command}"]);
+  const [isDead = "", current = "", ...start] = dead.ok ? dead.stdout.trim().split("\t") : [];
+  /* Kept (`keep`): a CLI that has already exited at this point, with a status
+     other than 0, failed at launch; its tab stays, since it was asked to, and
+     says why. One that exited 0 this fast is a one-shot that finished. */
+  if (p.keep && KEPT_EXITED(current, start.join("\t"))) {
+    const status = /the CLI exited \((\d+)\)/.exec((await screenOf(opened.paneId)) ?? "")?.[1];
+    if (status && status !== "0") return { ok: false, error: "died" };
+  }
+  if (isDead === "1") {
     await tmux(["kill-window", "-t", opened.windowId]);
     return { ok: false, error: "died" };
   }
@@ -342,6 +350,8 @@ export type PromptOutcome = "sent" | "queued" | "diverted" | "stuck" | "gone";
  * worker's own recovery (`send-keys enter` after a look) applies.
  */
 export async function promptAgent(paneId: string, text: string, timeoutMs = 10_000): Promise<PromptOutcome> {
+  /* A kept tab whose CLI has exited: a paste would land in a `sleep`. */
+  if (!(await panesAlive()).has(paneId)) return "gone";
   const buf = `agx-agent-${paneId.replace("%", "")}`;
   const load = await tmux(["load-buffer", "-b", buf, "-"], text);
   if (!load.ok) return "gone";
@@ -376,7 +386,16 @@ const KEYS: Record<string, string> = {
 export const keyNamed = (k: unknown): string | null => (typeof k === "string" ? KEYS[k.toLowerCase()] ?? null : null);
 
 export async function pressKey(paneId: string, key: string): Promise<boolean> {
+  /* A kept tab whose CLI has exited is a `sleep`: a key there reaches nobody. */
+  if (!(await panesAlive()).has(paneId)) return false;
   return (await tmux(["send-keys", "-t", paneId, key])).ok;
+}
+
+/** Whether an ended agent's own tab is still on the engine: its pane, in a
+ *  window still carrying the name it was opened under. */
+export async function keptTabOf(a: NamedAgent): Promise<boolean> {
+  const r = await tmux(["display-message", "-p", "-t", a.paneId, "#{window_name}"]);
+  return r.ok && r.stdout.trim() === a.name;
 }
 
 /**
@@ -427,7 +446,7 @@ export async function enlistAgent(p: { name: string; pane?: string; window?: str
   if (!r.ok) return { ok: false, error: "no-pane" };
   /* A dead pane — the engine keeps one whose command failed — is a status
      line, not an agent to enlist. */
-  const rows = r.stdout.split("\n").map((l) => l.split("\t")).filter((c) => c.length >= 5 && c[6] !== "1");
+  const rows = r.stdout.split("\n").map((l) => l.split("\t")).filter((c) => c.length >= 5 && c[6] !== "1" && !KEPT_EXITED(c[4] ?? "", c[5] ?? ""));
   const wanted = p.pane
     ? rows.filter((c) => c[0] === p.pane)
     : rows.filter((c) => c[2] === (p.window ?? p.name));

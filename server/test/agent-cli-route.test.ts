@@ -295,6 +295,16 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
       expect(screen).toContain("the CLI exited (0)");
       /* The name is free again, as for any agent that has ended. */
       expect((await cli("list", "--all")).out.result?.agents?.find((a) => a.name === "wkeep")?.endedAt).not.toBeNull();
+      /* And the answer is read by name, which is what --keep is for; the
+         agent in the tab is gone, and says so. */
+      const read = await cli("read", "wkeep");
+      expect(read.out.ok, read.out.error).toBe(true);
+      expect(String(read.out.result?.text)).toContain("the answer is 42");
+      expect(read.out.result?.state).toBe("gone");
+      /* Nothing to prompt, and nothing to enlist: the pane holds a sleep. */
+      expect((await cli("prompt", "wkeep", "anything")).code).toBe(1);
+      const enlisted = await cli("enlist", "wkeep2", "--pane", paneId);
+      expect(enlisted.out.ok, "a finished CLI's tab is not an agent to enlist").toBe(false);
     } finally { rmSync(`${log}.oneshot`, { force: true }); }
   }, SLOW);
 
