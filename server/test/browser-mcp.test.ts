@@ -1045,6 +1045,37 @@ describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
     expect(bare.split("\r\n")[0], "no Host at all").toContain("400");
   });
 
+  test("an IPv6 bind serves, and --allow-host admits the name a tunnel in front forwards", async () => {
+    /* Parsing `[::1]:PORT` was half of it: the server class is IPv4-only,
+       and the bind itself died with gaierror. And a tunnel that terminates
+       TLS in front of a loopback bind (the thing the off-loopback warning
+       recommends) forwards the tailnet name as Host, which is not a loopback
+       name — so it gets 421 unless the operator names it. */
+    const port = await freePort();
+    const p = Bun.spawn(["python3", MCP, "--http", `[::1]:${port}`, "--allow-host", "box.tailnet-orbit.ts.net"], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, AGENTGLASS_MCP_TOKEN: TOKEN },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    try {
+      const { request } = await import("node:http");
+      const ask = (host: string) => new Promise<number>((resolve, reject) => {
+        const req = request({ hostname: "::1", family: 6, port, path: "/", method: "POST", headers: { host, authorization: `Bearer ${TOKEN}`, "content-type": "application/json" } }, (res) => {
+          res.resume(); res.on("end", () => resolve(res.statusCode ?? 0));
+        }).on("error", reject);
+        req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }));
+      });
+      let first = 0;
+      for (let i = 0; i < 50 && !first; i++) { try { first = await ask(`[::1]:${port}`); } catch { await Bun.sleep(100); } }
+      expect(first, "the v6 bind came up and answered").toBe(200);
+      expect(await ask(`localhost:${port}`)).toBe(200);
+      expect(await ask("box.tailnet-orbit.ts.net")).toBe(200);
+      expect(await ask("BOX.tailnet-orbit.ts.net:443"), "case and port do not make another name").toBe(200);
+      expect(await ask("other.tailnet-orbit.ts.net")).toBe(421);
+    } finally {
+      p.kill();
+    }
+  });
+
   test("the bind is parsed as [HOST:]PORT, bracketed IPv6 included", async () => {
     const probe = Bun.spawn(["python3", "-c", `
 import importlib.machinery, importlib.util, json, sys

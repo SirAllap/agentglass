@@ -130,6 +130,7 @@ are:
 | `AGENTGLASS_MCP_HTTP` | — | `[HOST:]PORT` → serve the MCP server (`agentglass-browser-mcp`) over **Streamable HTTP** instead of stdio, e.g. `8765` (loopback) or `127.0.0.1:8765`. The same flag exists as `--http`. Serves the same tools; every request needs `AGENTGLASS_MCP_TOKEN` as a Bearer token; only answers to the bound address — DNS rebinding, any browser `Origin` and any body over 1 MiB are refused. A bind off loopback needs `--expose` (or `AGENTGLASS_MCP_EXPOSE=1`) as well as a token, and warns that the token crosses the network in the clear until TLS terminates in front of it. |
 | `AGENTGLASS_MCP_TOKEN` | minted | The Bearer token the Streamable-HTTP MCP endpoint requires on every request, 32+ chars. It is the endpoint's own, never `AGENTGLASS_TOKEN` (refused if equal): whoever holds it can drive the browser, not the app. Unset, one is minted for the process and printed on stderr at start. |
 | `AGENTGLASS_MCP_EXPOSE` | — | `1` → the same opt-in as `--expose`: allow `AGENTGLASS_MCP_HTTP` to bind an address that is not loopback. |
+| `AGENTGLASS_MCP_ALLOW_HOSTS` | — | Comma-separated `Host` names the Streamable-HTTP MCP endpoint answers besides the bound address; the same as repeating `--allow-host NAME`. For a TLS tunnel or reverse proxy in front of a loopback bind, which forwards its own public name as `Host`. |
 | `AGENTGLASS_UNDERSTUDY` | — | `0` → force the **Clone** off whatever its settings file says. It can force off, never on: recording must not start because of a variable inherited from a shell. |
 | `AGENTGLASS_PRIVATE_TERMS` | `~/.config/agentglass/private-terms.txt` | The Clone's private-terms list — one pattern per line of names that must never leave a private repository. With the app's own file absent, `~/.config/git/private-terms.txt` is honoured. Without any list the Clone refuses to learn. |
 | `AGENTGLASS_STATE_DIR` | `~/.local/state/agentglass` | Where a server keeps its mutable state — the tmux socket and config, pane records, the judge's private room, and (unless `AGENTGLASS_DB` names a file) its database. A second server pointed here runs beside the real one without touching its history. |
@@ -352,10 +353,11 @@ over plain `http://` to any host that is not this machine.
   `Authorization: Bearer $AGENTGLASS_MCP_TOKEN` and it lands on the identical
   tools/list and tools/call. The token is the endpoint's own (minted and
   printed at start when unset), required on every request, loopback included;
-  a browser `Origin` is refused outright; sessions are capped at 64, with a
-  connection limit and the byte cap above. Binding anywhere else is
+  a browser `Origin` is refused outright; a connection limit and the byte cap
+  above bound what a request can cost. Binding anywhere else is
   `--http 0.0.0.0:8765 --expose`, which says on stderr that the token travels
-  in the clear until TLS terminates in front of it.
+  in the clear until TLS terminates in front of it. A tunnel in front of a
+  loopback bind forwards its own name as `Host`; name it with `--allow-host`.
 
 ---
 

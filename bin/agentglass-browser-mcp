@@ -52,6 +52,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sys
 import threading
 import time
@@ -2137,7 +2138,10 @@ class _McpHttp(BaseHTTPRequestHandler):
         sends a loopback name only for a loopback URL, which no foreign page
         can wear. Bound to one address, that address or the name the operator
         typed. Bound to every interface, any name — the token and the Origin
-        rule are what hold there. A missing Host is not HTTP/1.1."""
+        rule are what hold there. And whatever the bind, a name passed with
+        --allow-host: a tunnel that terminates TLS in front of a loopback bind
+        forwards its own public name as Host, and that name is the operator's
+        to vouch for. A missing Host is not HTTP/1.1."""
         host = self.headers.get("Host", "")
         if not host:
             return False
@@ -2145,6 +2149,8 @@ class _McpHttp(BaseHTTPRequestHandler):
             name = (urlsplit("http://" + host).hostname or "").lower()
         except ValueError:
             return False
+        if name in self.server.allowed_hosts:
+            return True
         bound = self.server.bound_host
         if bound in ("0.0.0.0", "::"):
             return True
@@ -2273,7 +2279,13 @@ def _parse_bind(bind):
     return host, int(port)
 
 
-def _run_http(bind, expose=False):
+class _McpHttpServer6(ThreadingHTTPServer):
+    # socketserver is IPv4 unless told: `[::1]:PORT` parsed and then died
+    # in bind with gaierror.
+    address_family = socket.AF_INET6
+
+
+def _run_http(bind, expose=False, allow_hosts=()):
     parsed = _parse_bind(bind)
     if not parsed:
         print(f"--http wants [HOST:]PORT, got {bind!r}", file=sys.stderr)
@@ -2300,21 +2312,24 @@ def _run_http(bind, expose=False):
     minted = not token
     if minted:
         token = secrets.token_urlsafe(32)
-    httpd = ThreadingHTTPServer((host, port), _McpHttp)
+    six = ":" in host
+    httpd = (_McpHttpServer6 if six else ThreadingHTTPServer)((host, port), _McpHttp)
     httpd.mcp_token = token
+    httpd.allowed_hosts = {h.strip().lower() for h in allow_hosts if h.strip()}
     # getsockname's spelling of the bind, and the operator's: `localhost`
     # binds 127.0.0.1, and clients will say either.
     httpd.bound_host = str(httpd.server_address[0])
     httpd.typed_host = host
-    print(f"agentglass-browser MCP over Streamable HTTP on http://{host}:{port}/ (token required)", file=sys.stderr)
+    shown = f"[{host}]" if six else host
+    print(f"agentglass-browser MCP over Streamable HTTP on http://{shown}:{port}/ (token required)", file=sys.stderr)
     if minted:
         print(f"AGENTGLASS_MCP_TOKEN was not set; this process answers to this one, and to nothing after it exits:\n"
               f"  AGENTGLASS_MCP_TOKEN={token}", file=sys.stderr)
     if not _loopback(host):
         print(f"WARNING: {host} is not loopback and this is plain HTTP. The token, and every page the browser "
               "reads, cross the network in the clear until TLS terminates in front of this port — a tunnel "
-              "that does (tailscale serve) or a reverse proxy. Anyone who reads the wire can drive the "
-              "signed-in browser.", file=sys.stderr)
+              "that does (tailscale serve) or a reverse proxy, with --allow-host naming what it forwards. "
+              "Anyone who reads the wire can drive the signed-in browser.", file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -2329,10 +2344,13 @@ def main(argv=None):
                      help="serve MCP over Streamable HTTP instead of stdio (loopback unless HOST says otherwise)")
     _ap.add_argument("--expose", action="store_true",
                      help="allow a --http bind off loopback; the token then crosses the network in the clear")
+    _ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                     help="a Host name to answer besides the bound one — the name a TLS tunnel in front forwards")
     args, _ = _ap.parse_known_args(argv)
     http_bind = args.http or os.environ.get("AGENTGLASS_MCP_HTTP")
     if http_bind:
-        return _run_http(http_bind, expose=args.expose)
+        allow = list(args.allow_host) + os.environ.get("AGENTGLASS_MCP_ALLOW_HOSTS", "").split(",")
+        return _run_http(http_bind, expose=args.expose, allow_hosts=allow)
     for line in sys.stdin:
         line = line.strip()
         if not line:
