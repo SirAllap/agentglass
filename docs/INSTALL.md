@@ -366,6 +366,45 @@ an unreachable control plane **denies** instead of allows — the fleet stops
 until you decide. Off by default; turn it on only when blocking is safer than
 proceeding, and remember agentglass being down then blocks every gated call.
 
+### Rules — decide without waiting for you
+
+A hold only helps while somebody is watching. `gateRules` in
+`~/.config/agentglass/config.json` lets the gate answer a call on arrival:
+
+```jsonc
+"gateRules": [
+  // everywhere: reading is fine, fetching the web is not, the rest waits for you
+  { "allow": ["Read", "Grep", "Glob"], "deny": ["WebFetch"] },
+  // one project, stricter: only these tools run, and nothing once its budget is spent
+  { "root": "~/code/orbit", "allow": ["Read", "Edit", "Bash", "mcp__orbit__*"],
+    "otherwise": "deny", "overBudget": "deny" }
+]
+```
+
+- `allow` — runs without a hold. agentglass answers with no opinion, so Claude
+  Code's own permission prompt still applies.
+- `deny` — denied at once. The agent is told a rule did it, not a person, and
+  the denial shows up in "What needs you" and in gate history.
+- `otherwise` — a tool on neither list: `hold` (default), `allow` or `deny`.
+- `overBudget` — once a spend budget (Settings → Budgets) covering the project
+  is over: `hold` (default: even an allowed tool waits for you) or `deny`.
+  Only budgets on every model count; the gate does not know which model a call
+  comes from.
+- Tool names are exact and case-sensitive; a trailing `*` matches a prefix. The
+  deepest `root` that covers the call wins; a rule without one covers
+  everything. A project's linked worktrees count.
+- An outward action agentglass recognises (a push, a comment, a message) is
+  never let through by an allow list — it is still held for you, closed. That
+  recognition is a heuristic: with `Bash` on an allow list, a push hidden inside
+  `bash -c '…'` is not recognised and runs. Allow `Bash` only where that is fine.
+
+Rules only see calls the hook is wired for, so an allow list is most useful
+with a broad matcher (`"matcher": "*"`). They name tools, not arguments, and a
+rule follows the directory the session runs in, not the file a call touches.
+They are read at startup: restart agentglass after editing them. A rule that
+cannot be read is logged and holds every call under its root for you, rather
+than handing that project to a laxer rule.
+
 ---
 
 ## Any provider — Kimi, OpenAI, Gemini, Bedrock, …

@@ -177,7 +177,8 @@ Prefer a file over env vars? Drop a `~/.config/agentglass/config.json` (or
 `$XDG_CONFIG_HOME/agentglass/config.json`) with `root`, `repoDirs`,
 `terminalDisabled` and/or `chatBypass`; env vars override it. The last two
 matter for a desktop-launched app, which inherits no shell environment and so
-cannot be configured by `export` at all.
+cannot be configured by `export` at all. Gate rules (`gateRules`) live there
+too — see the control-plane section of INSTALL.md.
 
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
 > tokens and matched against `model_name` by substring. Set
