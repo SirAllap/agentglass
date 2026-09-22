@@ -11,10 +11,20 @@
  *
  * The assertion has two halves on Linux, because neither alone is the whole
  * promise:
- *   - `systemd-inhibit --what=sleep:handle-lid-switch` is a *child process*
- *     holding a logind inhibitor lock for as long as it runs. `handle-lid-switch`
+ *   - `systemd-inhibit` is a *child process* holding a logind inhibitor lock
+ *     for as long as it runs — two of them, one per lock, because the two
+ *     locks need different modes (see `spawnInhibit`). `handle-lid-switch`
  *     is deliberate: closing the lid must not end a run.
  *   - Electron's `powerSaveBlocker` covers the display, which systemd does not.
+ *
+ * A PERSON'S OWN SUSPEND WINS. The sleep lock is held in DELAY mode, never in
+ * block mode. Block was the first version, and it did what it says to every
+ * suspend — the one asked for from the menu included: with an agent mid-turn,
+ * `systemctl suspend` answered "Operation inhibited" and the machine stayed on,
+ * with nothing on screen saying why. Measured on the owner's laptop. What this
+ * feature was ever for is IDLE sleep, and idle sleep is not something anybody
+ * asks for; a delay lock stops exactly that and gives way to a request. The
+ * lid switch has no delay mode in logind, and blocking it is what was wanted.
  *
  * Three failure modes are the whole difference between this working and this
  * being a lie, and each gets its own paragraph below: `systemd-inhibit` not
@@ -52,8 +62,13 @@ let mode = "off";
 let getApiOrigin = () => "";
 let getToken = () => "";
 
-/** @type {import("child_process").ChildProcess | null} */
-let inhibitChild = null;
+/**
+ * The two logind locks, each its own child. They cannot be one: a delay lock
+ * is only offered for `sleep` and `shutdown`, so `sleep:handle-lid-switch`
+ * would have to be block for both, and block on sleep is the bug above.
+ * @type {{ sleep: import("child_process").ChildProcess | null, lid: import("child_process").ChildProcess | null }}
+ */
+const inhibitChild = { sleep: null, lid: null };
 /** Set once `systemd-inhibit` comes back ENOENT. Checked before every spawn,
  *  and never cleared for the life of the process — a binary that is not on
  *  this machine at second 10 is not going to appear at second 40, and
@@ -93,16 +108,21 @@ function saveMode(m) {
   } catch { /* the mode still applies for this run; it just won't survive a restart */ }
 }
 
-/** Spawn the inhibitor. Idempotent: a second call while one is already
- *  running is a no-op, not a leaked second lock. */
-function assertLinuxInhibit() {
-  if (inhibitChild || inhibitUnavailable) return;
+/**
+ * Spawn one lock. Idempotent: a second call while it is already running is a
+ * no-op, not a leaked second lock.
+ * @param {"sleep" | "lid"} which
+ */
+function spawnInhibit(which) {
+  if (inhibitChild[which] || inhibitUnavailable) return;
+  const what = which === "sleep" ? "--what=sleep" : "--what=handle-lid-switch";
+  const mode = which === "sleep" ? "--mode=delay" : "--mode=block";
   const child = spawn(
     "systemd-inhibit",
-    ["--what=sleep:handle-lid-switch", "--who=agentglass", "--why=Agents are working", "--mode=block", "sleep", "infinity"],
+    [what, "--who=agentglass", "--why=Agents are working", mode, "sleep", "infinity"],
     { stdio: "ignore" },
   );
-  inhibitChild = child;
+  inhibitChild[which] = child;
   /*
    * ENOENT means the tool is not on this machine — not every Linux ships
    * systemd, and a laptop without it must not busy-loop trying to spawn a
@@ -111,22 +131,33 @@ function assertLinuxInhibit() {
    * poll, so only ENOENT sets the permanent flag.
    */
   child.on("error", (e) => {
-    if (inhibitChild === child) inhibitChild = null;
+    if (inhibitChild[which] === child) inhibitChild[which] = null;
     if (/** @type {NodeJS.ErrnoException} */ (e).code === "ENOENT") inhibitUnavailable = true;
   });
   child.on("exit", () => {
     // A suspend does not necessarily leave this child alive to see the
     // resume — the `resume` handler below is what re-asserts, not this.
-    if (inhibitChild === child) inhibitChild = null;
+    if (inhibitChild[which] === child) inhibitChild[which] = null;
   });
 }
 
-/** Idempotent, and ESRCH — the process already gone — is not an error. */
-function releaseLinuxInhibit() {
-  const child = inhibitChild;
-  inhibitChild = null;
+/** Idempotent, and ESRCH — the process already gone — is not an error.
+ *  @param {"sleep" | "lid"} which */
+function killInhibit(which) {
+  const child = inhibitChild[which];
+  inhibitChild[which] = null;
   if (!child) return;
   try { child.kill(); } catch { /* already gone */ }
+}
+
+function assertLinuxInhibit() {
+  spawnInhibit("sleep");
+  spawnInhibit("lid");
+}
+
+function releaseLinuxInhibit() {
+  killInhibit("sleep");
+  killInhibit("lid");
 }
 
 function assertDisplay() {
@@ -253,6 +284,17 @@ function init(opts) {
     releaseAwake();
     assertAwake();
   });
+  /*
+   * And the moment logind announces the suspend, the sleep lock is let go.
+   *
+   * A delay lock does not stop the suspend; it makes logind wait for the
+   * holder to release, up to InhibitDelayMaxSec (five seconds by default),
+   * before going ahead. That grace is for saving state, and there is none to
+   * save here — so a person who pressed suspend would sit through five
+   * seconds of nothing. Released here, they do not. `held` is left as it is:
+   * the resume handler above re-asserts everything on the way back.
+   */
+  powerMonitor?.on("suspend", () => { killInhibit("sleep"); });
   applyMode();
 }
 
