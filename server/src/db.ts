@@ -18,7 +18,7 @@ import type {
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
-import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
+import { workspaceRoots, scopeKey, scopeRoots, isWithin, type Scope } from "./config.ts";
 
 /**
  * Where the database lives.
@@ -1797,14 +1797,14 @@ function notePath(p: unknown): void {
  *  `_` as a wildcard, so a path containing an underscore matched more than it
  *  should have. `startsWith` does not.
  */
-export function scopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  if (!scope) return { clause: "", args: [] };
-  // Every checkout of the project, not the scope path alone: linked worktrees
-  // usually live in sibling directories, so a prefix test against the scope
-  // matches none of them — a project opened at ~/code/orbit would show an empty
-  // dashboard for a day spent working in ~/code/orbit-WEB-1042, which is where
-  // the work actually happens.
+export function scopeClause(scope: Scope = workspaceRoots()): { clause: string; args: string[] } {
+  // Every checkout of every open project, not the scope paths alone: linked
+  // worktrees usually live in sibling directories, so a prefix test against the
+  // scope matches none of them — a project opened at ~/code/orbit would show an
+  // empty dashboard for a day spent working in ~/code/orbit-WEB-1042, which is
+  // where the work actually happens. Empty when unscoped.
   const roots = scopeRoots(scope);
+  if (!roots.length) return { clause: "", args: [] };
   // isWithin rather than a hardcoded `r + "/"`: these are resolve()-derived
   // host paths, so on Windows they are backslash-joined and the literal slash
   // matched a checkout root itself but nothing inside it — the same bug fixed
@@ -1824,7 +1824,7 @@ export function scopeClause(scope: string | null = workspaceRoot()): { clause: s
 }
 
 /** Same restriction for the `sessions` table, which carries its own columns. */
-function sessionScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
+function sessionScopeClause(scope: Scope = workspaceRoots()): { clause: string; args: string[] } {
   // Delegate to scopeClause rather than keep a second copy: this used its own
   // `LIKE 'root/%'` pattern — the very thing scopeClause was rewritten to drop,
   // because an underscore in a scope root is a single-char wildcard in LIKE and
@@ -2344,9 +2344,9 @@ function rollupPaths(): string[] {
  * And there is no `cwd_path` to fall back on: the fold does not carry one, so
  * a row whose only in-scope path was the cwd cannot be recovered here.
  */
-function rollupScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  if (!scope) return { clause: "", args: [] };
+function rollupScopeClause(scope: Scope = workspaceRoots()): { clause: string; args: string[] } {
   const roots = scopeRoots(scope);
+  if (!roots.length) return { clause: "", args: [] };
   const inScope = rollupPaths().filter((p) => roots.some((r) => isWithin(p, r)));
   // Same honest answer as scopeClause: nothing folded for this project yet.
   if (!inScope.length) return { clause: " AND 0", args: [] };
@@ -2923,7 +2923,7 @@ const openToolSql = (scoped: string) =>
  * Keyed on scope so switching project can never serve another project's list.
  */
 const OPEN_TOOL_TTL_MS = 2000;
-let openToolCache: { at: number; scope: string | null; data: OpenToolCall[] } | null = null;
+let openToolCache: { at: number; scope: string; data: OpenToolCall[] } | null = null;
 
 /** Drop the open-tool memo. insertEvent() calls this on a Pre/PostToolUse write
  *  so a tool that just opened or closed shows on the very next read. */
@@ -2934,7 +2934,7 @@ export function invalidateOpenTools(): void {
 /** Currently-running tool calls across the fleet (open Pre, unpaired, session
  *  still alive) — the seed for the client's per-agent "running" state. */
 export function openToolCalls(): OpenToolCall[] {
-  const scope = workspaceRoot();
+  const scope = scopeKey();
   if (openToolCache && openToolCache.scope === scope) {
     // Empty is valid until a write invalidates it; non-empty honours the TTL so
     // an age-out cannot hide behind a quiet period.
@@ -2944,7 +2944,7 @@ export function openToolCalls(): OpenToolCall[] {
   }
   // Aliased to `p`, so the shared clause needs qualifying to stay unambiguous
   // against the correlated subqueries above.
-  const s = scopeClause(scope);
+  const s = scopeClause();
   const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "p.$1");
   const data = db
     .query<OpenToolCall, any[]>(openToolSql(scoped))
@@ -2989,7 +2989,7 @@ export function openToolCalls(): OpenToolCall[] {
  * have just aged out is a filter that finds nothing, not a wrong answer.
  */
 const FILTER_TTL_MS = 10 * 60_000;
-let filterCache: { at: number; scope: string | null; data: ReturnType<typeof computeFilterOptions> } | null = null;
+let filterCache: { at: number; scope: string; data: ReturnType<typeof computeFilterOptions> } | null = null;
 /** The values the memo was built from, so an event can be tested against them
  *  without a query. Rebuilt with the memo; null while there is none. */
 let filterSeen: { apps: Set<string>; types: Set<string>; models: Set<string> } | null = null;
@@ -3006,7 +3006,7 @@ function noteFilterValues(app: unknown, type: unknown, model: unknown): void {
 }
 
 export function getFilterOptions() {
-  const scope = workspaceRoot();
+  const scope = scopeKey();
   if (filterCache && filterCache.scope === scope && Date.now() - filterCache.at < FILTER_TTL_MS) return filterCache.data;
   const data = computeFilterOptions();
   filterCache = { at: Date.now(), scope, data };
@@ -3267,7 +3267,7 @@ export function latestWaits(ids: string[]): Map<string, SessionWait> {
 }
 
 export function getSessions(limit = 100, provider?: string): SessionRollup[] {
-  const key = `${limit}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
+  const key = `${limit}|${provider ?? ""}|${scopeKey()}`;
   const hit = sessionsCache.get(key);
   if (hit && Date.now() - hit.at < SESSIONS_TTL_MS) return hit.data;
   const s = sessionScopeClause();
@@ -3340,7 +3340,7 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string, tz?
   // viewer is often not on the server (remote access, the phone companion).
   // Without it here, one viewer's grid is served to another in a different
   // zone for the whole TTL.
-  const key = `${windowMs}|${provider ?? ""}|${workspaceRoot() ?? ""}|${tz ?? ""}`;
+  const key = `${windowMs}|${provider ?? ""}|${scopeKey()}|${tz ?? ""}`;
   const hit = statsCache.get(key);
   if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
   const data = computeStatsSummary(windowMs, provider, tz);

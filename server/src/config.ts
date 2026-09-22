@@ -63,8 +63,10 @@ function realConfigOffLimits(p: string): boolean {
 }
 
 interface Config {
-  /** Work on this one project and nothing else. */
-  root?: string;
+  /** Work on this project and nothing else — or on these, when it is a list.
+   *  One is written as a plain string, so a build that predates the list still
+   *  reads the commonest case. */
+  root?: string | string[];
   /** Directories to sweep for git repos, e.g. ["~/code", "/mnt/hdd/code"]. */
   repoDirs?: string[];
   /** Offer `bypassPermissions` — `claude --dangerously-skip-permissions` — as a
@@ -157,8 +159,11 @@ function load(path: string): Config {
       return {};
     }
     const cfg = raw as Config;
-    if ("root" in cfg && cfg.root !== undefined && typeof cfg.root !== "string") {
-      console.error(`[config] ignoring non-string "root" in ${path}`);
+    // A string is one project; a list is several. Anything else is ignored
+    // whole, and a list keeps its strings and drops the rest — see
+    // workspaceRoots() for the per-entry reading.
+    if ("root" in cfg && cfg.root !== undefined && typeof cfg.root !== "string" && !Array.isArray(cfg.root)) {
+      console.error(`[config] ignoring "root" in ${path}: expected a path or a list of paths`);
       delete cfg.root;
     }
     return cfg;
@@ -344,12 +349,13 @@ export function writeBudgets(budgets: Budget[]): { ok: boolean; persisted: boole
  * inference can only ever guess from history.
  */
 /**
- * The single project this instance is for, if it was opened for one.
+ * The projects this instance is for, if it was opened for any.
  *
- * Scoping to one directory is a different thing from listing several to search:
- * it means "this cockpit is about this project" — no sweeping, no other repos,
- * and the dashboard shows that project's work rather than everything on the
- * machine. Unset (the default) keeps the machine-wide behaviour.
+ * Scoping is a different thing from listing folders to search: it means "this
+ * cockpit is about these projects" — no sweeping, no other repos, and the
+ * dashboard shows their work rather than everything on the machine. Usually
+ * one; several when they were chosen together in the picker. Empty (the
+ * default) keeps the machine-wide behaviour.
  *
  * Only ever set on purpose: AGENTGLASS_ROOT, `root` in the config file, or the
  * directory passed to the app. Deliberately *not* inferred from the working
@@ -357,21 +363,61 @@ export function writeBudgets(budgets: Budget[]): { ok: boolean; persisted: boole
  * that checkout, which is a surprising way to lose the rest of your fleet.
  * Scoping is a decision, so it has to be stated.
  */
-let cachedRoot: string | null | undefined;
+let cachedRoots: string[] | undefined;
 let cachedFor: string | undefined;
-export function workspaceRoot(): string | null {
-  const asked = process.env.AGENTGLASS_ROOT || config().root;
+/** What the environment or the file asks for, before resolving. The
+ *  environment names one project, as it always has. The file may name several;
+ *  its entries are checked one by one, like every other list in this
+ *  hand-editable file, and a junk entry costs itself rather than the scope. */
+function askedRoots(): string[] {
+  const env = process.env.AGENTGLASS_ROOT;
+  const raw = config().root;
+  return env ? [env]
+    : typeof raw === "string" ? [raw]
+    : Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string" && !!p.trim())
+    : [];
+}
+export function workspaceRoots(): string[] {
+  const asked = askedRoots();
+  const key = asked.join("\0");
   // Keyed on what was asked for, not merely "have we answered before". The
   // scope never changes in a running server, so this costs one comparison —
   // but `bun test` shares a process, and the first suite to call this used to
   // pin the answer for every suite after it. A later file setting
   // AGENTGLASS_ROOT then got the earlier file's scope, silently, and only in
   // whatever file order the runner happened to pick.
-  if (cachedRoot !== undefined && cachedFor === asked) return cachedRoot;
-  cachedFor = asked;
-  cachedRoot = asked ? resolveScope(asked) : null;
-  return cachedRoot;
+  if (cachedRoots !== undefined && cachedFor === key) return cachedRoots;
+  cachedFor = key;
+  cachedRoots = [...new Set(asked.map((a) => resolveScope(a)))];
+  return cachedRoots;
 }
+
+/**
+ * The first of the open projects, or null when none is.
+ *
+ * Most callers need a directory rather than a scope: where a shell starts, whose
+ * name goes in the title, which repo a seat is for. With one project open that
+ * is the project; with several it is the first one chosen, which is a choice the
+ * person made rather than one this guesses at. Anything that ENFORCES scope —
+ * inScope, sessionInScope, scopeRoots, scopeClause — reads every root instead,
+ * and a new enforcement check has to as well: handing it this would open three
+ * projects and refuse work in two of them.
+ */
+export function workspaceRoot(): string | null {
+  return workspaceRoots()[0] ?? null;
+}
+
+/** The whole scope as one string, for a cache key. `workspaceRoot()` is not
+ *  one: opening a second project beside the first leaves it unchanged, and a
+ *  cache keyed on it would go on serving the one-project answer. */
+export function scopeKey(): string {
+  return workspaceRoots().join("\0");
+}
+
+/** What the scope helpers accept: one root, several, or none (unscoped). */
+export type Scope = string | readonly string[] | null | undefined;
+const scopeList = (scope: Scope): readonly string[] =>
+  scope == null ? [] : typeof scope === "string" ? (scope ? [scope] : []) : scope;
 
 /**
  * Is this path inside the open project?
@@ -410,14 +456,15 @@ export function isWithin(child: string, parent: string, s: string = sep): boolea
   return child.startsWith(prefix);
 }
 
-export function inScope(path: string | null | undefined, scope = workspaceRoot()): boolean {
-  if (!scope) return true; // whole-machine: nothing to enforce
+export function inScope(path: string | null | undefined, scope: Scope = workspaceRoots()): boolean {
+  const roots = scopeList(scope);
+  if (!roots.length) return true; // whole-machine: nothing to enforce
   if (!path) return false;
   const p = resolve(expand(path));
   // The plain prefix test first: it answers every non-worktree case without a
   // subprocess, including the container-folder scope where the family is moot.
-  if (isWithin(p, scope)) return true;
-  return worktreeFamily(scope).some((r) => isWithin(p, r));
+  if (roots.some((r) => isWithin(p, r))) return true;
+  return roots.some((root) => worktreeFamily(root).some((r) => isWithin(p, r)));
 }
 
 /**
@@ -438,17 +485,18 @@ export function inScope(path: string | null | undefined, scope = workspaceRoot()
  */
 export function sessionInScope(
   s: { project_path?: string | null; cwd_path?: string | null },
-  scope = workspaceRoot(),
+  scope: Scope = workspaceRoots(),
 ): boolean {
-  if (!scope) return true; // whole-machine: nothing to filter
+  if (!scopeList(scope).length) return true; // whole-machine: nothing to filter
   return inScope(s.project_path, scope) || inScope(s.cwd_path, scope);
 }
 
-/** The directories a scoped instance is about: the project plus its linked
- *  worktrees. Unscoped returns empty — "no scope" is not "a list of roots", and
- *  callers branch on that rather than being handed the whole machine. */
-export function scopeRoots(scope = workspaceRoot()): string[] {
-  return scope ? worktreeFamily(scope) : [];
+/** The directories a scoped instance is about: each open project plus its
+ *  linked worktrees. Unscoped returns empty — "no scope" is not "a list of
+ *  roots", and callers branch on that rather than being handed the whole
+ *  machine. */
+export function scopeRoots(scope: Scope = workspaceRoots()): string[] {
+  return [...new Set(scopeList(scope).flatMap((r) => worktreeFamily(r)))];
 }
 
 /** One rule for turning "what the user asked for" into a scope directory —
@@ -507,30 +555,39 @@ function repoTop(dir: string): string | null {
 }
 
 /**
- * Point this instance at one project (or back at the whole machine) while it
+ * Point this instance at some projects (or back at the whole machine) while it
  * runs — the project picker in the UI calls this. The choice is applied
  * immediately (the transcript scanner re-evaluates scope on its next sweep,
  * every few seconds) and persisted to the config file so the next launch opens
- * the same project. Passing null clears the scope.
+ * the same projects. An empty list clears the scope.
+ *
+ * All or nothing: one path that is not a directory refuses the whole choice. A
+ * cockpit that quietly opened two of the three projects asked for would look
+ * exactly like one that opened all three until the missing one's work failed
+ * to appear.
  *
  * Note the runtime cache is set directly: AGENTGLASS_ROOT from the environment
  * seeds the *initial* scope, but an explicit pick in the UI is newer intent and
  * wins for the rest of this process's life.
  */
-export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspace: string | null; persisted: boolean; error?: string; note?: string } {
-  const fail = (error: string) => ({ ok: false as const, workspace: workspaceRoot(), persisted: false, error });
-  let next: string | null = null;
-  if (rootIn !== null) {
+export function setWorkspaceRoots(rootsIn: readonly unknown[] | null): { ok: boolean; workspaces: string[]; persisted: boolean; error?: string; note?: string } {
+  const fail = (error: string) => ({ ok: false as const, workspaces: workspaceRoots(), persisted: false, error });
+  const next: string[] = [];
+  for (const rootIn of rootsIn ?? []) {
     if (typeof rootIn !== "string" || !rootIn.trim() || rootIn.includes("\0")) return fail("invalid path");
     const abs = resolve(expand(rootIn.trim()));
     try {
-      if (!statSync(abs).isDirectory()) return fail("not a directory");
+      if (!statSync(abs).isDirectory()) return fail(`not a directory: ${abs}`);
     } catch {
-      return fail("directory does not exist");
+      return fail(`directory does not exist: ${abs}`);
     }
-    next = resolveScope(abs);
+    const r = resolveScope(abs);
+    if (!next.includes(r)) next.push(r);
   }
-  cachedRoot = next;
+  // Pinned to what is asked for right now, so the pick holds until the file or
+  // the environment says something new — which, once persisted below, is this.
+  cachedFor = askedRoots().join("\0");
+  cachedRoots = next;
   // Persist so the choice survives a restart. Re-read the file first — another
   // setting written there by hand must not be clobbered by a stale snapshot.
   let persisted = false;
@@ -538,9 +595,9 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
   const path = configPath();
   // A test may choose a workspace; it may not rewrite the settings of the
   // machine it runs on. The switch still applies in memory, which is all any
-  // test needs, and cachedRoot above already carries it.
+  // test needs, and cachedRoots above already carries it.
   if (realConfigOffLimits(path)) {
-    return { ok: true, workspace: next, persisted: false, note: "not persisted: tests write settings only under os.tmpdir()" };
+    return { ok: true, workspaces: next, persisted: false, note: "not persisted: tests write settings only under os.tmpdir()" };
   }
   try {
     let cur: Config = {};
@@ -552,13 +609,18 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
       // (repoDirs, future keys). The runtime switch still applies.
       if (existsSync(path)) {
         console.error(`[config] not persisting workspace — ${path} exists but can't be parsed: ${e instanceof Error ? e.message : e}`);
-        return { ok: true, workspace: next, persisted: false, note: `config file is malformed — fix ${path} to persist this choice` };
+        return { ok: true, workspaces: next, persisted: false, note: `config file is malformed — fix ${path} to persist this choice` };
       }
     }
-    if (next) cur.root = next; else delete cur.root;
+    // One project stays a plain string: it is the commonest case, and it is
+    // the shape every earlier build reads.
+    if (next.length === 1) cur.root = next[0]; else if (next.length) cur.root = next; else delete cur.root;
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(cur, null, 2) + "\n");
     cached = null; // the file changed under us; next read picks it up
+    // The file now says what was just applied; pin the cache to that, or the
+    // next read would resolve every root again for the same answer.
+    cachedFor = askedRoots().join("\0");
     persisted = true;
   } catch (e) {
     console.error(`[config] could not persist workspace to ${path}: ${e instanceof Error ? e.message : e}`);
@@ -566,7 +628,14 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
   // The env var is read before the config file at boot, so it will shadow this
   // choice on the next launch (e.g. the desktop app started with a directory).
   if (process.env.AGENTGLASS_ROOT) note = `AGENTGLASS_ROOT is set — it will override this choice on the next launch`;
-  return { ok: true, workspace: next, persisted, note };
+  return { ok: true, workspaces: next, persisted, note };
+}
+
+/** One project, or null for the whole machine — the shape the older callers
+ *  and the `/workspace` body's `root` field still use. */
+export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspace: string | null; workspaces: string[]; persisted: boolean; error?: string; note?: string } {
+  const r = setWorkspaceRoots(rootIn === null ? [] : [rootIn]);
+  return { ...r, workspace: r.workspaces[0] ?? null };
 }
 
 /**

@@ -9,7 +9,7 @@ import { seedWorktree, type SeedReport } from "./worktreeseed.ts";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
-import { configuredRepoDirs, workspaceRoot, inScope, hiddenProjects } from "./config.ts";
+import { configuredRepoDirs, workspaceRoots, scopeKey, inScope, hiddenProjects } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { observe, noteResolved, noteReopened, stopFor, forget } from "./mergesession.ts";
 import { entered, backoff } from "./loopwatch.ts";
@@ -545,7 +545,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // set — removing a project has to show up before the cache expires.
   // `\\1` between the two lists, so a removed project and a known root cannot
   // add up to the key of a different pair.
-  const key = [opts.ignoreScope ? "*" : workspaceRoot() ?? "", ...hide, "\\1", ...knownRoots].join("\\0");
+  const key = [opts.ignoreScope ? "*" : scopeKey(), ...hide, "\\1", ...knownRoots].join("\\0");
   const hit = repoCache.get(key);
   // Held longer while a shell is in use or the loop is stalling: this sweep is
   // eighteen `git status` calls on a worktree-heavy repo, and none of them is
@@ -560,23 +560,29 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // come along because they *are* the project, on other branches.
   // (`ignoreScope` is the project *picker* asking — choosing a different
   // project requires seeing more than the current one.)
-  const only1 = opts.ignoreScope ? null : workspaceRoot();
-  if (only1) {
-    const self = repoRoot(only1);
-    // The scope may be a repo ("this project") or a plain folder ("my projects
-    // live in here" — e.g. ~/code picked in the app). A repo brings its linked
-    // worktrees, because they ARE the project on other branches; a container
-    // folder brings every repo found from that folder inward, and nothing else.
-    const found = self
-      // `worktreeListAsync`, not `worktrees`: this needs the paths and nothing
-      // else, and the richer call computes a base branch and a `rev-list --count`
-      // per checkout — which on a repo with 17 worktrees is 34 subprocesses, on
-      // the most frequently requested endpoint in the app. Async, so even the one
-      // `worktree list` it does need is off the thread the terminal rides rather
-      // than a synchronous spawn between keystrokes.
-      ? [self, ...(await worktreeListAsync(self)).map((w) => w.path).filter((p) => p && p !== self)]
-      : reposUnder(only1);
-    const refs = await Promise.all(found.map((r) => repoRef(r)));
+  const open = opts.ignoreScope ? [] : workspaceRoots();
+  if (open.length) {
+    // Each open project, in the order they were chosen — usually one.
+    const selves = open.map((root) => repoRoot(root));
+    const found = new Set<string>();
+    await Promise.all(open.map(async (root, i) => {
+      const self = selves[i];
+      // The scope may be a repo ("this project") or a plain folder ("my projects
+      // live in here" — e.g. ~/code picked in the app). A repo brings its linked
+      // worktrees, because they ARE the project on other branches; a container
+      // folder brings every repo found from that folder inward, and nothing else.
+      const here = self
+        // `worktreeListAsync`, not `worktrees`: this needs the paths and nothing
+        // else, and the richer call computes a base branch and a `rev-list --count`
+        // per checkout — which on a repo with 17 worktrees is 34 subprocesses, on
+        // the most frequently requested endpoint in the app. Async, so even the one
+        // `worktree list` it does need is off the thread the terminal rides rather
+        // than a synchronous spawn between keystrokes.
+        ? [self, ...(await worktreeListAsync(self)).map((w) => w.path).filter((p) => p && p !== self)]
+        : reposUnder(root);
+      for (const r of here) found.add(r);
+    }));
+    const refs = await Promise.all([...found].map((r) => repoRef(r)));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
     // The project itself first, then its worktrees. Dirtiest-first is the right
     // order among peers, but it shouldn't bury the main checkout behind a
@@ -590,7 +596,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     // and is subsumed by it — staging a file touches the index.
     scoped.sort((a, b) =>
       Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.touchedAt - a.touchedAt || a.name.localeCompare(b.name));
-    const kept = notHidden(scoped, hide, self ?? only1);
+    const kept = notHidden(scoped, hide, selves.map((s, i) => s ?? open[i]!));
     repoCache.set(key, { at: Date.now(), repos: kept });
     return kept;
   }
@@ -719,11 +725,11 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
 
 /** Drop the projects the picker was told to forget, and their worktrees with
  *  them — a checkout of a removed project is the removed project. `keep` is the
- *  open project, which is never dropped however it is listed. */
-function notHidden(repos: GitRepoRef[], hide: string[], keep?: string | null): GitRepoRef[] {
+ *  open projects, which are never dropped however they are listed. */
+function notHidden(repos: GitRepoRef[], hide: string[], keep: readonly string[] = []): GitRepoRef[] {
   if (!hide.length) return repos;
   const gone = new Set(hide);
-  return repos.filter((r) => r.root === keep || (!gone.has(r.root) && !(r.worktreeOf && gone.has(r.worktreeOf))));
+  return repos.filter((r) => keep.includes(r.root) || (!gone.has(r.root) && !(r.worktreeOf && gone.has(r.worktreeOf))));
 }
 
 /** Keep only repos inside one of `dirs`. */
@@ -959,11 +965,21 @@ let fetching = false;
 async function autoFetchOnce(): Promise<void> {
   // Overlapping fetches would pile up on a slow remote; one in flight is enough.
   if (fetching) return;
-  const root = workspaceRoot();
   // Unscoped means "the whole machine", and fetching every repo on the machine
-  // once a minute is exactly the cost this feature must not have.
-  if (!root || !repoRoot(root)) return;
+  // once a minute is exactly the cost this feature must not have. Several open
+  // projects are fetched one after another, never at once: the ceiling below
+  // is per fetch, and a slow remote should not have company.
+  const roots = workspaceRoots().filter((r) => repoRoot(r));
+  if (!roots.length) return;
   fetching = true;
+  try {
+    for (const root of roots) await fetchOne(root);
+  } finally {
+    fetching = false;
+  }
+}
+
+async function fetchOne(root: string): Promise<void> {
   try {
     // What the remote refs point at, before and after. Invalidating on every
     // tick regardless is what broke squash detection outright: the sweep that
@@ -1014,8 +1030,6 @@ async function autoFetchOnce(): Promise<void> {
   } catch {
     // Offline, no remote, no credentials — all ordinary. The counts simply stay
     // where they were, which is the same as the old behaviour.
-  } finally {
-    fetching = false;
   }
 }
 
