@@ -25,7 +25,7 @@
  * reads as null, and the caller finds no match — which lands on the same
  * "nothing here can answer this" it showed before, rather than on a wrong pane.
  */
-import { readFileSync, readlinkSync } from "node:fs";
+import { readFileSync, readlinkSync, realpathSync } from "node:fs";
 
 export interface PaneRow {
   /** tmux session NAME, for display, and its id for addressing. */
@@ -69,19 +69,33 @@ const NODE_CLIS: [pkg: string, name: string][] = [
   ["opencode-ai", "opencode"],
 ];
 
+/** What node calls itself: `node`, or on Node 26 `node-MainThread` (measured
+ *  in /proc/self/comm). The argv[0] is still `node`. */
+const NODE_RE = /^(node|bun)(-MainThread)?$/;
+
+const realpathOf = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
+
 /**
  * Which agent CLI a process is, from its argv, or null.
  *
  * The binary's basename when it is one of the CLIs by name; the npm package
- * when the binary is `node` or `bun` running one of them. Pure, so the
- * restore and the pane walk can share it and a test can state a process.
+ * when the binary is `node` or `bun` running one of them. The package is
+ * looked for on the SCRIPT — the first argument that is not a flag — and on
+ * the script's real path, because neither spelling on this machine names it
+ * outright: `/usr/bin/qwen` is a symlink into the package, and the process it
+ * starts is `node --expose-gc <package>/cli.js` (measured). Pure apart from
+ * the injectable realpath, so the restore and the pane walk share it and a
+ * test can state a process.
  */
-export function agentNamed(argv: readonly string[]): string | null {
+export function agentNamed(argv: readonly string[], realpath: (p: string) => string = realpathOf): string | null {
   const head = (argv[0] || "").split("/").pop() || "";
   if (AGENT_COMMS.has(head)) return head;
-  if (head === "node" || head === "bun") {
-    const script = argv[1] || "";
-    for (const [pkg, name] of NODE_CLIS) if (script.includes(`/node_modules/${pkg}/`)) return name;
+  if (NODE_RE.test(head)) {
+    const script = argv.slice(1).find((a) => !a.startsWith("-"));
+    if (!script) return null;
+    for (const path of [script, realpath(script)]) {
+      for (const [pkg, name] of NODE_CLIS) if (path.includes(`/node_modules/${pkg}/`)) return name;
+    }
   }
   return null;
 }
@@ -128,8 +142,10 @@ export interface ProcIo {
   cwd: (pid: number) => string | null;
   children: (pid: number) => number[];
   argv: (pid: number) => string[];
+  /** A path with its symlinks resolved; the path itself when it cannot be. */
+  realpath?: (p: string) => string;
 }
-const machine: ProcIo = { comm, cwd: cwdOf, children: childrenOf, argv: argvOf };
+const machine: ProcIo = { comm, cwd: cwdOf, children: childrenOf, argv: argvOf, realpath: realpathOf };
 
 export function agentCwdsUnder(panePid: number, depth = MAX_DEPTH, io: ProcIo = machine): string[] {
   if (process.platform !== "linux" && io === machine) return [];
@@ -142,7 +158,7 @@ export function agentCwdsUnder(panePid: number, depth = MAX_DEPTH, io: ProcIo = 
       /* By name — or, for a CLI that is a script run by node, by the package
          on its command line: `comm` says `node` for every one of those, and
          a name match alone read a tab running one as a plain shell. */
-      const agent = !!c && (AGENT_COMMS.has(c) || ((c === "node" || c === "bun") && agentNamed(io.argv(pid)) !== null));
+      const agent = !!c && (AGENT_COMMS.has(c) || (NODE_RE.test(c) && agentNamed(io.argv(pid), io.realpath ?? realpathOf) !== null));
       if (agent) {
         const cwd = io.cwd(pid);
         if (cwd && !found.includes(cwd)) found.push(cwd);

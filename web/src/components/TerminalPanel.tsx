@@ -1782,7 +1782,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const paneBook = useRef(new Map<string, { dirs: string[]; agent: string }>());
   /** Directories the repo list has already been asked about — see
    *  `unlistedWorktree`. */
-  const askedRepos = useRef(new Set<string>());
+  const askedRepos = useRef(new Map<string, number>());
   const containerRef = useRef<HTMLDivElement>(null);
   // The value is used, not just the dispatch: a session is MUTATED in place
   // and notified through `subs`, so an effect watching `sess.openFail` has no

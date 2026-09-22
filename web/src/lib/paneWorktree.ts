@@ -41,7 +41,7 @@ export function nextSeen(prev: PaneSeen | undefined, found: string | null, sessi
      every hiccup — for a pane whose agent has no hooked session most of all,
      because nothing else could keep it: an opencode or a qwen has no session
      id here, so its memory lives only as long as every poll succeeds. */
-  if (!read) return prev ?? null;
+  if (!read && !found) return prev ?? null;
   if (found) return { root: found, session };
   // Nothing found, and the same agent is still there: it has simply not
   // mentioned the worktree since. This is the case stickiness exists for.
@@ -63,13 +63,20 @@ export function nextSeen(prev: PaneSeen | undefined, found: string | null, sessi
  * all (a home directory, a scratch folder) would otherwise be asked about on
  * every poll.
  */
-export function unlistedWorktree(dirs: string[], cands: { root: string }[], asked: Set<string>): string | null {
+export function unlistedWorktree(dirs: string[], cands: { root: string }[], asked: Map<string, number>, now = Date.now()): string | null {
   const dir = dirs[0];
-  if (!dir || asked.has(dir)) return null;
+  if (!dir) return null;
   if (cands.some((r) => dir === r.root || dir.startsWith(r.root + "/"))) return null;
-  asked.add(dir);
+  /* Asked again after a while, not never: the server keeps its own list for
+     some seconds, so the first read after a worktree is cut can still be the
+     old one. A minute is longer than that cache and shorter than a person's
+     patience. */
+  const last = asked.get(dir);
+  if (last !== undefined && now - last < ASK_AGAIN_MS) return null;
+  asked.set(dir, now);
   return dir;
 }
+const ASK_AGAIN_MS = 60_000;
 
 /*
  * The memory, across restarts.

@@ -289,4 +289,18 @@ describe("the walk under a pane", () => {
     const vite = ["node", `${APP}/node_modules/.bin/vite`];
     expect(agentCwdsUnder(1, 6, tree({ comm: "node", argv: vite, cwd: WT }))).toEqual([]);
   });
+
+  test("Node 26 calls itself node-MainThread, and the launcher names its script by a symlink on PATH", () => {
+    /* Both measured on the owner's machine: /proc/self/comm reads
+       `node-MainThread`, and `/usr/bin/qwen` is a symlink into the package.
+       Neither spelling names the package until the link is followed. */
+    const io = { ...tree({ comm: "node-MainThread", argv: ["node", "/usr/bin/qwen"], cwd: WT }),
+      realpath: (p: string) => (p === "/usr/bin/qwen" ? "/usr/lib/node_modules/@qwen-code/qwen-code/scripts/cli-entry.js" : p) };
+    expect(agentCwdsUnder(1, 6, io)).toEqual([WT]);
+  });
+
+  test("the process the launcher starts puts a flag before the script", () => {
+    const child = ["node", "--expose-gc", "/usr/lib/node_modules/@qwen-code/qwen-code/cli.js"];
+    expect(agentCwdsUnder(1, 6, tree({ comm: "node-MainThread", argv: child, cwd: WT }))).toEqual([WT]);
+  });
 });
