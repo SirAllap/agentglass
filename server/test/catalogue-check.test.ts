@@ -164,3 +164,24 @@ describe("wired into CI", () => {
     expect(ci).toContain('if [ "$files" = "landing/plugins.json" ]; then');
   });
 });
+
+/*
+ * The catalogue this repository publishes, as it stands. An entry with no
+ * commit and no hash installs whatever its default branch holds that day,
+ * which is the exposure the rest of this file exists to close — so every
+ * entry on the shelf is pinned, not only the ones listed from now on.
+ */
+describe("the published catalogue", () => {
+  test("pins every entry to a commit and the hash of its tree, and reads its picture there", async () => {
+    const shelf = (await Bun.file(new URL("../../landing/plugins.json", import.meta.url)).json()) as {
+      plugins: { id: string; source: { ref: unknown }; sha256?: unknown; preview?: string; verified?: unknown }[];
+    };
+    expect(shelf.plugins.length).toBeGreaterThan(0);
+    for (const p of shelf.plugins) {
+      expect(String(p.source.ref), `${p.id} ref`).toMatch(/^[0-9a-f]{40}$/);
+      expect(String(p.sha256), `${p.id} sha256`).toMatch(/^[0-9a-f]{64}$/);
+      expect(p.verified, `${p.id} verified`).toBe(false);
+      if (p.preview) expect(p.preview, `${p.id} preview`).toContain(`/${p.source.ref}/`);
+    }
+  });
+});
