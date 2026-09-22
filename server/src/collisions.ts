@@ -393,7 +393,8 @@ export function cachedListeners(
 /** Thirty seconds: a dev server that just bound shows up on the next poll or two. */
 const listening = cachedListeners(async () => (await listPortsAsync()).ports, 30_000);
 
-const FILE_TOOLS = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"];
+// Lowercase: OpenCode names its tools `bash` and `read`, Claude `Bash` and `Read`.
+const FILE_TOOLS = new Set(["read", "edit", "write", "multiedit", "notebookedit"]);
 
 /**
  * Collisions among the sessions live right now.
@@ -411,8 +412,8 @@ export async function getCollisions(
     .query<{ source_app: string; session_id: string; hook_event_type: string; tool_name: string | null; ts: number; cmd: string | null; path: string | null; cwd: string | null }, [number]>(
       `SELECT source_app, session_id, hook_event_type, tool_name, timestamp AS ts,
               json_extract(payload,'$.tool_input.command') AS cmd,
-              json_extract(payload,'$.tool_input.file_path') AS path,
-              json_extract(payload,'$.cwd') AS cwd
+              COALESCE(json_extract(payload,'$.tool_input.file_path'), json_extract(payload,'$.tool_input.filePath')) AS path,
+              COALESCE(json_extract(payload,'$.cwd'), json_extract(payload,'$.project_path')) AS cwd
        FROM events
        WHERE timestamp > ? AND hook_event_type IN ('PreToolUse','SessionEnd')
        ORDER BY timestamp`,
@@ -433,11 +434,12 @@ export async function getCollisions(
     // a SessionEnd is a resumed session speaking again.
     s.ended = r.hook_event_type === "SessionEnd";
     if (r.hook_event_type !== "PreToolUse") continue;
-    if (r.tool_name === "Bash" && r.cmd) {
+    const tool = r.tool_name?.toLowerCase();
+    if (tool === "bash" && r.cmd) {
       for (const c of claimsFromCommand(String(r.cmd), r.cwd)) {
         s.claims.push({ ...c, ts: r.ts, via: "command", evidence: maskEvidence(String(r.cmd)) });
       }
-    } else if (r.tool_name && FILE_TOOLS.includes(r.tool_name) && r.path) {
+    } else if (tool && FILE_TOOLS.has(tool) && r.path) {
       for (const c of claimsFromPath(String(r.path))) {
         s.claims.push({ ...c, ts: r.ts, via: "file", evidence: `${r.tool_name} ${r.path}` });
       }

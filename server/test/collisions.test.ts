@@ -251,6 +251,19 @@ describe("getCollisions", () => {
     expect(hit!.parties.map((s) => `${s.session_id}:${s.via}`).sort()).toEqual(["live-f:listening", "live-g:command"]);
   });
 
+  test("an OpenCode session counts: lowercase tools, filePath, project_path for its directory", async () => {
+    // OpenCode's plugin sends `bash` and `read`, the path as `filePath`, and
+    // its directory as `project_path` with no `cwd` — read as Claude's shape,
+    // the session had no cwd and dropped out.
+    const oc = (session_id: string, tool: string, input: Record<string, unknown>, project_path: string) =>
+      ({ ...ev(session_id, now - 5_000, "PreToolUse", tool, input, ""), source_app: "opencode", payload: { project_path, tool_input: input } });
+    db.insertEvent(oc("oc-k", "read", { filePath: `${W}/.env.shared` }, `${W}/wt-a`) as any);
+    db.insertEvent(oc("oc-l", "bash", { command: "cat ../.env.shared" }, `${W}/wt-b`) as any);
+    const out = ours(await col.getCollisions(now, () => []), ["oc-k", "oc-l"]);
+    expect(out.map((c) => c.resource)).toEqual([`env ${W}/.env.shared`]);
+    expect(out[0].parties.map((p) => `${p.session_id}:${p.via}`).sort()).toEqual(["oc-k:file", "oc-l:command"]);
+  });
+
   test("a session outside any checkout is not a party, and a listener below it is nobody's", async () => {
     // A session sitting in the home directory has no checkout; taking the
     // directory itself as one made every dev server under it that session's,
