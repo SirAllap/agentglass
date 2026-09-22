@@ -874,12 +874,20 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
          * something else, which is the ceiling.
          */
         if (p.dead) {
-          const was = previous?.sessions.find((s) => s.name === name)?.windows.find((x) => x.id === w.id)?.panes.find((x) => x.id === p.id);
+          /* By id, and by window name as well: while a desk is not whole,
+             windows are carried with the ids of the server that died, and
+             this one hands the same ids out again. The directory too, when
+             tmux still says one — for a dead pane it says "" (measured), so
+             the photograph's is the only one left, and the pane is given it
+             back rather than restored wherever the server was started. */
+          const was = previous?.sessions.find((s) => s.name === name)?.windows
+            .find((x) => x.id === w.id && (x.name ?? "") === (w.name ?? ""))?.panes
+            .find((x) => x.id === p.id && (!p.path || x.path === p.path));
           const bornClaude = startCommand.split(/[\s"']+/).some((t) => (t.split("/").pop() || "") === claudeName());
           const note = was || !bornClaude ? null : paneAgentNote(p.id);
           const noteFits = !!note && noteIsThisAgents(note, { cwd: p.path, startedAt }, server);
           const agentSession = was ? was.agentSession : noteFits ? note!.session_id : undefined;
-          panes.push({ ...p, startCommand: "", ...(agentSession ? { agentSession, ...(was?.agentArgs ? { agentArgs: was.agentArgs } : {}) } : {}) });
+          panes.push({ ...p, path: p.path || was?.path || "", startCommand: "", ...(agentSession ? { agentSession, ...(was?.agentArgs ? { agentArgs: was.agentArgs } : {}) } : {}) });
           continue;
         }
         /*

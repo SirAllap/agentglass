@@ -234,6 +234,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(dead!.agentSession, "the conversation of the agent that died here").toBe(CRASH);
     expect(dead!.agentArgs).toContain("--dangerously-skip-permissions");
     expect(dead!.startCommand, "never the born-with line: that is the failure again").toBe("");
+    expect(dead!.path, "tmux says no directory for a dead pane; the photograph does").toBe(alive!.path);
     expect(restore.runArgs("all", dead, "/opt/agentglass/bin/claude")).toEqual(["/opt/agentglass/bin/claude", ...dead!.agentArgs!, "--resume", CRASH]);
   }, 20_000);
 
@@ -347,6 +348,42 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got?.agentArgs).toContain("--dangerously-skip-permissions");
     expect(got?.agentArgs, "the id is re-supplied, never carried in the flags").not.toContain(OTHER);
     expect(got?.agentArgs).not.toContain("--resume");
+  }, 20_000);
+});
+
+describe("a corpse and the photograph it is read from", () => {
+  const dieWhen = async (win: string, stop: string) => {
+    writeFileSync(stop, "");
+    for (let i = 0; i < 40; i++) {
+      if ((await pane.tmux(["display-message", "-p", "-t", `=${S}:${win}`, "#{pane_dead}"])).stdout.trim() === "1") return;
+      await Bun.sleep(100);
+    }
+  };
+
+  test("a window carried from a server that died is not read for a new pane that reuses its ids", async () => {
+    /*
+     * While a desk is not whole, windows missing from the photograph are
+     * carried with the ids they had on the server that died, and the new
+     * server hands the same ids out again from @0/%0. A new pane that died
+     * before its first sweep matched a carried window by id alone, and
+     * inherited somebody else's conversation and flags.
+     */
+    const STRANGER = "2c3d4e5f-6a7b-4c8d-8e9f-0a1b2c3d4e5f";
+    const stop = join(CWD, "stop-reused");
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "reused", "-c", CWD, ...fakeCrashingClaude(stop, "--model", "opus")]);
+    const wid = (await pane.tmux(["display-message", "-p", "-t", `=${S}:reused`, "#{window_id}"])).stdout.trim();
+    const pid = await paneOf("reused");
+    const engine = (await pane.tmux(["display-message", "-p", "#{pid}.#{start_time}"])).stdout.trim();
+    const file = join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore", "layout.json");
+    const had = JSON.parse(require("node:fs").readFileSync(file, "utf8"));
+    const carried = { id: wid, index: 9, name: "carried", active: false, panes: [{ id: pid, index: 0, active: true, command: "claude", path: "/home/someone/code/acme", startCommand: "", agentSession: STRANGER, agentArgs: ["--dangerously-skip-permissions"] }] };
+    writeFileSync(file, JSON.stringify({ ...had, engine, sessions: had.sessions.map((x: { name: string; windows: unknown[] }) => x.name === S ? { ...x, windows: [...x.windows, carried] } : x) }));
+    await dieWhen("reused", stop);
+    const got = await photographed("reused");
+    expect(got, "the pane is in the picture").not.toBeUndefined();
+    expect(got!.dead).toBe(true);
+    expect(got!.agentSession, "a carried window's conversation").not.toBe(STRANGER);
+    expect(got!.agentArgs ?? []).not.toContain("--dangerously-skip-permissions");
   }, 20_000);
 });
 
