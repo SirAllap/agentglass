@@ -35,7 +35,13 @@ export interface PaneSeen {
  * `null` means forget: the chip falls back to the panel's own checkout rather
  * than to the last thing anybody saw.
  */
-export function nextSeen(prev: PaneSeen | undefined, found: string | null, session: string): PaneSeen | null {
+export function nextSeen(prev: PaneSeen | undefined, found: string | null, session: string, read = true): PaneSeen | null {
+  /* A read that did not happen is not news. The server was busy or offline,
+     and forgetting on that dropped the chip to the panel's own checkout on
+     every hiccup — for a pane whose agent has no hooked session most of all,
+     because nothing else could keep it: an opencode or a qwen has no session
+     id here, so its memory lives only as long as every poll succeeds. */
+  if (!read) return prev ?? null;
   if (found) return { root: found, session };
   // Nothing found, and the same agent is still there: it has simply not
   // mentioned the worktree since. This is the case stickiness exists for.
@@ -44,6 +50,25 @@ export function nextSeen(prev: PaneSeen | undefined, found: string | null, sessi
   // the pane) or there is none. Whatever was remembered belonged to somebody
   // else's conversation.
   return null;
+}
+
+/**
+ * A worktree the candidate list has not caught up with.
+ *
+ * The list is read when the view opens, and a worktree cut after that — by an
+ * agent, in another tab — is not in it: the pane's agent stands in a directory
+ * no candidate names, so the chip cannot name it and falls back to the panel's
+ * own checkout until the view is reopened. That directory is the one to ask
+ * the list about again. Asked about ONCE: a directory that is no worktree at
+ * all (a home directory, a scratch folder) would otherwise be asked about on
+ * every poll.
+ */
+export function unlistedWorktree(dirs: string[], cands: { root: string }[], asked: Set<string>): string | null {
+  const dir = dirs[0];
+  if (!dir || asked.has(dir)) return null;
+  if (cands.some((r) => dir === r.root || dir.startsWith(r.root + "/"))) return null;
+  asked.add(dir);
+  return dir;
 }
 
 /*

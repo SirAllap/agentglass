@@ -98,6 +98,10 @@ const cwdOf = (pid: number): string | null => {
   try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return null; }
 };
 
+const argvOf = (pid: number): string[] => {
+  try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean); } catch { return []; }
+};
+
 const childrenOf = (pid: number): number[] => {
   try {
     // Needs CONFIG_PROC_CHILDREN; absent, this reads empty and the pane simply
@@ -116,19 +120,34 @@ const childrenOf = (pid: number): number[] => {
  * shallow answer named the wrong directory every time. Walking on costs a few
  * more reads of /proc and removes a whole class of confident wrong answer.
  */
-export function agentCwdsUnder(panePid: number, depth = MAX_DEPTH): string[] {
-  if (process.platform !== "linux") return [];
+/** How the walk reads a process, as a seam: the walk is the one part of this
+ *  module that cannot be exercised without a process tree, so a test states
+ *  one. The default is the machine's /proc. */
+export interface ProcIo {
+  comm: (pid: number) => string | null;
+  cwd: (pid: number) => string | null;
+  children: (pid: number) => number[];
+  argv: (pid: number) => string[];
+}
+const machine: ProcIo = { comm, cwd: cwdOf, children: childrenOf, argv: argvOf };
+
+export function agentCwdsUnder(panePid: number, depth = MAX_DEPTH, io: ProcIo = machine): string[] {
+  if (process.platform !== "linux" && io === machine) return [];
   const found: string[] = [];
   let level = [panePid];
   for (let d = 0; d <= depth && level.length; d++) {
     const next: number[] = [];
     for (const pid of level) {
-      const c = comm(pid);
-      if (c && AGENT_COMMS.has(c)) {
-        const cwd = cwdOf(pid);
+      const c = io.comm(pid);
+      /* By name — or, for a CLI that is a script run by node, by the package
+         on its command line: `comm` says `node` for every one of those, and
+         a name match alone read a tab running one as a plain shell. */
+      const agent = !!c && (AGENT_COMMS.has(c) || ((c === "node" || c === "bun") && agentNamed(io.argv(pid)) !== null));
+      if (agent) {
+        const cwd = io.cwd(pid);
         if (cwd && !found.includes(cwd)) found.push(cwd);
       }
-      next.push(...childrenOf(pid));
+      next.push(...io.children(pid));
     }
     level = next;
   }

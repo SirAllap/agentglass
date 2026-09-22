@@ -13,7 +13,7 @@ import { dirName } from "../lib/worktree.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { ExpandIcon, GridIcon, IconLabel, LockIcon, SearchIcon } from "../lib/glyphIcons.tsx";
-import { nextSeen, type PaneSeen, readPaneSeen, writePaneSeen } from "../lib/paneWorktree.ts";
+import { nextSeen, unlistedWorktree, type PaneSeen, readPaneSeen, writePaneSeen } from "../lib/paneWorktree.ts";
 import { readBranchPrs, writeBranchPrs, readCardPrios, writeCardPrios, type RememberedPr, type RememberedPrio } from "../lib/paneFacts.ts";
 import { lanternRows } from "../lib/lanternStore.ts";
 import { askOnBench } from "../lib/lanternAsk.ts";
@@ -1780,6 +1780,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * first hover of every pane is already answered.
    */
   const paneBook = useRef(new Map<string, { dirs: string[]; agent: string }>());
+  /** Directories the repo list has already been asked about — see
+   *  `unlistedWorktree`. */
+  const askedRepos = useRef(new Set<string>());
   const containerRef = useRef<HTMLDivElement>(null);
   // The value is used, not just the dispatch: a session is MUTATED in place
   // and notified through `subs`, so an effect watching `sess.openFail` has no
@@ -1977,6 +1980,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       /** Which agent answered. "" is a pane with nobody working in it, and it
        *  is what ends the memory below rather than a gap in it. */
       let agent = "";
+      /** Whether the server answered at all. A read that did not happen is not
+       *  news — see `nextSeen`. */
+      let read = true;
       if (focusWin) {
         try {
           /* The book first: it holds every pane of this window and is filled
@@ -1994,7 +2000,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
             const hit = cands.find((r) => p === r.root || p.startsWith(r.root + "/"));
             if (hit) { d = hit; break; }
           }
-        } catch { /* server busy or offline — the buffer scan below still works */ }
+          /* The agent stands somewhere no candidate names: a worktree cut since
+             the list was read. Read it again, once for that directory. */
+          if (!d && unlistedWorktree(dirs, cands, askedRepos.current)) {
+            api.gitRepos().then(({ repos: rr }) => setRepos(rr)).catch(() => { /* next open re-reads it anyway */ });
+          }
+        } catch { read = false; /* server busy or offline — the buffer scan below still works */ }
       }
       if (stopped) return;
       if (!d) d = detectPaneWorktree(s?.term, cands);
@@ -2012,7 +2023,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
        * the reset above.
        */
       const found = d;
-      const keep = nextSeen(focusKey ? wtSeen.current.get(focusKey) : undefined, found?.root ?? null, agent);
+      const keep = nextSeen(focusKey ? wtSeen.current.get(focusKey) : undefined, found?.root ?? null, agent, read);
       if (focusKey) {
         if (keep) wtSeen.current.set(focusKey, keep); else wtSeen.current.delete(focusKey);
         rememberSeen();

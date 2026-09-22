@@ -46,3 +46,26 @@ describe("what a pane keeps believing", () => {
     expect(nextSeen(undefined, null, "s-1")).toBeNull();
   });
 });
+
+describe("a read that did not happen", () => {
+  test("is not news: the memory stays, whoever is in the pane", () => {
+    /* The server was busy or offline. Forgetting on that dropped the chip to
+       the panel's own checkout on every hiccup — and for a pane whose agent
+       has no hooked session, nothing else could keep it. */
+    expect(nextSeen(seen, null, "s-1", false)).toEqual(seen);
+    expect(nextSeen({ root: seen.root, session: "" }, null, "", false)).toEqual({ root: seen.root, session: "" });
+    expect(nextSeen(undefined, null, "", false)).toBeNull();
+  });
+});
+
+describe("a worktree the list has not caught up with", () => {
+  const cands = [{ root: "/home/dev/code/orbit" }, { root: "/home/dev/code/orbit-1042" }];
+  test("is the directory the agent stands in that no candidate names — asked about once", async () => {
+    const { unlistedWorktree } = await import("../src/lib/paneWorktree.ts");
+    const asked = new Set<string>();
+    expect(unlistedWorktree(["/home/dev/code/orbit-2001"], cands, asked)).toBe("/home/dev/code/orbit-2001");
+    expect(unlistedWorktree(["/home/dev/code/orbit-2001"], cands, asked), "not again on the next poll").toBeNull();
+    expect(unlistedWorktree(["/home/dev/code/orbit-1042/src"], cands, asked), "inside a candidate is known").toBeNull();
+    expect(unlistedWorktree([], cands, asked)).toBeNull();
+  });
+});
