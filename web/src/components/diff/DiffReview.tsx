@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { anchorLabel, inReviewOrder, type Review, type ReviewComment } from "../../lib/diffReview.ts";
+import { anchorLabel, inReviewOrder, type Review, type ReviewComment, type StaleFile } from "../../lib/diffReview.ts";
 import { Btn } from "../PrPanel.tsx";
 
 const CARD = {
@@ -94,11 +94,15 @@ function StaleTag() {
  * the intro and outro the prompt is framed with and every comment in the tree,
  * including the ones on files not on screen, each one a jump back to its line.
  */
-export function ReviewTray({ where, review, staleIds, target, onFrame, onJump, onRemove, onSend, onDiscard }: {
+export function ReviewTray({ where, review, staleIds, staleFiles, checking, target, onFrame, onJump, onRemove, onSend, onDiscard }: {
   /** The branch, or the checkout's path when it has none. */
   where: string;
   review: Review;
   staleIds: ReadonlySet<string>;
+  /** What the last press of Send found in files not on screen: set, the send
+   *  stopped to say so, and the next press sends anyway. */
+  staleFiles: readonly StaleFile[] | null;
+  checking: boolean;
   /** Which chat will get it, said before the button is pressed. */
   target: string;
   onFrame: (f: { intro?: string; outro?: string }) => void;
@@ -144,6 +148,18 @@ export function ReviewTray({ where, review, staleIds, target, onFrame, onJump, o
             onChange={(e) => onFrame({ outro: e.target.value })} />
         </div>
       )}
+      {staleFiles && (
+        <div role="alert" className="px-4 pt-2 flex flex-col gap-0.5 text-[11px]" style={{ color: "var(--warning)" }}>
+          <span>Changed since you commented — the review says so beside each stale comment:</span>
+          {staleFiles.map((f) => (
+            <span key={`${f.mode}\0${f.path}`} className="truncate pl-2">
+              {f.path}{f.mode === "committed" ? " (last commit)" : ""} · {f.unknown
+                ? `could not be checked (${f.of} ${f.of === 1 ? "comment" : "comments"})`
+                : `${f.stale} of ${f.of} ${f.of === 1 ? "comment" : "comments"} stale`}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-2 px-4 py-2 text-[11px]">
         <button onClick={() => setOpen((v) => !v)} aria-expanded={open}
           className="agx-btn min-w-0 flex items-center gap-1.5 rounded px-1.5 py-0.5" style={{ color: "var(--text)" }}>
@@ -154,8 +170,9 @@ export function ReviewTray({ where, review, staleIds, target, onFrame, onJump, o
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           <Btn small onClick={() => { if (armed) { setArmed(false); onDiscard(); } else setArmed(true); }}
             title="Throw the whole review away">{armed ? `Discard ${n}?` : "Discard"}</Btn>
-          <Btn small onClick={onSend} primary title={`Puts the review in ${target}'s composer as one prompt — nothing runs until you send it there`}>
-            Send review
+          <Btn small onClick={onSend} primary pending={checking}
+            title={`Checks every commented file, then puts the review in ${target}'s composer as one prompt — nothing runs until you send it there`}>
+            {checking ? "Checking…" : staleFiles ? "Send anyway" : "Send review"}
           </Btn>
         </span>
       </div>

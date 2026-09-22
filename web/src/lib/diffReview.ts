@@ -83,6 +83,40 @@ export function isStale(c: ReviewComment, hunks: readonly DiffHunk[] | null): bo
   return now.length !== c.snippet.length || now.some((l, i) => l !== c.snippet[i]);
 }
 
+/** A file with comments that are stale, or that could not be checked at all. */
+export type StaleFile = { path: string; mode: ReviewComment["mode"]; stale: number; of: number; unknown: boolean };
+
+/**
+ * Staleness for EVERY file the review has comments on, fetched at send time.
+ *
+ * The view can only judge the file on screen, so without this a comment on a
+ * file the agent edited while you looked at another went out as current, with a
+ * line number that had moved — the case this feature exists for. One fetch per
+ * file and half. A file whose diff cannot be fetched is listed as unchecked
+ * rather than passed: saying nothing about it is how it would read as current.
+ */
+export async function checkAtSend(
+  comments: readonly ReviewComment[],
+  load: (path: string, mode: ReviewComment["mode"]) => Promise<readonly DiffHunk[]>,
+): Promise<{ stale: Set<string>; files: StaleFile[] }> {
+  const byFile = new Map<string, ReviewComment[]>();
+  for (const c of comments) {
+    const k = `${c.mode}\0${c.path}`;
+    byFile.set(k, [...(byFile.get(k) ?? []), c]);
+  }
+  const stale = new Set<string>();
+  const files: StaleFile[] = [];
+  await Promise.all([...byFile.values()].map(async (cs) => {
+    const { path, mode } = cs[0]!;
+    const hunks = await load(path, mode).catch(() => null);
+    const bad = hunks ? cs.filter((c) => isStale(c, hunks)) : [];
+    for (const c of bad) stale.add(c.id);
+    if (!hunks || bad.length) files.push({ path, mode, stale: bad.length, of: cs.length, unknown: !hunks });
+  }));
+  files.sort((a, b) => a.path.localeCompare(b.path) || a.mode.localeCompare(b.mode));
+  return { stale, files };
+}
+
 /** `path:12` or `path:12-14`, and which file the numbers are in whenever it is
  *  not the file as it is now — an agent reading `:12` goes to line 12 of what is
  *  on disk, and a comment from the last-commit half counts that commit's lines. */

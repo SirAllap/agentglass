@@ -7,7 +7,7 @@
 import { test, expect } from "bun:test";
 import type { DiffHunk } from "../../shared/types.ts";
 import {
-  addComment, anchorLabel, captureSnippet, chatForTree, clearReview, composeReview, editComment,
+  addComment, anchorLabel, captureSnippet, chatForTree, checkAtSend, clearReview, composeReview, editComment,
   isStale, removeComment, reviewFor, sanitizeReviews, setFrame, withDraft, type ReviewComment,
 } from "../src/lib/diffReview.ts";
 
@@ -117,6 +117,34 @@ test("code that holds a fence cannot close the snippet's", () => {
 });
 
 // --- who gets it -------------------------------------------------------------
+
+test("at send time every commented file is checked, not only the one on screen", async () => {
+  // Comments on two files; the agent edited a.ts while b.ts was on screen.
+  const a = comment({ id: "a1", path: "a.ts", snippet: captureSnippet(hunks, "RIGHT", 11, 11) });
+  const a2 = comment({ id: "a2", path: "a.ts", start: 10, end: 10, snippet: captureSnippet(hunks, "RIGHT", 10, 10) });
+  const b = comment({ id: "b1", path: "b.ts", snippet: captureSnippet(hunks, "RIGHT", 11, 11) });
+  const edited: DiffHunk[] = [{ ...hunks[0]!, lines: hunks[0]!.lines.map((l) => l.startsWith("+") ? "+const total = subtotal(items);" : l) }];
+  const asked: string[] = [];
+  const got = await checkAtSend([a, a2, b], async (path, mode) => {
+    asked.push(`${path}@${mode}`);
+    return path === "a.ts" ? edited : hunks;
+  });
+  expect([...got.stale]).toEqual(["a1"]);
+  expect(got.files).toEqual([{ path: "a.ts", mode: "working", stale: 1, of: 2, unknown: false }]);
+  expect(asked.sort()).toEqual(["a.ts@working", "b.ts@working"]);
+});
+
+test("a file whose diff cannot be fetched is warned about as unchecked, not passed as current", async () => {
+  const c = comment({ id: "c1", path: "gone.ts", snippet: ["+x"] });
+  const got = await checkAtSend([c], async () => { throw new Error("404"); });
+  expect(got.stale.size).toBe(0);
+  expect(got.files).toEqual([{ path: "gone.ts", mode: "working", stale: 0, of: 1, unknown: true }]);
+});
+
+test("nothing stale anywhere means nothing to warn about", async () => {
+  const c = comment({ id: "c1", snippet: captureSnippet(hunks, "RIGHT", 11, 11) });
+  expect((await checkAtSend([c], async () => hunks)).files).toEqual([]);
+});
 
 const chat = (id: string, cwd: string, lastTs: number | null, createdAt = 0) =>
   ({ id, cwd, createdAt, messages: lastTs == null ? [] : [{ ts: lastTs }] });

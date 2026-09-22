@@ -41,11 +41,12 @@ import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDi
 import { subscribeWorktreeJump, worktreeJump } from "../../lib/worktreeJump.ts";
 import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
+import { api } from "../../lib/api.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS, LINEBTN_CSS, type LinePick, type LineSel } from "./DiffLines.tsx";
 import { CommentBox, CommentCard, ReviewTray } from "./DiffReview.tsx";
 import {
-  addComment, anchorLabel, captureSnippet, chatForTree, clearReview, composeReview, editComment, isStale,
-  removeComment, reviewFor, setFrame, subscribeReviews, withDraft, type ReviewComment,
+  addComment, anchorLabel, captureSnippet, chatForTree, checkAtSend, clearReview, composeReview, editComment, isStale,
+  removeComment, reviewFor, setFrame, subscribeReviews, withDraft, type Review, type ReviewComment, type StaleFile,
 } from "../../lib/diffReview.ts";
 import { listChats, requestChatFocus, seedChat, setActiveChatId, subscribe as subscribeChats, update as updateChat } from "../../lib/chatStore.ts";
 import { FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
@@ -161,9 +162,9 @@ export function DiffPage({ active, onClose, onOpenChat }: {
    *
    * Per checkout because that is who receives it: one agent works in one tree,
    * and a review that mixed two would go to one of them with the other's
-   * comments in it. Staleness can only be judged for the file on screen — the
-   * others are not loaded — so those are sent as written, which is the same
-   * thing that happens to a stale one.
+   * comments in it. Staleness is shown live only for the file on screen — the
+   * others are not loaded; Send review fetches every commented file and checks
+   * them all before anything goes (see sendReview).
    */
   const root = selected?.repoRoot ?? "";
   const review = useSyncExternalStore(subscribeReviews, () => reviewFor(root));
@@ -212,9 +213,20 @@ export function DiffPage({ active, onClose, onOpenChat }: {
   }, [jumpTo]);
   const jumped = useCallback(() => setJumpTo(null), []);
 
-  const sendReview = useCallback(() => {
-    if (!root || !review.comments.length) return;
-    const prompt = composeReview(root, review, staleIds);
+  /*
+   * Send review checks every commented file first, not just the one on screen:
+   * an agent edits the file you are NOT looking at as readily as the one you
+   * are. Anything stale or uncheckable stops the send and is listed per file in
+   * the tray; the next press sends it anyway, with each stale comment marked in
+   * the prompt. The check belongs to the review it was run on — any edit to the
+   * review drops it, and the next press checks again.
+   */
+  const [check, setCheck] = useState<{ review: Review; stale: Set<string>; files: StaleFile[] } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const checked = check && check.review === review ? check : null;
+
+  const deliver = useCallback((stale: ReadonlySet<string>) => {
+    const prompt = composeReview(root, review, stale);
     /* Into the composer of the chat already working in this tree, under whatever
        was half-typed there; a new chat pointed at the tree when there is none.
        Never sent from here — seedChat's rule, and the reason is the same: a run
@@ -227,9 +239,27 @@ export function DiffPage({ active, onClose, onOpenChat }: {
     } else {
       seedChat(root, prompt, `Review: ${selected?.branch || root.split("/").pop() || root}`);
     }
+    setCheck(null);
     clearReview(root);
     onOpenChat?.();
-  }, [root, review, staleIds, selected?.branch, onOpenChat]);
+  }, [root, review, selected?.branch, onOpenChat]);
+
+  const sendReview = useCallback(async () => {
+    if (!root || !review.comments.length || checking) return;
+    if (checked) { deliver(checked.stale); return; }
+    setChecking(true);
+    const got = await checkAtSend(review.comments, (path, mode) => api.gitFileDiff(root, path, mode).then((d) => d.hunks))
+      .finally(() => setChecking(false));
+    /* Edited, sent from another window or switched away from while the diffs
+       were in flight: this press no longer means this review. */
+    if (reviewFor(root) !== review) return;
+    if (got.files.length) setCheck({ review, ...got });
+    else deliver(got.stale);
+  }, [root, review, checking, checked, deliver]);
+  /* What the tray marks stale: the file on screen, live, plus whatever the last
+     send check found in the others. */
+  const trayStale = useMemo(
+    () => (checked ? new Set([...staleIds, ...checked.stale]) : staleIds), [staleIds, checked]);
 
   const toggleReviewed = useCallback((r: ChangeRow) => {
     setReviewed((prev) => {
@@ -391,11 +421,12 @@ export function DiffPage({ active, onClose, onOpenChat }: {
                 comments={review.comments} staleIds={staleIds} jumpTo={jumpTo} onJumped={jumped} />
             : <Blank>Nothing selected</Blank>}
           {root && review.comments.length > 0 && (
-            <ReviewTray where={selected?.branch || root} review={review} staleIds={staleIds}
+            <ReviewTray where={selected?.branch || root} review={review} staleIds={trayStale}
+              staleFiles={checked?.files ?? null} checking={checking}
               target={reviewTarget != null ? `“${reviewTarget}”` : "a new chat in this checkout"}
               onFrame={(f) => setFrame(root, f)} onJump={jump}
               onRemove={(id) => removeComment(root, id)}
-              onSend={sendReview} onDiscard={() => clearReview(root)} />
+              onSend={() => void sendReview()} onDiscard={() => clearReview(root)} />
           )}
         </div>
       </div>
