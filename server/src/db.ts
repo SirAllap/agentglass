@@ -26,10 +26,9 @@ import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
  * A relative path resolves against the working directory, which is fine when
  * the server is started from the repo but not when it's launched from a
  * desktop icon — the cwd is then arbitrary, and each launch would quietly
- * start a fresh database somewhere new. Fall back to the XDG data dir so the
- * history is the same no matter how the server was started. An explicit
- * AGENTGLASS_DB still wins, and a plain `bun run dev` in a checkout keeps
- * using the local file if one is already there.
+ * start a fresh database somewhere new. Use the XDG data dir so the history
+ * is the same no matter how the server was started. An explicit AGENTGLASS_DB
+ * still wins.
  */
 function defaultDbPath(): string {
   /*
@@ -59,13 +58,26 @@ function defaultDbPath(): string {
     } catch { /* unwritable: fall through to the ordinary answer */ }
   }
   const local = resolve("agentglass.db");
-  if (existsSync(local)) return local;
   const base =
     process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   const dir = join(base, "agentglass");
+  const data = join(dir, "agentglass.db");
+  /*
+   * A FILE IN THE WORKING DIRECTORY NO LONGER WINS.
+   *
+   * It used to: a pre-existing `./agentglass.db` beat the data dir, so a
+   * server started from `server/` in a checkout that once had one read that
+   * old history instead of the current one — real sessions, weeks stale, and
+   * nothing on screen to say which file it was. The data dir is the answer
+   * whatever the cwd; the stray file is named once, at startup, and never
+   * opened.
+   */
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    return join(dir, "agentglass.db");
+    if (local !== data && existsSync(local)) {
+      console.warn(`[db] ignoring ${local} in the working directory; the database is ${data} (set AGENTGLASS_DB to use a specific file)`);
+    }
+    return data;
   } catch {
     return local; // unwritable data dir — better a local file than no database
   }
@@ -406,8 +418,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_pat
  * events and 5,000 input tokens instead of 4,000.
  *
  * It is easy to reach: `defaultDbPath()` resolves to the XDG data dir, so any
- * checkout without a local `agentglass.db` — none of the worktrees on this
- * machine have one — runs its scanner over the real history. The README's
+ * checkout runs its scanner over the real history. The README's
  * "attaches, never duplicates" only fires on a `:4000` port collision, and a
  * second server started on another port on purpose sails straight past it.
  *
