@@ -27,6 +27,8 @@ export interface TmuxPaneRow {
   /** The command has exited and tmux kept the pane (`remain-on-exit`): a
    *  corpse with a status line, not a place anybody can type. */
   dead?: boolean;
+  /** The pane's own process — the shell, or the command it was born with. */
+  pid?: number;
 }
 
 /** A window with its panes, for a tab strip and split UI. */
@@ -62,12 +64,16 @@ export async function windowPanes(name: string, windowId: string): Promise<TmuxP
   if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return null;
   const r = await tmux([
     "list-panes", "-t", `=${name}:${windowId}`,
-    "-F", "#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_dead}",
+    "-F", "#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_dead}\t#{pane_pid}",
   ]);
   if (!r.ok) return null;
   return r.stdout.split("\n").filter(Boolean).map((line) => {
-    const [id, index, active, command, path, dead] = line.split("\t");
-    return { id, index: Number(index), active: active === "1", command: command ?? "", path: path ?? "", ...(dead === "1" ? { dead: true } : {}) };
+    const [id, index, active, command, path, dead, pid] = line.split("\t");
+    const n = Number(pid);
+    return {
+      id, index: Number(index), active: active === "1", command: command ?? "", path: path ?? "",
+      ...(dead === "1" ? { dead: true } : {}), ...(Number.isInteger(n) && n > 1 ? { pid: n } : {}),
+    };
   }).filter((p) => PANE_RE.test(p.id));
 }
 

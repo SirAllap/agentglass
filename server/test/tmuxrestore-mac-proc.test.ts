@@ -14,7 +14,7 @@
  * left in it and the agent IS that process.
  */
 import { describe, expect, test } from "bun:test";
-import { childPidsOf, argvOf, agentUnder, resumeIdIn, withoutPromptFlags, isBareShell, type ProcReader } from "../src/tmuxrestore.ts";
+import { childPidsOf, argvOf, agentUnder, resumeIdIn, withoutPromptFlags, isBareShell, isForeground, type ProcReader } from "../src/tmuxrestore.ts";
 
 const RESUME = "0f6b6a1c-2d3e-4f50-8a9b-0c1d2e3f4a5b";
 
@@ -154,7 +154,26 @@ describe("on Linux, the measured spelling is unchanged", () => {
     expect(isBareShell(["-bash"])).toBe(true);
     expect(isBareShell(["/usr/bin/fish", "-l"])).toBe(true);
     expect(isBareShell(["bash", "-c", "sleep 45 && echo done"])).toBe(false);
+    /* `-c` folded into other flags still runs the next argument. */
+    expect(isBareShell(["bash", "-lc", "sleep 45"])).toBe(false);
+    expect(isBareShell(["sh", "-ec", "sleep 45"])).toBe(false);
     expect(isBareShell(["lazygit"])).toBe(false);
+  });
+
+  test("a one-shot job of another CLI is nothing to bring back: it would run again at boot", () => {
+    expect(withoutPromptFlags("codex", ["codex", "exec", "--full-auto", "fix the tests"])).toEqual([]);
+    expect(withoutPromptFlags("opencode", ["opencode", "run", "summarise"])).toEqual([]);
+    expect(withoutPromptFlags("opencode", ["opencode", "-s", "ses_1"])).toEqual(["opencode", "-s", "ses_1"]);
+  });
+
+  test("the agent has to be what the pane is running, not a worker something in it spawned", () => {
+    /* A dev server that runs `claude -p` helpers is a `node` pane, and would
+       otherwise come back as one helper's conversation. */
+    expect(isForeground({ name: "claude", argv: ["/usr/bin/claude", "--model", "opus"], cwd: "" }, "claude")).toBe(true);
+    expect(isForeground({ name: "claude", argv: ["/usr/bin/claude", "-p", "lint"], cwd: "" }, "node")).toBe(false);
+    /* A launcher is the `node` tmux names, and so is its script. */
+    expect(isForeground({ name: "qwen", argv: ["node", "/usr/bin/qwen"], cwd: "" }, "node")).toBe(true);
+    expect(isForeground({ name: "opencode", argv: ["/opt/opencode/bin/opencode", "-s", "x"], cwd: "" }, "opencode")).toBe(true);
   });
 
   test("the walk stops at a shell's depth, and at a ceiling of processes", () => {

@@ -32,6 +32,7 @@ process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
 const TMPDIR = join(tmpdir(), `agx-resume-tmp-${process.pid}`);
 process.env.AGENTGLASS_STATE_DIR = join(tmpdir(), `agx-resume-state-${process.pid}`);
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
+const REAL_STATE = process.env.AGENTGLASS_STATE_DIR;
 
 let restore: typeof import("../src/tmuxrestore.ts");
 let pane: typeof import("../src/tmuxpane.ts");
@@ -64,6 +65,10 @@ afterAll(async () => {
   try { await pane.tmux(["kill-server"]); } catch { /* already gone */ }
   if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
+  /* Every test file shares one process: a state dir left pointing at a
+     directory this file deletes is the next file's problem. */
+  if (REAL_STATE === undefined) delete process.env.AGENTGLASS_STATE_DIR;
+  else process.env.AGENTGLASS_STATE_DIR = REAL_STATE;
   for (const d of [TMPDIR, CWD, process.env.AGENTGLASS_STATE_DIR!]) {
     try { rmSync(d, { recursive: true, force: true }); } catch { /* never made */ }
   }

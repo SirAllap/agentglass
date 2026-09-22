@@ -76,7 +76,8 @@ describe("where the id comes from", () => {
     /* The case this covers is a pane that was ITSELF restored: it starts as
        `claude --resume <id>`, so the id is in its argv before any hook has
        fired. Without it a restored desk would not survive a second reboot. */
-    expect(src).toContain("|| resumeIdIn(under.argv)");
+    expect(src).toContain("const resumed = resumeIdIn(under.argv);");
+    expect(src).toContain("|| resumed;");
   });
 
   it("is stored in the photograph, because the pane id dies with the server", () => {

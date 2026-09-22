@@ -3242,6 +3242,20 @@ export function wasPromptOf(sessionId: string, text: string): boolean {
   try { return promptSeen.get(sessionId, text) !== null; } catch { return false; }
 }
 
+/**
+ * The same question of every session, for when the pane's conversation is not
+ * the one the prompt was given to: `/clear` starts a new session in the same
+ * pane, and the argument on the command line was submitted to the old one. A
+ * scan of the UserPromptSubmit rows rather than an indexed lookup, so the
+ * caller remembers the answer per process instead of asking every sweep.
+ */
+const promptSeenAnywhere = db.query<{ one: number }, [string]>(
+  `SELECT 1 AS one FROM events WHERE hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+export function wasPromptAnywhere(text: string): boolean {
+  if (!text) return false;
+  try { return promptSeenAnywhere.get(text) !== null; } catch { return false; }
+}
+
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {
   /* The Lantern's own chat never waits on anybody in the board's sense: a
      person asked it something and it answered. Its notifications are dropped

@@ -29,7 +29,7 @@ import { tmux, listPanes, validSessionName, tmuxSocket, setCaptureHook } from ".
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
-import { wasPromptOf } from "./db.ts";
+import { wasPromptOf, wasPromptAnywhere } from "./db.ts";
 import { agentNamed } from "./paneloc.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
@@ -356,7 +356,9 @@ export function argvOf(pid: number, proc: ProcReader = machineProc): string[] {
  *  ceiling on processes visited, because a pane running a build is a tree
  *  with hundreds of leaves and this runs every ten seconds. */
 const WALK_DEPTH = 6;
-const WALK_MAX = 60;
+/* Lower on a Mac, where every process visited is a `ps` and a `pgrep` spawned
+   on the event loop: a dev server's tree would stall the server every sweep. */
+const WALK_MAX = process.platform === "darwin" ? 12 : 60;
 
 /** What an agent CLI under a pane is: which one, its argv, where it runs. */
 export interface AgentUnder { name: string; argv: string[]; cwd: string }
@@ -418,7 +420,21 @@ const PROMPT_FLAGS: Record<string, string[]> = {
   gemini: ["-p", "--prompt", "-i", "--prompt-interactive"],
 };
 
+/**
+ * Invocations that run one job and exit. Replayed, the job runs again at
+ * boot — the same mistake as a replayed prompt, by another door — and before
+ * the argv was photographed such a pane came back as a shell. It still does.
+ * A short known list, not a rule: a CLI's one-shot spelling is its own.
+ */
+const ONE_SHOT: Record<string, string[]> = {
+  codex: ["exec"],
+  opencode: ["run"],
+  crush: ["run"],
+  amp: ["-x", "--execute"],
+};
+
 export function withoutPromptFlags(name: string, argv: readonly string[]): string[] {
+  if ((ONE_SHOT[name] ?? []).some((m) => argv.slice(1).includes(m))) return [];
   const drop = new Set(PROMPT_FLAGS[name] ?? []);
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -440,19 +456,59 @@ export function withoutPromptFlags(name: string, argv: readonly string[]): strin
 const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"]);
 export function isBareShell(argv: readonly string[]): boolean {
   const head = (argv[0] || "").replace(/^-/, "").split("/").pop() || "";
-  return SHELLS.has(head) && !argv.slice(1).some((a) => a === "-c" || a === "--command");
+  /* `-c` on its own or folded into `-lc`, `-ec`, `-ic`: all of them run the
+     next argument. */
+  return SHELLS.has(head) && !argv.slice(1).some((a) => a === "--command" || /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
 }
+
+/**
+ * Is the agent the walk found what the pane is actually running?
+ *
+ * The walk takes any descendant, and a pane whose program spawns workers — a
+ * script running `claude -p`, a dev server with a helper — would be
+ * photographed as a Claude pane holding a worker's conversation, and come
+ * back as that worker instead of its program. `#{pane_current_command}` is
+ * tmux's name for the foreground process, and it has to be the agent's own
+ * binary: `claude` under a shell, `opencode`, the `node` a launcher is.
+ */
+export function isForeground(found: AgentUnder, paneCommand: string): boolean {
+  const head = (found.argv[0] || "").split("/").pop() || "";
+  return !!paneCommand && head === paneCommand;
+}
+
+/** The chat pane's own wrapper ends in `exec sleep 86400` once the CLI has
+ *  exited, to keep the pane for reading (newSessionArgv, paneCommand). That
+ *  sleep, by its exact spelling, is nothing to bring back. */
+const isKeepAlive = (argv: readonly string[]): boolean =>
+  argv.length === 2 && ((argv[0] || "").split("/").pop() || "") === "sleep" && argv[1] === "86400";
 
 /** A pane forked a moment ago still carries the tmux server's own argv until
  *  it execs — measured: photographed right after `new-window`, the pane read
  *  as the tmux binary with the server's arguments. Not a command anybody
  *  ran, and the next sweep sees the real one. */
-const bornYet = (argv: readonly string[]): boolean => (argv[0] || "").split("/").pop() !== "tmux";
+const bornYet = (argv: readonly string[]): boolean =>
+  (argv[0] || "").split("/").pop() !== ((resolveTmuxBin() || "tmux").split("/").pop() || "tmux");
 
-async function panePidOf(name: string, windowId: string, paneId: string): Promise<number> {
-  const r = await tmux(["display-message", "-t", `=${name}:${windowId}.${paneId}`, "-p", "#{pane_pid}"]);
-  const pid = Number(r.stdout.trim());
-  return r.ok && Number.isInteger(pid) && pid > 1 ? pid : 0;
+/**
+ * Whether an argument of a running CLI was a prompt, remembered per process.
+ *
+ * Asked of the pane's own conversation first (an indexed lookup), then of
+ * every session — after `/clear` the pane holds a new conversation and the
+ * argument on its command line was submitted to the old one, which the note
+ * no longer names. The argv of a process never changes, so the answer is
+ * kept for the process's life rather than asked every ten seconds; the map
+ * dies with this server, which is the stated ceiling: a prompt older than
+ * the retention window reappears after an app restart.
+ */
+const promptVerdicts = new Map<string, boolean>();
+function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[]): boolean {
+  const key = `${pid}\0${text}`;
+  const had = promptVerdicts.get(key);
+  if (had !== undefined) return had;
+  const yes = sessions.some((id) => !!id && wasPromptOf(id, text)) || wasPromptAnywhere(text);
+  if (promptVerdicts.size > 2000) promptVerdicts.clear();
+  promptVerdicts.set(key, yes);
+  return yes;
 }
 
 /**
@@ -529,7 +585,9 @@ function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
   const state: RestoreState = { capturedAt: now, sessions };
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state));
+  /* The person's own, and now with the arguments of what they were running
+     in it — prompts included. Not for the other accounts on the machine. */
+  writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
   swapInLayout(tmp);
   return state;
 }
@@ -554,7 +612,7 @@ export function forgetSession(name: string): void {
   if (sessions.length === before.sessions.length) return;
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ ...before, sessions }));
+  writeFileSync(tmp, JSON.stringify({ ...before, sessions }), { mode: 0o600 });
   swapInLayout(tmp);
 }
 
@@ -642,8 +700,11 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
          * once photographed carrying conversation ids. The process tree under
          * the pane says what is there, which CLI it is, and with what flags.
          */
-        const pid = await panePidOf(name, w.id, p.id);
-        const under = pid ? agentUnder(pid) : null;
+        const pid = p.pid ?? 0;
+        /* No walk under a pane whose foreground is its shell: nothing is
+           running in it, and a job a person backgrounded is not its agent. */
+        const found = pid && !SHELLS.has(p.command) ? agentUnder(pid) : null;
+        const under = found && isForeground(found, p.command) ? found : null;
         if (under && under.name === claudeName()) {
           /*
            * The id: the hook's note first, because it is the newer fact — a
@@ -656,17 +717,22 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
            */
           const note = paneAgentNote(p.id);
           const noteFits = !!note && (!under.cwd || note.cwd === under.cwd);
-          const agentSession = (noteFits ? note!.session_id : undefined) || resumeIdIn(under.argv);
-          const agentArgs = agentArgsOf(under.argv, agentSession ? (text) => wasPromptOf(agentSession, text) : undefined);
-          panes.push({ ...p, startCommand, agentSession, agentArgs: agentArgs.length ? agentArgs : undefined });
+          const resumed = resumeIdIn(under.argv);
+          const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
+          const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, note?.session_id]));
+          /* A conversation, or nothing: the born-with line is blanked so a
+             pane whose id could not be found comes back as a shell rather
+             than as its command line, prompt and all. */
+          panes.push({ ...p, startCommand: "", agentSession, agentArgs: agentArgs.length ? agentArgs : undefined });
           continue;
         }
         /* Another CLI: itself, with its prompt taken off. Nothing else: the
            command the pane was born from, unless that is a login shell with
            nothing to run — which tmux gives a restored pane anyway. */
         const root = pid ? argvOf(pid).filter((a) => !/[\n\r\0]/.test(a)).slice(0, 64) : [];
-        const startArgv = under ? withoutPromptFlags(under.name, under.argv) : bornYet(root) ? root : [];
-        panes.push({ ...p, startCommand, ...(startArgv.length && !isBareShell(startArgv) ? { startArgv } : {}) });
+        const startArgv = under ? withoutPromptFlags(under.name, under.argv)
+          : bornYet(root) && !isBareShell(root) && !isKeepAlive(root) ? root : [];
+        panes.push({ ...p, startCommand, ...(startArgv.length ? { startArgv } : {}) });
       }
       if (panes.length) out.push({ ...w, panes });
     }
@@ -707,7 +773,7 @@ export function captureLayoutSync(now = Date.now()): void {
     }
     mkdirSync(restoreDir(), { recursive: true });
     const tmp = `${layoutPath()}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()] }));
+    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()] }), { mode: 0o600 });
     swapInLayout(tmp);
   } catch { /* never block an exit on bookkeeping */ }
 }
@@ -764,8 +830,10 @@ export function lastCaptureAt(): number | null {
  *      it was read. The id is the conversation; the flags are the desk; the
  *      prompt was said once.
  *   2. Any other program comes back as the argv it was running with
- *      (`startArgv`), passed to tmux as argv — never through a shell, so it
- *      is exact and never one level deeper.
+ *      (`startArgv`), passed to tmux as argv, so it is exact and never one
+ *      level deeper. (tmux runs a ONE-word argv through the login shell —
+ *      its own rule for a single argument — which for a bare program name
+ *      is the same program.)
  *   3. A photograph from before `startArgv` existed still has the string tmux
  *      reported, and gets the old `sh -c` on it: right for a line tmux
  *      printed unquoted, a shell for one it quoted, and gone at the first
@@ -1043,7 +1111,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
 type Made = { session: string; window: CapturedWindow; id: string };
 
 /** The shell the engine gives a new pane — `default-shell`, which tmux takes
- *  from $SHELL at start. Asked once per pass; `/bin/sh` if it will not say. */
+ *  from $SHELL at start. Asked once per process; `/bin/sh` if it will not say. */
 let shellCache: string | null = null;
 async function engineShell(): Promise<string> {
   if (shellCache) return shellCache;
@@ -1055,9 +1123,9 @@ async function engineShell(): Promise<string> {
 /**
  * How long to wait before asking whether what was built is still standing.
  *
- * A window is created WITH its command inside it, and tmux closes a window
- * whose command has exited — nothing here sets `remain-on-exit`, and it must
- * not: the understudy depends on a finished run's window closing itself.
+ * A window is created WITH its command inside it. tmux closes a window whose
+ * command ended cleanly, and the engine keeps one whose command failed as a
+ * dead pane (tmuxconf.ts) — either way it is not the pane that was asked for.
  *
  * So the failure is: `claude --resume <id>` cannot start — the conversation is
  * already open in another pane, the id is unknown to the CLI, the binary moved
@@ -1145,7 +1213,13 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
     for (const [paneId = "", dead = ""] of rows) {
       if (dead !== "1") continue;
       const at = m.window.panes[rows.findIndex((r) => r[0] === paneId)]?.path || cwd;
-      await tmux(["respawn-pane", "-k", "-t", paneId, "-c", at, await engineShell()]);
+      /* Two arguments, so tmux execs the shell itself rather than wrapping
+         one word in `default-shell -c`: a login shell, and not `fish -c fish`
+         photographed as a command for ever. And the pane goes back to closing
+         on exit, the way a plain tab does: it was born with a command, so the
+         hook for shells (tmuxconf.ts) would not cover it. */
+      await tmux(["respawn-pane", "-k", "-t", paneId, "-c", at, await engineShell(), "-l"]);
+      await tmux(["set-option", "-p", "-t", paneId, "remain-on-exit", "off"]);
     }
     const have = rows.length;
     if (have < want) await restorePanes(m.session, id, m.window.panes.slice(have), "lazy");
