@@ -1004,6 +1004,25 @@ export interface FileChange {
    *  unscoped instance, where there is no project to be outside of) means never
    *  hidden. */
   outside?: boolean;
+  /** What this edit touched that a reviewer should read first — a secret, a CI
+   *  definition, a lockfile, a migration, auth code, a large deletion — each
+   *  with a one-line reason. Computed by `shared/riskFlags.ts` from the path and
+   *  the added lines; absent on a change nobody ran the rules on (a commit from
+   *  the log), which is "not checked", never "clean". */
+  risks?: RiskFlag[];
+}
+
+export type RiskKind = "secret" | "ci" | "deps" | "migration" | "auth" | "deletion";
+export interface RiskFlag {
+  kind: RiskKind;
+  /** One sentence, checkable against the diff: "an AWS access key was added". */
+  reason: string;
+  /** The line in the new file, when the rule matched a line rather than a path. */
+  line?: number;
+}
+/** A session's flags, one per kind and file. */
+export interface SessionRisk extends RiskFlag {
+  file: string;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching
