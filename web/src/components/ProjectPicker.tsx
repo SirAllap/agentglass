@@ -197,7 +197,13 @@ type Mode = "list" | "clone" | "new";
  * nobody would call a project. That sweep is still one click away ("look for
  * projects"), but never the default, and never on a first run.
  */
-export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; workspaces: readonly string[]; onClose: () => void }) {
+export function ProjectPicker({ open, workspaces, known, onClose }: {
+  open: boolean; workspaces: readonly string[];
+  /** Has the server said what is open? Until it has, an empty `workspaces` is
+   *  not "nothing open": no first run, and no row marked as the whole machine. */
+  known: boolean;
+  onClose: () => void;
+}) {
   const [repos, setRepos] = useState<GitRepoRef[] | null>(null);
   /** The folders the list is drawn from. Server-side, in config.json. */
   const [roots, setRoots] = useState<string[]>([]);
@@ -272,7 +278,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
     markAnswered();
     // Already there — nothing to change. An empty list is the whole machine,
     // which nextScope does not answer for: see the row that sends it.
-    if (list.length ? !nextScope(list, workspaces) : !workspaces.length) { onClose(); return; }
+    if (list.length ? !nextScope(list, workspaces) : known && !workspaces.length) { onClose(); return; }
     setBusy(true);
     setError("");
     setWorking(list.length > 1 ? `Opening ${list.length} projects…` : list.length ? "Switching project…" : "Opening the whole machine…");
@@ -418,7 +424,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
   // No folder yet, not looking and nothing open: the first run. Nothing on the
   // machine has been looked at, and the one thing to do is say where the
   // projects are.
-  const isFirstRun = firstRun(repos, roots, scanned, workspaces);
+  const isFirstRun = firstRun(repos, roots, scanned, known ? workspaces : null);
   const pending = nextScope(ticked, workspaces);
 
   return (
@@ -561,7 +567,7 @@ export function ProjectPicker({ open, workspaces, onClose }: { open: boolean; wo
                           config. Last, because it is the one choice that is not
                           about the list above it. */}
                       {!scanned && !isFirstRun && repos !== null && (
-                        <Row current={!workspaces.length} icon={<MonitorIcon size={ICON.sm} />} title="Every project on this machine"
+                        <Row current={known && !workspaces.length} icon={<MonitorIcon size={ICON.sm} />} title="Every project on this machine"
                           sub="No scope — the panels are not held to any one project" onClick={() => void openScope([])} disabled={busy} />
                       )}
                       {/* The sweep, only when asked for. It is how somebody

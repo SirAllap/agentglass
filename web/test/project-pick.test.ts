@@ -146,8 +146,14 @@ describe("the first run's screen", () => {
     expect(firstRun([], [], true, [])).toBe(false);
     expect(firstRun(null, [], false, [])).toBe(false);
   });
+  test("not before the server has said what is open", () => {
+    // Opened before /projects answers, "nothing open yet" is not "nothing
+    // open", and the screen came back over a project that was.
+    expect(firstRun([], [], false, null)).toBe(false);
+  });
   test("the screen asks the rule rather than keeping its own copy", () => {
-    expect(PICKER).toContain("const isFirstRun = firstRun(repos, roots, scanned, workspaces);");
+    expect(PICKER).toContain("const isFirstRun = firstRun(repos, roots, scanned, known ? workspaces : null);");
+    expect(APP).toContain("<ProjectPicker open={projectOpen} workspaces={workspaces} known={workspace !== undefined}");
   });
 });
 
@@ -186,8 +192,8 @@ describe("the whole machine", () => {
   // Leaving a scope for the unscoped view was a choice some people had made on
   // purpose, and once they opened anything the picker had no way back to it
   // but a hand edit of config.json.
-  test("is a row of its own, open when nothing is", () => {
-    expect(PICKER).toMatch(/<Row current=\{!workspaces\.length\} icon=\{<MonitorIcon size=\{ICON\.sm\} \/>\} title="Every project on this machine"/);
+  test("is a row of its own, open when nothing is — once that is known", () => {
+    expect(PICKER).toMatch(/<Row current=\{known && !workspaces\.length\} icon=\{<MonitorIcon size=\{ICON\.sm\} \/>\} title="Every project on this machine"/);
   });
   test("choosing it sends no projects at all", () => {
     expect(PICKER).toContain('title="Every project on this machine"');
@@ -196,7 +202,7 @@ describe("the whole machine", () => {
   test("an empty choice is not dropped as 'nothing changed' on its way", () => {
     // nextScope answers null for an empty list, so that unticking the last box
     // is not a request for the machine; the row has to get past that check.
-    expect(PICKER).toContain("if (list.length ? !nextScope(list, workspaces) : !workspaces.length) { onClose(); return; }");
+    expect(PICKER).toContain("if (list.length ? !nextScope(list, workspaces) : known && !workspaces.length) { onClose(); return; }");
   });
 });
 

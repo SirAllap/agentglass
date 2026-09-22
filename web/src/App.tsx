@@ -1292,7 +1292,7 @@ export default function App() {
         onZoom={zoom}
       />
       <HelpLegend open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <ProjectPicker open={projectOpen} workspaces={workspaces} onClose={() => { setProjectOpen(false); setAwaitingPick(false); }} />
+      <ProjectPicker open={projectOpen} workspaces={workspaces} known={workspace !== undefined} onClose={() => { setProjectOpen(false); setAwaitingPick(false); }} />
     </div>
   );
 }

@@ -109,6 +109,7 @@ export function autoPick(listed: readonly { root: string }[], workspaces: readon
  * a project open and no folders yet, who was told to add the folder their
  * projects live in above the row of the project they had open.
  */
-export function firstRun(listed: readonly unknown[] | null, roots: readonly string[], scanned: boolean, workspaces: readonly string[]): boolean {
-  return listed !== null && !roots.length && !scanned && !workspaces.length;
+export function firstRun(listed: readonly unknown[] | null, roots: readonly string[], scanned: boolean, workspaces: readonly string[] | null): boolean {
+  // null: the server has not said what is open yet, which is not "nothing".
+  return listed !== null && !roots.length && !scanned && workspaces !== null && !workspaces.length;
 }
