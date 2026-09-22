@@ -68,7 +68,7 @@ export function headingAuthors(t: TreeAuthorsInfo): { text: string; shared: bool
   return {
     text: `shared · ${names.length} sessions`,
     shared: true,
-    title: `${joinNames(names)} are all writing into this checkout, so a change here can be any of theirs. `
+    title: `${joinNames(names)} are ${names.length === 2 ? "both" : "all"} writing into this checkout, so a change here can be any of theirs. `
       + (n
         ? `${n} file${n === 1 ? " has" : "s have"} been edited by more than one of them, and a diff on disk cannot say whose hunk is whose — per-file attribution here is approximate. `
         : "No file has been edited by more than one of them yet, so no file's diff is a mix of theirs. ")

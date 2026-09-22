@@ -42,7 +42,7 @@ import { subscribeWorktreeJump, worktreeJump } from "../../lib/worktreeJump.ts";
 import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLines.tsx";
-import { FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
+import { AgentIcon, FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { authorsIndex, headingAuthors, rowAuthorsTitle, sectionAuthors } from "../../lib/treeAuthors.ts";
 
 /* Storage keys are v3 on purpose: the two before them stored a group-by that no
@@ -461,10 +461,13 @@ function List({
               <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{g.label}</span>
               {g.sub && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{g.sub}</span>}
               {h && (
-                <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate shrink"} title={h.title}
+                /* Takes only the room that is left (a zero basis), so it never
+                   squeezes the branch: that is what the section is called, and
+                   "feat/…" beside a whole sentence was the first render of this. */
+                <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate min-w-0"} title={h.title}
                   style={h.shared
                     ? { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
-                    : { color: "var(--text3)" }}>
+                    : { color: "var(--text3)", flex: "1 1 0" }}>
                   {h.text}
                 </span>
               )}
@@ -548,10 +551,14 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
             {r.staged === "partial" ? "part staged" : "staged"}
           </span>
         )}
+        {/* An agent glyph and a count, not a word: the row is narrow and the
+            file name is what it is for. The heading above says what the colour
+            means, and the tooltip names them. */}
         {authors && (
-          <span className="text-[9.5px] px-1 rounded shrink-0" title={rowAuthorsTitle(authors)}
+          <span className="text-[9.5px] px-1 rounded shrink-0 inline-flex items-center gap-0.5" title={rowAuthorsTitle(authors)}
+            aria-label={`${authors.length} authors`}
             style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
-            {authors.length} authors
+            <AgentIcon size={ICON.xs} />{authors.length}
           </span>
         )}
       </span>
