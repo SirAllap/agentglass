@@ -37,7 +37,9 @@ export function FleetVerdictStrip({ onOpenLantern }: { onOpenLantern: () => void
       <span aria-hidden className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ background: ink[v.tone] }} />
       <span className="flex items-center gap-1.5 min-w-0 overflow-hidden whitespace-nowrap">
         {v.clauses.map((c, i) => (
-          <span key={c.kind} className="flex items-center gap-1.5 min-w-0">
+          /* The count is a few characters and is the answer to the first
+             question; the long clauses are the ones that give way. */
+          <span key={c.kind} className={`flex items-center gap-1.5 ${c.kind === "running" ? "shrink-0" : "min-w-0"}`}>
             {i > 0 && <span aria-hidden style={{ color: "var(--text4)" }}>·</span>}
             <button
               onClick={() => go(c)}
