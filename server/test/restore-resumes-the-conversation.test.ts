@@ -450,6 +450,22 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
     expect(got!.startArgv, "the prompt was said once").not.toContain(BRIEF);
   }, 20_000);
 
+  test("a layout tab's own command comes back as itself while it runs", async () => {
+    /* Not an agent: a dev server, a `tail -f`. Before the wrapper was walked
+       through, its line came back and ran the command; photographed as the
+       wrapper with no agent under it, it came back a bare shell. */
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptlog", "-c", CWD, ...wrapped(["tail", "-f", "/dev/null"])]);
+    await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptloop", "-c", CWD, ...wrapped(["sh", "-c", "while :; do sleep 1; done"])]);
+    await Bun.sleep(300);
+    const log = await photographed("keptlog");
+    expect(log, "the pane is in the picture").not.toBeUndefined();
+    expect(log!.startCommand, "the wrapper line is never replayed").toBe("");
+    expect(log!.startArgv).toEqual(["tail", "-f", "/dev/null"]);
+    expect(restore.runArgs("all", log!, "/opt/agentglass/bin/claude")).toEqual(["tail", "-f", "/dev/null"]);
+    const loop = await photographed("keptloop");
+    expect(loop!.startArgv).toEqual(["sh", "-c", "while :; do sleep 1; done"]);
+  }, 20_000);
+
   test("once the CLI has exited it is a shell, not the line again", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptdone", "-c", CWD, ...wrapped(["echo", BRIEF])]);
     await Bun.sleep(300);

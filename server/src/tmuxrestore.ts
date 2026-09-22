@@ -953,10 +953,20 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
         }
         /* Another CLI: itself, with its prompt taken off. Nothing else: the
            command the pane was born from, unless that is a login shell with
-           nothing to run — which tmux gives a restored pane anyway. */
-        const root = pid ? argvOf(pid).filter((a) => !/[\n\r\0]/.test(a)).slice(0, 64) : [];
+           nothing to run — which tmux gives a restored pane anyway.
+           In the wrapper with no agent under it, the command is the
+           wrapper's child — a layout tab's dev server or `tail -f`, which
+           came back running before the wrapper was walked through, and a
+           bare shell after. Only while the wrapper's `sh` is still the
+           foreground: once the `sleep` has taken over, the command has
+           finished and is not run again. A child caught between its fork and
+           its exec still carries the wrapper's line, and is not the command. */
+        const clean = (argv: string[]) => argv.filter((a) => !/[\n\r\0]/.test(a)).slice(0, 64);
+        const root = !pid ? []
+          : !wrapped ? clean(argvOf(pid))
+          : !under && SHELLS.has(p.command) ? clean(childPidsOf(pid).slice(0, 1).flatMap((c) => argvOf(c))) : [];
         const startArgv = under ? withoutPromptFlags(under.name, under.argv)
-          : !wrapped && bornYet(root) && !isBareShell(root) && !isKeepAlive(root) ? root : [];
+          : bornYet(root) && !isBareShell(root) && !isKeepAlive(root) && !root.some((a) => a.includes(KEPT_MARK)) ? root : [];
         panes.push({ ...p, startCommand: wrapped ? "" : startCommand, ...(startArgv.length ? { startArgv } : {}) });
       }
       if (panes.length) out.push({ ...w, panes });
