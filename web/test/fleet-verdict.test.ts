@@ -105,7 +105,8 @@ test("a wait that came without a sentence is named by its kind", () => {
 });
 
 test("a working seat counts as running, as the Lantern view counts it", () => {
-  const v = fleetVerdict([working("orbit-seat", { role: "seat" as LanternRow["role"] })], now)!;
+  // The server marks the project's seat `role: "orchestrator"` (BoardRow.role).
+  const v = fleetVerdict([working("orbit-seat", { role: "orchestrator" })], now)!;
   expect(v.clauses[0].text).toBe("1 running · all nominal");
 });
 
