@@ -22,7 +22,7 @@ const CHECK = new URL("../../scripts/catalogue-check.py", import.meta.url).pathn
 const ci = await Bun.file(new URL("../../.github/workflows/ci.yml", import.meta.url)).text();
 
 const OWNER = "SirAllap";
-let root = "", repo = "", sha = "", hash = "", moved = "";
+let root = "", repo = "", sha = "", hash = "", moved = "", forked = "", forkedHash = "", tagged = "", taggedHash = "";
 
 const git = (cwd: string, ...args: string[]) => {
   const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
@@ -50,6 +50,25 @@ beforeAll(() => {
   writeFileSync(join(repo, "clock.py"), "print('something else')\n");
   git(repo, "commit", "-q", "-am", "two");
   moved = git(repo, "rev-parse", "HEAD");
+  // A commit only a fork has. GitHub serves any object in a fork network by
+  // id from every repository in it, and shows a fork's pull request head
+  // under the parent's refs/pull/; the fixture does both.
+  git(repo, "config", "uploadpack.allowAnySHA1InWant", "true");
+  git(repo, "checkout", "-q", "-b", "side");
+  writeFileSync(join(repo, "clock.py"), "print('from somebody else')\n");
+  git(repo, "commit", "-q", "-am", "fork");
+  forked = git(repo, "rev-parse", "HEAD");
+  forkedHash = contentHash(repo, walkPluginDir(repo).files);
+  git(repo, "update-ref", "refs/pull/1/head", forked);
+  // And a release that is a tag and no longer any branch's.
+  git(repo, "reset", "-q", "--hard", sha);
+  writeFileSync(join(repo, "clock.py"), "print('a release')\n");
+  git(repo, "commit", "-q", "-am", "release");
+  tagged = git(repo, "rev-parse", "HEAD");
+  taggedHash = contentHash(repo, walkPluginDir(repo).files);
+  git(repo, "tag", "v0.9", tagged);
+  git(repo, "checkout", "-q", "main");
+  git(repo, "branch", "-D", "side");
 });
 
 afterAll(() => { try { rmSync(root, { recursive: true, force: true }); } catch { /* fine */ } });
@@ -96,6 +115,12 @@ describe("a listing that holds", () => {
     expect(check(shelf([old]), shelf([entry()])).code).toBe(0);
   });
 
+  test("a commit that is on a tag and no branch", () => {
+    const r = check(shelf([existing]), shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: tagged }, sha256: taggedHash })]));
+    expect(r.out).toContain("one entry, pinned");
+    expect(r.code).toBe(0);
+  });
+
   test("a pull request that touches no entry has nothing for this to pass", () => {
     expect(check(shelf([existing]), shelf([existing])).out).toContain("changes 0 entries");
   });
@@ -128,6 +153,16 @@ describe("a listing that does not", () => {
     refused(shelf([existing, entry({ sha256: `${hash}\n` })]), "no content hash");
     refused(shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock\n", ref: sha } })]), "not a public GitHub repository");
   });
+  // The approval pins the tip of the named repository; a hand edit could
+  // name any commit the fork network holds and still fetch it by id.
+  test("a commit that only a fork has, under the repository's name", () =>
+    refused(shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: forked }, sha256: forkedHash })]), "not on a branch or a tag"));
+  // What the approval derives from the manifest, and a hand edit could say
+  // otherwise: a card that draws where the plugin does not, needs another
+  // app, or carries another plugin's title.
+  test("places it draws that the manifest does not declare", () => refused(shelf([existing, entry({ draws: ["panel"] })]), "draws"));
+  test("an app version the manifest does not ask for", () => refused(shelf([existing, entry({ minApp: "0.1.0" })]), "minApp"));
+  test("a title that is not the id's", () => refused(shelf([existing, entry({ title: "Local Review" })]), "title"));
   test("a branch instead of a commit", () => refused(shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: "main" } })]), "not pinned to a full commit"));
   test("no hash", () => refused(shelf([existing, entry({ sha256: undefined })]), "no content hash"));
   test("a hash that is not the tree's", () => refused(shelf([existing, entry({ sha256: "0".repeat(64) })]), "not the pinned"));
@@ -145,6 +180,21 @@ describe("a listing that does not", () => {
   test("a commit the repository does not have", () =>
     refused(shelf([existing, entry({ source: { kind: "git", url: "https://github.com/acme/orbit-clock", ref: "3".repeat(40) } })]), "could not fetch"));
   test("the catalogue's own owner changed", () => refused({ ...shelf([existing, entry()]), owner: "acme" }, "name or owner changed"));
+});
+
+describe("the words a card uses", () => {
+  // The approval turns a manifest's keys into the catalogue's words, and the
+  // check turns them again to compare: two copies of one map.
+  test("are the same in the approval and in the check", async () => {
+    const approval = await Bun.file(new URL("../../.github/workflows/plugin-approve.yml", import.meta.url)).text();
+    const script = await Bun.file(CHECK).text();
+    const map = (src: string) => {
+      const m = src.match(/WORD = (\{[^}]*\})/);
+      expect(m, "a WORD map").not.toBeNull();
+      return JSON.parse(m![1]!) as Record<string, string>;
+    };
+    expect(map(script)).toEqual(map(approval));
+  });
 });
 
 describe("wired into CI", () => {

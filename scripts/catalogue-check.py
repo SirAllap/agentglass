@@ -12,7 +12,9 @@ checks that the entry is what that commit holds:
   - exactly one entry is added or replaced, and nothing else in the file moves;
   - a replaced entry keeps its repository (a new version, not a new owner);
   - the ref is a full commit and the hash is a sha256;
-  - the id, the publisher and the scope are the manifest's at that commit;
+  - the commit is on a branch or a tag of that repository, not only a fork's;
+  - the id, the publisher, the scope, the places it draws, the app version it
+    needs and the title are what the manifest at that commit makes them;
   - a fresh clone at that commit validates and hashes to the pinned hash;
   - `verified` is false, and the project's name is not a stranger's byline;
   - the preview, if any, is read at the pinned commit.
@@ -36,6 +38,9 @@ CLI = os.environ.get("AGENTGLASS_PLUGIN_CLI") or os.path.join(os.path.dirname(os
 GITHUB_REPO = re.compile(r"^https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$")
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# The manifest's key names in the catalogue's words, as the approval writes
+# them; a test holds the two copies of this map to each other.
+WORD = {"panels": "panel", "settings": "settings", "prNotes": "pr-notes", "prActions": "pr-button"}
 
 
 def squash(s):
@@ -71,6 +76,23 @@ def clone_at(url, sha, into):
         if r.returncode != 0:
             return (r.stderr.strip().splitlines() or ["git failed"])[-1][:300]
     return None
+
+
+def on_a_branch_or_tag(url, sha):
+    """Whether the commit is on a branch or a tag of the repository the entry
+    names. GitHub serves a commit by id from every repository in a fork
+    network, so a fetch by id proves the network has it, not that this
+    repository does; a fork's pull request even shows up under the parent's
+    refs/pull/. Only branches and tags count, fetched without file contents."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
+    with tempfile.TemporaryDirectory(prefix="agx-refs-") as refs:
+        for args in (["clone", "-q", "--bare", "--filter=blob:none", "--", url, refs],
+                     ["-C", refs, "fetch", "-q", "--tags", "origin"]):
+            if subprocess.run(["git", *args], capture_output=True, text=True, env=env).returncode != 0:
+                return False
+        r = subprocess.run(["git", "-C", refs, "for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/tags"],
+                           capture_output=True, text=True)
+        return r.returncode == 0 and bool(r.stdout.strip())
 
 
 def check(base, head):
@@ -129,6 +151,8 @@ def check(base, head):
         got = subprocess.run(["git", "-C", folder, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         if got != ref:
             return [f"the fetch resolved to {got or 'nothing'}, not {ref}"]
+        if not on_a_branch_or_tag(url, ref):
+            return [f"{ref[:12]} is not on a branch or a tag of {url}; a commit only a fork has is not this repository's"]
         v = cli("validate", folder)
         if not v.get("ok"):
             return [f"the manifest at {ref[:12]} is not one the app accepts: {v.get('error')}"]
@@ -138,6 +162,13 @@ def check(base, head):
             problems.append("the publisher is not the manifest's")
         if v.get("scope") != e.get("scope"):
             problems.append(f"the entry says scope {e.get('scope')!r} and the manifest asks for {v.get('scope')!r}")
+        draws = [WORD.get(d, d) for d in v.get("draws") or []]
+        if (e.get("draws") or []) != draws:
+            problems.append(f"the entry says it draws {e.get('draws')!r} and the manifest declares {draws!r}")
+        if e.get("minApp") != v.get("minApp"):
+            problems.append(f"the entry says minApp {e.get('minApp')!r} and the manifest asks for {v.get('minApp')!r}")
+        if e.get("title") != str(eid).replace("-", " ").title():
+            problems.append(f"the title is {e.get('title')!r}; a listing's title is its id's, {str(eid).replace('-', ' ').title()!r}")
         h = cli("hash", folder)
         if not h.get("ok"):
             problems.append(f"the tree at that commit cannot be hashed: {h.get('error')}")
