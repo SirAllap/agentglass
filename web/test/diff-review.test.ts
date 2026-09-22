@@ -218,3 +218,13 @@ test("comments collect per checkout, edit, remove and clear", () => {
   clearReview(root);
   expect(reviewFor(root)).toEqual({ intro: "", outro: "", comments: [] });
 });
+
+test("removing the last comment takes the intro and outro with it", () => {
+  // The tray hides at zero comments, so a frame left behind would be sent,
+  // unseen, at the head and tail of the next review on this checkout.
+  const root = "/code/orbit-frame-test";
+  const a = addComment(root, { path: "a.ts", side: "RIGHT", start: 1, end: 1, body: "one", snippet: ["+x"], mode: "working" });
+  setFrame(root, { intro: "hi", outro: "run the tests" });
+  removeComment(root, a.id);
+  expect(reviewFor(root)).toEqual({ intro: "", outro: "", comments: [] });
+});

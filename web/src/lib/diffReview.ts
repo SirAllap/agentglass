@@ -268,9 +268,14 @@ export function editComment(root: string, id: string, body: string) {
   commit({ ...reviews, [root]: { ...cur, comments: cur.comments.map((c) => (c.id === id ? { ...c, body } : c)) } });
 }
 
+/* The last comment going takes the intro and outro with it: the tray hides at
+   zero comments, so a frame left behind would ride along, unseen, on the next
+   review of this checkout. */
 export function removeComment(root: string, id: string) {
   const cur = reviewFor(root);
-  commit({ ...reviews, [root]: { ...cur, comments: cur.comments.filter((c) => c.id !== id) } });
+  const comments = cur.comments.filter((c) => c.id !== id);
+  if (!comments.length) { clearReview(root); return; }
+  commit({ ...reviews, [root]: { ...cur, comments } });
 }
 
 export function setFrame(root: string, frame: Partial<Pick<Review, "intro" | "outro">>) {
