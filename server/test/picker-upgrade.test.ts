@@ -72,3 +72,13 @@ test("the first picker read turns an old folder scope into a folder, and leaves 
   expect(saved()).toEqual({ root: code, repoDirs: [code], repoDirsSeeded: true });
   expect((await get("/projects")).workspaces).toEqual([code]);
 });
+
+test("the unscoped panel call reports the held roots, not the seeded list — a seeded config holds no panel", async () => {
+  // panelRepoDirs() answers [] once repoDirsSeeded is true, precisely so the
+  // panels are not narrowed to the upgrade's seed (see config.ts). The route
+  // has to expose that same [], or a client re-filtering by `roots` (e.g.
+  // gitNote.ts's notesWorthyRepos) reintroduces the narrowing the server
+  // deliberately dropped.
+  const r = await get("/git/repos");
+  expect(r.roots).toEqual([]);
+});

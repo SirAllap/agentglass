@@ -170,7 +170,7 @@ import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
-import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots } from "./config.ts";
+import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, panelRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
@@ -5156,7 +5156,15 @@ const server = Bun.serve<WsData>({
         return JSON.stringify({
           repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope, rootsOnly }),
           hidden: hiddenProjects(),
-          roots: configuredRepoDirs(),
+          // The picker (`all=1`) needs the folders a person added, to render
+          // the list it can un-tick from. The unscoped panels need the same
+          // set `discoverRepos` actually held them to — `panelRepoDirs()`,
+          // which is deliberately `[]` once an upgrade seeds `configuredRepoDirs()`
+          // (see config.ts). Answering with the seeded list here made a client
+          // that re-filters by `roots` (gitNote.ts's notesWorthyRepos) narrow
+          // the panels right back down to it, reintroducing the bug the seed
+          // exemption exists to avoid — dropping a worktree beside its project.
+          roots: ignoreScope ? configuredRepoDirs() : panelRepoDirs(),
         });
       }));
     }
