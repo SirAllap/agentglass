@@ -38,6 +38,8 @@ import { alarmVoiceId, setAlarmVoice } from "../lib/alarm.ts";
 import { SEARCH_ENGINE_LABELS, type SearchEngine } from "../lib/browserUrl.ts";
 import { homePageRaw, setHomePage, searchEngine, setSearchEngine, importHistory, setImportHistory, importBookmarks, setImportBookmarks, pickImportRows } from "../lib/browserPrefs.ts";
 import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
+import { NOTIFY_KINDS, NOTIFY_CHANNELS, NOTIFY_KIND_LABEL, NOTIFY_CHANNEL_LABEL, type NotifyKind, type NotifyChannel } from "../../../shared/notifyPrefs.ts";
+import { getNotifyPrefs, subscribeNotifyPrefs, saveNotifyPrefs } from "../lib/notifyPrefsStore.ts";
 import { PluginsPane } from "./PluginsPane.tsx";
 import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon } from "./workspace/icons.tsx";
 import {
@@ -2088,6 +2090,53 @@ function LanternSection({ open }: { open: boolean }) {
   );
 }
 
+/**
+ * The notification diet — what the fleet is ALLOWED to push at you, and on
+ * which channel. See shared/notifyPrefs.ts.
+ *
+ * Everything here defaults quiet on purpose: only `blocked` (an agent truly
+ * stopped on a gate or a permission prompt) and `reminders` (an alarm the
+ * person set themselves) reach for them out of the box. The rest — an agent
+ * merely idle, a stall, a tool error, the understudy needing a look, a usage
+ * limit — still show wherever they already live (the fleet card, the bell's
+ * history list); a switch here is what lets one of them additionally push.
+ *
+ * `None` sits above both groups rather than inside either: it silences every
+ * kind on every channel at once, and the "What" and "Where" rows go disabled
+ * under it so the state they represent is not lost, only overridden — turning
+ * `None` back off returns to whatever was chosen before.
+ */
+function NotificationsSection() {
+  const prefs = useSyncExternalStore(subscribeNotifyPrefs, getNotifyPrefs, getNotifyPrefs);
+  const [err, setErr] = useState<string | null>(null);
+  const save = (next: typeof prefs) => {
+    setErr(null);
+    saveNotifyPrefs(next).catch(() => setErr("Could not save."));
+  };
+  const setKind = (k: NotifyKind, on: boolean) => save({ ...prefs, kinds: { ...prefs.kinds, [k]: on } });
+  const setChannel = (c: NotifyChannel, on: boolean) => save({ ...prefs, channels: { ...prefs.channels, [c]: on } });
+  return (
+    <Section title="Notifications" desc="What agentglass may interrupt you for. Whatever is off still shows quietly on the fleet card.">
+      {err && <div className="text-[11px] px-1" style={{ color: "var(--error)" }}>{err}</div>}
+      <Toggle on={prefs.none} onClick={() => save({ ...prefs, none: !prefs.none })}
+        label="None — silence everything"
+        hint="Nothing interrupts, whatever is chosen below." />
+      <Group>What</Group>
+      {NOTIFY_KINDS.map((k) => (
+        <Toggle key={k} on={prefs.kinds[k]} disabled={prefs.none}
+          onClick={() => setKind(k, !prefs.kinds[k])}
+          label={NOTIFY_KIND_LABEL[k].label} hint={NOTIFY_KIND_LABEL[k].desc} />
+      ))}
+      <Group>Where</Group>
+      {NOTIFY_CHANNELS.map((c) => (
+        <Toggle key={c} on={prefs.channels[c]} disabled={prefs.none}
+          onClick={() => setChannel(c, !prefs.channels[c])}
+          label={NOTIFY_CHANNEL_LABEL[c].label} hint={NOTIFY_CHANNEL_LABEL[c].desc} />
+      ))}
+    </Section>
+  );
+}
+
 function AgentsSection({ open }: { open: boolean }) {
   return (
     <Section title="Other agents on this machine">
@@ -4078,6 +4127,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   )}
 
                   {pane === "notifications" && (
+                  <>
+                  <NotificationsSection />
                   <Section title="What reaches you"
                     desc="Which events are worth an interruption.">
                     {/* Two sources, two switches. They share one surface — the
@@ -4204,6 +4255,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       label="Keep Codex usage current"
                       hint="Runs a minimal Codex turn hourly so the quota reading is not stale — uses a small amount of the quota it measures" />
                   </Section>
+                  </>
                   )}
 
                   {pane === "browser" && <><BrowserPane /><AgentBrowserPane open={open} /></>}

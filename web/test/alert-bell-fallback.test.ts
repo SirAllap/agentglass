@@ -35,6 +35,17 @@ let permission: NotificationPermission = "granted";
 let asked = 0;
 let built = 0;
 
+/*
+ * This file is about the fallback PLUMBING — whether the bell still gets its
+ * row when a popup cannot happen — not about the notification diet, which is
+ * its own file (notify-prefs-emitters.test.ts). Every fixture below carries
+ * `notifyKind: "blocked"` so the diet's default (only `blocked` and
+ * `reminders` interrupt) never gets in the way of what this file is actually
+ * measuring: the four fixtures are not really approval prompts, they are
+ * stand-ins for "any alert, whatever permission state the browser is in".
+ */
+const BLOCKED = "blocked" as const;
+
 class FakeNotification {
   static get permission(): NotificationPermission { return permission; }
   static requestPermission(): Promise<NotificationPermission> {
@@ -65,7 +76,7 @@ beforeEach(() => {
 });
 
 test("granted: the popup and the bell row, as before", () => {
-  sysNotify.fireDesktopAlert({ title: "✋ Approval needed", body: "agentglass · main:3", urgency: 2, pane: "%8" });
+  sysNotify.fireDesktopAlert({ title: "✋ Approval needed", body: "agentglass · main:3", urgency: 2, pane: "%8", notifyKind: BLOCKED });
   expect(built).toBe(1);
   const history = sysNotify.notifyHistory();
   expect(history.length).toBe(1);
@@ -77,7 +88,7 @@ test("granted: the popup and the bell row, as before", () => {
 
 test("default — a browser tab nobody has asked — still writes the bell row", () => {
   permission = "default";
-  sysNotify.fireDesktopAlert({ title: "❌ Tool error", body: "agentglass · Bash failed", urgency: 2 });
+  sysNotify.fireDesktopAlert({ title: "❌ Tool error", body: "agentglass · Bash failed", urgency: 2, notifyKind: BLOCKED });
   expect(built).toBe(0); // no popup is possible, and that is the point
   expect(sysNotify.notifyHistory().length).toBe(1);
   expect(sysNotify.notifyHistory()[0]!.summary).toBe("❌ Tool error");
@@ -85,7 +96,7 @@ test("default — a browser tab nobody has asked — still writes the bell row",
 
 test("denied — an insecure origin — still writes the bell row", () => {
   permission = "denied";
-  sysNotify.fireDesktopAlert({ title: "⏳ Approval needed", body: "agentglass is waiting", urgency: 2 });
+  sysNotify.fireDesktopAlert({ title: "⏳ Approval needed", body: "agentglass is waiting", urgency: 2, notifyKind: BLOCKED });
   expect(built).toBe(0);
   expect(sysNotify.notifyHistory().length).toBe(1);
 });
@@ -94,7 +105,7 @@ test("a host with no Notification API at all still writes the bell row", () => {
   const saved = (globalThis as any).Notification;
   delete (globalThis as any).Notification;
   try {
-    sysNotify.fireDesktopAlert({ title: "🔔 heads up", body: "agentglass", urgency: 1 });
+    sysNotify.fireDesktopAlert({ title: "🔔 heads up", body: "agentglass", urgency: 1, notifyKind: BLOCKED });
     expect(sysNotify.notifyHistory().length).toBe(1);
   } finally {
     (globalThis as any).Notification = saved;

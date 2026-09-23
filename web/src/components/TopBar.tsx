@@ -33,6 +33,7 @@ import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
 import { Logo } from "./Logo.tsx";
 import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
 import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
+import { needsStaysOpen } from "../lib/needsPanel.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
@@ -465,6 +466,13 @@ export function TopBar({
   const { note, behind, ahead } = useAmbientNotes();
   const chip = useRef<HTMLButtonElement>(null);
   const [needsOpen, setNeedsOpen] = useState(false);
+  // What the panel was opened FOR. See needsStaysOpen: without this the flag
+  // outlived its alerts and the next one drew the panel by itself.
+  const needsFor = useRef<string[]>([]);
+  const needKeys = needsList.map((n) => n.key).join("\n");
+  useEffect(() => {
+    if (needsOpen && !needsStaysOpen(needsFor.current, needKeys ? needKeys.split("\n") : [])) setNeedsOpen(false);
+  }, [needsOpen, needKeys]);
 
   /*
    * The meters stand down while the middle of the bar is in use.
@@ -667,7 +675,10 @@ export function TopBar({
           empty so that it has somewhere to put the one thing that matters. */}
       <div ref={slotRef} data-topbar-slot className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
         {alarm ? (
-          <button ref={chip} onClick={() => setNeedsOpen((v) => !v)}
+          <button ref={chip} onClick={() => {
+              needsFor.current = needsList.map((n) => n.key);
+              setNeedsOpen((v) => !v);
+            }}
             aria-label="What needs you" aria-expanded={needsOpen}
             className="flex items-center gap-2 px-2.5 py-px rounded-full min-w-0"
             style={{
@@ -706,6 +717,7 @@ export function TopBar({
       </div>
       <NeedsPopover
         anchorRef={chip}
+        avoidRef={rightRef}
         open={needsOpen && alarm}
         items={needsList}
         onClose={() => setNeedsOpen(false)}

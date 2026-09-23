@@ -57,6 +57,15 @@ export const LAYER = {
   palette: 10040,
 
   /**
+   * The "waiting on you" panel under the title-bar chip.
+   *
+   * Above the workspace's own layers because it is raised from the bar over
+   * whatever view is open; below the catalog and every sheet, which are opened
+   * on purpose and should not be covered by something that was not.
+   */
+  needs: 10055,
+
+  /**
    * The Skills explorer.
    *
    * Above the workspace's own portal rather than merely after it: the rail

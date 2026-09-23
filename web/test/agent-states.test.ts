@@ -232,13 +232,12 @@ test("a stalled card raises exactly one stall alert, and it names the reason", (
   expect(ids(a, "long:")).toEqual([]);
 });
 
-test("a call nothing can vouch for raises the soft alert and no stall alert", () => {
-  const a = card([], [open({ tool_name: "WebFetch", target: null, since: now - 20 * MIN, liveness: "unknown", evidenceKind: "none" })]);
+test("a call nothing can vouch for raises nothing: running is not waiting on you", () => {
+  // Every alert is the amber chip and a row under WAITING ON YOU. A long Bash
+  // or WebFetch is the agent busy, not the agent blocked on a person.
+  const a = card([], [open({ tool_name: "Bash", target: null, since: now - 20 * MIN, liveness: "unknown", evidenceKind: "none" })]);
   expect(a.status).toBe("working");
-  expect(ids(a, "stuck:")).toEqual([]);
-  const long = ids(a, "long:");
-  expect(long.length).toBe(1);
-  expect(long[0].level).toBe("warn");
+  expect(deriveAlerts([a])).toEqual([]);
 });
 
 test("a healthy long call raises nothing at all", () => {

@@ -4,6 +4,7 @@ import { providerOf, UNKNOWN } from "../../../shared/models.ts";
 import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
 import type { AgentKind } from "./agents.ts";
+import { kindOfNotification, type NotifyKind } from "../../../shared/notifyPrefs.ts";
 
 /**
  * What is happening to this session *right now* — the axis the fleet's dot, the
@@ -639,11 +640,16 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
     if (a.status === "stalled" && a.runningTool) {
       out.push({ id: "stuck:" + a.key, level: "error", agent: a.key, ts: a.runningSince,
         text: `${a.runningTool} open ${fmtMs(now - a.runningSince)} with nothing to show for it — ${stuckBecause(a)}` });
-    } else if (a.status === "working" && a.runningTool && a.liveness === "unknown"
-      && now - a.runningSince >= TOOL_RUN_WARN_MS) {
-      out.push({ id: "long:" + a.key, level: "warn", agent: a.key, ts: a.runningSince,
-        text: `${a.runningTool} running ${fmtMs(now - a.runningSince)} — nothing local to check, so this could be either` });
     }
+    // A call nothing local can vouch for — a Bash whose effects land outside
+    // the working directory, a WebFetch — raised a soft "could be either"
+    // alert here once it passed TOOL_RUN_WARN_MS. Every alert is the amber
+    // chip in the title bar and a row under WAITING ON YOU, and a running
+    // tool is not waiting on anybody: the agent is busy, and nothing in the
+    // panel could act on it. A seven-minute build held the chip for seven
+    // minutes. The card already shows the call and how long it has been open,
+    // which is where a long call belongs; only `stuck:` above, which the
+    // evidence backs, is raised.
     // toolErrors, not errors: the denominator is tool calls, and an errored
     // LLM span or notification never enters it. With the all-events count this
     // read "high failure rate 150%" on a session whose every tool succeeded.
@@ -652,6 +658,32 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
       out.push({ id: "rate:" + a.key, level: "error", agent: a.key, text: `high failure rate ${(rate * 100).toFixed(0)}%`, ts: a.lastSeen });
   }
   return out.sort((x, y) => y.ts - x.ts);
+}
+
+/**
+ * Which of the seven notification kinds a fleet alert is — see
+ * shared/notifyPrefs.ts for the vocabulary. Pure, and separate from
+ * `deriveAlerts`, so a wiring bug (the chip filtering one alert type and the
+ * bell another) shows up as a test on this function rather than a screenshot
+ * only a person would have noticed disagreed.
+ *
+ * `wait:` is the one alert `deriveAlerts` raises for more than one reason, so
+ * it is the only id this has to look inside. `agent.needBecause` carries the
+ * same text the server's own `Notification` branch matched, EXCEPT for a
+ * `PermissionRequest` event: `becauseOf` renders that as "wants to run X" /
+ * "wants your approval", which `kindOfNotification`'s regex was never meant
+ * to catch — it is already the real thing, not a message to classify. See
+ * `asked` in `deriveAgents`, a few hundred lines up, for the same branch on
+ * the server side.
+ */
+export function alertKind(alert: Alert, agent: AgentCard | undefined): NotifyKind {
+  if (alert.id.startsWith("wait:")) {
+    if (agent?.lastType === "PermissionRequest") return "blocked";
+    return kindOfNotification(agent?.needBecause ?? alert.text);
+  }
+  if (alert.id.startsWith("stuck:")) return "stalled";
+  if (alert.id.startsWith("rate:")) return "failures";
+  return "idle";
 }
 
 /** How long a session may stay silent before we treat it as finished.
