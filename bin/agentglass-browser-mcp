@@ -33,6 +33,9 @@ is installed, not one where a package tree was.
 Environment:
     AGENTGLASS_SERVER   default http://localhost:4000
     AGENTGLASS_TOKEN    only needed if the server was started with one
+    AGENTGLASS_MCP_TOOLS  full (default, every tool) | core (the everyday verbs plus
+                        one generic `browser` tool for the rest) | generic (only
+                        `browser {verb, args}`; verb "help" describes any verb)
 """
 import base64
 import json
@@ -1316,6 +1319,66 @@ TOOLS = [
 
 VERB = {t["name"]: t["name"][len("browser_"):] for t in TOOLS}
 
+# ── THE TOOL LIST IS PART OF EVERY TURN ────────────────────────────────────
+#
+# Measured: all of TOOLS as `tools/list` sends it is ~70 KB, about 20k tokens
+# of schema a client re-reads on every turn whether or not it drives a page.
+# `core` keeps the verbs a task reaches for in the first minute and puts the
+# rest behind ONE tool, `browser {verb, args}`, so nothing is unreachable —
+# only unlisted. `generic` is that one tool alone. The default stays `full`:
+# a client written against the 68 names must not lose one on upgrade.
+CORE_TOOLS = (
+    "open", "read", "observe", "checkup", "click", "type", "fill", "press",
+    "scroll", "wait", "shot", "eval", "console", "network", "tabs", "newtab", "closetab",
+)
+
+
+def _generic_tool(listed=()):
+    """`listed` are the verbs the client already has as tools of their own."""
+    verbs = sorted(v for v in VERB.values() if v not in listed)
+    return {
+        "name": "browser",
+        "description": (
+            "Any browser verb by name, for the ones that are not listed as tools of their own: "
+            + ", ".join(verbs)
+            + ". `verb` is the name and `args` is that verb's arguments, exactly as the "
+            "browser_<verb> tool takes them. verb \"help\" with args {\"verb\": \"<name>\"} returns that "
+            "verb's description and schema; without it, the list of verbs."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "verb": {"type": "string", "description": "A verb name, or help."},
+                "args": {"type": "object", "description": "The verb's arguments."},
+            },
+            "required": ["verb"],
+        },
+    }
+
+
+def listed_tools(profile=None):
+    profile = (profile if profile is not None else os.environ.get("AGENTGLASS_MCP_TOOLS", "")).strip().lower()
+    if profile == "generic":
+        return [_generic_tool()]
+    if profile == "core":
+        return [t for t in TOOLS if VERB[t["name"]] in CORE_TOOLS] + [_generic_tool(CORE_TOOLS)]
+    return TOOLS
+
+
+def _generic_call(args):
+    verb = str(args.get("verb", "")).removeprefix("browser_")
+    inner = args.get("args") or {}
+    if verb == "help":
+        want = str(inner.get("verb", "")).removeprefix("browser_")
+        tool = next((t for t in TOOLS if VERB[t["name"]] == want), None)
+        text = json.dumps(tool) if tool else "verbs: " + ", ".join(sorted(VERB.values()))
+        return {"content": [{"type": "text", "text": text}]}
+    if not isinstance(inner, dict):
+        return {"content": [{"type": "text", "text": "args must be an object"}], "isError": True}
+    if f"browser_{verb}" not in VERB:
+        return {"content": [{"type": "text", "text": f"no such verb: {verb} — verb \"help\" lists them"}], "isError": True}
+    return run(f"browser_{verb}", inner)
+
 # Verbs about the LIST of tabs, or about the window's session, rather than
 # about a page inside one tab. Copied from bin/agentglass-browser's TAB_OPS,
 # for the same reasons and with the same one that is easy to miss: `settings`
@@ -1429,6 +1492,8 @@ def _no_tab(name, who):
 
 def run(name, args):
     """A tool call, as MCP content."""
+    if name == "browser":
+        return _generic_call(args)
     verb = VERB.get(name)
     if not verb:
         return {"content": [{"type": "text", "text": f"no such tool: {name}"}], "isError": True}
@@ -1825,7 +1890,7 @@ def main():
                 ),
             })
         elif method == "tools/list":
-            reply(msg_id, {"tools": TOOLS})
+            reply(msg_id, {"tools": listed_tools()})
         elif method == "tools/call":
             params = msg.get("params") or {}
             reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
