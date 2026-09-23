@@ -62,6 +62,14 @@ describe("deliver() gated by the notification diet", () => {
     expect(fallbacks[0]?.title).toContain("Approval");
   });
 
+  test("a paired-devices file edited behind the server's back fires by default", () => {
+    // A security warning, not news: nobody has to turn a kind on before they
+    // hear that a device may have been slipped into the paired list.
+    alerts.pushDeviceStoreChanged("/w/orbit/devices.json");
+    expect(fallbacks.length).toBe(1);
+    expect(fallbacks[0]?.title).toContain("Paired devices changed");
+  });
+
   test("the common idle Notification does NOT reach the desktop by default", () => {
     alerts.maybeAlert({
       hook_event_type: "Notification", session_id: "s-idle-1", source_app: "app",
