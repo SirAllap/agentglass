@@ -18,10 +18,19 @@
  * whatever the suite before this one left behind). So those children need to be
  * told, and `tmux-test-isolation.test.ts` fails the build if one is not.
  *
- * One fixed directory rather than one per suite: a suite that puts a server in
- * it names its own socket, so they cannot collide. Created here so a spawn can
- * use it without each caller remembering to mkdir — and swept here, see below,
- * because a fixed directory is exactly the one that accumulates.
+ * One directory per RUN rather than one per suite: a suite that puts a server
+ * in it names its own socket, so they cannot collide. Created here so a spawn
+ * can use it without each caller remembering to mkdir, and removed with the run
+ * by the preload (tmpsweep.ts), which takes anything named after its pid.
+ *
+ * It used to be one fixed /tmp/agx-test-tmux for every run on the machine, and
+ * the preload removes a directory the run that CREATED it made — so the first
+ * run to finish took it away from every run still going. tmux does not fail
+ * on a TMUX_TMPDIR that is gone: it falls back to /tmp/tmux-<uid>, and every
+ * server those runs booted afterwards sourced its C-b conf into the
+ * developer's engine. Measured with several suites running at once: the
+ * directory absent, and the engine's prefix flipping as each such server
+ * started.
  *
  * This is the same defence `TMUX_ISOLATED` (`-f /dev/null`) makes one layer
  * down: that one stops a test's tmux from loading the developer's config, this
@@ -30,7 +39,7 @@
 import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-export const TMUX_TEST_TMPDIR = "/tmp/agx-test-tmux";
+export const TMUX_TEST_TMPDIR = `/tmp/agx-test-tmux-${process.pid}`;
 
 /*
  * Loud when the directory cannot be made, because the quiet version armed the

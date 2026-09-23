@@ -24,7 +24,7 @@ import { liveNvimSockets } from "./editor.ts";
 // One rule for "may a tmux command reach this socket", not a second copy of it
 // here. tmuxctl.ts does not import this file, so the edge is one-way.
 import { socketPath, tmuxSocketAllowed, tmuxSocketConfined } from "./tmuxctl.ts";
-import { resolveTmuxBin, tmuxSocket } from "./tmuxbin.ts";
+import { resolveTmuxBin, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 
 /*
  * Resolved per call, not once at import.
@@ -539,7 +539,7 @@ export type SyncResult = { ok: boolean; wrote: string[]; reloaded: string[]; err
 
 /** The only live tmux server a theme pick may repaint. */
 export function themeTmuxTarget(): string[] {
-  return ["-L", tmuxSocket()];
+  return engineSocketArgs();
 }
 
 /** Is this socket the engine's own — the one furniture this app draws lives on? */

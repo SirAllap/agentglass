@@ -76,7 +76,7 @@ describe("a tab is a session of its own", () => {
     const desk = engineAttachArgv("/home/someone/code/orbit");
     const tab = engineBenchArgv("/home/someone/code/orbit", 2, ["nvim", "-R", "/tmp/x.py"]);
     if (!desk || !tab) return;
-    expect(tab).toContain("-L");
+    expect(tab).toContain("-S");
     expect(tab).toContain("-f");
     expect(tab).toContain("-A");
     // The command is argv, handed to tmux — never a string for a shell to
