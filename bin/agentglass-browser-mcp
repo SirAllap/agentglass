@@ -1139,7 +1139,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "set": {"type": "object", "description": "{ name, value, path?, domain? }"},
+                "set": {"type": "object", "description": "{ name, value, path?, domain?, secure?, httpOnly?, sameSite? }"},
             },
         },
     },

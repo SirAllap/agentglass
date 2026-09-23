@@ -7,7 +7,7 @@
  * nothing, and a typed value that a framework throws away on its next render.
  */
 import { describe, expect, test } from "bun:test";
-import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { claimAgentZoom, cookieSetParams, forgetAgentZoom, reapplyZoom, resetBrowserSettings, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
 
 /** Records the code it is asked to run and answers with whatever was queued. */
 /*
@@ -17,7 +17,7 @@ import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, run
  * and "that is not a selector", and a stand-in that answers `true` to all four
  * would let a verb pass while reporting the wrong one.
  */
-function fakeGuest(answer: (code: string) => unknown = () => ({ kind: "ok" })) {
+function fakeGuest(answer: (code: string) => unknown = () => ({ kind: "ok" }), url = "https://example.com/app") {
   const ran: string[] = [];
   const keys: string[] = [];
   /* `sendInputEvent` is NOT part of `DrivableWebview` any more — it was taken
@@ -43,7 +43,7 @@ function fakeGuest(answer: (code: string) => unknown = () => ({ kind: "ok" })) {
     reload: () => { ran.push("reload"); },
     reloadIgnoringCache: () => { ran.push("reloadIgnoringCache"); },
     sendInputEvent: (e) => { keys.push(`${e.type}:${e.keyCode}`); },
-    getURL: () => "https://example.com/app",
+    getURL: () => url,
     getTitle: () => "The app",
     executeJavaScript: async (code: string) => { ran.push(code); return answer(code); },
     capturePage: async () => ({ toDataURL: () => "data:image/png;base64,AAAA" }),
@@ -1315,26 +1315,282 @@ describe("eval's wrapper stays synchronous unless asked", () => {
   });
 });
 
+/**
+ * A stand-in DevTools cookie jar, with Chromium's own prefix rules:
+ * `__Host-` needs `secure`, path `"/"`, no `domain`; `__Secure-` needs
+ * `secure`; a `domain` that does not match the page's own host is
+ * refused. `Network.setCookie` answers `{ success: false }` rather than
+ * throwing on any of these — the same shape a real DevTools session
+ * returns — and `Network.getCookies` reads back whatever actually landed.
+ *
+ * Also stands in for the READ half: `document.cookie` genuinely does carry a
+ * cookie's value once `Network.setCookie` has landed it, for anything that
+ * isn't `httpOnly` — the two do not read from separate worlds — so `el`'s
+ * `executeJavaScript` reflects this SAME jar instead of a canned "".
+ */
+function fakeCookieJar(url: string) {
+  const jar: Array<Record<string, unknown>> = [];
+  const cdp = async (method: string, params?: unknown) => {
+    if (method === "Network.setCookie") {
+      const p = { ...(params as Record<string, unknown>) };
+      const name = String(p.name);
+      const cookieUrl = new URL(String(p.url));
+      const rejected =
+        (name.startsWith("__Host-") && (p.secure !== true || p.domain || p.path !== "/")) ||
+        (name.startsWith("__Secure-") && p.secure !== true) ||
+        (typeof p.domain === "string" && p.domain !== "" &&
+          cookieUrl.hostname !== p.domain && !cookieUrl.hostname.endsWith(`.${p.domain}`));
+      if (rejected) return { ok: true, result: { success: false } };
+      jar.push(p);
+      return { ok: true, result: { success: true } };
+    }
+    if (method === "Network.getCookies") {
+      return { ok: true, result: { cookies: jar.slice() } };
+    }
+    return { ok: false, error: `unhandled CDP method in test: ${method}` };
+  };
+  const el = fakeGuest(() => ({
+    cookies: jar.filter((c) => !c.httpOnly).map((c) => `${c.name}=${c.value}`).join("; "),
+    note: "httpOnly cookies are not visible to the page and so not here",
+  }), url);
+  return { el, cdp };
+}
+
+/** `cookies` reads through `document.cookie`, unaffected by a set that now
+ *  goes through the network stack — this stands in for that read step only,
+ *  for the error-path tests that never get as far as a landed cookie. */
+function fakeGuestForCookies(url: string) {
+  return fakeGuest(() => ({ cookies: "", note: "httpOnly cookies are not visible to the page and so not here" }), url);
+}
+
 describe("cookies --set is backed by the jar it claims", () => {
   /*
    * A REGRESSION THIS FILE DID NOT CATCH, which is the reason it is here.
    *
-   * `cookies --set` answered `ok` on the strength of the write script not
-   * throwing, never on the jar actually holding the cookie afterwards — and
-   * `fakeGuest`'s canned answers can't tell the difference, since they never
-   * run the code at all. `fakeGuestWithCookies` does: it is the same path a
-   * real page's `document.cookie` is, so a write that does not stick fails
-   * this test instead of reporting success.
+   * `cookies --set` answered `ok` on the strength of a `document.cookie`
+   * write not throwing, never on the jar it actually lands in — and Chromium
+   * drops any `__Host-`/`__Secure-` cookie written that way regardless,
+   * silently, flags and all. The write now goes through
+   * `Network.setCookie`/`Network.getCookies`, and `fakeCookieJar` is the
+   * same path a real DevTools session is: a write that does not stick, or a
+   * prefix rule that is broken, fails these tests instead of reporting
+   * success.
    */
-  test("set, then read back through the same path", async () => {
-    const el = fakeGuestWithCookies();
-    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }));
-    expect(r).toEqual({ ok: true, value: { cookies: "session=abc123", note: expect.any(String) } });
+  test("a __Host- cookie lands with secure, path \"/\", no domain — FAILS on a document.cookie write", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "__Host-orbit_session", value: "abc123" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect((r as { value: { set: Record<string, unknown> } }).value.set).toEqual({
+      name: "__Host-orbit_session", domain: undefined, path: "/", secure: true, httpOnly: false, sameSite: undefined,
+    });
   });
 
-  test("a cookie for a domain the page isn't on does not land, and the verb says so", async () => {
-    const el = fakeGuestWithCookies("example.com");
-    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "a", value: "b", domain: "other.com" } }));
+  test("a plain cookie on an https page lands secure", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "dark" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect((r as { value: { set: Record<string, unknown> } }).value.set.secure).toBe(true);
+  });
+
+  test("--http-only lands httpOnly:true, and stays out of the document.cookie echo", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "sid", value: "s3cr3t", httpOnly: true } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    const value = (r as { value: { set: Record<string, unknown>; cookies: string } }).value;
+    expect(value.set.httpOnly).toBe(true);
+    // httpOnly is invisible to the page — this is the fake proving it, not just claiming it.
+    expect(value.cookies).not.toContain("s3cr3t");
+  });
+
+  test("sameSite is passed through, case-insensitive", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "dark", sameSite: "lax" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect((r as { value: { set: Record<string, unknown> } }).value.set.sameSite).toBe("Lax");
+  });
+
+  test("a __Host- cookie with a domain is refused before it ever reaches CDP", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "__Host-x", value: "b", domain: "orbit.example" } }),
+      undefined, undefined, undefined, cdp);
     expect(r.ok).toBe(false);
-    expect((r as { error: string }).error).toContain("a");  });
+    expect((r as { error: string }).error).toContain("__Host-");
+  });
+
+  test("a __Host- cookie on an http page is refused", async () => {
+    const { el, cdp } = fakeCookieJar("http://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "__Host-x", value: "b" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("https");
+  });
+
+  test("a page that is not on http(s) (about:blank) is refused", async () => {
+    const { el, cdp } = fakeCookieJar("about:blank");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "dark" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("open a page");
+  });
+
+  test("the value is never repeated back in the `set` metadata", async () => {
+    // document.cookie legitimately carries the value for a non-httpOnly
+    // cookie (see the httpOnly test above) — this test is scoped to the
+    // metadata object, which is the one place a value must never reappear.
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "top-secret" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    const value = (r as { value: { set: Record<string, unknown> } }).value;
+    expect(JSON.stringify(value.set)).not.toContain("top-secret");
+  });
+
+  test("a domain other than the page's is refused by Chromium (success:false), worded as its own kind of failure", async () => {
+    const { el, cdp } = fakeCookieJar("https://example.com/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "a", value: "b", domain: "other.com" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    // Not "needs the DevTools relay" — the relay answered fine, Chromium refused the cookie.
+    expect((r as { error: string }).error).toBe(`Chromium refused cookie "a" — check the prefix rules (__Host-/__Secure-) and the domain`);
+  });
+
+  test("not in the jar after the write is still ok:false", async () => {
+    // A relay that claims success but the cookie never actually lands
+    // (a third-party cookie policy, say) — the getCookies check catches it.
+    const el = fakeGuestForCookies("https://orbit.example/");
+    const cdp = async (method: string) => {
+      if (method === "Network.setCookie") return { ok: true, result: { success: true } };
+      if (method === "Network.getCookies") return { ok: true, result: { cookies: [] } };
+      return { ok: false, error: "unhandled" };
+    };
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("not in the page's jar");
+  });
+
+  test("no DevTools relay is an honest error, not a silent no-op", async () => {
+    const el = fakeGuestForCookies("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }));
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("DevTools relay");
+    expect((r as { error: string }).error).not.toContain("close the inspector");
+  });
+
+  test("a relay refused because DevTools is already attached says so, and to retry after closing it — no document.cookie fallback", async () => {
+    // M2: the old document.cookie write is the very thing this fix routes
+    // around (it drops flags silently), so it is not a fallback here either.
+    // The failure is new where the inspector is open on the tab, and the
+    // error has to say what changed rather than repeat the generic relay line.
+    const el = fakeGuestForCookies("https://orbit.example/");
+    const cdp = async () => ({ ok: false, error: "the inspector is attached to this page" });
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("the inspector is attached to this page");
+    expect((r as { error: string }).error).toContain("close the inspector and retry");
+    // Never wrote through document.cookie as a fallback.
+    expect(el.ran.join(" ")).not.toContain("document.cookie =");
+  });
+
+  test("the read path is unchanged: a --set through CDP does not touch the document.cookie jar this read uses", async () => {
+    const el = fakeGuestWithCookies();
+    const setResult = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }),
+      undefined, undefined, undefined, fakeCookieJar("https://example.com/app").cdp);
+    // The SET call's own read-back used el's real document.cookie jar too —
+    // untouched by the separate cdp jar it wrote to — so it is still empty.
+    expect(setResult).toEqual({ ok: true, value: { cookies: "", note: expect.any(String), set: expect.any(Object) } });
+    const r = await runBrowserAsk(el, ask("cookies"));
+    expect(r).toEqual({ ok: true, value: { cookies: "", note: expect.any(String) } });
+  });
+});
+
+describe("cookieSetParams", () => {
+  test("a plain cookie on https defaults to secure", () => {
+    const r = cookieSetParams("https://orbit.example/app", { name: "pref", value: "dark" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.params).toMatchObject({ name: "pref", value: "dark", url: "https://orbit.example/", path: "/", secure: true, httpOnly: false });
+    }
+  });
+
+  test("a plain cookie on http defaults to not secure", () => {
+    const r = cookieSetParams("http://orbit.example/app", { name: "pref", value: "dark" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.secure).toBe(false);
+  });
+
+  test("explicit secure:false is honoured for a non-prefixed name", () => {
+    const r = cookieSetParams("https://orbit.example/app", { name: "pref", value: "dark", secure: false });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.secure).toBe(false);
+  });
+
+  test("__Host- forces secure, path \"/\", and refuses a domain", () => {
+    const ok = cookieSetParams("https://orbit.example/", { name: "__Host-s", value: "v" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.params).toMatchObject({ secure: true, path: "/" });
+
+    const withPath = cookieSetParams("https://orbit.example/", { name: "__Host-s", value: "v", path: "/app" });
+    expect(withPath.ok).toBe(false);
+
+    const withDomain = cookieSetParams("https://orbit.example/", { name: "__Host-s", value: "v", domain: "orbit.example" });
+    expect(withDomain.ok).toBe(false);
+
+    const onHttp = cookieSetParams("http://orbit.example/", { name: "__Host-s", value: "v" });
+    expect(onHttp.ok).toBe(false);
+  });
+
+  test("__Secure- forces secure and requires https", () => {
+    const ok = cookieSetParams("https://orbit.example/", { name: "__Secure-s", value: "v" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.params.secure).toBe(true);
+
+    const onHttp = cookieSetParams("http://orbit.example/", { name: "__Secure-s", value: "v" });
+    expect(onHttp.ok).toBe(false);
+  });
+
+  test("sameSite normalises case and requires secure for None", () => {
+    const lax = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "STRICT" });
+    expect(lax.ok).toBe(true);
+    if (lax.ok) expect(lax.params.sameSite).toBe("Strict");
+
+    const badNone = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "none", secure: false });
+    expect(badNone.ok).toBe(false);
+
+    const goodNone = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "none" });
+    expect(goodNone.ok).toBe(true);
+
+    const bad = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "whenever" });
+    expect(bad.ok).toBe(false);
+  });
+
+  test("a non-http(s) page is refused", () => {
+    const r = cookieSetParams("about:blank", { name: "pref", value: "v" });
+    expect(r.ok).toBe(false);
+  });
+
+  test("localhost, 127.0.0.1 and [::1] are secure contexts over plain http, same as Chromium treats them", () => {
+    for (const origin of ["http://localhost:5173", "http://sub.localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173"]) {
+      const plain = cookieSetParams(`${origin}/app`, { name: "pref", value: "v" });
+      expect(plain.ok, `${origin} should be ok`).toBe(true);
+      if (plain.ok) expect(plain.params.secure, `${origin} should default secure`).toBe(true);
+
+      const host = cookieSetParams(`${origin}/`, { name: "__Host-s", value: "v" });
+      expect(host.ok, `${origin} should allow __Host-`).toBe(true);
+
+      const secure = cookieSetParams(`${origin}/`, { name: "__Secure-s", value: "v" });
+      expect(secure.ok, `${origin} should allow __Secure-`).toBe(true);
+    }
+  });
+
+  test("a non-loopback http host is still not a secure context", () => {
+    const r = cookieSetParams("http://orbit.example/", { name: "pref", value: "v" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.secure).toBe(false);
+  });
 });

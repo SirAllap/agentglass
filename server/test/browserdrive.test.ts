@@ -469,6 +469,21 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("cookies", { set: { name: "a", value: "b" } })).toBe(true);
   });
 
+  test("cookies --set's optional flags are type-checked, not just name/value", () => {
+    delete process.env.AGENTGLASS_BROWSER_READONLY;
+    expect("ask" in parseAsk("cookies", { set: { name: "a", value: "b", secure: true, httpOnly: false, sameSite: "Lax" } }))
+      .toBe(true);
+    const badSecure = parseAsk("cookies", { set: { name: "a", value: "b", secure: "yes" } });
+    if (!("error" in badSecure)) throw new Error("unreachable");
+    expect(badSecure.error).toContain("secure");
+    const badHttpOnly = parseAsk("cookies", { set: { name: "a", value: "b", httpOnly: 1 } });
+    if (!("error" in badHttpOnly)) throw new Error("unreachable");
+    expect(badHttpOnly.error).toContain("httpOnly");
+    const badSameSite = parseAsk("cookies", { set: { name: "a", value: "b", sameSite: 3 } });
+    if (!("error" in badSameSite)) throw new Error("unreachable");
+    expect(badSameSite.error).toContain("sameSite");
+  });
+
   test("shot: marks is a flag and combines with a crop or a highlight", () => {
     const ok = parseAsk("shot", { marks: true, selector: "#panel", highlight: "#status" });
     if (!("ask" in ok)) throw new Error(ok.error);
@@ -597,6 +612,90 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect(entries[0]!.ok).toBe(false);
   });
 
+  describe("the structured read verbs", () => {
+    test("markdown, links, count, search and extract observe — read-only lets them through", () => {
+      process.env.AGENTGLASS_BROWSER_READONLY = "1";
+      try {
+        for (const op of ["markdown", "links", "count", "search", "extract"]) {
+          const body = op === "extract" ? { fields: { price: ".price" } }
+            : op === "search" ? { query: "price" }
+            : op === "count" ? { selector: ".price" }
+            : {};
+          expect("ask" in parseAsk(op, body), `${op} was refused under read-only`).toBe(true);
+        }
+      } finally {
+        delete process.env.AGENTGLASS_BROWSER_READONLY;
+      }
+    });
+
+    test("screencast takes three actions and keeps its pictures bounded", () => {
+      expect("error" in parseAsk("screencast", { action: "pause" })).toBe(true);
+      expect("error" in parseAsk("screencast", { action: "start", quality: 0 })).toBe(true);
+      expect("error" in parseAsk("screencast", { action: "start", maxWidth: 5000 })).toBe(true);
+      expect("error" in parseAsk("screencast", { action: "start", everyNth: 1.5 })).toBe(true);
+      const start = parseAsk("screencast", {});
+      if (!("ask" in start)) throw new Error("unreachable");
+      expect(start.ask.args).toMatchObject({ action: "start", quality: 60, maxWidth: 1024, maxHeight: 768, everyNth: 1 });
+      const frames = parseAsk("screencast", { action: "frames" });
+      if (!("ask" in frames)) throw new Error("unreachable");
+      expect(frames.ask.args.action).toBe("frames");
+      // Observing: it changes nothing on the page, so read-only mode admits it.
+      process.env.AGENTGLASS_BROWSER_READONLY = "1";
+      try { expect("ask" in parseAsk("screencast", { action: "stop" })).toBe(true); }
+      finally { delete process.env.AGENTGLASS_BROWSER_READONLY; }
+    });
+
+    test("attr takes a selector and up to twenty attribute names, and refuses what is not a name", () => {
+      expect("error" in parseAsk("attr", {})).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: "href" })).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: ["href", "x y"] })).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: ["on\nload"] })).toBe(true);
+      expect("error" in parseAsk("attr", { selector: "a", names: Array.from({ length: 21 }, (_, i) => `a${i}`) })).toBe(true);
+      const ok = parseAsk("attr", { selector: "e17", names: ["href", "data-testid", "aria-label"] });
+      if (!("ask" in ok)) throw new Error("unreachable");
+      expect(ok.ask.args).toMatchObject({ selector: "e17", names: ["href", "data-testid", "aria-label"] });
+      const all = parseAsk("attr", { selector: "#login" });
+      if (!("ask" in all)) throw new Error("unreachable");
+      expect(all.ask.args.names).toBeUndefined();
+      // The inventories take nothing, and all three are observing, so read-only mode admits them.
+      process.env.AGENTGLASS_BROWSER_READONLY = "1";
+      try {
+        for (const op of ["interactive", "forms"]) expect("ask" in parseAsk(op, {}), op).toBe(true);
+        expect("ask" in parseAsk("attr", { selector: "a" })).toBe(true);
+      } finally {
+        delete process.env.AGENTGLASS_BROWSER_READONLY;
+      }
+    });
+
+    test("extract validates every field before it becomes page JavaScript", () => {
+      expect("error" in parseAsk("extract", {})).toBe(true);
+      expect("error" in parseAsk("extract", { fields: [] })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: {} })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: { "bad name": ".price" } })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: { price: 5 } })).toBe(true);
+      expect("error" in parseAsk("extract", { fields: { price: "a\nb" } })).toBe(true);
+      const over = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`f${i}`, `.x${i}`]));
+      expect("error" in parseAsk("extract", { fields: over })).toBe(true);
+      const ok = parseAsk("extract", { fields: { price: ".product-price", title: "h1" } });
+      if (!("ask" in ok)) throw new Error("unreachable");
+      expect(ok.ask.args.fields).toEqual({ price: ".product-price", title: "h1" });
+    });
+
+    test("search and count validate their one argument", () => {
+      expect("error" in parseAsk("search", {})).toBe(true);
+      expect("error" in parseAsk("search", { query: "" })).toBe(true);
+      expect("error" in parseAsk("search", { query: "x".repeat(201) })).toBe(true);
+      expect("error" in parseAsk("search", { query: "a\nb" })).toBe(true);
+      const q = parseAsk("search", { query: "  price  " });
+      if (!("ask" in q)) throw new Error("unreachable");
+      expect(q.ask.args.query).toBe("price");
+      expect("error" in parseAsk("count", { selector: ".\n" })).toBe(true);
+      const c = parseAsk("count", {});
+      if (!("ask" in c)) throw new Error("unreachable");
+      expect(c.ask.args.selector).toBeUndefined();
+    });
+  });
+
   test("a completed call is audited too, oldest first, with a growing id", async () => {
     setBrowserSink({ send: (a) => queueMicrotask(() => settleBrowser(a.id, { ok: true, value: "Dashboard" })), listeners: () => 1 });
     noteBrowserReady("w1", true);
@@ -658,15 +757,15 @@ describe("a typed password does not reach the audit log", () => {
    * not applied that day.
    *
    * The case below is the one both heuristics miss, and it is the ordinary
-   * one: a framework-generated id. `#j_id_42` names nothing, `Verano2026!` has
+   * one: a framework-generated id. `#j_id_42` names nothing, `fixture-pass-1042!` has
    * no token shape, and a widened word list cannot fix that — the id is not a
    * word. Only the panel can read the node's `type`, so the panel is asked and
    * its answer is what the log obeys.
    */
   test("the panel's verdict redacts it, where the selector and the value do not", () => {
-    const args = { selector: "#j_id_42", text: "Verano2026!" };
+    const args = { selector: "#j_id_42", text: "fixture-pass-1042!" };
     expect(redactAskForTest("type", args, false).text,
-      "the heuristics were supposed to miss this one").toBe("Verano2026!");
+      "the heuristics were supposed to miss this one").toBe("fixture-pass-1042!");
     expect(redactAskForTest("type", args, true).text).toBe("[redacted]");
   });
 
@@ -756,6 +855,43 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
     expect(JSON.stringify(out)).not.toContain(sessionid);
   });
 
+  test("a cookie or a stored value sent through `cdp` goes by position as well", () => {
+    /*
+     * `session load` restores cookies with `Network.setCookie`, and an agent
+     * can write storage with `DOMStorage.setDOMStorageItem`, through the
+     * `cdp` verb — the `cookies` and `storage` rows above never see those,
+     * and every value would sit in the audit log in clear.
+     */
+    const sid = "kq3zr9x1v7b2n5m8t4w6y0p3s1d7f9g2";
+    const one = redactAskForTest("cdp", args("cdp", {
+      method: "Network.setCookie", params: { name: "__Host-orbit_sid", value: sid, url: "https://www.orbit.example/" },
+    }));
+    expect((one.params as Record<string, unknown>).name).toBe("__Host-orbit_sid");
+    expect(JSON.stringify(one)).not.toContain(sid);
+    const many = redactAskForTest("cdp", args("cdp", {
+      method: "Network.setCookies", params: { cookies: [{ name: "a", value: sid }, { name: "b", value: `${sid}2` }] },
+    }));
+    expect(JSON.stringify(many)).not.toContain(sid);
+    expect(JSON.stringify(many)).toContain('"name":"b"');
+    const stored = redactAskForTest("cdp", args("cdp", {
+      method: "DOMStorage.setDOMStorageItem",
+      params: { storageId: { securityOrigin: "https://www.orbit.example", isLocalStorage: true }, key: "device", value: sid },
+    }));
+    expect((stored.params as Record<string, unknown>).key).toBe("device");
+    expect(JSON.stringify(stored)).not.toContain(sid);
+    // Shared storage is the other stored-value writer the protocol has.
+    const shared = redactAskForTest("cdp", args("cdp", {
+      method: "Storage.setSharedStorageEntry",
+      params: { ownerOrigin: "https://www.orbit.example", key: "device", value: sid },
+    }));
+    expect((shared.params as Record<string, unknown>).key).toBe("device");
+    expect(JSON.stringify(shared)).not.toContain(sid);
+    // Any other method keeps its params: a `value` in Runtime.evaluate's
+    // answer shape is not a credential by position.
+    const other = redactAskForTest("cdp", args("cdp", { method: "Emulation.setTimezoneOverride", params: { timezoneId: "Europe/Madrid" } }));
+    expect((other.params as Record<string, unknown>).timezoneId).toBe("Europe/Madrid");
+  });
+
   test("a stored value goes by position too, benign ones included, and that is the trade", () => {
     const token = "opaque-session-9f2c-not-a-token-shape";
     const secret = redactAskForTest("storage", args("storage", { set: true, key: "authToken", value: token }));
@@ -794,7 +930,7 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
      * deliberately absent — the comment on the table says why — and if it is
      * ever added this list must move with it.
      */
-    expect([...valueCarryingOpsForTest].sort()).toEqual(["cookies", "dialog", "fill", "storage", "type"]);
+    expect([...valueCarryingOpsForTest].sort()).toEqual(["cdp", "cookies", "dialog", "fill", "storage", "type"]);
   });
 
   test("the replay script emits a real `fill`, with the pairs and the marker", () => {
@@ -841,17 +977,17 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
     setBrowserSink({
       send: (a) => queueMicrotask(() => settleBrowser(a.id, {
         ok: false,
-        error: 'could not fill label=Pass — selector matched 2 elements — e1 input#j1 "Verano2026!", e2 input#j2 ghp_' + "b".repeat(30),
+        error: 'could not fill label=Pass — selector matched 2 elements — e1 input#j1 "fixture-pass-1042!", e2 input#j2 ghp_' + "b".repeat(30),
         value: { secretFields: ["#j1"] },
       })),
       listeners: () => 1,
     });
     noteBrowserReady("w1", true);
-    const p = parseAsk("fill", { fields: { "#j1": "Verano2026!", "label=Pass": "x" } });
+    const p = parseAsk("fill", { fields: { "#j1": "fixture-pass-1042!", "label=Pass": "x" } });
     if (!("ask" in p)) throw new Error("unreachable");
     await askBrowser(p.ask);
     const logged = JSON.stringify(exportAudit()[0]!);
-    expect(logged, "the typed secret reached the log through the error").not.toContain("Verano2026!");
+    expect(logged, "the typed secret reached the log through the error").not.toContain("fixture-pass-1042!");
     expect(logged, "a token reached the log through the error").not.toContain("ghp_");
     expect(logged).toContain("matched 2 elements");
   });

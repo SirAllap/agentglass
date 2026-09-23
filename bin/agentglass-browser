@@ -1478,6 +1478,11 @@ def main():
     p = sub.add_parser("cookies", help="read the page's cookies, or set one")
     p.add_argument("--set", nargs=2, metavar=("NAME", "VALUE"), default=None)
     p.add_argument("--path", default="/")
+    p.add_argument("--domain", default=None)
+    p.add_argument("--http-only", dest="httpOnly", action="store_true")
+    p.add_argument("--same-site", dest="sameSite", choices=["Strict", "Lax", "None"], default=None)
+    p.add_argument("--insecure", dest="insecure", action="store_true",
+                    help="write without Secure — refused for __Host-/__Secure- names")
     sub.add_parser("frames", help="iframes, service workers and shadow roots on this page")
 
     sub.add_parser("tabs", help="what tabs are open, with the active one marked")
@@ -2308,7 +2313,19 @@ def main():
     elif a.cmd == "reload":
         body = {"bypassCache": not a.keepCache}
     elif a.cmd == "cookies":
-        body = {"set": {"name": a.set[0], "value": a.set[1], "path": a.path}} if a.set else {}
+        if a.set:
+            c = {"name": a.set[0], "value": a.set[1], "path": a.path}
+            if a.domain:
+                c["domain"] = a.domain
+            if a.httpOnly:
+                c["httpOnly"] = True
+            if a.sameSite:
+                c["sameSite"] = a.sameSite
+            if a.insecure:
+                c["secure"] = False
+            body = {"set": c}
+        else:
+            body = {}
     elif a.cmd == "frames":
         body = {}
     elif a.cmd == "resize":
