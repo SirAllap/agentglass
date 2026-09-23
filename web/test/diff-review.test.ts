@@ -256,16 +256,17 @@ test("the tray is keyed by checkout, so an armed Discard does not carry to anoth
   expect(PAGE).toMatch(/<ReviewTray key=\{root\}/);
 });
 
-test("Send review only fills a composer; it never starts a run", () => {
-  // A run costs tokens and goes to whoever the chat points at; the chat is where
-  // that is seen before it happens. So the view must not even import the send.
-  const imp = PAGE.match(/import \{([^}]*)\} from "\.\.\/\.\.\/lib\/chatStore\.ts"/);
-  expect(imp).not.toBeNull();
-  expect(imp![1]!.split(",").map((n) => n.trim().split(/\s+/)[0])).not.toContain("send");
+test("Send review opens a terminal with an agent already on it, not a chat draft", () => {
+  // Option (1): the same move conflict resolution already makes
+  // (PrPanel.tsx's "Hand to Claude in a terminal", requestTermIssue) — a NEW
+  // tmux window, in the checkout's own worktree, with an agent started on the
+  // composed review. It used to park the review as an unsent draft in
+  // whichever chat was open in the tree; that composer step is gone.
   const from = PAGE.indexOf("const deliver = useCallback(");
   expect(from).toBeGreaterThan(-1);
   const deliver = PAGE.slice(from, PAGE.indexOf("\n  }, [", from))
     .split("\n").filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join("\n");
-  expect(deliver).toContain("c.draft = withDraft(");
-  expect(deliver).not.toMatch(/\bsend\(|chatSend|sendMessage/);
+  expect(deliver).toContain("requestTermIssue(");
+  expect(deliver).not.toContain("c.draft = withDraft(");
+  expect(deliver).not.toMatch(/\bseedChat\(/);
 });

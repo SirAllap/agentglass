@@ -104,7 +104,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
    *  stopped to say so, and the next press sends anyway. */
   staleFiles: readonly StaleFile[] | null;
   checking: boolean;
-  /** Which chat will get it, said before the button is pressed. */
+  /** Where Send opens a window, said before the button is pressed. */
   target: string;
   onFrame: (f: { intro?: string; outro?: string }) => void;
   onJump: (c: ReviewComment) => void;
@@ -172,7 +172,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
           <Btn small onClick={() => { if (armed) { setArmed(false); onDiscard(); } else setArmed(true); }}
             title="Throw the whole review away">{armed ? `Discard ${n}?` : "Discard"}</Btn>
           <Btn small onClick={onSend} primary pending={checking}
-            title={`Checks every commented file, then puts the review in ${target}'s composer as one prompt — nothing runs until you send it there`}>
+            title={`Checks every commented file, then opens ${target} with an agent already working through it`}>
             {checking ? "Checking…" : staleFiles ? "Send anyway" : "Send review"}
           </Btn>
         </span>
