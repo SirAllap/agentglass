@@ -1217,6 +1217,59 @@ async function withFocus<T>(cdp: (m: string, p?: unknown) => Promise<{ ok: boole
   }
 }
 
+/**
+ * `handoff`: the page, given to the person for what an agent must not do —
+ * a CAPTCHA, a 2FA code, a consent. A banner on the page says why and has a
+ * Done button; the agent's side checks in short waits (the CLI loops), so no
+ * request is held open for minutes. The plan lives in the document: if the
+ * page navigates the plan is gone, and a check says `navigated` — for a
+ * sign-in that is usually the person finishing, and it is reported as what it
+ * is rather than as success.
+ */
+function handoffScript(a: { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean }): string {
+  return `(async () => {
+    const ID = "__agx_handoff__";
+    const clear = () => { const b = document.getElementById(ID); if (b) b.remove(); };
+    const info = (state) => ({ state, url: location.href, title: document.title });
+    ${a.cancel ? `clear(); window.__agxHandoff = null; return info("cancelled");` : ""}
+    ${a.reason ? `
+    clear();
+    const plan = { done: false, reason: ${jsLit(a.reason)}, until: ${a.until ? jsLit(a.until) : "null"} };
+    window.__agxHandoff = plan;
+    const bar = document.createElement("div");
+    bar.id = ID;
+    bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:2147483647;display:flex;gap:12px;align-items:center;padding:10px 16px;background:#1f3a5f;color:#fff;font:600 14px system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.4)";
+    const msg = document.createElement("span");
+    msg.textContent = "An agent needs you: " + plan.reason;
+    const done = document.createElement("button");
+    done.textContent = "Done";
+    done.style.cssText = "margin-left:auto;padding:4px 14px;font:600 14px system-ui;cursor:pointer";
+    done.addEventListener("click", () => { plan.done = true; clear(); });
+    bar.append(msg, done);
+    document.body.appendChild(bar);
+    return info("armed");` : ""}
+    ${a.check ? `
+    const plan = window.__agxHandoff;
+    if (!plan) return info("navigated");
+    const met = () => {
+      if (plan.done) return "done";
+      if (plan.until) {
+        if (plan.until[0] === "/" || plan.until.startsWith("http")) { if (location.href.indexOf(plan.until) !== -1) return "condition"; }
+        else { try { if (document.querySelector(plan.until)) return "condition"; } catch (e) {} }
+      }
+      return null;
+    };
+    const end = Date.now() + ${Math.max(0, Math.min(25000, Number(a.waitMs ?? 0)))};
+    for (;;) {
+      const m = met();
+      if (m) { clear(); window.__agxHandoff = null; return info(m); }
+      if (!window.__agxHandoff) return info("navigated");
+      if (Date.now() >= end) return info("waiting");
+      await new Promise((r) => setTimeout(r, 300));
+    }` : ""}
+  })()`;
+}
+
 /** `reload`'s: hard by default, and wait for it. */
 async function reloadAndSettle(el: DrivableWebview, hard: boolean): Promise<string | null> {
   const nav = settled(el);
@@ -1618,6 +1671,12 @@ async function runVerb(
       case "open": {
         const r = await navigateTo(el, String(ask.args.url ?? ""));
         return r.ok ? { ok: true, value: { url: r.url, title: el.getTitle() } } : r;
+      }
+
+      case "handoff": {
+        const a = ask.args as { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean };
+        const value = await el.executeJavaScript(handoffScript(a));
+        return { ok: true, value };
       }
 
       case "dialog": {

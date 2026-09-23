@@ -240,6 +240,26 @@ def wait_for_slot(op, body, res, seconds):
     return res
 
 
+def wait_for_person(a, body, armed):
+    """The banner is up; now wait. Each check waits up to 20 s inside the page,
+    so no request is held open for minutes, and the loop ends on the person's
+    Done, on --until, on a navigation, or on --timeout (which takes the banner
+    down again rather than leave it on a page nobody is answering for)."""
+    open_browser_view()
+    print(f"handoff: waiting for the person — {body['reason']}", file=sys.stderr)
+    end = time.time() + max(1, min(a.timeout, 3600))
+    res = armed
+    # The same addressing as the request that armed it: this tab, this caller.
+    same = {k: v for k, v in body.items() if k not in ("reason", "until")}
+    while time.time() < end:
+        res = call("handoff", stamped(a, {**same, "check": True, "waitMs": 20000}))
+        state = ((res.get("value") or {}).get("state")) if res.get("ok") else "error"
+        if state != "waiting":
+            return res
+    call("handoff", stamped(a, {**same, "cancel": True}))
+    return {"ok": False, "error": f"nobody answered the handoff in {a.timeout} s; the banner was taken down"}
+
+
 def call(op, body):
     def send(token):
         req = urllib.request.Request(
@@ -1626,6 +1646,23 @@ def main():
     p.add_argument("--dismiss", action="store_true", help="answer Cancel / false / null")
     p.add_argument("--text", help="what a prompt() is answered with when accepted")
     p.add_argument("--always", action="store_true", help="every dialog, not just the next one")
+    p = sub.add_parser(
+        "handoff",
+        help="give the tab to the person for a CAPTCHA, a 2FA code or a consent, and wait for them",
+        description=(
+            "Brings the browser forward, puts a banner on the page saying why (with a Done button) and waits "
+            "until the person presses it, or --until is true, or --timeout runs out. Use it for what an agent "
+            "must not do itself: a CAPTCHA, a code from their phone, a consent screen. Then continue from the "
+            "answer. If the page navigates meanwhile, the answer says `navigated`: for a sign-in that is usually "
+            "the person finishing.\n\n"
+            "  handoff 'Sign-in needs your 2FA code' --until 'nav .avatar'\n"
+            "  handoff 'Solve the CAPTCHA' --until /dashboard --timeout 600"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("reason", help="one line: what the person is needed for")
+    p.add_argument("--until", help="also done when this CSS selector exists, or the url contains this (starts with / or http)")
+    p.add_argument("--timeout", type=int, default=300, help="give up after this many seconds (default 300, max 3600)")
     p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
     p.add_argument("selector", help="an id from an observation, a locator (role=dialog) or CSS")
     p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")
@@ -2245,6 +2282,10 @@ def main():
         body = {k: True for k in ("accept", "dismiss", "always") if getattr(a, k)}
         if a.text is not None:
             body["text"] = a.text
+    elif a.cmd == "handoff":
+        body = {"reason": a.reason}
+        if a.until:
+            body["until"] = a.until
     elif a.cmd == "upload":
         body = {"selector": a.selector, "paths": a.paths}
     elif a.cmd == "permission":
@@ -2535,6 +2576,8 @@ def main():
     res = call(a.cmd, body)
     if getattr(a, "waitSlot", None):
         res = wait_for_slot(a.cmd, body, res, a.waitSlot)
+    if a.cmd == "handoff" and res.get("ok"):
+        res = wait_for_person(a, body, res)
     # A tab of ours that is gone stops being ours, so the next call opens a
     # fresh one instead of addressing a ghost forever.
     if body.get("page") and str(res.get("error") or "").startswith("no tab called"):

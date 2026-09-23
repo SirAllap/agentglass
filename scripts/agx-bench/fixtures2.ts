@@ -74,6 +74,20 @@ const GESTURE = doc(
    ed.addEventListener("input", () => { window.__seen.text = ed.textContent; });`,
 );
 
+/** A gate only a person passes: a code sent to their phone. The server counts who got through. */
+const GATE = doc(
+  "Gate",
+  `<h1>Two-step sign-in</h1><p>Enter the code sent to your phone.</p>
+   <input id="code" aria-label="Code" inputmode="numeric"><button id="go">Verify</button>
+   <p id="welcome" hidden>Welcome back</p>`,
+  `document.getElementById("go").addEventListener("click", () => {
+    if (document.getElementById("code").value === "482913") {
+      document.getElementById("welcome").hidden = false;
+      fetch("/__bench/beacon?name=gate-passed", { method: "POST" });
+    }
+  });`,
+);
+
 /** A trivial page a lot of tabs can hold. */
 const BLANK = (n: string) => doc(`Slot ${n}`, `<h1>Slot ${n}</h1>`)();
 
@@ -81,6 +95,7 @@ export async function phase2Routes(p: string, req: Request, state: BenchState): 
   if (p === "/confirm") return CONFIRM();
   if (p === "/marks") return MARKS();
   if (p === "/gesture") return GESTURE();
+  if (p === "/gate") return GATE();
   const slot = /^\/slot\/(\d+)$/.exec(p);
   if (slot) return BLANK(slot[1]!);
   if (p === "/__bench/beacon" && req.method === "POST") {

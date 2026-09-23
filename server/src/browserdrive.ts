@@ -74,7 +74,7 @@ export type BrowserOp =
   | "cdp" | "listeners" | "coverage" | "profiles" | "emulate" | "events" | "record" | "audit"
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
-  | "trace" | "intercept" | "checkup" | "dialog"
+  | "trace" | "intercept" | "checkup" | "dialog" | "handoff"
   | "inspect"
   | "whoami"
   | "health";
@@ -92,7 +92,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "inspect",
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
-  "checkup", "dialog",
+  "checkup", "dialog", "handoff",
   "whoami",
   "health",
 ];
@@ -231,6 +231,8 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
      panel still held the domains on. Below the CLI's own 120 s. */
   checkup: 110_000,
   dialog: 15_000,
+  /* One check waits up to 25 s inside the page; the CLI loops over checks. */
+  handoff: 45_000,
   /* The clipboard is a round trip; a snapshot is Chromium serialising every
      subresource the page pulled in. */
   clipboard: 15_000, save: 60_000, headers: 15_000,
@@ -2174,6 +2176,38 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         const n = Number(b.settleMs);
         if (typeof b.settleMs !== "number" || !Number.isFinite(n)) return { error: "settleMs must be a number of milliseconds" };
         args.settleMs = Math.min(15_000, Math.max(0, Math.round(n)));
+      }
+      break;
+    }
+    case "handoff": {
+      /* Three shapes: arm (reason, optional until), check (waitMs), cancel. */
+      const shapes = ["reason", "check", "cancel"].filter((k) => b[k] !== undefined);
+      if (shapes.length !== 1) return { error: "handoff takes exactly one of reason (arm), check or cancel" };
+      if (b.reason !== undefined) {
+        if (typeof b.reason !== "string" || !b.reason.trim() || b.reason.length > 200 || /[\r\n]/.test(b.reason)) {
+          return { error: "reason must be one short line saying what the person is needed for (at most 200 characters)" };
+        }
+        args.reason = b.reason.trim();
+        if (b.until !== undefined) {
+          if (typeof b.until !== "string" || !b.until.trim() || b.until.length > 300 || /[\r\n]/.test(b.until)) {
+            return { error: "until must be a short CSS selector, or a url fragment starting with / or http" };
+          }
+          args.until = b.until.trim();
+        }
+      } else {
+        if (b.until !== undefined) return { error: "until goes with the reason that arms the handoff" };
+        if (b.check !== undefined) {
+          if (b.check !== true) return { error: "check is a flag" };
+          args.check = true;
+          if (b.waitMs !== undefined) {
+            const n = Number(b.waitMs);
+            if (typeof b.waitMs !== "number" || !Number.isFinite(n)) return { error: "waitMs must be a number of milliseconds" };
+            args.waitMs = Math.min(25_000, Math.max(0, Math.round(n)));
+          }
+        } else {
+          if (b.cancel !== true) return { error: "cancel is a flag" };
+          args.cancel = true;
+        }
       }
       break;
     }

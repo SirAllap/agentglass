@@ -132,6 +132,31 @@ export const PHASE2_TASKS: Task[] = [
     },
   },
   {
+    id: "p2-handoff",
+    family: "phase2",
+    title: "Item 11, handoff: a code only the person has — the agent hands the tab over and carries on when they are done",
+    arms: {
+      // Before: nothing to do but try and stop. The agent has no code.
+      async baseline(s) {
+        await s.cli("open", [s.url("/gate")]);
+        await s.cli("click", ["#go"]);
+        return { state: "stuck" };
+      },
+      async phase2(s) {
+        await s.cli("open", [s.url("/gate")]);
+        const waiting = s.cli("handoff", ["Enter the code from your phone", "--until", "#welcome", "--timeout", "60"], { allowFail: true });
+        // The person, played by a script: reads the code off their phone and types it in.
+        await Bun.sleep(2500);
+        await s.cli("eval", [`(() => { const c = document.getElementById("code"); c.value = "482913"; document.getElementById("go").click(); return 1; })()`]);
+        const r = await waiting;
+        return { state: r.json?.state ?? `exit ${r.exit}: ${r.stderr.slice(0, 80)}` };
+      },
+    },
+    grade: (a, state) =>
+      !(state.beacons["gate-passed"] > 0) ? `the gate was never passed (${a?.state})`
+        : a?.state !== "condition" && a?.state !== "done" ? `the handoff ended as ${JSON.stringify(a?.state)}` : null,
+  },
+  {
     id: "p2-wait-slot",
     family: "phase2",
     title: "Item 6, --wait-slot: with every slot taken, a new tab queues for the one that frees up",

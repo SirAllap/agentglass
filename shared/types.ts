@@ -1172,6 +1172,8 @@ export interface BrowserAskFrame {
     | "checkup"
     /* Arm the answer to the page's next confirm/prompt (the default is yes). */
     | "dialog"
+    /* Give the tab to the person for a CAPTCHA, a 2FA code or a consent. */
+    | "handoff"
     /* §11: the clipboard through the route that works, and the page as one
        file that still renders offline. */
     | "clipboard" | "save"

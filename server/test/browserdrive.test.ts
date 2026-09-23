@@ -476,6 +476,22 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("shot", { marks: "yes" })).toBe(true);
   });
 
+  test("handoff: arm, check or cancel — exactly one, with sane bounds", () => {
+    const arm = parseAsk("handoff", { reason: "Enter the code from your phone", until: "#welcome" });
+    if (!("ask" in arm)) throw new Error(arm.error);
+    expect(arm.ask.args).toEqual({ reason: "Enter the code from your phone", until: "#welcome" });
+    const chk = parseAsk("handoff", { check: true, waitMs: 999_999 });
+    if (!("ask" in chk)) throw new Error(chk.error);
+    expect(chk.ask.args).toEqual({ check: true, waitMs: 25_000 });
+    expect("ask" in parseAsk("handoff", { cancel: true })).toBe(true);
+    expect("error" in parseAsk("handoff", {})).toBe(true);
+    expect("error" in parseAsk("handoff", { reason: "x", check: true })).toBe(true);
+    expect("error" in parseAsk("handoff", { reason: "two\nlines" })).toBe(true);
+    expect("error" in parseAsk("handoff", { reason: "x".repeat(201) })).toBe(true);
+    expect("error" in parseAsk("handoff", { check: true, until: "#a" })).toBe(true);
+    expect("error" in parseAsk("handoff", { check: "yes" })).toBe(true);
+  });
+
   test("dialog: accept or dismiss, never both; text needs an accept; always needs a side", () => {
     const ok = parseAsk("dialog", { dismiss: true, always: true });
     if (!("ask" in ok)) throw new Error(ok.error);

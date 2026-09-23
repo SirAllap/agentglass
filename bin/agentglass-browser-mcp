@@ -1096,6 +1096,26 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_handoff",
+        "description": (
+            "Give the page to the person for what you must not do: a CAPTCHA, a 2FA code, a consent. "
+            "Call with `reason` (one line) and optionally `until` (a CSS selector, or a url fragment starting "
+            "with / or http) to put a banner with a Done button on the page; then call with `check: true` "
+            "(it waits up to 25 s per call) until `state` is not `waiting`: done, condition, navigated. "
+            "`cancel: true` takes the banner down."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string"},
+                "until": {"type": "string"},
+                "check": {"type": "boolean"},
+                "waitMs": {"type": "integer", "description": "with check: how long to wait, at most 25000"},
+                "cancel": {"type": "boolean"},
+            },
+        },
+    },
+    {
         "name": "browser_reload",
         "description": "Reload, ignoring the cache by default — with assets versioned by query string there is no other way to force a new bundle.",
         "inputSchema": {

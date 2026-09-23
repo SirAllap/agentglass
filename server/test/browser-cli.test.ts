@@ -459,6 +459,28 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual(["newtab"]);
   });
 
+  test("handoff arms once, checks until the person is done, and says so", async () => {
+    await openWindow();
+    let checks = 0;
+    answers = {
+      handoff: () => {
+        const a = askedArgs[askedArgs.length - 1] as Record<string, unknown>;
+        if (a.reason) return { ok: true, value: { state: "armed", url: "u", title: "t" } };
+        if (a.check) return { ok: true, value: { state: ++checks < 3 ? "waiting" : "done", url: "u", title: "t" } };
+        return { ok: true, value: { state: "cancelled" } };
+      },
+    };
+    asked = []; askedArgs = []; controls = [];
+    const r = await cli("handoff", "Enter the code", "--until", "#welcome");
+    expect(r.code, r.err).toBe(0);
+    expect(JSON.parse(r.out).state).toBe("done");
+    expect(asked).toEqual(["handoff", "handoff", "handoff", "handoff"]);
+    expect(verbArgs(0)).toMatchObject({ reason: "Enter the code", until: "#welcome" });
+    expect(verbArgs(1)).toMatchObject({ check: true, waitMs: 20_000 });
+    expect(verbArgs(1).reason).toBeUndefined();
+    expect(controls).toContainEqual({ cmd: "view", to: "browser" });
+  });
+
   test("but a refusal a retry cannot fix is not retried", async () => {
     await openWindow();
     asked = []; controls = [];
